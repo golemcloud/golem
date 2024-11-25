@@ -1015,7 +1015,7 @@ pub struct WorkerResourceDescription {
 /// This status is just cached information, all fields must be computable by the oplog alone.
 /// By having an associated oplog_idx, the cached information can be used together with the
 /// tail of the oplog to determine the actual status of the worker.
-#[derive(Clone, Debug, PartialEq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Encode)]
 pub struct WorkerStatusRecord {
     pub status: WorkerStatus,
     pub deleted_regions: DeletedRegions,
@@ -1031,6 +1031,62 @@ pub struct WorkerStatusRecord {
     pub total_linear_memory_size: u64,
     pub owned_resources: HashMap<WorkerResourceId, WorkerResourceDescription>,
     pub oplog_idx: OplogIndex,
+    pub active_plugins: HashSet<PluginInstallationId>,
+}
+
+impl ::bincode::Decode for WorkerStatusRecord {
+    fn decode<__D: Decoder>(decoder: &mut __D) -> Result<Self, DecodeError> {
+        Ok(Self {
+            status: Decode::decode(decoder)?,
+            deleted_regions: Decode::decode(decoder)?,
+            overridden_retry_config: Decode::decode(decoder)?,
+            pending_invocations: Decode::decode(decoder)?,
+            pending_updates: Decode::decode(decoder)?,
+            failed_updates: Decode::decode(decoder)?,
+            successful_updates: Decode::decode(decoder)?,
+            invocation_results: Decode::decode(decoder)?,
+            current_idempotency_key: Decode::decode(decoder)?,
+            component_version: Decode::decode(decoder)?,
+            component_size: Decode::decode(decoder)?,
+            total_linear_memory_size: Decode::decode(decoder)?,
+            owned_resources: Decode::decode(decoder)?,
+            oplog_idx: Decode::decode(decoder)?,
+            active_plugins: Decode::decode(decoder).or_else(|err| {
+                if let DecodeError::UnexpectedEnd { .. } = &err {
+                    Ok(HashSet::new())
+                } else {
+                    Err(err)
+                }
+            })?,
+        })
+    }
+}
+impl<'__de> BorrowDecode<'__de> for WorkerStatusRecord {
+    fn borrow_decode<__D: BorrowDecoder<'__de>>(decoder: &mut __D) -> Result<Self, DecodeError> {
+        Ok(Self {
+            status: BorrowDecode::borrow_decode(decoder)?,
+            deleted_regions: BorrowDecode::borrow_decode(decoder)?,
+            overridden_retry_config: BorrowDecode::borrow_decode(decoder)?,
+            pending_invocations: BorrowDecode::borrow_decode(decoder)?,
+            pending_updates: BorrowDecode::borrow_decode(decoder)?,
+            failed_updates: BorrowDecode::borrow_decode(decoder)?,
+            successful_updates: BorrowDecode::borrow_decode(decoder)?,
+            invocation_results: BorrowDecode::borrow_decode(decoder)?,
+            current_idempotency_key: BorrowDecode::borrow_decode(decoder)?,
+            component_version: BorrowDecode::borrow_decode(decoder)?,
+            component_size: BorrowDecode::borrow_decode(decoder)?,
+            total_linear_memory_size: BorrowDecode::borrow_decode(decoder)?,
+            owned_resources: BorrowDecode::borrow_decode(decoder)?,
+            oplog_idx: BorrowDecode::borrow_decode(decoder)?,
+            active_plugins: BorrowDecode::borrow_decode(decoder).or_else(|err| {
+                if let DecodeError::UnexpectedEnd { .. } = &err {
+                    Ok(HashSet::new())
+                } else {
+                    Err(err)
+                }
+            })?,
+        })
+    }
 }
 
 impl Default for WorkerStatusRecord {
@@ -1049,6 +1105,7 @@ impl Default for WorkerStatusRecord {
             component_size: 0,
             total_linear_memory_size: 0,
             owned_resources: HashMap::new(),
+            active_plugins: HashSet::new(),
             oplog_idx: OplogIndex::default(),
         }
     }
@@ -2807,7 +2864,7 @@ impl From<ComponentFileSystemNode> for golem_api_grpc::proto::golem::worker::Fil
                             last_modified,
                             size,
                             permissions:
-                                golem_api_grpc::proto::golem::component::ComponentFilePermissions::from(permissions).into(),
+                            golem_api_grpc::proto::golem::component::ComponentFilePermissions::from(permissions).into(),
                         }
                     ))
                 },

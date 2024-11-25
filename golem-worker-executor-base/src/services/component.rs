@@ -24,6 +24,7 @@ use crate::services::compiled_component::CompiledComponentService;
 use crate::services::golem_config::{
     CompiledComponentServiceConfig, ComponentCacheConfig, ComponentServiceConfig,
 };
+use crate::services::plugins::PluginsObservations;
 use async_trait::async_trait;
 use futures_util::TryStreamExt;
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
@@ -36,7 +37,10 @@ use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::config::RetryConfig;
 use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
 use golem_common::model::component_metadata::LinearMemory;
-use golem_common::model::{ComponentId, ComponentType, ComponentVersion, InitialComponentFile};
+use golem_common::model::plugin::PluginInstallation;
+use golem_common::model::{
+    AccountId, ComponentId, ComponentType, ComponentVersion, InitialComponentFile,
+};
 use golem_common::retries::with_retries;
 use golem_service_base::storage::blob::BlobStorage;
 use golem_wasm_ast::analysis::AnalysedExport;
@@ -60,6 +64,7 @@ pub struct ComponentMetadata {
     pub exports: Vec<AnalysedExport>,
     pub component_type: ComponentType,
     pub files: Vec<InitialComponentFile>,
+    pub plugin_installations: Vec<PluginInstallation>,
 }
 
 /// Service for downloading a specific Golem component from the Golem Component API
@@ -68,12 +73,14 @@ pub trait ComponentService {
     async fn get(
         &self,
         engine: &Engine,
+        account_id: &AccountId,
         component_id: &ComponentId,
         component_version: ComponentVersion,
     ) -> Result<(Component, ComponentMetadata), GolemError>;
 
     async fn get_metadata(
         &self,
+        account_id: &AccountId,
         component_id: &ComponentId,
         forced_version: Option<ComponentVersion>,
     ) -> Result<ComponentMetadata, GolemError>;
@@ -84,6 +91,7 @@ pub async fn configured(
     cache_config: &ComponentCacheConfig,
     compiled_config: &CompiledComponentServiceConfig,
     blob_storage: Arc<dyn BlobStorage + Send + Sync>,
+    plugin_observations: Arc<dyn PluginsObservations + Send + Sync>,
 ) -> Arc<dyn ComponentService + Send + Sync> {
     let compiled_component_service = compiled_component::configured(compiled_config, blob_storage);
     match config {
@@ -101,6 +109,7 @@ pub async fn configured(
                 config.retries.clone(),
                 compiled_component_service,
                 config.max_component_size,
+                plugin_observations,
             ))
         }
         ComponentServiceConfig::Local(config) => Arc::new(ComponentServiceLocalFileSystem::new(
@@ -126,6 +135,7 @@ pub struct ComponentServiceGrpc {
     retry_config: RetryConfig,
     compiled_component_service: Arc<dyn CompiledComponentService + Send + Sync>,
     client: GrpcClient<ComponentServiceClient<Channel>>,
+    plugin_observations: Arc<dyn PluginsObservations + Send + Sync>,
 }
 
 impl ComponentServiceGrpc {
@@ -138,6 +148,7 @@ impl ComponentServiceGrpc {
         retry_config: RetryConfig,
         compiled_component_service: Arc<dyn CompiledComponentService + Send + Sync>,
         max_component_size: usize,
+        plugin_observations: Arc<dyn PluginsObservations + Send + Sync>,
     ) -> Self {
         Self {
             component_cache: create_component_cache(max_capacity, time_to_idle),
@@ -162,6 +173,7 @@ impl ComponentServiceGrpc {
                     ..Default::default() // TODO
                 },
             ),
+            plugin_observations,
         }
     }
 }
@@ -171,6 +183,7 @@ impl ComponentService for ComponentServiceGrpc {
     async fn get(
         &self,
         engine: &Engine,
+        account_id: &AccountId,
         component_id: &ComponentId,
         component_version: ComponentVersion,
     ) -> Result<(Component, ComponentMetadata), GolemError> {
@@ -252,7 +265,7 @@ impl ComponentService for ComponentServiceGrpc {
             })
             .await?;
         let metadata = self
-            .get_metadata(component_id, Some(component_version))
+            .get_metadata(account_id, component_id, Some(component_version))
             .await?;
 
         Ok((component, metadata))
@@ -260,6 +273,7 @@ impl ComponentService for ComponentServiceGrpc {
 
     async fn get_metadata(
         &self,
+        account_id: &AccountId,
         component_id: &ComponentId,
         forced_version: Option<ComponentVersion>,
     ) -> Result<ComponentMetadata, GolemError> {
@@ -269,6 +283,8 @@ impl ComponentService for ComponentServiceGrpc {
                 let access_token = self.access_token;
                 let retry_config = self.retry_config.clone();
                 let component_id = component_id.clone();
+                let plugin_observations = self.plugin_observations.clone();
+                let account_id = account_id.clone();
                 self.component_metadata_cache
                     .get_or_insert_simple(
                         &ComponentKey {
@@ -277,14 +293,25 @@ impl ComponentService for ComponentServiceGrpc {
                         },
                         || {
                             Box::pin(async move {
-                                get_metadata_via_grpc(
+                                let metadata = get_metadata_via_grpc(
                                     &client,
                                     &access_token,
                                     &retry_config,
                                     &component_id,
                                     forced_version,
                                 )
-                                .await
+                                .await?;
+                                for installation in &metadata.plugin_installations {
+                                    plugin_observations
+                                        .observe_plugin_installation(
+                                            &account_id,
+                                            &component_id,
+                                            metadata.version,
+                                            installation,
+                                        )
+                                        .await?;
+                                }
+                                Ok(metadata)
                             })
                         },
                     )
@@ -472,6 +499,16 @@ async fn get_metadata_via_grpc(
                         .collect::<Result<Vec<_>, _>>()
                         .map_err(|_| {
                             GrpcError::Unexpected("Failed to get the files".to_string())
+                        })?,
+                    plugin_installations: component
+                        .installed_plugins
+                        .into_iter()
+                        .map(|plugin| plugin.try_into())
+                        .collect::<Result<Vec<_>, _>>()
+                        .map_err(|_| {
+                            GrpcError::Unexpected(
+                                "Failed to get the plugin installations".to_string(),
+                            )
                         })?,
                 };
 
@@ -709,17 +746,17 @@ impl ComponentServiceLocalFileSystem {
         self.component_metadata_cache
             .get_or_insert_simple(&key, || {
                 Box::pin(async move {
-                    let data = tokio::fs::read_to_string(props_path).await.map_err(|e| {
+                    let data = tokio::fs::read_to_string(props_path.clone()).await.map_err(|e| {
                         GolemError::GetLatestVersionOfComponentFailed {
                             component_id: component_id.clone(),
-                            reason: format!("Failed to read properties of component: {}", e),
+                            reason: format!("Failed to read properties of component {component_id}/{component_version} from {props_path:?}: {}", e),
                         }
                     })?;
 
                     serde_json::from_str(&data).map_err(|e| {
                         GolemError::GetLatestVersionOfComponentFailed {
                             component_id: component_id.clone(),
-                            reason: format!("Failed to read properties of component: {}", e),
+                            reason: format!("Failed to deserialize properties of component {component_id}/{component_version}: {}", e),
                         }
                     })
                 })
@@ -738,6 +775,7 @@ impl ComponentService for ComponentServiceLocalFileSystem {
     async fn get(
         &self,
         engine: &Engine,
+        _account_id: &AccountId,
         component_id: &ComponentId,
         component_version: ComponentVersion,
     ) -> Result<(Component, ComponentMetadata), GolemError> {
@@ -756,6 +794,7 @@ impl ComponentService for ComponentServiceLocalFileSystem {
 
     async fn get_metadata(
         &self,
+        _account_id: &AccountId,
         component_id: &ComponentId,
         forced_version: Option<ComponentVersion>,
     ) -> Result<ComponentMetadata, GolemError> {

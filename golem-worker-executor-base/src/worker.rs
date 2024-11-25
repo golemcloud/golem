@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::mem;
 use std::ops::DerefMut;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -33,9 +33,9 @@ use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
 use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
 use crate::services::{
     All, HasActiveWorkers, HasAll, HasBlobStoreService, HasComponentService, HasConfig, HasEvents,
-    HasExtraDeps, HasFileLoader, HasKeyValueService, HasOplog, HasOplogService, HasPromiseService,
-    HasRpc, HasSchedulerService, HasWasmtimeEngine, HasWorker, HasWorkerEnumerationService,
-    HasWorkerProxy, HasWorkerService, UsesAllDeps,
+    HasExtraDeps, HasFileLoader, HasKeyValueService, HasOplog, HasOplogService, HasPlugins,
+    HasPromiseService, HasRpc, HasSchedulerService, HasWasmtimeEngine, HasWorker,
+    HasWorkerEnumerationService, HasWorkerProxy, HasWorkerService, UsesAllDeps,
 };
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 use anyhow::anyhow;
@@ -47,7 +47,7 @@ use golem_common::model::oplog::{
     WorkerResourceId,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
-use golem_common::model::{exports, ComponentFilePath, ComponentType};
+use golem_common::model::{exports, ComponentFilePath, ComponentType, PluginInstallationId};
 use golem_common::model::{
     ComponentVersion, FailedUpdateRecord, IdempotencyKey, OwnedWorkerId, SuccessfulUpdateRecord,
     Timestamp, TimestampedWorkerInvocation, WorkerId, WorkerInvocation, WorkerMetadata,
@@ -182,6 +182,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let initial_component_metadata = deps
             .component_service()
             .get_metadata(
+                &owned_worker_id.account_id,
                 &owned_worker_id.worker_id.component_id,
                 Some(worker_metadata.last_known_status.component_version),
             )
@@ -822,6 +823,28 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         receiver.await.unwrap()
     }
 
+    pub async fn activate_plugin(
+        &self,
+        plugin_installation_id: PluginInstallationId,
+    ) -> Result<(), GolemError> {
+        self.oplog
+            .add_and_commit(OplogEntry::activate_plugin(plugin_installation_id))
+            .await;
+        self.update_metadata().await?;
+        Ok(())
+    }
+
+    pub async fn deactivate_plugin(
+        &self,
+        plugin_installation_id: PluginInstallationId,
+    ) -> Result<(), GolemError> {
+        self.oplog
+            .add_and_commit(OplogEntry::deactivate_plugin(plugin_installation_id))
+            .await;
+        self.update_metadata().await?;
+        Ok(())
+    }
+
     async fn wait_for_invocation_result(
         &self,
         key: &IdempotencyKey,
@@ -1020,7 +1043,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let component_id = owned_worker_id.component_id();
                 let component_metadata = this
                     .component_service()
-                    .get_metadata(&component_id, component_version)
+                    .get_metadata(
+                        &owned_worker_id.account_id,
+                        &component_id,
+                        component_version,
+                    )
                     .await?;
 
                 let initial_status =
@@ -1239,6 +1266,7 @@ impl RunningWorker {
     async fn create_instance<Ctx: WorkerCtx>(
         parent: Arc<Worker<Ctx>>,
     ) -> Result<(Instance, async_mutex::Mutex<Store<Ctx>>), GolemError> {
+        let account_id = parent.owned_worker_id.account_id();
         let component_id = parent.owned_worker_id.component_id();
         let worker_metadata = parent.get_metadata().await?;
 
@@ -1263,7 +1291,12 @@ impl RunningWorker {
             );
         let (component, component_metadata) = parent
             .component_service()
-            .get(&parent.engine(), &component_id, component_version)
+            .get(
+                &parent.engine(),
+                &account_id,
+                &component_id,
+                component_version,
+            )
             .await?;
 
         let context = Ctx::create(
@@ -1295,6 +1328,7 @@ impl RunningWorker {
             ),
             parent.execution_status.clone(),
             parent.file_loader(),
+            parent.plugins(),
         )
         .await?;
 
@@ -1912,6 +1946,7 @@ enum WorkerCommand {
 pub async fn get_component_metadata<Ctx: WorkerCtx>(
     worker: &Arc<Worker<Ctx>>,
 ) -> Result<ComponentMetadata, GolemError> {
+    let account_id = worker.owned_worker_id.account_id();
     let component_id = worker.owned_worker_id.component_id();
     let worker_metadata = worker.get_metadata().await?;
 
@@ -1919,7 +1954,7 @@ pub async fn get_component_metadata<Ctx: WorkerCtx>(
 
     let component_metadata = worker
         .component_service()
-        .get_metadata(&component_id, Some(component_version))
+        .get_metadata(&account_id, &component_id, Some(component_version))
         .await?;
 
     Ok(component_metadata)
@@ -2008,6 +2043,8 @@ where
 
         let owned_resources = calculate_owned_resources(last_known.owned_resources, &new_entries);
 
+        let active_plugins = calculate_active_plugins(last_known.active_plugins, &new_entries);
+
         let result = WorkerStatusRecord {
             oplog_idx: last_oplog_index,
             status,
@@ -2023,6 +2060,7 @@ where
             component_size,
             owned_resources,
             total_linear_memory_size,
+            active_plugins,
         };
         Ok(result)
     }
@@ -2122,6 +2160,12 @@ fn calculate_latest_worker_status(
             OplogEntry::Restart { .. } => {
                 result = WorkerStatus::Idle;
             }
+            OplogEntry::CreateV1 { .. } => {
+                result = WorkerStatus::Idle;
+            }
+            OplogEntry::SuccessfulUpdateV1 { .. } => {}
+            OplogEntry::ActivatePlugin { .. } => {}
+            OplogEntry::DeactivatePlugin { .. } => {}
         }
     }
     result
@@ -2254,10 +2298,24 @@ fn calculate_update_fields(
                 });
                 pending_updates.pop_front();
             }
+            OplogEntry::SuccessfulUpdateV1 {
+                timestamp,
+                target_version,
+                new_component_size,
+            } => {
+                successful_updates.push(SuccessfulUpdateRecord {
+                    timestamp: *timestamp,
+                    target_version: *target_version,
+                });
+                version = *target_version;
+                component_size = *new_component_size;
+                pending_updates.pop_front();
+            }
             OplogEntry::SuccessfulUpdate {
                 timestamp,
                 target_version,
                 new_component_size,
+                ..
             } => {
                 successful_updates.push(SuccessfulUpdateRecord {
                     timestamp: *timestamp,
@@ -2357,6 +2415,30 @@ fn calculate_owned_resources(
                 if let Some(description) = result.get_mut(id) {
                     description.indexed_resource_key = Some(indexed_resource.clone());
                 }
+            }
+            _ => {}
+        }
+    }
+    result
+}
+
+fn calculate_active_plugins(
+    initial: HashSet<PluginInstallationId>,
+    entries: &BTreeMap<OplogIndex, OplogEntry>,
+) -> HashSet<PluginInstallationId> {
+    let mut result = initial;
+    for entry in entries.values() {
+        match entry {
+            OplogEntry::ActivatePlugin { plugin, .. } => {
+                result.insert(plugin.clone());
+            }
+            OplogEntry::DeactivatePlugin { plugin, .. } => {
+                result.remove(plugin);
+            }
+            OplogEntry::SuccessfulUpdate {
+                new_active_plugins, ..
+            } => {
+                result = new_active_plugins.clone();
             }
             _ => {}
         }

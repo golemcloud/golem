@@ -2,6 +2,7 @@ syntax = "proto3";
 
 import "golem/common/account_id.proto";
 import "golem/common/empty.proto";
+import "golem/common/plugin_installation_id.proto";
 import "golem/worker/idempotency_key.proto";
 import "golem/worker/worker_id.proto";
 import "google/protobuf/timestamp.proto";
@@ -11,31 +12,33 @@ package golem.worker;
 
 message OplogEntry {
   oneof entry {
-      CreateParameters Create = 1;
-      ImportedFunctionInvokedParameters ImportedFunctionInvoked = 2;
-      ExportedFunctionInvokedParameters ExportedFunctionInvoked = 3;
-      ExportedFunctionCompletedParameters ExportedFunctionCompleted = 4;
-      TimestampParameter Suspend = 5;
-      ErrorParameters Error = 6;
-      TimestampParameter NoOp = 7;
-      JumpParameters Jump = 8;
-      TimestampParameter Interrupted = 9;
-      TimestampParameter Exited = 10;
-      ChangeRetryPolicyParameters ChangeRetryPolicy = 11;
-      TimestampParameter BeginAtomicRegion = 12;
-      EndAtomicRegionParameters EndAtomicRegion = 13;
-      TimestampParameter BeginRemoteWrite = 14;
-      EndRemoteWriteParameters EndRemoteWrite = 15;
-      PendingWorkerInvocationParameters PendingWorkerInvocation = 16;
-      PendingUpdateParameters PendingUpdate = 17;
-      SuccessfulUpdateParameters SuccessfulUpdate = 18;
-      FailedUpdateParameters FailedUpdate = 19;
-      GrowMemoryParameters GrowMemory = 20;
-      CreateResourceParameters CreateResource = 21;
-      DropResourceParameters DropResource = 22;
-      DescribeResourceParameters DescribeResource = 23;
-      LogParameters Log = 24;
-      TimestampParameter Restart = 25;
+    CreateParameters Create = 1;
+    ImportedFunctionInvokedParameters ImportedFunctionInvoked = 2;
+    ExportedFunctionInvokedParameters ExportedFunctionInvoked = 3;
+    ExportedFunctionCompletedParameters ExportedFunctionCompleted = 4;
+    TimestampParameter Suspend = 5;
+    ErrorParameters Error = 6;
+    TimestampParameter NoOp = 7;
+    JumpParameters Jump = 8;
+    TimestampParameter Interrupted = 9;
+    TimestampParameter Exited = 10;
+    ChangeRetryPolicyParameters ChangeRetryPolicy = 11;
+    TimestampParameter BeginAtomicRegion = 12;
+    EndAtomicRegionParameters EndAtomicRegion = 13;
+    TimestampParameter BeginRemoteWrite = 14;
+    EndRemoteWriteParameters EndRemoteWrite = 15;
+    PendingWorkerInvocationParameters PendingWorkerInvocation = 16;
+    PendingUpdateParameters PendingUpdate = 17;
+    SuccessfulUpdateParameters SuccessfulUpdate = 18;
+    FailedUpdateParameters FailedUpdate = 19;
+    GrowMemoryParameters GrowMemory = 20;
+    CreateResourceParameters CreateResource = 21;
+    DropResourceParameters DropResource = 22;
+    DescribeResourceParameters DescribeResource = 23;
+    LogParameters Log = 24;
+    TimestampParameter Restart = 25;
+    ActivatePluginParameters ActivatePlugin = 26;
+    DeactivatePluginParameters DeactivatePlugin = 27;
   }
 }
 
@@ -51,6 +54,13 @@ message WrappedFunctionType {
   optional uint64 oplog_index = 2;
 }
 
+message PluginInstallationDescription {
+  golem.common.PluginInstallationId installation_id = 1;
+  string plugin_name = 2;
+  string plugin_version = 3;
+  map<string, string> parameters = 4;
+}
+
 message CreateParameters {
   google.protobuf.Timestamp timestamp = 1;
   WorkerId worker_id = 2;
@@ -61,6 +71,7 @@ message CreateParameters {
   optional WorkerId parent = 7;
   uint64 component_size = 8;
   uint64 initial_total_linear_memory_size = 9;
+  repeated PluginInstallationDescription initial_active_plugins = 10;
 }
 
 message ImportedFunctionInvokedParameters {
@@ -158,6 +169,7 @@ message SuccessfulUpdateParameters {
   google.protobuf.Timestamp timestamp = 1;
   uint64 target_version = 2;
   uint64 new_component_size = 3;
+  repeated PluginInstallationDescription new_active_plugins = 10;
 }
 
 message FailedUpdateParameters {
@@ -190,6 +202,16 @@ message DescribeResourceParameters {
 
 message TimestampParameter {
   google.protobuf.Timestamp timestamp = 1;
+}
+
+message ActivatePluginParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  PluginInstallationDescription plugin = 2;
+}
+
+message DeactivatePluginParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  PluginInstallationDescription plugin = 2;
 }
 
 enum OplogLogLevel {

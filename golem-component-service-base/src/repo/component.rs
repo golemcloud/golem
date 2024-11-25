@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::{Component, ComponentConstraints, ComponentPluginInstallationTarget};
-use crate::repo::plugin_installation::ComponentPluginInstallationRow;
+use crate::model::{Component, ComponentConstraints};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use conditional_trait_gen::{trait_gen, when};
@@ -21,11 +20,12 @@ use futures::future::try_join_all;
 use golem_common::model::component::ComponentOwner;
 use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_common::model::component_metadata::ComponentMetadata;
-use golem_common::model::plugin::PluginOwner;
+use golem_common::model::plugin::{ComponentPluginInstallationTarget, PluginOwner};
 use golem_common::model::{
     ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentType, InitialComponentFile,
     InitialComponentFileKey,
 };
+use golem_common::repo::plugin_installation::ComponentPluginInstallationRow;
 use golem_service_base::model::{ComponentName, VersionedComponentId};
 use golem_service_base::repo::plugin_installation::{
     DbPluginInstallationRepoQueries, PluginInstallationRecord, PluginInstallationRepoQueries,
@@ -41,7 +41,7 @@ use tracing::{debug, error};
 use uuid::Uuid;
 
 #[derive(sqlx::FromRow, Debug, Clone)]
-pub struct ComponentRecord {
+pub struct ComponentRecord<Owner: ComponentOwner> {
     pub namespace: String,
     pub component_id: Uuid,
     pub name: String,
@@ -55,14 +55,20 @@ pub struct ComponentRecord {
     // one-to-many relationship. Retrieved separately
     #[sqlx(skip)]
     pub files: Vec<FileRecord>,
+    // one-to-many relationship. Retrieved separately
+    #[sqlx(skip)]
+    pub installed_plugins:
+        Vec<PluginInstallationRecord<Owner::PluginOwner, ComponentPluginInstallationTarget>>,
 }
 
-impl ComponentRecord {
-    pub fn try_from_model<Owner: ComponentOwner>(
-        value: Component<Owner>,
-        available: bool,
-    ) -> Result<Self, String> {
+impl<Owner: ComponentOwner> ComponentRecord<Owner> {
+    pub fn try_from_model(value: Component<Owner>, available: bool) -> Result<Self, String> {
         let metadata = record_metadata_serde::serialize(&value.metadata)?;
+
+        let component_owner = value.owner.clone();
+        let component_owner_row: Owner::Row = component_owner.into();
+        let plugin_owner_row: <Owner::PluginOwner as PluginOwner>::Row = component_owner_row.into();
+
         Ok(Self {
             namespace: value.owner.to_string(),
             component_id: value.versioned_component_id.component_id.0,
@@ -87,14 +93,28 @@ impl ComponentRecord {
                     file_permissions: file.permissions.as_compact_str().to_string(),
                 })
                 .collect(),
+            installed_plugins: value
+                .installed_plugins
+                .iter()
+                .map(|installation| {
+                    PluginInstallationRecord::try_from(
+                        installation.clone(),
+                        plugin_owner_row.clone(),
+                        ComponentPluginInstallationRow {
+                            component_id: value.versioned_component_id.component_id.0,
+                            component_version: value.versioned_component_id.version as i64,
+                        },
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?,
         })
     }
 }
 
-impl<Owner: ComponentOwner> TryFrom<ComponentRecord> for Component<Owner> {
+impl<Owner: ComponentOwner> TryFrom<ComponentRecord<Owner>> for Component<Owner> {
     type Error = String;
 
-    fn try_from(value: ComponentRecord) -> Result<Self, Self::Error> {
+    fn try_from(value: ComponentRecord<Owner>) -> Result<Self, Self::Error> {
         let metadata: ComponentMetadata = record_metadata_serde::deserialize(&value.metadata)?;
         let versioned_component_id: VersionedComponentId = VersionedComponentId {
             component_id: ComponentId(value.component_id),
@@ -117,6 +137,11 @@ impl<Owner: ComponentOwner> TryFrom<ComponentRecord> for Component<Owner> {
             component_type: ComponentType::try_from(value.component_type)?,
             object_store_key: Some(value.object_store_key),
             files,
+            installed_plugins: value
+                .installed_plugins
+                .into_iter()
+                .map(|record| record.try_into())
+                .collect::<Result<Vec<_>, _>>()?,
         })
     }
 }
@@ -206,7 +231,7 @@ impl TryFrom<FileRecord> for InitialComponentFile {
 
 #[async_trait]
 pub trait ComponentRepo<Owner: ComponentOwner>: Debug {
-    async fn create(&self, component: &ComponentRecord) -> Result<(), RepoError>;
+    async fn create(&self, component: &ComponentRecord<Owner>) -> Result<(), RepoError>;
 
     /// Creates a new component version (ignores component.version) and copies the plugin
     /// installations from the previous latest version.
@@ -221,7 +246,7 @@ pub trait ComponentRepo<Owner: ComponentOwner>: Debug {
         metadata: Vec<u8>,
         component_type: Option<i32>,
         files: Option<Vec<FileRecord>>,
-    ) -> Result<ComponentRecord, RepoError>;
+    ) -> Result<ComponentRecord<Owner>, RepoError>;
 
     /// Activates a component version previously created with `update`.
     ///
@@ -239,28 +264,28 @@ pub trait ComponentRepo<Owner: ComponentOwner>: Debug {
         &self,
         namespace: &str,
         component_id: &Uuid,
-    ) -> Result<Vec<ComponentRecord>, RepoError>;
+    ) -> Result<Vec<ComponentRecord<Owner>>, RepoError>;
 
-    async fn get_all(&self, namespace: &str) -> Result<Vec<ComponentRecord>, RepoError>;
+    async fn get_all(&self, namespace: &str) -> Result<Vec<ComponentRecord<Owner>>, RepoError>;
 
     async fn get_latest_version(
         &self,
         namespace: &str,
         component_id: &Uuid,
-    ) -> Result<Option<ComponentRecord>, RepoError>;
+    ) -> Result<Option<ComponentRecord<Owner>>, RepoError>;
 
     async fn get_by_version(
         &self,
         namespace: &str,
         component_id: &Uuid,
         version: u64,
-    ) -> Result<Option<ComponentRecord>, RepoError>;
+    ) -> Result<Option<ComponentRecord<Owner>>, RepoError>;
 
     async fn get_by_name(
         &self,
         namespace: &str,
         name: &str,
-    ) -> Result<Vec<ComponentRecord>, RepoError>;
+    ) -> Result<Vec<ComponentRecord<Owner>>, RepoError>;
 
     async fn get_id_by_name(&self, namespace: &str, name: &str) -> Result<Option<Uuid>, RepoError>;
 
@@ -359,7 +384,7 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner>> LoggedComponentRepo<Owne
 impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentRepo<Owner>
     for LoggedComponentRepo<Owner, Repo>
 {
-    async fn create(&self, component: &ComponentRecord) -> Result<(), RepoError> {
+    async fn create(&self, component: &ComponentRecord<Owner>) -> Result<(), RepoError> {
         let result = self.repo.create(component).await;
         Self::logged_with_id("create", &component.component_id, result)
     }
@@ -373,7 +398,7 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
         metadata: Vec<u8>,
         component_type: Option<i32>,
         files: Option<Vec<FileRecord>>,
-    ) -> Result<ComponentRecord, RepoError> {
+    ) -> Result<ComponentRecord<Owner>, RepoError> {
         let result = self
             .repo
             .update(
@@ -407,12 +432,12 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
         &self,
         namespace: &str,
         component_id: &Uuid,
-    ) -> Result<Vec<ComponentRecord>, RepoError> {
+    ) -> Result<Vec<ComponentRecord<Owner>>, RepoError> {
         let result = self.repo.get(namespace, component_id).await;
         Self::logged_with_id("get", component_id, result)
     }
 
-    async fn get_all(&self, namespace: &str) -> Result<Vec<ComponentRecord>, RepoError> {
+    async fn get_all(&self, namespace: &str) -> Result<Vec<ComponentRecord<Owner>>, RepoError> {
         let result = self.repo.get_all(namespace).await;
         Self::logged("get_all", result)
     }
@@ -421,7 +446,7 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
         &self,
         namespace: &str,
         component_id: &Uuid,
-    ) -> Result<Option<ComponentRecord>, RepoError> {
+    ) -> Result<Option<ComponentRecord<Owner>>, RepoError> {
         let result = self.repo.get_latest_version(namespace, component_id).await;
         Self::logged_with_id("get_latest_version", component_id, result)
     }
@@ -431,7 +456,7 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
         namespace: &str,
         component_id: &Uuid,
         version: u64,
-    ) -> Result<Option<ComponentRecord>, RepoError> {
+    ) -> Result<Option<ComponentRecord<Owner>>, RepoError> {
         let result = self
             .repo
             .get_by_version(namespace, component_id, version)
@@ -443,7 +468,7 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
         &self,
         namespace: &str,
         name: &str,
-    ) -> Result<Vec<ComponentRecord>, RepoError> {
+    ) -> Result<Vec<ComponentRecord<Owner>>, RepoError> {
         let result = self.repo.get_by_name(namespace, name).await;
         Self::logged("get_by_name", result)
     }
@@ -601,8 +626,8 @@ impl<Owner: ComponentOwner> DbComponentRepo<sqlx::Postgres, Owner> {
 
     async fn add_files(
         &self,
-        components: impl IntoIterator<Item = ComponentRecord>,
-    ) -> Result<Vec<ComponentRecord>, RepoError> {
+        components: impl IntoIterator<Item = ComponentRecord<Owner>>,
+    ) -> Result<Vec<ComponentRecord<Owner>>, RepoError> {
         let result = components
             .into_iter()
             .map(|component| async move {
@@ -615,12 +640,57 @@ impl<Owner: ComponentOwner> DbComponentRepo<sqlx::Postgres, Owner> {
 
         try_join_all(result).await
     }
+
+    async fn get_installed_plugins_for_component(
+        &self,
+        component: &ComponentRecord<Owner>,
+    ) -> Result<
+        Vec<PluginInstallationRecord<Owner::PluginOwner, ComponentPluginInstallationTarget>>,
+        RepoError,
+    > {
+        let target = ComponentPluginInstallationRow {
+            component_id: component.component_id,
+            component_version: component.version,
+        };
+
+        let owner =
+            Owner::from_str(&component.namespace).map_err(RepoError::Internal)?;
+        let owner_row: Owner::Row = owner.into();
+        let plugin_owner_row: <Owner::PluginOwner as PluginOwner>::Row = owner_row.into();
+        let mut query = self
+            .plugin_installation_queries
+            .get_all(&plugin_owner_row, &target);
+        Ok(query.build_query_as::<PluginInstallationRecord<
+            Owner::PluginOwner,
+            ComponentPluginInstallationTarget,
+        >>()
+            .fetch_all(self.db_pool.deref())
+            .await?)
+    }
+
+    async fn add_installed_plugins(
+        &self,
+        components: impl IntoIterator<Item = ComponentRecord<Owner>>,
+    ) -> Result<Vec<ComponentRecord<Owner>>, RepoError> {
+        let result = components
+            .into_iter()
+            .map(|component| async move {
+                let installed_plugins = self.get_installed_plugins_for_component(&component).await?;
+                Ok(ComponentRecord {
+                    installed_plugins,
+                    ..component
+                })
+            })
+            .collect::<Vec<_>>();
+
+        try_join_all(result).await
+    }
 }
 
 #[trait_gen(sqlx::Postgres -> sqlx::Postgres, sqlx::Sqlite)]
 #[async_trait]
 impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postgres, Owner> {
-    async fn create(&self, component: &ComponentRecord) -> Result<(), RepoError> {
+    async fn create(&self, component: &ComponentRecord<Owner>) -> Result<(), RepoError> {
         let mut transaction = self.db_pool.begin().await?;
 
         let result = sqlx::query("SELECT namespace, name FROM components WHERE component_id = $1")
@@ -710,7 +780,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         metadata: Vec<u8>,
         component_type: Option<i32>,
         files: Option<Vec<FileRecord>>,
-    ) -> Result<ComponentRecord, RepoError> {
+    ) -> Result<ComponentRecord<Owner>, RepoError> {
         let mut transaction = self.db_pool.begin().await?;
 
         let result = sqlx::query("SELECT namespace FROM components WHERE component_id = $1")
@@ -902,8 +972,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         &self,
         namespace: &str,
         component_id: &Uuid,
-    ) -> Result<Vec<ComponentRecord>, RepoError> {
-        let components = sqlx::query_as::<_, ComponentRecord>(
+    ) -> Result<Vec<ComponentRecord<Owner>>, RepoError> {
+        let components = sqlx::query_as::<_, ComponentRecord<Owner>>(
             r#"
                 SELECT
                     c.namespace AS namespace,
@@ -927,7 +997,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         .await
         .map_err::<RepoError, _>(|e| e.into())?;
 
-        self.add_files(components).await
+        self.add_installed_plugins(self.add_files(components).await?).await
     }
 
     #[when(sqlx::Sqlite -> get)]
@@ -935,8 +1005,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         &self,
         namespace: &str,
         component_id: &Uuid,
-    ) -> Result<Vec<ComponentRecord>, RepoError> {
-        let components = sqlx::query_as::<_, ComponentRecord>(
+    ) -> Result<Vec<ComponentRecord<Owner>>, RepoError> {
+        let components = sqlx::query_as::<_, ComponentRecord<Owner>>(
             r#"
                 SELECT
                     c.namespace AS namespace,
@@ -960,12 +1030,15 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         .await
         .map_err::<RepoError, _>(|e| e.into())?;
 
-        self.add_files(components).await
+        self.add_installed_plugins(self.add_files(components).await?).await
     }
 
     #[when(sqlx::Postgres -> get_all)]
-    async fn get_all_postgres(&self, namespace: &str) -> Result<Vec<ComponentRecord>, RepoError> {
-        let components = sqlx::query_as::<_, ComponentRecord>(
+    async fn get_all_postgres(
+        &self,
+        namespace: &str,
+    ) -> Result<Vec<ComponentRecord<Owner>>, RepoError> {
+        let components = sqlx::query_as::<_, ComponentRecord<Owner>>(
             r#"
                 SELECT
                     c.namespace AS namespace,
@@ -988,12 +1061,15 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         .await
         .map_err::<RepoError, _>(|e| e.into())?;
 
-        self.add_files(components).await
+        self.add_installed_plugins(self.add_files(components).await?).await
     }
 
     #[when(sqlx::Sqlite -> get_all)]
-    async fn get_all_sqlite(&self, namespace: &str) -> Result<Vec<ComponentRecord>, RepoError> {
-        let components = sqlx::query_as::<_, ComponentRecord>(
+    async fn get_all_sqlite(
+        &self,
+        namespace: &str,
+    ) -> Result<Vec<ComponentRecord<Owner>>, RepoError> {
+        let components = sqlx::query_as::<_, ComponentRecord<Owner>>(
             r#"
                 SELECT
                     c.namespace AS namespace,
@@ -1016,7 +1092,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         .await
         .map_err::<RepoError, _>(|e| e.into())?;
 
-        self.add_files(components).await
+        self.add_installed_plugins(self.add_files(components).await?).await
     }
 
     #[when(sqlx::Postgres -> get_latest_version)]
@@ -1024,8 +1100,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         &self,
         namespace: &str,
         component_id: &Uuid,
-    ) -> Result<Option<ComponentRecord>, RepoError> {
-        let component = sqlx::query_as::<_, ComponentRecord>(
+    ) -> Result<Option<ComponentRecord<Owner>>, RepoError> {
+        let component = sqlx::query_as::<_, ComponentRecord<Owner>>(
             r#"
                 SELECT
                     c.namespace AS namespace,
@@ -1051,7 +1127,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         .await
         .map_err::<RepoError, _>(|e| e.into())?;
 
-        Ok(self.add_files(component).await?.pop())
+        Ok(self.add_installed_plugins(self.add_files(component).await?).await?.pop())
     }
 
     #[when(sqlx::Sqlite -> get_latest_version)]
@@ -1059,8 +1135,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         &self,
         namespace: &str,
         component_id: &Uuid,
-    ) -> Result<Option<ComponentRecord>, RepoError> {
-        let component = sqlx::query_as::<_, ComponentRecord>(
+    ) -> Result<Option<ComponentRecord<Owner>>, RepoError> {
+        let component = sqlx::query_as::<_, ComponentRecord<Owner>>(
             r#"
                 SELECT
                     c.namespace AS namespace,
@@ -1086,7 +1162,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         .await
         .map_err::<RepoError, _>(|e| e.into())?;
 
-        Ok(self.add_files(component).await?.pop())
+        Ok(self.add_installed_plugins(self.add_files(component).await?).await?.pop())
     }
 
     #[when(sqlx::Postgres -> get_by_version)]
@@ -1095,8 +1171,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         namespace: &str,
         component_id: &Uuid,
         version: u64,
-    ) -> Result<Option<ComponentRecord>, RepoError> {
-        let component = sqlx::query_as::<_, ComponentRecord>(
+    ) -> Result<Option<ComponentRecord<Owner>>, RepoError> {
+        let component = sqlx::query_as::<_, ComponentRecord<Owner>>(
             r#"
                 SELECT
                     c.namespace AS namespace,
@@ -1121,7 +1197,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         .await
         .map_err::<RepoError, _>(|e| e.into())?;
 
-        Ok(self.add_files(component).await?.pop())
+        Ok(self.add_installed_plugins(self.add_files(component).await?).await?.pop())
     }
 
     #[when(sqlx::Sqlite -> get_by_version)]
@@ -1130,8 +1206,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         namespace: &str,
         component_id: &Uuid,
         version: u64,
-    ) -> Result<Option<ComponentRecord>, RepoError> {
-        let component = sqlx::query_as::<_, ComponentRecord>(
+    ) -> Result<Option<ComponentRecord<Owner>>, RepoError> {
+        let component = sqlx::query_as::<_, ComponentRecord<Owner>>(
             r#"
                 SELECT
                     c.namespace AS namespace,
@@ -1156,7 +1232,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         .await
         .map_err::<RepoError, _>(|e| e.into())?;
 
-        Ok(self.add_files(component).await?.pop())
+        Ok(self.add_installed_plugins(self.add_files(component).await?).await?.pop())
     }
 
     #[when(sqlx::Postgres -> get_by_name)]
@@ -1164,8 +1240,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         &self,
         namespace: &str,
         name: &str,
-    ) -> Result<Vec<ComponentRecord>, RepoError> {
-        let components = sqlx::query_as::<_, ComponentRecord>(
+    ) -> Result<Vec<ComponentRecord<Owner>>, RepoError> {
+        let components = sqlx::query_as::<_, ComponentRecord<Owner>>(
             r#"
                 SELECT
                     c.namespace AS namespace,
@@ -1189,7 +1265,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         .await
         .map_err::<RepoError, _>(|e| e.into())?;
 
-        self.add_files(components).await
+        self.add_installed_plugins(self.add_files(components).await?).await
     }
 
     #[when(sqlx::Sqlite -> get_by_name)]
@@ -1197,8 +1273,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         &self,
         namespace: &str,
         name: &str,
-    ) -> Result<Vec<ComponentRecord>, RepoError> {
-        let components = sqlx::query_as::<_, ComponentRecord>(
+    ) -> Result<Vec<ComponentRecord<Owner>>, RepoError> {
+        let components = sqlx::query_as::<_, ComponentRecord<Owner>>(
             r#"
                 SELECT
                     c.namespace AS namespace,
@@ -1222,7 +1298,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         .await
         .map_err::<RepoError, _>(|e| e.into())?;
 
-        self.add_files(components).await
+        self.add_installed_plugins(self.add_files(components).await?).await
     }
 
     async fn get_id_by_name(&self, namespace: &str, name: &str) -> Result<Option<Uuid>, RepoError> {

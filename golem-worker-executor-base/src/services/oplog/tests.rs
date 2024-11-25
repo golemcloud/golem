@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashSet;
 use std::time::Instant;
 use test_r::{flaky, test, test_dep};
 
@@ -58,6 +59,27 @@ fn rounded_ts(ts: Timestamp) -> Timestamp {
 
 fn rounded(entry: OplogEntry) -> OplogEntry {
     match entry {
+        OplogEntry::CreateV1 {
+            timestamp,
+            worker_id,
+            component_version,
+            args,
+            env,
+            account_id,
+            parent,
+            component_size,
+            initial_total_linear_memory_size,
+        } => OplogEntry::CreateV1 {
+            timestamp: rounded_ts(timestamp),
+            worker_id,
+            component_version,
+            args,
+            env,
+            account_id,
+            parent,
+            component_size,
+            initial_total_linear_memory_size,
+        },
         OplogEntry::Create {
             timestamp,
             worker_id,
@@ -68,6 +90,7 @@ fn rounded(entry: OplogEntry) -> OplogEntry {
             parent,
             component_size,
             initial_total_linear_memory_size,
+            initial_active_plugins,
         } => OplogEntry::Create {
             timestamp: rounded_ts(timestamp),
             worker_id,
@@ -78,6 +101,7 @@ fn rounded(entry: OplogEntry) -> OplogEntry {
             parent,
             component_size,
             initial_total_linear_memory_size,
+            initial_active_plugins,
         },
         OplogEntry::ImportedFunctionInvokedV1 {
             timestamp,
@@ -173,14 +197,25 @@ fn rounded(entry: OplogEntry) -> OplogEntry {
             timestamp: rounded_ts(timestamp),
             description,
         },
+        OplogEntry::SuccessfulUpdateV1 {
+            timestamp,
+            target_version,
+            new_component_size,
+        } => OplogEntry::SuccessfulUpdateV1 {
+            timestamp: rounded_ts(timestamp),
+            target_version,
+            new_component_size,
+        },
         OplogEntry::SuccessfulUpdate {
             timestamp,
             target_version,
             new_component_size,
+            new_active_plugins,
         } => OplogEntry::SuccessfulUpdate {
             timestamp: rounded_ts(timestamp),
             target_version,
             new_component_size,
+            new_active_plugins,
         },
         OplogEntry::FailedUpdate {
             timestamp,
@@ -236,6 +271,14 @@ fn rounded(entry: OplogEntry) -> OplogEntry {
         },
         OplogEntry::Restart { timestamp } => OplogEntry::Restart {
             timestamp: rounded_ts(timestamp),
+        },
+        OplogEntry::ActivatePlugin { timestamp, plugin } => OplogEntry::ActivatePlugin {
+            timestamp: rounded_ts(timestamp),
+            plugin,
+        },
+        OplogEntry::DeactivatePlugin { timestamp, plugin } => OplogEntry::DeactivatePlugin {
+            timestamp: rounded_ts(timestamp),
+            plugin,
         },
     }
 }
@@ -881,7 +924,7 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
     let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
 
     let timestamp = Timestamp::now_utc();
-    let create_entry = rounded(OplogEntry::Create {
+    let create_entry = rounded(OplogEntry::CreateV1 {
         timestamp,
         worker_id: WorkerId {
             component_id: ComponentId(Uuid::new_v4()),
@@ -1492,6 +1535,7 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
             None,
             100,
             100,
+            HashSet::new(),
         );
 
         let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);

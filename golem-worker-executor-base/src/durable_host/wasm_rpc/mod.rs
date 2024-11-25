@@ -31,7 +31,7 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_common::model::exports::function_by_name;
 use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
-use golem_common::model::{ComponentId, IdempotencyKey, OwnedWorkerId, TargetWorkerId, WorkerId};
+use golem_common::model::{AccountId, ComponentId, IdempotencyKey, OwnedWorkerId, TargetWorkerId, WorkerId};
 use golem_common::uri::oss::urn::{WorkerFunctionUrn, WorkerOrFunctionUrn};
 use golem_wasm_rpc::golem::rpc::types::{
     FutureInvokeResult, HostFutureInvokeResult, Pollable, Uri,
@@ -138,6 +138,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 function_name: function_name.clone(),
                 function_params: try_get_typed_parameters(
                     self.state.component_service.clone(),
+                    &remote_worker_id.account_id,
                     &remote_worker_id.worker_id.component_id,
                     &function_name,
                     &function_params,
@@ -262,6 +263,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 function_name: function_name.clone(),
                 function_params: try_get_typed_parameters(
                     self.state.component_service.clone(),
+                    &remote_worker_id.account_id,
                     &remote_worker_id.worker_id.component_id,
                     &function_name,
                     &function_params,
@@ -348,6 +350,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             function_name: function_name.clone(),
             function_params: try_get_typed_parameters(
                 self.state.component_service.clone(),
+                &remote_worker_id.account_id,
                 &remote_worker_id.worker_id.component_id,
                 &function_name,
                 &function_params,
@@ -589,6 +592,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                         function_name: function_name.clone(),
                         function_params: try_get_typed_parameters(
                             component_service,
+                            &remote_worker_id.account_id,
                             &remote_worker_id.worker_id.component_id,
                             function_name,
                             function_params,
@@ -776,11 +780,12 @@ async fn generate_unique_local_worker_id<Ctx: WorkerCtx>(
 /// This should only be used for generating "debug information" for the stored oplog entries.
 async fn try_get_typed_parameters(
     components: Arc<dyn ComponentService + Send + Sync>,
+    account_id: &AccountId,
     component_id: &ComponentId,
     function_name: &str,
     params: &[WitValue],
 ) -> Vec<ValueAndType> {
-    if let Ok(metadata) = components.get_metadata(component_id, None).await {
+    if let Ok(metadata) = components.get_metadata(account_id, component_id, None).await {
         if let Ok(Some(function)) = function_by_name(&metadata.exports, function_name) {
             if function.parameters.len() == params.len() {
                 return params

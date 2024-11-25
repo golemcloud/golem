@@ -12,10 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::services::AdditionalDeps;
 use anyhow::Error;
 use async_trait::async_trait;
 use golem_common::model::oplog::WorkerResourceId;
-use golem_common::model::ComponentFilePath;
+use golem_common::model::{ComponentFilePath, PluginInstallationId};
 use golem_common::model::{
     AccountId, ComponentVersion, IdempotencyKey, OwnedWorkerId, WorkerId, WorkerMetadata,
     WorkerStatus, WorkerStatusRecord,
@@ -52,11 +53,13 @@ use golem_worker_executor_base::workerctx::{
     ExternalOperations, FileSystemReading, FuelManagement, IndexedResourceStore, InvocationHooks,
     InvocationManagement, StatusManagement, UpdateManagement, WorkerCtx,
 };
+use std::collections::HashSet;
 use std::sync::{Arc, RwLock, Weak};
 use wasmtime::component::{Instance, ResourceAny};
 use wasmtime::{AsContextMut, ResourceLimiterAsync};
-
-use crate::services::AdditionalDeps;
+use golem_common::model::component::{ComponentOwner, DefaultComponentOwner};
+use golem_common::model::plugin::DefaultPluginScope;
+use golem_worker_executor_base::services::plugins::Plugins;
 
 pub struct Context {
     pub durable_ctx: DurableWorkerCtx<Context>,
@@ -244,9 +247,10 @@ impl UpdateManagement for Context {
         &self,
         target_version: ComponentVersion,
         new_component_size: u64,
+        new_active_plugins: HashSet<PluginInstallationId>,
     ) {
         self.durable_ctx
-            .on_worker_update_succeeded(target_version, new_component_size)
+            .on_worker_update_succeeded(target_version, new_component_size, new_active_plugins)
             .await
     }
 }
@@ -282,6 +286,8 @@ impl IndexedResourceStore for Context {
 #[async_trait]
 impl WorkerCtx for Context {
     type PublicState = PublicDurableWorkerState<Context>;
+    type ComponentOwner = DefaultComponentOwner;
+    type PluginScope = DefaultPluginScope;
 
     async fn create(
         owned_worker_id: OwnedWorkerId,
@@ -307,6 +313,7 @@ impl WorkerCtx for Context {
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
+        plugins: Arc<dyn Plugins<<Self::ComponentOwner as ComponentOwner>::PluginOwner, Self::PluginScope> + Send + Sync>
     ) -> Result<Self, GolemError> {
         let golem_ctx = DurableWorkerCtx::create(
             owned_worker_id,
@@ -328,6 +335,7 @@ impl WorkerCtx for Context {
             worker_config,
             execution_status,
             file_loader,
+            plugins
         )
         .await?;
         Ok(Self {

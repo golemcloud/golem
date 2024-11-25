@@ -15,6 +15,7 @@
 use crate::components::component_service::{AddComponentError, ComponentService};
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
+use golem_common::model::plugin::PluginInstallation;
 use golem_common::model::{
     component_metadata::{LinearMemory, RawComponentMetadata},
     ComponentId, ComponentType, ComponentVersion, InitialComponentFile,
@@ -98,6 +99,7 @@ impl FileSystemComponentService {
             size,
             memories,
             exports,
+            plugin_installations: vec![],
         };
         metadata
             .write_to_file(&target_dir.join(format!("{component_id}-{component_version}.json")))
@@ -308,6 +310,7 @@ pub struct ComponentMetadata {
     pub exports: Vec<AnalysedExport>,
     pub component_type: ComponentType,
     pub files: Vec<InitialComponentFile>,
+    pub plugin_installations: Vec<PluginInstallation>,
 }
 
 impl ComponentMetadata {

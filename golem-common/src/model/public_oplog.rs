@@ -15,15 +15,18 @@
 use crate::config::RetryConfig;
 use crate::model::lucene::{LeafQuery, Query};
 use crate::model::oplog::{LogLevel, OplogIndex, WorkerResourceId, WrappedFunctionType};
+use crate::model::plugin::PluginInstallation;
 use crate::model::regions::OplogRegion;
-use crate::model::{AccountId, ComponentVersion, Empty, IdempotencyKey, Timestamp, WorkerId};
+use crate::model::{
+    AccountId, ComponentVersion, Empty, IdempotencyKey, PluginInstallationId, Timestamp, WorkerId,
+};
 use golem_api_grpc::proto::golem::worker::{oplog_entry, worker_invocation, wrapped_function_type};
 use golem_wasm_ast::analysis::{AnalysedType, NameOptionTypePair};
 use golem_wasm_rpc::{Value, ValueAndType};
 use poem_openapi::types::{ParseFromParameter, ParseResult};
 use poem_openapi::{Object, Union};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::time::Duration;
@@ -133,6 +136,58 @@ pub enum PublicWorkerInvocation {
     ManualUpdate(ManualUpdateParameters),
 }
 
+#[derive(Clone, Debug, Serialize, PartialEq, Eq, PartialOrd, Ord, Deserialize, Object)]
+pub struct PluginInstallationDescription {
+    pub installation_id: PluginInstallationId,
+    pub plugin_name: String,
+    pub plugin_version: String,
+    pub parameters: BTreeMap<String, String>,
+}
+
+impl From<PluginInstallation> for PluginInstallationDescription {
+    fn from(installation: PluginInstallation) -> Self {
+        Self {
+            installation_id: installation.id,
+            plugin_name: installation.name,
+            plugin_version: installation.version,
+            parameters: installation.parameters.into_iter().collect(),
+        }
+    }
+}
+
+impl From<PluginInstallationDescription>
+    for golem_api_grpc::proto::golem::worker::PluginInstallationDescription
+{
+    fn from(plugin_installation_description: PluginInstallationDescription) -> Self {
+        golem_api_grpc::proto::golem::worker::PluginInstallationDescription {
+            installation_id: Some(plugin_installation_description.installation_id.into()),
+            plugin_name: plugin_installation_description.plugin_name,
+            plugin_version: plugin_installation_description.plugin_version,
+            parameters: HashMap::from_iter(plugin_installation_description.parameters),
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::PluginInstallationDescription>
+    for PluginInstallationDescription
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::PluginInstallationDescription,
+    ) -> Result<Self, Self::Error> {
+        Ok(PluginInstallationDescription {
+            installation_id: value
+                .installation_id
+                .ok_or("Missing installation_id".to_string())?
+                .try_into()?,
+            plugin_name: value.plugin_name,
+            plugin_version: value.plugin_version,
+            parameters: BTreeMap::from_iter(value.parameters),
+        })
+    }
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
 pub struct CreateParameters {
     pub timestamp: Timestamp,
@@ -144,6 +199,7 @@ pub struct CreateParameters {
     pub parent: Option<WorkerId>,
     pub component_size: u64,
     pub initial_total_linear_memory_size: u64,
+    pub initial_active_plugins: BTreeSet<PluginInstallationDescription>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
@@ -217,6 +273,7 @@ pub struct SuccessfulUpdateParameters {
     pub timestamp: Timestamp,
     pub target_version: ComponentVersion,
     pub new_component_size: u64,
+    pub new_active_plugins: BTreeSet<PluginInstallationDescription>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
@@ -252,6 +309,18 @@ pub struct LogParameters {
     pub level: LogLevel,
     pub context: String,
     pub message: String,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
+pub struct ActivatePluginParameters {
+    pub timestamp: Timestamp,
+    pub plugin: PluginInstallationDescription,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
+pub struct DeactivatePluginParameters {
+    pub timestamp: Timestamp,
+    pub plugin: PluginInstallationDescription,
 }
 
 /// A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
@@ -325,6 +394,10 @@ pub enum PublicOplogEntry {
     Log(LogParameters),
     /// Marks the point where the worker was restarted from clean initial state
     Restart(TimestampParameter),
+    /// Activates a plugin
+    ActivatePlugin(ActivatePluginParameters),
+    /// Deactivates a plugin
+    DeactivatePlugin(DeactivatePluginParameters),
 }
 
 impl PublicOplogEntry {
@@ -538,6 +611,14 @@ impl PublicOplogEntry {
             PublicOplogEntry::Restart(_params) => {
                 Self::string_match("restart", &[], query_path, query)
             }
+            PublicOplogEntry::ActivatePlugin(_params) => {
+                Self::string_match("activateplugin", &[], query_path, query)
+                    || Self::string_match("activate-plugin", &[], query_path, query)
+            }
+            PublicOplogEntry::DeactivatePlugin(_params) => {
+                Self::string_match("deactivateplugin", &[], query_path, query)
+                    || Self::string_match("deactivate-plugin", &[], query_path, query)
+            }
         }
     }
 
@@ -738,6 +819,13 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                 },
                 component_size: create.component_size,
                 initial_total_linear_memory_size: create.initial_total_linear_memory_size,
+                initial_active_plugins: BTreeSet::from_iter(
+                    create
+                        .initial_active_plugins
+                        .into_iter()
+                        .map(|pr| pr.try_into())
+                        .collect::<Result<Vec<_>, _>>()?,
+                ),
             })),
             oplog_entry::Entry::ImportedFunctionInvoked(imported_function_invoked) => Ok(
                 PublicOplogEntry::ImportedFunctionInvoked(ImportedFunctionInvokedParameters {
@@ -902,6 +990,13 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .into(),
                     target_version: successful_update.target_version,
                     new_component_size: successful_update.new_component_size,
+                    new_active_plugins: BTreeSet::from_iter(
+                        successful_update
+                            .new_active_plugins
+                            .into_iter()
+                            .map(|pr| pr.try_into())
+                            .collect::<Result<Vec<_>, _>>()?,
+                    ),
                 }),
             ),
             oplog_entry::Entry::FailedUpdate(failed_update) => {
@@ -967,6 +1062,24 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     timestamp: restart.timestamp.ok_or("Missing timestamp field")?.into(),
                 }))
             }
+            oplog_entry::Entry::ActivatePlugin(activate) => {
+                Ok(PublicOplogEntry::ActivatePlugin(ActivatePluginParameters {
+                    timestamp: activate.timestamp.ok_or("Missing timestamp field")?.into(),
+                    plugin: activate.plugin.ok_or("Missing plugin field")?.try_into()?,
+                }))
+            }
+            oplog_entry::Entry::DeactivatePlugin(deactivate) => Ok(
+                PublicOplogEntry::DeactivatePlugin(DeactivatePluginParameters {
+                    timestamp: deactivate
+                        .timestamp
+                        .ok_or("Missing timestamp field")?
+                        .into(),
+                    plugin: deactivate
+                        .plugin
+                        .ok_or("Missing plugin field")?
+                        .try_into()?,
+                }),
+            ),
         }
     }
 }
@@ -988,6 +1101,11 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         parent: create.parent.map(Into::into),
                         component_size: create.component_size,
                         initial_total_linear_memory_size: create.initial_total_linear_memory_size,
+                        initial_active_plugins: create
+                            .initial_active_plugins
+                            .into_iter()
+                            .map(Into::into)
+                            .collect(),
                     },
                 )),
             },
@@ -1176,6 +1294,11 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                             timestamp: Some(successful_update.timestamp.into()),
                             target_version: successful_update.target_version,
                             new_component_size: successful_update.new_component_size,
+                            new_active_plugins: successful_update
+                                .new_active_plugins
+                                .into_iter()
+                                .map(Into::into)
+                                .collect(),
                         },
                     )),
                 }
@@ -1258,6 +1381,26 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     entry: Some(oplog_entry::Entry::Restart(
                         golem_api_grpc::proto::golem::worker::TimestampParameter {
                             timestamp: Some(restart.timestamp.into()),
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::ActivatePlugin(activate) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::ActivatePlugin(
+                        golem_api_grpc::proto::golem::worker::ActivatePluginParameters {
+                            timestamp: Some(activate.timestamp.into()),
+                            plugin: Some(activate.plugin.into()),
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::DeactivatePlugin(deactivate) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::DeactivatePlugin(
+                        golem_api_grpc::proto::golem::worker::DeactivatePluginParameters {
+                            timestamp: Some(deactivate.timestamp.into()),
+                            plugin: Some(deactivate.plugin.into()),
                         },
                     )),
                 }
@@ -1566,23 +1709,23 @@ impl From<OplogCursor> for golem_api_grpc::proto::golem::worker::OplogCursor {
 
 #[cfg(test)]
 mod tests {
-
     use super::{
         ChangeRetryPolicyParameters, CreateParameters, DescribeResourceParameters,
         EndRegionParameters, ErrorParameters, ExportedFunctionCompletedParameters,
         ExportedFunctionInvokedParameters, ExportedFunctionParameters, FailedUpdateParameters,
         GrowMemoryParameters, ImportedFunctionInvokedParameters, JumpParameters, LogParameters,
-        PendingUpdateParameters, PendingWorkerInvocationParameters, PublicOplogEntry,
-        PublicRetryConfig, PublicUpdateDescription, PublicWorkerInvocation,
+        PendingUpdateParameters, PendingWorkerInvocationParameters, PluginInstallationDescription,
+        PublicOplogEntry, PublicRetryConfig, PublicUpdateDescription, PublicWorkerInvocation,
         PublicWrappedFunctionType, ResourceParameters, SnapshotBasedUpdateParameters,
         SuccessfulUpdateParameters, TimestampParameter,
     };
     use crate::model::oplog::{LogLevel, OplogIndex, WorkerResourceId};
     use crate::model::regions::OplogRegion;
-    use crate::model::{AccountId, ComponentId, Empty, IdempotencyKey, Timestamp, WorkerId};
+    use crate::model::{AccountId, ComponentId, Empty, IdempotencyKey, PluginInstallationId, Timestamp, WorkerId};
     use golem_wasm_ast::analysis::analysed_type::{field, list, r#enum, record, s16, str, u64};
     use golem_wasm_rpc::{Value, ValueAndType};
     use poem_openapi::types::ToJSON;
+    use std::collections::{BTreeMap, BTreeSet};
     use test_r::test;
     use uuid::Uuid;
 
@@ -1616,6 +1759,14 @@ mod tests {
             }),
             component_size: 100_000_000,
             initial_total_linear_memory_size: 200_000_000,
+            initial_active_plugins: BTreeSet::from_iter(vec![PluginInstallationDescription {
+                installation_id: PluginInstallationId(
+                    Uuid::parse_str("13A5C8D4-F05E-4E23-B982-F4D413E181CB").unwrap(),
+                ),
+                plugin_name: "plugin1".to_string(),
+                plugin_version: "1".to_string(),
+                parameters: BTreeMap::new(),
+            }]),
         });
         let serialized = entry.to_json_string();
         let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -1860,6 +2011,14 @@ mod tests {
             timestamp: rounded_ts(Timestamp::now_utc()),
             target_version: 1,
             new_component_size: 100_000_000,
+            new_active_plugins: BTreeSet::from_iter(vec![PluginInstallationDescription {
+                installation_id: PluginInstallationId(
+                    Uuid::parse_str("13A5C8D4-F05E-4E23-B982-F4D413E181CB").unwrap(),
+                ),
+                plugin_name: "plugin1".to_string(),
+                plugin_version: "1".to_string(),
+                parameters: BTreeMap::new(),
+            }]),
         });
         let serialized = entry.to_json_string();
         let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();

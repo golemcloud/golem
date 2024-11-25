@@ -12,12 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::plugin::DefaultPluginOwner;
+use crate::model::plugin::{ComponentPluginScope, DefaultPluginOwner, DefaultPluginScope};
 use crate::repo::component::DefaultComponentOwnerRow;
 use crate::repo::RowMeta;
 use sqlx::query_builder::Separated;
-use sqlx::{Database, QueryBuilder};
+use sqlx::{Database, Encode, QueryBuilder, Type};
 use std::fmt::{Display, Formatter};
+use uuid::Uuid;
+use crate::model::{ComponentId, Empty};
 
 #[derive(sqlx::FromRow, Debug, Clone)]
 pub struct DefaultPluginOwnerRow {}
@@ -55,5 +57,59 @@ impl<DB: Database> RowMeta<DB> for DefaultPluginOwnerRow {
 impl From<DefaultComponentOwnerRow> for DefaultPluginOwnerRow {
     fn from(_value: DefaultComponentOwnerRow) -> Self {
         Self {}
+    }
+}
+
+#[derive(sqlx::FromRow, Debug, Clone)]
+pub struct DefaultPluginScopeRow {
+    scope_component_id: Option<Uuid>,
+}
+
+impl From<DefaultPluginScope> for DefaultPluginScopeRow {
+    fn from(value: DefaultPluginScope) -> Self {
+        match value {
+            DefaultPluginScope::Global(_) => Self {
+                scope_component_id: None,
+            },
+            DefaultPluginScope::Component(component) => Self {
+                scope_component_id: Some(component.component_id.0),
+            },
+        }
+    }
+}
+
+impl TryFrom<DefaultPluginScopeRow> for DefaultPluginScope {
+    type Error = String;
+
+    fn try_from(value: DefaultPluginScopeRow) -> Result<Self, Self::Error> {
+        match value.scope_component_id {
+            Some(component_id) => Ok(DefaultPluginScope::Component(ComponentPluginScope {
+                component_id: ComponentId(component_id),
+            })),
+            None => Ok(DefaultPluginScope::Global(Empty {})),
+        }
+    }
+}
+
+impl<DB: Database> RowMeta<DB> for DefaultPluginScopeRow
+where
+    Uuid: for<'q> Encode<'q, DB> + Type<DB>,
+    Option<Uuid>: for<'q> Encode<'q, DB> + Type<DB>,
+{
+    fn add_column_list<Sep: Display>(builder: &mut Separated<DB, Sep>) {
+        builder.push("scope_component_id");
+    }
+
+    fn add_where_clause<'a>(&'a self, builder: &mut QueryBuilder<'a, DB>) {
+        if let Some(component_id) = &self.scope_component_id {
+            builder.push("scope_component_id = ");
+            builder.push_bind(component_id);
+        } else {
+            builder.push("scope_component_id IS NULL");
+        }
+    }
+
+    fn push_bind<'a, Sep: Display>(&'a self, builder: &mut Separated<'_, 'a, DB, Sep>) {
+        builder.push_bind(self.scope_component_id);
     }
 }

@@ -59,7 +59,7 @@ use golem_worker_executor_base::services::blob_store;
 use golem_worker_executor_base::services::promise::RedisPromiseState;
 use golem_worker_executor_base::services::rpc::RpcError;
 use golem_worker_executor_base::services::worker_proxy::WorkerProxyError;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::io::Write;
 use std::path::Path;
@@ -448,6 +448,7 @@ pub fn worker_status_record() {
             },
         )]),
         oplog_idx: OplogIndex::from_u64(10000),
+        active_plugins: HashSet::new(),
     };
 
     let wsr2 = WorkerStatusRecord {
@@ -484,6 +485,7 @@ pub fn worker_status_record() {
             },
         )]),
         oplog_idx: OplogIndex::from_u64(10000),
+        active_plugins: HashSet::new(),
     };
 
     let mut mint = Mint::new("tests/goldenfiles");
@@ -656,7 +658,7 @@ pub fn log_level() {
 
 #[test]
 pub fn oplog_entry() {
-    let oe1a = OplogEntry::Create {
+    let oe1a = OplogEntry::CreateV1 {
         timestamp: Timestamp::from(1724701938466),
         worker_id: WorkerId {
             component_id: ComponentId(
@@ -677,7 +679,7 @@ pub fn oplog_entry() {
         component_size: 100_000_000,
         initial_total_linear_memory_size: 100_000_000,
     };
-    let oe1b = OplogEntry::Create {
+    let oe1b = OplogEntry::CreateV1 {
         timestamp: Timestamp::from(1724701938466),
         worker_id: WorkerId {
             component_id: ComponentId(
@@ -796,7 +798,7 @@ pub fn oplog_entry() {
         },
     };
 
-    let oe18 = OplogEntry::SuccessfulUpdate {
+    let oe18 = OplogEntry::SuccessfulUpdateV1 {
         timestamp: Timestamp::from(1724701938466),
         target_version: 10,
         new_component_size: 1234,

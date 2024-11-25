@@ -21,7 +21,8 @@ use golem_api_grpc::proto::golem::common::ResourceLimits as GrpcResourceLimits;
 use golem_api_grpc::proto::golem::worker::{Cursor, ResourceMetadata, UpdateMode};
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::WorkerExecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    ConnectWorkerRequest, DeleteWorkerRequest, GetFileContentsRequest, GetFileContentsResponse,
+    ActivatePluginRequest, ActivatePluginResponse, ConnectWorkerRequest, DeactivatePluginRequest,
+    DeactivatePluginResponse, DeleteWorkerRequest, GetFileContentsRequest, GetFileContentsResponse,
     GetOplogRequest, GetOplogResponse, GetRunningWorkersMetadataRequest,
     GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
     InvokeAndAwaitWorkerRequest, InvokeAndAwaitWorkerResponseTyped, InvokeAndAwaitWorkerSuccess,
@@ -30,14 +31,16 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 };
 use golem_common::grpc::{
     proto_account_id_string, proto_component_id_string, proto_idempotency_key_string,
-    proto_promise_id_string, proto_target_worker_id_string, proto_worker_id_string,
+    proto_plugin_installation_id_string, proto_promise_id_string, proto_target_worker_id_string,
+    proto_worker_id_string,
 };
 use golem_common::metrics::api::record_new_grpc_api_active_stream;
 use golem_common::model::oplog::{OplogIndex, UpdateDescription};
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentId, ComponentType, IdempotencyKey, OwnedWorkerId,
-    ScanCursor, ShardId, TargetWorkerId, TimestampedWorkerInvocation, WorkerEvent, WorkerFilter,
-    WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+    PluginInstallationId, ScanCursor, ShardId, TargetWorkerId, TimestampedWorkerInvocation,
+    WorkerEvent, WorkerFilter, WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatus,
+    WorkerStatusRecord,
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
@@ -64,7 +67,7 @@ use crate::services::events::Event;
 use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActivator};
 use crate::services::worker_event::WorkerEventReceiver;
 use crate::services::{
-    All, HasActiveWorkers, HasAll, HasComponentService, HasEvents, HasOplogService,
+    All, HasActiveWorkers, HasAll, HasComponentService, HasEvents, HasOplogService, HasPlugins,
     HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
     HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
 };
@@ -877,6 +880,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let component_metadata = self
             .component_service()
             .get_metadata(
+                &account_id,
                 &worker_id.component_id,
                 Some(metadata.last_known_status.component_version),
             )
@@ -976,7 +980,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
             UpdateMode::Manual => {
                 if metadata.last_known_status.pending_invocations.iter().any(|invocation|
-                matches!(invocation, TimestampedWorkerInvocation { invocation: WorkerInvocation::ManualUpdate { target_version, .. }, ..} if *target_version == request.target_version)
+                    matches!(invocation, TimestampedWorkerInvocation { invocation: WorkerInvocation::ManualUpdate { target_version, .. }, ..} if *target_version == request.target_version)
                 ) {
                     return Err(GolemError::invalid_request(
                         "The same update is already in progress",
@@ -1071,6 +1075,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 get_public_oplog_chunk(
                     self.component_service(),
                     self.oplog_service(),
+                    self.plugins(),
                     &owned_worker_id,
                     cursor.current_component_version,
                     OplogIndex::from_u64(cursor.next_oplog_index),
@@ -1088,6 +1093,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 get_public_oplog_chunk(
                     self.component_service(),
                     self.oplog_service(),
+                    self.plugins(),
                     &owned_worker_id,
                     initial_component_version,
                     start,
@@ -1149,6 +1155,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 search_public_oplog(
                     self.component_service(),
                     self.oplog_service(),
+                    self.plugins(),
                     &owned_worker_id,
                     cursor.current_component_version,
                     OplogIndex::from_u64(cursor.next_oplog_index),
@@ -1166,6 +1173,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 search_public_oplog(
                     self.component_service(),
                     self.oplog_service(),
+                    self.plugins(),
                     &owned_worker_id,
                     initial_component_version,
                     start,
@@ -1303,29 +1311,175 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 let header_stream = tokio_stream::iter(vec![Ok(header_chunk)]);
 
                 let content_stream = stream
-                .map(|item| {
-                    let transformed = match item {
-                        Ok(data) => {
-                            GetFileContentsResponse {
-                                result: Some(
-                                    golem::workerexecutor::v1::get_file_contents_response::Result::Success(data.into())
-                                )
+                    .map(|item| {
+                        let transformed = match item {
+                            Ok(data) => {
+                                GetFileContentsResponse {
+                                    result: Some(
+                                        golem::workerexecutor::v1::get_file_contents_response::Result::Success(data.into())
+                                    )
+                                }
                             }
-                        },
-                        Err(e) => {
-                            GetFileContentsResponse {
-                                result: Some(
-                                    golem::workerexecutor::v1::get_file_contents_response::Result::Failure(e.into())
-                                )
+                            Err(e) => {
+                                GetFileContentsResponse {
+                                    result: Some(
+                                        golem::workerexecutor::v1::get_file_contents_response::Result::Failure(e.into())
+                                    )
+                                }
                             }
-                        }
-                    };
-                    Ok(transformed)
-                });
+                        };
+                        Ok(transformed)
+                    });
                 Box::pin(header_stream.chain(content_stream))
             }
         };
         Ok(response)
+    }
+
+    async fn activate_plugin_internal(
+        &self,
+        request: ActivatePluginRequest,
+    ) -> Result<(), GolemError> {
+        let worker_id = request
+            .worker_id
+            .ok_or(GolemError::invalid_request("worker_id not found"))?;
+        let worker_id: WorkerId = worker_id.try_into().map_err(GolemError::invalid_request)?;
+
+        let account_id = request
+            .account_id
+            .ok_or(GolemError::invalid_request("account_id not found"))?;
+        let account_id: AccountId = account_id.into();
+
+        let plugin_installation_id = request
+            .installation_id
+            .ok_or(GolemError::invalid_request("installation_id not found"))?;
+        let plugin_installation_id: PluginInstallationId = plugin_installation_id
+            .try_into()
+            .map_err(GolemError::invalid_request)?;
+
+        let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
+
+        let metadata = self.worker_service().get(&owned_worker_id).await;
+        let worker_status =
+            Ctx::compute_latest_worker_status(self, &owned_worker_id, &metadata).await?;
+
+        match metadata {
+            Some(metadata) => {
+                // Worker exists
+
+                if worker_status
+                    .active_plugins
+                    .contains(&plugin_installation_id)
+                {
+                    Err(GolemError::invalid_request("Plugin is already activated"))
+                } else {
+                    let component_metadata = self
+                        .component_service()
+                        .get_metadata(
+                            &account_id,
+                            &worker_id.component_id,
+                            Some(metadata.last_known_status.component_version),
+                        )
+                        .await?;
+
+                    if component_metadata
+                        .plugin_installations
+                        .iter()
+                        .any(|installation| installation.id == plugin_installation_id)
+                    {
+                        let worker = Worker::get_or_create_suspended(
+                            self,
+                            &owned_worker_id,
+                            None,
+                            None,
+                            None,
+                            None,
+                        )
+                        .await?;
+                        worker.activate_plugin(plugin_installation_id).await?;
+                        Ok(())
+                    } else {
+                        Err(GolemError::invalid_request(
+                            "Plugin installation does not belong to this worker's component",
+                        ))
+                    }
+                }
+            }
+            None => Err(GolemError::worker_not_found(worker_id)),
+        }
+    }
+
+    async fn deactivate_plugin_internal(
+        &self,
+        request: DeactivatePluginRequest,
+    ) -> Result<(), GolemError> {
+        let worker_id = request
+            .worker_id
+            .ok_or(GolemError::invalid_request("worker_id not found"))?;
+        let worker_id: WorkerId = worker_id.try_into().map_err(GolemError::invalid_request)?;
+
+        let account_id = request
+            .account_id
+            .ok_or(GolemError::invalid_request("account_id not found"))?;
+        let account_id: AccountId = account_id.into();
+
+        let plugin_installation_id = request
+            .installation_id
+            .ok_or(GolemError::invalid_request("installation_id not found"))?;
+        let plugin_installation_id: PluginInstallationId = plugin_installation_id
+            .try_into()
+            .map_err(GolemError::invalid_request)?;
+
+        let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
+
+        let metadata = self.worker_service().get(&owned_worker_id).await;
+        let worker_status =
+            Ctx::compute_latest_worker_status(self, &owned_worker_id, &metadata).await?;
+
+        match metadata {
+            Some(metadata) => {
+                // Worker exists
+
+                if !worker_status
+                    .active_plugins
+                    .contains(&plugin_installation_id)
+                {
+                    Err(GolemError::invalid_request("Plugin is not activate"))
+                } else {
+                    let component_metadata = self
+                        .component_service()
+                        .get_metadata(
+                            &account_id,
+                            &worker_id.component_id,
+                            Some(metadata.last_known_status.component_version),
+                        )
+                        .await?;
+
+                    if component_metadata
+                        .plugin_installations
+                        .iter()
+                        .any(|installation| installation.id == plugin_installation_id)
+                    {
+                        let worker = Worker::get_or_create_suspended(
+                            self,
+                            &owned_worker_id,
+                            None,
+                            None,
+                            None,
+                            None,
+                        )
+                        .await?;
+                        worker.deactivate_plugin(plugin_installation_id).await?;
+                        Ok(())
+                    } else {
+                        Err(GolemError::invalid_request(
+                            "Plugin installation does not belong to this worker's component",
+                        ))
+                    }
+                }
+            }
+            None => Err(GolemError::worker_not_found(worker_id)),
+        }
     }
 
     fn create_proto_metadata(
@@ -1395,6 +1549,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             );
         }
 
+        let active_plugins = metadata.last_known_status.active_plugins.clone();
+
         golem::worker::WorkerMetadata {
             worker_id: Some(metadata.worker_id.into()),
             args: metadata.args.clone(),
@@ -1415,6 +1571,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             component_size: metadata.last_known_status.component_size,
             total_linear_memory_size: metadata.last_known_status.total_linear_memory_size,
             owned_resources,
+            active_plugins: active_plugins.into_iter().map(|id| id.into()).collect(),
         }
     }
 }
@@ -2134,6 +2291,80 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
         };
         Ok(Response::new(stream))
+    }
+
+    async fn activate_plugin(
+        &self,
+        request: Request<ActivatePluginRequest>,
+    ) -> Result<Response<ActivatePluginResponse>, Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "activate_plugin",
+            worker_id = proto_worker_id_string(&request.worker_id),
+            plugin_installation_id = proto_plugin_installation_id_string(&request.installation_id)
+        );
+
+        let result = self
+            .activate_plugin_internal(request)
+            .instrument(record.span.clone())
+            .await;
+
+        match result {
+            Ok(_) => record.succeed(Ok(Response::new(ActivatePluginResponse {
+                result: Some(
+                    golem::workerexecutor::v1::activate_plugin_response::Result::Success(
+                        golem::common::Empty {},
+                    ),
+                ),
+            }))),
+            Err(err) => record.fail(
+                Ok(Response::new(ActivatePluginResponse {
+                    result: Some(
+                        golem::workerexecutor::v1::activate_plugin_response::Result::Failure(
+                            err.clone().into(),
+                        ),
+                    ),
+                })),
+                &err,
+            ),
+        }
+    }
+
+    async fn deactivate_plugin(
+        &self,
+        request: Request<DeactivatePluginRequest>,
+    ) -> Result<Response<DeactivatePluginResponse>, Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "deactivate_plugin",
+            worker_id = proto_worker_id_string(&request.worker_id),
+            plugin_installation_id = proto_plugin_installation_id_string(&request.installation_id)
+        );
+
+        let result = self
+            .deactivate_plugin_internal(request)
+            .instrument(record.span.clone())
+            .await;
+
+        match result {
+            Ok(_) => record.succeed(Ok(Response::new(DeactivatePluginResponse {
+                result: Some(
+                    golem::workerexecutor::v1::deactivate_plugin_response::Result::Success(
+                        golem::common::Empty {},
+                    ),
+                ),
+            }))),
+            Err(err) => record.fail(
+                Ok(Response::new(DeactivatePluginResponse {
+                    result: Some(
+                        golem::workerexecutor::v1::deactivate_plugin_response::Result::Failure(
+                            err.clone().into(),
+                        ),
+                    ),
+                })),
+                &err,
+            ),
+        }
     }
 }
 

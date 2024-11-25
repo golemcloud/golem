@@ -1,12 +1,17 @@
-use crate::model::{AccountId, ComponentId, Empty, HasAccountId, PluginInstallationId};
+use crate::model::{
+    AccountId, ComponentId, ComponentVersion, Empty, HasAccountId, PluginInstallationId,
+};
 use crate::repo::RowMeta;
+use async_trait::async_trait;
+use http_02::Uri;
 use poem_openapi::types::{
     ParseError, ParseFromJSON, ParseFromParameter, ParseResult, ToJSON, Type,
 };
-use poem_openapi::{Object, Union};
+use poem_openapi::{Enum, Object, Union};
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgRow;
 use sqlx::sqlite::SqliteRow;
+use sqlx::{Postgres, Sqlite};
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::str::FromStr;
@@ -43,7 +48,7 @@ impl Default for DefaultPluginScope {
 }
 
 impl Display for DefaultPluginScope {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             DefaultPluginScope::Global(_) => write!(f, "global"),
             DefaultPluginScope::Component(scope) => write!(f, "component:{}", scope.component_id),
@@ -134,6 +139,22 @@ impl From<PluginInstallation> for golem_api_grpc::proto::golem::component::Plugi
     }
 }
 
+impl TryFrom<golem_api_grpc::proto::golem::component::PluginInstallation> for PluginInstallation {
+    type Error = String;
+
+    fn try_from(
+        proto: golem_api_grpc::proto::golem::component::PluginInstallation,
+    ) -> Result<Self, Self::Error> {
+        Ok(PluginInstallation {
+            id: proto.id.ok_or("Missing id")?.try_into()?,
+            name: proto.name,
+            version: proto.version,
+            priority: proto.priority,
+            parameters: proto.parameters,
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
@@ -215,6 +236,7 @@ pub trait PluginOwner:
         + From<Self>
         + TryInto<Self, Error = String>
         + Clone
+        + Debug
         + Display
         + Send
         + Sync
@@ -253,4 +275,294 @@ impl HasAccountId for DefaultPluginOwner {
 
 impl PluginOwner for DefaultPluginOwner {
     type Row = crate::repo::plugin::DefaultPluginOwnerRow;
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct PluginDefinition<Owner: PluginOwner, Scope: PluginScope> {
+    pub name: String,
+    pub version: String,
+    pub description: String,
+    pub icon: Vec<u8>,
+    pub homepage: String,
+    pub specs: PluginTypeSpecificDefinition,
+    pub scope: Scope,
+    pub owner: Owner,
+}
+
+impl From<PluginDefinition<DefaultPluginOwner, DefaultPluginScope>>
+    for golem_api_grpc::proto::golem::component::PluginDefinition
+{
+    fn from(value: PluginDefinition<DefaultPluginOwner, DefaultPluginScope>) -> Self {
+        golem_api_grpc::proto::golem::component::PluginDefinition {
+            name: value.name,
+            version: value.version,
+            description: value.description,
+            icon: value.icon,
+            homepage: value.homepage,
+            specs: Some(value.specs.into()),
+            scope: Some(value.scope.into()),
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::PluginDefinition>
+    for PluginDefinition<DefaultPluginOwner, DefaultPluginScope>
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::PluginDefinition,
+    ) -> Result<Self, Self::Error> {
+        Ok(PluginDefinition {
+            name: value.name,
+            version: value.version,
+            description: value.description,
+            icon: value.icon,
+            homepage: value.homepage,
+            specs: value.specs.ok_or("Missing plugin specs")?.try_into()?,
+            scope: value.scope.ok_or("Missing plugin scope")?.try_into()?,
+            owner: DefaultPluginOwner,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct PluginDefinitionWithoutOwner<Scope: PluginScope> {
+    pub name: String,
+    pub version: String,
+    pub description: String,
+    pub icon: Vec<u8>,
+    pub homepage: String,
+    pub specs: PluginTypeSpecificDefinition,
+    pub scope: Scope,
+}
+
+impl<Scope: PluginScope> PluginDefinitionWithoutOwner<Scope> {
+    pub fn with_owner<Owner: PluginOwner>(self, owner: Owner) -> PluginDefinition<Owner, Scope> {
+        PluginDefinition {
+            name: self.name,
+            version: self.version,
+            description: self.description,
+            icon: self.icon,
+            homepage: self.homepage,
+            specs: self.specs,
+            scope: self.scope,
+            owner,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Enum)]
+#[repr(i8)]
+pub enum PluginType {
+    ComponentTransformer = 0,
+    OplogProcessor = 1,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Union)]
+#[oai(discriminator_name = "type", one_of = true)]
+#[serde(tag = "type")]
+pub enum PluginTypeSpecificDefinition {
+    ComponentTransformer(ComponentTransformerDefinition),
+    OplogProcessor(OplogProcessorDefinition),
+}
+
+impl PluginTypeSpecificDefinition {
+    pub fn plugin_type(&self) -> PluginType {
+        match self {
+            PluginTypeSpecificDefinition::ComponentTransformer(_) => {
+                PluginType::ComponentTransformer
+            }
+            PluginTypeSpecificDefinition::OplogProcessor(_) => PluginType::OplogProcessor,
+        }
+    }
+}
+
+impl From<PluginTypeSpecificDefinition>
+    for golem_api_grpc::proto::golem::component::PluginTypeSpecificDefinition
+{
+    fn from(value: PluginTypeSpecificDefinition) -> Self {
+        match value {
+            PluginTypeSpecificDefinition::ComponentTransformer(value) => golem_api_grpc::proto::golem::component::PluginTypeSpecificDefinition {
+                definition: Some(golem_api_grpc::proto::golem::component::plugin_type_specific_definition::Definition::ComponentTransformer(value.into()))
+            },
+            PluginTypeSpecificDefinition::OplogProcessor(value) => golem_api_grpc::proto::golem::component::PluginTypeSpecificDefinition {
+                definition: Some(golem_api_grpc::proto::golem::component::plugin_type_specific_definition::Definition::OplogProcessor(value.into()))
+            }
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::PluginTypeSpecificDefinition>
+    for PluginTypeSpecificDefinition
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::PluginTypeSpecificDefinition,
+    ) -> Result<Self, Self::Error> {
+        match value.definition.ok_or("Missing plugin type specific definition")? {
+            golem_api_grpc::proto::golem::component::plugin_type_specific_definition::Definition::ComponentTransformer(value) => Ok(PluginTypeSpecificDefinition::ComponentTransformer(value.try_into()?)),
+            golem_api_grpc::proto::golem::component::plugin_type_specific_definition::Definition::OplogProcessor(value) => Ok(PluginTypeSpecificDefinition::OplogProcessor(value.try_into()?)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct ComponentTransformerDefinition {
+    pub provided_wit_package: Option<String>,
+    pub json_schema: Option<String>,
+    pub validate_url: String,
+    pub transform_url: String,
+}
+
+impl From<ComponentTransformerDefinition>
+    for golem_api_grpc::proto::golem::component::ComponentTransformerDefinition
+{
+    fn from(value: ComponentTransformerDefinition) -> Self {
+        golem_api_grpc::proto::golem::component::ComponentTransformerDefinition {
+            provided_wit_package: value.provided_wit_package,
+            json_schema: value.json_schema,
+            validate_url: value.validate_url,
+            transform_url: value.transform_url,
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::ComponentTransformerDefinition>
+    for ComponentTransformerDefinition
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::ComponentTransformerDefinition,
+    ) -> Result<Self, Self::Error> {
+        Ok(ComponentTransformerDefinition {
+            provided_wit_package: value.provided_wit_package,
+            json_schema: value.json_schema,
+            validate_url: value.validate_url,
+            transform_url: value.transform_url,
+        })
+    }
+}
+
+impl ComponentTransformerDefinition {
+    pub fn validate_url(&self) -> &Uri {
+        todo!()
+    }
+
+    pub fn transform_url(&self) -> &Uri {
+        todo!()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct OplogProcessorDefinition {
+    pub component_id: ComponentId,
+    pub component_version: ComponentVersion,
+}
+
+impl From<OplogProcessorDefinition>
+    for golem_api_grpc::proto::golem::component::OplogProcessorDefinition
+{
+    fn from(value: OplogProcessorDefinition) -> Self {
+        golem_api_grpc::proto::golem::component::OplogProcessorDefinition {
+            component_id: Some(value.component_id.into()),
+            component_version: value.component_version,
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::OplogProcessorDefinition>
+    for OplogProcessorDefinition
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::OplogProcessorDefinition,
+    ) -> Result<Self, Self::Error> {
+        Ok(OplogProcessorDefinition {
+            component_id: value
+                .component_id
+                .ok_or("Missing component_id")?
+                .try_into()?,
+            component_version: value.component_version,
+        })
+    }
+}
+
+#[async_trait]
+pub trait PluginScope:
+    Debug
+    + Clone
+    + PartialEq
+    + Serialize
+    + for<'de> Deserialize<'de>
+    + Type
+    + ParseFromJSON
+    + ToJSON
+    + Send
+    + Sync
+    + 'static
+{
+    type Row: RowMeta<Sqlite>
+        + RowMeta<Postgres>
+        + for<'r> sqlx::FromRow<'r, SqliteRow>
+        + for<'r> sqlx::FromRow<'r, PgRow>
+        + From<Self>
+        + TryInto<Self, Error = String>
+        + Send
+        + Sync
+        + Unpin
+        + 'static;
+
+    /// Context required to calculate the set of `accessible_scopes`
+    type RequestContext: Send + Sync + 'static;
+
+    /// Gets all the plugin scopes valid for this given scope
+    async fn accessible_scopes(&self, context: Self::RequestContext) -> Result<Vec<Self>, String>;
+}
+
+#[async_trait]
+impl PluginScope for DefaultPluginScope {
+    type Row = crate::repo::plugin::DefaultPluginScopeRow;
+
+    type RequestContext = ();
+
+    async fn accessible_scopes(&self, _context: ()) -> Result<Vec<Self>, String> {
+        Ok(match self {
+            DefaultPluginScope::Global(_) => vec![self.clone()],
+            DefaultPluginScope::Component(_) => vec![Self::global(), self.clone()],
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct ComponentPluginInstallationTarget {
+    pub component_id: ComponentId,
+    pub component_version: ComponentVersion,
+}
+
+impl Display for ComponentPluginInstallationTarget {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.component_id, self.component_version)
+    }
+}
+
+impl PluginInstallationTarget for ComponentPluginInstallationTarget {
+    type Row = crate::repo::plugin_installation::ComponentPluginInstallationRow;
+
+    fn table_name() -> &'static str {
+        "component_plugin_installation"
+    }
 }

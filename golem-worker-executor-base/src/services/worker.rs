@@ -129,6 +129,7 @@ impl WorkerService for DefaultWorkerService {
             worker_metadata.parent.clone(),
             worker_metadata.last_known_status.component_size,
             worker_metadata.last_known_status.total_linear_memory_size,
+            worker_metadata.last_known_status.active_plugins.clone()
         );
         self.oplog_service
             .create(&owned_worker_id, initial_oplog_entry, component_type)
@@ -184,7 +185,7 @@ impl WorkerService for DefaultWorkerService {
             None => None,
             Some((
                 _,
-                OplogEntry::Create {
+                OplogEntry::CreateV1 {
                     worker_id,
                     component_version,
                     args,
@@ -207,6 +208,55 @@ impl WorkerService for DefaultWorkerService {
                         component_version,
                         component_size,
                         total_linear_memory_size: initial_total_linear_memory_size,
+                        ..WorkerStatusRecord::default()
+                    },
+                };
+
+                let status_value: Option<WorkerStatusRecord> = self
+                    .key_value_storage
+                    .with_entity("worker", "get", "worker_status")
+                    .get(
+                        KeyValueStorageNamespace::Worker,
+                        &Self::status_key(&owned_worker_id.worker_id),
+                    )
+                    .await
+                    .unwrap_or_else(|err| {
+                        panic!("failed to get worker status for {owned_worker_id} from KV storage: {err}")
+                    });
+
+                if let Some(status) = status_value {
+                    details.last_known_status = status;
+                }
+
+                Some(details)
+            }
+            Some((
+                     _,
+                     OplogEntry::Create {
+                         worker_id,
+                         component_version,
+                         args,
+                         env,
+                         account_id,
+                         timestamp,
+                         parent,
+                         component_size,
+                         initial_total_linear_memory_size,
+                         initial_active_plugins
+                     },
+                 )) => {
+                let mut details = WorkerMetadata {
+                    worker_id,
+                    args,
+                    env,
+                    account_id,
+                    created_at: timestamp,
+                    parent,
+                    last_known_status: WorkerStatusRecord {
+                        component_version,
+                        component_size,
+                        total_linear_memory_size: initial_total_linear_memory_size,
+                        active_plugins: initial_active_plugins,
                         ..WorkerStatusRecord::default()
                     },
                 };

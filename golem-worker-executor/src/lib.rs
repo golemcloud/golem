@@ -20,6 +20,8 @@ use std::sync::Arc;
 use crate::context::Context;
 use crate::services::AdditionalDeps;
 use async_trait::async_trait;
+use golem_common::model::component::ComponentOwner;
+use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope};
 use golem_worker_executor_base::durable_host::DurableWorkerCtx;
 use golem_worker_executor_base::preview2::golem::{api0_2_0, api1_1_0_rc1};
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
@@ -30,6 +32,7 @@ use golem_worker_executor_base::services::file_loader::FileLoader;
 use golem_worker_executor_base::services::golem_config::GolemConfig;
 use golem_worker_executor_base::services::key_value::KeyValueService;
 use golem_worker_executor_base::services::oplog::OplogService;
+use golem_worker_executor_base::services::plugins::{Plugins, PluginsObservations};
 use golem_worker_executor_base::services::promise::PromiseService;
 use golem_worker_executor_base::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc};
 use golem_worker_executor_base::services::scheduler::SchedulerService;
@@ -41,8 +44,9 @@ use golem_worker_executor_base::services::worker_enumeration::{
     RunningWorkerEnumerationService, WorkerEnumerationService,
 };
 use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
-use golem_worker_executor_base::services::All;
+use golem_worker_executor_base::services::{plugins, All};
 use golem_worker_executor_base::wasi_host::create_linker;
+use golem_worker_executor_base::workerctx::WorkerCtx;
 use golem_worker_executor_base::Bootstrap;
 use prometheus::Registry;
 use tokio::runtime::Handle;
@@ -59,6 +63,22 @@ struct ServerBootstrap {}
 impl Bootstrap<Context> for ServerBootstrap {
     fn create_active_workers(&self, golem_config: &GolemConfig) -> Arc<ActiveWorkers<Context>> {
         Arc::new(ActiveWorkers::<Context>::new(&golem_config.memory))
+    }
+
+    fn create_plugins(
+        &self,
+        golem_config: &GolemConfig,
+    ) -> (
+        Arc<
+            dyn Plugins<
+                    <<Context as WorkerCtx>::ComponentOwner as ComponentOwner>::PluginOwner,
+                    <Context as WorkerCtx>::PluginScope,
+                > + Send
+                + Sync,
+        >,
+        Arc<dyn PluginsObservations + Send + Sync>,
+    ) {
+        plugins::default_configured(&golem_config.component_service)
     }
 
     async fn create_services(
@@ -83,6 +103,7 @@ impl Bootstrap<Context> for ServerBootstrap {
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
+        plugins: Arc<dyn Plugins<DefaultPluginOwner, DefaultPluginScope> + Send + Sync>,
     ) -> anyhow::Result<All<Context>> {
         let additional_deps = AdditionalDeps {};
 
@@ -110,6 +131,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             worker_activator.clone(),
             events.clone(),
             file_loader.clone(),
+            plugins.clone(),
             additional_deps.clone(),
         ));
 
@@ -135,6 +157,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             worker_proxy.clone(),
             events.clone(),
             file_loader.clone(),
+            plugins.clone(),
             additional_deps,
         ))
     }

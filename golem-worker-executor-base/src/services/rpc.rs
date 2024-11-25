@@ -23,23 +23,24 @@ use golem_wasm_rpc::WitValue;
 use tokio::runtime::Handle;
 use tracing::debug;
 
-use golem_common::model::{IdempotencyKey, OwnedWorkerId, TargetWorkerId, WorkerId};
-
 use crate::error::GolemError;
 use crate::services::events::Events;
+use crate::services::plugins::Plugins;
 use crate::services::shard::ShardService;
 use crate::services::worker_proxy::{WorkerProxy, WorkerProxyError};
 use crate::services::{
     active_workers, blob_store, component, golem_config, key_value, oplog, promise, scheduler,
     shard, shard_manager, worker, worker_activator, worker_enumeration, HasActiveWorkers,
     HasBlobStoreService, HasComponentService, HasConfig, HasEvents, HasExtraDeps, HasFileLoader,
-    HasKeyValueService, HasOplogService, HasPromiseService, HasRpc,
+    HasKeyValueService, HasOplogService, HasPlugins, HasPromiseService, HasRpc,
     HasRunningWorkerEnumerationService, HasSchedulerService, HasShardManagerService,
     HasShardService, HasWasmtimeEngine, HasWorkerActivator, HasWorkerEnumerationService,
     HasWorkerProxy, HasWorkerService,
 };
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
+use golem_common::model::component::ComponentOwner;
+use golem_common::model::{IdempotencyKey, OwnedWorkerId, TargetWorkerId, WorkerId};
 
 use super::file_loader::FileLoader;
 
@@ -276,6 +277,11 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     worker_activator: Arc<dyn worker_activator::WorkerActivator + Send + Sync>,
     events: Arc<Events>,
     file_loader: Arc<FileLoader>,
+    plugins: Arc<
+        dyn Plugins<<Ctx::ComponentOwner as ComponentOwner>::PluginOwner, Ctx::PluginScope>
+            + Send
+            + Sync,
+    >,
     extra_deps: Ctx::ExtraDeps,
 }
 
@@ -301,8 +307,9 @@ impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
             scheduler_service: self.scheduler_service.clone(),
             worker_activator: self.worker_activator.clone(),
             events: self.events.clone(),
-            extra_deps: self.extra_deps.clone(),
             file_loader: self.file_loader.clone(),
+            plugins: self.plugins.clone(),
+            extra_deps: self.extra_deps.clone(),
         }
     }
 }
@@ -439,6 +446,21 @@ impl<Ctx: WorkerCtx> HasFileLoader for DirectWorkerInvocationRpc<Ctx> {
     }
 }
 
+impl<Ctx: WorkerCtx>
+    HasPlugins<<Ctx::ComponentOwner as ComponentOwner>::PluginOwner, Ctx::PluginScope>
+    for DirectWorkerInvocationRpc<Ctx>
+{
+    fn plugins(
+        &self,
+    ) -> Arc<
+        dyn Plugins<<Ctx::ComponentOwner as ComponentOwner>::PluginOwner, Ctx::PluginScope>
+            + Send
+            + Sync,
+    > {
+        self.plugins.clone()
+    }
+}
+
 impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -466,6 +488,11 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         worker_activator: Arc<dyn worker_activator::WorkerActivator + Send + Sync>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
+        plugins: Arc<
+            dyn Plugins<<Ctx::ComponentOwner as ComponentOwner>::PluginOwner, Ctx::PluginScope>
+                + Send
+                + Sync,
+        >,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
         Self {
@@ -489,6 +516,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             worker_activator,
             events,
             file_loader,
+            plugins,
             extra_deps,
         }
     }

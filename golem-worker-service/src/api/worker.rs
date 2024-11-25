@@ -3,8 +3,8 @@ use futures_util::TryStreamExt;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::OplogCursor;
 use golem_common::model::{
-    ComponentFilePath, ComponentId, IdempotencyKey, ScanCursor, TargetWorkerId, WorkerFilter,
-    WorkerId,
+    ComponentFilePath, ComponentId, IdempotencyKey, PluginInstallationId, ScanCursor,
+    TargetWorkerId, WorkerFilter, WorkerId,
 };
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
@@ -726,6 +726,80 @@ impl WorkerApi {
                     std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
                 })))
             });
+
+        record.result(response)
+    }
+
+    /// Activate a plugin
+    ///
+    /// The plugin must be one of the installed plugins for the worker's current component version.
+    #[oai(
+        path = "/:component_id/workers/:worker_name/activate-plugin",
+        method = "post",
+        operation_id = "activate_plugin"
+    )]
+    async fn activate_plugin(
+        &self,
+        component_id: Path<ComponentId>,
+        worker_name: Path<String>,
+        #[oai(name = "plugin-installation-id")] plugin_installation_id: Query<PluginInstallationId>,
+    ) -> Result<Json<ActivatePluginResponse>> {
+        let worker_id = make_worker_id(component_id.0, worker_name.0)?;
+
+        let record = recorded_http_api_request!(
+            "activate_plugin",
+            worker_id = worker_id.to_string(),
+            plugin_installation_id = plugin_installation_id.to_string()
+        );
+
+        let response = self
+            .worker_service
+            .activate_plugin(
+                &worker_id,
+                &plugin_installation_id.0,
+                empty_worker_metadata(),
+            )
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(|_| Json(ActivatePluginResponse {}));
+
+        record.result(response)
+    }
+
+    /// Deactivate a plugin
+    ///
+    /// The plugin must be one of the installed plugins for the worker's current component version.
+    #[oai(
+        path = "/:component_id/workers/:worker_name/deactivate-plugin",
+        method = "post",
+        operation_id = "deactivate_plugin"
+    )]
+    async fn deactivate_plugin(
+        &self,
+        component_id: Path<ComponentId>,
+        worker_name: Path<String>,
+        #[oai(name = "plugin-installation-id")] plugin_installation_id: Query<PluginInstallationId>,
+    ) -> Result<Json<DeactivatePluginResponse>> {
+        let worker_id = make_worker_id(component_id.0, worker_name.0)?;
+
+        let record = recorded_http_api_request!(
+            "activate_plugin",
+            worker_id = worker_id.to_string(),
+            plugin_installation_id = plugin_installation_id.to_string()
+        );
+
+        let response = self
+            .worker_service
+            .deactivate_plugin(
+                &worker_id,
+                &plugin_installation_id.0,
+                empty_worker_metadata(),
+            )
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(|_| Json(DeactivatePluginResponse {}));
 
         record.result(response)
     }
