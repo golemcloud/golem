@@ -22,6 +22,7 @@ use golem_api_grpc::proto::golem::component::v1::{
     get_installed_plugins_response, get_plugin_response, GetInstalledPluginsRequest,
     GetPluginRequest,
 };
+use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::config::RetryConfig;
 use golem_common::model::plugin::{
@@ -105,14 +106,14 @@ pub fn default_configured(
 ) {
     match config {
         ComponentServiceConfig::Grpc(config) => {
-            let client1 = DefaultGrpcPlugins::new(
+            let client1 = CachedPlugins::new(DefaultGrpcPlugins::new(
                 config.uri(),
                 config
                     .access_token
                     .parse::<Uuid>()
                     .expect("Access token must be an UUID"),
                 config.retries.clone(),
-            );
+            ));
             let client2 = client1.clone();
             (Arc::new(client1), Arc::new(client2))
         }
@@ -121,6 +122,146 @@ pub fn default_configured(
             let client2 = client1.clone();
             (Arc::new(client1), Arc::new(client2))
         }
+    }
+}
+
+#[derive(Clone)]
+struct CachedPlugins<Owner: PluginOwner, Scope: PluginScope, Inner: Plugins<Owner, Scope>> {
+    inner: Inner,
+    cached_plugin_installations: Cache<
+        (
+            AccountId,
+            ComponentId,
+            ComponentVersion,
+            PluginInstallationId,
+        ),
+        (),
+        PluginInstallation,
+        GolemError,
+    >,
+    cached_plugin_definitions:
+        Cache<(AccountId, String, String), (), PluginDefinition<Owner, Scope>, GolemError>,
+}
+
+impl<Owner: PluginOwner, Scope: PluginScope, Inner: Plugins<Owner, Scope>>
+    CachedPlugins<Owner, Scope, Inner>
+{
+    pub fn new(inner: Inner) -> Self {
+        // TODO: configuration
+        Self {
+            inner,
+            cached_plugin_installations: Cache::new(
+                Some(1024),
+                FullCacheEvictionMode::LeastRecentlyUsed(1),
+                BackgroundEvictionMode::None,
+                "plugin_installations",
+            ),
+            cached_plugin_definitions: Cache::new(
+                Some(1024),
+                FullCacheEvictionMode::LeastRecentlyUsed(1),
+                BackgroundEvictionMode::None,
+                "plugin_definitions",
+            ),
+        }
+    }
+}
+
+#[async_trait]
+impl<Owner: PluginOwner, Scope: PluginScope, Inner: Plugins<Owner, Scope> + Send + Sync>
+    PluginsObservations for CachedPlugins<Owner, Scope, Inner>
+{
+    async fn observe_plugin_installation(
+        &self,
+        account_id: &AccountId,
+        component_id: &ComponentId,
+        component_version: ComponentVersion,
+        plugin_installation: &PluginInstallation,
+    ) -> Result<(), GolemError> {
+        let key = (
+            account_id.clone(),
+            component_id.clone(),
+            component_version,
+            plugin_installation.id.clone(),
+        );
+        let installation = plugin_installation.clone();
+        let _ = self
+            .cached_plugin_installations
+            .get_or_insert_simple(&key, || Box::pin(async move { Ok(installation) }))
+            .await;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl<
+        Owner: PluginOwner,
+        Scope: PluginScope,
+        Inner: Plugins<Owner, Scope> + Clone + Send + Sync + 'static,
+    > Plugins<Owner, Scope> for CachedPlugins<Owner, Scope, Inner>
+{
+    async fn get_plugin_installation(
+        &self,
+        account_id: &AccountId,
+        component_id: &ComponentId,
+        component_version: ComponentVersion,
+        installation_id: &PluginInstallationId,
+    ) -> Result<PluginInstallation, GolemError> {
+        let key = (
+            account_id.clone(),
+            component_id.clone(),
+            component_version,
+            installation_id.clone(),
+        );
+        let inner = self.inner.clone();
+        let account_id = account_id.clone();
+        let component_id = component_id.clone();
+        let installation_id = installation_id.clone();
+        self.cached_plugin_installations
+            .get_or_insert_simple(&key, || {
+                Box::pin(async move {
+                    inner
+                        .get_plugin_installation(
+                            &account_id,
+                            &component_id,
+                            component_version,
+                            &installation_id,
+                        )
+                        .await
+                })
+            })
+            .await
+    }
+
+    async fn get_plugin_definition(
+        &self,
+        account_id: &AccountId,
+        component_id: &ComponentId,
+        component_version: ComponentVersion,
+        plugin_installation: &PluginInstallation,
+    ) -> Result<PluginDefinition<Owner, Scope>, GolemError> {
+        let key = (
+            account_id.clone(),
+            plugin_installation.name.clone(),
+            plugin_installation.version.clone(),
+        );
+        let inner = self.inner.clone();
+        let account_id = account_id.clone();
+        let component_id = component_id.clone();
+        let plugin_installation = plugin_installation.clone();
+        self.cached_plugin_definitions
+            .get_or_insert_simple(&key, || {
+                Box::pin(async move {
+                    inner
+                        .get_plugin_definition(
+                            &account_id,
+                            &component_id,
+                            component_version,
+                            &plugin_installation,
+                        )
+                        .await
+                })
+            })
+            .await
     }
 }
 
@@ -333,6 +474,3 @@ impl<Owner: PluginOwner, Scope: PluginScope> Plugins<Owner, Scope>
         Err(GolemError::runtime("Not available"))
     }
 }
-
-// TODO: implementation to get with DefaultPluginOwner and DefaultPluginScope through gRPC
-// TODO: generic implementation for caching
