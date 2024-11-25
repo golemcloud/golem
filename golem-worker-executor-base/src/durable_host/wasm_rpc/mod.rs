@@ -31,7 +31,9 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_common::model::exports::function_by_name;
 use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
-use golem_common::model::{AccountId, ComponentId, IdempotencyKey, OwnedWorkerId, TargetWorkerId, WorkerId};
+use golem_common::model::{
+    AccountId, ComponentId, IdempotencyKey, OwnedWorkerId, TargetWorkerId, WorkerId,
+};
 use golem_common::uri::oss::urn::{WorkerFunctionUrn, WorkerOrFunctionUrn};
 use golem_wasm_rpc::golem::rpc::types::{
     FutureInvokeResult, HostFutureInvokeResult, Pollable, Uri,
@@ -785,7 +787,10 @@ async fn try_get_typed_parameters(
     function_name: &str,
     params: &[WitValue],
 ) -> Vec<ValueAndType> {
-    if let Ok(metadata) = components.get_metadata(account_id, component_id, None).await {
+    if let Ok(metadata) = components
+        .get_metadata(account_id, component_id, None)
+        .await
+    {
         if let Ok(Some(function)) = function_by_name(&metadata.exports, function_name) {
             if function.parameters.len() == params.len() {
                 return params

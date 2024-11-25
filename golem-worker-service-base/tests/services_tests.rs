@@ -164,6 +164,7 @@ impl TestComponentService {
             created_at: Some(Utc::now()),
             component_type: None,
             files: vec![],
+            installed_plugins: vec![],
         }
     }
 

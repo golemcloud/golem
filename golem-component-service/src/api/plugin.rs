@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use crate::api::{ComponentError, Result};
-use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope, PluginDefinition, PluginDefinitionWithoutOwner};
+use golem_common::model::plugin::{
+    DefaultPluginOwner, DefaultPluginScope, PluginDefinition, PluginDefinitionWithoutOwner,
+};
 use golem_common::model::Empty;
 use golem_common::recorded_http_api_request;
 use golem_component_service_base::service::plugin::PluginService;

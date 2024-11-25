@@ -1721,7 +1721,9 @@ mod tests {
     };
     use crate::model::oplog::{LogLevel, OplogIndex, WorkerResourceId};
     use crate::model::regions::OplogRegion;
-    use crate::model::{AccountId, ComponentId, Empty, IdempotencyKey, PluginInstallationId, Timestamp, WorkerId};
+    use crate::model::{
+        AccountId, ComponentId, Empty, IdempotencyKey, PluginInstallationId, Timestamp, WorkerId,
+    };
     use golem_wasm_ast::analysis::analysed_type::{field, list, r#enum, record, s16, str, u64};
     use golem_wasm_rpc::{Value, ValueAndType};
     use poem_openapi::types::ToJSON;

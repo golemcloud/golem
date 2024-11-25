@@ -17,8 +17,15 @@ use test_r::test;
 
 use crate::compatibility::v1::backward_compatible;
 use goldenfile::Mint;
-use golem_common::model::oplog::{IndexedResourceKey, OplogEntry, OplogIndex, OplogPayload, WorkerResourceId, WrappedFunctionType};
-use golem_common::model::{AccountId, ComponentId, IdempotencyKey, PluginInstallationId, Timestamp, TimestampedWorkerInvocation, WorkerId, WorkerInvocation, WorkerResourceDescription, WorkerStatus, WorkerStatusRecord};
+use golem_common::config::RetryConfig;
+use golem_common::model::oplog::{
+    IndexedResourceKey, OplogEntry, OplogIndex, OplogPayload, WorkerResourceId, WrappedFunctionType,
+};
+use golem_common::model::{
+    AccountId, ComponentId, IdempotencyKey, PluginInstallationId, Timestamp,
+    TimestampedWorkerInvocation, WorkerId, WorkerInvocation, WorkerResourceDescription,
+    WorkerStatus, WorkerStatusRecord,
+};
 use golem_wasm_ast::analysis::analysed_type::bool;
 use golem_wasm_rpc::{Value, ValueAndType};
 use golem_worker_executor_base::durable_host::serialized::SerializableError;
@@ -26,7 +33,6 @@ use golem_worker_executor_base::durable_host::wasm_rpc::serialized::Serializable
 use golem_worker_executor_base::error::GolemError;
 use golem_worker_executor_base::services::rpc::RpcError;
 use uuid::Uuid;
-use golem_common::config::RetryConfig;
 
 #[test]
 pub fn golem_error() {

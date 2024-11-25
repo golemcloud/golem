@@ -125,7 +125,11 @@ impl<Owner: ComponentOwner> From<Component<Owner>>
             ))),
             component_type: Some(component_type.into()),
             files: value.files.into_iter().map(|file| file.into()).collect(),
-            installed_plugins: value.installed_plugins.into_iter().map(|plugin| plugin.into()).collect(),
+            installed_plugins: value
+                .installed_plugins
+                .into_iter()
+                .map(|plugin| plugin.into())
+                .collect(),
         }
     }
 }

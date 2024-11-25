@@ -33,6 +33,7 @@ use crate::services::file_loader::FileLoader;
 use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
 use crate::services::oplog::{Oplog, OplogService};
+use crate::services::plugins::Plugins;
 use crate::services::promise::PromiseService;
 use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
@@ -50,7 +51,6 @@ use golem_common::model::{
     AccountId, ComponentFilePath, ComponentVersion, IdempotencyKey, OwnedWorkerId,
     PluginInstallationId, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
-use crate::services::plugins::Plugins;
 
 /// WorkerCtx is the primary customization and extension point of worker executor. It is the context
 /// associated with each running worker, and it is responsible for initializing the WASM linker as
@@ -125,7 +125,11 @@ pub trait WorkerCtx:
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn Plugins<<Self::ComponentOwner as ComponentOwner>::PluginOwner, Self::PluginScope> + Send + Sync>
+        plugins: Arc<
+            dyn Plugins<<Self::ComponentOwner as ComponentOwner>::PluginOwner, Self::PluginScope>
+                + Send
+                + Sync,
+        >,
     ) -> Result<Self, GolemError>;
 
     /// Get the public part of the worker context

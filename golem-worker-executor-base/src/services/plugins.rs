@@ -13,14 +13,14 @@
 // limitations under the License.
 
 use crate::error::GolemError;
-use crate::grpc::{authorised_grpc_request, is_grpc_retriable, GrpcError, UriBackConversion};
+use crate::grpc::{authorised_grpc_request, UriBackConversion};
 use crate::services::golem_config::ComponentServiceConfig;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
 use golem_api_grpc::proto::golem::component::v1::plugin_service_client::PluginServiceClient;
 use golem_api_grpc::proto::golem::component::v1::{
-    get_installed_plugins_response, get_plugin_response, ComponentError,
-    GetInstalledPluginsRequest, GetPluginRequest,
+    get_installed_plugins_response, get_plugin_response, GetInstalledPluginsRequest,
+    GetPluginRequest,
 };
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::config::RetryConfig;
@@ -29,7 +29,6 @@ use golem_common::model::plugin::{
     PluginScope,
 };
 use golem_common::model::{AccountId, ComponentId, ComponentVersion, PluginInstallationId};
-use golem_common::retries::with_retries;
 use http::Uri;
 use std::sync::Arc;
 use tonic::codec::CompressionEncoding;
@@ -170,10 +169,10 @@ impl DefaultGrpcPlugins {
 impl PluginsObservations for DefaultGrpcPlugins {
     async fn observe_plugin_installation(
         &self,
-        account_id: &AccountId,
-        component_id: &ComponentId,
-        component_version: ComponentVersion,
-        plugin_installation: &PluginInstallation,
+        _account_id: &AccountId,
+        _component_id: &ComponentId,
+        _component_version: ComponentVersion,
+        _plugin_installation: &PluginInstallation,
     ) -> Result<(), GolemError> {
         Ok(())
     }
@@ -213,7 +212,7 @@ impl Plugins<DefaultPluginOwner, DefaultPluginScope> for DefaultGrpcPlugins {
                 .into_iter()
                 .map(|i| i.try_into())
                 .collect::<Result<Vec<_>, _>>()
-                .map_err(|err| GolemError::runtime(err))?, // TODO: new error cases
+                .map_err(GolemError::runtime)?, // TODO: new error cases
             Some(get_installed_plugins_response::Result::Error(error)) => {
                 Err(GolemError::runtime(format!("{error:?}")))? // TODO: new error cases
             }
@@ -269,9 +268,9 @@ impl Plugins<DefaultPluginOwner, DefaultPluginScope> for DefaultGrpcPlugins {
                 Ok(response
                     .plugin
                     .ok_or("Missing plugin field")
-                    .map_err(|err| GolemError::runtime(err))? // TODO: new error cases
+                    .map_err(GolemError::runtime)? // TODO: new error cases
                     .try_into()
-                    .map_err(|err| GolemError::runtime(err))?) // TODO: new error cases
+                    .map_err(GolemError::runtime)?) // TODO: new error cases
             }
             Some(get_plugin_response::Result::Error(error)) => {
                 Err(GolemError::runtime(format!("{error:?}")))? // TODO: new error cases

@@ -15,12 +15,14 @@
 use crate::services::AdditionalDeps;
 use anyhow::Error;
 use async_trait::async_trait;
+use golem_common::model::component::{ComponentOwner, DefaultComponentOwner};
 use golem_common::model::oplog::WorkerResourceId;
-use golem_common::model::{ComponentFilePath, PluginInstallationId};
+use golem_common::model::plugin::DefaultPluginScope;
 use golem_common::model::{
     AccountId, ComponentVersion, IdempotencyKey, OwnedWorkerId, WorkerId, WorkerMetadata,
     WorkerStatus, WorkerStatusRecord,
 };
+use golem_common::model::{ComponentFilePath, PluginInstallationId};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
@@ -39,6 +41,7 @@ use golem_worker_executor_base::services::file_loader::FileLoader;
 use golem_worker_executor_base::services::golem_config::GolemConfig;
 use golem_worker_executor_base::services::key_value::KeyValueService;
 use golem_worker_executor_base::services::oplog::{Oplog, OplogService};
+use golem_worker_executor_base::services::plugins::Plugins;
 use golem_worker_executor_base::services::promise::PromiseService;
 use golem_worker_executor_base::services::rpc::Rpc;
 use golem_worker_executor_base::services::scheduler::SchedulerService;
@@ -57,9 +60,6 @@ use std::collections::HashSet;
 use std::sync::{Arc, RwLock, Weak};
 use wasmtime::component::{Instance, ResourceAny};
 use wasmtime::{AsContextMut, ResourceLimiterAsync};
-use golem_common::model::component::{ComponentOwner, DefaultComponentOwner};
-use golem_common::model::plugin::DefaultPluginScope;
-use golem_worker_executor_base::services::plugins::Plugins;
 
 pub struct Context {
     pub durable_ctx: DurableWorkerCtx<Context>,
@@ -313,7 +313,11 @@ impl WorkerCtx for Context {
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn Plugins<<Self::ComponentOwner as ComponentOwner>::PluginOwner, Self::PluginScope> + Send + Sync>
+        plugins: Arc<
+            dyn Plugins<<Self::ComponentOwner as ComponentOwner>::PluginOwner, Self::PluginScope>
+                + Send
+                + Sync,
+        >,
     ) -> Result<Self, GolemError> {
         let golem_ctx = DurableWorkerCtx::create(
             owned_worker_id,
@@ -335,7 +339,7 @@ impl WorkerCtx for Context {
             worker_config,
             execution_status,
             file_loader,
-            plugins
+            plugins,
         )
         .await?;
         Ok(Self {

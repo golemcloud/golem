@@ -653,8 +653,7 @@ impl<Owner: ComponentOwner> DbComponentRepo<sqlx::Postgres, Owner> {
             component_version: component.version,
         };
 
-        let owner =
-            Owner::from_str(&component.namespace).map_err(RepoError::Internal)?;
+        let owner = Owner::from_str(&component.namespace).map_err(RepoError::Internal)?;
         let owner_row: Owner::Row = owner.into();
         let plugin_owner_row: <Owner::PluginOwner as PluginOwner>::Row = owner_row.into();
         let mut query = self
@@ -675,7 +674,8 @@ impl<Owner: ComponentOwner> DbComponentRepo<sqlx::Postgres, Owner> {
         let result = components
             .into_iter()
             .map(|component| async move {
-                let installed_plugins = self.get_installed_plugins_for_component(&component).await?;
+                let installed_plugins =
+                    self.get_installed_plugins_for_component(&component).await?;
                 Ok(ComponentRecord {
                     installed_plugins,
                     ..component
@@ -997,7 +997,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         .await
         .map_err::<RepoError, _>(|e| e.into())?;
 
-        self.add_installed_plugins(self.add_files(components).await?).await
+        self.add_installed_plugins(self.add_files(components).await?)
+            .await
     }
 
     #[when(sqlx::Sqlite -> get)]
@@ -1030,7 +1031,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         .await
         .map_err::<RepoError, _>(|e| e.into())?;
 
-        self.add_installed_plugins(self.add_files(components).await?).await
+        self.add_installed_plugins(self.add_files(components).await?)
+            .await
     }
 
     #[when(sqlx::Postgres -> get_all)]
@@ -1061,7 +1063,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         .await
         .map_err::<RepoError, _>(|e| e.into())?;
 
-        self.add_installed_plugins(self.add_files(components).await?).await
+        self.add_installed_plugins(self.add_files(components).await?)
+            .await
     }
 
     #[when(sqlx::Sqlite -> get_all)]
@@ -1092,7 +1095,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         .await
         .map_err::<RepoError, _>(|e| e.into())?;
 
-        self.add_installed_plugins(self.add_files(components).await?).await
+        self.add_installed_plugins(self.add_files(components).await?)
+            .await
     }
 
     #[when(sqlx::Postgres -> get_latest_version)]
@@ -1127,7 +1131,10 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         .await
         .map_err::<RepoError, _>(|e| e.into())?;
 
-        Ok(self.add_installed_plugins(self.add_files(component).await?).await?.pop())
+        Ok(self
+            .add_installed_plugins(self.add_files(component).await?)
+            .await?
+            .pop())
     }
 
     #[when(sqlx::Sqlite -> get_latest_version)]
@@ -1162,7 +1169,10 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         .await
         .map_err::<RepoError, _>(|e| e.into())?;
 
-        Ok(self.add_installed_plugins(self.add_files(component).await?).await?.pop())
+        Ok(self
+            .add_installed_plugins(self.add_files(component).await?)
+            .await?
+            .pop())
     }
 
     #[when(sqlx::Postgres -> get_by_version)]
@@ -1197,7 +1207,10 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         .await
         .map_err::<RepoError, _>(|e| e.into())?;
 
-        Ok(self.add_installed_plugins(self.add_files(component).await?).await?.pop())
+        Ok(self
+            .add_installed_plugins(self.add_files(component).await?)
+            .await?
+            .pop())
     }
 
     #[when(sqlx::Sqlite -> get_by_version)]
@@ -1232,7 +1245,10 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         .await
         .map_err::<RepoError, _>(|e| e.into())?;
 
-        Ok(self.add_installed_plugins(self.add_files(component).await?).await?.pop())
+        Ok(self
+            .add_installed_plugins(self.add_files(component).await?)
+            .await?
+            .pop())
     }
 
     #[when(sqlx::Postgres -> get_by_name)]
@@ -1265,7 +1281,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         .await
         .map_err::<RepoError, _>(|e| e.into())?;
 
-        self.add_installed_plugins(self.add_files(components).await?).await
+        self.add_installed_plugins(self.add_files(components).await?)
+            .await
     }
 
     #[when(sqlx::Sqlite -> get_by_name)]
@@ -1298,7 +1315,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         .await
         .map_err::<RepoError, _>(|e| e.into())?;
 
-        self.add_installed_plugins(self.add_files(components).await?).await
+        self.add_installed_plugins(self.add_files(components).await?)
+            .await
     }
 
     async fn get_id_by_name(&self, namespace: &str, name: &str) -> Result<Option<Uuid>, RepoError> {

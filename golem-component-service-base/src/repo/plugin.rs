@@ -15,15 +15,14 @@
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use golem_common::model::plugin::{
-    ComponentTransformerDefinition,
-    OplogProcessorDefinition, PluginDefinition, PluginOwner, PluginScope,
-    PluginTypeSpecificDefinition,
+    ComponentTransformerDefinition, OplogProcessorDefinition, PluginDefinition, PluginOwner,
+    PluginScope, PluginTypeSpecificDefinition,
 };
 use golem_common::model::ComponentId;
 use golem_common::repo::RowMeta;
 use golem_service_base::repo::RepoError;
 use sqlx::{Database, Pool, QueryBuilder};
-use std::fmt::{Debug, Display, Formatter};
+use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::Arc;

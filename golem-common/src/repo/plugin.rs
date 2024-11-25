@@ -13,13 +13,13 @@
 // limitations under the License.
 
 use crate::model::plugin::{ComponentPluginScope, DefaultPluginOwner, DefaultPluginScope};
+use crate::model::{ComponentId, Empty};
 use crate::repo::component::DefaultComponentOwnerRow;
 use crate::repo::RowMeta;
 use sqlx::query_builder::Separated;
 use sqlx::{Database, Encode, QueryBuilder, Type};
 use std::fmt::{Display, Formatter};
 use uuid::Uuid;
-use crate::model::{ComponentId, Empty};
 
 #[derive(sqlx::FromRow, Debug, Clone)]
 pub struct DefaultPluginOwnerRow {}
