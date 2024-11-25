@@ -16,11 +16,12 @@ use crate::gateway_api_definition::http::{QueryInfo, VarInfo};
 
 use crate::gateway_api_deployment::ApiSiteString;
 use crate::gateway_request::http_request::ApiInputPath;
+use golem_wasm_ast::analysis::analysed_type::field;
+use http::uri::Scheme;
 use http::HeaderMap;
+use poem_openapi::param::Cookie;
 use serde_json::Value;
 use std::collections::HashMap;
-use http::uri::Scheme;
-use poem_openapi::param::Cookie;
 use url::Url;
 
 // https://github.com/golemcloud/golem/issues/1069
@@ -115,7 +116,12 @@ pub struct HttpRequestDetails {
 impl HttpRequestDetails {
     pub fn url(&self) -> Result<Url, String> {
         let url_str = if let Some(scheme) = &self.scheme {
-            format!("{}://{}{}", scheme, &self.host, &self.api_input_path.to_string())
+            format!(
+                "{}://{}{}",
+                scheme,
+                &self.host,
+                &self.api_input_path.to_string()
+            )
         } else {
             format!("{}{}", &self.host, &self.api_input_path.to_string())
         };
@@ -169,7 +175,7 @@ impl HttpRequestDetails {
             .0
             .fields
             .iter()
-            .find(|field| field.name == "Cookie")
+            .find(|field| field.name == "Cookie" || field.name == "cookie")
             .and_then(|field| field.value.as_str().map(|x| x.to_string()))
             .and_then(|cookie_header| {
                 let parts: Vec<&str> = cookie_header.split(';').collect();
@@ -185,42 +191,26 @@ impl HttpRequestDetails {
             })
     }
 
-    pub fn get_auth_state_from_cookie(&self) -> Option<String> {
-        self.request_header_values
-            .0
-            .fields
-            .iter()
-            .find(|field| field.name == "Cookie")
-            .and_then(|field| field.value.as_str().map(|x| x.to_string()))
-            .and_then(|cookie_header| {
-                let parts: Vec<&str> = cookie_header.split(';').collect();
-                let state_part = parts.iter().find(|part| part.contains("auth_state"));
-                state_part.and_then(|part| {
-                    let token_parts: Vec<&str> = part.split('=').collect();
-                    if token_parts.len() == 2 {
-                        Some(token_parts[1].to_string())
-                    } else {
-                        None
-                    }
-                })
-            })
-    }
+    pub fn get_cookie_values(&self) -> HashMap<&str, &str> {
+        let mut hash_map = HashMap::new();
 
-    pub fn get_auth_bearer_token(&self) -> Option<String> {
-        self.request_header_values
-            .0
-            .fields
-            .iter()
-            .find(|field| field.name == "Authorization")
-            .and_then(|field| field.value.as_str().map(|x| x.to_string()))
-            .and_then(|auth_header| {
-                let parts: Vec<&str> = auth_header.split_whitespace().collect();
-                if parts.len() == 2 && parts[0] == "Bearer" {
-                    Some(parts[1].to_string())
-                } else {
-                    None
+        for json_key_value in &self.request_header_values.0.fields {
+            let field_name = &json_key_value.name;
+
+            if field_name == "cookie" || field_name == "Cookie" {
+                if let Some(cookie_header) = json_key_value.value.as_str() {
+                    let parts: Vec<&str> = cookie_header.split(';').collect();
+                    for part in parts {
+                        let key_value: Vec<&str> = part.split('=').collect();
+                        if let (Some(key), Some(value)) = (key_value.first(), key_value.get(1)) {
+                            hash_map.insert(key.trim(), value.trim());
+                        }
+                    }
                 }
-            })
+            }
+        }
+
+        hash_map
     }
 
     pub fn get_accept_content_type_header(&self) -> Option<String> {

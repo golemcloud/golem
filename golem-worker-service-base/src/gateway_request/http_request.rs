@@ -14,13 +14,13 @@
 
 use crate::gateway_api_deployment::ApiSiteString;
 use http::header::HOST;
+use http::uri::Scheme;
 use http::StatusCode;
 use hyper::http::{HeaderMap, Method};
 use poem::{Body, Response};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fmt::Display;
-use http::uri::Scheme;
 use tracing::error;
 
 #[derive(Clone, Debug)]
@@ -46,7 +46,6 @@ impl InputHttpRequest {
     pub async fn from_request(request: poem::Request) -> Result<InputHttpRequest, ErrorResponse> {
         let (req_parts, body) = request.into_parts();
         let headers = req_parts.headers;
-        let cookies = request.cookie();
         let uri = req_parts.uri;
         let scheme = uri.scheme();
 

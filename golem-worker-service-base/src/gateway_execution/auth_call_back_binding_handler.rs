@@ -44,7 +44,7 @@ pub struct AuthorisationSuccess {
     pub target_path: String,
     pub id_token: Option<String>,
     pub access_token: String,
-    pub session: String
+    pub session: String,
 }
 
 #[derive(Debug)]
@@ -158,12 +158,16 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
             .map_err(|_| AuthorisationError::MissingParametersInSession)?
             .ok_or(AuthorisationError::InvalidSession)?;
 
-        let target_path =
-            session_params.get(&DataKey("redirect_url".to_string())).ok_or(
-                AuthorisationError::Internal("Failed to obtain redirect url of protected resource from session store".to_string())
-            )?.as_string().ok_or(
-                AuthorisationError::Internal("Invalid redirect url (target url of the protected resource)".to_string())
-            )?;
+        let target_path = session_params
+            .get(&DataKey("redirect_url".to_string()))
+            .ok_or(AuthorisationError::Internal(
+                "Failed to obtain redirect url of protected resource from session store"
+                    .to_string(),
+            ))?
+            .as_string()
+            .ok_or(AuthorisationError::Internal(
+                "Invalid redirect url (target url of the protected resource)".to_string(),
+            ))?;
 
         let nonce = session_params
             .get(&DataKey("nonce".to_string()))
@@ -190,13 +194,7 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
                 token_response.clone(),
                 &Nonce::new(nonce.clone()),
             )
-            .map_err(AuthorisationError::ClaimFetchError)
-            .map_err({
-                |err| {
-                    dbg!("error", &err);
-                    err
-                }
-            })?;
+            .map_err(AuthorisationError::ClaimFetchError)?;
 
         let _ = session_store
             .0
@@ -215,20 +213,19 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
         let _ = session_store
             .0
             .insert(
-                SessionId(state),
+                SessionId(state.clone()),
                 DataKey("access_token".to_string()),
-                DataValue(serde_json::Value::String(access_token)),
+                DataValue(serde_json::Value::String(access_token.clone())),
             )
             .await
             .map_err(|err| AuthorisationError::SessionUpdateError(err.to_string()))?;
-
 
         if let Some(id_token) = &id_token {
             // id token in session store
             let _ = session_store
                 .0
                 .insert(
-                    SessionId(state),
+                    SessionId(state.clone()),
                     DataKey("id_token".to_string()),
                     DataValue(serde_json::Value::String(id_token.to_string())),
                 )
@@ -242,7 +239,7 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
             target_path,
             id_token,
             access_token,
-            session: state
+            session: state,
         })
     }
 }

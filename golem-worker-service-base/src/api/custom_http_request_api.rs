@@ -87,8 +87,7 @@ impl<Namespace: Clone + Send + Sync + 'static> CustomHttpRequestApi<Namespace> {
     }
 
     pub async fn execute(&self, request: Request) -> Response {
-        let input_http_request_result =
-            InputHttpRequest::from_request(request).await;
+        let input_http_request_result = InputHttpRequest::from_request(request).await;
 
         match input_http_request_result {
             Ok(input_http_request) => {

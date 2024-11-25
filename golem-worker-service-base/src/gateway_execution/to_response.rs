@@ -39,7 +39,7 @@ pub trait ToResponse<Response> {
 }
 
 #[async_trait]
-impl<'a> ToResponse<poem::Response> for FileServerBindingResult {
+impl ToResponse<poem::Response> for FileServerBindingResult {
     async fn to_response(
         self,
         _request_details: &GatewayRequestDetails,
@@ -70,7 +70,7 @@ impl<'a> ToResponse<poem::Response> for FileServerBindingResult {
 
 // Preflight (OPTIONS) response that will consist of all configured CORS headers
 #[async_trait]
-impl<'a> ToResponse<poem::Response> for CorsPreflight {
+impl ToResponse<poem::Response> for CorsPreflight {
     async fn to_response(
         self,
         _request_details: &GatewayRequestDetails,
@@ -150,7 +150,8 @@ impl ToResponse<poem::Response> for AuthCallBackResult {
                         format!(
                             "access_token={}; HttpOnly; Secure; Path=/; SameSite=None",
                             access_token
-                        ).as_str(),
+                        )
+                        .as_str(),
                     );
 
                 if let Some(id_token) = id_token {
@@ -159,7 +160,8 @@ impl ToResponse<poem::Response> for AuthCallBackResult {
                         format!(
                             "id_token={}; HttpOnly; Secure; Path=/; SameSite=None",
                             id_token
-                        ).as_str(),
+                        )
+                        .as_str(),
                     )
                 }
 
@@ -168,11 +170,12 @@ impl ToResponse<poem::Response> for AuthCallBackResult {
                     format!(
                         "session_id={}; HttpOnly; Secure; Path=/; SameSite=None",
                         session_id
-                    ).as_str(),
+                    )
+                    .as_str(),
                 );
 
                 response.body(())
-            },
+            }
 
             Err(err) => err.to_response_from_safe_display(|_| StatusCode::UNAUTHORIZED),
         }

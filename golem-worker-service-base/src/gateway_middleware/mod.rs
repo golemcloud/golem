@@ -61,6 +61,7 @@ impl Middlewares {
                     HttpMiddleware::AddCorsHeaders(_) => {}
                     HttpMiddleware::AuthenticateRequest(auth) => {
                         let result = auth.process_input(input).await?;
+
                         match result {
                             MiddlewareSuccess::Redirect(response) => {
                                 return Ok(MiddlewareSuccess::Redirect(response))

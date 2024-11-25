@@ -27,13 +27,20 @@ impl HttpRequestAuthentication {
         let identity_provider = identity_provider_resolver
             .resolve(&self.security_scheme.security_scheme.provider_type());
 
+        let client = identity_provider
+            .get_client(&self.security_scheme)
+            .map_err(|err| MiddlewareInError::Unauthorized(err.to_safe_string()))?;
+
+        let identity_token_verifier = identity_provider.get_id_token_verifier(&client);
+
         let open_id_client = identity_provider
             .get_client(&self.security_scheme)
             .map_err(|err| MiddlewareInError::Unauthorized(err.to_safe_string()))?;
 
-        let id_token = input.get_id_token_from_cookie();
+        let cookie_values = input.get_cookie_values();
 
-        let state = input.get_auth_state_from_cookie();
+        let id_token = cookie_values.get("id_token");
+        let state = cookie_values.get("session_id");
 
         if let (Some(id_token), Some(state)) = (id_token, state) {
             let id_token = CoreIdToken::from_str(&id_token)
@@ -41,22 +48,23 @@ impl HttpRequestAuthentication {
 
             let nonce = session_store
                 .0
-                .get(SessionId(state.clone()), DataKey::nonce())
+                .get(SessionId(state.to_string()), DataKey::nonce())
                 .await
                 .map_err(MiddlewareInError::InternalServerError)?;
 
             if let Some(nonce) = nonce.and_then(|x| x.as_string()) {
-                let result: Result<&CoreIdTokenClaims, ClaimsVerificationError> =
-                    id_token.claims(&open_id_client.id_token_verifier(), &Nonce::new(nonce));
+                let token_claims_result: Result<&CoreIdTokenClaims, ClaimsVerificationError> =
+                    id_token.claims(&identity_token_verifier, &Nonce::new(nonce));
 
-                match result {
+                match token_claims_result {
                     Ok(claims) => {
                         internal::store_claims_in_session_store(
-                            &SessionId(state.clone()),
+                            &SessionId(state.to_string()),
                             claims,
                             session_store,
                         )
                         .await?;
+
                         Ok(MiddlewareSuccess::PassThrough)
                     }
                     Err(ClaimsVerificationError::Expired(_)) => {
@@ -157,6 +165,7 @@ mod internal {
         let json = serde_json::to_value(claims)
             .map_err(|err| err.to_string())
             .unwrap();
+
         let claims_data_value = DataValue(json);
 
         session_store

@@ -245,6 +245,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         }
     }
 
+    // If redirects, it instantly responds with Some(response)
     async fn redirect_or_continue<Response>(
         input: &Input<Namespace>,
         middlewares: &Middlewares,

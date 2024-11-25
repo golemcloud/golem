@@ -37,8 +37,9 @@ use golem_worker_service_base::gateway_security::{
     Provider, SecurityScheme, SecuritySchemeIdentifier,
 };
 use golem_worker_service_base::{api, gateway_api_definition};
-use http::{HeaderMap, HeaderValue, Method};
+use http::header::LOCATION;
 use http::uri::Scheme;
+use http::{HeaderMap, HeaderValue, Method};
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use serde_json::Value;
 use url::Url;
@@ -196,10 +197,17 @@ async fn test_end_to_end_api_gateway_with_multiple_security() {
     // redirects to the open id connector login
     let initial_redirect_response_info_opt =
         match initial_redirect_response_to_identity_provider.clone() {
-            TestResponse::RedirectResponse { redirect_url } => {
-                let query = redirect_url.query();
+            TestResponse::RedirectResponse { headers } => {
+                let location = headers
+                    .get(LOCATION)
+                    .expect("Expecting location")
+                    .to_str()
+                    .unwrap();
+                let url =
+                    Url::parse(location).expect("Expect the initial redirection to be a full URL");
+
                 let query_components =
-                    ApiInputPath::query_components_from_str(query.unwrap_or_default());
+                    ApiInputPath::query_components_from_str(url.query().unwrap_or_default());
 
                 Some(security::get_initial_redirect_data(&query_components))
             }
@@ -238,21 +246,45 @@ async fn test_end_to_end_api_gateway_with_multiple_security() {
         );
 
     // Executing this request against the same API definition
-    let input_http_request =
-        InputHttpRequest::from_request(call_back_request_from_identity_provider).await;
+    let request_with_cookies =
+        InputHttpRequest::from_request(call_back_request_from_identity_provider)
+            .await
+            .expect("Failed to get request");
 
     // If successful, then auth call back is successful and we get a redirect response
     // to be then executed against the original endpoint which is in api-request
-    let response = execute(
-        &input_http_request.unwrap(),
-        &api_specification,
-        &session_store,
-    )
-    .await;
+    let response = execute(&request_with_cookies, &api_specification, &session_store).await;
 
-    //let redirect_uri_obtained = initial_redirect_url_data.redirect_uri.as_str();
+    match response {
+        TestResponse::RedirectResponse { headers } => {
+            let request = security::create_request_from_redirect(&headers);
+            let api_request = InputHttpRequest::from_request(request)
+                .await
+                .expect("Failed to get http request");
 
-    assert_eq!(1, 2);
+            let test_response = execute(&api_request, &api_specification, &session_store).await;
+
+            let result = (
+                test_response.get_function_name().unwrap(),
+                test_response.get_function_params().unwrap(),
+            );
+
+            let expected = (
+                "golem:it/api.{get-cart-contents}".to_string(),
+                Value::Array(vec![
+                    Value::String("a".to_string()),
+                    Value::String("b".to_string()),
+                ]),
+            );
+
+            assert_eq!(result, expected);
+        }
+
+        _ => assert!(
+            false,
+            "The response from auth middleware is expected to be a redirect response"
+        ),
+    }
 }
 
 #[test]
@@ -1262,8 +1294,8 @@ mod internal {
     use serde_json::Value;
     use std::collections::HashMap;
 
+    use http::{HeaderMap, StatusCode};
     use std::sync::Arc;
-    use http::StatusCode;
     use url::Url;
 
     pub(crate) struct TestApiGatewayWorkerRequestExecutor {}
@@ -1305,7 +1337,7 @@ mod internal {
         },
         CorsPreflightResponse(Cors), // preflight test response
         RedirectResponse {
-            redirect_url: Url,
+            headers: HeaderMap,
         }, // If any middleware resulted in redirect
     }
 
@@ -1328,23 +1360,9 @@ mod internal {
                             get_test_response_for_static_preflight(response)
                         }
                         // If binding was http auth call back, we expect a redirect to the original Url
-                        StaticBinding::HttpAuthCallBack(_) => {
-
-                            let location = response.headers().get("Location").and_then(|x| x.to_str().ok()).expect(
-                                "Expected a redirect URL in the response of http auth call back"
-                            );
-
-                            dbg!(location);
-
-                            // Access cookies from the "Set-Cookie" header
-                            if let Some(cookie) = response.headers().get_all("Set-Cookie").iter().next() {
-                                println!("Set-Cookie: {}", cookie.to_str().unwrap());
-                            }
-
-                           TestResponse::RedirectResponse {
-                               redirect_url: Url::parse(location).expect("Expected a valid URL")
-                           }
-                        }
+                        StaticBinding::HttpAuthCallBack(_) => TestResponse::RedirectResponse {
+                            headers: response.headers().clone(),
+                        },
                     }
                 }
 
@@ -1588,14 +1606,8 @@ mod internal {
 
         // If the binding contains middlewares that can return with a redirect instead of
         // propagating the worker response, we capture that
-        if is_middleware_redirect(&binding.middlewares) {
-            let location = headers
-                .get(LOCATION)
-                .map(|x| x.to_str().unwrap().to_string())
-                .expect("Cors preflight response expects allow_origin");
-            return TestResponse::RedirectResponse {
-                redirect_url: Url::parse(location.as_str()).expect("Invalid redirect location url"),
-            };
+        if is_middleware_redirect(&binding.middlewares, &response) {
+            return TestResponse::RedirectResponse { headers };
         }
 
         let bytes = response
@@ -1653,17 +1665,22 @@ mod internal {
 
     // Spotting if there is a middleware that can respond with a redirect response
     // instead of passing it through to the worker or other bindings.
-    fn is_middleware_redirect(middlewares: &Middlewares) -> bool {
+    fn is_middleware_redirect(middlewares: &Middlewares, response: &Response) -> bool {
         // If the binding contains middlewares that can return with a redirect instead of
         // propagating the worker response, we capture that
 
         let mut can_redirect = false;
         for middleware in middlewares.0.iter() {
             match middleware {
-                // Input middleware that can redirect
+                // Input middleware that can redirect, and if the response is an actual redirect,
+                // then we tag the TestResponse as a redirect.
+                // This is the only valid state, and if we get any other redirect response
+                // as part of an actual response, we spot a bug!
                 Middleware::Http(HttpMiddleware::AuthenticateRequest(_)) => {
-                    can_redirect = true;
-                    break;
+                    if response.status() == StatusCode::FOUND {
+                        can_redirect = true;
+                        break;
+                    }
                 }
                 // Output middleware
                 Middleware::Http(HttpMiddleware::AddCorsHeaders(_)) => {}
@@ -1700,7 +1717,7 @@ mod internal {
 
 mod security {
     use async_trait::async_trait;
-    use chrono::{Duration, Utc};
+    use chrono::{Duration, TimeZone, Utc};
     use golem_service_base::auth::DefaultNamespace;
     use golem_service_base::repo::RepoError;
     use golem_worker_service_base::gateway_security::{
@@ -1714,7 +1731,8 @@ mod security {
     use golem_worker_service_base::service::gateway::security_scheme::{
         DefaultSecuritySchemeService, SecuritySchemeService,
     };
-    use http::{Method, Uri};
+    use http::header::{COOKIE, HOST};
+    use http::{HeaderMap, HeaderValue, Method, Uri};
     use openidconnect::core::{
         CoreClaimName, CoreClaimType, CoreClientAuthMethod, CoreGrantType, CoreIdToken,
         CoreIdTokenClaims, CoreIdTokenFields, CoreIdTokenVerifier, CoreJsonWebKey,
@@ -1732,9 +1750,11 @@ mod security {
     use poem::Request;
     use rsa::pkcs8::DecodePublicKey;
     use rsa::traits::PublicKeyParts;
+    use serde_json::Value;
     use std::collections::HashMap;
     use std::str::FromStr;
     use std::sync::Arc;
+    use testcontainers::core::CgroupnsMode::Host;
     use tokio::sync::Mutex;
 
     // These keys are used over the default JwkKeySet of the actual client
@@ -1920,7 +1940,7 @@ mod security {
             CoreIdTokenClaims::new(
                 IssuerUrl::new("https://accounts.google.com".to_string()).unwrap(),
                 vec![Audience::new("client_id_foo".to_string())],
-                Utc::now() + Duration::seconds(300),
+                Utc.with_ymd_and_hms(9999, 1, 1, 0, 0, 0).unwrap(),
                 Utc::now(),
                 StandardClaims::new(SubjectIdentifier::new(
                     "5f83e0ca-2b8e-4e8c-ba0a-f80fe9bc3632".to_string(),
@@ -2181,5 +2201,55 @@ mod security {
         )]));
 
         new_provider_metadata
+    }
+
+    pub(crate) fn create_request_from_redirect(headers: &HeaderMap) -> Request {
+        let cookies = extract_cookies_from_redirect(headers);
+
+        let cookie_header = cookies
+            .into_iter()
+            .map(|(key, value)| format!("{}={}", key, value))
+            .collect::<Vec<String>>()
+            .join("; ");
+
+        let mut request_headers = HeaderMap::new();
+
+        request_headers.insert(COOKIE, HeaderValue::from_str(&cookie_header).unwrap());
+
+        let location = headers
+            .get("location")
+            .and_then(|loc| loc.to_str().ok())
+            .unwrap_or("/");
+
+        Request::builder()
+            .method(Method::GET)
+            .uri(Uri::from_str(format!("http://localhost/{}", location).as_str()).unwrap()) // Use the "Location" header as the URL
+            .header(HOST, "localhost")
+            .header(COOKIE, cookie_header)
+            .finish()
+    }
+
+    fn extract_cookies_from_redirect(headers: &HeaderMap) -> HashMap<String, String> {
+        let mut cookies = HashMap::new();
+
+        // Extract "Set-Cookie" headers from the provided headers (i.e., headers of RedirectResponse)
+        let view = headers.get_all("set-cookie");
+        for cookie in view.iter() {
+            if let Ok(cookie_str) = cookie.to_str() {
+                // Split the cookie string by ';' (attributes of cookies like "HttpOnly", "Secure", etc.)
+                let parts: Vec<&str> = cookie_str.split(';').collect();
+
+                // Get the first part, which contains the cookie name and value
+                if let Some(cookie_value) = parts.get(0) {
+                    let cookie_parts: Vec<&str> = cookie_value.splitn(2, '=').collect();
+                    if cookie_parts.len() == 2 {
+                        // Insert cookie name and value into the HashMap
+                        cookies.insert(cookie_parts[0].to_string(), cookie_parts[1].to_string());
+                    }
+                }
+            }
+        }
+
+        cookies
     }
 }
