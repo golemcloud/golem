@@ -76,7 +76,7 @@ async fn execute(
     let input = Input::new(
         &resolved_gateway_binding,
         session_store,
-        Arc::new(internal::TestIdentityProviderResolver),
+        Arc::new(security::TestIdentityProviderResolver),
     );
 
     let poem_response: poem::Response = test_executor.execute_binding(&input).await;
@@ -200,7 +200,7 @@ async fn test_end_to_end_api_gateway_with_multiple_security() {
                 let query_components =
                     ApiInputPath::query_components_from_str(query.unwrap_or_default());
 
-                Some(internal::get_initial_redirect_data(&query_components))
+                Some(security::get_initial_redirect_data(&query_components))
             }
             _ => None,
         };
@@ -228,7 +228,7 @@ async fn test_end_to_end_api_gateway_with_multiple_security() {
 
     // Manually call back the auth_call_back endpoint by assuming the identity-provider
     let call_back_request_from_identity_provider =
-        internal::request_from_identity_provider_to_auth_call_back_endpoint(
+        security::request_from_identity_provider_to_auth_call_back_endpoint(
             initial_redirect_response_info.state.as_str(),
             "foo_code", // Decided by IdentityProvider
             initial_redirect_response_info.scope.as_str(),
@@ -240,6 +240,8 @@ async fn test_end_to_end_api_gateway_with_multiple_security() {
     let input_http_request =
         InputHttpRequest::from_request(call_back_request_from_identity_provider).await;
 
+    // If successful, then auth call back is successful and we get a redirect response
+    // to be then executed against the original endpoint which is in api-request
     let _ = execute(
         &input_http_request.unwrap(),
         &api_specification,
@@ -847,7 +849,7 @@ async fn get_api_spec_worker_binding(
         &DefaultNamespace(),
         core_request,
         create_at,
-        &internal::get_security_scheme_service(),
+        &security::get_security_scheme_service(),
     )
     .await
     .unwrap()
@@ -893,7 +895,7 @@ async fn get_api_spec_worker_binding_with_security(
         http_api_definition_request.try_into().unwrap();
 
     let create_at: DateTime<Utc> = "2024-08-21T07:42:15.696Z".parse().unwrap();
-    let security_scheme_service = internal::get_security_scheme_service();
+    let security_scheme_service = security::get_security_scheme_service();
 
     let security_scheme = SecurityScheme::new(
         Provider::Google,
@@ -965,7 +967,7 @@ async fn get_api_spec_worker_binding_with_multiple_securities(
     let core_definition_request: gateway_api_definition::http::HttpApiDefinitionRequest =
         user_facing_definition_request.try_into().unwrap();
 
-    let security_scheme_service = internal::get_security_scheme_service();
+    let security_scheme_service = security::get_security_scheme_service();
 
     let security_scheme1 = SecurityScheme::new(
         Provider::Google,
@@ -1046,7 +1048,7 @@ async fn get_api_spec_cors_preflight_binding_default_response(
         &DefaultNamespace(),
         core_request,
         create_at,
-        &internal::get_security_scheme_service(),
+        &security::get_security_scheme_service(),
     )
     .await
     .unwrap()
@@ -1094,7 +1096,7 @@ async fn get_api_spec_cors_preflight_binding(path_pattern: &str, cors: &Cors) ->
         &DefaultNamespace(),
         core_request,
         create_at,
-        &internal::get_security_scheme_service(),
+        &security::get_security_scheme_service(),
     )
     .await
     .unwrap()
@@ -1160,7 +1162,7 @@ async fn get_api_spec_for_cors_preflight_and_actual_endpoint(
         &DefaultNamespace(),
         core_request,
         create_at,
-        &internal::get_security_scheme_service(),
+        &security::get_security_scheme_service(),
     )
     .await
     .unwrap()
@@ -1207,7 +1209,7 @@ async fn get_api_spec_for_cors_preflight_default_and_actual_endpoint(
         &DefaultNamespace(),
         core_request,
         create_at,
-        &internal::get_security_scheme_service(),
+        &security::get_security_scheme_service(),
     )
     .await
     .unwrap()
@@ -1215,11 +1217,9 @@ async fn get_api_spec_for_cors_preflight_default_and_actual_endpoint(
 
 mod internal {
     use async_trait::async_trait;
-    use chrono::{Duration, TimeZone, Utc};
     use golem_common::model::ComponentId;
     use golem_service_base::auth::DefaultNamespace;
     use golem_service_base::model::VersionedComponentId;
-    use golem_service_base::repo::RepoError;
     use golem_wasm_ast::analysis::analysed_type::{field, record, str, tuple};
     use golem_wasm_ast::analysis::{
         AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
@@ -1243,6 +1243,7 @@ mod internal {
         Cors, HttpMiddleware, Middleware, Middlewares,
     };
 
+    use crate::security;
     use golem_worker_service_base::gateway_rib_interpreter::{
         DefaultRibInterpreter, EvaluationError, WorkerServiceRibInterpreter,
     };
@@ -1264,12 +1265,11 @@ mod internal {
     };
     use http::{Method, Uri};
     use openidconnect::core::{
-        CoreClaimName, CoreClaimType, CoreClient, CoreClientAuthMethod, CoreGrantType, CoreIdToken,
+        CoreClaimName, CoreClaimType, CoreClientAuthMethod, CoreGrantType, CoreIdToken,
         CoreIdTokenClaims, CoreIdTokenFields, CoreIdTokenVerifier, CoreJsonWebKey,
-        CoreJsonWebKeyType, CoreJsonWebKeyUse, CoreJweContentEncryptionAlgorithm,
-        CoreJweKeyManagementAlgorithm, CoreJwsSigningAlgorithm, CoreProviderMetadata,
-        CoreResponseMode, CoreResponseType, CoreRsaPrivateSigningKey, CoreSubjectIdentifierType,
-        CoreTokenResponse, CoreTokenType,
+        CoreJweContentEncryptionAlgorithm, CoreJweKeyManagementAlgorithm, CoreJwsSigningAlgorithm,
+        CoreProviderMetadata, CoreResponseMode, CoreResponseType, CoreRsaPrivateSigningKey,
+        CoreSubjectIdentifierType, CoreTokenResponse, CoreTokenType,
     };
     use openidconnect::{
         AccessToken, Audience, AuthUrl, AuthenticationContextClass, AuthorizationCode, ClientId,
@@ -1288,152 +1288,6 @@ mod internal {
     use std::sync::Arc;
     use tokio::sync::Mutex;
     use url::Url;
-
-    struct TestSecuritySchemeRepo {
-        security_scheme: Arc<Mutex<HashMap<String, SecuritySchemeRecord>>>,
-    }
-
-    #[async_trait]
-    impl SecuritySchemeRepo for TestSecuritySchemeRepo {
-        async fn create(
-            &self,
-            security_scheme_record: &SecuritySchemeRecord,
-        ) -> Result<(), RepoError> {
-            self.security_scheme.lock().await.insert(
-                security_scheme_record.security_scheme_id.clone(),
-                security_scheme_record.clone(),
-            );
-            Ok(())
-        }
-
-        async fn get(
-            &self,
-            security_scheme_id: &str,
-        ) -> Result<Option<SecuritySchemeRecord>, RepoError> {
-            Ok(self
-                .security_scheme
-                .lock()
-                .await
-                .get(security_scheme_id)
-                .cloned())
-        }
-    }
-
-    const PUBLIC_KEY_PEM: &str = "\
------BEGIN PUBLIC KEY-----\n\
-MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsRMj0YYjy7du6v1gWyKS\n\
-TJx3YjBzZTG0XotRP0IaObw0k+6830dXadjL5jVhSWNdcg9OyMyTGWfdNqfdrS6p\n\
-pBqlQNgjZJdloIqL9zOLBZrDm7G4+qN4KeZ4/5TyEilq2zOHHGFEzXpOq/UxqVnm\n\
-3J4fhjqCNaS2nKd7HVVXGBQQ+4+FdVT+MyJXemw5maz2F/h324TQi6XoUPEwUddx\n\
-BwLQFSOlzWnHYMc4/lcyZJ8MpTXCMPe/YJFNtb9CaikKUdf8x4mzwH7usSf8s2d6\n\
-R4dQITzKrjrEJ0u3w3eGkBBapoMVFBGPjP3Haz5FsVtHc5VEN3FZVIDF6HrbJH1C\n\
-4QIDAQAB\n\
------END PUBLIC KEY-----";
-
-    // A simple testable identity provider
-    // which piggybacks on DefaultIdentityProvider for all non side effecting
-    // functionalities
-    struct TestIdentityProvider {}
-
-    #[async_trait]
-    impl IdentityProvider for TestIdentityProvider {
-        async fn get_provider_metadata(
-            &self,
-            _provider: &Provider,
-        ) -> Result<GolemIdentityProviderMetadata, IdentityProviderError> {
-            Ok(get_test_provider_metadata())
-        }
-
-        async fn exchange_code_for_tokens(
-            &self,
-            _client: &OpenIdClient,
-            _code: &AuthorizationCode,
-        ) -> Result<CoreTokenResponse, IdentityProviderError> {
-            Ok(CoreTokenResponse::new(
-                AccessToken::new("secret_access_token".to_string()),
-                CoreTokenType::Bearer,
-                CoreIdTokenFields::new(Some(get_id_token()), EmptyExtraTokenFields {}),
-            ))
-        }
-
-        // In real, this token verifier depends on the provider metadata
-        // however, we simply use our own public key for testing
-        // instead of relying providers public key.
-        fn get_id_token_verifier<'a>(&self, _client: &'a OpenIdClient) -> CoreIdTokenVerifier<'a> {
-            let public_key = rsa::RsaPublicKey::from_public_key_pem(PUBLIC_KEY_PEM)
-                .expect("Failed to parse public key");
-
-            // Extract modulus and exponent
-            let n = public_key.n().to_bytes_be(); // Modulus in big-endian
-            let e = public_key.e().to_bytes_be(); // Exponent in big-endian
-            let kid = JsonWebKeyId::new("my-key-id".to_string()); // Use a unique key ID
-
-            let jwks = JsonWebKeySet::new(vec![CoreJsonWebKey::new_rsa(n, e, Some(kid))]);
-
-            IdTokenVerifier::new_confidential_client(
-                ClientId::new("client_id_foo".to_string()),
-                ClientSecret::new("client_secret_foo".to_string()),
-                IssuerUrl::new("https://accounts.google.com".to_string()).unwrap(),
-                jwks,
-            )
-        }
-
-        fn get_claims(
-            &self,
-            id_token_verifier: &CoreIdTokenVerifier,
-            core_token_response: CoreTokenResponse,
-            nonce: &Nonce,
-        ) -> Result<CoreIdTokenClaims, IdentityProviderError> {
-            let identity_provider = DefaultIdentityProvider;
-
-            identity_provider.get_claims(id_token_verifier, core_token_response, nonce)
-        }
-
-        fn get_authorization_url(
-            &self,
-            client: &OpenIdClient,
-            scopes: Vec<Scope>,
-            _state: Option<CsrfToken>,
-            _nonce: Option<Nonce>,
-        ) -> AuthorizationUrl {
-            let identity_provider = DefaultIdentityProvider;
-            identity_provider.get_authorization_url(
-                client,
-                scopes,
-                Some(CsrfToken::new("token".to_string())),
-                Some(Nonce::new("nonce".to_string())),
-            )
-        }
-
-        fn get_client(
-            &self,
-            security_scheme: &SecuritySchemeWithProviderMetadata,
-        ) -> Result<OpenIdClient, IdentityProviderError> {
-            let identity_provider = DefaultIdentityProvider;
-            identity_provider.get_client(security_scheme)
-        }
-    }
-
-    pub(crate) struct TestIdentityProviderResolver;
-
-    impl IdentityProviderResolver for TestIdentityProviderResolver {
-        fn resolve(&self, _provider_type: &Provider) -> Arc<dyn IdentityProvider + Sync + Send> {
-            Arc::new(TestIdentityProvider {})
-        }
-    }
-
-    pub(crate) fn get_security_scheme_service(
-    ) -> Arc<dyn SecuritySchemeService<DefaultNamespace> + Send + Sync> {
-        let repo = Arc::new(TestSecuritySchemeRepo {
-            security_scheme: Arc::new(Mutex::new(HashMap::new())),
-        });
-
-        let identity_provider_resolver = Arc::new(TestIdentityProviderResolver);
-
-        let default = DefaultSecuritySchemeService::new(repo, identity_provider_resolver);
-
-        Arc::new(default)
-    }
 
     pub(crate) struct TestApiGatewayWorkerRequestExecutor {}
 
@@ -1696,6 +1550,479 @@ R4dQITzKrjrEJ0u3w3eGkBBapoMVFBGPjP3Haz5FsVtHc5VEN3FZVIDF6HrbJH1C\n\
         Arc::new(TestFileServerBindingHandler {})
     }
 
+    fn get_test_response_for_static_preflight(response: Response) -> TestResponse {
+        let headers = response.headers();
+
+        let allow_headers = headers
+            .get(ACCESS_CONTROL_ALLOW_HEADERS)
+            .map(|x| x.to_str().unwrap())
+            .expect("Cors preflight response expects allow_headers");
+
+        let allow_origin = headers
+            .get(ACCESS_CONTROL_ALLOW_ORIGIN)
+            .map(|x| x.to_str().unwrap())
+            .expect("Cors preflight response expects allow_origin");
+
+        let allow_methods = headers
+            .get(ACCESS_CONTROL_ALLOW_METHODS)
+            .map(|x| x.to_str().unwrap())
+            .expect("Cors preflight response expects allow_method");
+
+        let expose_headers = headers
+            .get(ACCESS_CONTROL_EXPOSE_HEADERS)
+            .map(|x| x.to_str().unwrap());
+
+        let max_age = headers
+            .get(ACCESS_CONTROL_MAX_AGE)
+            .map(|x| x.to_str().unwrap().parse::<u64>().unwrap());
+
+        let allow_credentials = headers
+            .get(ACCESS_CONTROL_ALLOW_CREDENTIALS)
+            .map(|x| x.to_str().unwrap().parse::<bool>().unwrap());
+
+        TestResponse::CorsPreflightResponse(Cors::new(
+            allow_origin,
+            allow_methods,
+            allow_headers,
+            expose_headers,
+            allow_credentials,
+            max_age,
+        ))
+    }
+
+    async fn get_test_response_for_worker_binding(
+        response: Response,
+        binding: &ResolvedWorkerBinding<DefaultNamespace>,
+    ) -> TestResponse {
+        let headers = response.headers().clone();
+
+        // If the binding contains middlewares that can return with a redirect instead of
+        // propagating the worker response, we capture that
+        if is_middleware_redirect(&binding.middlewares) {
+            let location = headers
+                .get(LOCATION)
+                .map(|x| x.to_str().unwrap().to_string())
+                .expect("Cors preflight response expects allow_origin");
+            return TestResponse::RedirectResponse {
+                redirect_url: Url::parse(location.as_str()).expect("Invalid redirect location url"),
+            };
+        }
+
+        let bytes = response
+            .into_body()
+            .into_bytes()
+            .await
+            .ok()
+            .expect("TestResponse for worker-binding expects a response body");
+
+        let body_json: Value =
+            serde_json::from_slice(&bytes).expect("Failed to read the response body");
+
+        let worker_name = body_json
+            .get("worker_name")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+
+        let function_name = body_json
+            .get("function_name")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+
+        let function_params = body_json.get("function_params").cloned();
+
+        TestResponse::WorkerResponse {
+            worker_name: worker_name.expect("Worker response expects worker_name"),
+            function_name: function_name.expect("Worker response expects function_name"),
+            function_params: function_params.expect("Worker response expects function_params"),
+            cors_middleware_headers: {
+                if binding.middlewares.get_cors().is_some() {
+                    let cors_header_allow_origin = headers
+                        .get(ACCESS_CONTROL_ALLOW_ORIGIN)
+                        .map(|x| x.to_str().unwrap().to_string())
+                        .expect("Cors preflight response expects allow_origin");
+
+                    let cors_header_allow_credentials = headers
+                        .get(ACCESS_CONTROL_ALLOW_CREDENTIALS)
+                        .map(|x| x.to_str().unwrap().parse::<bool>().unwrap());
+
+                    let cors_header_expose_headers = headers
+                        .get(ACCESS_CONTROL_EXPOSE_HEADERS)
+                        .map(|x| x.to_str().unwrap().to_string());
+
+                    Some(CorsMiddlewareHeadersInResponse {
+                        cors_header_allow_origin,
+                        cors_header_allow_credentials,
+                        cors_header_expose_headers,
+                    })
+                } else {
+                    None
+                }
+            },
+        }
+    }
+
+    // Spotting if there is a middleware that can respond with a redirect response
+    // instead of passing it through to the worker or other bindings.
+    fn is_middleware_redirect(middlewares: &Middlewares) -> bool {
+        // If the binding contains middlewares that can return with a redirect instead of
+        // propagating the worker response, we capture that
+
+        let mut can_redirect = false;
+        for middleware in middlewares.0.iter() {
+            match middleware {
+                // Input middleware that can redirect
+                Middleware::Http(HttpMiddleware::AuthenticateRequest(_)) => {
+                    can_redirect = true;
+                    break;
+                }
+                // Output middleware
+                Middleware::Http(HttpMiddleware::AddCorsHeaders(_)) => {}
+            }
+        }
+
+        can_redirect
+    }
+
+    // Simple decoder only for test
+    pub(crate) fn decode_url(encoded: &str) -> String {
+        let mut decoded = String::new();
+        let mut chars = encoded.chars().peekable();
+
+        while let Some(c) = chars.next() {
+            if c == '%' {
+                if let (Some(hex1), Some(hex2)) = (chars.next(), chars.next()) {
+                    if let Ok(byte) = u8::from_str_radix(&format!("{}{}", hex1, hex2), 16) {
+                        decoded.push(byte as char);
+                    } else {
+                        decoded.push('%');
+                        decoded.push(hex1);
+                        decoded.push(hex2);
+                    }
+                }
+            } else {
+                decoded.push(c);
+            }
+        }
+
+        decoded
+    }
+}
+
+mod security {
+    use async_trait::async_trait;
+    use chrono::{Duration, Utc};
+    use golem_service_base::auth::DefaultNamespace;
+    use golem_service_base::repo::RepoError;
+    use golem_worker_service_base::gateway_security::{
+        AuthorizationUrl, DefaultIdentityProvider, GolemIdentityProviderMetadata, IdentityProvider,
+        IdentityProviderError, IdentityProviderResolver, OpenIdClient, Provider,
+        SecuritySchemeWithProviderMetadata,
+    };
+    use golem_worker_service_base::repo::security_scheme::{
+        SecuritySchemeRecord, SecuritySchemeRepo,
+    };
+    use golem_worker_service_base::service::gateway::security_scheme::{
+        DefaultSecuritySchemeService, SecuritySchemeService,
+    };
+    use http::{Method, Uri};
+    use openidconnect::core::{
+        CoreClaimName, CoreClaimType, CoreClientAuthMethod, CoreGrantType, CoreIdToken,
+        CoreIdTokenClaims, CoreIdTokenFields, CoreIdTokenVerifier, CoreJsonWebKey,
+        CoreJweContentEncryptionAlgorithm, CoreJweKeyManagementAlgorithm, CoreJwsSigningAlgorithm,
+        CoreProviderMetadata, CoreResponseMode, CoreResponseType, CoreRsaPrivateSigningKey,
+        CoreSubjectIdentifierType, CoreTokenResponse, CoreTokenType,
+    };
+    use openidconnect::{
+        AccessToken, Audience, AuthUrl, AuthenticationContextClass, AuthorizationCode, ClientId,
+        ClientSecret, CsrfToken, EmptyAdditionalClaims, EmptyExtraTokenFields, EndUserEmail,
+        IdTokenVerifier, IssuerUrl, JsonWebKeyId, JsonWebKeySet, JsonWebKeySetUrl, Nonce,
+        RegistrationUrl, ResponseTypes, Scope, StandardClaims, SubjectIdentifier, TokenUrl,
+        UserInfoUrl,
+    };
+    use poem::Request;
+    use rsa::pkcs8::DecodePublicKey;
+    use rsa::traits::PublicKeyParts;
+    use std::collections::HashMap;
+    use std::str::FromStr;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    struct TestSecuritySchemeRepo {
+        security_scheme: Arc<Mutex<HashMap<String, SecuritySchemeRecord>>>,
+    }
+
+    #[async_trait]
+    impl SecuritySchemeRepo for TestSecuritySchemeRepo {
+        async fn create(
+            &self,
+            security_scheme_record: &SecuritySchemeRecord,
+        ) -> Result<(), RepoError> {
+            self.security_scheme.lock().await.insert(
+                security_scheme_record.security_scheme_id.clone(),
+                security_scheme_record.clone(),
+            );
+            Ok(())
+        }
+
+        async fn get(
+            &self,
+            security_scheme_id: &str,
+        ) -> Result<Option<SecuritySchemeRecord>, RepoError> {
+            Ok(self
+                .security_scheme
+                .lock()
+                .await
+                .get(security_scheme_id)
+                .cloned())
+        }
+    }
+
+    // A simple testable identity provider
+    // which piggybacks on DefaultIdentityProvider for all non side effecting
+    // functionalities
+    struct TestIdentityProvider {}
+
+    #[async_trait]
+    impl IdentityProvider for TestIdentityProvider {
+        async fn get_provider_metadata(
+            &self,
+            _provider: &Provider,
+        ) -> Result<GolemIdentityProviderMetadata, IdentityProviderError> {
+            Ok(get_test_provider_metadata())
+        }
+
+        async fn exchange_code_for_tokens(
+            &self,
+            _client: &OpenIdClient,
+            _code: &AuthorizationCode,
+        ) -> Result<CoreTokenResponse, IdentityProviderError> {
+            Ok(CoreTokenResponse::new(
+                AccessToken::new("secret_access_token".to_string()),
+                CoreTokenType::Bearer,
+                CoreIdTokenFields::new(Some(get_id_token()), EmptyExtraTokenFields {}),
+            ))
+        }
+
+        // In real, this token verifier depends on the provider metadata
+        // however, we simply use our own public key for testing
+        // instead of relying providers public key.
+        fn get_id_token_verifier<'a>(&self, _client: &'a OpenIdClient) -> CoreIdTokenVerifier<'a> {
+            let public_key = rsa::RsaPublicKey::from_public_key_pem(PUBLIC_KEY_PEM)
+                .expect("Failed to parse public key");
+
+            // Extract modulus and exponent
+            let n = public_key.n().to_bytes_be(); // Modulus in big-endian
+            let e = public_key.e().to_bytes_be(); // Exponent in big-endian
+            let kid = JsonWebKeyId::new("my-key-id".to_string()); // Use a unique key ID
+
+            let jwks = JsonWebKeySet::new(vec![CoreJsonWebKey::new_rsa(n, e, Some(kid))]);
+
+            IdTokenVerifier::new_confidential_client(
+                ClientId::new("client_id_foo".to_string()),
+                ClientSecret::new("client_secret_foo".to_string()),
+                IssuerUrl::new("https://accounts.google.com".to_string()).unwrap(),
+                jwks,
+            )
+        }
+
+        fn get_claims(
+            &self,
+            id_token_verifier: &CoreIdTokenVerifier,
+            core_token_response: CoreTokenResponse,
+            nonce: &Nonce,
+        ) -> Result<CoreIdTokenClaims, IdentityProviderError> {
+            let identity_provider = DefaultIdentityProvider;
+
+            identity_provider.get_claims(id_token_verifier, core_token_response, nonce)
+        }
+
+        fn get_authorization_url(
+            &self,
+            client: &OpenIdClient,
+            scopes: Vec<Scope>,
+            _state: Option<CsrfToken>,
+            _nonce: Option<Nonce>,
+        ) -> AuthorizationUrl {
+            let identity_provider = DefaultIdentityProvider;
+            identity_provider.get_authorization_url(
+                client,
+                scopes,
+                Some(CsrfToken::new("token".to_string())),
+                Some(Nonce::new("nonce".to_string())),
+            )
+        }
+
+        fn get_client(
+            &self,
+            security_scheme: &SecuritySchemeWithProviderMetadata,
+        ) -> Result<OpenIdClient, IdentityProviderError> {
+            let identity_provider = DefaultIdentityProvider;
+            identity_provider.get_client(security_scheme)
+        }
+    }
+
+    pub(crate) struct TestIdentityProviderResolver;
+
+    impl IdentityProviderResolver for TestIdentityProviderResolver {
+        fn resolve(&self, _provider_type: &Provider) -> Arc<dyn IdentityProvider + Sync + Send> {
+            Arc::new(TestIdentityProvider {})
+        }
+    }
+
+    pub(crate) fn get_security_scheme_service(
+    ) -> Arc<dyn SecuritySchemeService<DefaultNamespace> + Send + Sync> {
+        let repo = Arc::new(TestSecuritySchemeRepo {
+            security_scheme: Arc::new(Mutex::new(HashMap::new())),
+        });
+
+        let identity_provider_resolver = Arc::new(TestIdentityProviderResolver);
+
+        let default = DefaultSecuritySchemeService::new(repo, identity_provider_resolver);
+
+        Arc::new(default)
+    }
+
+    const PUBLIC_KEY_PEM: &str = "\
+-----BEGIN PUBLIC KEY-----\n\
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsRMj0YYjy7du6v1gWyKS\n\
+TJx3YjBzZTG0XotRP0IaObw0k+6830dXadjL5jVhSWNdcg9OyMyTGWfdNqfdrS6p\n\
+pBqlQNgjZJdloIqL9zOLBZrDm7G4+qN4KeZ4/5TyEilq2zOHHGFEzXpOq/UxqVnm\n\
+3J4fhjqCNaS2nKd7HVVXGBQQ+4+FdVT+MyJXemw5maz2F/h324TQi6XoUPEwUddx\n\
+BwLQFSOlzWnHYMc4/lcyZJ8MpTXCMPe/YJFNtb9CaikKUdf8x4mzwH7usSf8s2d6\n\
+R4dQITzKrjrEJ0u3w3eGkBBapoMVFBGPjP3Haz5FsVtHc5VEN3FZVIDF6HrbJH1C\n\
+4QIDAQAB\n\
+-----END PUBLIC KEY-----";
+
+    const TEST_RSA_KEY: &str = "\
+      -----BEGIN RSA PRIVATE KEY-----\n\
+       MIIEowIBAAKCAQEAsRMj0YYjy7du6v1gWyKSTJx3YjBzZTG0XotRP0IaObw0k+68\n\
+       30dXadjL5jVhSWNdcg9OyMyTGWfdNqfdrS6ppBqlQNgjZJdloIqL9zOLBZrDm7G4\n\
+       +qN4KeZ4/5TyEilq2zOHHGFEzXpOq/UxqVnm3J4fhjqCNaS2nKd7HVVXGBQQ+4+F\n\
+       dVT+MyJXemw5maz2F/h324TQi6XoUPEwUddxBwLQFSOlzWnHYMc4/lcyZJ8MpTXC\n\
+       MPe/YJFNtb9CaikKUdf8x4mzwH7usSf8s2d6R4dQITzKrjrEJ0u3w3eGkBBapoMV\n\
+       FBGPjP3Haz5FsVtHc5VEN3FZVIDF6HrbJH1C4QIDAQABAoIBAHSS3izM+3nc7Bel\n\
+       8S5uRxRKmcm5je6b11u6qiVUFkHWJmMRc6QmqmSThkCq+b4/vUAe1cYZ7+l02Exo\n\
+       HOcrZiEULaDP6hUKGqyjKVv3wdlRtt8kFFxlC/HBufzAiNDuFVvzw0oquwnvMCXC\n\
+       yQvtlK+/JY/PqvM32cSt+b4o9apySsHqAtdsoHHohK82jsQqIfCi1v8XYV/xRBJB\n\
+       cQMCaA0Ls3tFpmJv3JdikyyQxio4kZ5tswghC63znCp1iL+qDq1wjjKzjick9MDb\n\
+       Qzb95X09QQP201l1FPWN7Kbhj4ybg6PJGz/VHQcvILcBCoYIc0UY/OMSBt9VN9yD\n\
+       wr1WlbECgYEA37difsTMcLmUEN57sicFe1q4lxH6eqnUBjmoKBflx4oMIIyRnfjF\n\
+       Jwsu9yIiBkJfBCP85nl2tZdcV0wfZLf6amxB/KMtdfW6r8eoTDzE472OYxSIg1F5\n\
+       dI4qn2nBI0Dou0g58xj+Kv0iLaym0pxtyJkSg/rxZGwKb9a+x5WAs50CgYEAyqC0\n\
+       NcZs2BRIiT5kEOF6+MeUvarbKh1mangKHKcTdXRrvoJ+Z5izm7FifBixo/79MYpt\n\
+       0VofW0IzYKtAI9KZDq2JcozEbZ+lt/ZPH5QEXO4T39QbDoAG8BbOmEP7l+6m+7QO\n\
+       PiQ0WSNjDnwk3W7Zihgg31DH7hyxsxQCapKLcxUCgYAwERXPiPcoDSd8DGFlYK7z\n\
+       1wUsKEe6DT0p7T9tBd1v5wA+ChXLbETn46Y+oQ3QbHg/yn+vAU/5KkFD3G4uVL0w\n\
+       Gnx/DIxa+OYYmHxXjQL8r6ClNycxl9LRsS4FPFKsAWk/u///dFI/6E1spNjfDY8k\n\
+       94ab5tHwsqn3Z5tsBHo3nQKBgFUmxbSXh2Qi2fy6+GhTqU7k6G/wXhvLsR9rBKzX\n\
+       1YiVfTXZNu+oL0ptd/q4keZeIN7x0oaY/fZm0pp8PP8Q4HtXmBxIZb+/yG+Pld6q\n\
+       YE8BSd7VDu3ABapdm0JHx3Iou4mpOBcLNeiDw3vx1bgsfkTXMPFHzE0XR+H+tak9\n\
+       nlalAoGBALAmAF7WBGdOt43Rj8hPaKOM/ahj+6z3CNwVreToNsVBHoyNmiO8q7MC\n\
+       +tRo4jgdrzk1pzs66OIHfbx5P1mXKPtgPZhvI5omAY8WqXEgeNqSL1Ksp6LZ2ql/\n\
+       ouZns5xwKc9+aRL+GWoAGNzwzcjE8cP52sBy/r0rYXTs/sZo5kgV\n\
+       -----END RSA PRIVATE KEY-----\
+       ";
+
+    pub fn get_id_token() -> CoreIdToken {
+        CoreIdToken::new(
+            CoreIdTokenClaims::new(
+                IssuerUrl::new("https://accounts.google.com".to_string()).unwrap(),
+                vec![Audience::new("client_id_foo".to_string())],
+                Utc::now() + Duration::seconds(300),
+                Utc::now(),
+                StandardClaims::new(SubjectIdentifier::new(
+                    "5f83e0ca-2b8e-4e8c-ba0a-f80fe9bc3632".to_string(),
+                ))
+                .set_email(Some(EndUserEmail::new("bob@example.com".to_string())))
+                .set_email_verified(Some(true)),
+                EmptyAdditionalClaims {},
+            )
+            .set_nonce(Some(Nonce::new("nonce".to_string()))),
+            &CoreRsaPrivateSigningKey::from_pem(
+                TEST_RSA_KEY,
+                Some(JsonWebKeyId::new("my-key-id".to_string())),
+            )
+            .expect("Invalid RSA private key"),
+            CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256,
+            Some(&AccessToken::new("secret_access_token".to_string())),
+            None,
+        )
+        .unwrap()
+    }
+
+    // A simulated auth call back from identity provider
+    // Example:
+    //  Request {
+    //     method: GET,
+    //     uri: /auth/callback?state=Iy3GSF&code=4%2F0AeanPOWQlsww.googleapis.com%2Fauth%2Fuserinfo.profile+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fuserinfo.email&authuser=0&hd=ziverge.com&prompt=consent,
+    //     version: HTTP/1.1,
+    //     headers: {
+    //         "host": "127.0.0.1:5000",
+    //         "connection": "keep-alive",
+    //     },
+    // }
+    pub(crate) fn request_from_identity_provider_to_auth_call_back_endpoint(
+        state: &str,
+        code: &str,
+        scope: &str,
+        redirect_path: &str,
+        redirect_host: &str,
+    ) -> Request {
+        let uri = Uri::from_str(
+            format!(
+                "{}?state={}&code={}&scope={}&prompt=consent",
+                redirect_path, state, code, scope
+            )
+            .as_str(),
+        )
+        .unwrap();
+
+        let request = poem::Request::builder()
+            .method(Method::GET)
+            .uri(uri)
+            .header("host", redirect_host)
+            .header("connection", "keep-alive")
+            .header("referer", "https://accounts.google.com/");
+
+        request.finish()
+    }
+
+    #[derive(Debug)]
+    pub(crate) struct InitialRedirectData {
+        pub(crate) response_type: String,
+        pub(crate) client_id: String,
+        pub(crate) state: String,
+        pub(crate) auth_call_back_uri: String,
+        pub(crate) scope: String,
+        pub(crate) nonce: String,
+    }
+
+    pub(crate) fn get_initial_redirect_data(
+        query_components: &HashMap<String, String>,
+    ) -> InitialRedirectData {
+        let response_type = query_components
+            .get("response_type")
+            .expect("response_type is missing");
+        let client_id = query_components
+            .get("client_id")
+            .expect("client_id is missing");
+        let state = query_components.get("state").expect("state is missing");
+        let redirect_uri = query_components
+            .get("redirect_uri")
+            .expect("redirect_uri is missing");
+        let scope = query_components.get("scope").expect("scope is missing");
+        let nonce = query_components.get("nonce").expect("nonce is missing");
+
+        InitialRedirectData {
+            response_type: response_type.to_string(),
+            client_id: client_id.to_string(),
+            state: state.to_string(),
+            auth_call_back_uri: redirect_uri.to_string(),
+            scope: scope.to_string(),
+            nonce: nonce.to_string(),
+        }
+    }
+
     fn get_test_provider_metadata() -> GolemIdentityProviderMetadata {
         let all_signing_algs = vec![
             CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256,
@@ -1863,293 +2190,4 @@ R4dQITzKrjrEJ0u3w3eGkBBapoMVFBGPjP3Haz5FsVtHc5VEN3FZVIDF6HrbJH1C\n\
 
         new_provider_metadata
     }
-
-    const TEST_RSA_KEY: &str = "\
-                               -----BEGIN RSA PRIVATE KEY-----\n\
-                                MIIEowIBAAKCAQEAsRMj0YYjy7du6v1gWyKSTJx3YjBzZTG0XotRP0IaObw0k+68\n\
-                                30dXadjL5jVhSWNdcg9OyMyTGWfdNqfdrS6ppBqlQNgjZJdloIqL9zOLBZrDm7G4\n\
-                                +qN4KeZ4/5TyEilq2zOHHGFEzXpOq/UxqVnm3J4fhjqCNaS2nKd7HVVXGBQQ+4+F\n\
-                                dVT+MyJXemw5maz2F/h324TQi6XoUPEwUddxBwLQFSOlzWnHYMc4/lcyZJ8MpTXC\n\
-                                MPe/YJFNtb9CaikKUdf8x4mzwH7usSf8s2d6R4dQITzKrjrEJ0u3w3eGkBBapoMV\n\
-                                FBGPjP3Haz5FsVtHc5VEN3FZVIDF6HrbJH1C4QIDAQABAoIBAHSS3izM+3nc7Bel\n\
-                                8S5uRxRKmcm5je6b11u6qiVUFkHWJmMRc6QmqmSThkCq+b4/vUAe1cYZ7+l02Exo\n\
-                                HOcrZiEULaDP6hUKGqyjKVv3wdlRtt8kFFxlC/HBufzAiNDuFVvzw0oquwnvMCXC\n\
-                                yQvtlK+/JY/PqvM32cSt+b4o9apySsHqAtdsoHHohK82jsQqIfCi1v8XYV/xRBJB\n\
-                                cQMCaA0Ls3tFpmJv3JdikyyQxio4kZ5tswghC63znCp1iL+qDq1wjjKzjick9MDb\n\
-                                Qzb95X09QQP201l1FPWN7Kbhj4ybg6PJGz/VHQcvILcBCoYIc0UY/OMSBt9VN9yD\n\
-                                wr1WlbECgYEA37difsTMcLmUEN57sicFe1q4lxH6eqnUBjmoKBflx4oMIIyRnfjF\n\
-                                Jwsu9yIiBkJfBCP85nl2tZdcV0wfZLf6amxB/KMtdfW6r8eoTDzE472OYxSIg1F5\n\
-                                dI4qn2nBI0Dou0g58xj+Kv0iLaym0pxtyJkSg/rxZGwKb9a+x5WAs50CgYEAyqC0\n\
-                                NcZs2BRIiT5kEOF6+MeUvarbKh1mangKHKcTdXRrvoJ+Z5izm7FifBixo/79MYpt\n\
-                                0VofW0IzYKtAI9KZDq2JcozEbZ+lt/ZPH5QEXO4T39QbDoAG8BbOmEP7l+6m+7QO\n\
-                                PiQ0WSNjDnwk3W7Zihgg31DH7hyxsxQCapKLcxUCgYAwERXPiPcoDSd8DGFlYK7z\n\
-                                1wUsKEe6DT0p7T9tBd1v5wA+ChXLbETn46Y+oQ3QbHg/yn+vAU/5KkFD3G4uVL0w\n\
-                                Gnx/DIxa+OYYmHxXjQL8r6ClNycxl9LRsS4FPFKsAWk/u///dFI/6E1spNjfDY8k\n\
-                                94ab5tHwsqn3Z5tsBHo3nQKBgFUmxbSXh2Qi2fy6+GhTqU7k6G/wXhvLsR9rBKzX\n\
-                                1YiVfTXZNu+oL0ptd/q4keZeIN7x0oaY/fZm0pp8PP8Q4HtXmBxIZb+/yG+Pld6q\n\
-                                YE8BSd7VDu3ABapdm0JHx3Iou4mpOBcLNeiDw3vx1bgsfkTXMPFHzE0XR+H+tak9\n\
-                                nlalAoGBALAmAF7WBGdOt43Rj8hPaKOM/ahj+6z3CNwVreToNsVBHoyNmiO8q7MC\n\
-                                +tRo4jgdrzk1pzs66OIHfbx5P1mXKPtgPZhvI5omAY8WqXEgeNqSL1Ksp6LZ2ql/\n\
-                                ouZns5xwKc9+aRL+GWoAGNzwzcjE8cP52sBy/r0rYXTs/sZo5kgV\n\
-                                -----END RSA PRIVATE KEY-----\
-                                ";
-
-    pub fn get_id_token() -> CoreIdToken {
-        CoreIdToken::new(
-            CoreIdTokenClaims::new(
-                IssuerUrl::new("https://accounts.google.com".to_string()).unwrap(),
-                vec![Audience::new("client_id_foo".to_string())],
-                Utc::now() + Duration::seconds(300),
-                Utc::now(),
-                StandardClaims::new(SubjectIdentifier::new(
-                    "5f83e0ca-2b8e-4e8c-ba0a-f80fe9bc3632".to_string(),
-                ))
-                .set_email(Some(EndUserEmail::new("bob@example.com".to_string())))
-                .set_email_verified(Some(true)),
-                EmptyAdditionalClaims {},
-            )
-            .set_nonce(Some(Nonce::new("nonce".to_string()))),
-            &CoreRsaPrivateSigningKey::from_pem(
-                TEST_RSA_KEY,
-                Some(JsonWebKeyId::new("my-key-id".to_string())),
-            )
-            .expect("Invalid RSA private key"),
-            CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256,
-            Some(&AccessToken::new("secret_access_token".to_string())),
-            None,
-        )
-        .unwrap()
-    }
-
-    fn get_test_response_for_static_preflight(response: Response) -> TestResponse {
-        let headers = response.headers();
-
-        let allow_headers = headers
-            .get(ACCESS_CONTROL_ALLOW_HEADERS)
-            .map(|x| x.to_str().unwrap())
-            .expect("Cors preflight response expects allow_headers");
-
-        let allow_origin = headers
-            .get(ACCESS_CONTROL_ALLOW_ORIGIN)
-            .map(|x| x.to_str().unwrap())
-            .expect("Cors preflight response expects allow_origin");
-
-        let allow_methods = headers
-            .get(ACCESS_CONTROL_ALLOW_METHODS)
-            .map(|x| x.to_str().unwrap())
-            .expect("Cors preflight response expects allow_method");
-
-        let expose_headers = headers
-            .get(ACCESS_CONTROL_EXPOSE_HEADERS)
-            .map(|x| x.to_str().unwrap());
-
-        let max_age = headers
-            .get(ACCESS_CONTROL_MAX_AGE)
-            .map(|x| x.to_str().unwrap().parse::<u64>().unwrap());
-
-        let allow_credentials = headers
-            .get(ACCESS_CONTROL_ALLOW_CREDENTIALS)
-            .map(|x| x.to_str().unwrap().parse::<bool>().unwrap());
-
-        TestResponse::CorsPreflightResponse(Cors::new(
-            allow_origin,
-            allow_methods,
-            allow_headers,
-            expose_headers,
-            allow_credentials,
-            max_age,
-        ))
-    }
-
-    async fn get_test_response_for_worker_binding(
-        response: Response,
-        binding: &ResolvedWorkerBinding<DefaultNamespace>,
-    ) -> TestResponse {
-        let headers = response.headers().clone();
-
-        // If the binding contains middlewares that can return with a redirect instead of
-        // propagating the worker response, we capture that
-        if is_middleware_redirect(&binding.middlewares) {
-            let location = headers
-                .get(LOCATION)
-                .map(|x| x.to_str().unwrap().to_string())
-                .expect("Cors preflight response expects allow_origin");
-            return TestResponse::RedirectResponse {
-                redirect_url: Url::parse(location.as_str()).expect("Invalid redirect location url"),
-            };
-        }
-
-        let bytes = response
-            .into_body()
-            .into_bytes()
-            .await
-            .ok()
-            .expect("TestResponse for worker-binding expects a response body");
-
-        let body_json: Value =
-            serde_json::from_slice(&bytes).expect("Failed to read the response body");
-
-        let worker_name = body_json
-            .get("worker_name")
-            .and_then(|v| v.as_str())
-            .map(String::from);
-
-        let function_name = body_json
-            .get("function_name")
-            .and_then(|v| v.as_str())
-            .map(String::from);
-
-        let function_params = body_json.get("function_params").cloned();
-
-        TestResponse::WorkerResponse {
-            worker_name: worker_name.expect("Worker response expects worker_name"),
-            function_name: function_name.expect("Worker response expects function_name"),
-            function_params: function_params.expect("Worker response expects function_params"),
-            cors_middleware_headers: {
-                if binding.middlewares.get_cors().is_some() {
-                    let cors_header_allow_origin = headers
-                        .get(ACCESS_CONTROL_ALLOW_ORIGIN)
-                        .map(|x| x.to_str().unwrap().to_string())
-                        .expect("Cors preflight response expects allow_origin");
-
-                    let cors_header_allow_credentials = headers
-                        .get(ACCESS_CONTROL_ALLOW_CREDENTIALS)
-                        .map(|x| x.to_str().unwrap().parse::<bool>().unwrap());
-
-                    let cors_header_expose_headers = headers
-                        .get(ACCESS_CONTROL_EXPOSE_HEADERS)
-                        .map(|x| x.to_str().unwrap().to_string());
-
-                    Some(CorsMiddlewareHeadersInResponse {
-                        cors_header_allow_origin,
-                        cors_header_allow_credentials,
-                        cors_header_expose_headers,
-                    })
-                } else {
-                    None
-                }
-            },
-        }
-    }
-
-    // Spotting if there is a middleware that can respond with a redirect response
-    // instead of passing it through to the worker or other bindings.
-    fn is_middleware_redirect(middlewares: &Middlewares) -> bool {
-        // If the binding contains middlewares that can return with a redirect instead of
-        // propagating the worker response, we capture that
-
-        let mut can_redirect = false;
-        for middleware in middlewares.0.iter() {
-            match middleware {
-                // Input middleware that can redirect
-                Middleware::Http(HttpMiddleware::AuthenticateRequest(_)) => {
-                    can_redirect = true;
-                    break;
-                }
-                // Output middleware
-                Middleware::Http(HttpMiddleware::AddCorsHeaders(_)) => {}
-            }
-        }
-
-        can_redirect
-    }
-
-    #[derive(Debug)]
-    pub(crate) struct InitialRedirectData {
-        pub(crate) response_type: String,
-        pub(crate) client_id: String,
-        pub(crate) state: String,
-        pub(crate) auth_call_back_uri: String,
-        pub(crate) scope: String,
-        pub(crate) nonce: String,
-    }
-
-    pub(crate) fn get_initial_redirect_data(
-        query_components: &HashMap<String, String>,
-    ) -> InitialRedirectData {
-        let response_type = query_components
-            .get("response_type")
-            .expect("response_type is missing");
-        let client_id = query_components
-            .get("client_id")
-            .expect("client_id is missing");
-        let state = query_components.get("state").expect("state is missing");
-        let redirect_uri = query_components
-            .get("redirect_uri")
-            .expect("redirect_uri is missing");
-        let scope = query_components.get("scope").expect("scope is missing");
-        let nonce = query_components.get("nonce").expect("nonce is missing");
-
-        InitialRedirectData {
-            response_type: response_type.to_string(),
-            client_id: client_id.to_string(),
-            state: state.to_string(),
-            auth_call_back_uri: redirect_uri.to_string(),
-            scope: scope.to_string(),
-            nonce: nonce.to_string(),
-        }
-    }
-
-    // Simple decoder only for test
-    pub(crate) fn decode_url(encoded: &str) -> String {
-        let mut decoded = String::new();
-        let mut chars = encoded.chars().peekable();
-
-        while let Some(c) = chars.next() {
-            if c == '%' {
-                if let (Some(hex1), Some(hex2)) = (chars.next(), chars.next()) {
-                    if let Ok(byte) = u8::from_str_radix(&format!("{}{}", hex1, hex2), 16) {
-                        decoded.push(byte as char);
-                    } else {
-                        decoded.push('%');
-                        decoded.push(hex1);
-                        decoded.push(hex2);
-                    }
-                }
-            } else {
-                decoded.push(c);
-            }
-        }
-
-        decoded
-    }
-
-    // A simulated auth call back from identity provider
-    // Example:
-    //  Request {
-    //     method: GET,
-    //     uri: /auth/callback?state=Iy3GSF&code=4%2F0AeanPOWQlsww.googleapis.com%2Fauth%2Fuserinfo.profile+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fuserinfo.email&authuser=0&hd=ziverge.com&prompt=consent,
-    //     version: HTTP/1.1,
-    //     headers: {
-    //         "host": "127.0.0.1:5000",
-    //         "connection": "keep-alive",
-    //     },
-    // }
-    pub(crate) fn request_from_identity_provider_to_auth_call_back_endpoint(
-        state: &str,
-        code: &str,
-        scope: &str,
-        redirect_path: &str,
-        redirect_host: &str,
-    ) -> Request {
-        let uri = Uri::from_str(
-            format!(
-                "{}?state={}&code={}&scope={}&prompt=consent",
-                redirect_path, state, code, scope
-            )
-            .as_str(),
-        )
-        .unwrap();
-
-        let request = poem::Request::builder()
-            .method(Method::GET)
-            .uri(uri)
-            .header("host", redirect_host)
-            .header("connection", "keep-alive")
-            .header("referer", "https://accounts.google.com/");
-
-        request.finish()
-    }
 }
-
-mod key_pair {}
