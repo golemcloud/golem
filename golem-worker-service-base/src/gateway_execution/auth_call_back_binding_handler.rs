@@ -40,7 +40,6 @@ pub trait AuthCallBackBindingHandler {
 
 pub struct AuthorisationSuccess {
     pub token_response: CoreTokenResponse,
-    pub token_claims: CoreIdTokenClaims,
     pub target_path: String,
     pub id_token: Option<String>,
     pub access_token: String,
@@ -184,28 +183,6 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
             .await
             .map_err(AuthorisationError::FailedCodeExchange)?;
 
-        let token_verifier = identity_provider
-            .as_ref()
-            .get_id_token_verifier(&open_id_client);
-
-        let claims = identity_provider
-            .get_claims(
-                &token_verifier,
-                token_response.clone(),
-                &Nonce::new(nonce.clone()),
-            )
-            .map_err(AuthorisationError::ClaimFetchError)?;
-
-        let _ = session_store
-            .0
-            .insert(
-                SessionId(state.clone()),
-                DataKey("claims".to_string()),
-                DataValue(serde_json::to_value(claims.clone()).unwrap()), // TODO;
-            )
-            .await
-            .map_err(|err| AuthorisationError::SessionUpdateError(err.to_string()))?;
-
         let access_token = token_response.access_token().secret().clone();
         let id_token = token_response.id_token().map(|x| x.to_string());
 
@@ -235,7 +212,6 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
 
         Ok(AuthorisationSuccess {
             token_response,
-            token_claims: claims,
             target_path,
             id_token,
             access_token,

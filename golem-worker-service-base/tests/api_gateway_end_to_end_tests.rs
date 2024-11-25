@@ -188,7 +188,6 @@ async fn test_end_to_end_api_gateway_with_security_expired_token() {
     let actual_auth_call_back_url =
         internal::decode_url(&initial_redirect_response_info.auth_call_back_url);
     
-    // Manually call back the auth_call_back endpoint by assuming we are identity-provider
     let call_back_request_from_identity_provider =
         security::request_from_identity_provider_to_auth_call_back_endpoint(
             initial_redirect_response_info.state.as_str(),
@@ -198,56 +197,49 @@ async fn test_end_to_end_api_gateway_with_security_expired_token() {
             "localhost",
         );
 
-    let request_with_cookies =
+    let request_to_auth_call_back_endpoint =
         InputHttpRequest::from_request(call_back_request_from_identity_provider)
             .await
             .expect("Failed to get request");
 
-    // If successful, then auth call back is successful and we get a redirect response
-    // to be then executed against the original endpoint which is in api-request
-    let response = execute(
-        &request_with_cookies,
+    let auth_call_back_response = execute(
+        &request_to_auth_call_back_endpoint,
         &api_specification,
         &session_store,
         &invalid_identity_provider_resolver
     )
         .await;
 
-    // The authcallback endpoint results in another redirect response
+    // The auth call back endpoint results in another redirect response
     // which will now have the actual URL to the original protected resource
-    let redirect_response_headers = response
+    let redirect_response_headers = auth_call_back_response
         .as_redirect()
         .expect("The middleware should have resulted in a redirect response");
 
     // Manually calling it back as we are the browser
     let request = security::create_request_from_redirect(&redirect_response_headers);
 
-    let api_request = InputHttpRequest::from_request(request)
+    let api_request_from_browser = InputHttpRequest::from_request(request)
         .await
         .expect("Failed to get http request");
 
-    let test_response = execute(
-        &api_request,
+    // We are hitting the endpoint with an expired token
+    let test_response_from_actual_endpoint = execute(
+        &api_request_from_browser,
         &api_specification,
         &session_store,
         &invalid_identity_provider_resolver
     )
         .await;
 
-    let result = (
-        test_response.get_function_name().unwrap(),
-        test_response.get_function_params().unwrap(),
+   // And it should be a redirect back to the original
+    let final_redirect = test_response_from_actual_endpoint.as_redirect().expect(
+        "Expecting a redirect from the protected endpoint due to expired token"
     );
 
-    let expected = (
-        "golem:it/api.{get-cart-contents}".to_string(),
-        Value::Array(vec![
-            Value::String("a".to_string()),
-            Value::String("b".to_string()),
-        ]),
-    );
-
-    assert_eq!(result, expected);
+    // The final redirect from the protected endpoint should be the same as
+    // the initial redirect for unauthenticated request
+    assert_eq!(final_redirect, initial_redirect_response_headers)
 }
 
 #[test]
@@ -1979,8 +1971,8 @@ mod security {
                 .expect("Failed to parse public key");
 
             // Extract modulus and exponent
-            let n = public_key.n().to_bytes_be(); // Modulus in big-endian
-            let e = public_key.e().to_bytes_be(); // Exponent in big-endian
+            let n = public_key.n().to_bytes_be();
+            let e = public_key.e().to_bytes_be();
             let kid = JsonWebKeyId::new("my-key-id".to_string()); // Use a unique key ID
 
             let jwks = JsonWebKeySet::new(vec![CoreJsonWebKey::new_rsa(n, e, Some(kid))]);
@@ -2191,7 +2183,7 @@ mod security {
         request.finish()
     }
 
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     pub struct InitialRedirectData {
         pub response_type: String,
         pub client_id: String,
