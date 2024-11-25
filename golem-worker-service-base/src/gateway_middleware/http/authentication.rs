@@ -9,11 +9,11 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct HttpRequestAuthentication {
+pub struct HttpAuthenticationMiddleware {
     pub security_scheme: SecuritySchemeWithProviderMetadata,
 }
 
-impl HttpRequestAuthentication {
+impl HttpAuthenticationMiddleware {
     pub fn get_scopes(&self) -> Vec<Scope> {
         self.security_scheme.security_scheme.scopes()
     }
@@ -101,7 +101,7 @@ mod internal {
         DataKey, DataValue, GatewaySessionStore, SessionId,
     };
     use crate::gateway_middleware::middleware_in::MiddlewareSuccess;
-    use crate::gateway_middleware::{HttpRequestAuthentication, MiddlewareInError};
+    use crate::gateway_middleware::{HttpAuthenticationMiddleware, MiddlewareInError};
     use crate::gateway_security::{IdentityProvider, OpenIdClient};
     use http::StatusCode;
     use openidconnect::core::CoreIdTokenClaims;
@@ -112,7 +112,7 @@ mod internal {
         input: &HttpRequestDetails,
         identity_provider: &Arc<dyn IdentityProvider + Send + Sync>,
         client: &OpenIdClient,
-        http_authorizer: &HttpRequestAuthentication,
+        http_authorizer: &HttpAuthenticationMiddleware,
     ) -> Result<MiddlewareSuccess<poem::Response>, MiddlewareInError> {
         let redirect_uri = input.get_api_input_path();
 

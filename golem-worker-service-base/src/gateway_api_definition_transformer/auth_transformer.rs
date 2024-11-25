@@ -68,7 +68,7 @@ impl ApiDefinitionTransformer for AuthTransformer {
 mod internal {
     use crate::gateway_api_definition::http::{AllPathPatterns, MethodPattern, Route};
     use crate::gateway_binding::{GatewayBinding, StaticBinding};
-    use crate::gateway_middleware::HttpRequestAuthentication;
+    use crate::gateway_middleware::HttpAuthenticationMiddleware;
     use crate::gateway_security::{SecuritySchemeIdentifier, SecuritySchemeWithProviderMetadata};
     use std::collections::HashMap;
 
@@ -85,7 +85,7 @@ mod internal {
             let path = AllPathPatterns::parse(path)?;
             let method = MethodPattern::Get;
             let binding = GatewayBinding::static_binding(StaticBinding::http_auth_call_back(
-                HttpRequestAuthentication {
+                HttpAuthenticationMiddleware {
                     security_scheme: scheme,
                 },
             ));

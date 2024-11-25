@@ -18,7 +18,7 @@ use std::ops::Deref;
 
 use crate::gateway_binding::WorkerBindingCompiled;
 use crate::gateway_middleware::{
-    Cors, HttpMiddleware, HttpRequestAuthentication, Middleware, Middlewares,
+    HttpAuthenticationMiddleware, HttpCors, HttpMiddleware, Middleware, Middlewares,
 };
 use golem_service_base::model::VersionedComponentId;
 use rib::Expr;
@@ -33,7 +33,7 @@ pub struct WorkerBinding {
 }
 
 impl WorkerBinding {
-    pub fn get_auth_middleware(&self) -> Option<HttpRequestAuthentication> {
+    pub fn get_auth_middleware(&self) -> Option<HttpAuthenticationMiddleware> {
         self.clone().middleware.and_then(|x| {
             x.0.iter().find_map(|x| match x {
                 Middleware::Http(http) => match http {
@@ -54,7 +54,7 @@ impl WorkerBinding {
         }
     }
 
-    pub fn get_cors_middleware(&self) -> Option<Cors> {
+    pub fn get_cors_middleware(&self) -> Option<HttpCors> {
         self.middleware.as_ref().and_then(|m| m.get_cors())
     }
 }

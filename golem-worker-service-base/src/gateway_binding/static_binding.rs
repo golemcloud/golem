@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::gateway_middleware::{Cors, HttpRequestAuthentication};
+use crate::gateway_middleware::{HttpAuthenticationMiddleware, HttpCors};
 
 // Static bindings must NOT contain Rib, in either pre-compiled or raw form,
 // as it may introduce unnecessary latency
@@ -22,20 +22,20 @@ use crate::gateway_middleware::{Cors, HttpRequestAuthentication};
 // don't need to pass through to the backend.
 #[derive(Debug, Clone, PartialEq)]
 pub enum StaticBinding {
-    HttpCorsPreflight(Box<Cors>),
-    HttpAuthCallBack(Box<HttpRequestAuthentication>),
+    HttpCorsPreflight(Box<HttpCors>),
+    HttpAuthCallBack(Box<HttpAuthenticationMiddleware>),
 }
 
 impl StaticBinding {
-    pub fn http_auth_call_back(value: HttpRequestAuthentication) -> StaticBinding {
+    pub fn http_auth_call_back(value: HttpAuthenticationMiddleware) -> StaticBinding {
         StaticBinding::HttpAuthCallBack(Box::new(value))
     }
 
-    pub fn from_http_cors(cors: Cors) -> Self {
+    pub fn from_http_cors(cors: HttpCors) -> Self {
         StaticBinding::HttpCorsPreflight(Box::new(cors))
     }
 
-    pub fn get_cors_preflight(&self) -> Option<Cors> {
+    pub fn get_cors_preflight(&self) -> Option<HttpCors> {
         match self {
             StaticBinding::HttpCorsPreflight(preflight) => Some(*preflight.clone()),
             _ => None,

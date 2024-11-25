@@ -20,7 +20,7 @@ use crate::gateway_execution::file_server_binding_handler::{
 };
 use crate::gateway_execution::gateway_session::GatewaySessionStore;
 use crate::gateway_execution::to_response_failure::ToResponseFromSafeDisplay;
-use crate::gateway_middleware::Cors as CorsPreflight;
+use crate::gateway_middleware::HttpCors as CorsPreflight;
 use async_trait::async_trait;
 use http::header::*;
 use http::StatusCode;

@@ -35,7 +35,7 @@ impl ApiDefinitionTransformer for CorsTransformer {
 mod internal {
     use crate::gateway_api_definition::http::{AllPathPatterns, MethodPattern, Route};
     use crate::gateway_api_definition_transformer::ApiDefTransformationError;
-    use crate::gateway_middleware::{Cors, HttpMiddleware, Middleware};
+    use crate::gateway_middleware::{HttpCors, HttpMiddleware, Middleware};
 
     pub(crate) fn update_routes_with_cors_middleware(
         routes: &mut [Route],
@@ -82,7 +82,7 @@ mod internal {
     fn apply_cors_middleware_to_routes(
         routes: &mut [Route],
         target_path: &AllPathPatterns,
-        cors: Cors,
+        cors: HttpCors,
     ) -> Result<(), ApiDefTransformationError> {
         for route in routes.iter_mut() {
             if route.path == *target_path && route.method != MethodPattern::Options {
@@ -94,7 +94,7 @@ mod internal {
 
     fn add_cors_middleware_to_route(
         route: &mut Route,
-        cors: Cors,
+        cors: HttpCors,
     ) -> Result<(), ApiDefTransformationError> {
         if let Some(worker_binding) = route.binding.get_worker_binding_mut() {
             // Make it Idempotent
@@ -132,7 +132,7 @@ mod tests {
         ApiDefTransformationError, ApiDefinitionTransformer, CorsTransformer,
     };
     use crate::gateway_binding::{GatewayBinding, ResponseMapping, StaticBinding, WorkerBinding};
-    use crate::gateway_middleware::{Cors, HttpMiddleware, Middleware, Middlewares};
+    use crate::gateway_middleware::{HttpCors, HttpMiddleware, Middleware, Middlewares};
     use golem_common::model::ComponentId;
     use golem_service_base::model::VersionedComponentId;
     use rib::Expr;
@@ -193,8 +193,8 @@ mod tests {
         }
     }
 
-    fn cors() -> Cors {
-        Cors::from_parameters(
+    fn cors() -> HttpCors {
+        HttpCors::from_parameters(
             Some("*".to_string()),
             Some("GET, POST".to_string()),
             Some("Content-Type".to_string()),

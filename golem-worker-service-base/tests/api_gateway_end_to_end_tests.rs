@@ -32,7 +32,7 @@ use golem_worker_service_base::gateway_execution::gateway_input_executor::{
     DefaultGatewayInputExecutor, GatewayInputExecutor, Input,
 };
 use golem_worker_service_base::gateway_execution::gateway_session::GatewaySessionStore;
-use golem_worker_service_base::gateway_middleware::Cors;
+use golem_worker_service_base::gateway_middleware::HttpCors;
 use golem_worker_service_base::gateway_request::http_request::{ApiInputPath, InputHttpRequest};
 use golem_worker_service_base::gateway_security::{
     Provider, SecurityScheme, SecuritySchemeIdentifier,
@@ -483,7 +483,7 @@ async fn test_end_to_end_api_gateway_cors_preflight() {
     let api_request =
         get_preflight_api_request("foo/1", None, &empty_headers, serde_json::Value::Null);
 
-    let cors = Cors::from_parameters(
+    let cors = HttpCors::from_parameters(
         Some("http://example.com".to_string()),
         Some("GET, POST, PUT, DELETE, OPTIONS".to_string()),
         Some("Content-Type, Authorization".to_string()),
@@ -532,7 +532,7 @@ async fn test_end_to_end_api_gateway_cors_preflight_default() {
 
     let result = internal::get_preflight_from_response(response);
 
-    let expected = Cors::default();
+    let expected = HttpCors::default();
 
     assert_eq!(result, expected);
 }
@@ -580,7 +580,7 @@ async fn test_end_to_end_api_gateway_cors_with_preflight_default_and_actual_requ
     )
     .await;
 
-    let expected_cors_preflight = Cors::default();
+    let expected_cors_preflight = HttpCors::default();
 
     let preflight_response = get_preflight_from_response(preflight_response);
 
@@ -605,7 +605,7 @@ async fn test_end_to_end_api_gateway_cors_with_preflight_and_actual_request() {
 
     let api_request = get_api_request("foo/1", None, &empty_headers, serde_json::Value::Null);
 
-    let cors = Cors::from_parameters(
+    let cors = HttpCors::from_parameters(
         Some("http://example.com".to_string()),
         Some("GET, POST, PUT, DELETE, OPTIONS".to_string()),
         Some("Content-Type, Authorization".to_string()),
@@ -1276,7 +1276,7 @@ async fn get_api_spec_with_default_cors_preflight_configuration(
 
 async fn get_api_spec_with_cors_preflight_configuration(
     path_pattern: &str,
-    cors: &Cors,
+    cors: &HttpCors,
 ) -> HttpApiDefinition {
     let yaml_string = format!(
         r#"
@@ -1329,7 +1329,7 @@ async fn get_api_spec_with_cors_preflight_configuration_and_extra_endpoint(
     path_pattern: &str,
     worker_name: &str,
     rib_expression: &str,
-    cors: &Cors,
+    cors: &HttpCors,
 ) -> HttpApiDefinition {
     let yaml_string = format!(
         r#"
@@ -1459,7 +1459,7 @@ mod internal {
         GatewayResolvedWorkerRequest, GatewayWorkerRequestExecutor, WorkerRequestExecutorError,
         WorkerResponse,
     };
-    use golem_worker_service_base::gateway_middleware::Cors;
+    use golem_worker_service_base::gateway_middleware::HttpCors;
 
     use golem_worker_service_base::gateway_rib_interpreter::{
         DefaultRibInterpreter, EvaluationError, WorkerServiceRibInterpreter,
@@ -1659,7 +1659,7 @@ mod internal {
         Arc::new(TestFileServerBindingHandler {})
     }
 
-    pub fn get_preflight_from_response(response: Response) -> Cors {
+    pub fn get_preflight_from_response(response: Response) -> HttpCors {
         let headers = response.headers();
 
         let allow_headers = headers
@@ -1689,7 +1689,7 @@ mod internal {
             .get(ACCESS_CONTROL_ALLOW_CREDENTIALS)
             .map(|x| x.to_str().unwrap().parse::<bool>().unwrap());
 
-        Cors::new(
+        HttpCors::new(
             allow_origin,
             allow_methods,
             allow_headers,

@@ -15,7 +15,7 @@
 pub(crate) use crate::gateway_execution::gateway_binding_resolver::*;
 pub(crate) use crate::gateway_execution::rib_input_value_resolver::*;
 use crate::gateway_middleware::{
-    HttpMiddleware, HttpRequestAuthentication, Middleware, Middlewares,
+    HttpAuthenticationMiddleware, HttpMiddleware, Middleware, Middlewares,
 };
 pub(crate) use crate::gateway_request::request_details::*;
 use crate::gateway_security::SecuritySchemeWithProviderMetadata;
@@ -60,7 +60,7 @@ impl GatewayBinding {
         }
     }
 
-    pub fn get_authenticate_request_middleware(&self) -> Option<HttpRequestAuthentication> {
+    pub fn get_authenticate_request_middleware(&self) -> Option<HttpAuthenticationMiddleware> {
         match self {
             GatewayBinding::Default(binding) => binding.get_auth_middleware(),
             GatewayBinding::FileServer(binding) => binding.get_auth_middleware(),

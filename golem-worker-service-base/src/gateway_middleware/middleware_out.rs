@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::gateway_execution::gateway_session::GatewaySessionStore;
-use crate::gateway_middleware::{Cors, HttpMiddleware};
+use crate::gateway_middleware::{HttpCors, HttpMiddleware};
 use async_trait::async_trait;
 use golem_common::SafeDisplay;
 
@@ -48,7 +48,7 @@ impl SafeDisplay for MiddlewareOutError {
 }
 
 #[async_trait]
-impl MiddlewareOut<poem::Response> for Cors {
+impl MiddlewareOut<poem::Response> for HttpCors {
     async fn process_output(
         &self,
         _session_store: &GatewaySessionStore,

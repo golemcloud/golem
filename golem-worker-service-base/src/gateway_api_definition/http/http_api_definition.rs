@@ -18,7 +18,7 @@ use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion, HasGolemBinding
 use crate::gateway_api_definition_transformer::transform_http_api_definition;
 use crate::gateway_binding::WorkerBindingCompiled;
 use crate::gateway_binding::{GatewayBinding, GatewayBindingCompiled};
-use crate::gateway_middleware::Cors;
+use crate::gateway_middleware::HttpCors;
 use crate::gateway_security::SecuritySchemeReference;
 use crate::service::gateway::api_definition::ApiDefinitionError;
 use crate::service::gateway::api_definition_validator::ValidationErrors;
@@ -499,7 +499,7 @@ impl TryFrom<HttpRoute> for Route {
 }
 
 impl Route {
-    pub fn cors_preflight_binding(&self) -> Option<Cors> {
+    pub fn cors_preflight_binding(&self) -> Option<HttpCors> {
         match &self.binding {
             GatewayBinding::Static(static_binding) => static_binding.get_cors_preflight(),
             _ => None,

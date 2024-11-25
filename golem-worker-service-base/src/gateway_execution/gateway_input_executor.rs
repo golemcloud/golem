@@ -26,7 +26,7 @@ use crate::gateway_execution::gateway_session::GatewaySessionStore;
 use crate::gateway_execution::to_response::ToResponse;
 use crate::gateway_execution::to_response_failure::ToResponseFromSafeDisplay;
 use crate::gateway_middleware::{
-    Cors as CorsPreflight, HttpRequestAuthentication, MiddlewareIn, MiddlewareInError,
+    HttpAuthenticationMiddleware, HttpCors as CorsPreflight, MiddlewareIn, MiddlewareInError,
     MiddlewareOut, MiddlewareOutError, MiddlewareSuccess, Middlewares,
 };
 use crate::gateway_rib_interpreter::{EvaluationError, WorkerServiceRibInterpreter};
@@ -55,7 +55,7 @@ pub trait GatewayInputExecutor<Namespace, Response> {
         FileServerBindingResult: ToResponse<Response>,
         CorsPreflight: ToResponse<Response>,
         AuthCallBackResult: ToResponse<Response>,
-        HttpRequestAuthentication: MiddlewareIn<Namespace, Response>,
+        HttpAuthenticationMiddleware: MiddlewareIn<Namespace, Response>,
         CorsPreflight: MiddlewareOut<Response>;
 }
 
@@ -251,7 +251,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         middlewares: &Middlewares,
     ) -> Option<Response>
     where
-        HttpRequestAuthentication: MiddlewareIn<Namespace, Response>,
+        HttpAuthenticationMiddleware: MiddlewareIn<Namespace, Response>,
         CorsPreflight: MiddlewareOut<Response>,
         MiddlewareInError: ToResponseFromSafeDisplay<Response>,
     {
@@ -285,7 +285,7 @@ impl<Namespace: Send + Sync + Clone, Response: Debug + Send + Sync>
         FileServerBindingResult: ToResponse<Response>, // FileServerBindingResult can be a direct response in a file server endpoint
         CorsPreflight: ToResponse<Response>, // Cors can be a direct response in a cors preflight endpoint
         AuthCallBackResult: ToResponse<Response>, // AuthCallBackResult can be a direct response in auth callback endpoint
-        HttpRequestAuthentication: MiddlewareIn<Namespace, Response>, // HttpAuthorizer can authorise input
+        HttpAuthenticationMiddleware: MiddlewareIn<Namespace, Response>, // HttpAuthorizer can authorise input
         CorsPreflight: MiddlewareOut<Response>, // CorsPreflight can be a middleware in other endpoints
     {
         let binding = &input.resolved_gateway_binding.resolved_binding;

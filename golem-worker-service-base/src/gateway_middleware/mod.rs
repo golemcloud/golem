@@ -53,7 +53,7 @@ impl Middlewares {
         input: &Input<Namespace>,
     ) -> Result<MiddlewareSuccess<Response>, MiddlewareInError>
     where
-        HttpRequestAuthentication: MiddlewareIn<Namespace, Response>,
+        HttpAuthenticationMiddleware: MiddlewareIn<Namespace, Response>,
     {
         for middleware in self.0.iter() {
             match middleware {
@@ -82,7 +82,7 @@ impl Middlewares {
         response: &mut Out,
     ) -> Result<(), MiddlewareOutError>
     where
-        Cors: MiddlewareOut<Out>,
+        HttpCors: MiddlewareOut<Out>,
     {
         for middleware in self.0.iter() {
             match middleware {
@@ -102,11 +102,11 @@ impl Middlewares {
         self.0.push(middleware);
     }
 
-    pub fn get_cors(&self) -> Option<Cors> {
+    pub fn get_cors(&self) -> Option<HttpCors> {
         self.0.iter().find_map(|m| m.get_cors())
     }
 
-    pub fn get_http_authentication(&self) -> Option<HttpRequestAuthentication> {
+    pub fn get_http_authentication(&self) -> Option<HttpAuthenticationMiddleware> {
         self.0.iter().find_map(|m| m.get_http_authentication())
     }
 }
@@ -125,18 +125,18 @@ pub enum Middleware {
 }
 
 impl Middleware {
-    pub fn cors(cors: &Cors) -> Middleware {
+    pub fn cors(cors: &HttpCors) -> Middleware {
         Middleware::Http(HttpMiddleware::cors(cors.clone()))
     }
 
-    pub fn get_cors(&self) -> Option<Cors> {
+    pub fn get_cors(&self) -> Option<HttpCors> {
         match self {
             Middleware::Http(HttpMiddleware::AddCorsHeaders(cors)) => Some(cors.clone()),
             _ => None,
         }
     }
 
-    pub fn get_http_authentication(&self) -> Option<HttpRequestAuthentication> {
+    pub fn get_http_authentication(&self) -> Option<HttpAuthenticationMiddleware> {
         match self {
             Middleware::Http(HttpMiddleware::AuthenticateRequest(auth)) => {
                 Some(auth.deref().clone())
@@ -158,7 +158,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::Middleware> for Middle
     ) -> Result<Self, Self::Error> {
         let mut middlewares = Vec::new();
         if let Some(cors) = value.cors {
-            let cors = Cors::try_from(cors)?;
+            let cors = HttpCors::try_from(cors)?;
             middlewares.push(Middleware::http(HttpMiddleware::cors(cors)));
         }
 

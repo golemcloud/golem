@@ -20,7 +20,9 @@ use crate::gateway_api_deployment::ApiSite;
 use crate::gateway_binding::{
     GatewayBinding, GatewayBindingCompiled, StaticBinding, WorkerBinding, WorkerBindingCompiled,
 };
-use crate::gateway_middleware::{Cors, CorsPreflightExpr, HttpMiddleware, Middleware, Middlewares};
+use crate::gateway_middleware::{
+    CorsPreflightExpr, HttpCors, HttpMiddleware, Middleware, Middlewares,
+};
 use crate::gateway_security::{
     Provider, SecurityScheme, SecuritySchemeIdentifier, SecuritySchemeReference,
     SecuritySchemeWithProviderMetadata,
@@ -373,7 +375,7 @@ impl GatewayBindingData {
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct MiddlewareData {
-    pub cors: Option<Cors>,
+    pub cors: Option<HttpCors>,
     pub auth: Option<SecuritySchemeReferenceData>,
 }
 
@@ -452,7 +454,7 @@ pub struct GatewayBindingWithTypeInfo {
     pub response_mapping_input: Option<RibInputTypeInfo>, // If bindingType is Default or FileServer
     pub worker_name_input: Option<RibInputTypeInfo>,      // If bindingType is Default or FileServer
     pub idempotency_key_input: Option<RibInputTypeInfo>, // If bindingType is Default or FilerServer
-    pub cors_preflight: Option<Cors>, // If bindingType is CorsPreflight (internally, a static binding)
+    pub cors_preflight: Option<HttpCors>, // If bindingType is CorsPreflight (internally, a static binding)
     pub middleware: Option<MiddlewareData>, // If bindingType is FileServer or Default, middleware is not applicable for static binding like CorsPreflight
 }
 
@@ -701,13 +703,13 @@ impl TryFrom<GatewayBindingData> for GatewayBinding {
                     Some(expr_str) => {
                         let expr = rib::from_string(expr_str).map_err(|e| e.to_string())?;
                         let cors_preflight_expr = CorsPreflightExpr(expr);
-                        let cors = Cors::from_cors_preflight_expr(&cors_preflight_expr)?;
+                        let cors = HttpCors::from_cors_preflight_expr(&cors_preflight_expr)?;
                         Ok(GatewayBinding::static_binding(
                             StaticBinding::from_http_cors(cors),
                         ))
                     }
                     None => {
-                        let cors = Cors::default();
+                        let cors = HttpCors::default();
                         Ok(GatewayBinding::static_binding(
                             StaticBinding::from_http_cors(cors),
                         ))

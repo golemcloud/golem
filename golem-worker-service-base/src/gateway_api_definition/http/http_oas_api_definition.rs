@@ -125,7 +125,7 @@ mod internal {
 
     use crate::gateway_binding::{GatewayBinding, ResponseMapping, StaticBinding, WorkerBinding};
     use crate::gateway_middleware::{
-        Cors, CorsPreflightExpr, HttpMiddleware, Middleware, Middlewares,
+        CorsPreflightExpr, HttpCors, HttpMiddleware, Middleware, Middlewares,
     };
     use crate::gateway_security::{SecuritySchemeIdentifier, SecuritySchemeReference};
     use golem_service_base::model::VersionedComponentId;
@@ -286,7 +286,7 @@ mod internal {
 
             None => {
                 if method == MethodPattern::Options {
-                    let binding = StaticBinding::from_http_cors(Cors::default());
+                    let binding = StaticBinding::from_http_cors(HttpCors::default());
 
                     Ok(RouteRequest {
                         path: path_pattern.clone(),
@@ -342,12 +342,13 @@ mod internal {
 
                     let rib = rib::from_string(rib_expr_text).map_err(|err| err.to_string())?;
 
-                    let cors_preflight = Cors::from_cors_preflight_expr(&CorsPreflightExpr(rib))?;
+                    let cors_preflight =
+                        HttpCors::from_cors_preflight_expr(&CorsPreflightExpr(rib))?;
 
                     Ok(StaticBinding::from_http_cors(cors_preflight))
                 }
 
-                None => Ok(StaticBinding::from_http_cors(Cors::default())),
+                None => Ok(StaticBinding::from_http_cors(HttpCors::default())),
             },
             _ => Err("Invalid schema for cors binding".to_string()),
         }
@@ -399,7 +400,7 @@ mod internal {
             // is a preflight endpoint that corresponds to a static binding of cors.
             match middleware_value {
                 Value::Object(map) => {
-                    let cors_preflight: Option<Cors> = map
+                    let cors_preflight: Option<HttpCors> = map
                         .get("cors")
                         .map(|json_value| serde_json::from_value(json_value.clone()))
                         .transpose()
@@ -480,7 +481,7 @@ mod tests {
     use super::*;
     use crate::gateway_api_definition::http::{AllPathPatterns, MethodPattern, RouteRequest};
     use crate::gateway_binding::{GatewayBinding, ResponseMapping, StaticBinding, WorkerBinding};
-    use crate::gateway_middleware::{Cors, HttpMiddleware, Middleware, Middlewares};
+    use crate::gateway_middleware::{HttpCors, HttpMiddleware, Middleware, Middlewares};
     use golem_common::model::ComponentId;
     use openapiv3::Operation;
     use rib::Expr;
@@ -581,13 +582,15 @@ mod tests {
         RouteRequest {
             path: path_pattern.clone(),
             method: MethodPattern::Options,
-            binding: GatewayBinding::static_binding(StaticBinding::from_http_cors(Cors::default())),
+            binding: GatewayBinding::static_binding(StaticBinding::from_http_cors(
+                HttpCors::default(),
+            )),
             security: None,
         }
     }
 
     fn expected_route_with_cors_preflight_binding(path_pattern: &AllPathPatterns) -> RouteRequest {
-        let mut cors_preflight = Cors::default();
+        let mut cors_preflight = HttpCors::default();
         cors_preflight.set_allow_origin("apple.com").unwrap();
         RouteRequest {
             path: path_pattern.clone(),
@@ -638,7 +641,7 @@ mod tests {
                     .collect(),
                 )),
                 middleware: Some(Middlewares(vec![Middleware::Http(HttpMiddleware::cors(
-                    Cors::from_parameters(
+                    HttpCors::from_parameters(
                         Some("*".to_string()),
                         Some("GET, POST, PUT, DELETE, OPTIONS".to_string()),
                         Some("Content-Type, Authorization".to_string()),
