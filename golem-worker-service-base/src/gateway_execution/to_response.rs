@@ -24,22 +24,22 @@ use crate::gateway_middleware::Cors as CorsPreflight;
 use async_trait::async_trait;
 use http::header::*;
 use http::StatusCode;
-use openidconnect::OAuth2TokenResponse;
+use openidconnect::{OAuth2TokenResponse, TokenResponse};
 use poem::Body;
 use poem::IntoResponse;
 use rib::RibResult;
 
 #[async_trait]
-pub trait ToResponse<A> {
+pub trait ToResponse<Response> {
     async fn to_response(
         self,
         request_details: &GatewayRequestDetails,
         session_store: &GatewaySessionStore,
-    ) -> A;
+    ) -> Response;
 }
 
 #[async_trait]
-impl ToResponse<poem::Response> for FileServerBindingResult {
+impl<'a> ToResponse<poem::Response> for FileServerBindingResult {
     async fn to_response(
         self,
         _request_details: &GatewayRequestDetails,
@@ -70,7 +70,7 @@ impl ToResponse<poem::Response> for FileServerBindingResult {
 
 // Preflight (OPTIONS) response that will consist of all configured CORS headers
 #[async_trait]
-impl ToResponse<poem::Response> for CorsPreflight {
+impl<'a> ToResponse<poem::Response> for CorsPreflight {
     async fn to_response(
         self,
         _request_details: &GatewayRequestDetails,
@@ -137,17 +137,42 @@ impl ToResponse<poem::Response> for AuthCallBackResult {
         _session_store: &GatewaySessionStore,
     ) -> poem::Response {
         match self {
-            Ok(success) => poem::Response::builder()
-                .status(StatusCode::FOUND)
-                .header("Location", "/")
-                .header(
-                    "Authorization",
+            Ok(success) => {
+                let access_token = success.access_token;
+                let id_token = success.id_token;
+                let session_id = success.session;
+
+                let mut response = poem::Response::builder()
+                    .status(StatusCode::FOUND)
+                    .header("Location", success.target_path)
+                    .header(
+                        "Set-Cookie",
+                        format!(
+                            "access_token={}; HttpOnly; Secure; Path=/; SameSite=None",
+                            access_token
+                        ).as_str(),
+                    );
+
+                if let Some(id_token) = id_token {
+                    response = response.header(
+                        "Set-Cookie",
+                        format!(
+                            "id_token={}; HttpOnly; Secure; Path=/; SameSite=None",
+                            id_token
+                        ).as_str(),
+                    )
+                }
+
+                response = response.header(
+                    "Set-Cookie",
                     format!(
-                        "Bearer {}",
-                        success.token_response.access_token().secret().clone()
-                    ),
-                )
-                .body(()),
+                        "session_id={}; HttpOnly; Secure; Path=/; SameSite=None",
+                        session_id
+                    ).as_str(),
+                );
+
+                response.body(())
+            },
 
             Err(err) => err.to_response_from_safe_display(|_| StatusCode::UNAUTHORIZED),
         }

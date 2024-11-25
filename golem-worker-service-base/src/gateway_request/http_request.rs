@@ -20,10 +20,12 @@ use poem::{Body, Response};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fmt::Display;
+use http::uri::Scheme;
 use tracing::error;
 
 #[derive(Clone, Debug)]
 pub struct InputHttpRequest {
+    pub scheme: Option<Scheme>,
     pub host: ApiSiteString,
     pub api_input_path: ApiInputPath,
     pub headers: HeaderMap,
@@ -44,7 +46,9 @@ impl InputHttpRequest {
     pub async fn from_request(request: poem::Request) -> Result<InputHttpRequest, ErrorResponse> {
         let (req_parts, body) = request.into_parts();
         let headers = req_parts.headers;
+        let cookies = request.cookie();
         let uri = req_parts.uri;
+        let scheme = uri.scheme();
 
         let host = match headers.get(HOST).and_then(|h| h.to_str().ok()) {
             Some(host) => ApiSiteString(host.to_string()),
@@ -74,6 +78,7 @@ impl InputHttpRequest {
         };
 
         Ok(InputHttpRequest {
+            scheme: scheme.cloned(),
             host,
             api_input_path: ApiInputPath {
                 base_path: uri.path().to_string(),
@@ -83,13 +88,6 @@ impl InputHttpRequest {
             req_method: req_parts.method,
             req_body: json_request_body,
         })
-    }
-
-    pub fn uri(&self) -> String {
-        match self.api_input_path.query_path {
-            Some(ref query_path) => format!("{}?{}", self.api_input_path.base_path, query_path),
-            None => self.api_input_path.base_path.clone(),
-        }
     }
 }
 

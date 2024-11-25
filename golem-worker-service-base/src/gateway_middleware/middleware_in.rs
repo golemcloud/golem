@@ -22,11 +22,9 @@ use golem_common::SafeDisplay;
 // While some middlewares are  specific to `MiddlewareIn` other are specific to `MiddlewareOut`.
 // This ensures orthogonality in middleware usages, such that, at type level, we distinguish whether it is
 // used only to process input (of api gateway) or used only to manipulate the output (of probably rib evaluation result)
-// These middlewares are protocol-independent. It's input `GatewayRequestDetails`,
-// with is an enum of different types (protocols) of input the protocol type.
-// An `enum` over type parameter is used merely for simplicity.
 // The middleware decides which protocol out of `GatewayRequestDetails` to process.
 // This approach centralizes middleware management, and easy to add new middlewares without worrying about protocols.
+// Better typesafety will be achieved once we resolve https://github.com/golemcloud/golem/issues/1069
 #[async_trait]
 pub trait MiddlewareIn<Namespace, Out> {
     async fn process_input(

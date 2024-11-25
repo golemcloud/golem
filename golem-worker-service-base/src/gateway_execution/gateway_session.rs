@@ -46,10 +46,10 @@ impl GatewaySessionStore {
     }
 }
 
-#[derive(Hash, PartialEq, Eq, Clone)]
+#[derive(Debug, Hash, PartialEq, Eq, Clone)]
 pub struct SessionId(pub String);
 
-#[derive(Hash, PartialEq, Eq, Clone)]
+#[derive(Debug, Hash, PartialEq, Eq, Clone)]
 pub struct DataKey(pub String);
 
 impl DataKey {
@@ -62,7 +62,7 @@ impl DataKey {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct DataValue(pub serde_json::Value);
 
 impl DataValue {

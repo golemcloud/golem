@@ -27,11 +27,11 @@ use golem_common::SafeDisplay;
 // The middleware decides which protocol out of `GatewayRequestDetails` to process.
 // This approach centralizes middleware management, and easy to add new middlewares without worrying about protocols.
 #[async_trait]
-pub trait MiddlewareOut<R> {
+pub trait MiddlewareOut<Response> {
     async fn process_output(
         &self,
         session_store: &GatewaySessionStore,
-        input: &mut R,
+        input: &mut Response,
     ) -> Result<(), MiddlewareOutError>;
 }
 

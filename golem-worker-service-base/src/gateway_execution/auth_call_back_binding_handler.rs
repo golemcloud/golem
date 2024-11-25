@@ -17,13 +17,12 @@ use crate::gateway_execution::gateway_session::{
     DataKey, DataValue, GatewaySessionStore, SessionId,
 };
 use crate::gateway_security::{
-    IdentityProvider, IdentityProviderError, IdentityProviderResolver,
-    SecuritySchemeWithProviderMetadata,
+    IdentityProviderError, IdentityProviderResolver, SecuritySchemeWithProviderMetadata,
 };
 use async_trait::async_trait;
 use golem_common::SafeDisplay;
 use openidconnect::core::{CoreIdTokenClaims, CoreTokenResponse};
-use openidconnect::{AuthorizationCode, Nonce, OAuth2TokenResponse};
+use openidconnect::{AuthorizationCode, Nonce, OAuth2TokenResponse, TokenResponse};
 use std::sync::Arc;
 
 pub type AuthCallBackResult = Result<AuthorisationSuccess, AuthorisationError>;
@@ -42,11 +41,15 @@ pub trait AuthCallBackBindingHandler {
 pub struct AuthorisationSuccess {
     pub token_response: CoreTokenResponse,
     pub token_claims: CoreIdTokenClaims,
+    pub target_path: String,
+    pub id_token: Option<String>,
+    pub access_token: String,
+    pub session: String
 }
 
 #[derive(Debug)]
 pub enum AuthorisationError {
-    BadRequest(String),
+    Internal(String),
     CodeNotFound,
     InvalidCode,
     StateNotFound,
@@ -67,7 +70,7 @@ pub enum AuthorisationError {
 impl SafeDisplay for AuthorisationError {
     fn to_safe_string(&self) -> String {
         match self {
-            AuthorisationError::BadRequest(_) => "Failed authentication".to_string(),
+            AuthorisationError::Internal(_) => "Failed authentication".to_string(),
             AuthorisationError::CodeNotFound => "The authorisation code is missing.".to_string(),
             AuthorisationError::InvalidCode => "The authorisation code is invalid.".to_string(),
             AuthorisationError::StateNotFound => {
@@ -124,7 +127,7 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
     ) -> Result<AuthorisationSuccess, AuthorisationError> {
         let api_url = &http_request_details
             .url()
-            .map_err(|err| AuthorisationError::BadRequest(err))?;
+            .map_err(|err| AuthorisationError::Internal(err))?;
 
         let query_pairs = api_url.query_pairs();
 
@@ -154,6 +157,13 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
             .await
             .map_err(|_| AuthorisationError::MissingParametersInSession)?
             .ok_or(AuthorisationError::InvalidSession)?;
+
+        let target_path =
+            session_params.get(&DataKey("redirect_url".to_string())).ok_or(
+                AuthorisationError::Internal("Failed to obtain redirect url of protected resource from session store".to_string())
+            )?.as_string().ok_or(
+                AuthorisationError::Internal("Invalid redirect url (target url of the protected resource)".to_string())
+            )?;
 
         let nonce = session_params
             .get(&DataKey("nonce".to_string()))
@@ -199,6 +209,7 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
             .map_err(|err| AuthorisationError::SessionUpdateError(err.to_string()))?;
 
         let access_token = token_response.access_token().secret().clone();
+        let id_token = token_response.id_token().map(|x| x.to_string());
 
         // access token in session store
         let _ = session_store
@@ -211,9 +222,27 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
             .await
             .map_err(|err| AuthorisationError::SessionUpdateError(err.to_string()))?;
 
+
+        if let Some(id_token) = &id_token {
+            // id token in session store
+            let _ = session_store
+                .0
+                .insert(
+                    SessionId(state),
+                    DataKey("id_token".to_string()),
+                    DataValue(serde_json::Value::String(id_token.to_string())),
+                )
+                .await
+                .map_err(|err| AuthorisationError::SessionUpdateError(err.to_string()))?;
+        }
+
         Ok(AuthorisationSuccess {
             token_response,
             token_claims: claims,
+            target_path,
+            id_token,
+            access_token,
+            session: state
         })
     }
 }

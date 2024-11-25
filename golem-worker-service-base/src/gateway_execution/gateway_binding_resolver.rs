@@ -182,13 +182,14 @@ impl<Namespace: Clone + Send + Sync + 'static>
         };
 
         let http_request_details = GatewayRequestDetails::from(
+            &self.scheme,
             &self.host,
             &self.api_input_path,
             &zipped_path_params,
             &request_query_variables,
             query_params,
             request_body,
-            headers,
+            headers.clone(),
         )
         .map_err(|err| format!("Failed to fetch input request details {}", err.join(", ")))?;
 

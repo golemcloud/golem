@@ -19,8 +19,11 @@ use crate::gateway_request::http_request::ApiInputPath;
 use http::HeaderMap;
 use serde_json::Value;
 use std::collections::HashMap;
+use http::uri::Scheme;
+use poem_openapi::param::Cookie;
 use url::Url;
 
+// https://github.com/golemcloud/golem/issues/1069
 #[derive(Clone, Debug)]
 pub enum GatewayRequestDetails {
     Http(HttpRequestDetails),
@@ -33,15 +36,17 @@ impl GatewayRequestDetails {
     // in the workflow but not through API definition, use poem::Request directly
     // as it will be better performing in the hot path
     pub fn from(
+        scheme: &Option<Scheme>,
         host: &ApiSiteString,
         api_input_path: &ApiInputPath,
         path_params: &HashMap<VarInfo, &str>,
         query_variable_values: &HashMap<String, String>,
         query_variable_names: &[QueryInfo],
         request_body: &Value,
-        headers: &HeaderMap,
+        headers: HeaderMap,
     ) -> Result<Self, Vec<String>> {
         Ok(Self::Http(HttpRequestDetails::from_input_http_request(
+            scheme,
             host,
             api_input_path,
             path_params,
@@ -96,8 +101,9 @@ impl GatewayRequestDetails {
 // Any extra query parameter values in the incoming request will not be available
 // in query or path values. If we need to retrieve them at any stage, the original
 // api_input_path is still available.
-#[derive(Clone, Debug)]
+#[derive(Debug, Clone)]
 pub struct HttpRequestDetails {
+    pub scheme: Option<Scheme>,
     pub host: ApiSiteString,
     pub api_input_path: ApiInputPath,
     pub request_path_values: RequestPathValues,
@@ -108,15 +114,19 @@ pub struct HttpRequestDetails {
 
 impl HttpRequestDetails {
     pub fn url(&self) -> Result<Url, String> {
-        let uri_str = format!("http://{}{}", &self.host, &self.api_input_path.to_string());
-        dbg!(uri_str.clone());
-        let result = Url::parse(&uri_str).map_err(|err| err.to_string());
-        dbg!(&result);
+        let url_str = if let Some(scheme) = &self.scheme {
+            format!("{}://{}{}", scheme, &self.host, &self.api_input_path.to_string())
+        } else {
+            format!("{}{}", &self.host, &self.api_input_path.to_string())
+        };
+
+        let result = Url::parse(&url_str).map_err(|err| err.to_string());
         result
     }
 
     pub fn empty() -> HttpRequestDetails {
         HttpRequestDetails {
+            scheme: Some(Scheme::HTTP),
             host: ApiSiteString("".to_string()),
             api_input_path: ApiInputPath {
                 base_path: "".to_string(),
@@ -223,20 +233,22 @@ impl HttpRequestDetails {
     }
 
     fn from_input_http_request(
+        scheme: &Option<Scheme>,
         host: &ApiSiteString,
         api_input_path: &ApiInputPath,
         path_params: &HashMap<VarInfo, &str>,
         query_variable_values: &HashMap<String, String>,
         query_variable_names: &[QueryInfo],
         request_body: &Value,
-        headers: &HeaderMap,
+        all_headers: HeaderMap,
     ) -> Result<Self, Vec<String>> {
         let request_body = RequestBody::from(request_body)?;
         let path_params = RequestPathValues::from(path_params);
         let query_params = RequestQueryValues::from(query_variable_values, query_variable_names)?;
-        let header_params = RequestHeaderValues::from(headers)?;
+        let header_params = RequestHeaderValues::from(&all_headers)?;
 
         Ok(Self {
+            scheme: scheme.clone(),
             host: host.clone(),
             api_input_path: api_input_path.clone(),
             request_path_values: path_params,
