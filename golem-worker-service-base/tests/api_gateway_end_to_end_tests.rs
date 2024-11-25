@@ -22,6 +22,7 @@ use golem_service_base::auth::DefaultNamespace;
 use crate::gateway_api_definition::http::{CompiledHttpApiDefinition, HttpApiDefinition};
 
 use crate::internal::TestResponse;
+use crate::security::TestIdentityProviderResolver;
 use chrono::{DateTime, Utc};
 use golem_common::model::IdempotencyKey;
 use golem_worker_service_base::gateway_api_deployment::ApiSiteString;
@@ -56,6 +57,7 @@ async fn execute(
     api_request: &InputHttpRequest,
     api_specification: &HttpApiDefinition,
     session_store: &GatewaySessionStore,
+    test_identity_provider_resolver: TestIdentityProviderResolver,
 ) -> TestResponse {
     let compiled = CompiledHttpApiDefinition::from_http_api_definition(
         api_specification,
@@ -78,7 +80,7 @@ async fn execute(
     let input = Input::new(
         &resolved_gateway_binding,
         session_store,
-        Arc::new(security::TestIdentityProviderResolver),
+        Arc::new(test_identity_provider_resolver),
     );
 
     let poem_response: poem::Response = test_executor.execute_binding(&input).await;
@@ -104,7 +106,13 @@ async fn test_end_to_end_api_gateway_simple_worker() {
         get_api_spec_worker_binding("foo/{user-id}", worker_name, response_mapping).await;
 
     let session_store = GatewaySessionStore::in_memory();
-    let test_response = execute(&api_request, &api_specification, &session_store).await;
+    let test_response = execute(
+        &api_request,
+        &api_specification,
+        &session_store,
+        TestIdentityProviderResolver::default(),
+    )
+    .await;
 
     let result = (
         test_response.get_function_name().unwrap(),
@@ -121,7 +129,6 @@ async fn test_end_to_end_api_gateway_simple_worker() {
 
     assert_eq!(result, expected);
 }
-
 
 #[test]
 async fn test_end_to_end_api_gateway_with_security_successful_authentication() {
@@ -141,19 +148,24 @@ async fn test_end_to_end_api_gateway_with_security_successful_authentication() {
     let auth_call_back_url =
         RedirectUrl::new("http://foodomain/auth/callback".to_string()).unwrap();
 
-    let api_specification: HttpApiDefinition =
-        get_api_spec_with_security_configuration(
-            "foo/{user-id}",
-            worker_name,
-            response_mapping,
-            &auth_call_back_url,
-        )
-        .await;
+    let api_specification: HttpApiDefinition = get_api_spec_with_security_configuration(
+        "foo/{user-id}",
+        worker_name,
+        response_mapping,
+        &auth_call_back_url,
+        TestIdentityProviderResolver::default(),
+    )
+    .await;
 
     let session_store = GatewaySessionStore::in_memory();
 
-    let initial_response_to_identity_provider =
-        execute(&api_request, &api_specification, &session_store).await;
+    let initial_response_to_identity_provider = execute(
+        &api_request,
+        &api_specification,
+        &session_store,
+        TestIdentityProviderResolver::default(),
+    )
+    .await;
 
     let initial_redirect_response_headers = initial_response_to_identity_provider.as_redirect()
         .expect("MiddlewareIn for authentication should have resulted in a redirect response indicating login to identity provider");
@@ -162,15 +174,13 @@ async fn test_end_to_end_api_gateway_with_security_successful_authentication() {
         .get(LOCATION)
         .expect("Expecting location")
         .to_str()
-        .unwrap();
-    let url =
-        Url::parse(location).expect("Expect the initial redirection to be a full URL");
+        .expect("Location should be a string");
 
-    let query_components =
-        ApiInputPath::query_components_from_str(url.query().unwrap_or_default());
+    let url = Url::parse(location).expect("Expect the initial redirection to be a full URL");
 
-    let initial_redirect_response_info =
-        security::get_initial_redirect_data(&query_components);
+    let query_components = ApiInputPath::query_components_from_str(url.query().unwrap_or_default());
+
+    let initial_redirect_response_info = security::get_initial_redirect_data(&query_components);
 
     let actual_auth_call_back_url =
         internal::decode_url(&initial_redirect_response_info.auth_call_back_url);
@@ -187,7 +197,7 @@ async fn test_end_to_end_api_gateway_with_security_successful_authentication() {
         // The url embedded in the initial redirect should be the same as the redirect url
         // specified in the security scheme. Note that security scheme will have a full
         // redirect URL (auth call back URL)
-        Url::parse(&actual_auth_call_back_url).unwrap(),
+        Url::parse(&actual_auth_call_back_url).expect("Auth call back URL should be a full valid URL"),
         auth_call_back_url.url().clone()
     );
 
@@ -208,23 +218,34 @@ async fn test_end_to_end_api_gateway_with_security_successful_authentication() {
 
     // If successful, then auth call back is successful and we get a redirect response
     // to be then executed against the original endpoint which is in api-request
-    let response =
-        execute(&request_with_cookies, &api_specification, &session_store).await;
+    let response = execute(
+        &request_with_cookies,
+        &api_specification,
+        &session_store,
+        TestIdentityProviderResolver::default(),
+    )
+    .await;
 
     // The authcallback endpoint results in another redirect response
     // which will now have the actual URL to the original protected resource
-    let redirect_response_headers= response.as_redirect()
+    let redirect_response_headers = response
+        .as_redirect()
         .expect("The middleware should have resulted in a redirect response");
 
     // Manually calling it back as we are the browser
-    let request =
-        security::create_request_from_redirect(&redirect_response_headers);
+    let request = security::create_request_from_redirect(&redirect_response_headers);
 
     let api_request = InputHttpRequest::from_request(request)
         .await
         .expect("Failed to get http request");
 
-    let test_response = execute(&api_request, &api_specification, &session_store).await;
+    let test_response = execute(
+        &api_request,
+        &api_specification,
+        &session_store,
+        TestIdentityProviderResolver::default(),
+    )
+    .await;
 
     let result = (
         test_response.get_function_name().unwrap(),
@@ -263,7 +284,13 @@ async fn test_end_to_end_api_gateway_cors_preflight() {
 
     let session_store = GatewaySessionStore::in_memory();
 
-    let test_response = execute(&api_request, &api_specification, &session_store).await;
+    let test_response = execute(
+        &api_request,
+        &api_specification,
+        &session_store,
+        TestIdentityProviderResolver::default(),
+    )
+    .await;
 
     let result = test_response.get_cors_preflight().unwrap();
     assert_eq!(result, cors);
@@ -280,7 +307,13 @@ async fn test_end_to_end_api_gateway_cors_preflight_default() {
 
     let session_store = GatewaySessionStore::in_memory();
 
-    let test_response = execute(&api_request, &api_specification, &session_store).await;
+    let test_response = execute(
+        &api_request,
+        &api_specification,
+        &session_store,
+        TestIdentityProviderResolver::default(),
+    )
+    .await;
 
     let result = test_response.get_cors_preflight().unwrap();
 
@@ -317,8 +350,20 @@ async fn test_end_to_end_api_gateway_cors_with_preflight_default_and_actual_requ
 
     let session_store = GatewaySessionStore::in_memory();
 
-    let preflight_response = execute(&preflight_request, &api_specification, &session_store).await;
-    let actual_response = execute(&api_request, &api_specification, &session_store).await;
+    let preflight_response = execute(
+        &preflight_request,
+        &api_specification,
+        &session_store,
+        TestIdentityProviderResolver::default(),
+    )
+    .await;
+    let actual_response = execute(
+        &api_request,
+        &api_specification,
+        &session_store,
+        TestIdentityProviderResolver::default(),
+    )
+    .await;
 
     let pre_flight_response = preflight_response.get_cors_preflight().unwrap();
 
@@ -363,18 +408,31 @@ async fn test_end_to_end_api_gateway_cors_with_preflight_and_actual_request() {
       response
     "#;
 
-    let api_specification: HttpApiDefinition = get_api_spec_with_cors_preflight_configuration_and_extra_endpoint(
-        "foo/{user-id}",
-        worker_name,
-        response_mapping,
-        &cors,
-    )
-    .await;
+    let api_specification: HttpApiDefinition =
+        get_api_spec_with_cors_preflight_configuration_and_extra_endpoint(
+            "foo/{user-id}",
+            worker_name,
+            response_mapping,
+            &cors,
+        )
+        .await;
 
     let session_store = GatewaySessionStore::in_memory();
 
-    let preflight_response = execute(&preflight_request, &api_specification, &session_store).await;
-    let actual_response = execute(&api_request, &api_specification, &session_store).await;
+    let preflight_response = execute(
+        &preflight_request,
+        &api_specification,
+        &session_store,
+        TestIdentityProviderResolver::default(),
+    )
+    .await;
+    let actual_response = execute(
+        &api_request,
+        &api_specification,
+        &session_store,
+        TestIdentityProviderResolver::default(),
+    )
+    .await;
 
     let pre_flight_response = preflight_response.get_cors_preflight().unwrap();
 
@@ -427,7 +485,13 @@ async fn test_end_to_end_api_gateway_with_request_path_and_query_lookup() {
 
     let session_store = GatewaySessionStore::in_memory();
 
-    let test_response = execute(&api_request, &api_specification, &session_store).await;
+    let test_response = execute(
+        &api_request,
+        &api_specification,
+        &session_store,
+        TestIdentityProviderResolver::default(),
+    )
+    .await;
 
     let result = (
         test_response.get_worker_name().unwrap(),
@@ -478,7 +542,13 @@ async fn test_end_to_end_api_gateway_with_request_path_and_query_lookup_complex(
 
     let session_store = GatewaySessionStore::in_memory();
 
-    let test_response = execute(&api_request, &api_specification, &session_store).await;
+    let test_response = execute(
+        &api_request,
+        &api_specification,
+        &session_store,
+        TestIdentityProviderResolver::default(),
+    )
+    .await;
 
     let result = (
         test_response.get_worker_name().unwrap(),
@@ -528,7 +598,13 @@ async fn test_end_to_end_api_gateway_with_with_request_body_lookup1() {
 
     let session_store = GatewaySessionStore::in_memory();
 
-    let test_response = execute(&api_request, &api_specification, &session_store).await;
+    let test_response = execute(
+        &api_request,
+        &api_specification,
+        &session_store,
+        TestIdentityProviderResolver::default(),
+    )
+    .await;
 
     let result = (
         test_response.get_worker_name().unwrap(),
@@ -591,7 +667,13 @@ async fn test_end_to_end_api_gateway_with_with_request_body_lookup2() {
         get_api_spec_worker_binding("foo/{user-id}", worker_name, response_mapping).await;
 
     let session_store = GatewaySessionStore::in_memory();
-    let test_response = execute(&api_request, &api_specification, &session_store).await;
+    let test_response = execute(
+        &api_request,
+        &api_specification,
+        &session_store,
+        TestIdentityProviderResolver::default(),
+    )
+    .await;
 
     let result = (
         test_response.get_worker_name().unwrap(),
@@ -652,7 +734,13 @@ async fn test_end_to_end_api_gateway_with_with_request_body_lookup3() {
         get_api_spec_worker_binding("foo/{user-id}", worker_name, response_mapping).await;
 
     let session_store = GatewaySessionStore::in_memory();
-    let test_response = execute(&api_request, &api_specification, &session_store).await;
+    let test_response = execute(
+        &api_request,
+        &api_specification,
+        &session_store,
+        TestIdentityProviderResolver::default(),
+    )
+    .await;
 
     let result = (
         test_response.get_worker_name().unwrap(),
@@ -839,7 +927,7 @@ async fn get_api_spec_worker_binding(
         &DefaultNamespace(),
         core_request,
         create_at,
-        &security::get_test_security_scheme_service(),
+        &security::get_test_security_scheme_service(TestIdentityProviderResolver::default()),
     )
     .await
     .unwrap()
@@ -851,11 +939,12 @@ async fn get_api_spec_with_security_configuration(
     worker_name: &str,
     rib_expression: &str,
     auth_call_back_url: &RedirectUrl,
+    test_identity_provider_resolver: TestIdentityProviderResolver,
 ) -> HttpApiDefinition {
     let security_scheme_identifier = SecuritySchemeIdentifier::new("openId1".to_string());
 
     let security_scheme_service =
-        security::get_test_security_scheme_service();
+        security::get_test_security_scheme_service(test_identity_provider_resolver);
 
     let security_scheme = SecurityScheme::new(
         Provider::Google,
@@ -949,13 +1038,16 @@ async fn get_api_spec_with_default_cors_preflight_configuration(
         &DefaultNamespace(),
         core_request,
         create_at,
-        &security::get_test_security_scheme_service(),
+        &security::get_test_security_scheme_service(TestIdentityProviderResolver::default()),
     )
     .await
     .unwrap()
 }
 
-async fn get_api_spec_with_cors_preflight_configuration(path_pattern: &str, cors: &Cors) -> HttpApiDefinition {
+async fn get_api_spec_with_cors_preflight_configuration(
+    path_pattern: &str,
+    cors: &Cors,
+) -> HttpApiDefinition {
     let yaml_string = format!(
         r#"
           id: users-api
@@ -997,7 +1089,7 @@ async fn get_api_spec_with_cors_preflight_configuration(path_pattern: &str, cors
         &DefaultNamespace(),
         core_request,
         create_at,
-        &security::get_test_security_scheme_service(),
+        &security::get_test_security_scheme_service(TestIdentityProviderResolver::default()),
     )
     .await
     .unwrap()
@@ -1063,7 +1155,7 @@ async fn get_api_spec_with_cors_preflight_configuration_and_extra_endpoint(
         &DefaultNamespace(),
         core_request,
         create_at,
-        &security::get_test_security_scheme_service(),
+        &security::get_test_security_scheme_service(TestIdentityProviderResolver::default()),
     )
     .await
     .unwrap()
@@ -1110,7 +1202,7 @@ async fn get_api_spec_for_cors_preflight_default_and_actual_endpoint(
         &DefaultNamespace(),
         core_request,
         create_at,
-        &security::get_test_security_scheme_service(),
+        &security::get_test_security_scheme_service(TestIdentityProviderResolver::default()),
     )
     .await
     .unwrap()
@@ -1203,7 +1295,7 @@ mod internal {
         CorsPreflightResponse(Cors), // preflight test response
         Redirect {
             headers: HeaderMap,
-        }
+        },
     }
 
     #[derive(Debug, Clone)]
@@ -1624,6 +1716,7 @@ mod security {
     use rsa::traits::PublicKeyParts;
 
     use std::collections::HashMap;
+    use std::ops::Sub;
     use std::str::FromStr;
     use std::sync::Arc;
 
@@ -1705,7 +1798,34 @@ mod security {
     // A simple testable identity provider
     // which piggybacks on DefaultIdentityProvider for all non side effecting
     // functionalities
-    struct TestIdentityProvider {}
+    #[derive(Clone)]
+    struct TestIdentityProvider {
+        static_provider_metadata: GolemIdentityProviderMetadata,
+        static_id_token: CoreIdToken,
+    }
+
+    impl TestIdentityProvider {
+        pub fn get_provider_with_valid_id_token() -> TestIdentityProvider {
+            TestIdentityProvider {
+                static_provider_metadata: get_test_provider_metadata(),
+                static_id_token: get_non_expiring_id_token(),
+            }
+        }
+
+        pub fn get_provider_with_expired_id_token() -> TestIdentityProvider {
+            TestIdentityProvider {
+                static_provider_metadata: get_test_provider_metadata(),
+                static_id_token: get_expired_id_token(),
+            }
+        }
+
+        pub fn get_provider_with_invalid_id_token() -> TestIdentityProvider {
+            TestIdentityProvider {
+                static_provider_metadata: get_test_provider_metadata(),
+                static_id_token: get_id_token_with_invalid_access_token(),
+            }
+        }
+    }
 
     #[async_trait]
     impl IdentityProvider for TestIdentityProvider {
@@ -1724,7 +1844,10 @@ mod security {
             Ok(CoreTokenResponse::new(
                 AccessToken::new("secret_access_token".to_string()),
                 CoreTokenType::Bearer,
-                CoreIdTokenFields::new(Some(get_id_token()), EmptyExtraTokenFields {}),
+                CoreIdTokenFields::new(
+                    Some(self.static_id_token.clone()),
+                    EmptyExtraTokenFields {},
+                ),
             ))
         }
 
@@ -1786,28 +1909,45 @@ mod security {
         }
     }
 
-    pub(crate) struct TestIdentityProviderResolver;
+    pub(crate) struct TestIdentityProviderResolver {
+        test_identity_provider: TestIdentityProvider,
+    }
+
+    impl TestIdentityProviderResolver {
+        pub fn valid_provider() -> Self {
+            TestIdentityProviderResolver::default()
+        }
+    }
+
+    impl Default for TestIdentityProviderResolver {
+        fn default() -> Self {
+            TestIdentityProviderResolver {
+                test_identity_provider: TestIdentityProvider::get_provider_with_valid_id_token(),
+            }
+        }
+    }
 
     impl IdentityProviderResolver for TestIdentityProviderResolver {
         fn resolve(&self, _provider_type: &Provider) -> Arc<dyn IdentityProvider + Sync + Send> {
-            Arc::new(TestIdentityProvider {})
+            Arc::new(self.test_identity_provider.clone())
         }
     }
 
     pub(crate) fn get_test_security_scheme_service(
+        identity_provider: TestIdentityProviderResolver,
     ) -> Arc<dyn SecuritySchemeService<DefaultNamespace> + Send + Sync> {
         let repo = Arc::new(TestSecuritySchemeRepo {
             security_scheme: Arc::new(Mutex::new(HashMap::new())),
         });
 
-        let identity_provider_resolver = Arc::new(TestIdentityProviderResolver);
+        let identity_provider_resolver = Arc::new(identity_provider);
 
         let default = DefaultSecuritySchemeService::new(repo, identity_provider_resolver);
 
         Arc::new(default)
     }
 
-    pub fn get_id_token() -> CoreIdToken {
+    pub fn get_non_expiring_id_token() -> CoreIdToken {
         CoreIdToken::new(
             CoreIdTokenClaims::new(
                 IssuerUrl::new("https://accounts.google.com".to_string()).unwrap(),
@@ -1829,6 +1969,60 @@ mod security {
             .expect("Invalid RSA private key"),
             CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256,
             Some(&AccessToken::new("secret_access_token".to_string())),
+            None,
+        )
+        .unwrap()
+    }
+
+    pub fn get_expired_id_token() -> CoreIdToken {
+        CoreIdToken::new(
+            CoreIdTokenClaims::new(
+                IssuerUrl::new("https://accounts.google.com".to_string()).unwrap(),
+                vec![Audience::new("client_id_foo".to_string())],
+                Utc::now().sub(chrono::Duration::days(1)),
+                Utc::now().sub(chrono::Duration::days(2)),
+                StandardClaims::new(SubjectIdentifier::new(
+                    "5f83e0ca-2b8e-4e8c-ba0a-f80fe9bc3632".to_string(),
+                ))
+                .set_email(Some(EndUserEmail::new("bob@example.com".to_string())))
+                .set_email_verified(Some(true)),
+                EmptyAdditionalClaims {},
+            )
+            .set_nonce(Some(Nonce::new("nonce".to_string()))),
+            &CoreRsaPrivateSigningKey::from_pem(
+                TEST_PRIVATE_KEY,
+                Some(JsonWebKeyId::new("my-key-id".to_string())),
+            )
+            .expect("Invalid RSA private key"),
+            CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256,
+            Some(&AccessToken::new("secret_access_token".to_string())),
+            None,
+        )
+        .unwrap()
+    }
+
+    pub fn get_id_token_with_invalid_access_token() -> CoreIdToken {
+        CoreIdToken::new(
+            CoreIdTokenClaims::new(
+                IssuerUrl::new("https://accounts.google.com".to_string()).unwrap(),
+                vec![Audience::new("client_id_foo".to_string())],
+                Utc::now().sub(chrono::Duration::days(1)),
+                Utc::now().sub(chrono::Duration::days(2)),
+                StandardClaims::new(SubjectIdentifier::new(
+                    "5f83e0ca-2b8e-4e8c-ba0a-f80fe9bc3632".to_string(),
+                ))
+                .set_email(Some(EndUserEmail::new("bob@example.com".to_string())))
+                .set_email_verified(Some(true)),
+                EmptyAdditionalClaims {},
+            )
+            .set_nonce(Some(Nonce::new("nonce".to_string()))),
+            &CoreRsaPrivateSigningKey::from_pem(
+                TEST_PRIVATE_KEY,
+                Some(JsonWebKeyId::new("my-key-id".to_string())),
+            )
+            .expect("Invalid RSA private key"),
+            CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256,
+            Some(&AccessToken::new("invalid_access_token".to_string())),
             None,
         )
         .unwrap()
