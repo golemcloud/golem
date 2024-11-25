@@ -24,7 +24,6 @@ use crate::gateway_middleware::Cors as CorsPreflight;
 use async_trait::async_trait;
 use http::header::*;
 use http::StatusCode;
-use openidconnect::{OAuth2TokenResponse, TokenResponse};
 use poem::Body;
 use poem::IntoResponse;
 use rib::RibResult;

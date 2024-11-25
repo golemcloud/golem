@@ -16,10 +16,8 @@ use crate::gateway_api_definition::http::{QueryInfo, VarInfo};
 
 use crate::gateway_api_deployment::ApiSiteString;
 use crate::gateway_request::http_request::ApiInputPath;
-use golem_wasm_ast::analysis::analysed_type::field;
 use http::uri::Scheme;
 use http::HeaderMap;
-use poem_openapi::param::Cookie;
 use serde_json::Value;
 use std::collections::HashMap;
 use url::Url;

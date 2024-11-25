@@ -17,7 +17,6 @@ use crate::gateway_execution::gateway_input_executor::Input;
 use crate::gateway_middleware::HttpRequestAuthentication;
 use async_trait::async_trait;
 use golem_common::SafeDisplay;
-use std::fmt::Debug;
 
 // Implementation note: We have multiple `Middleware` (see `Middlewares`).
 // While some middlewares are  specific to `MiddlewareIn` other are specific to `MiddlewareOut`.

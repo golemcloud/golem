@@ -1285,7 +1285,7 @@ mod internal {
     use http::header::{
         ACCESS_CONTROL_ALLOW_CREDENTIALS, ACCESS_CONTROL_ALLOW_HEADERS,
         ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_EXPOSE_HEADERS,
-        ACCESS_CONTROL_MAX_AGE, LOCATION,
+        ACCESS_CONTROL_MAX_AGE,
     };
 
     use poem::Response;
@@ -1296,7 +1296,7 @@ mod internal {
 
     use http::{HeaderMap, StatusCode};
     use std::sync::Arc;
-    use url::Url;
+    
 
     pub(crate) struct TestApiGatewayWorkerRequestExecutor {}
 
@@ -1717,7 +1717,7 @@ mod internal {
 
 mod security {
     use async_trait::async_trait;
-    use chrono::{Duration, TimeZone, Utc};
+    use chrono::{TimeZone, Utc};
     use golem_service_base::auth::DefaultNamespace;
     use golem_service_base::repo::RepoError;
     use golem_worker_service_base::gateway_security::{
@@ -1750,11 +1750,11 @@ mod security {
     use poem::Request;
     use rsa::pkcs8::DecodePublicKey;
     use rsa::traits::PublicKeyParts;
-    use serde_json::Value;
+    
     use std::collections::HashMap;
     use std::str::FromStr;
     use std::sync::Arc;
-    use testcontainers::core::CgroupnsMode::Host;
+    
     use tokio::sync::Mutex;
 
     // These keys are used over the default JwkKeySet of the actual client
