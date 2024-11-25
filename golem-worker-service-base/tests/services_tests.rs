@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_service_base::migration::{Migrations, MigrationsDir};
 use test_r::test;
 
 use async_trait::async_trait;
@@ -103,7 +104,7 @@ pub async fn test_with_postgres_db() {
 
     db::postgres_migrate(
         &db_config,
-        &PathBuf::from("../golem-worker-service/db/migration/postgres"),
+        MigrationsDir::new("../golem-worker-service/db/migration".into()).postgres_migrations(),
     )
     .await
     .unwrap();
@@ -130,7 +131,7 @@ pub async fn test_with_sqlite_db() {
 
     db::sqlite_migrate(
         &db_config,
-        &PathBuf::from("../golem-worker-service/db/migration/sqlite"),
+        MigrationsDir::new("../golem-worker-service/db/migration".into()).sqlite_migrations(),
     )
     .await
     .unwrap();

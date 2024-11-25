@@ -16,6 +16,7 @@ use crate::service::Services;
 use anyhow::{anyhow, Context};
 use golem_common::config::DbConfig;
 use golem_service_base::db;
+use golem_service_base::migration::Migrations;
 use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
 use poem::listener::TcpListener;
 use poem::middleware::{OpenTelemetryMetrics, Tracing};
@@ -45,18 +46,18 @@ impl WorkerService {
     pub async fn new(
         config: WorkerServiceBaseConfig,
         prometheus_registry: Registry,
-        db_migration_path: &Path,
+        migrations: impl Migrations,
     ) -> Result<Self, anyhow::Error> {
         match &config.db {
             DbConfig::Postgres(c) => {
-                db::postgres_migrate(c, &db_migration_path.join("postgres"))
+                db::postgres_migrate(c, migrations.postgres_migrations())
                     .await
                     .context("Postgres DB migration")?;
             }
             DbConfig::Sqlite(c) => {
-                db::sqlite_migrate(c, &db_migration_path.join("sqlite"))
+                db::sqlite_migrate(c, migrations.sqlite_migrations())
                     .await
-                    .context("Postgres DB migration")?;
+                    .context("Sqlite DB migration")?;
             }
         };
 

@@ -15,6 +15,7 @@
 use crate::Tracing;
 use golem_common::config::DbPostgresConfig;
 use golem_service_base::db;
+use golem_service_base::migration::{Migrations, MigrationsDir};
 use sqlx::Pool;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -138,7 +139,7 @@ impl PostgresDb {
 
         db::postgres_migrate(
             &db_config,
-            &PathBuf::from("../golem-component-service/db/migration/postgres"),
+            MigrationsDir::new("../golem-component-service/db/migration".into()).postgres_migrations(),
         )
         .await
         .unwrap();

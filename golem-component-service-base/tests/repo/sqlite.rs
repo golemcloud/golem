@@ -14,7 +14,7 @@
 
 use crate::Tracing;
 use golem_common::config::DbSqliteConfig;
-use golem_service_base::db;
+use golem_service_base::{db, migration::{Migrations, MigrationsDir}};
 use sqlx::Pool;
 use std::{path::PathBuf, sync::Arc};
 use test_r::{inherit_test_dep, sequential};
@@ -140,7 +140,7 @@ impl SqliteDb {
 
         db::sqlite_migrate(
             &db_config,
-            &PathBuf::from("../golem-component-service/db/migration/sqlite"),
+            MigrationsDir::new("../golem-component-service/db/migration".into()).sqlite_migrations(),
         )
         .await
         .unwrap();

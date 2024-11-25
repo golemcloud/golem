@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::path::PathBuf;
+use std::{ffi::OsStr, path::{Path, PathBuf}};
 
-use sqlx::migrate::MigrationSource;
+use futures::future::BoxFuture;
+use sqlx::{error::BoxDynError, migrate::{Migration, MigrationSource}};
 
 pub trait Migrations {
     type Output<'a>: MigrationSource<'a>
@@ -22,6 +23,18 @@ pub trait Migrations {
 
     fn sqlite_migrations<'a>(&'a self) -> Self::Output<'a>;
     fn postgres_migrations<'a>(&'a self) -> Self::Output<'a>;
+}
+
+#[derive(Debug)]
+pub struct SpecificMigrationsDir<'a> {
+    value: PathBuf,
+    _lifetime: std::marker::PhantomData<&'a ()>,
+}
+
+impl <'a> MigrationSource<'a> for SpecificMigrationsDir<'a> {
+    fn resolve(self) -> BoxFuture<'a, Result<Vec<Migration>, BoxDynError>> {
+        self.value.resolve()
+    }
 }
 
 pub struct MigrationsDir(PathBuf);
@@ -32,15 +45,15 @@ impl MigrationsDir {
     }
 }
 
-
 impl Migrations for MigrationsDir {
-    type Output<'a> = PathBuf;
+    type Output<'a> = SpecificMigrationsDir<'a>
+        where Self: 'a;
 
     fn sqlite_migrations<'a>(&'a self) -> Self::Output<'a> {
-        self.0.join("sqlite")
+        SpecificMigrationsDir { value: self.0.join("sqlite"), _lifetime: std::marker::PhantomData }
     }
 
     fn postgres_migrations<'a>(&'a self) -> Self::Output<'a> {
-        self.0.join("postgres")
+        SpecificMigrationsDir { value: self.0.join("postgres"), _lifetime: std::marker::PhantomData }
     }
 }

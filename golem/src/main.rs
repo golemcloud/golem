@@ -41,6 +41,7 @@ use http_body_util::BodyExt;
 use hyper_util::rt::TokioIo;
 use include_dir::Dir;
 use include_dir::include_dir;
+use migration::{IncludedMigrationsDir};
 use opentelemetry::global;
 use opentelemetry_sdk::metrics::MeterProviderBuilder;
 use poem::endpoint::{BoxEndpoint, PrometheusExporter};
@@ -109,8 +110,6 @@ async fn run_all(runtime: Arc<Runtime>) -> Result<(), anyhow::Error> {
 
     let prometheus_registry = Registry::default();
     let metrics = PrometheusExporter::new(prometheus_registry.clone());
-
-    let a = MigrationsDir(include_dir!("$CARGO_MANIFEST_DIR/../golem-component-service/db/migration"));
 
     let proxy = Proxy::new(8083, 9005)?
         .with(OpenTelemetryMetrics::new())
@@ -211,11 +210,7 @@ async fn run_component_service(
 ) -> Result<(), anyhow::Error> {
     let config = component_service_config();
     let prometheus_registry = golem_component_service::metrics::register_all();
-    let migration_path = Path::new(
-        // include_dir!("$CARGO_MANIFEST_DIR/../golem-component-service/db/migration"),
-
-        "/Users/vigoo/projects/ziverge/golem-services/golem-component-service/db/migration",
-    ); // TODO: this needs to be embedded in the final binary
+    let migration_path = IncludedMigrationsDir::new(include_dir!("$CARGO_MANIFEST_DIR/../golem-component-service/db/migration"));
 
     let component_service =
         ComponentService::new(config, prometheus_registry, migration_path).await?;
@@ -229,8 +224,7 @@ async fn run_worker_service(
 ) -> Result<(), anyhow::Error> {
     let config = worker_service_config();
     let prometheus_registry = golem_worker_executor_base::metrics::register_all();
-    let migration_path =
-        Path::new("/Users/vigoo/projects/ziverge/golem-services/golem-worker-service/db/migration"); // TODO: this needs to be embedded in the final binary
+    let migration_path = IncludedMigrationsDir::new(include_dir!("$CARGO_MANIFEST_DIR/../golem-worker-service/db/migration"));
 
     let worker_service = WorkerService::new(config, prometheus_registry, migration_path).await?;
 
@@ -339,43 +333,5 @@ impl Endpoint for Proxy {
 
     async fn call(&self, req: Request) -> poem::Result<Self::Output> {
         self.proxy(req).await
-    }
-}
-
-#[derive(Debug)]
-struct SpecificMigrationsDir<'a>(&'a Dir<'a>);
-
-impl<'a> SpecificMigrationsDir<'a> {
-    async fn resolve_impl(self) -> Result<Vec<Migration>, BoxDynError> {
-        let temp_dir = tempfile::tempdir().map_err(Box::new)?;
-        self.0.extract(temp_dir.path()).map_err(Box::new)?;
-        temp_dir.path().resolve().await
-    }
-}
-
-impl <'a> MigrationSource<'a> for SpecificMigrationsDir<'a> {
-    fn resolve(self) -> BoxFuture<'a, Result<Vec<Migration>, BoxDynError>> {
-        Box::pin(self.resolve_impl())
-    }
-}
-
-struct MigrationsDir(Dir<'static>);
-
-impl MigrationsDir {
-    pub fn new(dir: Dir<'static>) -> Self {
-        Self(dir)
-    }
-}
-
-impl Migrations for MigrationsDir {
-    type Output<'b> = SpecificMigrationsDir<'b>
-        where Self: 'b;
-
-    fn sqlite_migrations<'b>(&'b self) -> Self::Output<'b> {
-        SpecificMigrationsDir(self.0.get_dir("sqlite").unwrap())
-    }
-
-    fn postgres_migrations<'b>(&'b self) -> Self::Output<'b> {
-        SpecificMigrationsDir(self.0.get_dir("postgres").unwrap())
     }
 }

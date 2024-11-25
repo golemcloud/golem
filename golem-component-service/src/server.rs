@@ -15,6 +15,7 @@
 use golem_common::tracing::init_tracing_with_default_env_filter;
 use golem_component_service::config::{make_config_loader, ComponentServiceConfig};
 use golem_component_service::{metrics, ComponentService};
+use golem_service_base::migration::MigrationsDir;
 use opentelemetry::global;
 use prometheus::Registry;
 use std::path::Path;
@@ -50,14 +51,14 @@ fn main() -> Result<(), anyhow::Error> {
 }
 
 async fn run(config: ComponentServiceConfig, prometheus: Registry) -> Result<(), anyhow::Error> {
-    let server = ComponentService::new(config, prometheus, Path::new("./db/migration")).await?;
+    let server = ComponentService::new(config, prometheus, MigrationsDir::new("./db/migration".into())).await?;
     server.run().await
 }
 
 async fn dump_openapi_yaml() -> Result<(), anyhow::Error> {
     let config = ComponentServiceConfig::default();
     let service =
-        ComponentService::new(config, Registry::default(), Path::new("./db/migration")).await?;
+        ComponentService::new(config, Registry::default(), MigrationsDir::new("./db/migration".into())).await?;
     let yaml = service.http_service().spec_yaml();
     println!("{yaml}");
     Ok(())

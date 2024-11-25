@@ -57,43 +57,47 @@ use tokio::runtime::Runtime;
 use tokio::task::JoinSet;
 
 #[derive(Debug)]
-struct SpecificMigrationsDir<'a>(&'a Dir<'a>);
+pub struct SpecificIncludedMigrationsDir<'a> {
+    included_dir: &'a Dir<'a>,
+    sub_dir: String
+}
 
-impl<'a> SpecificMigrationsDir<'a> {
+impl<'a> SpecificIncludedMigrationsDir<'a> {
     async fn resolve_impl(self) -> Result<Vec<Migration>, BoxDynError> {
         let temp_dir = tempfile::tempdir().map_err(Box::new)?;
-        self.0.extract(temp_dir.path()).map_err(Box::new)?;
+
+        // extract assumes that the directory the entries will be extracted to already exists.
+        tokio::fs::create_dir(temp_dir.path().join(self.sub_dir)).await?;
+        self.included_dir.extract(temp_dir.path()).map_err(Box::new)?;
         temp_dir.path().resolve().await
     }
 }
 
-impl <'a> MigrationSource<'a> for SpecificMigrationsDir<'a> {
+impl <'a> MigrationSource<'a> for SpecificIncludedMigrationsDir<'a> {
     fn resolve(self) -> BoxFuture<'a, Result<Vec<Migration>, BoxDynError>> {
         Box::pin(self.resolve_impl())
     }
 }
 
-struct MigrationsDir(Dir<'static>);
+pub struct IncludedMigrationsDir(Dir<'static>);
 
-impl Migrations for MigrationsDir {
-    type Output<'b> = SpecificMigrationsDir<'b>
+impl IncludedMigrationsDir {
+    pub fn new(dir: Dir<'static>) -> Self {
+        Self(dir)
+    }
+}
+
+impl Migrations for IncludedMigrationsDir {
+    type Output<'b> = SpecificIncludedMigrationsDir<'b>
         where Self: 'b;
 
     fn sqlite_migrations<'b>(&'b self) -> Self::Output<'b> {
-        SpecificMigrationsDir(self.0.get_dir("sqlite").unwrap())
+        let sub_dir = "sqlite".to_string();
+        SpecificIncludedMigrationsDir { included_dir: self.0.get_dir(&sub_dir).unwrap(), sub_dir }
     }
 
     fn postgres_migrations<'b>(&'b self) -> Self::Output<'b> {
-        SpecificMigrationsDir(self.0.get_dir("postgres").unwrap())
+        let sub_dir = "postgres".to_string();
+        SpecificIncludedMigrationsDir { included_dir: self.0.get_dir(&sub_dir).unwrap(), sub_dir }
     }
 }
-
-macro_rules! include_migrations_dir {
-    ($path:expr) => {
-        MigrationsDir(include_dir!(concat!($path, "/db/migration")))
-    };
-}
-
-// pub fn included_migrations_dir(path: &str) -> MigrationsDir {
-//     MigrationsDir(include_dir!(path))
-// }

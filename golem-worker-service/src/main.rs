@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use golem_common::tracing::init_tracing_with_default_env_filter;
+use golem_service_base::migration::MigrationsDir;
 use golem_worker_service::config::make_config_loader;
 use golem_worker_service::WorkerService;
 use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
@@ -52,14 +53,14 @@ fn main() -> Result<(), anyhow::Error> {
 }
 
 async fn run(config: WorkerServiceBaseConfig, prometheus: Registry) -> Result<(), anyhow::Error> {
-    let server = WorkerService::new(config, prometheus, Path::new("./db/migration")).await?;
+    let server = WorkerService::new(config, prometheus, MigrationsDir::new("./db/migration".into())).await?;
     server.run().await
 }
 
 async fn dump_openapi_yaml() -> Result<(), anyhow::Error> {
     let config = WorkerServiceBaseConfig::default();
     let service =
-        WorkerService::new(config, Registry::default(), Path::new("./db/migration")).await?;
+        WorkerService::new(config, Registry::default(), MigrationsDir::new("./db/migration".into())).await?;
     let yaml = service.http_service().spec_yaml();
     println!("{yaml}");
     Ok(())
