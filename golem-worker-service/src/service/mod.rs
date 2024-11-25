@@ -52,6 +52,7 @@ use golem_common::config::RetryConfig;
 use golem_common::config::DbConfig;
 use golem_service_base::db;
 use golem_worker_service_base::gateway_request::http_request::InputHttpRequest;
+use golem_worker_service_base::gateway_security::DefaultIdentityProviderResolver;
 use golem_worker_service_base::repo::security_scheme::{DbSecuritySchemeRepo, SecuritySchemeRepo};
 use golem_worker_service_base::service::gateway::api_deployment::{
     ApiDeploymentService, ApiDeploymentServiceDefault,
@@ -62,7 +63,6 @@ use golem_worker_service_base::service::gateway::security_scheme::{
 use std::sync::Arc;
 use std::time::Duration;
 use tonic::codec::CompressionEncoding;
-use golem_worker_service_base::gateway_security::DefaultIdentityProviderResolver;
 
 #[derive(Clone)]
 pub struct Services {
@@ -74,8 +74,10 @@ pub struct Services {
     pub deployment_service:
         Arc<dyn ApiDeploymentService<EmptyAuthCtx, DefaultNamespace> + Sync + Send>,
     pub http_definition_lookup_service: Arc<
-        dyn ApiDefinitionsLookup<InputHttpRequest, CompiledHttpApiDefinition<DefaultNamespace>>
-            + Sync
+        dyn ApiDefinitionsLookup<
+                InputHttpRequest,
+                ApiDefinition = CompiledHttpApiDefinition<DefaultNamespace>,
+            > + Sync
             + Send,
     >,
     pub worker_to_http_service:
@@ -225,8 +227,10 @@ impl Services {
 
         let identity_provider_resolver = Arc::new(DefaultIdentityProviderResolver);
 
-        let security_scheme_service =
-            Arc::new(DefaultSecuritySchemeService::new(security_scheme_repo, identity_provider_resolver));
+        let security_scheme_service = Arc::new(DefaultSecuritySchemeService::new(
+            security_scheme_repo,
+            identity_provider_resolver,
+        ));
 
         let definition_service: Arc<
             dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace> + Sync + Send,

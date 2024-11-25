@@ -299,7 +299,10 @@ mod tests {
     fn api_definition_error_400_validation() {
         let error = ApiDefinitionError::Error400(WorkerServiceErrorsBody::Validation(
             ValidationErrorsBody {
-                errors: vec!["Get/path/02f09a3f-1624-3b1d-8409-44eff7708208/Duplicate route".to_string(), "Post/path2/02f09a3f-1624-3b1d-8409-44eff7708209/Other route".to_string()],
+                errors: vec![
+                    "Get/path/02f09a3f-1624-3b1d-8409-44eff7708208/Duplicate route".to_string(),
+                    "Post/path2/02f09a3f-1624-3b1d-8409-44eff7708209/Other route".to_string(),
+                ],
             },
         ));
         assert_eq!(error.map(), "Get/path/02f09a3f-1624-3b1d-8409-44eff7708208/Duplicate route\nPost/path2/02f09a3f-1624-3b1d-8409-44eff7708209/Other route".to_string())

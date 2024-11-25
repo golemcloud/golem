@@ -304,6 +304,7 @@ mod test {
     use golem_common::model::ComponentId;
     use golem_service_base::db;
     use golem_service_base::model::Component;
+    use golem_worker_service_base::gateway_security::DefaultIdentityProviderResolver;
     use golem_worker_service_base::repo::api_definition::{
         ApiDefinitionRepo, DbApiDefinitionRepo, LoggedApiDefinitionRepo,
     };
@@ -318,7 +319,6 @@ mod test {
     use http::StatusCode;
     use poem::test::TestClient;
     use std::marker::PhantomData;
-    use golem_worker_service_base::gateway_security::DefaultIdentityProviderResolver;
 
     struct SqliteDb<'c> {
         db_path: String,
@@ -400,8 +400,10 @@ mod test {
 
         let identity_provider_resolver = Arc::new(DefaultIdentityProviderResolver);
 
-        let security_scheme_service =
-            Arc::new(DefaultSecuritySchemeService::new(security_scheme_repo, identity_provider_resolver));
+        let security_scheme_service = Arc::new(DefaultSecuritySchemeService::new(
+            security_scheme_repo,
+            identity_provider_resolver,
+        ));
 
         let component_service: ComponentService = Arc::new(TestComponentService);
         let definition_service = ApiDefinitionServiceDefault::new(
