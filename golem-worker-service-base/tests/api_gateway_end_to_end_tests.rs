@@ -34,7 +34,7 @@ use golem_worker_service_base::gateway_execution::gateway_session::GatewaySessio
 use golem_worker_service_base::gateway_middleware::Cors;
 use golem_worker_service_base::gateway_request::http_request::{ApiInputPath, InputHttpRequest};
 use golem_worker_service_base::gateway_security::{
-    DefaultIdentityProviderResolver, Provider, SecurityScheme, SecuritySchemeIdentifier,
+    Provider, SecurityScheme, SecuritySchemeIdentifier,
 };
 use golem_worker_service_base::{api, gateway_api_definition};
 use http::{HeaderMap, HeaderValue, Method};
@@ -1243,50 +1243,30 @@ mod internal {
         Cors, HttpMiddleware, Middleware, Middlewares,
     };
 
-    use crate::security;
+    
     use golem_worker_service_base::gateway_rib_interpreter::{
         DefaultRibInterpreter, EvaluationError, WorkerServiceRibInterpreter,
     };
-    use golem_worker_service_base::gateway_security::{
-        AuthorizationUrl, DefaultIdentityProvider, GolemIdentityProviderMetadata, IdentityProvider,
-        IdentityProviderError, IdentityProviderResolver, OpenIdClient, Provider,
-        SecuritySchemeWithProviderMetadata,
-    };
-    use golem_worker_service_base::repo::security_scheme::{
-        SecuritySchemeRecord, SecuritySchemeRepo,
-    };
-    use golem_worker_service_base::service::gateway::security_scheme::{
-        DefaultSecuritySchemeService, SecuritySchemeService,
-    };
+    
+    use golem_worker_service_base::repo::security_scheme::SecuritySchemeRepo;
+    use golem_worker_service_base::service::gateway::security_scheme::SecuritySchemeService;
     use http::header::{
         ACCESS_CONTROL_ALLOW_CREDENTIALS, ACCESS_CONTROL_ALLOW_HEADERS,
         ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_EXPOSE_HEADERS,
         ACCESS_CONTROL_MAX_AGE, LOCATION,
     };
-    use http::{Method, Uri};
-    use openidconnect::core::{
-        CoreClaimName, CoreClaimType, CoreClientAuthMethod, CoreGrantType, CoreIdToken,
-        CoreIdTokenClaims, CoreIdTokenFields, CoreIdTokenVerifier, CoreJsonWebKey,
-        CoreJweContentEncryptionAlgorithm, CoreJweKeyManagementAlgorithm, CoreJwsSigningAlgorithm,
-        CoreProviderMetadata, CoreResponseMode, CoreResponseType, CoreRsaPrivateSigningKey,
-        CoreSubjectIdentifierType, CoreTokenResponse, CoreTokenType,
-    };
-    use openidconnect::{
-        AccessToken, Audience, AuthUrl, AuthenticationContextClass, AuthorizationCode, ClientId,
-        ClientSecret, CsrfToken, EmptyAdditionalClaims, EmptyExtraTokenFields, EndUserEmail,
-        IdTokenVerifier, IssuerUrl, JsonWebKeyId, JsonWebKeySet, JsonWebKeySetUrl, Nonce,
-        RegistrationUrl, ResponseTypes, Scope, StandardClaims, SubjectIdentifier, TokenUrl,
-        UserInfoUrl,
-    };
-    use poem::{Request, Response};
+    
+    
+    
+    use poem::Response;
     use rib::RibResult;
-    use rsa::pkcs8::DecodePublicKey;
-    use rsa::traits::PublicKeyParts;
+    
+    
     use serde_json::Value;
     use std::collections::HashMap;
-    use std::str::FromStr;
+    
     use std::sync::Arc;
-    use tokio::sync::Mutex;
+    
     use url::Url;
 
     pub(crate) struct TestApiGatewayWorkerRequestExecutor {}

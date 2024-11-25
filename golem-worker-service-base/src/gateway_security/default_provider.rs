@@ -16,11 +16,11 @@ use crate::gateway_security::open_id_client::OpenIdClient;
 use crate::gateway_security::*;
 use async_trait::async_trait;
 use openidconnect::core::{
-    CoreClient, CoreIdTokenClaims, CoreIdTokenVerifier, CoreJsonWebKeyType, CoreProviderMetadata,
+    CoreClient, CoreIdTokenClaims, CoreIdTokenVerifier, CoreProviderMetadata,
     CoreResponseType, CoreTokenResponse,
 };
 use openidconnect::{
-    AuthenticationFlow, AuthorizationCode, CsrfToken, IdTokenVerifier, JsonWebKeySet, Nonce, Scope,
+    AuthenticationFlow, AuthorizationCode, CsrfToken, Nonce, Scope,
 };
 
 // All providers can reuse DefaultIdentityProvider if provided internally

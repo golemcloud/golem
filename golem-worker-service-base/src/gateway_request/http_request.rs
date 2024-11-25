@@ -21,8 +21,6 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::fmt::Display;
 use tracing::error;
-use url::form_urlencoded::Parse;
-use url::Url;
 
 #[derive(Clone, Debug)]
 pub struct InputHttpRequest {

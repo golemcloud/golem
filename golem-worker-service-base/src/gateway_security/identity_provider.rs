@@ -19,7 +19,7 @@ use crate::gateway_security::{
 use async_trait::async_trait;
 use golem_common::SafeDisplay;
 use openidconnect::core::{CoreIdTokenClaims, CoreIdTokenVerifier, CoreTokenResponse};
-use openidconnect::{AuthorizationCode, CsrfToken, IdTokenVerifier, Nonce, Scope};
+use openidconnect::{AuthorizationCode, CsrfToken, Nonce, Scope};
 use std::fmt::{Display, Formatter};
 use url::Url;
 
