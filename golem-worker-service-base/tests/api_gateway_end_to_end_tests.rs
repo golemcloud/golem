@@ -122,47 +122,9 @@ async fn test_end_to_end_api_gateway_simple_worker() {
     assert_eq!(result, expected);
 }
 
-#[test]
-async fn test_end_to_end_api_gateway_with_security() {
-    let empty_headers = HeaderMap::new();
-    let api_request = get_api_request("foo/1", None, &empty_headers, serde_json::Value::Null);
-
-    let worker_name = r#"
-      let id: u64 = request.path.user-id;
-      "shopping-cart-${id}"
-    "#;
-
-    let response_mapping = r#"
-      let response = golem:it/api.{get-cart-contents}("a", "b");
-      response
-    "#;
-
-    let api_specification: HttpApiDefinition =
-        get_api_spec_worker_binding_with_security("foo/{user-id}", worker_name, response_mapping)
-            .await;
-
-    let session_store = GatewaySessionStore::in_memory();
-
-    let test_response = execute(&api_request, &api_specification, &session_store).await;
-
-    let result = (
-        test_response.get_function_name().unwrap(),
-        test_response.get_function_params().unwrap(),
-    );
-
-    let expected = (
-        "golem:it/api.{get-cart-contents}".to_string(),
-        Value::Array(vec![
-            Value::String("a".to_string()),
-            Value::String("b".to_string()),
-        ]),
-    );
-
-    assert_eq!(result, expected);
-}
 
 #[test]
-async fn test_end_to_end_api_gateway_with_multiple_security() {
+async fn test_end_to_end_api_gateway_with_security_successful_authentication() {
     let empty_headers = HeaderMap::new();
     let api_request = get_api_request("foo/1", None, &empty_headers, serde_json::Value::Null);
 
@@ -180,7 +142,7 @@ async fn test_end_to_end_api_gateway_with_multiple_security() {
         RedirectUrl::new("http://foodomain/auth/callback".to_string()).unwrap();
 
     let api_specification: HttpApiDefinition =
-        get_api_spec_worker_binding_with_multiple_securities(
+        get_api_spec_with_security_configuration(
             "foo/{user-id}",
             worker_name,
             response_mapping,
@@ -297,7 +259,7 @@ async fn test_end_to_end_api_gateway_cors_preflight() {
     .unwrap();
 
     let api_specification: HttpApiDefinition =
-        get_api_spec_cors_preflight_binding("foo/{user-id}", &cors).await;
+        get_api_spec_with_cors_preflight_configuration("foo/{user-id}", &cors).await;
 
     let session_store = GatewaySessionStore::in_memory();
 
@@ -314,7 +276,7 @@ async fn test_end_to_end_api_gateway_cors_preflight_default() {
         get_preflight_api_request("foo/1", None, &empty_headers, serde_json::Value::Null);
 
     let api_specification: HttpApiDefinition =
-        get_api_spec_cors_preflight_binding_default_response("foo/{user-id}").await;
+        get_api_spec_with_default_cors_preflight_configuration("foo/{user-id}").await;
 
     let session_store = GatewaySessionStore::in_memory();
 
@@ -401,7 +363,7 @@ async fn test_end_to_end_api_gateway_cors_with_preflight_and_actual_request() {
       response
     "#;
 
-    let api_specification: HttpApiDefinition = get_api_spec_for_cors_preflight_and_actual_endpoint(
+    let api_specification: HttpApiDefinition = get_api_spec_with_cors_preflight_configuration_and_extra_endpoint(
         "foo/{user-id}",
         worker_name,
         response_mapping,
@@ -877,93 +839,44 @@ async fn get_api_spec_worker_binding(
         &DefaultNamespace(),
         core_request,
         create_at,
-        &security::get_security_scheme_service(),
+        &security::get_test_security_scheme_service(),
     )
     .await
     .unwrap()
 }
 
 // https://swagger.io/docs/specification/v3_0/authentication/openid-connect-discovery/
-async fn get_api_spec_worker_binding_with_security(
-    path_pattern: &str,
-    worker_name: &str,
-    rib_expression: &str,
-) -> HttpApiDefinition {
-    let security_scheme_identifier = SecuritySchemeIdentifier::new("openId1".to_string());
-    let redirect_url = RedirectUrl::new("http://foodomain/auth/callback".to_string()).unwrap();
-
-    let yaml_string = format!(
-        r#"
-          id: users-api
-          version: 0.0.1
-          createdAt: 2024-08-21T07:42:15.696Z
-          security:
-          - openId1
-          routes:
-          - method: Get
-            path: {}
-            security: {}
-            binding:
-              type: wit-worker
-              componentId:
-                componentId: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
-                version: 0
-              workerName: '{}'
-              response: '${{{}}}'
-
-        "#,
-        path_pattern, security_scheme_identifier, worker_name, rib_expression
-    );
-
-    // Serde is available only for user facing HttpApiDefinition
-    let http_api_definition_request: api::HttpApiDefinitionRequest =
-        serde_yaml::from_str(yaml_string.as_str()).unwrap();
-
-    let core_request: gateway_api_definition::http::HttpApiDefinitionRequest =
-        http_api_definition_request.try_into().unwrap();
-
-    let create_at: DateTime<Utc> = "2024-08-21T07:42:15.696Z".parse().unwrap();
-    let security_scheme_service = security::get_security_scheme_service();
-
-    let security_scheme = SecurityScheme::new(
-        Provider::Google,
-        security_scheme_identifier,
-        ClientId::new("foo".to_string()),
-        ClientSecret::new("bar".to_string()),
-        redirect_url,
-        vec![
-            Scope::new("user".to_string()),
-            Scope::new("email".to_string()),
-        ],
-    );
-
-    // Make sure security scheme is added to golem
-    security_scheme_service
-        .create(&DefaultNamespace(), &security_scheme)
-        .await
-        .unwrap();
-
-    HttpApiDefinition::from_http_api_definition_request(
-        &DefaultNamespace(),
-        core_request,
-        create_at,
-        &security_scheme_service,
-    )
-    .await
-    .unwrap()
-}
-
-// https://swagger.io/docs/specification/v3_0/authentication/openid-connect-discovery/
-async fn get_api_spec_worker_binding_with_multiple_securities(
+async fn get_api_spec_with_security_configuration(
     path_pattern: &str,
     worker_name: &str,
     rib_expression: &str,
     auth_call_back_url: &RedirectUrl,
 ) -> HttpApiDefinition {
-    let security_scheme_identifier1 = SecuritySchemeIdentifier::new("openId1".to_string());
-    let security_scheme_identifier2 = SecuritySchemeIdentifier::new("openId2".to_string());
+    let security_scheme_identifier = SecuritySchemeIdentifier::new("openId1".to_string());
 
-    let yaml_string = format!(
+    let security_scheme_service =
+        security::get_test_security_scheme_service();
+
+    let security_scheme = SecurityScheme::new(
+        Provider::Google,
+        security_scheme_identifier.clone(),
+        ClientId::new("client_id_foo".to_string()),
+        ClientSecret::new("client_secret_foo".to_string()),
+        auth_call_back_url.clone(),
+        vec![
+            Scope::new("openid".to_string()),
+            Scope::new("user".to_string()),
+            Scope::new("email".to_string()),
+        ],
+    );
+
+    // Make sure security scheme 1 is added to golem
+    security_scheme_service
+        .create(&DefaultNamespace(), &security_scheme)
+        .await
+        .unwrap();
+
+    let api_definition_yaml = format!(
         r#"
           id: users-api
           version: 0.0.1
@@ -982,58 +895,18 @@ async fn get_api_spec_worker_binding_with_multiple_securities(
               workerName: '{}'
               response: '${{{}}}'
         "#,
-        security_scheme_identifier1,
+        security_scheme_identifier,
         path_pattern,
-        security_scheme_identifier1,
+        security_scheme_identifier,
         worker_name,
         rib_expression
     );
 
     let user_facing_definition_request: api::HttpApiDefinitionRequest =
-        serde_yaml::from_str(yaml_string.as_str()).unwrap();
+        serde_yaml::from_str(api_definition_yaml.as_str()).unwrap();
 
     let core_definition_request: gateway_api_definition::http::HttpApiDefinitionRequest =
         user_facing_definition_request.try_into().unwrap();
-
-    let security_scheme_service = security::get_security_scheme_service();
-
-    let security_scheme1 = SecurityScheme::new(
-        Provider::Google,
-        security_scheme_identifier1,
-        ClientId::new("client_id_foo".to_string()),
-        ClientSecret::new("client_secret_foo".to_string()),
-        auth_call_back_url.clone(),
-        vec![
-            Scope::new("openid".to_string()),
-            Scope::new("user".to_string()),
-            Scope::new("email".to_string()),
-        ],
-    );
-
-    let security_scheme2 = SecurityScheme::new(
-        Provider::Google,
-        security_scheme_identifier2,
-        ClientId::new("client_id_bar".to_string()),
-        ClientSecret::new("client_secret_bar".to_string()),
-        auth_call_back_url.clone(),
-        vec![
-            Scope::new("openid".to_string()),
-            Scope::new("user".to_string()),
-            Scope::new("email".to_string()),
-        ],
-    );
-
-    // Make sure security scheme 1 is added to golem
-    security_scheme_service
-        .create(&DefaultNamespace(), &security_scheme1)
-        .await
-        .unwrap();
-
-    // Make sure security scheme 2 is added to golem
-    security_scheme_service
-        .create(&DefaultNamespace(), &security_scheme2)
-        .await
-        .unwrap();
 
     let create_at: DateTime<Utc> = "2024-08-21T07:42:15.696Z".parse().unwrap();
 
@@ -1044,10 +917,10 @@ async fn get_api_spec_worker_binding_with_multiple_securities(
         &security_scheme_service,
     )
     .await
-    .unwrap()
+    .expect("Conversion of an HttpApiDefinitionRequest to HttpApiDefinition failed")
 }
 
-async fn get_api_spec_cors_preflight_binding_default_response(
+async fn get_api_spec_with_default_cors_preflight_configuration(
     path_pattern: &str,
 ) -> HttpApiDefinition {
     let yaml_string = format!(
@@ -1076,13 +949,13 @@ async fn get_api_spec_cors_preflight_binding_default_response(
         &DefaultNamespace(),
         core_request,
         create_at,
-        &security::get_security_scheme_service(),
+        &security::get_test_security_scheme_service(),
     )
     .await
     .unwrap()
 }
 
-async fn get_api_spec_cors_preflight_binding(path_pattern: &str, cors: &Cors) -> HttpApiDefinition {
+async fn get_api_spec_with_cors_preflight_configuration(path_pattern: &str, cors: &Cors) -> HttpApiDefinition {
     let yaml_string = format!(
         r#"
           id: users-api
@@ -1124,13 +997,13 @@ async fn get_api_spec_cors_preflight_binding(path_pattern: &str, cors: &Cors) ->
         &DefaultNamespace(),
         core_request,
         create_at,
-        &security::get_security_scheme_service(),
+        &security::get_test_security_scheme_service(),
     )
     .await
     .unwrap()
 }
 
-async fn get_api_spec_for_cors_preflight_and_actual_endpoint(
+async fn get_api_spec_with_cors_preflight_configuration_and_extra_endpoint(
     path_pattern: &str,
     worker_name: &str,
     rib_expression: &str,
@@ -1190,7 +1063,7 @@ async fn get_api_spec_for_cors_preflight_and_actual_endpoint(
         &DefaultNamespace(),
         core_request,
         create_at,
-        &security::get_security_scheme_service(),
+        &security::get_test_security_scheme_service(),
     )
     .await
     .unwrap()
@@ -1237,7 +1110,7 @@ async fn get_api_spec_for_cors_preflight_default_and_actual_endpoint(
         &DefaultNamespace(),
         core_request,
         create_at,
-        &security::get_security_scheme_service(),
+        &security::get_test_security_scheme_service(),
     )
     .await
     .unwrap()
@@ -1921,7 +1794,7 @@ mod security {
         }
     }
 
-    pub(crate) fn get_security_scheme_service(
+    pub(crate) fn get_test_security_scheme_service(
     ) -> Arc<dyn SecuritySchemeService<DefaultNamespace> + Send + Sync> {
         let repo = Arc::new(TestSecuritySchemeRepo {
             security_scheme: Arc::new(Mutex::new(HashMap::new())),
