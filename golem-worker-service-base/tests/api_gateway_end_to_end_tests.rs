@@ -146,19 +146,20 @@ async fn test_end_to_end_api_gateway_with_security_expired_token() {
     "#;
 
     let auth_call_back_url =
-        RedirectUrl::new("http://foodomain/auth/callback".to_string()).unwrap();
+        RedirectUrl::new("http://localhost/auth/callback".to_string()).unwrap();
 
-    let invalid_identity_provider_resolver =
-        TestIdentityProviderResolver::new(TestIdentityProvider::get_provider_with_expired_id_token());
+    let invalid_identity_provider_resolver = TestIdentityProviderResolver::new(
+        TestIdentityProvider::get_provider_with_expired_id_token(),
+    );
 
     let api_specification: HttpApiDefinition = get_api_spec_with_security_configuration(
         "foo/{user-id}",
         worker_name,
         response_mapping,
         &auth_call_back_url,
-        &invalid_identity_provider_resolver
+        &invalid_identity_provider_resolver,
     )
-        .await;
+    .await;
 
     let session_store = GatewaySessionStore::in_memory();
 
@@ -166,9 +167,9 @@ async fn test_end_to_end_api_gateway_with_security_expired_token() {
         &api_request,
         &api_specification,
         &session_store,
-        &invalid_identity_provider_resolver
+        &invalid_identity_provider_resolver,
     )
-        .await;
+    .await;
 
     let initial_redirect_response_headers = initial_response_to_identity_provider.as_redirect()
         .expect("MiddlewareIn for authentication should have resulted in a redirect response indicating login to identity provider");
@@ -187,7 +188,7 @@ async fn test_end_to_end_api_gateway_with_security_expired_token() {
 
     let actual_auth_call_back_url =
         internal::decode_url(&initial_redirect_response_info.auth_call_back_url);
-    
+
     let call_back_request_from_identity_provider =
         security::request_from_identity_provider_to_auth_call_back_endpoint(
             initial_redirect_response_info.state.as_str(),
@@ -206,9 +207,9 @@ async fn test_end_to_end_api_gateway_with_security_expired_token() {
         &request_to_auth_call_back_endpoint,
         &api_specification,
         &session_store,
-        &invalid_identity_provider_resolver
+        &invalid_identity_provider_resolver,
     )
-        .await;
+    .await;
 
     // The auth call back endpoint results in another redirect response
     // which will now have the actual URL to the original protected resource
@@ -228,14 +229,14 @@ async fn test_end_to_end_api_gateway_with_security_expired_token() {
         &api_request_from_browser,
         &api_specification,
         &session_store,
-        &invalid_identity_provider_resolver
+        &invalid_identity_provider_resolver,
     )
-        .await;
+    .await;
 
-   // And it should be a redirect back to the original
-    let final_redirect = test_response_from_actual_endpoint.as_redirect().expect(
-        "Expecting a redirect from the protected endpoint due to expired token"
-    );
+    // And it should be a redirect back to the original
+    let final_redirect = test_response_from_actual_endpoint
+        .as_redirect()
+        .expect("Expecting a redirect from the protected endpoint due to expired token");
 
     // The final redirect from the protected endpoint should be the same as
     // the initial redirect for unauthenticated request
@@ -257,15 +258,17 @@ async fn test_end_to_end_api_gateway_with_security_successful_authentication() {
       response
     "#;
 
+    let identity_provider_resolver = TestIdentityProviderResolver::valid_provider();
+
     let auth_call_back_url =
-        RedirectUrl::new("http://foodomain/auth/callback".to_string()).unwrap();
+        RedirectUrl::new("http://localhost/auth/callback".to_string()).unwrap();
 
     let api_specification: HttpApiDefinition = get_api_spec_with_security_configuration(
         "foo/{user-id}",
         worker_name,
         response_mapping,
         &auth_call_back_url,
-        &TestIdentityProviderResolver::default(),
+        &identity_provider_resolver,
     )
     .await;
 
@@ -275,7 +278,7 @@ async fn test_end_to_end_api_gateway_with_security_successful_authentication() {
         &api_request,
         &api_specification,
         &session_store,
-        &TestIdentityProviderResolver::default(),
+        &identity_provider_resolver,
     )
     .await;
 
@@ -309,7 +312,8 @@ async fn test_end_to_end_api_gateway_with_security_successful_authentication() {
         // The url embedded in the initial redirect should be the same as the redirect url
         // specified in the security scheme. Note that security scheme will have a full
         // redirect URL (auth call back URL)
-        Url::parse(&actual_auth_call_back_url).expect("Auth call back URL should be a full valid URL"),
+        Url::parse(&actual_auth_call_back_url)
+            .expect("Auth call back URL should be a full valid URL"),
         auth_call_back_url.url().clone()
     );
 
@@ -334,7 +338,7 @@ async fn test_end_to_end_api_gateway_with_security_successful_authentication() {
         &request_with_cookies,
         &api_specification,
         &session_store,
-        &TestIdentityProviderResolver::default(),
+        &identity_provider_resolver,
     )
     .await;
 
@@ -355,7 +359,7 @@ async fn test_end_to_end_api_gateway_with_security_successful_authentication() {
         &api_request,
         &api_specification,
         &session_store,
-        &TestIdentityProviderResolver::default(),
+        &identity_provider_resolver,
     )
     .await;
 
@@ -1495,9 +1499,7 @@ mod internal {
         }
     }
 
-    pub fn create_tuple(
-        type_annotated_value: Vec<TypeAnnotatedValue>,
-    ) -> TypeAnnotatedValue {
+    pub fn create_tuple(type_annotated_value: Vec<TypeAnnotatedValue>) -> TypeAnnotatedValue {
         let root = type_annotated_value
             .iter()
             .map(|x| golem_wasm_rpc::protobuf::TypeAnnotatedValue {
@@ -1931,7 +1933,7 @@ mod security {
             }
         }
 
-        pub fn get_provider_with_invalid_id_token() -> TestIdentityProvider {
+        pub fn get_provider_with_invalid_access_token() -> TestIdentityProvider {
             TestIdentityProvider {
                 static_provider_metadata: get_test_provider_metadata(),
                 static_id_token: get_id_token_with_invalid_access_token(),
@@ -1945,7 +1947,7 @@ mod security {
             &self,
             _provider: &Provider,
         ) -> Result<GolemIdentityProviderMetadata, IdentityProviderError> {
-            Ok(get_test_provider_metadata())
+            Ok(self.static_provider_metadata.clone())
         }
 
         async fn exchange_code_for_tokens(
@@ -2029,7 +2031,7 @@ mod security {
     impl TestIdentityProviderResolver {
         pub fn new(test_identity_provider: TestIdentityProvider) -> TestIdentityProviderResolver {
             TestIdentityProviderResolver {
-                test_identity_provider
+                test_identity_provider,
             }
         }
         pub fn valid_provider() -> Self {

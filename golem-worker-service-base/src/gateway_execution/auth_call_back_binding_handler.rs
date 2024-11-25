@@ -21,8 +21,8 @@ use crate::gateway_security::{
 };
 use async_trait::async_trait;
 use golem_common::SafeDisplay;
-use openidconnect::core::{CoreIdTokenClaims, CoreTokenResponse};
-use openidconnect::{AuthorizationCode, Nonce, OAuth2TokenResponse, TokenResponse};
+use openidconnect::core::CoreTokenResponse;
+use openidconnect::{AuthorizationCode, OAuth2TokenResponse, TokenResponse};
 use std::sync::Arc;
 
 pub type AuthCallBackResult = Result<AuthorisationSuccess, AuthorisationError>;
@@ -167,12 +167,6 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
             .ok_or(AuthorisationError::Internal(
                 "Invalid redirect url (target url of the protected resource)".to_string(),
             ))?;
-
-        let nonce = session_params
-            .get(&DataKey("nonce".to_string()))
-            .ok_or(AuthorisationError::MissingParametersInSession)?
-            .as_string()
-            .ok_or(AuthorisationError::NonceNotFound)?;
 
         let open_id_client = identity_provider
             .get_client(security_scheme_with_metadata)
