@@ -22,7 +22,7 @@ use golem_service_base::auth::DefaultNamespace;
 use crate::gateway_api_definition::http::{CompiledHttpApiDefinition, HttpApiDefinition};
 
 use crate::internal::TestResponse;
-use crate::security::TestIdentityProviderResolver;
+use crate::security::{TestIdentityProvider, TestIdentityProviderResolver};
 use chrono::{DateTime, Utc};
 use golem_common::model::IdempotencyKey;
 use golem_worker_service_base::gateway_api_deployment::ApiSiteString;
@@ -57,7 +57,7 @@ async fn execute(
     api_request: &InputHttpRequest,
     api_specification: &HttpApiDefinition,
     session_store: &GatewaySessionStore,
-    test_identity_provider_resolver: TestIdentityProviderResolver,
+    test_identity_provider_resolver: &TestIdentityProviderResolver,
 ) -> TestResponse {
     let compiled = CompiledHttpApiDefinition::from_http_api_definition(
         api_specification,
@@ -80,7 +80,7 @@ async fn execute(
     let input = Input::new(
         &resolved_gateway_binding,
         session_store,
-        Arc::new(test_identity_provider_resolver),
+        Arc::new(test_identity_provider_resolver.clone()),
     );
 
     let poem_response: poem::Response = test_executor.execute_binding(&input).await;
@@ -110,9 +110,129 @@ async fn test_end_to_end_api_gateway_simple_worker() {
         &api_request,
         &api_specification,
         &session_store,
-        TestIdentityProviderResolver::default(),
+        &TestIdentityProviderResolver::default(),
     )
     .await;
+
+    let result = (
+        test_response.get_function_name().unwrap(),
+        test_response.get_function_params().unwrap(),
+    );
+
+    let expected = (
+        "golem:it/api.{get-cart-contents}".to_string(),
+        Value::Array(vec![
+            Value::String("a".to_string()),
+            Value::String("b".to_string()),
+        ]),
+    );
+
+    assert_eq!(result, expected);
+}
+
+#[test]
+async fn test_end_to_end_api_gateway_with_security_expired_token() {
+    let empty_headers = HeaderMap::new();
+    let api_request = get_api_request("foo/1", None, &empty_headers, serde_json::Value::Null);
+
+    let worker_name = r#"
+      let id: u64 = request.path.user-id;
+      "shopping-cart-${id}"
+    "#;
+
+    let response_mapping = r#"
+      let response = golem:it/api.{get-cart-contents}("a", "b");
+      response
+    "#;
+
+    let auth_call_back_url =
+        RedirectUrl::new("http://foodomain/auth/callback".to_string()).unwrap();
+
+    let invalid_identity_provider_resolver =
+        TestIdentityProviderResolver::new(TestIdentityProvider::get_provider_with_expired_id_token());
+
+    let api_specification: HttpApiDefinition = get_api_spec_with_security_configuration(
+        "foo/{user-id}",
+        worker_name,
+        response_mapping,
+        &auth_call_back_url,
+        &invalid_identity_provider_resolver
+    )
+        .await;
+
+    let session_store = GatewaySessionStore::in_memory();
+
+    let initial_response_to_identity_provider = execute(
+        &api_request,
+        &api_specification,
+        &session_store,
+        &invalid_identity_provider_resolver
+    )
+        .await;
+
+    let initial_redirect_response_headers = initial_response_to_identity_provider.as_redirect()
+        .expect("MiddlewareIn for authentication should have resulted in a redirect response indicating login to identity provider");
+
+    let location = initial_redirect_response_headers
+        .get(LOCATION)
+        .expect("Expecting location")
+        .to_str()
+        .expect("Location should be a string");
+
+    let url = Url::parse(location).expect("Expect the initial redirection to be a full URL");
+
+    let query_components = ApiInputPath::query_components_from_str(url.query().unwrap_or_default());
+
+    let initial_redirect_response_info = security::get_initial_redirect_data(&query_components);
+
+    let actual_auth_call_back_url =
+        internal::decode_url(&initial_redirect_response_info.auth_call_back_url);
+    
+    // Manually call back the auth_call_back endpoint by assuming we are identity-provider
+    let call_back_request_from_identity_provider =
+        security::request_from_identity_provider_to_auth_call_back_endpoint(
+            initial_redirect_response_info.state.as_str(),
+            "foo_code", // Decided by IdentityProvider
+            initial_redirect_response_info.scope.as_str(),
+            &actual_auth_call_back_url.to_string(),
+            "localhost",
+        );
+
+    let request_with_cookies =
+        InputHttpRequest::from_request(call_back_request_from_identity_provider)
+            .await
+            .expect("Failed to get request");
+
+    // If successful, then auth call back is successful and we get a redirect response
+    // to be then executed against the original endpoint which is in api-request
+    let response = execute(
+        &request_with_cookies,
+        &api_specification,
+        &session_store,
+        &invalid_identity_provider_resolver
+    )
+        .await;
+
+    // The authcallback endpoint results in another redirect response
+    // which will now have the actual URL to the original protected resource
+    let redirect_response_headers = response
+        .as_redirect()
+        .expect("The middleware should have resulted in a redirect response");
+
+    // Manually calling it back as we are the browser
+    let request = security::create_request_from_redirect(&redirect_response_headers);
+
+    let api_request = InputHttpRequest::from_request(request)
+        .await
+        .expect("Failed to get http request");
+
+    let test_response = execute(
+        &api_request,
+        &api_specification,
+        &session_store,
+        &invalid_identity_provider_resolver
+    )
+        .await;
 
     let result = (
         test_response.get_function_name().unwrap(),
@@ -153,7 +273,7 @@ async fn test_end_to_end_api_gateway_with_security_successful_authentication() {
         worker_name,
         response_mapping,
         &auth_call_back_url,
-        TestIdentityProviderResolver::default(),
+        &TestIdentityProviderResolver::default(),
     )
     .await;
 
@@ -163,7 +283,7 @@ async fn test_end_to_end_api_gateway_with_security_successful_authentication() {
         &api_request,
         &api_specification,
         &session_store,
-        TestIdentityProviderResolver::default(),
+        &TestIdentityProviderResolver::default(),
     )
     .await;
 
@@ -222,7 +342,7 @@ async fn test_end_to_end_api_gateway_with_security_successful_authentication() {
         &request_with_cookies,
         &api_specification,
         &session_store,
-        TestIdentityProviderResolver::default(),
+        &TestIdentityProviderResolver::default(),
     )
     .await;
 
@@ -243,7 +363,7 @@ async fn test_end_to_end_api_gateway_with_security_successful_authentication() {
         &api_request,
         &api_specification,
         &session_store,
-        TestIdentityProviderResolver::default(),
+        &TestIdentityProviderResolver::default(),
     )
     .await;
 
@@ -288,7 +408,7 @@ async fn test_end_to_end_api_gateway_cors_preflight() {
         &api_request,
         &api_specification,
         &session_store,
-        TestIdentityProviderResolver::default(),
+        &TestIdentityProviderResolver::default(),
     )
     .await;
 
@@ -311,7 +431,7 @@ async fn test_end_to_end_api_gateway_cors_preflight_default() {
         &api_request,
         &api_specification,
         &session_store,
-        TestIdentityProviderResolver::default(),
+        &TestIdentityProviderResolver::default(),
     )
     .await;
 
@@ -354,14 +474,14 @@ async fn test_end_to_end_api_gateway_cors_with_preflight_default_and_actual_requ
         &preflight_request,
         &api_specification,
         &session_store,
-        TestIdentityProviderResolver::default(),
+        &TestIdentityProviderResolver::default(),
     )
     .await;
     let actual_response = execute(
         &api_request,
         &api_specification,
         &session_store,
-        TestIdentityProviderResolver::default(),
+        &TestIdentityProviderResolver::default(),
     )
     .await;
 
@@ -423,14 +543,14 @@ async fn test_end_to_end_api_gateway_cors_with_preflight_and_actual_request() {
         &preflight_request,
         &api_specification,
         &session_store,
-        TestIdentityProviderResolver::default(),
+        &TestIdentityProviderResolver::default(),
     )
     .await;
     let actual_response = execute(
         &api_request,
         &api_specification,
         &session_store,
-        TestIdentityProviderResolver::default(),
+        &TestIdentityProviderResolver::default(),
     )
     .await;
 
@@ -489,7 +609,7 @@ async fn test_end_to_end_api_gateway_with_request_path_and_query_lookup() {
         &api_request,
         &api_specification,
         &session_store,
-        TestIdentityProviderResolver::default(),
+        &TestIdentityProviderResolver::default(),
     )
     .await;
 
@@ -546,7 +666,7 @@ async fn test_end_to_end_api_gateway_with_request_path_and_query_lookup_complex(
         &api_request,
         &api_specification,
         &session_store,
-        TestIdentityProviderResolver::default(),
+        &TestIdentityProviderResolver::default(),
     )
     .await;
 
@@ -602,7 +722,7 @@ async fn test_end_to_end_api_gateway_with_with_request_body_lookup1() {
         &api_request,
         &api_specification,
         &session_store,
-        TestIdentityProviderResolver::default(),
+        &TestIdentityProviderResolver::default(),
     )
     .await;
 
@@ -671,7 +791,7 @@ async fn test_end_to_end_api_gateway_with_with_request_body_lookup2() {
         &api_request,
         &api_specification,
         &session_store,
-        TestIdentityProviderResolver::default(),
+        &TestIdentityProviderResolver::default(),
     )
     .await;
 
@@ -738,7 +858,7 @@ async fn test_end_to_end_api_gateway_with_with_request_body_lookup3() {
         &api_request,
         &api_specification,
         &session_store,
-        TestIdentityProviderResolver::default(),
+        &TestIdentityProviderResolver::default(),
     )
     .await;
 
@@ -939,12 +1059,12 @@ async fn get_api_spec_with_security_configuration(
     worker_name: &str,
     rib_expression: &str,
     auth_call_back_url: &RedirectUrl,
-    test_identity_provider_resolver: TestIdentityProviderResolver,
+    test_identity_provider_resolver: &TestIdentityProviderResolver,
 ) -> HttpApiDefinition {
     let security_scheme_identifier = SecuritySchemeIdentifier::new("openId1".to_string());
 
     let security_scheme_service =
-        security::get_test_security_scheme_service(test_identity_provider_resolver);
+        security::get_test_security_scheme_service(test_identity_provider_resolver.clone());
 
     let security_scheme = SecurityScheme::new(
         Provider::Google,
@@ -1255,7 +1375,7 @@ mod internal {
     use http::{HeaderMap, StatusCode};
     use std::sync::Arc;
 
-    pub(crate) struct TestApiGatewayWorkerRequestExecutor {}
+    pub struct TestApiGatewayWorkerRequestExecutor {}
 
     #[async_trait]
     impl GatewayWorkerRequestExecutor<DefaultNamespace> for TestApiGatewayWorkerRequestExecutor {
@@ -1285,7 +1405,7 @@ mod internal {
     }
 
     #[derive(Debug, Clone)]
-    pub(crate) enum TestResponse {
+    pub enum TestResponse {
         DefaultResult {
             worker_name: String,
             function_name: String,
@@ -1299,10 +1419,10 @@ mod internal {
     }
 
     #[derive(Debug, Clone)]
-    pub(crate) struct CorsMiddlewareHeadersInResponse {
-        pub(crate) cors_header_allow_origin: String,
-        pub(crate) cors_header_allow_credentials: Option<bool>, // If cors middleware is applied
-        pub(crate) cors_header_expose_headers: Option<String>,  // If cors middleware is applied
+    pub struct CorsMiddlewareHeadersInResponse {
+        pub cors_header_allow_origin: String,
+        pub cors_header_allow_credentials: Option<bool>, // If cors middleware is applied
+        pub cors_header_expose_headers: Option<String>,  // If cors middleware is applied
     }
 
     impl TestResponse {
@@ -1383,7 +1503,7 @@ mod internal {
         }
     }
 
-    pub(crate) fn create_tuple(
+    pub fn create_tuple(
         type_annotated_value: Vec<TypeAnnotatedValue>,
     ) -> TypeAnnotatedValue {
         let root = type_annotated_value
@@ -1404,7 +1524,7 @@ mod internal {
         })
     }
 
-    pub(crate) fn create_record(
+    pub fn create_record(
         values: Vec<(String, TypeAnnotatedValue)>,
     ) -> Result<TypeAnnotatedValue, EvaluationError> {
         let mut name_type_pairs = vec![];
@@ -1432,7 +1552,7 @@ mod internal {
         }))
     }
 
-    pub(crate) fn convert_to_worker_response(
+    pub fn convert_to_worker_response(
         worker_request: &GatewayResolvedWorkerRequest<DefaultNamespace>,
     ) -> TypeAnnotatedValue {
         let mut record_elems = vec![
@@ -1467,7 +1587,7 @@ mod internal {
         create_record(record_elems).unwrap()
     }
 
-    pub(crate) fn get_component_metadata() -> ComponentMetadataDictionary {
+    pub fn get_component_metadata() -> ComponentMetadataDictionary {
         let versioned_component_id = VersionedComponentId {
             component_id: ComponentId::try_from("0b6d9cd8-f373-4e29-8a5a-548e61b868a5").unwrap(),
             version: 0,
@@ -1510,14 +1630,14 @@ mod internal {
         }
     }
 
-    pub(crate) fn get_test_rib_interpreter(
+    pub fn get_test_rib_interpreter(
     ) -> Arc<dyn WorkerServiceRibInterpreter<DefaultNamespace> + Sync + Send> {
         Arc::new(DefaultRibInterpreter::from_worker_request_executor(
             Arc::new(TestApiGatewayWorkerRequestExecutor {}),
         ))
     }
 
-    pub(crate) fn get_test_file_server_binding_handler<Namespace>(
+    pub fn get_test_file_server_binding_handler<Namespace>(
     ) -> Arc<dyn FileServerBindingHandler<Namespace> + Sync + Send> {
         Arc::new(TestFileServerBindingHandler {})
     }
@@ -1655,7 +1775,7 @@ mod internal {
     }
 
     // Simple decoder only for test
-    pub(crate) fn decode_url(encoded: &str) -> String {
+    pub fn decode_url(encoded: &str) -> String {
         let mut decoded = String::new();
         let mut chars = encoded.chars().peekable();
 
@@ -1799,7 +1919,7 @@ mod security {
     // which piggybacks on DefaultIdentityProvider for all non side effecting
     // functionalities
     #[derive(Clone)]
-    struct TestIdentityProvider {
+    pub struct TestIdentityProvider {
         static_provider_metadata: GolemIdentityProviderMetadata,
         static_id_token: CoreIdToken,
     }
@@ -1909,11 +2029,17 @@ mod security {
         }
     }
 
-    pub(crate) struct TestIdentityProviderResolver {
+    #[derive(Clone)]
+    pub struct TestIdentityProviderResolver {
         test_identity_provider: TestIdentityProvider,
     }
 
     impl TestIdentityProviderResolver {
+        pub fn new(test_identity_provider: TestIdentityProvider) -> TestIdentityProviderResolver {
+            TestIdentityProviderResolver {
+                test_identity_provider
+            }
+        }
         pub fn valid_provider() -> Self {
             TestIdentityProviderResolver::default()
         }
@@ -1933,7 +2059,7 @@ mod security {
         }
     }
 
-    pub(crate) fn get_test_security_scheme_service(
+    pub fn get_test_security_scheme_service(
         identity_provider: TestIdentityProviderResolver,
     ) -> Arc<dyn SecuritySchemeService<DefaultNamespace> + Send + Sync> {
         let repo = Arc::new(TestSecuritySchemeRepo {
@@ -2039,7 +2165,7 @@ mod security {
     //         "connection": "keep-alive",
     //     },
     // }
-    pub(crate) fn request_from_identity_provider_to_auth_call_back_endpoint(
+    pub fn request_from_identity_provider_to_auth_call_back_endpoint(
         state: &str,
         code: &str,
         scope: &str,
@@ -2066,16 +2192,16 @@ mod security {
     }
 
     #[derive(Debug)]
-    pub(crate) struct InitialRedirectData {
-        pub(crate) response_type: String,
-        pub(crate) client_id: String,
-        pub(crate) state: String,
-        pub(crate) auth_call_back_url: String,
-        pub(crate) scope: String,
-        pub(crate) nonce: String,
+    pub struct InitialRedirectData {
+        pub response_type: String,
+        pub client_id: String,
+        pub state: String,
+        pub auth_call_back_url: String,
+        pub scope: String,
+        pub nonce: String,
     }
 
-    pub(crate) fn get_initial_redirect_data(
+    pub fn get_initial_redirect_data(
         query_components: &HashMap<String, String>,
     ) -> InitialRedirectData {
         let response_type = query_components
@@ -2269,7 +2395,7 @@ mod security {
         new_provider_metadata
     }
 
-    pub(crate) fn create_request_from_redirect(headers: &HeaderMap) -> Request {
+    pub fn create_request_from_redirect(headers: &HeaderMap) -> Request {
         let cookies = extract_cookies_from_redirect(headers);
 
         let cookie_header = cookies
