@@ -16,7 +16,7 @@ use crate::Tracing;
 use golem_common::config::DbSqliteConfig;
 use golem_service_base::db;
 use sqlx::Pool;
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 use test_r::{inherit_test_dep, sequential};
 use uuid::Uuid;
 
@@ -138,9 +138,12 @@ impl SqliteDb {
             max_connections: 10,
         };
 
-        db::sqlite_migrate(&db_config, "../golem-component-service/db/migration/sqlite")
-            .await
-            .unwrap();
+        db::sqlite_migrate(
+            &db_config,
+            &PathBuf::from("../golem-component-service/db/migration/sqlite"),
+        )
+        .await
+        .unwrap();
 
         let pool = Arc::new(db::create_sqlite_pool(&db_config).await.unwrap());
 

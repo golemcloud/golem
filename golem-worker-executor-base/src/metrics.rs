@@ -22,7 +22,7 @@ use prometheus::*;
 
 lazy_static! {
     static ref VERSION_INFO: IntCounterVec = register_int_counter_vec!(
-        "version_info",
+        "executor_version_info",
         "Version info of the server",
         &["version", "wasmtime"]
     )

@@ -11,22 +11,20 @@ use poem::endpoint::PrometheusExporter;
 use poem::{get, EndpointExt, Route};
 use poem_openapi::OpenApiService;
 use prometheus::Registry;
-use std::ops::Deref;
-use std::sync::Arc;
 
-type ApiServices = (
+pub type ApiServices = (
     WorkerApi,
     api_definition::RegisterApiDefinitionApi,
     api_deployment::ApiDeploymentApi,
     HealthcheckApi,
 );
 
-pub fn combined_routes(prometheus_registry: Arc<Registry>, services: &Services) -> Route {
+pub fn combined_routes(prometheus_registry: Registry, services: &Services) -> Route {
     let api_service = make_open_api_service(services);
 
     let ui = api_service.swagger_ui();
     let spec = api_service.spec_endpoint_yaml();
-    let metrics = PrometheusExporter::new(prometheus_registry.deref().clone());
+    let metrics = PrometheusExporter::new(prometheus_registry.clone());
 
     let connect_services = worker_connect::ConnectService::new(services.worker_service.clone());
 
@@ -41,11 +39,11 @@ pub fn combined_routes(prometheus_registry: Arc<Registry>, services: &Services) 
         )
 }
 
-pub fn custom_request_route(services: Services) -> Route {
+pub fn custom_request_route(services: &Services) -> Route {
     let custom_request_executor = CustomHttpRequestApi::new(
-        services.worker_to_http_service,
-        services.http_definition_lookup_service,
-        services.fileserver_binding_handler,
+        services.worker_to_http_service.clone(),
+        services.http_definition_lookup_service.clone(),
+        services.fileserver_binding_handler.clone(),
     );
 
     Route::new().nest("/", custom_request_executor)

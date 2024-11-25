@@ -321,6 +321,7 @@ mod test {
     use http::StatusCode;
     use poem::test::TestClient;
     use std::marker::PhantomData;
+    use std::path::PathBuf;
 
     struct SqliteDb<'c> {
         db_path: String,
@@ -382,7 +383,7 @@ mod test {
             max_connections: 10,
         };
 
-        db::sqlite_migrate(&db_config, "db/migration/sqlite")
+        db::sqlite_migrate(&db_config, &PathBuf::from("db/migration/sqlite"))
             .await
             .unwrap();
 

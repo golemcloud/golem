@@ -16,6 +16,7 @@ use crate::Tracing;
 use golem_common::config::DbPostgresConfig;
 use golem_service_base::db;
 use sqlx::Pool;
+use std::path::PathBuf;
 use std::sync::Arc;
 use test_r::{inherit_test_dep, sequential};
 use testcontainers::runners::AsyncRunner;
@@ -137,7 +138,7 @@ impl PostgresDb {
 
         db::postgres_migrate(
             &db_config,
-            "../golem-component-service/db/migration/postgres",
+            &PathBuf::from("../golem-component-service/db/migration/postgres"),
         )
         .await
         .unwrap();
