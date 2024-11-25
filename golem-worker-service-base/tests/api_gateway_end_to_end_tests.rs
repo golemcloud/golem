@@ -1296,7 +1296,6 @@ mod internal {
 
     use http::{HeaderMap, StatusCode};
     use std::sync::Arc;
-    
 
     pub(crate) struct TestApiGatewayWorkerRequestExecutor {}
 
@@ -1750,11 +1749,11 @@ mod security {
     use poem::Request;
     use rsa::pkcs8::DecodePublicKey;
     use rsa::traits::PublicKeyParts;
-    
+
     use std::collections::HashMap;
     use std::str::FromStr;
     use std::sync::Arc;
-    
+
     use tokio::sync::Mutex;
 
     // These keys are used over the default JwkKeySet of the actual client
