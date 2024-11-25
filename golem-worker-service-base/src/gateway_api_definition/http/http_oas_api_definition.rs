@@ -125,7 +125,7 @@ mod internal {
 
     use crate::gateway_binding::{GatewayBinding, ResponseMapping, StaticBinding, WorkerBinding};
     use crate::gateway_middleware::{
-        CorsPreflightExpr, HttpCors, HttpMiddleware, Middleware, Middlewares,
+        CorsPreflightExpr, HttpCors
     };
     use crate::gateway_security::{SecuritySchemeIdentifier, SecuritySchemeReference};
     use golem_service_base::model::VersionedComponentId;
@@ -252,7 +252,8 @@ mod internal {
                             method,
                             path: path_pattern.clone(),
                             binding: GatewayBinding::static_binding(binding),
-                            security
+                            security,
+                            cors: None
                         })
                     }
 
@@ -263,7 +264,8 @@ mod internal {
                             path: path_pattern.clone(),
                             method,
                             binding: GatewayBinding::Default(binding),
-                            security
+                            security,
+                            cors: None
                         })
                     }
                     (GatewayBindingType::FileServer, _) => {
@@ -273,7 +275,8 @@ mod internal {
                             path: path_pattern.clone(),
                             method,
                             binding: GatewayBinding::Default(binding),
-                            security
+                            security,
+                            cors: None
                         })
                     }
 
@@ -293,6 +296,7 @@ mod internal {
                         method,
                         binding: GatewayBinding::static_binding(binding),
                         security,
+                        cors: None
                     })
                 } else {
                     Err(format!(
@@ -307,24 +311,11 @@ mod internal {
     pub(crate) fn get_gateway_binding(
         gateway_binding_value: &Value,
     ) -> Result<WorkerBinding, String> {
-        let http_middlewares = get_middleware(gateway_binding_value)?;
-        let middlewares = http_middlewares
-            .into_iter()
-            .map(Middleware::http)
-            .collect::<Vec<_>>();
-
-        let binding_middleware = if middlewares.is_empty() {
-            None
-        } else {
-            Some(Middlewares(middlewares))
-        };
-
         let binding = WorkerBinding {
             worker_name: get_worker_id_expr(gateway_binding_value)?,
             component_id: get_component_id(gateway_binding_value)?,
             idempotency_key: get_idempotency_key(gateway_binding_value)?,
             response_mapping: get_response_mapping(gateway_binding_value)?,
-            middleware: binding_middleware,
         };
 
         Ok(binding)
@@ -390,35 +381,6 @@ mod internal {
         Ok(binding_type_optional.unwrap_or(GatewayBindingType::Default))
     }
 
-    pub(crate) fn get_middleware(
-        worker_gateway_info: &Value,
-    ) -> Result<Vec<HttpMiddleware>, String> {
-        let mut middlewares = vec![];
-        if let Some(middleware_value) = worker_gateway_info.get("middlewares") {
-            // Users hardly need to specify the auth middleware in an open API spec as this is not a standard
-            // pattern. Even cors is not needed in the standard pattern as it gets auto injected if there
-            // is a preflight endpoint that corresponds to a static binding of cors.
-            match middleware_value {
-                Value::Object(map) => {
-                    let cors_preflight: Option<HttpCors> = map
-                        .get("cors")
-                        .map(|json_value| serde_json::from_value(json_value.clone()))
-                        .transpose()
-                        .map_err(|err| format!("Invalid schema for Cors {}", err))?;
-
-                    if let Some(cors_preflight) = cors_preflight {
-                        middlewares.push(HttpMiddleware::cors(cors_preflight));
-                    }
-                }
-                _ => return Err(
-                    "Invalid response mapping type. It should be a string representing expression"
-                        .to_string(),
-                ),
-            }
-        }
-
-        Ok(middlewares)
-    }
 
     pub(crate) fn get_response_mapping(
         gateway_binding_value: &Value,
@@ -481,7 +443,7 @@ mod tests {
     use super::*;
     use crate::gateway_api_definition::http::{AllPathPatterns, MethodPattern, RouteRequest};
     use crate::gateway_binding::{GatewayBinding, ResponseMapping, StaticBinding, WorkerBinding};
-    use crate::gateway_middleware::{HttpCors, HttpMiddleware, Middleware, Middlewares};
+    use crate::gateway_middleware::{HttpCors, HttpMiddleware, Middleware, HttpMiddlewares};
     use golem_common::model::ComponentId;
     use openapiv3::Operation;
     use rib::Expr;
@@ -640,7 +602,7 @@ mod tests {
                     .into_iter()
                     .collect(),
                 )),
-                middleware: Some(Middlewares(vec![Middleware::Http(HttpMiddleware::cors(
+                middleware: Some(HttpMiddlewares(vec![Middleware::Http(HttpMiddleware::cors(
                     HttpCors::from_parameters(
                         Some("*".to_string()),
                         Some("GET, POST, PUT, DELETE, OPTIONS".to_string()),

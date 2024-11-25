@@ -15,6 +15,7 @@
 use crate::gateway_api_definition::http::{AllPathPatterns, MethodPattern, Route};
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use crate::gateway_binding::GatewayBinding;
+use crate::gateway_middleware::HttpCors;
 use crate::gateway_security::SecuritySchemeReference;
 
 // HttpApiDefinitionRequest corresponds to the user facing http api definition.
@@ -39,18 +40,24 @@ pub struct RouteRequest {
     pub method: MethodPattern,
     pub path: AllPathPatterns,
     pub binding: GatewayBinding,
+    pub cors: Option<HttpCors>,
     pub security: Option<SecuritySchemeReference>,
 }
 
 impl From<Route> for RouteRequest {
     fn from(value: Route) -> Self {
-        let security = value.binding.get_authenticate_request_middleware();
+        let security_middleware =
+            value.middlewares.clone().and_then(|x| x.get_http_authentication_middleware());
+
+        let cors_middleware =
+            value.middlewares.and_then(|x| x.get_cors_middleware());
 
         RouteRequest {
             method: value.method,
             path: value.path,
             binding: value.binding,
-            security: security.map(|x| SecuritySchemeReference::from(x.security_scheme)),
+            security: security_middleware.map(|x| SecuritySchemeReference::from(x.security_scheme)),
+            cors: cors_middleware
         }
     }
 }

@@ -138,6 +138,7 @@ pub mod router {
     use crate::gateway_api_definition::http::{PathPattern, QueryInfo, VarInfo};
     use crate::gateway_binding::GatewayBindingCompiled;
     use crate::gateway_execution::router::{Router, RouterPattern};
+    use crate::gateway_middleware::{HttpMiddleware, HttpMiddlewares};
 
     #[derive(Debug, Clone)]
     pub struct RouteEntry<Namespace> {
@@ -146,6 +147,7 @@ pub mod router {
         pub query_params: Vec<QueryInfo>,
         pub namespace: Namespace,
         pub binding: GatewayBindingCompiled,
+        pub middlewares: Option<HttpMiddlewares>
     }
 
     pub fn build<Namespace>(
@@ -173,6 +175,7 @@ pub mod router {
                 query_params: path.query_params,
                 namespace,
                 binding,
+                middlewares: route.middlewares
             };
 
             let path: Vec<RouterPattern> = path

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::gateway_binding::{GatewayRequestDetails, WorkerDetail};
+use crate::gateway_binding::{GatewayRequestDetails, HttpRequestDetails, WorkerDetail};
 use golem_common::SafeDisplay;
 use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
@@ -47,7 +47,7 @@ impl SafeDisplay for RibInputTypeMismatch {
     }
 }
 
-impl RibInputValueResolver for GatewayRequestDetails {
+impl RibInputValueResolver for HttpRequestDetails {
     fn resolve_rib_input_value(
         &self,
         required_types: &RibInputTypeInfo,

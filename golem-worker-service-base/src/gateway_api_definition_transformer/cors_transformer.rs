@@ -33,9 +33,10 @@ impl ApiDefinitionTransformer for CorsTransformer {
 }
 
 mod internal {
+    use poem_openapi::types::Type;
     use crate::gateway_api_definition::http::{AllPathPatterns, MethodPattern, Route};
     use crate::gateway_api_definition_transformer::ApiDefTransformationError;
-    use crate::gateway_middleware::{HttpCors, HttpMiddleware, Middleware};
+    use crate::gateway_middleware::{HttpCors, HttpMiddleware, HttpMiddlewares, Middleware};
 
     pub(crate) fn update_routes_with_cors_middleware(
         routes: &mut [Route],
@@ -96,27 +97,20 @@ mod internal {
         route: &mut Route,
         cors: HttpCors,
     ) -> Result<(), ApiDefTransformationError> {
-        if let Some(worker_binding) = route.binding.get_worker_binding_mut() {
-            // Make it Idempotent
-            if worker_binding.get_cors_middleware().is_some() {
-                let error = ApiDefTransformationError::new(
-                    route.method.clone(),
-                    route.path.to_string(),
-                    format!(
-                        "Conflicting CORS middleware configuration for path '{}' at method '{}'. \
-                    CORS preflight is already configured for the same path.",
-                        route.path, route.method
-                    ),
-                );
-                Err(error)
-            } else {
-                worker_binding
-                    .add_middleware(Middleware::Http(HttpMiddleware::AddCorsHeaders(cors)));
-                Ok(())
+        let middlewares = &mut route.middlewares;
+
+        match middlewares {
+            Some(middlewares) => {
+                if middlewares.get_cors_middleware().is_empty() {
+                    middlewares.add_cors(cors);
+                }
+            },
+            None => {
+                *middlewares = Some(HttpMiddlewares(vec![HttpMiddleware::cors(cors)]))
             }
-        } else {
-            Ok(())
         }
+
+        Ok(())
     }
 }
 
@@ -132,7 +126,7 @@ mod tests {
         ApiDefTransformationError, ApiDefinitionTransformer, CorsTransformer,
     };
     use crate::gateway_binding::{GatewayBinding, ResponseMapping, StaticBinding, WorkerBinding};
-    use crate::gateway_middleware::{HttpCors, HttpMiddleware, Middleware, Middlewares};
+    use crate::gateway_middleware::{HttpCors, HttpMiddleware, Middleware, HttpMiddlewares};
     use golem_common::model::ComponentId;
     use golem_service_base::model::VersionedComponentId;
     use rib::Expr;
@@ -181,7 +175,7 @@ mod tests {
             worker_name: None,
             idempotency_key: None,
             response_mapping: ResponseMapping(Expr::literal("")),
-            middleware: Some(Middlewares(vec![Middleware::Http(
+            middleware: Some(HttpMiddlewares(vec![Middleware::Http(
                 HttpMiddleware::AddCorsHeaders(cors()),
             )])),
         };

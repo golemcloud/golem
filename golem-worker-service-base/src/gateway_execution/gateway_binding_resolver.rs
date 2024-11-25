@@ -16,7 +16,7 @@ use crate::gateway_api_definition::http::{CompiledHttpApiDefinition, VarInfo};
 use crate::gateway_binding::{GatewayBindingCompiled, StaticBinding};
 use crate::gateway_binding::{GatewayRequestDetails, ResponseMappingCompiled};
 use crate::gateway_execution::router::RouterPattern;
-use crate::gateway_middleware::Middlewares;
+use crate::gateway_middleware::HttpMiddlewares;
 use crate::gateway_request::http_request::{router, InputHttpRequest};
 use crate::gateway_security::OpenIdClient;
 use async_trait::async_trait;
@@ -111,7 +111,6 @@ pub struct ResolvedWorkerBinding<Namespace> {
     pub worker_detail: WorkerDetail,
     pub compiled_response_mapping: ResponseMappingCompiled,
     pub namespace: Namespace,
-    pub middlewares: Middlewares,
 }
 
 impl<Namespace> ResolvedGatewayBinding<Namespace> {
@@ -170,6 +169,7 @@ impl<Namespace: Clone + Send + Sync + 'static>
             query_params,
             namespace,
             binding,
+            middlewares
         } = router
             .check_path(&api_request.req_method, &path)
             .ok_or("Failed to resolve route")?;
@@ -306,7 +306,6 @@ mod internal {
             worker_detail,
             compiled_response_mapping: binding.response_compiled.clone(),
             namespace: namespace.clone(),
-            middlewares: binding.middlewares.clone().unwrap_or_default(),
         };
 
         Ok(resolved_binding)

@@ -32,8 +32,8 @@ impl ApiDefinitionTransformer for AuthTransformer {
         let mut distinct_auth_middlewares = HashMap::new();
 
         for i in api_definition.routes.iter() {
-            let binding = &i.binding;
-            let auth_middleware = binding.get_authenticate_request_middleware();
+            let middlewares = &i.middlewares;
+            let auth_middleware = middlewares.clone().and_then(|x| x.get_http_authentication_middleware());
 
             if let Some(auth_middleware) = auth_middleware {
                 distinct_auth_middlewares.insert(
@@ -94,6 +94,7 @@ mod internal {
                 path,
                 method,
                 binding,
+                middlewares: None
             };
 
             routes.push(route)

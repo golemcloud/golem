@@ -28,8 +28,8 @@ use golem_common::model::IdempotencyKey;
 use golem_worker_service_base::gateway_api_deployment::ApiSiteString;
 use golem_worker_service_base::gateway_execution::auth_call_back_binding_handler::DefaultAuthCallBack;
 use golem_worker_service_base::gateway_execution::gateway_binding_resolver::GatewayBindingResolver;
-use golem_worker_service_base::gateway_execution::gateway_input_executor::{
-    DefaultGatewayInputExecutor, GatewayInputExecutor, Input,
+use golem_worker_service_base::gateway_execution::gateway_http_input_executor::{
+    DefaultGatewayInputExecutor, GatewayHttpInputExecutor, GatewayHttpInput,
 };
 use golem_worker_service_base::gateway_execution::gateway_session::GatewaySessionStore;
 use golem_worker_service_base::gateway_middleware::HttpCors;
@@ -78,7 +78,7 @@ async fn execute(
         Arc::new(DefaultAuthCallBack),
     );
 
-    let input = Input::new(
+    let input = GatewayHttpInput::new(
         &resolved_gateway_binding,
         session_store,
         Arc::new(test_identity_provider_resolver.clone()),

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::gateway_execution::gateway_input_executor::Input;
+use crate::gateway_execution::gateway_http_input_executor::GatewayHttpInput;
 use crate::gateway_execution::gateway_session::GatewaySessionStore;
 use crate::gateway_security::SecuritySchemeWithProviderMetadata;
 pub use http::*;
@@ -24,8 +24,7 @@ mod http;
 mod middleware_in;
 mod middleware_out;
 
-// A set of middleware can exist in a binding.
-// These middlewares will be processed in a sequential order.
+// Middlewares will be processed in a sequential order.
 // The information contained in each middleware is made available to
 // the Rib environment as a key-value pair. This implies, users can look up the data
 // related to the middleware in their Rib script.
@@ -36,40 +35,44 @@ mod middleware_out;
 // a CORS header already, then gateway resolves these conflicts by giving priority to user input)
 // In most cases, it is best for users to do every pre-processing of input and forming the shape of response by themselves.
 #[derive(Debug, Clone, PartialEq, Default)]
-pub struct Middlewares(pub Vec<Middleware>);
+pub struct HttpMiddlewares(pub Vec<HttpMiddleware>);
 
-impl Middlewares {
+impl HttpMiddlewares {
+
+    pub fn add_cors(&mut self, cors: HttpCors) {
+        self.0.push(HttpMiddleware::cors(cors));
+    }
+
+    pub fn get_http_middleware(&self) -> Option<HttpAuthenticationMiddleware> {
+        self.0.iter().find_map(|m| m.get_http_authentication())
+    }
+
     pub fn http_middlewares(&self) -> Vec<HttpMiddleware> {
         self.0
             .iter()
-            .flat_map(|m| match m {
-                Middleware::Http(http_middleware) => Some(http_middleware.clone()),
-            })
             .collect()
     }
 
     pub async fn process_middleware_in<Namespace, Response>(
         &self,
-        input: &Input<Namespace>,
+        input: &GatewayHttpInput<Namespace>,
     ) -> Result<MiddlewareSuccess<Response>, MiddlewareInError>
     where
         HttpAuthenticationMiddleware: MiddlewareIn<Namespace, Response>,
     {
         for middleware in self.0.iter() {
             match middleware {
-                Middleware::Http(http_middleware) => match http_middleware {
-                    HttpMiddleware::AddCorsHeaders(_) => {}
-                    HttpMiddleware::AuthenticateRequest(auth) => {
-                        let result = auth.process_input(input).await?;
+                HttpMiddleware::AddCorsHeaders(_) => {}
+                HttpMiddleware::AuthenticateRequest(auth) => {
+                    let result = auth.process_input(input).await?;
 
-                        match result {
-                            MiddlewareSuccess::Redirect(response) => {
-                                return Ok(MiddlewareSuccess::Redirect(response))
-                            }
-                            MiddlewareSuccess::PassThrough => {}
+                    match result {
+                        MiddlewareSuccess::Redirect(response) => {
+                            return Ok(MiddlewareSuccess::Redirect(response))
                         }
+                        MiddlewareSuccess::PassThrough => {}
                     }
-                },
+                }
             }
         }
 
@@ -86,27 +89,25 @@ impl Middlewares {
     {
         for middleware in self.0.iter() {
             match middleware {
-                Middleware::Http(http_middleware) => match http_middleware {
-                    HttpMiddleware::AddCorsHeaders(cors) => {
-                        cors.process_output(session_store, response).await?;
-                    }
-                    HttpMiddleware::AuthenticateRequest(_) => {}
-                },
+                HttpMiddleware::AddCorsHeaders(cors) => {
+                    cors.process_output(session_store, response).await?;
+                }
+                HttpMiddleware::AuthenticateRequest(_) => {}
             }
         }
 
         Ok(())
     }
 
-    pub fn add(&mut self, middleware: Middleware) {
+    pub fn add(&mut self, middleware: HttpMiddleware) {
         self.0.push(middleware);
     }
 
-    pub fn get_cors(&self) -> Option<HttpCors> {
+    pub fn get_cors_middleware(&self) -> Option<HttpCors> {
         self.0.iter().find_map(|m| m.get_cors())
     }
 
-    pub fn get_http_authentication(&self) -> Option<HttpAuthenticationMiddleware> {
+    pub fn get_http_authentication_middleware(&self) -> Option<HttpAuthenticationMiddleware> {
         self.0.iter().find_map(|m| m.get_http_authentication())
     }
 }
@@ -150,42 +151,40 @@ impl Middleware {
     }
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::apidefinition::Middleware> for Middlewares {
+impl TryFrom<golem_api_grpc::proto::golem::apidefinition::Middleware> for HttpMiddlewares {
     type Error = String;
 
     fn try_from(
         value: golem_api_grpc::proto::golem::apidefinition::Middleware,
     ) -> Result<Self, Self::Error> {
-        let mut middlewares = Vec::new();
+        let mut http_middlewares = Vec::new();
         if let Some(cors) = value.cors {
             let cors = HttpCors::try_from(cors)?;
-            middlewares.push(Middleware::http(HttpMiddleware::cors(cors)));
+            http_middlewares.push(HttpMiddleware::cors(cors));
         }
 
         if let Some(http) = value.http_authentication {
             let auth = SecuritySchemeWithProviderMetadata::try_from(http)?;
-            middlewares.push(Middleware::Http(HttpMiddleware::authenticate_request(auth)))
+            http_middlewares.push(HttpMiddleware::authenticate_request(auth))
         }
 
-        Ok(Middlewares(middlewares))
+        Ok(HttpMiddlewares(http_middlewares))
     }
 }
 
-impl TryFrom<Middlewares> for golem_api_grpc::proto::golem::apidefinition::Middleware {
+impl TryFrom<HttpMiddlewares> for golem_api_grpc::proto::golem::apidefinition::Middleware {
     type Error = String;
-    fn try_from(value: Middlewares) -> Result<Self, String> {
+    fn try_from(value: HttpMiddlewares) -> Result<Self, String> {
         let mut cors = None;
         let mut auth = None;
 
-        for middleware in value.0.iter() {
-            match middleware {
-                Middleware::Http(http_middleware) => match http_middleware {
-                    HttpMiddleware::AddCorsHeaders(cors0) => {
-                        cors = Some(golem_api_grpc::proto::golem::apidefinition::CorsPreflight::from(cors0.clone()));
-                    }
-                    HttpMiddleware::AuthenticateRequest(http_request_authentication) => {
-                        auth = Some(golem_api_grpc::proto::golem::apidefinition::SecurityWithProviderMetadata::try_from(http_request_authentication.security_scheme.clone())?)
-                    }
+        for http_middleware in value.0.iter() {
+            match http_middleware {
+                HttpMiddleware::AddCorsHeaders(cors0) => {
+                    cors = Some(golem_api_grpc::proto::golem::apidefinition::CorsPreflight::from(cors0.clone()));
+                }
+                HttpMiddleware::AuthenticateRequest(http_request_authentication) => {
+                    auth = Some(golem_api_grpc::proto::golem::apidefinition::SecurityWithProviderMetadata::try_from(http_request_authentication.security_scheme.clone())?)
                 }
             }
         }

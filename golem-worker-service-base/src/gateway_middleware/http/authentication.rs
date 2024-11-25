@@ -23,7 +23,7 @@ impl HttpAuthenticationMiddleware {
         input: &HttpRequestDetails,
         session_store: &GatewaySessionStore,
         identity_provider_resolver: &Arc<dyn IdentityProviderResolver + Send + Sync>,
-    ) -> Result<MiddlewareSuccess<poem::Response>, MiddlewareInError> {
+    ) -> Result<MiddlewareSuccess, MiddlewareInError> {
         let identity_provider = identity_provider_resolver
             .resolve(&self.security_scheme.security_scheme.provider_type());
 

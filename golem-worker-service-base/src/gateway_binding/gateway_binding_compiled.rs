@@ -17,7 +17,7 @@ use crate::gateway_binding::{
     GatewayBinding, IdempotencyKeyCompiled, ResponseMappingCompiled, WorkerBinding,
     WorkerBindingCompiled, WorkerNameCompiled,
 };
-use crate::gateway_middleware::Middlewares;
+use crate::gateway_middleware::HttpMiddlewares;
 use golem_common::model::GatewayBindingType;
 
 // A compiled binding is a binding with all existence of Rib Expr
@@ -27,20 +27,6 @@ pub enum GatewayBindingCompiled {
     Worker(WorkerBindingCompiled),
     Static(Box<StaticBinding>),
     FileServer(WorkerBindingCompiled),
-}
-
-impl GatewayBindingCompiled {
-    pub fn get_middlewares(&self) -> Option<Middlewares> {
-        match self {
-            GatewayBindingCompiled::Worker(worker_binding_compiled) => {
-                worker_binding_compiled.middlewares.clone()
-            }
-            GatewayBindingCompiled::Static(_) => None,
-            GatewayBindingCompiled::FileServer(worker_binding_compiled) => {
-                worker_binding_compiled.middlewares.clone()
-            }
-        }
-    }
 }
 
 impl From<GatewayBindingCompiled> for GatewayBinding {
@@ -105,7 +91,6 @@ impl From<GatewayBindingCompiled>
                             *static_binding,
                         ),
                     ),
-                    middleware: None,
                 }
             }
         }
@@ -181,9 +166,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
                         .map(rib::WorkerFunctionsInRib::try_from)
                         .transpose()?,
                 };
-
-                let middleware = value.middleware.map(Middlewares::try_from).transpose()?;
-
+                
                 let binding_type = value.binding_type.ok_or("Missing binding_type")?;
 
                 if binding_type == 0 {
@@ -192,7 +175,6 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
                         worker_name_compiled,
                         idempotency_key_compiled,
                         response_compiled,
-                        middlewares: middleware,
                     }))
                 } else {
                     Ok(GatewayBindingCompiled::FileServer(WorkerBindingCompiled {
@@ -200,7 +182,6 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
                         worker_name_compiled,
                         idempotency_key_compiled,
                         response_compiled,
-                        middlewares: middleware,
                     }))
                 }
             }
@@ -269,32 +250,6 @@ mod internal {
             .worker_calls
             .map(|x| x.into());
 
-        let mut cors = None;
-        let mut auth = None;
-
-        let middleware = if let Some(m) = worker_binding.middlewares {
-            for m in m.0.iter() {
-                match m {
-                    Middleware::Http(HttpMiddleware::AuthenticateRequest(auth0)) => {
-                        let auth0 = auth0.deref().clone().security_scheme;
-                        auth = Some(SecurityWithProviderMetadata::try_from(auth0).unwrap());
-                    }
-                    Middleware::Http(HttpMiddleware::AddCorsHeaders(cors0)) => {
-                        let cors0 = cors0.clone();
-                        cors = Some(
-                            golem_api_grpc::proto::golem::apidefinition::CorsPreflight::from(cors0),
-                        )
-                    }
-                }
-            }
-            Some(golem_api_grpc::proto::golem::apidefinition::Middleware {
-                cors,
-                http_authentication: auth,
-            })
-        } else {
-            None
-        };
-
         let binding_type = match binding_type {
             GatewayBindingType::Default => 0,
             GatewayBindingType::FileServer => 1,
@@ -315,7 +270,6 @@ mod internal {
             worker_functions_in_response,
             binding_type: Some(binding_type),
             static_binding: None,
-            middleware,
         }
     }
 }
