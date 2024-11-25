@@ -15,8 +15,13 @@
 use crate::gateway_security::open_id_client::OpenIdClient;
 use crate::gateway_security::*;
 use async_trait::async_trait;
-use openidconnect::core::{CoreClient, CoreIdTokenClaims, CoreIdTokenVerifier, CoreJsonWebKeyType, CoreProviderMetadata, CoreResponseType, CoreTokenResponse};
-use openidconnect::{AuthenticationFlow, AuthorizationCode, CsrfToken, JsonWebKeySet, Nonce, Scope};
+use openidconnect::core::{
+    CoreClient, CoreIdTokenClaims, CoreIdTokenVerifier, CoreJsonWebKeyType, CoreProviderMetadata,
+    CoreResponseType, CoreTokenResponse,
+};
+use openidconnect::{
+    AuthenticationFlow, AuthorizationCode, CsrfToken, IdTokenVerifier, JsonWebKeySet, Nonce, Scope,
+};
 
 // All providers can reuse DefaultIdentityProvider if provided internally
 pub struct DefaultIdentityProvider;
@@ -72,15 +77,16 @@ impl IdentityProvider for DefaultIdentityProvider {
 
         Ok(OpenIdClient { client })
     }
+    fn get_id_token_verifier<'a>(&self, client: &'a OpenIdClient) -> CoreIdTokenVerifier<'a> {
+        client.client.id_token_verifier()
+    }
 
     fn get_claims(
         &self,
-        client: &OpenIdClient,
+        id_token_verifier: &CoreIdTokenVerifier,
         core_token_response: CoreTokenResponse,
         nonce: &Nonce,
     ) -> Result<CoreIdTokenClaims, IdentityProviderError> {
-        let id_token_verifier: CoreIdTokenVerifier = client.client.id_token_verifier();
-
         let id_token_claims: &CoreIdTokenClaims = core_token_response
             .extra_fields()
             .id_token()
@@ -93,11 +99,19 @@ impl IdentityProvider for DefaultIdentityProvider {
         Ok(id_token_claims.clone())
     }
 
-    fn get_authorization_url(&self, client: &OpenIdClient, scopes: Vec<Scope>) -> AuthorizationUrl {
+    fn get_authorization_url(
+        &self,
+        client: &OpenIdClient,
+        scopes: Vec<Scope>,
+        state: Option<CsrfToken>,
+        nonce: Option<Nonce>,
+    ) -> AuthorizationUrl {
+        let state = || state.unwrap_or_else(|| CsrfToken::new_random());
+        let nonce = || nonce.unwrap_or_else(|| Nonce::new_random());
         let builder = client.client.authorize_url(
             AuthenticationFlow::<CoreResponseType>::AuthorizationCode,
-            CsrfToken::new_random,
-            Nonce::new_random,
+            state,
+            nonce,
         );
 
         let builder = scopes

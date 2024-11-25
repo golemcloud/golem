@@ -48,7 +48,6 @@ impl InputHttpRequest {
         let headers = req_parts.headers;
         let uri = req_parts.uri;
 
-
         let host = match headers.get(HOST).and_then(|h| h.to_str().ok()) {
             Some(host) => ApiSiteString(host.to_string()),
             None => {

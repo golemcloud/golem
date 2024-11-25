@@ -53,7 +53,7 @@ use url::Url;
 async fn execute(
     api_request: &InputHttpRequest,
     api_specification: &HttpApiDefinition,
-    session_store: &GatewaySessionStore
+    session_store: &GatewaySessionStore,
 ) -> TestResponse {
     let compiled = CompiledHttpApiDefinition::from_http_api_definition(
         api_specification,
@@ -193,28 +193,32 @@ async fn test_end_to_end_api_gateway_with_multiple_security() {
 
     // The first response will be a redirect from the auth middleware which
     // redirects to the open id connector login
-    let initial_redirect_response_info_opt = match initial_redirect_response_to_identity_provider.clone() {
-        TestResponse::RedirectResponse { redirect_url } => {
-            let query = redirect_url.query();
-            let query_components =
-                ApiInputPath::query_components_from_str(query.unwrap_or_default());
+    let initial_redirect_response_info_opt =
+        match initial_redirect_response_to_identity_provider.clone() {
+            TestResponse::RedirectResponse { redirect_url } => {
+                let query = redirect_url.query();
+                let query_components =
+                    ApiInputPath::query_components_from_str(query.unwrap_or_default());
 
-            Some(internal::get_initial_redirect_data(&query_components))
-        }
-        _ => None,
-    };
+                Some(internal::get_initial_redirect_data(&query_components))
+            }
+            _ => None,
+        };
 
-    let initial_redirect_response_info =
-        initial_redirect_response_info_opt.expect("Expected initial redirection to identity provider");
+    let initial_redirect_response_info = initial_redirect_response_info_opt
+        .expect("Expected initial redirection to identity provider");
 
     let actual_auth_call_back_url =
         internal::decode_url(&initial_redirect_response_info.auth_call_back_uri);
 
     assert_eq!(initial_redirect_response_info.response_type, "code");
     assert_eq!(initial_redirect_response_info.client_id, "client_id_foo");
-    assert_eq!(initial_redirect_response_info.scope, "openid+openiduseremail");
-    assert!(initial_redirect_response_info.state.len() > 1);
-    assert!(initial_redirect_response_info.nonce.len() > 1);
+    assert_eq!(
+        initial_redirect_response_info.scope,
+        "openid+openiduseremail"
+    );
+    assert_eq!(initial_redirect_response_info.state, "token"); // only for testing
+    assert_eq!(initial_redirect_response_info.nonce, "nonce"); // only for testing
     assert_eq!(
         // The url embedded in the initial redirect should be the same as the redirect url
         // specified in the security scheme
@@ -236,7 +240,12 @@ async fn test_end_to_end_api_gateway_with_multiple_security() {
     let input_http_request =
         InputHttpRequest::from_request(call_back_request_from_identity_provider).await;
 
-    let _ = execute(&input_http_request.unwrap(), &api_specification, &session_store).await;
+    let _ = execute(
+        &input_http_request.unwrap(),
+        &api_specification,
+        &session_store,
+    )
+    .await;
 
     //let redirect_uri_obtained = initial_redirect_url_data.redirect_uri.as_str();
 
@@ -1237,7 +1246,11 @@ mod internal {
     use golem_worker_service_base::gateway_rib_interpreter::{
         DefaultRibInterpreter, EvaluationError, WorkerServiceRibInterpreter,
     };
-    use golem_worker_service_base::gateway_security::{AuthorizationUrl, DefaultIdentityProvider, GolemIdentityProviderMetadata, IdentityProvider, IdentityProviderError, IdentityProviderResolver, OpenIdClient, Provider, SecuritySchemeWithProviderMetadata};
+    use golem_worker_service_base::gateway_security::{
+        AuthorizationUrl, DefaultIdentityProvider, GolemIdentityProviderMetadata, IdentityProvider,
+        IdentityProviderError, IdentityProviderResolver, OpenIdClient, Provider,
+        SecuritySchemeWithProviderMetadata,
+    };
     use golem_worker_service_base::repo::security_scheme::{
         SecuritySchemeRecord, SecuritySchemeRepo,
     };
@@ -1250,16 +1263,29 @@ mod internal {
         ACCESS_CONTROL_MAX_AGE, LOCATION,
     };
     use http::{Method, Uri};
-    use openidconnect::core::{CoreClaimName, CoreClaimType, CoreClient, CoreClientAuthMethod, CoreGrantType, CoreIdToken, CoreIdTokenClaims, CoreIdTokenFields, CoreJsonWebKey, CoreJsonWebKeyType, CoreJsonWebKeyUse, CoreJweContentEncryptionAlgorithm, CoreJweKeyManagementAlgorithm, CoreJwsSigningAlgorithm, CoreProviderMetadata, CoreResponseMode, CoreResponseType, CoreRsaPrivateSigningKey, CoreSubjectIdentifierType, CoreTokenResponse, CoreTokenType};
-    use openidconnect::{AccessToken, Audience, AuthUrl, AuthenticationContextClass, AuthorizationCode, ClientId, ClientSecret, CsrfToken, EmptyAdditionalClaims, EmptyExtraTokenFields, EndUserEmail, IdTokenVerifier, IssuerUrl, JsonWebKeyId, JsonWebKeySet, JsonWebKeySetUrl, Nonce, RegistrationUrl, ResponseTypes, Scope, StandardClaims, SubjectIdentifier, TokenUrl, UserInfoUrl};
+    use openidconnect::core::{
+        CoreClaimName, CoreClaimType, CoreClient, CoreClientAuthMethod, CoreGrantType, CoreIdToken,
+        CoreIdTokenClaims, CoreIdTokenFields, CoreIdTokenVerifier, CoreJsonWebKey,
+        CoreJsonWebKeyType, CoreJsonWebKeyUse, CoreJweContentEncryptionAlgorithm,
+        CoreJweKeyManagementAlgorithm, CoreJwsSigningAlgorithm, CoreProviderMetadata,
+        CoreResponseMode, CoreResponseType, CoreRsaPrivateSigningKey, CoreSubjectIdentifierType,
+        CoreTokenResponse, CoreTokenType,
+    };
+    use openidconnect::{
+        AccessToken, Audience, AuthUrl, AuthenticationContextClass, AuthorizationCode, ClientId,
+        ClientSecret, CsrfToken, EmptyAdditionalClaims, EmptyExtraTokenFields, EndUserEmail,
+        IdTokenVerifier, IssuerUrl, JsonWebKeyId, JsonWebKeySet, JsonWebKeySetUrl, Nonce,
+        RegistrationUrl, ResponseTypes, Scope, StandardClaims, SubjectIdentifier, TokenUrl,
+        UserInfoUrl,
+    };
     use poem::{Request, Response};
     use rib::RibResult;
+    use rsa::pkcs8::DecodePublicKey;
+    use rsa::traits::PublicKeyParts;
     use serde_json::Value;
     use std::collections::HashMap;
     use std::str::FromStr;
     use std::sync::Arc;
-    use rsa::pkcs8::DecodePublicKey;
-    use rsa::traits::PublicKeyParts;
     use tokio::sync::Mutex;
     use url::Url;
 
@@ -1330,6 +1356,55 @@ R4dQITzKrjrEJ0u3w3eGkBBapoMVFBGPjP3Haz5FsVtHc5VEN3FZVIDF6HrbJH1C\n\
             ))
         }
 
+        // In real, this token verifier depends on the provider metadata
+        // however, we simply use our own public key for testing
+        // instead of relying providers public key.
+        fn get_id_token_verifier<'a>(&self, _client: &'a OpenIdClient) -> CoreIdTokenVerifier<'a> {
+            let public_key = rsa::RsaPublicKey::from_public_key_pem(PUBLIC_KEY_PEM)
+                .expect("Failed to parse public key");
+
+            // Extract modulus and exponent
+            let n = public_key.n().to_bytes_be(); // Modulus in big-endian
+            let e = public_key.e().to_bytes_be(); // Exponent in big-endian
+            let kid = JsonWebKeyId::new("my-key-id".to_string()); // Use a unique key ID
+
+            let jwks = JsonWebKeySet::new(vec![CoreJsonWebKey::new_rsa(n, e, Some(kid))]);
+
+            IdTokenVerifier::new_confidential_client(
+                ClientId::new("client_id_foo".to_string()),
+                ClientSecret::new("client_secret_foo".to_string()),
+                IssuerUrl::new("https://accounts.google.com".to_string()).unwrap(),
+                jwks,
+            )
+        }
+
+        fn get_claims(
+            &self,
+            id_token_verifier: &CoreIdTokenVerifier,
+            core_token_response: CoreTokenResponse,
+            nonce: &Nonce,
+        ) -> Result<CoreIdTokenClaims, IdentityProviderError> {
+            let identity_provider = DefaultIdentityProvider;
+
+            identity_provider.get_claims(id_token_verifier, core_token_response, nonce)
+        }
+
+        fn get_authorization_url(
+            &self,
+            client: &OpenIdClient,
+            scopes: Vec<Scope>,
+            _state: Option<CsrfToken>,
+            _nonce: Option<Nonce>,
+        ) -> AuthorizationUrl {
+            let identity_provider = DefaultIdentityProvider;
+            identity_provider.get_authorization_url(
+                client,
+                scopes,
+                Some(CsrfToken::new("token".to_string())),
+                Some(Nonce::new("nonce".to_string())),
+            )
+        }
+
         fn get_client(
             &self,
             security_scheme: &SecuritySchemeWithProviderMetadata,
@@ -1337,64 +1412,7 @@ R4dQITzKrjrEJ0u3w3eGkBBapoMVFBGPjP3Haz5FsVtHc5VEN3FZVIDF6HrbJH1C\n\
             let identity_provider = DefaultIdentityProvider;
             identity_provider.get_client(security_scheme)
         }
-
-
-        fn get_claims(
-            &self,
-            client: &OpenIdClient,
-            core_token_response: CoreTokenResponse,
-            nonce: &Nonce,
-        ) -> Result<CoreIdTokenClaims, IdentityProviderError> {
-            dbg!(nonce.clone());
-
-            let public_key =
-                rsa::RsaPublicKey::from_public_key_pem(PUBLIC_KEY_PEM).expect("Failed to parse public key");
-
-            // Extract modulus and exponent
-            let n = public_key.n().to_bytes_be(); // Modulus in big-endian
-            let e = public_key.e().to_bytes_be(); // Exponent in big-endian
-
-            let kid = JsonWebKeyId::new("my-key-id".to_string()); // Use a unique key ID
-
-            let jwk = CoreJsonWebKey::new_rsa(n, e, Some(kid));
-
-            let jwks = JsonWebKeySet::new(vec![jwk]);
-
-            let id_token_verifier = IdTokenVerifier::new_confidential_client(
-                ClientId::new("client_id_foo".to_string()),
-                ClientSecret::new("client_secret_foo".to_string()),
-                IssuerUrl::new("https://accounts.google.com".to_string()).unwrap(),
-                jwks,
-            );
-
-            let id_token_claims: &CoreIdTokenClaims = core_token_response
-                .extra_fields()
-                .id_token()
-                .ok_or(IdentityProviderError::IdTokenVerificationError(
-                    "Failed to get ID token".to_string(),
-                ))?
-                .claims(&id_token_verifier, nonce)
-                .map_err(|err| IdentityProviderError::IdTokenVerificationError(err.to_string()))?;
-
-            Ok(id_token_claims.clone())
-
-            // let identity_provider = DefaultIdentityProvider;
-            // identity_provider.get_claims(
-            //     client, core_token_response, nonce
-            // )
-        }
-
-        fn get_authorization_url(
-            &self,
-            client: &OpenIdClient,
-            scopes: Vec<Scope>,
-        ) -> AuthorizationUrl {
-            let identity_provider = DefaultIdentityProvider;
-            identity_provider.get_authorization_url(client, scopes)
-        }
     }
-
-
 
     pub(crate) struct TestIdentityProviderResolver;
 
@@ -1889,9 +1907,13 @@ R4dQITzKrjrEJ0u3w3eGkBBapoMVFBGPjP3Haz5FsVtHc5VEN3FZVIDF6HrbJH1C\n\
                 .set_email(Some(EndUserEmail::new("bob@example.com".to_string())))
                 .set_email_verified(Some(true)),
                 EmptyAdditionalClaims {},
-            ).set_nonce(Some(Nonce::new("nonce".to_string()))),
-            &CoreRsaPrivateSigningKey::from_pem(TEST_RSA_KEY, Some(JsonWebKeyId::new("my-key-id".to_string())))
-                .expect("Invalid RSA private key"),
+            )
+            .set_nonce(Some(Nonce::new("nonce".to_string()))),
+            &CoreRsaPrivateSigningKey::from_pem(
+                TEST_RSA_KEY,
+                Some(JsonWebKeyId::new("my-key-id".to_string())),
+            )
+            .expect("Invalid RSA private key"),
             CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256,
             Some(&AccessToken::new("secret_access_token".to_string())),
             None,
@@ -2129,3 +2151,5 @@ R4dQITzKrjrEJ0u3w3eGkBBapoMVFBGPjP3Haz5FsVtHc5VEN3FZVIDF6HrbJH1C\n\
         request.finish()
     }
 }
+
+mod key_pair {}

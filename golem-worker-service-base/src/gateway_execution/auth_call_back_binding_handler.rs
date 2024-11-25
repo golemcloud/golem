@@ -12,18 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::ops::Deref;
 use crate::gateway_binding::HttpRequestDetails;
 use crate::gateway_execution::gateway_session::{
     DataKey, DataValue, GatewaySessionStore, SessionId,
 };
 use crate::gateway_security::{
-    IdentityProviderError, IdentityProviderResolver, SecuritySchemeWithProviderMetadata,
+    IdentityProvider, IdentityProviderError, IdentityProviderResolver,
+    SecuritySchemeWithProviderMetadata,
 };
 use async_trait::async_trait;
 use golem_common::SafeDisplay;
 use openidconnect::core::{CoreIdTokenClaims, CoreTokenResponse};
 use openidconnect::{AuthorizationCode, Nonce, OAuth2TokenResponse};
+use std::ops::Deref;
 use std::sync::Arc;
 
 pub type AuthCallBackResult = Result<AuthorisationSuccess, AuthorisationError>;
@@ -122,12 +123,11 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
         session_store: &GatewaySessionStore,
         identity_provider_resolver: &Arc<dyn IdentityProviderResolver + Send + Sync>,
     ) -> Result<AuthorisationSuccess, AuthorisationError> {
-        let api_url = &http_request_details.url().map_err(
-           |err| AuthorisationError::BadRequest(err)
-        )?;
+        let api_url = &http_request_details
+            .url()
+            .map_err(|err| AuthorisationError::BadRequest(err))?;
 
-
-        let mut query_pairs = api_url.query_pairs();
+        let query_pairs = api_url.query_pairs();
 
         let identity_provider = identity_provider_resolver.resolve(
             &security_scheme_with_metadata
@@ -149,7 +149,6 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
         let authorisation_code = code.ok_or(AuthorisationError::CodeNotFound)?;
         let state = state.ok_or(AuthorisationError::StateNotFound)?;
 
-        dbg!("here?");
         let session_params = session_store
             .0
             .get_params(SessionId(state.clone()))
@@ -172,20 +171,23 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
             .await
             .map_err(AuthorisationError::FailedCodeExchange)?;
 
-        dbg!(token_response.clone());
+        let token_verifier = identity_provider
+            .as_ref()
+            .get_id_token_verifier(&open_id_client);
 
         let claims = identity_provider
             .get_claims(
-                &open_id_client,
+                &token_verifier,
                 token_response.clone(),
-                &Nonce::new("nonce".to_string()), //TODO (for testing)
+                &Nonce::new(nonce.clone()),
             )
-            .map_err(AuthorisationError::ClaimFetchError).map_err({
+            .map_err(AuthorisationError::ClaimFetchError)
+            .map_err({
                 |err| {
                     dbg!("error", &err);
                     err
                 }
-        })?;
+            })?;
 
         let _ = session_store
             .0

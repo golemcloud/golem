@@ -18,8 +18,8 @@ use crate::gateway_security::{
 };
 use async_trait::async_trait;
 use golem_common::SafeDisplay;
-use openidconnect::core::{CoreIdTokenClaims, CoreTokenResponse};
-use openidconnect::{AuthorizationCode, CsrfToken, Nonce, Scope};
+use openidconnect::core::{CoreIdTokenClaims, CoreIdTokenVerifier, CoreTokenResponse};
+use openidconnect::{AuthorizationCode, CsrfToken, IdTokenVerifier, Nonce, Scope};
 use std::fmt::{Display, Formatter};
 use url::Url;
 
@@ -52,20 +52,31 @@ pub trait IdentityProvider {
         security_scheme: &SecuritySchemeWithProviderMetadata,
     ) -> Result<OpenIdClient, IdentityProviderError>;
 
+    // Get IDToken verifier
+    // For the most part, this is an internal detail to openidconnect, however,
+    // to test verifying claims using our own key pairs, this can be exposed
+    fn get_id_token_verifier<'a>(&self, client: &'a OpenIdClient) -> CoreIdTokenVerifier<'a>;
+
     // Claims are fetched from the ID token, and this gets called during the execution of static binding backing auth_call_back endpoint.
     // If needed this can be called just before serving the protected route, to fetch the claims from the ID token as a middleware
     // and feed it to the protected route handler through Rib. In any case, claims needs to be stored in a session
     // as the OAuth2 workflow in OpenID gets initiated by the gateway and not the client user-agent.
     fn get_claims(
         &self,
-        client: &OpenIdClient,
+        client: &CoreIdTokenVerifier,
         core_token_response: CoreTokenResponse,
         nonce: &Nonce,
     ) -> Result<CoreIdTokenClaims, IdentityProviderError>;
 
     // This gets called during the redirect to the provider's login page,
     // and this is the first step in the OAuth2 workflow in serving a protected route.
-    fn get_authorization_url(&self, client: &OpenIdClient, scopes: Vec<Scope>) -> AuthorizationUrl;
+    fn get_authorization_url(
+        &self,
+        client: &OpenIdClient,
+        scopes: Vec<Scope>,
+        state: Option<CsrfToken>,
+        nonce: Option<Nonce>,
+    ) -> AuthorizationUrl;
 }
 
 pub struct AuthorizationUrl {

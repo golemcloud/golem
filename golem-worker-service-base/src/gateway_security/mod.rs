@@ -1,5 +1,5 @@
-pub use identity_provider::*;
 pub use default_provider::*;
+pub use identity_provider::*;
 pub use identity_provider_metadata::*;
 pub use identity_provider_resolution::*;
 pub use open_id_client::*;

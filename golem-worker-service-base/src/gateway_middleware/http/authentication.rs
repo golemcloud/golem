@@ -108,8 +108,12 @@ mod internal {
     ) -> Result<MiddlewareSuccess<poem::Response>, MiddlewareInError> {
         let redirect_uri = input.get_api_input_path();
 
-        let authorization =
-            identity_provider.get_authorization_url(client, http_authorizer.get_scopes());
+        let authorization = identity_provider.get_authorization_url(
+            client,
+            http_authorizer.get_scopes(),
+            None,
+            None,
+        );
 
         let state = authorization.csrf_state.secret();
 

@@ -14,12 +14,12 @@
 
 use crate::gateway_api_definition::http::{QueryInfo, VarInfo};
 
+use crate::gateway_api_deployment::ApiSiteString;
 use crate::gateway_request::http_request::ApiInputPath;
 use http::HeaderMap;
 use serde_json::Value;
 use std::collections::HashMap;
 use url::Url;
-use crate::gateway_api_deployment::ApiSiteString;
 
 #[derive(Clone, Debug)]
 pub enum GatewayRequestDetails {
@@ -107,7 +107,7 @@ pub struct HttpRequestDetails {
 }
 
 impl HttpRequestDetails {
-    pub fn url(&self)  -> Result<Url, String> {
+    pub fn url(&self) -> Result<Url, String> {
         let uri_str = format!("http://{}{}", &self.host, &self.api_input_path.to_string());
         dbg!(uri_str.clone());
         let result = Url::parse(&uri_str).map_err(|err| err.to_string());
