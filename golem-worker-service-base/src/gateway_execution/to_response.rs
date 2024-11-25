@@ -20,13 +20,12 @@ use crate::gateway_execution::file_server_binding_handler::{
 };
 use crate::gateway_execution::gateway_session::GatewaySessionStore;
 use crate::gateway_execution::to_response_failure::ToResponseFromSafeDisplay;
-use crate::gateway_middleware::{Cors as CorsPreflight, MiddlewareInError};
+use crate::gateway_middleware::Cors as CorsPreflight;
 use async_trait::async_trait;
 use http::header::*;
 use http::StatusCode;
-use poem::{Body, Response};
+use poem::Body;
 use poem::IntoResponse;
-use golem_common::safe;
 use rib::RibResult;
 
 #[async_trait]

@@ -21,7 +21,7 @@ use golem_service_base::auth::DefaultNamespace;
 
 use crate::gateway_api_definition::http::{CompiledHttpApiDefinition, HttpApiDefinition};
 
-use crate::internal::{get_test_response_for_static_preflight, TestResponse};
+use crate::internal::get_preflight_from_response;
 use crate::security::{TestIdentityProvider, TestIdentityProviderResolver};
 use chrono::{DateTime, Utc};
 use golem_common::model::IdempotencyKey;
@@ -40,7 +40,7 @@ use golem_worker_service_base::gateway_security::{
 use golem_worker_service_base::{api, gateway_api_definition};
 use http::header::LOCATION;
 use http::uri::Scheme;
-use http::{HeaderMap, HeaderValue, Method};
+use http::{HeaderMap, HeaderValue, Method, StatusCode};
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use poem::Response;
 use serde_json::Value;
@@ -114,14 +114,9 @@ async fn test_end_to_end_api_gateway_simple_worker() {
     )
     .await;
 
-    let test_response = internal::get_test_response_for_worker_binding(
-        response,
-    ).await;
+    let test_response = internal::get_details_from_response(response).await;
 
-    let result = (
-        test_response.get_function_name().unwrap(),
-        test_response.get_function_params().unwrap(),
-    );
+    let result = (test_response.function_name, test_response.function_params);
 
     let expected = (
         "golem:it/api.{get-cart-contents}".to_string(),
@@ -135,7 +130,7 @@ async fn test_end_to_end_api_gateway_simple_worker() {
 }
 
 #[test]
-async fn test_end_to_end_api_gateway_with_security_invalid_access_token() {
+async fn test_end_to_end_api_gateway_with_security_invalid_signatures() {
     let empty_headers = HeaderMap::new();
     let api_request = get_api_request("foo/1", None, &empty_headers, serde_json::Value::Null);
 
@@ -163,7 +158,7 @@ async fn test_end_to_end_api_gateway_with_security_invalid_access_token() {
         &auth_call_back_url,
         &invalid_identity_provider_resolver,
     )
-        .await;
+    .await;
 
     let session_store = GatewaySessionStore::in_memory();
 
@@ -173,10 +168,9 @@ async fn test_end_to_end_api_gateway_with_security_invalid_access_token() {
         &session_store,
         &invalid_identity_provider_resolver,
     )
-        .await;
+    .await;
 
-    let initial_redirect_response_headers =
-        initial_redirect_response.headers();
+    let initial_redirect_response_headers = initial_redirect_response.headers();
 
     let location = initial_redirect_response_headers
         .get(LOCATION)
@@ -213,14 +207,14 @@ async fn test_end_to_end_api_gateway_with_security_invalid_access_token() {
         &session_store,
         &invalid_identity_provider_resolver,
     )
-        .await;
+    .await;
 
     // The auth call back endpoint results in another redirect response
     // which will now have the actual URL to the original protected resource
     let redirect_response_headers = auth_call_back_response.headers();
 
     // Manually calling it back as we are the browser
-    let request = security::create_request_from_redirect(&redirect_response_headers);
+    let request = security::create_request_from_redirect(redirect_response_headers);
 
     let api_request_from_browser = InputHttpRequest::from_request(request)
         .await
@@ -233,14 +227,14 @@ async fn test_end_to_end_api_gateway_with_security_invalid_access_token() {
         &session_store,
         &invalid_identity_provider_resolver,
     )
-        .await;
-
-    // And it should be a redirect back to the original
-    let final_redirect = test_response_from_actual_endpoint.headers();
+    .await;
 
     // The final redirect from the protected endpoint should be the same as
     // the initial redirect for unauthenticated request
-    assert_eq!(final_redirect, initial_redirect_response_headers)
+    assert_eq!(
+        test_response_from_actual_endpoint.status(),
+        StatusCode::UNAUTHORIZED
+    )
 }
 
 #[test]
@@ -327,9 +321,8 @@ async fn test_end_to_end_api_gateway_with_security_expired_token() {
     // which will now have the actual URL to the original protected resource
     let redirect_response_headers = auth_call_back_response.headers();
 
-
     // Manually calling it back as we are the browser
-    let request = security::create_request_from_redirect(&redirect_response_headers);
+    let request = security::create_request_from_redirect(redirect_response_headers);
 
     let api_request_from_browser = InputHttpRequest::from_request(request)
         .await
@@ -455,7 +448,7 @@ async fn test_end_to_end_api_gateway_with_security_successful_authentication() {
     let redirect_response_headers = response.headers();
 
     // Manually calling it back as we are the browser
-    let request = security::create_request_from_redirect(&redirect_response_headers);
+    let request = security::create_request_from_redirect(redirect_response_headers);
 
     let api_request = InputHttpRequest::from_request(request)
         .await
@@ -469,13 +462,9 @@ async fn test_end_to_end_api_gateway_with_security_successful_authentication() {
     )
     .await;
 
-    let test_response =
-        internal::get_test_response_for_worker_binding(response).await;
+    let test_response = internal::get_details_from_response(response).await;
 
-    let result = (
-        test_response.get_function_name().unwrap(),
-        test_response.get_function_params().unwrap(),
-    );
+    let result = (test_response.function_name, test_response.function_params);
 
     let expected = (
         "golem:it/api.{get-cart-contents}".to_string(),
@@ -517,8 +506,7 @@ async fn test_end_to_end_api_gateway_cors_preflight() {
     )
     .await;
 
-    let result =
-        internal::get_test_response_for_static_preflight(response);
+    let result = internal::get_preflight_from_response(response);
 
     assert_eq!(result, cors);
 }
@@ -542,7 +530,7 @@ async fn test_end_to_end_api_gateway_cors_preflight_default() {
     )
     .await;
 
-    let result = internal::get_test_response_for_static_preflight(response);
+    let result = internal::get_preflight_from_response(response);
 
     let expected = Cors::default();
 
@@ -592,19 +580,15 @@ async fn test_end_to_end_api_gateway_cors_with_preflight_default_and_actual_requ
     )
     .await;
 
-
     let expected_cors_preflight = Cors::default();
 
-    let preflight_response = get_test_response_for_static_preflight(preflight_response);
+    let preflight_response = get_preflight_from_response(preflight_response);
 
     let actual_test_response =
-        internal::get_test_response_for_worker_binding_with_cors(
-            response_from_other_endpoint,
-        ).await;
+        internal::get_test_response_for_worker_binding_with_cors(response_from_other_endpoint)
+            .await;
 
-    let allow_origin_in_actual_response = actual_test_response
-        .get_cors_headers_in_non_preflight_response()
-        .unwrap();
+    let allow_origin_in_actual_response = actual_test_response.cors_middleware_headers.unwrap();
 
     assert_eq!(preflight_response, expected_cors_preflight);
     assert_eq!(
@@ -667,16 +651,13 @@ async fn test_end_to_end_api_gateway_cors_with_preflight_and_actual_request() {
     )
     .await;
 
-    let pre_flight_response =
-        get_test_response_for_static_preflight(preflight_response);
+    let pre_flight_response = get_preflight_from_response(preflight_response);
 
     let actual_response =
-        internal::get_test_response_for_worker_binding_with_cors(
-            actual_response,
-        ).await;
+        internal::get_test_response_for_worker_binding_with_cors(actual_response).await;
 
     let cors_headers_in_actual_response = actual_response
-        .get_cors_headers_in_non_preflight_response()
+        .cors_middleware_headers
         .expect("Expecting cors headers in response");
 
     let allow_origin_in_actual_response = cors_headers_in_actual_response.cors_header_allow_origin;
@@ -732,13 +713,12 @@ async fn test_end_to_end_api_gateway_with_request_path_and_query_lookup() {
     )
     .await;
 
-    let test_response =
-        internal::get_test_response_for_worker_binding(response).await;
+    let test_response = internal::get_details_from_response(response).await;
 
     let result = (
-        test_response.get_worker_name().unwrap(),
-        test_response.get_function_name().unwrap(),
-        test_response.get_function_params().unwrap(),
+        test_response.worker_name,
+        test_response.function_name,
+        test_response.function_params,
     );
 
     let expected = (
@@ -792,13 +772,12 @@ async fn test_end_to_end_api_gateway_with_request_path_and_query_lookup_complex(
     )
     .await;
 
-    let test_response =
-        internal::get_test_response_for_worker_binding(response).await;
+    let test_response = internal::get_details_from_response(response).await;
 
     let result = (
-        test_response.get_worker_name().unwrap(),
-        test_response.get_function_name().unwrap(),
-        test_response.get_function_params().unwrap(),
+        test_response.worker_name,
+        test_response.function_name,
+        test_response.function_params,
     );
 
     let expected = (
@@ -851,13 +830,12 @@ async fn test_end_to_end_api_gateway_with_with_request_body_lookup1() {
     )
     .await;
 
-    let test_response =
-        internal::get_test_response_for_worker_binding(test_response).await;
+    let test_response = internal::get_details_from_response(test_response).await;
 
     let result = (
-        test_response.get_worker_name().unwrap(),
-        test_response.get_function_name().unwrap(),
-        test_response.get_function_params().unwrap(),
+        test_response.worker_name,
+        test_response.function_name,
+        test_response.function_params,
     );
 
     let expected = (
@@ -923,13 +901,12 @@ async fn test_end_to_end_api_gateway_with_with_request_body_lookup2() {
     )
     .await;
 
-    let test_response =
-        internal::get_test_response_for_worker_binding(response).await;
+    let test_response = internal::get_details_from_response(response).await;
 
     let result = (
-        test_response.get_worker_name().unwrap(),
-        test_response.get_function_name().unwrap(),
-        test_response.get_function_params().unwrap(),
+        test_response.worker_name,
+        test_response.function_name,
+        test_response.function_params,
     );
 
     let expected = (
@@ -993,13 +970,12 @@ async fn test_end_to_end_api_gateway_with_with_request_body_lookup3() {
     )
     .await;
 
-    let test_response =
-        internal::get_test_response_for_worker_binding(response).await;
+    let test_response = internal::get_details_from_response(response).await;
 
     let result = (
-        test_response.get_worker_name().unwrap(),
-        test_response.get_function_name().unwrap(),
-        test_response.get_function_params().unwrap(),
+        test_response.worker_name,
+        test_response.function_name,
+        test_response.function_params,
     );
 
     let expected = (
@@ -1474,21 +1450,16 @@ mod internal {
     };
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, Type, TypedRecord, TypedTuple};
-    use golem_worker_service_base::gateway_api_definition::http::{ComponentMetadataDictionary, HttpApiDefinition};
-    use golem_worker_service_base::gateway_binding::StaticBinding;
+    use golem_worker_service_base::gateway_api_definition::http::ComponentMetadataDictionary;
     use golem_worker_service_base::gateway_execution::file_server_binding_handler::{
         FileServerBindingHandler, FileServerBindingResult,
     };
-    use golem_worker_service_base::gateway_execution::gateway_binding_resolver::{
-        ResolvedBinding, ResolvedGatewayBinding, ResolvedWorkerBinding, WorkerDetail,
-    };
+    use golem_worker_service_base::gateway_execution::gateway_binding_resolver::WorkerDetail;
     use golem_worker_service_base::gateway_execution::{
         GatewayResolvedWorkerRequest, GatewayWorkerRequestExecutor, WorkerRequestExecutorError,
         WorkerResponse,
     };
-    use golem_worker_service_base::gateway_middleware::{
-        Cors, HttpMiddleware, Middleware, Middlewares,
-    };
+    use golem_worker_service_base::gateway_middleware::Cors;
 
     use golem_worker_service_base::gateway_rib_interpreter::{
         DefaultRibInterpreter, EvaluationError, WorkerServiceRibInterpreter,
@@ -1505,8 +1476,6 @@ mod internal {
 
     use serde_json::Value;
     use std::collections::HashMap;
-
-    use http::{HeaderMap, StatusCode};
     use std::sync::Arc;
 
     pub struct TestApiGatewayWorkerRequestExecutor {}
@@ -1539,17 +1508,11 @@ mod internal {
     }
 
     #[derive(Debug, Clone)]
-    pub enum TestResponse {
-        DefaultResult {
-            worker_name: String,
-            function_name: String,
-            function_params: Value,
-            cors_middleware_headers: Option<CorsMiddlewareHeadersInResponse>, // if binding has cors middleware configured
-        },
-        CorsPreflightResponse(Cors), // preflight test response
-        Redirect {
-            headers: HeaderMap,
-        },
+    pub struct DefaultResult {
+        pub worker_name: String,
+        pub function_name: String,
+        pub function_params: Value,
+        pub cors_middleware_headers: Option<CorsMiddlewareHeadersInResponse>, // if binding has cors middleware configured
     }
 
     #[derive(Debug, Clone)]
@@ -1557,57 +1520,6 @@ mod internal {
         pub cors_header_allow_origin: String,
         pub cors_header_allow_credentials: Option<bool>, // If cors middleware is applied
         pub cors_header_expose_headers: Option<String>,  // If cors middleware is applied
-    }
-
-    impl TestResponse {
-        pub fn as_redirect(&self) -> Option<&HeaderMap> {
-            match self {
-                TestResponse::Redirect { headers } => Some(headers),
-                _ => None,
-            }
-        }
-
-        pub fn get_cors_preflight(&self) -> Option<Cors> {
-            match self {
-                TestResponse::CorsPreflightResponse(preflight) => Some(preflight.clone()),
-                _ => None,
-            }
-        }
-
-        pub fn get_cors_headers_in_non_preflight_response(
-            &self,
-        ) -> Option<CorsMiddlewareHeadersInResponse> {
-            match self {
-                TestResponse::DefaultResult {
-                    cors_middleware_headers,
-                    ..
-                } => cors_middleware_headers.clone(),
-                _ => None,
-            }
-        }
-
-        pub fn get_worker_name(&self) -> Option<String> {
-            match self {
-                TestResponse::DefaultResult { worker_name, .. } => Some(worker_name.clone()),
-                _ => None,
-            }
-        }
-
-        pub fn get_function_name(&self) -> Option<String> {
-            match self {
-                TestResponse::DefaultResult { function_name, .. } => Some(function_name.clone()),
-                _ => None,
-            }
-        }
-
-        pub fn get_function_params(&self) -> Option<Value> {
-            match self {
-                TestResponse::DefaultResult {
-                    function_params, ..
-                } => Some(function_params.clone()),
-                _ => None,
-            }
-        }
     }
 
     pub fn create_tuple(type_annotated_value: Vec<TypeAnnotatedValue>) -> TypeAnnotatedValue {
@@ -1747,7 +1659,7 @@ mod internal {
         Arc::new(TestFileServerBindingHandler {})
     }
 
-    pub fn get_test_response_for_static_preflight(response: Response) -> Cors {
+    pub fn get_preflight_from_response(response: Response) -> Cors {
         let headers = response.headers();
 
         let allow_headers = headers
@@ -1787,14 +1699,11 @@ mod internal {
         )
     }
 
-    pub async fn get_test_response_for_worker_binding(
-        response: Response,
-    ) -> TestResponse {
+    pub async fn get_details_from_response(response: Response) -> DefaultResult {
         let bytes = response
             .into_body()
             .into_bytes()
             .await
-            .ok()
             .expect("TestResponse for worker-binding expects a response body");
 
         let body_json: Value =
@@ -1812,7 +1721,7 @@ mod internal {
 
         let function_params = body_json.get("function_params").cloned();
 
-        TestResponse::DefaultResult {
+        DefaultResult {
             worker_name: worker_name.expect("Worker response expects worker_name"),
             function_name: function_name.expect("Worker response expects function_name"),
             function_params: function_params.expect("Worker response expects function_params"),
@@ -1820,17 +1729,15 @@ mod internal {
         }
     }
 
-
     pub async fn get_test_response_for_worker_binding_with_cors(
         response: Response,
-    ) -> TestResponse {
+    ) -> DefaultResult {
         let headers = response.headers().clone();
 
         let bytes = response
             .into_body()
             .into_bytes()
             .await
-            .ok()
             .expect("TestResponse for worker-binding expects a response body");
 
         let body_json: Value =
@@ -1848,7 +1755,7 @@ mod internal {
 
         let function_params = body_json.get("function_params").cloned();
 
-        TestResponse::DefaultResult {
+        DefaultResult {
             worker_name: worker_name.expect("Worker response expects worker_name"),
             function_name: function_name.expect("Worker response expects function_name"),
             function_params: function_params.expect("Worker response expects function_params"),
@@ -1873,33 +1780,6 @@ mod internal {
                 })
             },
         }
-    }
-
-    // Spotting if there is a middleware that can respond with a redirect response
-    // instead of passing it through to the worker or other bindings.
-    fn is_middleware_redirect(middlewares: &Middlewares, response: &Response) -> bool {
-        // If the binding contains middlewares that can return with a redirect instead of
-        // propagating the worker response, we capture that
-
-        let mut can_redirect = false;
-        for middleware in middlewares.0.iter() {
-            match middleware {
-                // Input middleware that can redirect, and if the response is an actual redirect,
-                // then we tag the TestResponse as a redirect.
-                // This is the only valid state, and if we get any other redirect response
-                // as part of an actual response, we spot a bug!
-                Middleware::Http(HttpMiddleware::AuthenticateRequest(_)) => {
-                    if response.status() == StatusCode::FOUND {
-                        can_redirect = true;
-                        break;
-                    }
-                }
-                // Output middleware
-                Middleware::Http(HttpMiddleware::AddCorsHeaders(_)) => {}
-            }
-        }
-
-        can_redirect
     }
 
     // Simple decoder only for test
@@ -2013,7 +1893,7 @@ mod security {
        -----END RSA PRIVATE KEY-----\
        ";
 
-    const TEST_PRIVATE_KEY_WITH_DIFFERENT_PUBLIC_KEY: &'static str = "
+    const TEST_PRIVATE_KEY_INVALID: &str = "
 -----BEGIN RSA PRIVATE KEY-----
 MIICXAIBAAKBgHzeh/kp0qhpMU3zYHSdP/v2YGMLRg2MQMEGLrm8zDFPYu5/h9jx
 jYOmSafqSIQ2wsoYSEsLHPzcrbxn/QK8lw8pv7/lT6S9WoFZh5IECjv8qc16wEMm
@@ -2030,7 +1910,6 @@ sna894pALERX6c6y8QJBAOTRthvuxZO7dEQ9/F2DGEJZyiEFBIEtB+vmnmXwXr+H
 nUhg4edJVHjqxYyoQT+YSPLlHl6AkLZt9/n1NJ+bft0=
 -----END RSA PRIVATE KEY-----
 ";
-
 
     struct TestSecuritySchemeRepo {
         security_scheme: Arc<Mutex<HashMap<String, SecuritySchemeRecord>>>,
@@ -2290,7 +2169,7 @@ nUhg4edJVHjqxYyoQT+YSPLlHl6AkLZt9/n1NJ+bft0=
             )
             .set_nonce(Some(Nonce::new("nonce".to_string()))),
             &CoreRsaPrivateSigningKey::from_pem(
-                TEST_PRIVATE_KEY_WITH_DIFFERENT_PUBLIC_KEY,
+                TEST_PRIVATE_KEY_INVALID,
                 Some(JsonWebKeyId::new("my-key-id".to_string())),
             )
             .expect("Invalid RSA private key"),
@@ -2571,18 +2450,14 @@ nUhg4edJVHjqxYyoQT+YSPLlHl6AkLZt9/n1NJ+bft0=
     fn extract_cookies_from_redirect(headers: &HeaderMap) -> HashMap<String, String> {
         let mut cookies = HashMap::new();
 
-        // Extract "Set-Cookie" headers from the provided headers (i.e., headers of RedirectResponse)
         let view = headers.get_all("set-cookie");
         for cookie in view.iter() {
             if let Ok(cookie_str) = cookie.to_str() {
-                // Split the cookie string by ';' (attributes of cookies like "HttpOnly", "Secure", etc.)
                 let parts: Vec<&str> = cookie_str.split(';').collect();
 
-                // Get the first part, which contains the cookie name and value
-                if let Some(cookie_value) = parts.get(0) {
+                if let Some(cookie_value) = parts.first() {
                     let cookie_parts: Vec<&str> = cookie_value.splitn(2, '=').collect();
                     if cookie_parts.len() == 2 {
-                        // Insert cookie name and value into the HashMap
                         cookies.insert(cookie_parts[0].to_string(), cookie_parts[1].to_string());
                     }
                 }
