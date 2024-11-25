@@ -56,6 +56,7 @@ impl HttpRequestAuthentication {
                 let token_claims_result: Result<&CoreIdTokenClaims, ClaimsVerificationError> =
                     id_token.claims(&identity_token_verifier, &Nonce::new(nonce));
 
+                dbg!(token_claims_result.clone());
                 match token_claims_result {
                     Ok(claims) => {
                         internal::store_claims_in_session_store(
@@ -77,7 +78,9 @@ impl HttpRequestAuthentication {
                         )
                         .await
                     }
-                    Err(_) => Err(MiddlewareInError::Unauthorized("Invalid token".to_string())),
+                    Err(_) => {
+                        Err(MiddlewareInError::Unauthorized("Invalid token".to_string()))
+                    },
                 }
             } else {
                 Err(MiddlewareInError::Unauthorized("Invalid nonce".to_string()))

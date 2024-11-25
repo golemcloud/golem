@@ -264,7 +264,10 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
             },
 
             Err(err) => {
-                Some(err.to_response_from_safe_display(|_| StatusCode::INTERNAL_SERVER_ERROR))
+                Some(err.to_response_from_safe_display(|error| match error {
+                    MiddlewareInError::Unauthorized(_) => StatusCode::UNAUTHORIZED,
+                    MiddlewareInError::InternalServerError(_) => StatusCode::INTERNAL_SERVER_ERROR
+                }))
             }
         }
     }
