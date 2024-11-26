@@ -112,16 +112,21 @@ async fn run_all(runtime: Arc<Runtime>) -> Result<(), anyhow::Error> {
     let prometheus_registry = Registry::default();
     let metrics = PrometheusExporter::new(prometheus_registry.clone());
 
-    let proxy = Proxy::new(8083, 9005)?
-        .with(OpenTelemetryMetrics::new())
-        .with(Tracing);
+    // let proxy = proxy::Proxy::new(9999, 8083, 9005);
 
-    join_set.spawn(async move {
-        poem::Server::new(TcpListener::bind(format!("0.0.0.0:{}", 9881)))
-            .run(proxy)
-            .await
-            .map_err(|err| anyhow!(err).context("HTTP server failed"))
-    });
+    proxy::start_proxy(&proxy::Ports {
+        listener_port: 9881,
+        metrics_port: 9882,
+        component_service_port: 8083,
+        worker_service_port: 9005,
+    }, &mut join_set)?;
+
+    // join_set.spawn(async move {
+    //     poem::Server::new(TcpListener::bind(format!("0.0.0.0:{}", 9881)))
+    //         .run(proxy)
+    //         .await
+    //         .map_err(|err| anyhow!(err).context("HTTP server failed"))
+    // });
 
     while let Some(res) = join_set.join_next().await {
         let result = res?;
@@ -231,108 +236,4 @@ async fn run_worker_service(
 
     let _server = join_set.spawn(async move { worker_service.run().await });
     Ok(())
-}
-
-struct Proxy {
-    component_service_port: u16,
-    worker_service_port: u16,
-    exporter: BoxEndpoint<'static>,
-    re_workers1: Regex,
-    re_workers2: Regex,
-    re_workers3: Regex,
-}
-
-impl Proxy {
-    pub fn new(
-        component_service_port: u16,
-        worker_service_port: u16,
-    ) -> Result<Self, anyhow::Error> {
-        let prometheus_registry = Registry::default();
-        let exporter = PrometheusExporter::new(prometheus_registry.clone())
-            .into_endpoint()
-            .boxed();
-
-        let re_workers1 = Regex::new(r#"/v1/components/[^/]+/workers(.*)$"#)?;
-        let re_workers2 = Regex::new(r#"/v1/components/[^/]+/invoke$"#)?;
-        let re_workers3 = Regex::new(r#"/v1/components/[^/]+/invoke-and-await$"#)?;
-
-        Ok(Self {
-            component_service_port,
-            worker_service_port,
-            exporter,
-            re_workers1,
-            re_workers2,
-            re_workers3,
-        })
-    }
-
-    async fn proxy_to(&self, req: Request, port: u16) -> poem::Result<Response> {
-        let address = format!("localhost:{}", port);
-        let mut request: hyper::Request<BoxBody<Bytes, std::io::Error>> = req.into();
-
-        let mut uri_parts = request.uri().clone().into_parts();
-        uri_parts.authority = Some(address.parse().expect("Failed to parse authority"));
-        *request.uri_mut() =
-            hyper::Uri::from_parts(uri_parts).expect("Failed to construct modified URI");
-
-        let stream = TcpStream::connect(address).await.map_err(|err| {
-            poem::Error::from_string(err.to_string(), StatusCode::INTERNAL_SERVER_ERROR)
-        })?;
-
-        let io = TokioIo::new(stream);
-        let (mut sender, conn) =
-            hyper::client::conn::http1::handshake(io)
-                .await
-                .map_err(|err| {
-                    poem::Error::from_string(err.to_string(), StatusCode::INTERNAL_SERVER_ERROR)
-                })?;
-
-        let response = sender.send_request(request).await.map_err(|err| {
-            poem::Error::from_string(err.to_string(), StatusCode::INTERNAL_SERVER_ERROR)
-        })?;
-        let mut builder = Response::builder();
-        builder = builder.status(response.status());
-        for (name, value) in response.headers() {
-            builder = builder.header(name, value);
-        }
-        let body_stream = response
-            .into_body()
-            .map_err(|err| std::io::Error::other(err.to_string()))
-            .into_data_stream();
-        let poem_response = builder.body(Body::from_bytes_stream(body_stream));
-        Ok(poem_response)
-    }
-
-    async fn proxy_to_worker_service(&self, req: Request) -> poem::Result<Response> {
-        self.proxy_to(req, self.worker_service_port).await
-    }
-
-    async fn proxy_to_component_service(&self, req: Request) -> poem::Result<Response> {
-        self.proxy_to(req, self.component_service_port).await
-    }
-
-    async fn proxy(&self, req: Request) -> poem::Result<Response> {
-        let uri = req.uri();
-        let path = uri.path();
-
-        if path == "/metrics" {
-            self.exporter.call(req).await
-        } else if path.starts_with("/v1/api")
-            || self.re_workers1.is_match(path)
-            || self.re_workers2.is_match(path)
-            || self.re_workers3.is_match(path)
-        {
-            self.proxy_to_worker_service(req).await
-        } else {
-            self.proxy_to_component_service(req).await
-        }
-    }
-}
-
-impl Endpoint for Proxy {
-    type Output = Response;
-
-    async fn call(&self, req: Request) -> poem::Result<Self::Output> {
-        self.proxy(req).await
-    }
 }
