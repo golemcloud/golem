@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod migration;
+mod proxy;
 
 use anyhow::anyhow;
 use bytes::Bytes;
