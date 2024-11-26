@@ -439,13 +439,12 @@ mod tests {
 
     use super::*;
     use crate::gateway_api_definition::http::{AllPathPatterns, MethodPattern, RouteRequest};
-    use crate::gateway_binding::{GatewayBinding, ResponseMapping, StaticBinding, WorkerBinding};
+    use crate::gateway_binding::{GatewayBinding, StaticBinding};
     use crate::gateway_middleware::HttpCors;
-    use golem_common::model::ComponentId;
+
     use openapiv3::Operation;
-    use rib::Expr;
+
     use serde_json::json;
-    use uuid::Uuid;
 
     #[test]
     fn test_get_route_with_cors_preflight_binding() {
