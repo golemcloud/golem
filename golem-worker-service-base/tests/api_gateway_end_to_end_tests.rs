@@ -31,7 +31,9 @@ use golem_worker_service_base::gateway_execution::gateway_binding_resolver::Gate
 use golem_worker_service_base::gateway_execution::gateway_http_input_executor::{
     DefaultGatewayInputExecutor, GatewayHttpInput, GatewayHttpInputExecutor,
 };
-use golem_worker_service_base::gateway_execution::gateway_session::GatewaySessionStore;
+use golem_worker_service_base::gateway_execution::gateway_session::{
+    EvictionStrategy, GatewaySessionStore,
+};
 use golem_worker_service_base::gateway_middleware::HttpCors;
 use golem_worker_service_base::gateway_request::http_request::{ApiInputPath, InputHttpRequest};
 use golem_worker_service_base::gateway_request::request_details::GatewayRequestDetails;
@@ -109,7 +111,7 @@ async fn test_end_to_end_api_gateway_simple_worker() {
     let api_specification: HttpApiDefinition =
         get_api_spec_worker_binding("/foo/{user-id}", worker_name, response_mapping).await;
 
-    let session_store = GatewaySessionStore::in_memory();
+    let session_store = GatewaySessionStore::in_memory(&EvictionStrategy::default());
     let response = execute(
         &api_request,
         &api_specification,
@@ -164,7 +166,7 @@ async fn test_end_to_end_api_gateway_with_security_invalid_signatures() {
     )
     .await;
 
-    let session_store = GatewaySessionStore::in_memory();
+    let session_store = GatewaySessionStore::in_memory(&EvictionStrategy::default());
 
     let initial_redirect_response = execute(
         &api_request,
@@ -217,16 +219,13 @@ async fn test_end_to_end_api_gateway_with_security_invalid_signatures() {
     // which will now have the actual URL to the original protected resource
     let redirect_response_headers = auth_call_back_response.headers();
 
-    // Manually calling it back as we are the browser
-    let request = security::create_request_from_redirect(redirect_response_headers);
+    // Manually creating the request to hit the original endpoint, as a browser
+    let input_http_request =
+        security::create_request_from_redirect(redirect_response_headers).await;
 
-    let api_request_from_browser = InputHttpRequest::from_request(request)
-        .await
-        .expect("Failed to get http request");
-
-    // We are hitting the endpoint with an expired token
+    // Hitting the endpoint with an expired token
     let test_response_from_actual_endpoint = execute(
-        &api_request_from_browser,
+        &input_http_request,
         &api_specification,
         &session_store,
         &invalid_identity_provider_resolver,
@@ -272,7 +271,7 @@ async fn test_end_to_end_api_gateway_with_security_expired_token() {
     )
     .await;
 
-    let session_store = GatewaySessionStore::in_memory();
+    let session_store = GatewaySessionStore::in_memory(&EvictionStrategy::default());
 
     let initial_response_to_identity_provider = execute(
         &api_request,
@@ -284,26 +283,26 @@ async fn test_end_to_end_api_gateway_with_security_expired_token() {
 
     let initial_redirect_response_headers = initial_response_to_identity_provider.headers();
 
-    let location = initial_redirect_response_headers
+    let initial_redirect_location = initial_redirect_response_headers
         .get(LOCATION)
         .expect("Expecting location")
         .to_str()
         .expect("Location should be a string");
 
-    let url = Url::parse(location).expect("Expect the initial redirection to be a full URL");
+    let initial_redirect_url = Url::parse(initial_redirect_location)
+        .expect("Expect the initial redirection to be a full URL");
 
-    let query_components = ApiInputPath::query_components_from_str(url.query().unwrap_or_default());
+    let initial_redirect_data = security::get_initial_redirect_data(
+        &ApiInputPath::query_components_from_str(initial_redirect_url.query().unwrap_or_default()),
+    );
 
-    let initial_redirect_response_info = security::get_initial_redirect_data(&query_components);
-
-    let actual_auth_call_back_url =
-        internal::decode_url(&initial_redirect_response_info.auth_call_back_url);
+    let actual_auth_call_back_url = internal::decode_url(&initial_redirect_data.auth_call_back_url);
 
     let call_back_request_from_identity_provider =
         security::request_from_identity_provider_to_auth_call_back_endpoint(
-            initial_redirect_response_info.state.as_str(),
+            initial_redirect_data.state.as_str(),
             "foo_code", // Decided by IdentityProvider
-            initial_redirect_response_info.scope.as_str(),
+            initial_redirect_data.scope.as_str(),
             &actual_auth_call_back_url.to_string(),
             "localhost",
         );
@@ -326,13 +325,10 @@ async fn test_end_to_end_api_gateway_with_security_expired_token() {
     let redirect_response_headers = auth_call_back_response.headers();
 
     // Manually calling it back as we are the browser
-    let request = security::create_request_from_redirect(redirect_response_headers);
+    let api_request_from_browser =
+        security::create_request_from_redirect(redirect_response_headers).await;
 
-    let api_request_from_browser = InputHttpRequest::from_request(request)
-        .await
-        .expect("Failed to get http request");
-
-    // We are hitting the endpoint with an expired token
+    // Hitting the protected resource with an expired token
     let test_response_from_actual_endpoint = execute(
         &api_request_from_browser,
         &api_specification,
@@ -341,11 +337,12 @@ async fn test_end_to_end_api_gateway_with_security_expired_token() {
     )
     .await;
 
-    // And it should be a redirect back to the original
+    // And it should be a redirect which is same as the initial redirect to identity provider
     let final_redirect = test_response_from_actual_endpoint.headers();
 
     // The final redirect from the protected endpoint should be the same as
     // the initial redirect for unauthenticated request
+    assert!(final_redirect.contains_key(LOCATION));
     assert_eq!(final_redirect, initial_redirect_response_headers)
 }
 
@@ -378,7 +375,7 @@ async fn test_end_to_end_api_gateway_with_security_successful_authentication() {
     )
     .await;
 
-    let session_store = GatewaySessionStore::in_memory();
+    let session_store = GatewaySessionStore::in_memory(&EvictionStrategy::default());
 
     let initial_response_to_identity_provider = execute(
         &api_request,
@@ -390,29 +387,26 @@ async fn test_end_to_end_api_gateway_with_security_successful_authentication() {
 
     let initial_redirect_response_headers = initial_response_to_identity_provider.headers();
 
-    let location = initial_redirect_response_headers
+    let initial_redirect_location = initial_redirect_response_headers
         .get(LOCATION)
         .expect("Expecting location")
         .to_str()
         .expect("Location should be a string");
 
-    let url = Url::parse(location).expect("Expect the initial redirection to be a full URL");
+    let url = Url::parse(initial_redirect_location)
+        .expect("Expect the initial redirection to be a full URL");
 
     let query_components = ApiInputPath::query_components_from_str(url.query().unwrap_or_default());
 
-    let initial_redirect_response_info = security::get_initial_redirect_data(&query_components);
+    let initial_redirect_data = security::get_initial_redirect_data(&query_components);
 
-    let actual_auth_call_back_url =
-        internal::decode_url(&initial_redirect_response_info.auth_call_back_url);
+    let actual_auth_call_back_url = internal::decode_url(&initial_redirect_data.auth_call_back_url);
 
-    assert_eq!(initial_redirect_response_info.response_type, "code");
-    assert_eq!(initial_redirect_response_info.client_id, "client_id_foo");
-    assert_eq!(
-        initial_redirect_response_info.scope,
-        "openid+openiduseremail"
-    );
-    assert_eq!(initial_redirect_response_info.state, "token"); // only for testing
-    assert_eq!(initial_redirect_response_info.nonce, "nonce"); // only for testing
+    assert_eq!(initial_redirect_data.response_type, "code");
+    assert_eq!(initial_redirect_data.client_id, "client_id_foo");
+    assert_eq!(initial_redirect_data.scope, "openid+openid+user+email");
+    assert_eq!(initial_redirect_data.state, "token"); // only for testing
+    assert_eq!(initial_redirect_data.nonce, "nonce"); // only for testing
     assert_eq!(
         // The url embedded in the initial redirect should be the same as the redirect url
         // specified in the security scheme. Note that security scheme will have a full
@@ -422,41 +416,33 @@ async fn test_end_to_end_api_gateway_with_security_successful_authentication() {
         auth_call_back_url.url().clone()
     );
 
-    // Manually call back the auth_call_back endpoint by assuming we are identity-provider
+    // Manually create the request to hit auth_call_back endpoint by assuming we are identity-provider
     let call_back_request_from_identity_provider =
         security::request_from_identity_provider_to_auth_call_back_endpoint(
-            initial_redirect_response_info.state.as_str(),
+            initial_redirect_data.state.as_str(),
             "foo_code", // Decided by IdentityProvider
-            initial_redirect_response_info.scope.as_str(),
+            initial_redirect_data.scope.as_str(),
             &auth_call_back_url.to_string(),
             "localhost",
         );
 
-    let request_with_cookies =
-        InputHttpRequest::from_request(call_back_request_from_identity_provider)
+    // Execute it against the API Gateway
+    // If successful, then it implies auth call back is successful and we get another redirect response.
+    // This time, the redirect response will have a location that points to the original protected resource.
+    let final_redirect_response = execute(
+        &InputHttpRequest::from_request(call_back_request_from_identity_provider)
             .await
-            .expect("Failed to get request");
-
-    // If successful, then auth call back is successful and we get a redirect response
-    // to be then executed against the original endpoint which is in api-request
-    let response = execute(
-        &request_with_cookies,
+            .expect("Failed to get request"),
         &api_specification,
         &session_store,
         &identity_provider_resolver,
     )
     .await;
 
-    // The authcallback endpoint results in another redirect response
-    // which will now have the actual URL to the original protected resource
-    let redirect_response_headers = response.headers();
+    let redirect_response_headers = final_redirect_response.headers();
 
     // Manually calling it back as we are the browser
-    let request = security::create_request_from_redirect(redirect_response_headers);
-
-    let api_request = InputHttpRequest::from_request(request)
-        .await
-        .expect("Failed to get http request");
+    let api_request = security::create_request_from_redirect(redirect_response_headers).await;
 
     let response = execute(
         &api_request,
@@ -500,7 +486,7 @@ async fn test_end_to_end_api_gateway_cors_preflight() {
     let api_specification: HttpApiDefinition =
         get_api_spec_with_cors_preflight_configuration("/foo/{user-id}", &cors).await;
 
-    let session_store = GatewaySessionStore::in_memory();
+    let session_store = GatewaySessionStore::in_memory(&EvictionStrategy::default());
 
     let response = execute(
         &api_request,
@@ -524,7 +510,7 @@ async fn test_end_to_end_api_gateway_cors_preflight_default() {
     let api_specification: HttpApiDefinition =
         get_api_spec_with_default_cors_preflight_configuration("/foo/{user-id}").await;
 
-    let session_store = GatewaySessionStore::in_memory();
+    let session_store = GatewaySessionStore::in_memory(&EvictionStrategy::default());
 
     let response = execute(
         &api_request,
@@ -567,7 +553,7 @@ async fn test_end_to_end_api_gateway_cors_with_preflight_default_and_actual_requ
         )
         .await;
 
-    let session_store = GatewaySessionStore::in_memory();
+    let session_store = GatewaySessionStore::in_memory(&EvictionStrategy::default());
 
     let preflight_response = execute(
         &preflight_request,
@@ -638,7 +624,7 @@ async fn test_end_to_end_api_gateway_cors_with_preflight_and_actual_request() {
         )
         .await;
 
-    let session_store = GatewaySessionStore::in_memory();
+    let session_store = GatewaySessionStore::in_memory(&EvictionStrategy::default());
 
     let preflight_response = execute(
         &preflight_request,
@@ -707,7 +693,7 @@ async fn test_end_to_end_api_gateway_with_request_path_and_query_lookup() {
         get_api_spec_worker_binding("/foo/{user-id}?{token-id}", worker_name, response_mapping)
             .await;
 
-    let session_store = GatewaySessionStore::in_memory();
+    let session_store = GatewaySessionStore::in_memory(&EvictionStrategy::default());
 
     let response = execute(
         &api_request,
@@ -766,7 +752,7 @@ async fn test_end_to_end_api_gateway_with_request_path_and_query_lookup_complex(
     let api_specification: HttpApiDefinition =
         get_api_spec_worker_binding("/foo/{user-id}", worker_name, response_mapping).await;
 
-    let session_store = GatewaySessionStore::in_memory();
+    let session_store = GatewaySessionStore::in_memory(&EvictionStrategy::default());
 
     let response = execute(
         &api_request,
@@ -824,7 +810,7 @@ async fn test_end_to_end_api_gateway_with_with_request_body_lookup1() {
     let api_specification: HttpApiDefinition =
         get_api_spec_worker_binding("/foo/{user-id}", worker_name, response_mapping).await;
 
-    let session_store = GatewaySessionStore::in_memory();
+    let session_store = GatewaySessionStore::in_memory(&EvictionStrategy::default());
 
     let test_response = execute(
         &api_request,
@@ -896,7 +882,7 @@ async fn test_end_to_end_api_gateway_with_with_request_body_lookup2() {
     let api_specification: HttpApiDefinition =
         get_api_spec_worker_binding("/foo/{user-id}", worker_name, response_mapping).await;
 
-    let session_store = GatewaySessionStore::in_memory();
+    let session_store = GatewaySessionStore::in_memory(&EvictionStrategy::default());
     let response = execute(
         &api_request,
         &api_specification,
@@ -965,7 +951,7 @@ async fn test_end_to_end_api_gateway_with_with_request_body_lookup3() {
     let api_specification: HttpApiDefinition =
         get_api_spec_worker_binding("/foo/{user-id}", worker_name, response_mapping).await;
 
-    let session_store = GatewaySessionStore::in_memory();
+    let session_store = GatewaySessionStore::in_memory(&EvictionStrategy::default());
     let response = execute(
         &api_request,
         &api_specification,
@@ -1846,6 +1832,7 @@ pub mod security {
     use std::str::FromStr;
     use std::sync::Arc;
 
+    use golem_worker_service_base::gateway_request::http_request::InputHttpRequest;
     use tokio::sync::Mutex;
 
     // These keys are used over the default JwkKeySet of the actual client
@@ -2419,7 +2406,7 @@ nUhg4edJVHjqxYyoQT+YSPLlHl6AkLZt9/n1NJ+bft0=
         new_provider_metadata
     }
 
-    pub fn create_request_from_redirect(headers: &HeaderMap) -> Request {
+    pub async fn create_request_from_redirect(headers: &HeaderMap) -> InputHttpRequest {
         let cookies = extract_cookies_from_redirect(headers);
 
         let cookie_header = cookies
@@ -2437,12 +2424,16 @@ nUhg4edJVHjqxYyoQT+YSPLlHl6AkLZt9/n1NJ+bft0=
             .and_then(|loc| loc.to_str().ok())
             .unwrap_or("/");
 
-        Request::builder()
+        let request = Request::builder()
             .method(Method::GET)
             .uri(Uri::from_str(format!("http://localhost/{}", location).as_str()).unwrap()) // Use the "Location" header as the URL
             .header(HOST, "localhost")
             .header(COOKIE, cookie_header)
-            .finish()
+            .finish();
+
+        InputHttpRequest::from_request(request)
+            .await
+            .expect("Failed to get http request")
     }
 
     fn extract_cookies_from_redirect(headers: &HeaderMap) -> HashMap<String, String> {

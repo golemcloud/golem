@@ -40,6 +40,17 @@ pub struct SecuritySchemeRecord {
     pub security_scheme_metadata: Vec<u8>,
 }
 
+#[derive(sqlx::FromRow, Debug, Clone)]
+pub struct SecuritySchemeRecordX {
+    pub namespace: String,
+    pub provider_type: String,
+    pub security_scheme_id: String,
+    pub client_id: String,
+    pub client_secret: String,
+    pub redirect_url: String,
+    pub scopes: String,
+}
+
 impl SecuritySchemeRecord {
     pub fn from_security_scheme_metadata<Namespace: Display>(
         namespace: &Namespace,
@@ -51,7 +62,9 @@ impl SecuritySchemeRecord {
             .scopes()
             .iter()
             .map(|scope| scope.to_string())
-            .collect();
+            .collect::<Vec<_>>()
+            .join(",");
+
         Ok(SecuritySchemeRecord {
             namespace: namespace.to_string(),
             provider_type: value.security_scheme.provider_type().to_string(),
@@ -205,16 +218,16 @@ impl SecuritySchemeRepo for DbSecuritySchemeRepo<sqlx::Postgres> {
         let security_scheme_record = sqlx::query_as::<_, SecuritySchemeRecord>(
             r#"
                 SELECT
-                    c.namespace AS namespace,
-                    c.security_scheme_id AS security_scheme_id,
-                    c.provider_type AS provider_type,
-                    c.client_id AS client_id,
-                    c.client_secret AS client_secret,
-                    c.redirect_url AS redirect_url,
-                    c.scopes AS scopes,
-                    c.security_scheme_metadata AS security_scheme_metadata
-                FROM security_schemes
-                WHERE c.security_scheme_metadata = $1
+                    namespace,
+                    security_scheme_id,
+                    provider_type,
+                    client_id,
+                    client_secret,
+                    redirect_url,
+                    scopes,
+                    security_scheme_metadata
+                FROM security_schemes as c
+                WHERE security_scheme_id = $1
                 "#,
         )
         .bind(security_scheme_id.to_string())
@@ -233,15 +246,16 @@ impl SecuritySchemeRepo for DbSecuritySchemeRepo<sqlx::Postgres> {
         let security_scheme_record = sqlx::query_as::<_, SecuritySchemeRecord>(
             r#"
                 SELECT
-                    c.namespace AS namespace,
-                    c.security_scheme_id AS security_scheme_id,
-                    c.provider_type AS provider_type,
-                    c.client_id AS client_id,
-                    c.client_secret AS client_secret,
-                    c.redirect_url AS redirect_url,
-                    c.security_scheme_metadata AS security_scheme_metadata
+                    namespace,
+                    security_scheme_id,
+                    provider_type,
+                    client_id,
+                    client_secret,
+                    redirect_url,
+                    scopes,
+                    security_scheme_metadata
                 FROM security_schemes
-                WHERE c.security_scheme_metadata = $1
+                WHERE security_scheme_id = $1
                "#,
         )
         .bind(security_scheme_id)

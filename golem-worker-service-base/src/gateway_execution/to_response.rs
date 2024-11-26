@@ -287,7 +287,7 @@ mod test {
     use test_r::test;
 
     use crate::gateway_binding::HttpRequestDetails;
-    use crate::gateway_execution::gateway_session::GatewaySessionStore;
+    use crate::gateway_execution::gateway_session::{EvictionStrategy, GatewaySessionStore};
     use crate::gateway_execution::to_response::ToHttpResponse;
     use http::header::CONTENT_TYPE;
     use http::StatusCode;
@@ -340,7 +340,7 @@ mod test {
         let http_response: poem::Response = evaluation_result
             .to_response(
                 &HttpRequestDetails::empty(),
-                &GatewaySessionStore::in_memory(),
+                &GatewaySessionStore::in_memory(&EvictionStrategy::default()),
             )
             .await;
 
@@ -370,7 +370,7 @@ mod test {
         let http_response: poem::Response = evaluation_result
             .to_response(
                 &HttpRequestDetails::empty(),
-                &GatewaySessionStore::in_memory(),
+                &GatewaySessionStore::in_memory(&EvictionStrategy::default()),
             )
             .await;
 

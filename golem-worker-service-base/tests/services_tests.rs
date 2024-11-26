@@ -621,14 +621,22 @@ async fn test_security_crud(
 ) {
     let security_identifier = SecuritySchemeIdentifier::new("test".to_string());
 
-    let security_scheme = get_security(security_identifier);
+    let security_scheme = get_security(&security_identifier);
 
-    let result = security_scheme_service
+    let insert = security_scheme_service
         .create(&DefaultNamespace(), &security_scheme)
         .await
         .expect("Failed to create security scheme");
 
-    assert_eq!(result.security_scheme, security_scheme);
+    let get = security_scheme_service
+        .get(&security_identifier, &DefaultNamespace())
+        .await
+        .expect("Failed to get security scheme");
+
+    assert_eq!(insert.security_scheme, security_scheme);
+    assert_eq!(get.security_scheme, security_scheme);
+    assert_eq!(insert.provider_metadata, get_test_provider_metadata());
+    assert_eq!(insert.provider_metadata, get.provider_metadata)
 }
 
 async fn test_definition_crud(
@@ -816,10 +824,10 @@ fn get_api_deployment(
     }
 }
 
-fn get_security(security_schema_identifier: SecuritySchemeIdentifier) -> SecurityScheme {
+fn get_security(security_schema_identifier: &SecuritySchemeIdentifier) -> SecurityScheme {
     SecurityScheme::new(
         Provider::Google,
-        security_schema_identifier,
+        security_schema_identifier.clone(),
         ClientId::new("client_id_foo".to_string()),
         ClientSecret::new("client_secret_foo".to_string()),
         RedirectUrl::new("http://localhost:8080/auth/callback".to_string()).unwrap(),

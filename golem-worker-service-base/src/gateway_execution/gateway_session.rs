@@ -16,6 +16,7 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
 #[async_trait]
@@ -26,7 +27,10 @@ pub trait GatewayData {
         data_key: DataKey,
         data_value: DataValue,
     ) -> Result<(), String>;
-    async fn get(
+
+    async fn get(&self, session_id: &SessionId) -> Result<Option<SessionData>, String>;
+
+    async fn get_data_value(
         &self,
         session_id: SessionId,
         data_key: DataKey,
@@ -41,8 +45,8 @@ pub trait GatewayData {
 pub struct GatewaySessionStore(pub Arc<dyn GatewayData + Send + Sync>);
 
 impl GatewaySessionStore {
-    pub fn in_memory() -> Self {
-        GatewaySessionStore(Arc::new(InMemoryGatewaySession::default()))
+    pub fn in_memory(eviction_strategy: &EvictionStrategy) -> Self {
+        GatewaySessionStore(Arc::new(InMemoryGatewaySession::new(eviction_strategy)))
     }
 }
 
@@ -71,15 +75,98 @@ impl DataValue {
     }
 }
 
-// Should be used only for testing
+#[derive(Clone)]
+pub struct SessionData {
+    pub value: HashMap<DataKey, DataValue>,
+    created_at: Instant,
+}
+
+impl Default for SessionData {
+    fn default() -> Self {
+        SessionData {
+            value: HashMap::new(),
+            created_at: Instant::now(),
+        }
+    }
+}
+
 pub struct InMemoryGatewaySession {
-    data: Arc<Mutex<HashMap<SessionId, HashMap<DataKey, DataValue>>>>,
+    data: Arc<Mutex<HashMap<SessionId, SessionData>>>,
+    eviction_strategy: EvictionStrategy,
+}
+
+#[derive(Clone)]
+pub struct EvictionStrategy {
+    pub ttl: Duration,
+    pub period: Duration,
+}
+
+impl Default for EvictionStrategy {
+    fn default() -> Self {
+        EvictionStrategy {
+            ttl: Duration::from_secs(60 * 60),
+            period: Duration::from_secs(60),
+        }
+    }
+}
+
+impl InMemoryGatewaySession {
+    pub fn new(expiry_strategy: &EvictionStrategy) -> Self {
+        let session = InMemoryGatewaySession {
+            data: Arc::new(Mutex::new(HashMap::new())),
+            eviction_strategy: expiry_strategy.clone(),
+        };
+
+        let data_clone = Arc::clone(&session.data);
+        let eviction_strategy_clone = session.eviction_strategy.clone();
+
+        // Start the eviction task in the background
+        tokio::spawn(async move {
+            let session = InMemoryGatewaySession {
+                data: data_clone,
+                eviction_strategy: eviction_strategy_clone,
+            };
+
+            session.start_eviction_task().await;
+        });
+
+        session
+    }
+
+    async fn start_eviction_task(self) {
+        loop {
+            tokio::time::sleep(self.eviction_strategy.period).await;
+            self.perform_ttl_eviction(self.eviction_strategy.ttl).await;
+        }
+    }
+
+    // Perform TTL-based eviction, removing sessions older than the TTL
+    async fn perform_ttl_eviction(&self, ttl: Duration) {
+        let mut data = self.data.lock().await;
+        let now = Instant::now();
+
+        let mut sessions_to_evict = Vec::new();
+
+        // Iterate through each session and check if it has expired
+        for (session_id, session_data) in data.iter_mut() {
+            let age = now.duration_since(session_data.created_at);
+            if age > ttl {
+                sessions_to_evict.push(session_id.clone()); // Mark session for eviction
+            }
+        }
+
+        // Evict the sessions that are expired
+        for session_id in sessions_to_evict {
+            data.remove(&session_id);
+        }
+    }
 }
 
 impl Default for InMemoryGatewaySession {
     fn default() -> Self {
         InMemoryGatewaySession {
             data: Arc::new(Mutex::new(HashMap::new())),
+            eviction_strategy: EvictionStrategy::default(),
         }
     }
 }
@@ -93,19 +180,27 @@ impl GatewayData for InMemoryGatewaySession {
         data_value: DataValue,
     ) -> Result<(), String> {
         let mut data = self.data.lock().await;
-        let session_data = data.entry(session_id).or_insert(HashMap::new());
-        session_data.insert(data_key, data_value);
+        let session_data = data.entry(session_id).or_insert(SessionData::default());
+        session_data.value.insert(data_key, data_value);
         Ok(())
     }
 
-    async fn get(
+    async fn get(&self, session_id: &SessionId) -> Result<Option<SessionData>, String> {
+        let data = self.data.lock().await;
+        match data.get(session_id) {
+            Some(session_data) => Ok(Some(session_data.clone())),
+            None => Ok(None),
+        }
+    }
+
+    async fn get_data_value(
         &self,
         session_id: SessionId,
         data_key: DataKey,
     ) -> Result<Option<DataValue>, String> {
         let data = self.data.lock().await;
         match data.get(&session_id) {
-            Some(session_data) => match session_data.get(&data_key) {
+            Some(session_data) => match session_data.value.get(&data_key) {
                 Some(data_value) => Ok(Some(data_value.clone())),
                 None => Ok(None),
             },
@@ -119,7 +214,7 @@ impl GatewayData for InMemoryGatewaySession {
     ) -> Result<Option<HashMap<DataKey, DataValue>>, String> {
         let data = self.data.lock().await;
         match data.get(&session_id) {
-            Some(session_data) => Ok(Some(session_data.clone())),
+            Some(session_data) => Ok(Some(session_data.value.clone())),
             None => Ok(None),
         }
     }

@@ -30,7 +30,7 @@ use crate::gateway_execution::auth_call_back_binding_handler::DefaultAuthCallBac
 use crate::gateway_execution::gateway_http_input_executor::{
     DefaultGatewayInputExecutor, GatewayHttpInput, GatewayHttpInputExecutor,
 };
-use crate::gateway_execution::gateway_session::GatewaySessionStore;
+use crate::gateway_execution::gateway_session::{EvictionStrategy, GatewaySessionStore};
 use crate::gateway_execution::GatewayWorkerRequestExecutor;
 use crate::gateway_request::http_request::InputHttpRequest;
 use crate::gateway_security::DefaultIdentityProviderResolver;
@@ -76,7 +76,7 @@ impl<Namespace: Clone + Send + Sync + 'static> CustomHttpRequestApi<Namespace> {
             auth_call_back_binding_handler,
         });
 
-        let gateway_session_store = GatewaySessionStore::in_memory();
+        let gateway_session_store = GatewaySessionStore::in_memory(&EvictionStrategy::default());
 
         Self {
             api_definition_lookup_service,

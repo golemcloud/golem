@@ -122,7 +122,7 @@ impl<Namespace: Display + Clone + Hash + Eq + PartialEq + Send + Sync + 'static>
                             .get(&security_scheme_identifier.to_string())
                             .await
                             .map_err(|err| {
-                                SecuritySchemeServiceError::InternalError(err.to_safe_string())
+                                SecuritySchemeServiceError::InternalError(err.to_string())
                             })?;
 
                         match result {
