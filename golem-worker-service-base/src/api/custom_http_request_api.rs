@@ -25,10 +25,10 @@ use tracing::error;
 
 use crate::gateway_execution::api_definition_lookup::ApiDefinitionsLookup;
 
-use crate::gateway_binding::GatewayBindingResolver;
+use crate::gateway_binding::{GatewayBindingResolver, GatewayRequestDetails};
 use crate::gateway_execution::auth_call_back_binding_handler::DefaultAuthCallBack;
-use crate::gateway_execution::gateway_input_executor::{
-    DefaultGatewayInputExecutor, GatewayInputExecutor, Input,
+use crate::gateway_execution::gateway_http_input_executor::{
+    DefaultGatewayInputExecutor, GatewayHttpInput, GatewayHttpInputExecutor,
 };
 use crate::gateway_execution::gateway_session::GatewaySessionStore;
 use crate::gateway_execution::GatewayWorkerRequestExecutor;
@@ -46,8 +46,7 @@ pub struct CustomHttpRequestApi<Namespace> {
             > + Sync
             + Send,
     >,
-    pub gateway_binding_executor:
-        Arc<dyn GatewayInputExecutor<Namespace, poem::Response> + Sync + Send>,
+    pub gateway_binding_executor: Arc<dyn GatewayHttpInputExecutor<Namespace> + Sync + Send>,
     pub gateway_session_store: GatewaySessionStore,
 }
 
@@ -113,8 +112,12 @@ impl<Namespace: Clone + Send + Sync + 'static> CustomHttpRequestApi<Namespace> {
                     .await
                 {
                     Ok(resolved_gateway_binding) => {
-                        let input = Input::new(
-                            &resolved_gateway_binding,
+                        let GatewayRequestDetails::Http(request) =
+                            resolved_gateway_binding.request_details;
+
+                        let input = GatewayHttpInput::new(
+                            &request,
+                            resolved_gateway_binding.resolved_binding,
                             &self.gateway_session_store,
                             Arc::new(DefaultIdentityProviderResolver),
                         );

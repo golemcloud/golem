@@ -12,25 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::gateway_binding::GatewayRequestDetails;
-use crate::gateway_execution::gateway_input_executor::Input;
+use crate::gateway_execution::gateway_http_input_executor::GatewayHttpInput;
 use crate::gateway_middleware::HttpAuthenticationMiddleware;
 use async_trait::async_trait;
 use golem_common::SafeDisplay;
 
-// Implementation note: We have multiple `Middleware` (see `Middlewares`).
-// While some middlewares are  specific to `MiddlewareIn` other are specific to `MiddlewareOut`.
-// This ensures orthogonality in middleware usages, such that, at type level, we distinguish whether it is
-// used only to process input (of api gateway) or used only to manipulate the output (of probably rib evaluation result)
-// The middleware decides which protocol out of `GatewayRequestDetails` to process.
-// This approach centralizes middleware management, and easy to add new middlewares without worrying about protocols.
-// Better typesafety will be achieved once we resolve https://github.com/golemcloud/golem/issues/1069
 #[async_trait]
-pub trait MiddlewareIn<Namespace, Out> {
+pub trait HttpMiddlewareIn<Namespace> {
     async fn process_input(
         &self,
-        input: &Input<Namespace>,
-    ) -> Result<MiddlewareSuccess<Out>, MiddlewareInError>;
+        input: &GatewayHttpInput<Namespace>,
+    ) -> Result<MiddlewareSuccess, MiddlewareInError>;
 }
 
 pub enum MiddlewareInError {
@@ -49,28 +41,22 @@ impl SafeDisplay for MiddlewareInError {
     }
 }
 
-pub enum MiddlewareSuccess<Out> {
+pub enum MiddlewareSuccess {
     PassThrough,
-    Redirect(Out),
+    Redirect(poem::Response),
 }
 
 #[async_trait]
-impl<Namespace: Send + Sync> MiddlewareIn<Namespace, poem::Response>
-    for HttpAuthenticationMiddleware
-{
+impl<Namespace: Send + Sync> HttpMiddlewareIn<Namespace> for HttpAuthenticationMiddleware {
     async fn process_input(
         &self,
-        input: &Input<Namespace>,
-    ) -> Result<MiddlewareSuccess<poem::Response>, MiddlewareInError> {
-        match &input.resolved_gateway_binding.request_details {
-            GatewayRequestDetails::Http(http_request) => {
-                self.apply_http_auth(
-                    http_request,
-                    &input.session_store,
-                    &input.identity_provider_resolver,
-                )
-                .await
-            }
-        }
+        input: &GatewayHttpInput<Namespace>,
+    ) -> Result<MiddlewareSuccess, MiddlewareInError> {
+        self.apply_http_auth(
+            &input.http_request_details,
+            &input.session_store,
+            &input.identity_provider_resolver,
+        )
+        .await
     }
 }

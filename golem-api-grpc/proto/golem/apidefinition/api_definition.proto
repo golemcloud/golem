@@ -51,6 +51,7 @@ message HttpRoute {
   HttpMethod method = 1;
   string path = 2;
   GatewayBinding binding = 3;
+  Middleware middleware = 4;
 }
 
 // Used in api definition repo and needs to be backward compatible
@@ -58,6 +59,7 @@ message CompiledHttpRoute {
    HttpMethod method = 1;
    string path = 2;
    CompiledGatewayBinding binding = 3;
+   Middleware middleware = 4;
 }
 
 // Used in api definition repo and needs to be backward compatible
@@ -84,7 +86,6 @@ message GatewayBinding {
   // type discriminator to keep backward compatibility
   optional GatewayBindingType binding_type = 5;
   optional StaticBinding static_binding = 6;
-  optional Middleware middleware = 7;
 }
 
 // Used in api definition repo and needs to be backward compatible
@@ -104,8 +105,6 @@ message CompiledGatewayBinding {
     // type discriminator to keep backward compatibility
     optional GatewayBindingType binding_type = 12;
     optional StaticBinding static_binding = 13;
-    // middleware
-    optional Middleware middleware = 14;
 }
 
 message SecuritySchemaReference {

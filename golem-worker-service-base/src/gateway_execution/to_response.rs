@@ -13,13 +13,13 @@
 // limitations under the License.
 
 use crate::api::WorkerApiBaseError;
-use crate::gateway_binding::GatewayRequestDetails;
+use crate::gateway_binding::HttpRequestDetails;
 use crate::gateway_execution::auth_call_back_binding_handler::AuthCallBackResult;
 use crate::gateway_execution::file_server_binding_handler::{
     FileServerBindingError, FileServerBindingResult,
 };
 use crate::gateway_execution::gateway_session::GatewaySessionStore;
-use crate::gateway_execution::to_response_failure::ToResponseFromSafeDisplay;
+use crate::gateway_execution::to_response_failure::ToHttpResponseFromSafeDisplay;
 use crate::gateway_middleware::HttpCors as CorsPreflight;
 use async_trait::async_trait;
 use http::header::*;
@@ -29,19 +29,19 @@ use poem::IntoResponse;
 use rib::RibResult;
 
 #[async_trait]
-pub trait ToResponse<Response> {
+pub trait ToHttpResponse {
     async fn to_response(
         self,
-        request_details: &GatewayRequestDetails,
+        request_details: &HttpRequestDetails,
         session_store: &GatewaySessionStore,
-    ) -> Response;
+    ) -> poem::Response;
 }
 
 #[async_trait]
-impl ToResponse<poem::Response> for FileServerBindingResult {
+impl ToHttpResponse for FileServerBindingResult {
     async fn to_response(
         self,
-        _request_details: &GatewayRequestDetails,
+        _request_details: &HttpRequestDetails,
         _session_store: &GatewaySessionStore,
     ) -> poem::Response {
         match self {
@@ -69,10 +69,10 @@ impl ToResponse<poem::Response> for FileServerBindingResult {
 
 // Preflight (OPTIONS) response that will consist of all configured CORS headers
 #[async_trait]
-impl ToResponse<poem::Response> for CorsPreflight {
+impl ToHttpResponse for CorsPreflight {
     async fn to_response(
         self,
-        _request_details: &GatewayRequestDetails,
+        _request_details: &HttpRequestDetails,
         _session_store: &GatewaySessionStore,
     ) -> poem::Response {
         let mut response = poem::Response::builder().status(StatusCode::OK).finish();
@@ -115,10 +115,10 @@ impl ToResponse<poem::Response> for CorsPreflight {
 }
 
 #[async_trait]
-impl ToResponse<poem::Response> for RibResult {
+impl ToHttpResponse for RibResult {
     async fn to_response(
         self,
-        request_details: &GatewayRequestDetails,
+        request_details: &HttpRequestDetails,
         _session_store: &GatewaySessionStore,
     ) -> poem::Response {
         match internal::IntermediateHttpResponse::from(&self) {
@@ -129,10 +129,10 @@ impl ToResponse<poem::Response> for RibResult {
 }
 
 #[async_trait]
-impl ToResponse<poem::Response> for AuthCallBackResult {
+impl ToHttpResponse for AuthCallBackResult {
     async fn to_response(
         self,
-        _request_details: &GatewayRequestDetails,
+        _request_details: &HttpRequestDetails,
         _session_store: &GatewaySessionStore,
     ) -> poem::Response {
         match self {
@@ -182,7 +182,7 @@ impl ToResponse<poem::Response> for AuthCallBackResult {
 }
 
 mod internal {
-    use crate::gateway_binding::GatewayRequestDetails;
+    use crate::gateway_binding::HttpRequestDetails;
     use crate::gateway_execution::http_content_type_mapper::{
         ContentTypeHeaders, HttpContentTypeResponseMapper,
     };
@@ -235,7 +235,7 @@ mod internal {
 
         pub(crate) fn to_http_response(
             &self,
-            request_details: &GatewayRequestDetails,
+            request_details: &HttpRequestDetails,
         ) -> poem::Response {
             let response_content_type = self.headers.get_content_type();
             let response_headers = self.headers.headers.clone();
@@ -243,9 +243,7 @@ mod internal {
             let status = &self.status;
             let evaluation_result = &self.body;
 
-            let accepted_content_types = match request_details {
-                GatewayRequestDetails::Http(http) => http.get_accept_content_type_header(),
-            };
+            let accepted_content_types = request_details.get_accept_content_type_header();
 
             let content_type =
                 ContentTypeHeaders::from(response_content_type, accepted_content_types);
@@ -288,9 +286,9 @@ mod test {
     use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, TypedRecord};
     use test_r::test;
 
-    use crate::gateway_binding::{GatewayRequestDetails, HttpRequestDetails};
+    use crate::gateway_binding::HttpRequestDetails;
     use crate::gateway_execution::gateway_session::GatewaySessionStore;
-    use crate::gateway_execution::to_response::ToResponse;
+    use crate::gateway_execution::to_response::ToHttpResponse;
     use http::header::CONTENT_TYPE;
     use http::StatusCode;
     use rib::RibResult;
@@ -341,7 +339,7 @@ mod test {
 
         let http_response: poem::Response = evaluation_result
             .to_response(
-                &GatewayRequestDetails::Http(HttpRequestDetails::empty()),
+                &HttpRequestDetails::empty(),
                 &GatewaySessionStore::in_memory(),
             )
             .await;
@@ -371,7 +369,7 @@ mod test {
 
         let http_response: poem::Response = evaluation_result
             .to_response(
-                &GatewayRequestDetails::Http(HttpRequestDetails::empty()),
+                &HttpRequestDetails::empty(),
                 &GatewaySessionStore::in_memory(),
             )
             .await;

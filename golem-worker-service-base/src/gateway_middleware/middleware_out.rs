@@ -27,7 +27,7 @@ use golem_common::SafeDisplay;
 // The middleware decides which protocol out of `GatewayRequestDetails` to process.
 // This approach centralizes middleware management, and easy to add new middlewares without worrying about protocols.
 #[async_trait]
-pub trait MiddlewareOut<Response> {
+pub trait HttpMiddlewareOut<Response> {
     async fn process_output(
         &self,
         session_store: &GatewaySessionStore,
@@ -48,7 +48,7 @@ impl SafeDisplay for MiddlewareOutError {
 }
 
 #[async_trait]
-impl MiddlewareOut<poem::Response> for HttpCors {
+impl HttpMiddlewareOut<poem::Response> for HttpCors {
     async fn process_output(
         &self,
         _session_store: &GatewaySessionStore,

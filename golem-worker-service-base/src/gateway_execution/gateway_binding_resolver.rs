@@ -16,7 +16,6 @@ use crate::gateway_api_definition::http::{CompiledHttpApiDefinition, VarInfo};
 use crate::gateway_binding::{GatewayBindingCompiled, StaticBinding};
 use crate::gateway_binding::{GatewayRequestDetails, ResponseMappingCompiled};
 use crate::gateway_execution::router::RouterPattern;
-use crate::gateway_middleware::Middlewares;
 use crate::gateway_request::http_request::{router, InputHttpRequest};
 use crate::gateway_security::OpenIdClient;
 use async_trait::async_trait;
@@ -111,7 +110,6 @@ pub struct ResolvedWorkerBinding<Namespace> {
     pub worker_detail: WorkerDetail,
     pub compiled_response_mapping: ResponseMappingCompiled,
     pub namespace: Namespace,
-    pub middlewares: Middlewares,
 }
 
 impl<Namespace> ResolvedGatewayBinding<Namespace> {
@@ -170,6 +168,7 @@ impl<Namespace: Clone + Send + Sync + 'static>
             query_params,
             namespace,
             binding,
+            middlewares,
         } = router
             .check_path(&api_request.req_method, &path)
             .ok_or("Failed to resolve route")?;
@@ -190,6 +189,7 @@ impl<Namespace: Clone + Send + Sync + 'static>
             query_params,
             request_body,
             headers.clone(),
+            middlewares,
         )
         .map_err(|err| format!("Failed to fetch input request details {}", err.join(", ")))?;
 
@@ -233,10 +233,12 @@ mod internal {
 
     pub async fn get_resolved_binding<Namespace: Clone>(
         binding: &WorkerBindingCompiled,
-        http_request_details: &GatewayRequestDetails,
+        gateway_request_details: &GatewayRequestDetails,
         namespace: &Namespace,
         headers: &HeaderMap,
     ) -> Result<ResolvedWorkerBinding<Namespace>, GatewayBindingResolverError> {
+        let GatewayRequestDetails::Http(http_request_details) = gateway_request_details;
+
         let worker_name_opt = if let Some(worker_name_compiled) = &binding.worker_name_compiled {
             let resolve_rib_input = http_request_details
                 .resolve_rib_input_value(&worker_name_compiled.rib_input_type_info)
@@ -306,7 +308,6 @@ mod internal {
             worker_detail,
             compiled_response_mapping: binding.response_compiled.clone(),
             namespace: namespace.clone(),
-            middlewares: binding.middlewares.clone().unwrap_or_default(),
         };
 
         Ok(resolved_binding)

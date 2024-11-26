@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::gateway_middleware::http::authentication::HttpAuthenticationMiddleware;
+use std::ops::Deref;
 
 use crate::gateway_middleware::http::cors::HttpCors;
 use crate::gateway_security::SecuritySchemeWithProviderMetadata;
@@ -27,6 +28,22 @@ pub enum HttpMiddleware {
 }
 
 impl HttpMiddleware {
+    pub fn get_cors(&self) -> Option<HttpCors> {
+        match self {
+            HttpMiddleware::AddCorsHeaders(cors) => Some(cors.clone()),
+            HttpMiddleware::AuthenticateRequest(_) => None,
+        }
+    }
+
+    pub fn get_http_authentication(&self) -> Option<HttpAuthenticationMiddleware> {
+        match self {
+            HttpMiddleware::AuthenticateRequest(authentication) => {
+                Some(authentication.deref().clone())
+            }
+            HttpMiddleware::AddCorsHeaders(_) => None,
+        }
+    }
+
     pub fn authenticate_request(
         security_scheme: SecuritySchemeWithProviderMetadata,
     ) -> HttpMiddleware {

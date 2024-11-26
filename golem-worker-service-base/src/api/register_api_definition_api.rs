@@ -20,9 +20,7 @@ use crate::gateway_api_deployment::ApiSite;
 use crate::gateway_binding::{
     GatewayBinding, GatewayBindingCompiled, StaticBinding, WorkerBinding, WorkerBindingCompiled,
 };
-use crate::gateway_middleware::{
-    CorsPreflightExpr, HttpCors, HttpMiddleware, Middleware, Middlewares,
-};
+use crate::gateway_middleware::{CorsPreflightExpr, HttpCors, HttpMiddleware, HttpMiddlewares};
 use crate::gateway_security::{
     Provider, SecurityScheme, SecuritySchemeIdentifier, SecuritySchemeReference,
     SecuritySchemeWithProviderMetadata,
@@ -184,6 +182,7 @@ pub struct RouteRequestData {
     pub method: MethodPattern,
     pub path: String,
     pub binding: GatewayBindingData,
+    pub cors: Option<HttpCors>,
     pub security: Option<String>,
 }
 
@@ -202,6 +201,7 @@ impl TryFrom<RouteRequestData> for RouteRequest {
             path,
             binding,
             security,
+            cors: value.cors,
         })
     }
 }
@@ -212,21 +212,25 @@ impl TryFrom<Route> for RouteRequestData {
         let method = value.method.clone();
         let path = value.path.to_string();
         let binding = GatewayBindingData::try_from(value.binding.clone())?;
-        let security = value
-            .binding
-            .get_authenticate_request_middleware()
-            .map(|x| {
+        let security = value.middlewares.clone().and_then(|middlewares| {
+            middlewares.get_http_authentication_middleware().map(|x| {
                 x.security_scheme
                     .security_scheme
                     .scheme_identifier()
                     .to_string()
-            });
+            })
+        });
+
+        let cors = value
+            .middlewares
+            .and_then(|middlewares| middlewares.get_cors_middleware());
 
         Ok(Self {
             method,
             path,
             binding,
             security,
+            cors,
         })
     }
 }
@@ -241,11 +245,14 @@ impl TryFrom<RouteRequest> for RouteRequestData {
             .security
             .map(|s| s.security_scheme_identifier.to_string());
 
+        let cors = value.cors;
+
         Ok(Self {
             method: value.method,
             path,
             binding,
             security,
+            cors,
         })
     }
 }
@@ -289,9 +296,6 @@ pub struct GatewayBindingData {
     // For binding type - worker
     // Optional only to keep backward compatibility
     pub response: Option<String>,
-    // For binding type - worker
-    // Optional only to keep backward compatibility
-    pub middleware: Option<MiddlewareData>,
 
     // CORS binding type
     //  For binding type - cors-middleware
@@ -330,30 +334,6 @@ impl GatewayBindingData {
             None
         };
 
-        let mut cors = None;
-        let mut auth = None;
-
-        let middleware = if let Some(middlewares) = worker_binding.middleware {
-            for m in middlewares.0.iter() {
-                match m {
-                    Middleware::Http(http_middleware) => match http_middleware {
-                        HttpMiddleware::AddCorsHeaders(cors0) => {
-                            cors = Some(cors0.clone());
-                        }
-                        HttpMiddleware::AuthenticateRequest(http_authorizer) => {
-                            auth = Some(SecuritySchemeReferenceData::from(
-                                http_authorizer.security_scheme.clone(),
-                            ))
-                        }
-                    },
-                }
-            }
-
-            Some(MiddlewareData { cors, auth })
-        } else {
-            None
-        };
-
         Ok(Self {
             binding_type: Some(binding_type),
             component_id: Some(worker_binding.component_id),
@@ -366,7 +346,6 @@ impl GatewayBindingData {
             expose_headers: None,
             max_age: None,
             allow_credentials: None,
-            middleware,
         })
     }
 }
@@ -379,17 +358,15 @@ pub struct MiddlewareData {
     pub auth: Option<SecuritySchemeReferenceData>,
 }
 
-impl From<Middlewares> for MiddlewareData {
-    fn from(value: Middlewares) -> Self {
+impl From<HttpMiddlewares> for MiddlewareData {
+    fn from(value: HttpMiddlewares) -> Self {
         let mut cors = None;
         let mut auth = None;
 
         for i in value.0.iter() {
             match i {
-                Middleware::Http(HttpMiddleware::AddCorsHeaders(cors0)) => {
-                    cors = Some(cors0.clone())
-                }
-                Middleware::Http(HttpMiddleware::AuthenticateRequest(auth0)) => {
+                HttpMiddleware::AddCorsHeaders(cors0) => cors = Some(cors0.clone()),
+                HttpMiddleware::AuthenticateRequest(auth0) => {
                     let security_scheme_reference =
                         SecuritySchemeReferenceData::from(auth0.security_scheme.clone());
                     auth = Some(security_scheme_reference)
@@ -455,7 +432,6 @@ pub struct GatewayBindingWithTypeInfo {
     pub worker_name_input: Option<RibInputTypeInfo>,      // If bindingType is Default or FileServer
     pub idempotency_key_input: Option<RibInputTypeInfo>, // If bindingType is Default or FilerServer
     pub cors_preflight: Option<HttpCors>, // If bindingType is CorsPreflight (internally, a static binding)
-    pub middleware: Option<MiddlewareData>, // If bindingType is FileServer or Default, middleware is not applicable for static binding like CorsPreflight
 }
 
 impl GatewayBindingWithTypeInfo {
@@ -487,7 +463,6 @@ impl GatewayBindingWithTypeInfo {
                 .idempotency_key_compiled
                 .map(|idempotency_key_compiled| idempotency_key_compiled.rib_input),
             cors_preflight: None,
-            middleware: worker_binding.middlewares.map(MiddlewareData::from),
         }
     }
 }
@@ -519,7 +494,6 @@ impl From<GatewayBindingCompiled> for GatewayBindingWithTypeInfo {
                 worker_name_input: None,
                 idempotency_key_input: None,
                 cors_preflight: static_binding.get_cors_preflight(),
-                middleware: None,
             },
         }
     }
@@ -624,7 +598,6 @@ impl TryFrom<GatewayBinding> for GatewayBindingData {
                     expose_headers: cors.get_expose_headers(),
                     max_age: cors.get_max_age(),
                     allow_credentials: cors.get_allow_credentials(),
-                    middleware: None,
                 }),
 
                 StaticBinding::HttpAuthCallBack(_) => {
@@ -666,27 +639,11 @@ impl TryFrom<GatewayBindingData> for GatewayBinding {
                     None
                 };
 
-                let mut middlewares = Vec::new();
-                if let Some(middleware_data) = gateway_binding_data.middleware {
-                    if let Some(cors) = middleware_data.cors {
-                        middlewares.push(Middleware::http(HttpMiddleware::cors(cors)));
-                    }
-
-                    // Impossible to form authentication middleware. This needs  a slight redesign.
-                    // For now, please refer api definition transformations, where we hold this information
-                    // in the security field of RouteRequest, which later gets fed into the middleware
-                }
-
                 let worker_binding = WorkerBinding {
                     component_id,
                     worker_name,
                     idempotency_key,
                     response_mapping: response,
-                    middleware: if middlewares.is_empty() {
-                        None
-                    } else {
-                        Some(crate::gateway_middleware::Middlewares(middlewares))
-                    },
                 };
 
                 if v == Some(GatewayBindingType::FileServer) {
@@ -804,11 +761,16 @@ impl TryFrom<crate::gateway_api_definition::http::Route> for grpc_apidefinition:
         let path = value.path.to_string();
         let binding = grpc_apidefinition::GatewayBinding::from(value.binding);
         let method: grpc_apidefinition::HttpMethod = value.method.into();
+        let middlewares = value.middlewares.clone();
+        let middleware_proto = middlewares
+            .map(golem_api_grpc::proto::golem::apidefinition::Middleware::try_from)
+            .transpose()?;
 
         let result = grpc_apidefinition::HttpRoute {
             method: method as i32,
             path,
             binding: Some(binding),
+            middleware: middleware_proto,
         };
 
         Ok(result)
@@ -825,10 +787,16 @@ impl TryFrom<CompiledRoute> for golem_api_grpc::proto::golem::apidefinition::Com
             value.binding,
         );
 
+        let middleware_proto = value
+            .middlewares
+            .map(golem_api_grpc::proto::golem::apidefinition::Middleware::try_from)
+            .transpose()?;
+
         Ok(Self {
             method,
             path,
             binding: Some(binding),
+            middleware: middleware_proto,
         })
     }
 }
@@ -841,13 +809,18 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledHttpRoute> for
     ) -> Result<Self, Self::Error> {
         let method = MethodPattern::try_from(value.method)?;
         let path = AllPathPatterns::parse(value.path.as_str()).map_err(|e| e.to_string())?;
-        let binding_prot = value.binding.ok_or("binding is missing")?;
-        let binding = GatewayBindingCompiled::try_from(binding_prot)?;
+        let binding_proto = value.binding.ok_or("binding is missing")?;
+        let binding = GatewayBindingCompiled::try_from(binding_proto)?;
+        let middlewares = value
+            .middleware
+            .map(HttpMiddlewares::try_from)
+            .transpose()?;
 
         Ok(CompiledRoute {
             method,
             path,
             binding,
+            middlewares,
         })
     }
 }
@@ -877,22 +850,24 @@ impl TryFrom<grpc_apidefinition::HttpRoute> for crate::gateway_api_definition::h
         let method: MethodPattern = value.method.try_into()?;
 
         let gateway_binding = GatewayBinding::try_from(binding)?;
-        let security = gateway_binding.get_authenticate_request_middleware();
+        let security = value.middleware.clone().and_then(|x| x.http_authentication);
 
-        let security = security.map(|x| {
-            let security_scheme_result = x.security_scheme;
-            SecuritySchemeReference {
-                security_scheme_identifier: security_scheme_result
-                    .security_scheme
-                    .scheme_identifier(),
-            }
+        let security = security.and_then(|x| {
+            x.security_scheme.map(|x| SecuritySchemeReference {
+                security_scheme_identifier: SecuritySchemeIdentifier::new(x.scheme_identifier),
+            })
         });
+
+        let cors = value.middleware.and_then(|x| x.cors);
+
+        let cors = cors.map(HttpCors::try_from).transpose()?;
 
         let result = crate::gateway_api_definition::http::RouteRequest {
             method,
             path,
             binding: gateway_binding,
             security,
+            cors,
         };
 
         Ok(result)

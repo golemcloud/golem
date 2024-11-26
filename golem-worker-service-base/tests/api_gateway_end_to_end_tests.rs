@@ -28,12 +28,13 @@ use golem_common::model::IdempotencyKey;
 use golem_worker_service_base::gateway_api_deployment::ApiSiteString;
 use golem_worker_service_base::gateway_execution::auth_call_back_binding_handler::DefaultAuthCallBack;
 use golem_worker_service_base::gateway_execution::gateway_binding_resolver::GatewayBindingResolver;
-use golem_worker_service_base::gateway_execution::gateway_input_executor::{
-    DefaultGatewayInputExecutor, GatewayInputExecutor, Input,
+use golem_worker_service_base::gateway_execution::gateway_http_input_executor::{
+    DefaultGatewayInputExecutor, GatewayHttpInput, GatewayHttpInputExecutor,
 };
 use golem_worker_service_base::gateway_execution::gateway_session::GatewaySessionStore;
 use golem_worker_service_base::gateway_middleware::HttpCors;
 use golem_worker_service_base::gateway_request::http_request::{ApiInputPath, InputHttpRequest};
+use golem_worker_service_base::gateway_request::request_details::GatewayRequestDetails;
 use golem_worker_service_base::gateway_security::{
     Provider, SecurityScheme, SecuritySchemeIdentifier,
 };
@@ -78,8 +79,12 @@ async fn execute(
         Arc::new(DefaultAuthCallBack),
     );
 
-    let input = Input::new(
-        &resolved_gateway_binding,
+    let http = match resolved_gateway_binding.request_details {
+        GatewayRequestDetails::Http(http) => http,
+    };
+    let input = GatewayHttpInput::new(
+        &http,
+        resolved_gateway_binding.resolved_binding,
         session_store,
         Arc::new(test_identity_provider_resolver.clone()),
     );

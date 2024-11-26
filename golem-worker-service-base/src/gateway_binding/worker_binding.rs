@@ -14,12 +14,8 @@
 
 use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
-use std::ops::Deref;
 
 use crate::gateway_binding::WorkerBindingCompiled;
-use crate::gateway_middleware::{
-    HttpAuthenticationMiddleware, HttpCors, HttpMiddleware, Middleware, Middlewares,
-};
 use golem_service_base::model::VersionedComponentId;
 use rib::Expr;
 
@@ -29,34 +25,6 @@ pub struct WorkerBinding {
     pub worker_name: Option<Expr>,
     pub idempotency_key: Option<Expr>,
     pub response_mapping: ResponseMapping,
-    pub middleware: Option<Middlewares>,
-}
-
-impl WorkerBinding {
-    pub fn get_auth_middleware(&self) -> Option<HttpAuthenticationMiddleware> {
-        self.clone().middleware.and_then(|x| {
-            x.0.iter().find_map(|x| match x {
-                Middleware::Http(http) => match http {
-                    HttpMiddleware::AuthenticateRequest(authorizer) => {
-                        Some(authorizer.deref().clone())
-                    }
-                    _ => None,
-                },
-            })
-        })
-    }
-
-    pub fn add_middleware(&mut self, middleware: Middleware) {
-        if let Some(middlewares) = &mut self.middleware {
-            middlewares.add(middleware);
-        } else {
-            self.middleware = Some(Middlewares(vec![middleware]));
-        }
-    }
-
-    pub fn get_cors_middleware(&self) -> Option<HttpCors> {
-        self.middleware.as_ref().and_then(|m| m.get_cors())
-    }
 }
 
 // ResponseMapping will consist of actual logic such as invoking worker functions
@@ -78,7 +46,6 @@ impl From<WorkerBindingCompiled> for WorkerBinding {
             response_mapping: ResponseMapping(
                 worker_binding.response_compiled.response_mapping_expr,
             ),
-            middleware: value.middlewares,
         }
     }
 }

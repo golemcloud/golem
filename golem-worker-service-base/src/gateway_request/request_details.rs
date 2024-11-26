@@ -15,6 +15,7 @@
 use crate::gateway_api_definition::http::{QueryInfo, VarInfo};
 
 use crate::gateway_api_deployment::ApiSiteString;
+use crate::gateway_middleware::HttpMiddlewares;
 use crate::gateway_request::http_request::ApiInputPath;
 use http::uri::Scheme;
 use http::HeaderMap;
@@ -43,6 +44,7 @@ impl GatewayRequestDetails {
         query_variable_names: &[QueryInfo],
         request_body: &Value,
         headers: HeaderMap,
+        middlewares: &Option<HttpMiddlewares>,
     ) -> Result<Self, Vec<String>> {
         Ok(Self::Http(HttpRequestDetails::from_input_http_request(
             scheme,
@@ -53,45 +55,8 @@ impl GatewayRequestDetails {
             query_variable_names,
             request_body,
             headers,
+            middlewares,
         )?))
-    }
-
-    pub fn as_json(&self) -> Value {
-        match self {
-            GatewayRequestDetails::Http(http_request_details) => {
-                let typed_path_values = http_request_details.request_path_values.clone().0;
-                let typed_query_values = http_request_details.request_query_values.clone().0;
-
-                let mut path_values = serde_json::Map::new();
-
-                for field in typed_path_values.fields.iter() {
-                    path_values.insert(field.name.clone(), field.value.clone());
-                }
-
-                for field in typed_query_values.fields.iter() {
-                    path_values.insert(field.name.clone(), field.value.clone());
-                }
-
-                let merged_request_path_and_query = Value::Object(path_values);
-
-                let mut header_records = serde_json::Map::new();
-
-                for field in http_request_details.request_header_values.0.fields.iter() {
-                    header_records.insert(field.name.clone(), field.value.clone());
-                }
-
-                let header_value = Value::Object(header_records);
-
-                Value::Object(serde_json::Map::from_iter(vec![
-                    ("path".to_string(), merged_request_path_and_query),
-                    (
-                        "body".to_string(),
-                        http_request_details.request_body.0.clone(),
-                    ),
-                    ("headers".to_string(), header_value),
-                ]))
-            }
-        }
     }
 }
 
@@ -109,9 +74,41 @@ pub struct HttpRequestDetails {
     pub request_body: RequestBody,
     pub request_query_values: RequestQueryValues,
     pub request_header_values: RequestHeaderValues,
+    pub http_middlewares: Option<HttpMiddlewares>,
 }
 
 impl HttpRequestDetails {
+    pub fn as_json(&self) -> Value {
+        let typed_path_values = self.request_path_values.clone().0;
+        let typed_query_values = self.request_query_values.clone().0;
+
+        let mut path_values = serde_json::Map::new();
+
+        for field in typed_path_values.fields.iter() {
+            path_values.insert(field.name.clone(), field.value.clone());
+        }
+
+        for field in typed_query_values.fields.iter() {
+            path_values.insert(field.name.clone(), field.value.clone());
+        }
+
+        let merged_request_path_and_query = Value::Object(path_values);
+
+        let mut header_records = serde_json::Map::new();
+
+        for field in self.request_header_values.0.fields.iter() {
+            header_records.insert(field.name.clone(), field.value.clone());
+        }
+
+        let header_value = Value::Object(header_records);
+
+        Value::Object(serde_json::Map::from_iter(vec![
+            ("path".to_string(), merged_request_path_and_query),
+            ("body".to_string(), self.request_body.0.clone()),
+            ("headers".to_string(), header_value),
+        ]))
+    }
+
     pub fn url(&self) -> Result<Url, String> {
         let url_str = if let Some(scheme) = &self.scheme {
             format!(
@@ -139,6 +136,7 @@ impl HttpRequestDetails {
             request_body: RequestBody(Value::Null),
             request_query_values: RequestQueryValues(JsonKeyValues::default()),
             request_header_values: RequestHeaderValues(JsonKeyValues::default()),
+            http_middlewares: None,
         }
     }
 
@@ -228,6 +226,7 @@ impl HttpRequestDetails {
         query_variable_names: &[QueryInfo],
         request_body: &Value,
         all_headers: HeaderMap,
+        http_middlewares: &Option<HttpMiddlewares>,
     ) -> Result<Self, Vec<String>> {
         let request_body = RequestBody::from(request_body)?;
         let path_params = RequestPathValues::from(path_params);
@@ -242,6 +241,7 @@ impl HttpRequestDetails {
             request_body,
             request_query_values: query_params,
             request_header_values: header_params,
+            http_middlewares: http_middlewares.clone(),
         })
     }
 }

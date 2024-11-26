@@ -14,11 +14,7 @@
 
 pub(crate) use crate::gateway_execution::gateway_binding_resolver::*;
 pub(crate) use crate::gateway_execution::rib_input_value_resolver::*;
-use crate::gateway_middleware::{
-    HttpAuthenticationMiddleware, HttpMiddleware, Middleware, Middlewares,
-};
 pub(crate) use crate::gateway_request::request_details::*;
-use crate::gateway_security::SecuritySchemeWithProviderMetadata;
 pub(crate) use gateway_binding_compiled::*;
 use golem_service_base::model::VersionedComponentId;
 use rib::Expr;
@@ -45,28 +41,6 @@ pub enum GatewayBinding {
 }
 
 impl GatewayBinding {
-    pub fn add_authenticate_request_middleware(
-        &mut self,
-        security_scheme: SecuritySchemeWithProviderMetadata,
-    ) {
-        match self {
-            GatewayBinding::Static(_) => {}
-            GatewayBinding::FileServer(worker_binding) => worker_binding.add_middleware(
-                Middleware::Http(HttpMiddleware::authenticate_request(security_scheme)),
-            ),
-            GatewayBinding::Default(worker_binding) => worker_binding.add_middleware(
-                Middleware::Http(HttpMiddleware::authenticate_request(security_scheme)),
-            ),
-        }
-    }
-
-    pub fn get_authenticate_request_middleware(&self) -> Option<HttpAuthenticationMiddleware> {
-        match self {
-            GatewayBinding::Default(binding) => binding.get_auth_middleware(),
-            GatewayBinding::FileServer(binding) => binding.get_auth_middleware(),
-            GatewayBinding::Static(_) => None,
-        }
-    }
     pub fn is_http_cors_binding(&self) -> bool {
         match self {
             Self::Default(_) => false,
@@ -103,32 +77,22 @@ impl From<GatewayBinding> for golem_api_grpc::proto::golem::apidefinition::Gatew
     fn from(value: GatewayBinding) -> Self {
         match value {
             GatewayBinding::Default(worker_binding) => {
-                let middleware = worker_binding.middleware.map(|x| {
-                    golem_api_grpc::proto::golem::apidefinition::Middleware::try_from(x).unwrap()
-                });
-
                 golem_api_grpc::proto::golem::apidefinition::GatewayBinding {
                     binding_type: Some(0),
                     component: Some(worker_binding.component_id.into()),
                     worker_name: worker_binding.worker_name.map(|x| x.into()),
                     response: Some(worker_binding.response_mapping.0.into()),
                     idempotency_key: worker_binding.idempotency_key.map(|x| x.into()),
-                    middleware,
                     static_binding: None,
                 }
             }
             GatewayBinding::FileServer(worker_binding) => {
-                let middleware = worker_binding.middleware.map(|x| {
-                    golem_api_grpc::proto::golem::apidefinition::Middleware::try_from(x).unwrap()
-                });
-
                 golem_api_grpc::proto::golem::apidefinition::GatewayBinding {
                     binding_type: Some(1),
                     component: Some(worker_binding.component_id.into()),
                     worker_name: worker_binding.worker_name.map(|x| x.into()),
                     response: Some(worker_binding.response_mapping.0.into()),
                     idempotency_key: worker_binding.idempotency_key.map(|x| x.into()),
-                    middleware,
                     static_binding: None,
                 }
             }
@@ -139,7 +103,6 @@ impl From<GatewayBinding> for golem_api_grpc::proto::golem::apidefinition::Gatew
                     worker_name: None,
                     response: None,
                     idempotency_key: None,
-                    middleware: None,
                     static_binding: Some(static_binding.deref().clone().into()),
                 }
             }
@@ -168,14 +131,12 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::GatewayBinding> for Ga
                 let idempotency_key = value.idempotency_key.map(Expr::try_from).transpose()?;
                 let response_proto = value.response.ok_or("Missing response field")?;
                 let response = Expr::try_from(response_proto)?;
-                let middleware = value.middleware.map(Middlewares::try_from).transpose()?;
 
                 Ok(GatewayBinding::Default(WorkerBinding {
                     component_id,
                     worker_name,
                     idempotency_key,
                     response_mapping: ResponseMapping(response),
-                    middleware,
                 }))
             }
             golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::FileServer => {
@@ -186,14 +147,12 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::GatewayBinding> for Ga
                 let idempotency_key = value.idempotency_key.map(Expr::try_from).transpose()?;
                 let response_proto = value.response.ok_or("Missing response field")?;
                 let response = Expr::try_from(response_proto)?;
-                let middleware = value.middleware.map(Middlewares::try_from).transpose()?;
 
                 Ok(GatewayBinding::FileServer(WorkerBinding {
                     component_id,
                     worker_name,
                     idempotency_key,
                     response_mapping: ResponseMapping(response),
-                    middleware,
                 }))
             }
             golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::CorsPreflight => {
