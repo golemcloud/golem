@@ -56,16 +56,15 @@ use golem_worker_service_base::service::gateway::security_scheme::{
 };
 use openidconnect::core::{
     CoreClaimName, CoreClaimType, CoreClientAuthMethod, CoreGrantType, CoreIdTokenClaims,
-    CoreIdTokenFields, CoreIdTokenVerifier, CoreJweContentEncryptionAlgorithm,
-    CoreJweKeyManagementAlgorithm, CoreJwsSigningAlgorithm, CoreProviderMetadata, CoreResponseMode,
-    CoreResponseType, CoreSubjectIdentifierType, CoreTokenResponse, CoreTokenType,
+    CoreIdTokenVerifier, CoreJweContentEncryptionAlgorithm, CoreJweKeyManagementAlgorithm,
+    CoreJwsSigningAlgorithm, CoreProviderMetadata, CoreResponseMode, CoreResponseType,
+    CoreSubjectIdentifierType, CoreTokenResponse,
 };
 use openidconnect::{
-    AccessToken, AuthUrl, AuthenticationContextClass, AuthorizationCode, ClientId, ClientSecret,
-    CsrfToken, EmptyExtraTokenFields, IssuerUrl, JsonWebKeySetUrl, Nonce, RedirectUrl,
-    RegistrationUrl, ResponseTypes, Scope, TokenUrl, UserInfoUrl,
+    AuthUrl, AuthenticationContextClass, AuthorizationCode, ClientId, ClientSecret, CsrfToken,
+    IssuerUrl, JsonWebKeySetUrl, Nonce, RedirectUrl, RegistrationUrl, ResponseTypes, Scope,
+    TokenUrl, UserInfoUrl,
 };
-use rsa::pkcs8::DecodePublicKey;
 use std::sync::Arc;
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, ImageExt};
