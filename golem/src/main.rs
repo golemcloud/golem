@@ -106,7 +106,8 @@ async fn run_all() -> Result<(), anyhow::Error> {
     run_component_service(&mut join_set).await?;
     run_worker_service(&mut join_set).await?;
 
-    proxy::start_proxy(&proxy::Ports {
+    // Don't drop the channel, it will cause the proxy to fail
+    let _proxy_command_channel = proxy::start_proxy(&proxy::Ports {
         listener_port: 9882,
         component_service_port: 8083,
         worker_service_port: 9005,
@@ -180,23 +181,6 @@ fn worker_service_config() -> WorkerServiceBaseConfig {
         }),
         ..Default::default()
     }
-}
-
-async fn run_metrics(
-    port: u16,
-    prometheus_registry: &Registry,
-    join_set: &mut JoinSet<Result<(), anyhow::Error>>,
-) -> Result<(), anyhow::Error> {
-    let exporter = PrometheusExporter::new(prometheus_registry.clone());
-
-    let _server = join_set.spawn(async move {
-        poem::Server::new(TcpListener::bind(format!("0.0.0.0:{}", port)))
-            .run(exporter)
-            .await
-            .map_err(|err| anyhow!(err).context("Metrics HTTP server failed"))
-    });
-
-    Ok(())
 }
 
 async fn run_worker_executor(

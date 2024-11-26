@@ -25,6 +25,7 @@ use http_body_util::BodyExt;
 use hyper_util::rt::TokioIo;
 use include_dir::Dir;
 use include_dir::include_dir;
+use sozu_command_lib::proto::command::WorkerResponse;
 use crate::migration::{IncludedMigrationsDir};
 use opentelemetry::global;
 use opentelemetry_sdk::metrics::MeterProviderBuilder;
@@ -62,7 +63,7 @@ pub struct Ports {
 pub fn start_proxy(
     ports: &Ports,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
-) -> Result<(), anyhow::Error> {
+) -> Result<Channel<WorkerRequest, WorkerResponse>, anyhow::Error> {
     info!("Starting proxy");
 
     setup_default_logging(true, "info", "golem-proxy").with_context(|| "could not setup logging")?;
@@ -155,5 +156,5 @@ pub fn start_proxy(
         add_route((PathRule::prefix("/"), component_backend))?;
     }
 
-    Ok(())
+    Ok(command_channel)
 }
