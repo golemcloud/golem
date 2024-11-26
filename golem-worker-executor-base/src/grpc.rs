@@ -1371,7 +1371,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .active_plugins()
                     .contains(&plugin_installation_id)
                 {
-                    Err(GolemError::invalid_request("Plugin is already activated"))
+                    warn!("Plugin is already activated");
+                    Ok(())
                 } else {
                     let component_metadata = self
                         .component_service()
@@ -1444,7 +1445,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .active_plugins()
                     .contains(&plugin_installation_id)
                 {
-                    Err(GolemError::invalid_request("Plugin is not activate"))
+                    warn!("Plugin is already deactivated");
+                    Ok(())
                 } else {
                     let component_metadata = self
                         .component_service()
