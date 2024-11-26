@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::gateway_binding::{GatewayRequestDetails, HttpRequestDetails, WorkerDetail};
+use crate::gateway_binding::{HttpRequestDetails, WorkerDetail};
 use golem_common::SafeDisplay;
 use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;

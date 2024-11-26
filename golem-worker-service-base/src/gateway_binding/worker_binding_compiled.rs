@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::gateway_binding::{ResponseMapping, WorkerBinding};
-use crate::gateway_middleware::HttpMiddlewares;
 use crate::gateway_rib_compiler::{DefaultRibCompiler, WorkerServiceRibCompiler};
 use bincode::{Decode, Encode};
 use golem_service_base::model::VersionedComponentId;

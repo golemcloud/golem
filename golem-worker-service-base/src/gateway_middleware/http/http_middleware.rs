@@ -20,7 +20,6 @@ use crate::gateway_security::SecuritySchemeWithProviderMetadata;
 use http::header::{
     ACCESS_CONTROL_ALLOW_CREDENTIALS, ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_EXPOSE_HEADERS,
 };
-use golem_api_grpc::proto::golem::apidefinition::Middleware;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum HttpMiddleware {

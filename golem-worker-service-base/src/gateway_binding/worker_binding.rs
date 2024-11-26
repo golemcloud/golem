@@ -14,12 +14,8 @@
 
 use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
-use std::ops::Deref;
 
 use crate::gateway_binding::WorkerBindingCompiled;
-use crate::gateway_middleware::{
-    HttpAuthenticationMiddleware, HttpCors, HttpMiddleware, Middleware, HttpMiddlewares,
-};
 use golem_service_base::model::VersionedComponentId;
 use rib::Expr;
 

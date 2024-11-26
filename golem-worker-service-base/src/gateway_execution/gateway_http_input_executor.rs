@@ -31,7 +31,6 @@ use crate::gateway_security::{IdentityProviderResolver, SecuritySchemeWithProvid
 use async_trait::async_trait;
 use http::StatusCode;
 use rib::{RibInput, RibResult};
-use std::fmt::Debug;
 use std::sync::Arc;
 
 // Response is type parameterised here, mainly to support

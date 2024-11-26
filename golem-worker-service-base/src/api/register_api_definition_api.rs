@@ -37,7 +37,6 @@ use serde::{Deserialize, Serialize};
 use std::ops::Deref;
 use std::result::Result;
 use std::time::SystemTime;
-use poem::middleware::Cors;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]

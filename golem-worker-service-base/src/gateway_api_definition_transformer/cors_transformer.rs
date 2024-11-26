@@ -36,7 +36,7 @@ mod internal {
     use poem_openapi::types::Type;
     use crate::gateway_api_definition::http::{AllPathPatterns, MethodPattern, Route};
     use crate::gateway_api_definition_transformer::ApiDefTransformationError;
-    use crate::gateway_middleware::{HttpCors, HttpMiddleware, HttpMiddlewares, Middleware};
+    use crate::gateway_middleware::{HttpCors, HttpMiddleware, HttpMiddlewares};
 
     pub(crate) fn update_routes_with_cors_middleware(
         routes: &mut [Route],

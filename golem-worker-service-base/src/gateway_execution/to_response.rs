@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::api::WorkerApiBaseError;
-use crate::gateway_binding::{GatewayRequestDetails, HttpRequestDetails};
+use crate::gateway_binding::HttpRequestDetails;
 use crate::gateway_execution::auth_call_back_binding_handler::AuthCallBackResult;
 use crate::gateway_execution::file_server_binding_handler::{
     FileServerBindingError, FileServerBindingResult,
@@ -182,7 +182,7 @@ impl ToHttpResponse for AuthCallBackResult {
 }
 
 mod internal {
-    use crate::gateway_binding::{GatewayRequestDetails, HttpRequestDetails};
+    use crate::gateway_binding::HttpRequestDetails;
     use crate::gateway_execution::http_content_type_mapper::{
         ContentTypeHeaders, HttpContentTypeResponseMapper,
     };

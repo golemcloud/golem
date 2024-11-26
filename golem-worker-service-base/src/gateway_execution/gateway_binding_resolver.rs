@@ -224,7 +224,7 @@ impl<Namespace: Clone + Send + Sync + 'static>
 }
 
 mod internal {
-    use crate::gateway_binding::{GatewayBindingResolverError, GatewayRequestDetails, HttpRequestDetails, ResolvedWorkerBinding, RibInputValueResolver, WorkerBindingCompiled, WorkerDetail};
+    use crate::gateway_binding::{GatewayBindingResolverError, GatewayRequestDetails, ResolvedWorkerBinding, RibInputValueResolver, WorkerBindingCompiled, WorkerDetail};
     use golem_common::model::IdempotencyKey;
     use http::HeaderMap;
 

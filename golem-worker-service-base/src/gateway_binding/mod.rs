@@ -14,11 +14,7 @@
 
 pub(crate) use crate::gateway_execution::gateway_binding_resolver::*;
 pub(crate) use crate::gateway_execution::rib_input_value_resolver::*;
-use crate::gateway_middleware::{
-    HttpAuthenticationMiddleware, HttpMiddleware, Middleware, HttpMiddlewares,
-};
 pub(crate) use crate::gateway_request::request_details::*;
-use crate::gateway_security::SecuritySchemeWithProviderMetadata;
 pub(crate) use gateway_binding_compiled::*;
 use golem_service_base::model::VersionedComponentId;
 use rib::Expr;

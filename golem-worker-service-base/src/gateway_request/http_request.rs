@@ -138,7 +138,7 @@ pub mod router {
     use crate::gateway_api_definition::http::{PathPattern, QueryInfo, VarInfo};
     use crate::gateway_binding::GatewayBindingCompiled;
     use crate::gateway_execution::router::{Router, RouterPattern};
-    use crate::gateway_middleware::{HttpMiddleware, HttpMiddlewares};
+    use crate::gateway_middleware::HttpMiddlewares;
 
     #[derive(Debug, Clone)]
     pub struct RouteEntry<Namespace> {

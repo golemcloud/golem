@@ -17,7 +17,6 @@ use crate::gateway_binding::{
     GatewayBinding, IdempotencyKeyCompiled, ResponseMappingCompiled, WorkerBinding,
     WorkerBindingCompiled, WorkerNameCompiled,
 };
-use crate::gateway_middleware::HttpMiddlewares;
 use golem_common::model::GatewayBindingType;
 
 // A compiled binding is a binding with all existence of Rib Expr
@@ -201,10 +200,10 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
 
 mod internal {
     use crate::gateway_binding::WorkerBindingCompiled;
-    use crate::gateway_middleware::{HttpMiddleware, Middleware};
-    use golem_api_grpc::proto::golem::apidefinition::SecurityWithProviderMetadata;
+    
+    
     use golem_common::model::GatewayBindingType;
-    use std::ops::Deref;
+    
 
     pub(crate) fn to_gateway_binding_compiled_proto(
         worker_binding: WorkerBindingCompiled,
