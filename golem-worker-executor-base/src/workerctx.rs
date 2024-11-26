@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashSet;
 use std::sync::{Arc, RwLock, Weak};
 
 use async_trait::async_trait;
@@ -19,12 +20,6 @@ use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::Value;
 use wasmtime::{AsContextMut, ResourceLimiterAsync};
-
-use golem_common::model::oplog::WorkerResourceId;
-use golem_common::model::{
-    AccountId, ComponentFilePath, ComponentVersion, IdempotencyKey, OwnedWorkerId, WorkerId,
-    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
-};
 
 use crate::error::GolemError;
 use crate::model::{
@@ -38,6 +33,7 @@ use crate::services::file_loader::FileLoader;
 use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
 use crate::services::oplog::{Oplog, OplogService};
+use crate::services::plugins::Plugins;
 use crate::services::promise::PromiseService;
 use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
@@ -48,6 +44,13 @@ use crate::services::{
     worker_enumeration, HasAll, HasConfig, HasOplog, HasOplogService, HasWorker,
 };
 use crate::worker::{RetryDecision, Worker};
+use golem_common::model::component::ComponentOwner;
+use golem_common::model::oplog::WorkerResourceId;
+use golem_common::model::plugin::PluginScope;
+use golem_common::model::{
+    AccountId, ComponentFilePath, ComponentVersion, IdempotencyKey, OwnedWorkerId,
+    PluginInstallationId, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+};
 
 /// WorkerCtx is the primary customization and extension point of worker executor. It is the context
 /// associated with each running worker, and it is responsible for initializing the WASM linker as
@@ -72,6 +75,9 @@ pub trait WorkerCtx:
     /// execution. This is useful to publish queues and similar objects to communicate with the
     /// executing worker from things like a request handler.
     type PublicState: PublicWorkerIo + HasWorker<Self> + HasOplog + Clone + Send + Sync;
+
+    type ComponentOwner: ComponentOwner;
+    type PluginScope: PluginScope;
 
     /// Creates a new worker context
     ///
@@ -119,6 +125,11 @@ pub trait WorkerCtx:
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
+        plugins: Arc<
+            dyn Plugins<<Self::ComponentOwner as ComponentOwner>::PluginOwner, Self::PluginScope>
+                + Send
+                + Sync,
+        >,
     ) -> Result<Self, GolemError>;
 
     /// Get the public part of the worker context
@@ -289,6 +300,7 @@ pub trait UpdateManagement {
         &self,
         target_version: ComponentVersion,
         new_component_size: u64,
+        new_active_plugins: HashSet<PluginInstallationId>,
     );
 }
 

@@ -710,7 +710,9 @@ pub mod worker {
     use cli_table::{format::Justify, Table};
     use colored::Colorize;
     use golem_client::model::PublicOplogEntry;
-    use golem_common::model::public_oplog::{PublicUpdateDescription, PublicWorkerInvocation};
+    use golem_common::model::public_oplog::{
+        PluginInstallationDescription, PublicUpdateDescription, PublicWorkerInvocation,
+    };
     use golem_common::uri::oss::urn::{ComponentUrn, WorkerUrn};
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::{type_annotated_value_to_string, ValueAndType};
@@ -993,6 +995,15 @@ pub mod worker {
                     if let Some(parent) = params.parent.as_ref() {
                         println!("{pad}parent:            {}", format_id(parent));
                     }
+                    println!("{pad}initial active plugins:");
+                    for plugin in &params.initial_active_plugins {
+                        println!(
+                            "{pad}  - installation id: {}",
+                            format_id(&plugin.installation_id)
+                        );
+                        let inner_pad = format!("{pad}    ");
+                        print_plugin_description(&inner_pad, plugin);
+                    }
                 }
                 PublicOplogEntry::ImportedFunctionInvoked(params) => {
                     println!(
@@ -1159,6 +1170,15 @@ pub mod worker {
                         "{pad}target version:    {}",
                         format_id(&params.target_version)
                     );
+                    println!("{pad}new active plugins:");
+                    for plugin in &params.new_active_plugins {
+                        println!(
+                            "{pad}  - installation id: {}",
+                            format_id(&plugin.installation_id)
+                        );
+                        let inner_pad = format!("{pad}    ");
+                        print_plugin_description(&inner_pad, plugin);
+                    }
                 }
                 PublicOplogEntry::FailedUpdate(params) => {
                     println!("{}", format_message_highlight("FAILED UPDATE"));
@@ -1215,7 +1235,40 @@ pub mod worker {
                     println!("{}", format_message_highlight("RESTART"));
                     println!("{pad}at:                {}", format_id(&params.timestamp));
                 }
+                PublicOplogEntry::ActivatePlugin(params) => {
+                    println!("{}", format_message_highlight("ACTIVATE PLUGIN"));
+                    println!("{pad}at:                {}", format_id(&params.timestamp));
+                    println!(
+                        "{pad}installation id:   {}",
+                        format_id(&params.plugin.installation_id)
+                    );
+                    print_plugin_description(pad, &params.plugin);
+                }
+                PublicOplogEntry::DeactivatePlugin(params) => {
+                    println!("{}", format_message_highlight("DEACTIVATE PLUGIN"));
+                    println!("{pad}at:                {}", format_id(&params.timestamp));
+                    println!(
+                        "{pad}installation id:   {}",
+                        format_id(&params.plugin.installation_id)
+                    );
+                    print_plugin_description(pad, &params.plugin);
+                }
             }
+        }
+    }
+
+    fn print_plugin_description(pad: &str, value: &PluginInstallationDescription) {
+        println!("{pad}plugin name:       {}", format_id(&value.plugin_name));
+        println!(
+            "{pad}plugin version:    {}",
+            format_id(&value.plugin_version)
+        );
+        println!(
+            "{pad}plugin parameters:    {}",
+            format_id(&value.plugin_version)
+        );
+        for (k, v) in &value.parameters {
+            println!("{pad}  - {}: {}", k, format_id(&v));
         }
     }
 

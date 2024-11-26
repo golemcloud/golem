@@ -611,6 +611,7 @@ impl From<golem_client::model::WorkerMetadata> for WorkerMetadata {
             component_size,
             total_linear_memory_size,
             owned_resources,
+            active_plugins: _active_plugins,
         } = value;
 
         WorkerMetadata {

@@ -26,8 +26,9 @@ use golem_api_grpc::proto::golem::worker::{InvocationContext, InvokeResult};
 use golem_api_grpc::proto::golem::workerexecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest, InterruptWorkerRequest,
-    InvokeAndAwaitWorkerRequest, ResumeWorkerRequest, SearchOplogResponse, UpdateWorkerRequest,
+    ActivatePluginRequest, CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest,
+    DeactivatePluginRequest, InterruptWorkerRequest, InvokeAndAwaitWorkerRequest,
+    ResumeWorkerRequest, SearchOplogResponse, UpdateWorkerRequest,
 };
 use golem_common::client::MultiTargetGrpcClient;
 use golem_common::config::RetryConfig;
@@ -35,8 +36,8 @@ use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentFileSystemNode, ComponentId, ComponentVersion,
-    FilterComparator, IdempotencyKey, PromiseId, ScanCursor, TargetWorkerId, WorkerFilter,
-    WorkerId, WorkerStatus,
+    FilterComparator, IdempotencyKey, PluginInstallationId, PromiseId, ScanCursor, TargetWorkerId,
+    WorkerFilter, WorkerId, WorkerStatus,
 };
 use golem_service_base::model::GolemError;
 use golem_service_base::model::{
@@ -240,6 +241,20 @@ pub trait WorkerService {
         path: ComponentFilePath,
         metadata: WorkerRequestMetadata,
     ) -> WorkerResult<Pin<Box<dyn Stream<Item = WorkerResult<Bytes>> + Send + 'static>>>;
+
+    async fn activate_plugin(
+        &self,
+        worker_id: &WorkerId,
+        plugin_installation_id: &PluginInstallationId,
+        metadata: WorkerRequestMetadata,
+    ) -> WorkerResult<()>;
+
+    async fn deactivate_plugin(
+        &self,
+        worker_id: &WorkerId,
+        plugin_installation_id: &PluginInstallationId,
+        metadata: WorkerRequestMetadata,
+    ) -> WorkerResult<()>;
 }
 
 pub struct TypedResult {
@@ -1096,6 +1111,82 @@ impl WorkerService for WorkerServiceDefault {
             .map(|item| item.and_then(|inner| inner));
 
         Ok(Box::pin(stream))
+    }
+
+    async fn activate_plugin(
+        &self,
+        worker_id: &WorkerId,
+        plugin_installation_id: &PluginInstallationId,
+        metadata: WorkerRequestMetadata,
+    ) -> WorkerResult<()> {
+        let worker_id = worker_id.clone();
+        let plugin_installation_id = plugin_installation_id.clone();
+        self.call_worker_executor(
+            worker_id.clone(),
+            "activate_plugin",
+            move |worker_executor_client| {
+                let worker_id = worker_id.clone();
+                Box::pin(
+                    worker_executor_client.activate_plugin(ActivatePluginRequest {
+                        worker_id: Some(worker_id.into()),
+                        installation_id: Some(plugin_installation_id.clone().into()),
+                        account_id: metadata.account_id.clone().map(|id| id.into()),
+                    }),
+                )
+            },
+            |response| match response.into_inner() {
+                workerexecutor::v1::ActivatePluginResponse {
+                    result: Some(workerexecutor::v1::activate_plugin_response::Result::Success(_)),
+                } => Ok(()),
+                workerexecutor::v1::ActivatePluginResponse {
+                    result:
+                    Some(workerexecutor::v1::activate_plugin_response::Result::Failure(err)),
+                } => Err(err.into()),
+                workerexecutor::v1::ActivatePluginResponse { .. } => Err("Empty response".into()),
+            },
+            WorkerServiceError::InternalCallError,
+        )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn deactivate_plugin(
+        &self,
+        worker_id: &WorkerId,
+        plugin_installation_id: &PluginInstallationId,
+        metadata: WorkerRequestMetadata,
+    ) -> WorkerResult<()> {
+        let worker_id = worker_id.clone();
+        let plugin_installation_id = plugin_installation_id.clone();
+        self.call_worker_executor(
+            worker_id.clone(),
+            "deactivate_plugin",
+            move |worker_executor_client| {
+                let worker_id = worker_id.clone();
+                Box::pin(
+                    worker_executor_client.deactivate_plugin(DeactivatePluginRequest {
+                        worker_id: Some(worker_id.into()),
+                        installation_id: Some(plugin_installation_id.clone().into()),
+                        account_id: metadata.account_id.clone().map(|id| id.into()),
+                    }),
+                )
+            },
+            |response| match response.into_inner() {
+                workerexecutor::v1::DeactivatePluginResponse {
+                    result: Some(workerexecutor::v1::deactivate_plugin_response::Result::Success(_)),
+                } => Ok(()),
+                workerexecutor::v1::DeactivatePluginResponse {
+                    result:
+                    Some(workerexecutor::v1::deactivate_plugin_response::Result::Failure(err)),
+                } => Err(err.into()),
+                workerexecutor::v1::DeactivatePluginResponse { .. } => Err("Empty response".into()),
+            },
+            WorkerServiceError::InternalCallError,
+        )
+            .await?;
+
+        Ok(())
     }
 }
 

@@ -3,6 +3,7 @@ syntax = "proto3";
 package golem.worker;
 
 import "golem/common/account_id.proto";
+import "golem/common/plugin_installation_id.proto";
 import "golem/worker/worker_id.proto";
 import "golem/worker/worker_status.proto";
 import "google/protobuf/timestamp.proto";
@@ -22,6 +23,7 @@ message WorkerMetadata {
   uint64 component_size = 12;
   uint64 total_linear_memory_size = 13;
   map<uint64, ResourceMetadata> owned_resources = 14;
+  repeated golem.common.PluginInstallationId active_plugins = 15;
 }
 
 message UpdateRecord {

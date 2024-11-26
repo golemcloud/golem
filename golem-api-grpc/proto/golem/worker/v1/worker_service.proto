@@ -3,6 +3,7 @@ syntax = "proto3";
 package golem.worker.v1;
 
 import public "golem/common/empty.proto";
+import public "golem/common/plugin_installation_id.proto";
 import public "golem/worker/complete_parameters.proto";
 import public "golem/worker/cursor.proto";
 import public "golem/worker/idempotency_key.proto";
@@ -45,6 +46,9 @@ service WorkerService {
 
   rpc ListDirectory(ListDirectoryRequest) returns (ListDirectoryResponse);
   rpc GetFileContents(GetFileContentsRequest) returns (stream GetFileContentsResponse);
+
+  rpc ActivatePlugin(ActivatePluginRequest) returns (ActivatePluginResponse);
+  rpc DeactivatePlugin(DeactivatePluginRequest) returns (DeactivatePluginResponse);
 }
 
 message LaunchNewWorkerRequest {
@@ -288,6 +292,30 @@ message GetFileContentsRequest {
 message GetFileContentsResponse {
   oneof result {
     bytes success = 1;
+    WorkerError error = 2;
+  }
+}
+
+message ActivatePluginRequest {
+  golem.worker.WorkerId worker_id = 1;
+  golem.common.PluginInstallationId installation_id = 2;
+}
+
+message ActivatePluginResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    WorkerError error = 2;
+  }
+}
+
+message DeactivatePluginRequest {
+  golem.worker.WorkerId worker_id = 1;
+  golem.common.PluginInstallationId installation_id = 2;
+}
+
+message DeactivatePluginResponse {
+  oneof result {
+    golem.common.Empty success = 1;
     WorkerError error = 2;
   }
 }

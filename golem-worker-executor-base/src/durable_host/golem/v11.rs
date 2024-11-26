@@ -30,7 +30,7 @@ use crate::preview2::golem::api1_1_0_rc1::host::{
 use crate::preview2::golem::api1_1_0_rc1::oplog::{
     Host as OplogHost, HostGetOplog, HostSearchOplog, OplogEntry, SearchOplog,
 };
-use crate::services::HasOplogService;
+use crate::services::{HasOplogService, HasPlugins};
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -216,12 +216,14 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
 
         let component_service = self.state.component_service.clone();
         let oplog_service = self.state.oplog_service();
+        let plugins = self.state.plugins();
 
         let entry = self.as_wasi_view().table().get(&self_)?.clone();
 
         let chunk = get_public_oplog_chunk(
             component_service,
             oplog_service,
+            plugins,
             &entry.owned_worker_id,
             entry.current_component_version,
             entry.next_oplog_index,
@@ -320,12 +322,14 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
 
         let component_service = self.state.component_service.clone();
         let oplog_service = self.state.oplog_service();
+        let plugins = self.state.plugins();
 
         let entry = self.as_wasi_view().table().get(&self_)?.clone();
 
         let chunk = search_public_oplog(
             component_service,
             oplog_service,
+            plugins,
             &entry.owned_worker_id,
             entry.current_component_version,
             entry.next_oplog_index,

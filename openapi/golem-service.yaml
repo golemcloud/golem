@@ -1308,6 +1308,160 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
+  /v1/components/{component_id}/workers/{worker_name}/activate-plugin:
+    post:
+      tags:
+      - Worker
+      summary: Activate a plugin
+      description: The plugin must be one of the installed plugins for the worker's current component version.
+      operationId: activate_plugin
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: query
+        name: plugin-installation-id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: form
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ActivatePluginResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/GolemErrorBody'
+  /v1/components/{component_id}/workers/{worker_name}/deactivate-plugin:
+    post:
+      tags:
+      - Worker
+      summary: Deactivate a plugin
+      description: The plugin must be one of the installed plugins for the worker's current component version.
+      operationId: deactivate_plugin
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: query
+        name: plugin-installation-id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: form
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/DeactivatePluginResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/GolemErrorBody'
   /v1/api/definitions/import:
     put:
       tags:
@@ -3210,6 +3364,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
 components:
   schemas:
+    ActivatePluginParameters:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        plugin:
+          $ref: '#/components/schemas/PluginInstallationDescription'
+      required:
+      - timestamp
+      - plugin
+    ActivatePluginResponse:
+      type: object
     AnalysedResourceMode:
       type: string
       enum:
@@ -3654,6 +3821,10 @@ components:
         initial_total_linear_memory_size:
           type: integer
           format: uint64
+        initial_active_plugins:
+          type: array
+          items:
+            $ref: '#/components/schemas/PluginInstallationDescription'
       required:
       - timestamp
       - worker_id
@@ -3663,6 +3834,20 @@ components:
       - account_id
       - component_size
       - initial_total_linear_memory_size
+      - initial_active_plugins
+    DeactivatePluginParameters:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        plugin:
+          $ref: '#/components/schemas/PluginInstallationDescription'
+      required:
+      - timestamp
+      - plugin
+    DeactivatePluginResponse:
+      type: object
     DeleteWorkerResponse:
       type: object
     DescribeResourceParameters:
@@ -4734,6 +4919,25 @@ components:
       required:
       - timestamp
       - invocation
+    PluginInstallationDescription:
+      type: object
+      properties:
+        installation_id:
+          type: string
+          format: uuid
+        plugin_name:
+          type: string
+        plugin_version:
+          type: string
+        parameters:
+          type: object
+          additionalProperties:
+            type: string
+      required:
+      - installation_id
+      - plugin_name
+      - plugin_version
+      - parameters
     PromiseId:
       type: object
       properties:
@@ -4790,6 +4994,8 @@ components:
           DescribeResource: '#/components/schemas/PublicOplogEntry_DescribeResourceParameters'
           Log: '#/components/schemas/PublicOplogEntry_LogParameters'
           Restart: '#/components/schemas/PublicOplogEntry_TimestampParameter'
+          ActivatePlugin: '#/components/schemas/PublicOplogEntry_ActivatePluginParameters'
+          DeactivatePlugin: '#/components/schemas/PublicOplogEntry_DeactivatePluginParameters'
       type: object
       oneOf:
       - $ref: '#/components/schemas/PublicOplogEntry_CreateParameters'
@@ -4817,6 +5023,8 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_DescribeResourceParameters'
       - $ref: '#/components/schemas/PublicOplogEntry_LogParameters'
       - $ref: '#/components/schemas/PublicOplogEntry_TimestampParameter'
+      - $ref: '#/components/schemas/PublicOplogEntry_ActivatePluginParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_DeactivatePluginParameters'
     PublicOplogEntryWithIndex:
       type: object
       properties:
@@ -4828,6 +5036,18 @@ components:
       required:
       - oplogIndex
       - entry
+    PublicOplogEntry_ActivatePluginParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ActivatePlugin
+            type: string
+            enum:
+            - ActivatePlugin
+        required:
+        - type
+      - $ref: '#/components/schemas/ActivatePluginParameters'
     PublicOplogEntry_ChangeRetryPolicyParameters:
       allOf:
       - type: object
@@ -4852,6 +5072,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/CreateParameters'
+    PublicOplogEntry_DeactivatePluginParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: DeactivatePlugin
+            type: string
+            enum:
+            - DeactivatePlugin
+        required:
+        - type
+      - $ref: '#/components/schemas/DeactivatePluginParameters'
     PublicOplogEntry_DescribeResourceParameters:
       allOf:
       - type: object
@@ -5314,10 +5546,15 @@ components:
         new_component_size:
           type: integer
           format: uint64
+        new_active_plugins:
+          type: array
+          items:
+            $ref: '#/components/schemas/PluginInstallationDescription'
       required:
       - timestamp
       - target_version
       - new_component_size
+      - new_active_plugins
     TimestampParameter:
       type: object
       properties:
@@ -5769,6 +6006,11 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/ResourceMetadata'
+        activePlugins:
+          type: array
+          items:
+            type: string
+            format: uuid
       required:
       - workerId
       - args
@@ -5782,6 +6024,7 @@ components:
       - componentSize
       - totalLinearMemorySize
       - ownedResources
+      - activePlugins
     WorkerNameFilter:
       type: object
       properties:
@@ -6015,12 +6258,17 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/InitialComponentFile'
+        installedPlugins:
+          type: array
+          items:
+            $ref: '#/components/schemas/PluginInstallation'
       required:
       - versionedComponentId
       - componentName
       - componentSize
       - metadata
       - files
+      - installedPlugins
     ComponentFilePathWithPermissions:
       type: object
       properties:

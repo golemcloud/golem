@@ -16,21 +16,20 @@ use crate::Tracing;
 use golem_common::model::component::{ComponentOwner, DefaultComponentOwner};
 use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_common::model::plugin::{
-    ComponentPluginScope, DefaultPluginOwner, DefaultPluginScope, PluginInstallation, PluginOwner,
+    ComponentPluginInstallationTarget, ComponentPluginScope, ComponentTransformerDefinition,
+    DefaultPluginOwner, DefaultPluginScope, OplogProcessorDefinition, PluginDefinition,
+    PluginInstallation, PluginOwner, PluginTypeSpecificDefinition,
 };
 use golem_common::model::{
     AccountId, ComponentId, ComponentType, Empty, HasAccountId, PluginInstallationId,
 };
 use golem_common::repo::component::DefaultComponentOwnerRow;
-use golem_common::repo::plugin::DefaultPluginOwnerRow;
+use golem_common::repo::plugin::{DefaultPluginOwnerRow, DefaultPluginScopeRow};
+use golem_common::repo::plugin_installation::ComponentPluginInstallationRow;
 use golem_common::repo::RowMeta;
-use golem_component_service_base::model::{
-    Component, ComponentPluginInstallationTarget, ComponentTransformerDefinition,
-    OplogProcessorDefinition, PluginDefinition, PluginTypeSpecificDefinition,
-};
+use golem_component_service_base::model::Component;
 use golem_component_service_base::repo::component::{ComponentRecord, ComponentRepo};
-use golem_component_service_base::repo::plugin::{DefaultPluginScopeRow, PluginRepo};
-use golem_component_service_base::repo::plugin_installation::ComponentPluginInstallationRow;
+use golem_component_service_base::repo::plugin::PluginRepo;
 use golem_service_base::model::{ComponentName, VersionedComponentId};
 use golem_service_base::repo::plugin_installation::PluginInstallationRecord;
 use golem_service_base::repo::RepoError;
@@ -149,6 +148,7 @@ async fn test_repo_component_id_unique(
         ComponentType::Durable,
         &data,
         vec![],
+        vec![],
         owner1.clone(),
     )
     .unwrap();
@@ -196,6 +196,7 @@ async fn test_repo_component_name_unique_in_namespace(
         ComponentType::Durable,
         &data,
         vec![],
+        vec![],
         owner1.clone(),
     )
     .unwrap();
@@ -204,6 +205,7 @@ async fn test_repo_component_name_unique_in_namespace(
         component_name1,
         ComponentType::Durable,
         &data,
+        vec![],
         vec![],
         owner2.clone(),
     )
@@ -258,6 +260,7 @@ async fn test_repo_component_delete(
         component_name1,
         ComponentType::Durable,
         &data,
+        vec![],
         vec![],
         owner1.clone(),
     )
@@ -316,6 +319,7 @@ async fn test_repo_component_constraints(
         component_name1,
         ComponentType::Durable,
         &data,
+        vec![],
         vec![],
         owner1.clone(),
     )
@@ -409,6 +413,7 @@ async fn test_default_plugin_repo(
         ComponentType::Ephemeral,
         &get_component_data("shopping-cart"),
         vec![],
+        vec![],
         owner.clone(),
     )
     .unwrap();
@@ -417,6 +422,7 @@ async fn test_default_plugin_repo(
         ComponentName("default-plugin-repo-component2".to_string()),
         ComponentType::Durable,
         &get_component_data("shopping-cart"),
+        vec![],
         vec![],
         owner.clone(),
     )
@@ -549,6 +555,7 @@ async fn test_default_component_plugin_installation(
         ComponentName("default-component-plugin-installation-component1".to_string()),
         ComponentType::Ephemeral,
         &get_component_data("shopping-cart"),
+        vec![],
         vec![],
         component_owner.clone(),
     )

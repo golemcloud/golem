@@ -16,8 +16,9 @@ use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::worker::OplogEntryWithIndex;
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::oplog::OplogIndex;
+use golem_common::model::plugin::PluginInstallation;
 use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
-use golem_common::model::AccountId;
+use golem_common::model::{AccountId, PluginInstallationId};
 use golem_common::model::{
     ComponentFilePermissions, ComponentFileSystemNode, ComponentFileSystemNodeDetails, ComponentId,
     ComponentType, ComponentVersion, InitialComponentFile, PromiseId, ScanCursor, ShardId,
@@ -27,6 +28,7 @@ use golem_common::SafeDisplay;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use poem_openapi::{Enum, NewType, Object, Union};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::time::SystemTime;
 use std::{collections::HashMap, fmt::Display, fmt::Formatter};
 
@@ -1065,6 +1067,12 @@ pub struct ResumeResponse {}
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
 pub struct UpdateWorkerResponse {}
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
+pub struct ActivatePluginResponse {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
+pub struct DeactivatePluginResponse {}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
@@ -1229,6 +1237,7 @@ pub struct WorkerMetadata {
     pub component_size: u64,
     pub total_linear_memory_size: u64,
     pub owned_resources: HashMap<u64, ResourceMetadata>,
+    pub active_plugins: HashSet<PluginInstallationId>,
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMetadata {
@@ -1259,6 +1268,11 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMet
                 .into_iter()
                 .map(|(k, v)| v.try_into().map(|v| (k, v)))
                 .collect::<Result<HashMap<_, _>, _>>()?,
+            active_plugins: value
+                .active_plugins
+                .into_iter()
+                .map(|id| id.try_into())
+                .collect::<Result<HashSet<_>, _>>()?,
         })
     }
 }
@@ -1283,6 +1297,11 @@ impl From<WorkerMetadata> for golem_api_grpc::proto::golem::worker::WorkerMetada
                 .owned_resources
                 .into_iter()
                 .map(|(k, v)| (k, v.into()))
+                .collect(),
+            active_plugins: value
+                .active_plugins
+                .into_iter()
+                .map(|id| id.into())
                 .collect(),
         }
     }
@@ -1768,7 +1787,7 @@ impl From<golem_api_grpc::proto::golem::common::ErrorsBody> for ErrorsBody {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct Component {
@@ -1779,6 +1798,7 @@ pub struct Component {
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
     pub component_type: Option<ComponentType>,
     pub files: Vec<InitialComponentFile>,
+    pub installed_plugins: Vec<PluginInstallation>,
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
@@ -1808,6 +1828,12 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
             .map(|f| f.try_into())
             .collect::<Result<Vec<_>, _>>()?;
 
+        let installed_plugins = value
+            .installed_plugins
+            .into_iter()
+            .map(|p| p.try_into())
+            .collect::<Result<Vec<_>, _>>()?;
+
         Ok(Self {
             versioned_component_id: value
                 .versioned_component_id
@@ -1824,6 +1850,7 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
             created_at,
             component_type,
             files,
+            installed_plugins,
         })
     }
 }
@@ -1844,6 +1871,11 @@ impl From<Component> for golem_api_grpc::proto::golem::component::Component {
                 c.into()
             }),
             files: value.files.into_iter().map(|f| f.into()).collect(),
+            installed_plugins: value
+                .installed_plugins
+                .into_iter()
+                .map(|p| p.into())
+                .collect(),
         }
     }
 }

@@ -67,6 +67,15 @@ pub fn validate_protobuf_target_worker_id(
     validated_target_worker_id(worker_id.component_id, worker_id.worker_name)
 }
 
+pub fn validate_protobuf_plugin_installation_id(
+    plugin_installation_id: Option<golem_api_grpc::proto::golem::common::PluginInstallationId>,
+) -> Result<golem_common::model::PluginInstallationId, WorkerError> {
+    plugin_installation_id
+        .ok_or_else(|| bad_request_error("Missing plugin installation id"))?
+        .try_into()
+        .map_err(|e| bad_request_error(format!("Invalid plugin installation id: {e}")))
+}
+
 pub fn validate_component_file_path(file_path: String) -> Result<ComponentFilePath, WorkerError> {
     ComponentFilePath::from_abs_str(&file_path).map_err(|_| bad_request_error("Invalid file path"))
 }

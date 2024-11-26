@@ -14,17 +14,20 @@
 
 use crate::service::component::ComponentService;
 use crate::service::worker::WorkerService;
+use async_trait::async_trait;
 use futures::Stream;
 use futures::StreamExt;
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody};
 use golem_api_grpc::proto::golem::worker::v1::worker_service_server::WorkerService as GrpcWorkerService;
 use golem_api_grpc::proto::golem::worker::v1::{
-    complete_promise_response, delete_worker_response, get_oplog_response,
-    get_worker_metadata_response, get_workers_metadata_response, interrupt_worker_response,
-    invoke_and_await_json_response, invoke_and_await_response, invoke_and_await_typed_response,
-    invoke_response, launch_new_worker_response, resume_worker_response, search_oplog_response,
-    update_worker_response, worker_error, worker_execution_error, CompletePromiseRequest,
-    CompletePromiseResponse, ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse,
+    activate_plugin_response, complete_promise_response, deactivate_plugin_response,
+    delete_worker_response, get_oplog_response, get_worker_metadata_response,
+    get_workers_metadata_response, interrupt_worker_response, invoke_and_await_json_response,
+    invoke_and_await_response, invoke_and_await_typed_response, invoke_response,
+    launch_new_worker_response, resume_worker_response, search_oplog_response,
+    update_worker_response, worker_error, worker_execution_error, ActivatePluginRequest,
+    ActivatePluginResponse, CompletePromiseRequest, CompletePromiseResponse, ConnectWorkerRequest,
+    DeactivatePluginRequest, DeactivatePluginResponse, DeleteWorkerRequest, DeleteWorkerResponse,
     GetOplogRequest, GetOplogResponse, GetOplogSuccessResponse, GetWorkerMetadataRequest,
     GetWorkerMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
     GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, InterruptWorkerResponse,
@@ -41,8 +44,8 @@ use golem_api_grpc::proto::golem::worker::{
 };
 use golem_common::grpc::{
     proto_component_id_string, proto_idempotency_key_string,
-    proto_invocation_context_parent_worker_id_string, proto_target_worker_id_string,
-    proto_worker_id_string,
+    proto_invocation_context_parent_worker_id_string, proto_plugin_installation_id_string,
+    proto_target_worker_id_string, proto_worker_id_string,
 };
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{ComponentVersion, ScanCursor, WorkerFilter, WorkerId};
@@ -52,7 +55,8 @@ use golem_worker_service_base::api::WorkerTraceErrorKind;
 use golem_worker_service_base::empty_worker_metadata;
 use golem_worker_service_base::grpcapi::{
     bad_request_error, error_to_status, parse_json_invoke_parameters, validate_component_file_path,
-    validate_protobuf_target_worker_id, validate_protobuf_worker_id, validated_worker_id,
+    validate_protobuf_plugin_installation_id, validate_protobuf_target_worker_id,
+    validate_protobuf_worker_id, validated_worker_id,
 };
 use golem_worker_service_base::service::worker::WorkerStream;
 use std::pin::Pin;
@@ -74,7 +78,7 @@ impl WorkerGrpcApi {
     }
 }
 
-#[async_trait::async_trait]
+#[async_trait]
 impl GrpcWorkerService for WorkerGrpcApi {
     async fn launch_new_worker(
         &self,
@@ -594,6 +598,62 @@ impl GrpcWorkerService for WorkerGrpcApi {
         };
         Ok(Response::new(stream))
     }
+
+    async fn activate_plugin(
+        &self,
+        request: Request<ActivatePluginRequest>,
+    ) -> Result<Response<ActivatePluginResponse>, Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "activate_plugin",
+            worker_id = proto_worker_id_string(&request.worker_id),
+            plugin_installation_id = proto_plugin_installation_id_string(&request.installation_id),
+        );
+
+        let response = match self
+            .activate_plugin(request)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(()) => record.succeed(activate_plugin_response::Result::Success(Empty {})),
+            Err(error) => record.fail(
+                activate_plugin_response::Result::Error(error.clone()),
+                &WorkerTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(ActivatePluginResponse {
+            result: Some(response),
+        }))
+    }
+
+    async fn deactivate_plugin(
+        &self,
+        request: Request<DeactivatePluginRequest>,
+    ) -> Result<Response<DeactivatePluginResponse>, Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "deactivate_plugin",
+            worker_id = proto_worker_id_string(&request.worker_id),
+            plugin_installation_id = proto_plugin_installation_id_string(&request.installation_id),
+        );
+
+        let response = match self
+            .deactivate_plugin(request)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(()) => record.succeed(deactivate_plugin_response::Result::Success(Empty {})),
+            Err(error) => record.fail(
+                deactivate_plugin_response::Result::Error(error.clone()),
+                &WorkerTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(DeactivatePluginResponse {
+            result: Some(response),
+        }))
+    }
 }
 
 impl WorkerGrpcApi {
@@ -1045,5 +1105,32 @@ impl WorkerGrpcApi {
             ;
 
         Ok(Box::pin(stream))
+    }
+
+    async fn activate_plugin(&self, request: ActivatePluginRequest) -> Result<(), GrpcWorkerError> {
+        let worker_id = validate_protobuf_worker_id(request.worker_id)?;
+        let plugin_installation_id =
+            validate_protobuf_plugin_installation_id(request.installation_id)?;
+
+        self.worker_service
+            .activate_plugin(&worker_id, &plugin_installation_id, empty_worker_metadata())
+            .await?;
+
+        Ok(())
+    }
+
+    async fn deactivate_plugin(
+        &self,
+        request: DeactivatePluginRequest,
+    ) -> Result<(), GrpcWorkerError> {
+        let worker_id = validate_protobuf_worker_id(request.worker_id)?;
+        let plugin_installation_id =
+            validate_protobuf_plugin_installation_id(request.installation_id)?;
+
+        self.worker_service
+            .deactivate_plugin(&worker_id, &plugin_installation_id, empty_worker_metadata())
+            .await?;
+
+        Ok(())
     }
 }

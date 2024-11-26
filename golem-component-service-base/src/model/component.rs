@@ -16,6 +16,7 @@ use chrono::Utc;
 use golem_common::model::component::ComponentOwner;
 use golem_common::model::component_constraint::{FunctionConstraint, FunctionConstraintCollection};
 use golem_common::model::component_metadata::{ComponentMetadata, ComponentProcessingError};
+use golem_common::model::plugin::PluginInstallation;
 use golem_common::model::InitialComponentFile;
 use golem_common::model::{ComponentFilePathWithPermissions, ComponentId, ComponentType};
 use golem_service_base::model::{ComponentName, VersionedComponentId};
@@ -24,7 +25,7 @@ use std::fmt::Debug;
 use std::time::SystemTime;
 use tokio::fs::File;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Component<Owner: ComponentOwner> {
     pub owner: Owner,
     pub versioned_component_id: VersionedComponentId,
@@ -35,6 +36,7 @@ pub struct Component<Owner: ComponentOwner> {
     pub component_type: ComponentType,
     pub object_store_key: Option<String>,
     pub files: Vec<InitialComponentFile>,
+    pub installed_plugins: Vec<PluginInstallation>,
 }
 
 impl<Owner: ComponentOwner> Component<Owner> {
@@ -44,6 +46,7 @@ impl<Owner: ComponentOwner> Component<Owner> {
         component_type: ComponentType,
         data: &[u8],
         files: Vec<InitialComponentFile>,
+        installed_plugins: Vec<PluginInstallation>,
         owner: Owner,
     ) -> Result<Component<Owner>, ComponentProcessingError> {
         let metadata = ComponentMetadata::analyse_component(data)?;
@@ -63,6 +66,7 @@ impl<Owner: ComponentOwner> Component<Owner> {
             versioned_component_id,
             component_type,
             files,
+            installed_plugins,
         })
     }
 
@@ -99,6 +103,7 @@ impl<Owner: ComponentOwner> From<Component<Owner>> for golem_service_base::model
             created_at: Some(value.created_at),
             component_type: Some(value.component_type),
             files: value.files,
+            installed_plugins: value.installed_plugins,
         }
     }
 }
@@ -120,6 +125,11 @@ impl<Owner: ComponentOwner> From<Component<Owner>>
             ))),
             component_type: Some(component_type.into()),
             files: value.files.into_iter().map(|file| file.into()).collect(),
+            installed_plugins: value
+                .installed_plugins
+                .into_iter()
+                .map(|plugin| plugin.into())
+                .collect(),
         }
     }
 }

@@ -13,11 +13,9 @@
 // limitations under the License.
 
 mod component;
-mod plugin;
 
 pub use component::*;
 use golem_common::model::{ComponentFilePathWithPermissionsList, ComponentType};
-pub use plugin::*;
 use poem_openapi::types::multipart::Upload;
 use poem_openapi::Multipart;
 
