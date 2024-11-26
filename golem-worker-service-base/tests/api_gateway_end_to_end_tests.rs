@@ -79,9 +79,8 @@ async fn execute(
         Arc::new(DefaultAuthCallBack),
     );
 
-    let http = match resolved_gateway_binding.request_details {
-        GatewayRequestDetails::Http(http) => http,
-    };
+    let GatewayRequestDetails::Http(http) = resolved_gateway_binding.request_details;
+
     let input = GatewayHttpInput::new(
         &http,
         resolved_gateway_binding.resolved_binding,
