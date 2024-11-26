@@ -7,6 +7,8 @@ use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use poem_openapi::OpenApi;
 use std::sync::Arc;
+use golem_service_base::api_tags::ApiTags;
+
 use tracing::Instrument;
 
 pub struct SecuritySchemeApi {
@@ -23,12 +25,12 @@ impl SecuritySchemeApi {
     }
 }
 
-#[OpenApi(prefix_path = "/v1/security/schemes")]
+#[OpenApi(prefix_path = "/v1/api/security",  tag = ApiTags::ApiSecurity)]
 impl SecuritySchemeApi {
     /// Get a security scheme
     ///
     /// Get a security scheme by name
-    #[oai(path = "/{security_scheme_name}", method = "get", operation_id = "get")]
+    #[oai(path = "/{security_scheme_identifier}", method = "get", operation_id = "get")]
     async fn get(
         &self,
         security_scheme_identifier: Path<String>,

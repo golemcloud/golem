@@ -19,3 +19,4 @@ pub mod errors;
 pub mod health_check;
 pub mod plugin;
 pub mod worker;
+mod api_security;

@@ -4,6 +4,7 @@ use poem_openapi::Tags;
 pub enum ApiTags {
     ApiDeployment,
     ApiDefinition,
+    ApiSecurity,
     Component,
     Worker,
     HealthCheck,

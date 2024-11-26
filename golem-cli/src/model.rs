@@ -698,6 +698,19 @@ impl From<golem_client::model::ApiDeployment> for ApiDeployment {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ApiSecurityScheme {
+    #[serde(rename = "schemeIdentifier")]
+    pub scheme_identifier: String,
+    #[serde(rename = "clientId")]
+    pub client_id: String,
+    #[serde(rename = "clientSecret")]
+    pub client_secret: String,
+    #[serde(rename = "redirectUrl")]
+    pub redirect_url: String,
+    pub scopes: Vec<String>,
+}
+
 pub trait HasVerbosity {
     fn verbosity(&self) -> Verbosity;
 }

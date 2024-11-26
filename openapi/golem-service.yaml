@@ -2093,8 +2093,10 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-  /v1/security/schemes/{security_scheme_name}:
+  /v1/api/security/{security_scheme_identifier}:
     get:
+      tags:
+      - ApiSecurity
       summary: Get a security scheme
       description: Get a security scheme by name
       operationId: get
@@ -2150,8 +2152,10 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-  /v1/security/schemes:
+  /v1/api/security:
     post:
+      tags:
+      - ApiSecurity
       summary: Create a security scheme
       operationId: create
       requestBody:
@@ -3772,26 +3776,6 @@ components:
       enum:
       - read-only
       - read-write
-    Cors:
-      type: object
-      properties:
-        allowOrigin:
-          type: string
-        allowMethods:
-          type: string
-        allowHeaders:
-          type: string
-        exposeHeaders:
-          type: string
-        allowCredentials:
-          type: boolean
-        maxAge:
-          type: integer
-          format: uint64
-      required:
-      - allowOrigin
-      - allowMethods
-      - allowHeaders
     CreateParameters:
       type: object
       properties:
@@ -4033,8 +4017,6 @@ components:
           type: string
         response:
           type: string
-        middleware:
-          $ref: '#/components/schemas/MiddlewareData'
         allowOrigin:
           type: string
         allowMethods:
@@ -4074,9 +4056,7 @@ components:
         idempotencyKeyInput:
           $ref: '#/components/schemas/RibInputTypeInfo'
         corsPreflight:
-          $ref: '#/components/schemas/Cors'
-        middleware:
-          $ref: '#/components/schemas/MiddlewareData'
+          $ref: '#/components/schemas/HttpCors'
     GetFilesResponse:
       type: object
       properties:
@@ -4677,7 +4657,7 @@ components:
         security:
           type: array
           items:
-            $ref: '#/components/schemas/SecuritySchemeReferenceData'
+            type: string
         routes:
           type: array
           items:
@@ -4710,6 +4690,26 @@ components:
       - version
       - routes
       - draft
+    HttpCors:
+      type: object
+      properties:
+        allowOrigin:
+          type: string
+        allowMethods:
+          type: string
+        allowHeaders:
+          type: string
+        exposeHeaders:
+          type: string
+        allowCredentials:
+          type: boolean
+        maxAge:
+          type: integer
+          format: uint64
+      required:
+      - allowOrigin
+      - allowMethods
+      - allowHeaders
     ImportedFunctionInvokedParameters:
       type: object
       properties:
@@ -4831,13 +4831,6 @@ components:
       - Options
       - Trace
       - Head
-    MiddlewareData:
-      type: object
-      properties:
-        cors:
-          $ref: '#/components/schemas/Cors'
-        auth:
-          $ref: '#/components/schemas/SecuritySchemeReferenceData'
     NameOptionTypePair:
       type: object
       properties:
@@ -5437,6 +5430,10 @@ components:
           type: string
         binding:
           $ref: '#/components/schemas/GatewayBindingData'
+        cors:
+          $ref: '#/components/schemas/HttpCors'
+        security:
+          type: string
       required:
       - method
       - path
@@ -5490,13 +5487,6 @@ components:
       - clientSecret
       - redirectUrl
       - scopes
-    SecuritySchemeReferenceData:
-      type: object
-      properties:
-        securityScheme:
-          type: string
-      required:
-      - securityScheme
     ShardId:
       type: object
       properties:
@@ -6595,6 +6585,7 @@ components:
 tags:
 - name: ApiDefinition
 - name: ApiDeployment
+- name: ApiSecurity
 - name: Component
 - name: HealthCheck
 - name: Plugin

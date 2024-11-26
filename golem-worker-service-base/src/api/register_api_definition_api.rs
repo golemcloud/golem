@@ -98,7 +98,7 @@ pub struct SecuritySchemeData {
     pub provider_type: Provider,
     pub scheme_identifier: String,
     pub client_id: String,
-    pub client_secret: String, // secret type macros and therefore already redacted
+    pub client_secret: String,
     pub redirect_url: String,
     pub scopes: Vec<String>,
 }

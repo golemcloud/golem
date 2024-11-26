@@ -19,3 +19,4 @@ pub mod file_download;
 pub mod health_check;
 pub mod plugin;
 pub mod worker;
+pub mod api_security;

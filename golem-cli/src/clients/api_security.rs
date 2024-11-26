@@ -12,24 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::ComponentUriArg;
-use crate::oss::model::OssContext;
-use golem_common::uri::oss::uri::ComponentUri;
+use crate::model::{GolemError};
+use async_trait::async_trait;
+use golem_client::model::{Provider, SecuritySchemeData};
 
-pub mod api_definition;
-pub mod api_deployment;
-pub mod component;
-pub mod plugin;
-pub mod profile;
-pub mod worker;
-mod api_security;
+#[async_trait]
+pub trait ApiSecurityClient {
+    type ProjectContext;
 
-pub trait ComponentRefSplit<ProjectRef> {
-    fn split(self) -> (ComponentUri, Option<ProjectRef>);
-}
+    async fn create(
+        &self,
+        id: String,
+        provider_type: Provider,
+        client_id: String,
+        client_secret: String,
+        scope: Vec<String>,
+        redirect_url: String,
+        project: &Self::ProjectContext,
+    ) -> Result<SecuritySchemeData, GolemError>;
 
-impl ComponentRefSplit<OssContext> for ComponentUriArg {
-    fn split(self) -> (ComponentUri, Option<OssContext>) {
-        (self.uri, None)
-    }
+    async fn get(&self, id: &str) -> Result<SecuritySchemeData, GolemError>;
 }
