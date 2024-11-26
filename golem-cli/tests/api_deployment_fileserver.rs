@@ -136,11 +136,10 @@ fn api_deployment_file_server_simple(
     let res4 = reqwest::blocking::get(format!("http://{host}/files/{component_id}/dir"))?;
     assert_eq!(res4.status().as_u16(), 400);
 
-    // TODO: read a file from a nested path
-    // let res5 = reqwest::blocking::get(format!("http://{host}/files/{component_id}/dir/foo.txt"))?;
-    // assert_eq!(res5.status().as_u16(), 200);
-    // assert_eq!(res5.headers().get("content-type").unwrap(), "text/plain");
-    // assert_eq!(res5.text()?, "foo\n");
+    let res5 = reqwest::blocking::get(format!("http://{host}/files/{component_id}/dir/foo.txt"))?;
+    assert_eq!(res5.status().as_u16(), 200);
+    assert_eq!(res5.headers().get("content-type").unwrap(), "text/plain");
+    assert_eq!(res5.text()?, "foo\n");
 
     Ok(())
 }
@@ -309,7 +308,7 @@ fn make_file_server_api_definition_simple(
         draft: true
         routes:
         - method: Get
-          path: "/files/{component_id}/{{file}}"
+          path: "/files/{component_id}/{{+file}}"
           binding:
             bindingType: file-server
             componentId:

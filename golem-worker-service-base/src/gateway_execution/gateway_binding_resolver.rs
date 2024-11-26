@@ -173,10 +173,18 @@ impl<Namespace: Clone + Send + Sync + 'static>
             .check_path(&api_request.req_method, &path)
             .ok_or("Failed to resolve route")?;
 
-        let zipped_path_params: HashMap<VarInfo, &str> = {
+        let zipped_path_params: HashMap<VarInfo, String> = {
             path_params
                 .iter()
-                .map(|(var, index)| (var.clone(), path[*index]))
+                .map(|param| match param {
+                    router::PathParamExtractor::Single { var_info, index } => {
+                        (var_info.clone(), path[*index].to_string())
+                    }
+                    router::PathParamExtractor::AllFollowing { var_info, index } => {
+                        let value = path[*index..].join("/");
+                        (var_info.clone(), value)
+                    }
+                })
                 .collect()
         };
 

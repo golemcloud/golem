@@ -56,6 +56,7 @@ impl From<PathPattern> for RouterPattern {
         match path {
             PathPattern::Literal(literal) => RouterPattern::literal(literal.0),
             PathPattern::Var(_) => RouterPattern::Variable,
+            PathPattern::CatchAllVar(_) => RouterPattern::CatchAll,
         }
     }
 }

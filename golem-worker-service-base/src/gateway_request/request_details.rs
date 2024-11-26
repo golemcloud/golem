@@ -39,7 +39,7 @@ impl GatewayRequestDetails {
         scheme: &Option<Scheme>,
         host: &ApiSiteString,
         api_input_path: &ApiInputPath,
-        path_params: &HashMap<VarInfo, &str>,
+        path_params: &HashMap<VarInfo, String>,
         query_variable_values: &HashMap<String, String>,
         query_variable_names: &[QueryInfo],
         request_body: &Value,
@@ -221,7 +221,7 @@ impl HttpRequestDetails {
         scheme: &Option<Scheme>,
         host: &ApiSiteString,
         api_input_path: &ApiInputPath,
-        path_params: &HashMap<VarInfo, &str>,
+        path_params: &HashMap<VarInfo, String>,
         query_variable_values: &HashMap<String, String>,
         query_variable_names: &[QueryInfo],
         request_body: &Value,
@@ -258,7 +258,7 @@ impl RequestPathValues {
             .map(|field| &field.value)
     }
 
-    fn from(path_variables: &HashMap<VarInfo, &str>) -> RequestPathValues {
+    fn from(path_variables: &HashMap<VarInfo, String>) -> RequestPathValues {
         let record_fields: Vec<JsonKeyValue> = path_variables
             .iter()
             .map(|(key, value)| JsonKeyValue {
