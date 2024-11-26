@@ -237,9 +237,7 @@ mod internal {
         namespace: &Namespace,
         headers: &HeaderMap,
     ) -> Result<ResolvedWorkerBinding<Namespace>, GatewayBindingResolverError> {
-        let http_request_details = match gateway_request_details {
-            GatewayRequestDetails::Http(http) => http,
-        };
+        let GatewayRequestDetails::Http(http_request_details) = gateway_request_details;
 
         let worker_name_opt = if let Some(worker_name_compiled) = &binding.worker_name_compiled {
             let resolve_rib_input = http_request_details

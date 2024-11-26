@@ -763,7 +763,7 @@ impl TryFrom<crate::gateway_api_definition::http::Route> for grpc_apidefinition:
         let method: grpc_apidefinition::HttpMethod = value.method.into();
         let middlewares = value.middlewares.clone();
         let middleware_proto = middlewares
-            .map(|x| golem_api_grpc::proto::golem::apidefinition::Middleware::try_from(x))
+            .map(golem_api_grpc::proto::golem::apidefinition::Middleware::try_from)
             .transpose()?;
 
         let result = grpc_apidefinition::HttpRoute {
@@ -789,7 +789,7 @@ impl TryFrom<CompiledRoute> for golem_api_grpc::proto::golem::apidefinition::Com
 
         let middleware_proto = value
             .middlewares
-            .map(|x| golem_api_grpc::proto::golem::apidefinition::Middleware::try_from(x))
+            .map(golem_api_grpc::proto::golem::apidefinition::Middleware::try_from)
             .transpose()?;
 
         Ok(Self {
@@ -813,7 +813,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledHttpRoute> for
         let binding = GatewayBindingCompiled::try_from(binding_proto)?;
         let middlewares = value
             .middleware
-            .map(|x| HttpMiddlewares::try_from(x))
+            .map(HttpMiddlewares::try_from)
             .transpose()?;
 
         Ok(CompiledRoute {
@@ -860,7 +860,7 @@ impl TryFrom<grpc_apidefinition::HttpRoute> for crate::gateway_api_definition::h
 
         let cors = value.middleware.and_then(|x| x.cors);
 
-        let cors = cors.map(|x| HttpCors::try_from(x)).transpose()?;
+        let cors = cors.map(HttpCors::try_from).transpose()?;
 
         let result = crate::gateway_api_definition::http::RouteRequest {
             method,

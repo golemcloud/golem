@@ -112,9 +112,7 @@ impl<Namespace: Clone + Send + Sync + 'static> CustomHttpRequestApi<Namespace> {
                     .await
                 {
                     Ok(resolved_gateway_binding) => {
-                        let request = match resolved_gateway_binding.request_details {
-                            GatewayRequestDetails::Http(http) => http,
-                        };
+                        let GatewayRequestDetails::Http(request) = resolved_gateway_binding.request_details;
 
                         let input = GatewayHttpInput::new(
                             &request,

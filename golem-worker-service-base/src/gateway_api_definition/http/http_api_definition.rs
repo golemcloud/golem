@@ -492,7 +492,7 @@ impl TryFrom<HttpRoute> for Route {
         let binding = http_route.binding.ok_or("Missing binding")?;
         let middlewares = http_route
             .middleware
-            .map(|x| HttpMiddlewares::try_from(x))
+            .map(HttpMiddlewares::try_from)
             .transpose()?;
 
         Ok(Route {
