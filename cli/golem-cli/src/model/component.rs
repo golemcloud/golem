@@ -54,6 +54,7 @@ impl From<golem_client::model::Component> for Component {
             metadata,
             created_at,
             files,
+            installed_plugins: _installed_plugins,
         } = value;
 
         Component {
