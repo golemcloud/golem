@@ -44,7 +44,7 @@ impl GatewayRequestDetails {
         query_variable_names: &[QueryInfo],
         request_body: &Value,
         headers: HeaderMap,
-        middlewares: Option<HttpMiddlewares>,
+        middlewares: &Option<HttpMiddlewares>,
     ) -> Result<Self, Vec<String>> {
         Ok(Self::Http(HttpRequestDetails::from_input_http_request(
             scheme,
@@ -108,142 +108,142 @@ impl HttpRequestDetails {
             ("headers".to_string(), header_value),
         ]))
     }
-}
 
-pub fn url(&self) -> Result<Url, String> {
-    let url_str = if let Some(scheme) = &self.scheme {
-        format!(
-            "{}://{}{}",
-            scheme,
-            &self.host,
-            &self.api_input_path.to_string()
-        )
-    } else {
-        format!("{}{}", &self.host, &self.api_input_path.to_string())
-    };
+    pub fn url(&self) -> Result<Url, String> {
+        let url_str = if let Some(scheme) = &self.scheme {
+            format!(
+                "{}://{}{}",
+                scheme,
+                &self.host,
+                &self.api_input_path.to_string()
+            )
+        } else {
+            format!("{}{}", &self.host, &self.api_input_path.to_string())
+        };
 
-    Url::parse(&url_str).map_err(|err| err.to_string())
-}
-
-pub fn empty() -> HttpRequestDetails {
-    HttpRequestDetails {
-        scheme: Some(Scheme::HTTP),
-        host: ApiSiteString("".to_string()),
-        api_input_path: ApiInputPath {
-            base_path: "".to_string(),
-            query_path: None,
-        },
-        request_path_values: RequestPathValues(JsonKeyValues::default()),
-        request_body: RequestBody(Value::Null),
-        request_query_values: RequestQueryValues(JsonKeyValues::default()),
-        request_header_values: RequestHeaderValues(JsonKeyValues::default()),
-        http_middlewares: None,
+        Url::parse(&url_str).map_err(|err| err.to_string())
     }
-}
 
-pub fn get_api_input_path(&self) -> String {
-    self.api_input_path.to_string()
-}
+    pub fn empty() -> HttpRequestDetails {
+        HttpRequestDetails {
+            scheme: Some(Scheme::HTTP),
+            host: ApiSiteString("".to_string()),
+            api_input_path: ApiInputPath {
+                base_path: "".to_string(),
+                query_path: None,
+            },
+            request_path_values: RequestPathValues(JsonKeyValues::default()),
+            request_body: RequestBody(Value::Null),
+            request_query_values: RequestQueryValues(JsonKeyValues::default()),
+            request_header_values: RequestHeaderValues(JsonKeyValues::default()),
+            http_middlewares: None,
+        }
+    }
 
-pub fn get_access_token_from_cookie(&self) -> Option<String> {
-    self.request_header_values
-        .0
-        .fields
-        .iter()
-        .find(|field| field.name == "Cookie" || field.name == "cookie")
-        .and_then(|field| field.value.as_str().map(|x| x.to_string()))
-        .and_then(|cookie_header| {
-            let parts: Vec<&str> = cookie_header.split(';').collect();
-            let access_token_part = parts.iter().find(|part| part.contains("access_token"));
-            access_token_part.and_then(|part| {
-                let token_parts: Vec<&str> = part.split('=').collect();
-                if token_parts.len() == 2 {
-                    Some(token_parts[1].to_string())
-                } else {
-                    None
-                }
-            })
-        })
-}
+    pub fn get_api_input_path(&self) -> String {
+        self.api_input_path.to_string()
+    }
 
-pub fn get_id_token_from_cookie(&self) -> Option<String> {
-    self.request_header_values
-        .0
-        .fields
-        .iter()
-        .find(|field| field.name == "Cookie" || field.name == "cookie")
-        .and_then(|field| field.value.as_str().map(|x| x.to_string()))
-        .and_then(|cookie_header| {
-            let parts: Vec<&str> = cookie_header.split(';').collect();
-            let id_token_part = parts.iter().find(|part| part.contains("id_token"));
-            id_token_part.and_then(|part| {
-                let token_parts: Vec<&str> = part.split('=').collect();
-                if token_parts.len() == 2 {
-                    Some(token_parts[1].to_string())
-                } else {
-                    None
-                }
-            })
-        })
-}
-
-pub fn get_cookie_values(&self) -> HashMap<&str, &str> {
-    let mut hash_map = HashMap::new();
-
-    for json_key_value in &self.request_header_values.0.fields {
-        let field_name = &json_key_value.name;
-
-        if field_name == "cookie" || field_name == "Cookie" {
-            if let Some(cookie_header) = json_key_value.value.as_str() {
+    pub fn get_access_token_from_cookie(&self) -> Option<String> {
+        self.request_header_values
+            .0
+            .fields
+            .iter()
+            .find(|field| field.name == "Cookie" || field.name == "cookie")
+            .and_then(|field| field.value.as_str().map(|x| x.to_string()))
+            .and_then(|cookie_header| {
                 let parts: Vec<&str> = cookie_header.split(';').collect();
-                for part in parts {
-                    let key_value: Vec<&str> = part.split('=').collect();
-                    if let (Some(key), Some(value)) = (key_value.first(), key_value.get(1)) {
-                        hash_map.insert(key.trim(), value.trim());
+                let access_token_part = parts.iter().find(|part| part.contains("access_token"));
+                access_token_part.and_then(|part| {
+                    let token_parts: Vec<&str> = part.split('=').collect();
+                    if token_parts.len() == 2 {
+                        Some(token_parts[1].to_string())
+                    } else {
+                        None
+                    }
+                })
+            })
+    }
+
+    pub fn get_id_token_from_cookie(&self) -> Option<String> {
+        self.request_header_values
+            .0
+            .fields
+            .iter()
+            .find(|field| field.name == "Cookie" || field.name == "cookie")
+            .and_then(|field| field.value.as_str().map(|x| x.to_string()))
+            .and_then(|cookie_header| {
+                let parts: Vec<&str> = cookie_header.split(';').collect();
+                let id_token_part = parts.iter().find(|part| part.contains("id_token"));
+                id_token_part.and_then(|part| {
+                    let token_parts: Vec<&str> = part.split('=').collect();
+                    if token_parts.len() == 2 {
+                        Some(token_parts[1].to_string())
+                    } else {
+                        None
+                    }
+                })
+            })
+    }
+
+    pub fn get_cookie_values(&self) -> HashMap<&str, &str> {
+        let mut hash_map = HashMap::new();
+
+        for json_key_value in &self.request_header_values.0.fields {
+            let field_name = &json_key_value.name;
+
+            if field_name == "cookie" || field_name == "Cookie" {
+                if let Some(cookie_header) = json_key_value.value.as_str() {
+                    let parts: Vec<&str> = cookie_header.split(';').collect();
+                    for part in parts {
+                        let key_value: Vec<&str> = part.split('=').collect();
+                        if let (Some(key), Some(value)) = (key_value.first(), key_value.get(1)) {
+                            hash_map.insert(key.trim(), value.trim());
+                        }
                     }
                 }
             }
         }
+
+        hash_map
     }
 
-    hash_map
-}
+    pub fn get_accept_content_type_header(&self) -> Option<String> {
+        self.request_header_values
+            .0
+            .fields
+            .iter()
+            .find(|field| field.name == http::header::ACCEPT.to_string())
+            .and_then(|field| field.value.as_str().map(|x| x.to_string()))
+    }
 
-pub fn get_accept_content_type_header(&self) -> Option<String> {
-    self.request_header_values
-        .0
-        .fields
-        .iter()
-        .find(|field| field.name == http::header::ACCEPT.to_string())
-        .and_then(|field| field.value.as_str().map(|x| x.to_string()))
-}
+    fn from_input_http_request(
+        scheme: &Option<Scheme>,
+        host: &ApiSiteString,
+        api_input_path: &ApiInputPath,
+        path_params: &HashMap<VarInfo, &str>,
+        query_variable_values: &HashMap<String, String>,
+        query_variable_names: &[QueryInfo],
+        request_body: &Value,
+        all_headers: HeaderMap,
+        http_middlewares: &Option<HttpMiddlewares>,
+    ) -> Result<Self, Vec<String>> {
+        let request_body = RequestBody::from(request_body)?;
+        let path_params = RequestPathValues::from(path_params);
+        let query_params = RequestQueryValues::from(query_variable_values, query_variable_names)?;
+        let header_params = RequestHeaderValues::from(&all_headers)?;
 
-fn from_input_http_request(
-    scheme: &Option<Scheme>,
-    host: &ApiSiteString,
-    api_input_path: &ApiInputPath,
-    path_params: &HashMap<VarInfo, &str>,
-    query_variable_values: &HashMap<String, String>,
-    query_variable_names: &[QueryInfo],
-    request_body: &Value,
-    all_headers: HeaderMap,
-    http_middlewares: Option<HttpMiddlewares>,
-) -> Result<Self, Vec<String>> {
-    let request_body = RequestBody::from(request_body)?;
-    let path_params = RequestPathValues::from(path_params);
-    let query_params = RequestQueryValues::from(query_variable_values, query_variable_names)?;
-    let header_params = RequestHeaderValues::from(&all_headers)?;
-
-    Ok(Self {
-        scheme: scheme.clone(),
-        host: host.clone(),
-        api_input_path: api_input_path.clone(),
-        request_path_values: path_params,
-        request_body,
-        request_query_values: query_params,
-        request_header_values: header_params,
-        http_middlewares,
-    })
+        Ok(Self {
+            scheme: scheme.clone(),
+            host: host.clone(),
+            api_input_path: api_input_path.clone(),
+            request_path_values: path_params,
+            request_body,
+            request_query_values: query_params,
+            request_header_values: header_params,
+            http_middlewares: http_middlewares.clone(),
+        })
+    }
 }
 
 #[derive(Clone, Debug, Default)]

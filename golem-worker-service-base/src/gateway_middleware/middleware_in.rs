@@ -18,10 +18,10 @@ use async_trait::async_trait;
 use golem_common::SafeDisplay;
 
 #[async_trait]
-pub trait MiddlewareIn {
+pub trait HttpMiddlewareIn<Namespace> {
     async fn process_input(
         &self,
-        input: &GatewayHttpInput,
+        input: &GatewayHttpInput<Namespace>,
     ) -> Result<MiddlewareSuccess, MiddlewareInError>;
 }
 
@@ -47,12 +47,12 @@ pub enum MiddlewareSuccess {
 }
 
 #[async_trait]
-impl<Namespace: Send + Sync> MiddlewareIn
+impl<Namespace: Send + Sync> HttpMiddlewareIn<Namespace>
     for HttpAuthenticationMiddleware
 {
     async fn process_input(
         &self,
-        input: &GatewayHttpInput,
+        input: &GatewayHttpInput<Namespace>,
     ) -> Result<MiddlewareSuccess, MiddlewareInError> {
         self.apply_http_auth(
             &input.http_request_details,

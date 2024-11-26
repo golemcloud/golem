@@ -113,7 +113,7 @@ mod internal {
         identity_provider: &Arc<dyn IdentityProvider + Send + Sync>,
         client: &OpenIdClient,
         http_authorizer: &HttpAuthenticationMiddleware,
-    ) -> Result<MiddlewareSuccess<poem::Response>, MiddlewareInError> {
+    ) -> Result<MiddlewareSuccess, MiddlewareInError> {
         let redirect_uri = input.get_api_input_path();
 
         let authorization = identity_provider.get_authorization_url(

@@ -45,6 +45,7 @@ use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use poem::Response;
 use serde_json::Value;
 use url::Url;
+use golem_worker_service_base::gateway_request::request_details::GatewayRequestDetails;
 
 // The tests that focus on end to end workflow of API Gateway, without involving any real workers,
 // and stays independent of other modules.
@@ -78,8 +79,12 @@ async fn execute(
         Arc::new(DefaultAuthCallBack),
     );
 
+    let http = match resolved_gateway_binding.request_details {
+        GatewayRequestDetails::Http(http) => http
+    };
     let input = GatewayHttpInput::new(
-        &resolved_gateway_binding,
+        &http,
+        resolved_gateway_binding.resolved_binding,
         session_store,
         Arc::new(test_identity_provider_resolver.clone()),
     );

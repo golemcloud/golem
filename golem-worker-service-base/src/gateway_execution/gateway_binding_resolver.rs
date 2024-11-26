@@ -16,7 +16,6 @@ use crate::gateway_api_definition::http::{CompiledHttpApiDefinition, VarInfo};
 use crate::gateway_binding::{GatewayBindingCompiled, StaticBinding};
 use crate::gateway_binding::{GatewayRequestDetails, ResponseMappingCompiled};
 use crate::gateway_execution::router::RouterPattern;
-use crate::gateway_middleware::HttpMiddlewares;
 use crate::gateway_request::http_request::{router, InputHttpRequest};
 use crate::gateway_security::OpenIdClient;
 use async_trait::async_trait;
@@ -190,6 +189,7 @@ impl<Namespace: Clone + Send + Sync + 'static>
             query_params,
             request_body,
             headers.clone(),
+            middlewares
         )
         .map_err(|err| format!("Failed to fetch input request details {}", err.join(", ")))?;
 
@@ -224,19 +224,20 @@ impl<Namespace: Clone + Send + Sync + 'static>
 }
 
 mod internal {
-    use crate::gateway_binding::{
-        GatewayBindingResolverError, GatewayRequestDetails, ResolvedWorkerBinding,
-        RibInputValueResolver, WorkerBindingCompiled, WorkerDetail,
-    };
+    use crate::gateway_binding::{GatewayBindingResolverError, GatewayRequestDetails, HttpRequestDetails, ResolvedWorkerBinding, RibInputValueResolver, WorkerBindingCompiled, WorkerDetail};
     use golem_common::model::IdempotencyKey;
     use http::HeaderMap;
 
     pub async fn get_resolved_binding<Namespace: Clone>(
         binding: &WorkerBindingCompiled,
-        http_request_details: &GatewayRequestDetails,
+        gateway_request_details: &GatewayRequestDetails,
         namespace: &Namespace,
         headers: &HeaderMap,
     ) -> Result<ResolvedWorkerBinding<Namespace>, GatewayBindingResolverError> {
+        let http_request_details = match gateway_request_details {
+            GatewayRequestDetails::Http(http) => http
+        };
+
         let worker_name_opt = if let Some(worker_name_compiled) = &binding.worker_name_compiled {
             let resolve_rib_input = http_request_details
                 .resolve_rib_input_value(&worker_name_compiled.rib_input_type_info)

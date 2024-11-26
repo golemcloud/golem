@@ -43,22 +43,12 @@ impl HttpMiddlewares {
         self.0.push(HttpMiddleware::cors(cors));
     }
 
-    pub fn get_http_middleware(&self) -> Option<HttpAuthenticationMiddleware> {
-        self.0.iter().find_map(|m| m.get_http_authentication())
-    }
-
-    pub fn http_middlewares(&self) -> Vec<HttpMiddleware> {
-        self.0
-            .iter()
-            .collect()
-    }
-
-    pub async fn process_middleware_in<Namespace, Response>(
+    pub async fn process_middleware_in<Namespace>(
         &self,
         input: &GatewayHttpInput<Namespace>,
-    ) -> Result<MiddlewareSuccess<Response>, MiddlewareInError>
+    ) -> Result<MiddlewareSuccess, MiddlewareInError>
     where
-        HttpAuthenticationMiddleware: MiddlewareIn<Namespace, Response>,
+        HttpAuthenticationMiddleware: HttpMiddlewareIn<Namespace>,
     {
         for middleware in self.0.iter() {
             match middleware {
@@ -85,7 +75,7 @@ impl HttpMiddlewares {
         response: &mut Out,
     ) -> Result<(), MiddlewareOutError>
     where
-        HttpCors: MiddlewareOut<Out>,
+        HttpCors: HttpMiddlewareOut<Out>,
     {
         for middleware in self.0.iter() {
             match middleware {
@@ -112,14 +102,6 @@ impl HttpMiddlewares {
     }
 }
 
-// A middleware will not add, remove or update the input to worker what-so-ever,
-// as Rib is well typed and there wouldn't be any magical pre-processing such as adding a field to the worker input record.
-// In other words, users need to satisfy the Rib compiler (to not complain about the input or output of worker) while registering API definition.
-// That said, depending on the middleware type, gateway can make certain decisions automatically
-// such as adding CORS headers to the http response body instead of asking users to do this everytime the Rib script,
-// even after specifying a CORS middleware plugin. However, these automated decisions will still be rare.
-// In most cases, it is best for users to do every pre-processing of input and forming the shape of response by themselves,
-// as every data related to the configured middleware is made available to Rib compiler.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Middleware {
     Http(HttpMiddleware),
