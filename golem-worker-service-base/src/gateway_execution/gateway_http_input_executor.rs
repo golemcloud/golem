@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::gateway_binding::{HttpRequestDetails, ResolvedBinding, ResolvedWorkerBinding, RibInputTypeMismatch, RibInputValueResolver, StaticBinding};
+use crate::gateway_binding::{
+    HttpRequestDetails, ResolvedBinding, ResolvedWorkerBinding, RibInputTypeMismatch,
+    RibInputValueResolver, StaticBinding,
+};
 use crate::gateway_execution::auth_call_back_binding_handler::{
     AuthCallBackBindingHandler, AuthCallBackResult,
 };
@@ -23,8 +26,8 @@ use crate::gateway_execution::gateway_session::GatewaySessionStore;
 use crate::gateway_execution::to_response::ToHttpResponse;
 use crate::gateway_execution::to_response_failure::ToHttpResponseFromSafeDisplay;
 use crate::gateway_middleware::{
-    HttpAuthenticationMiddleware, HttpCors as CorsPreflight, HttpMiddlewareIn, MiddlewareInError,
-    HttpMiddlewareOut, MiddlewareOutError, MiddlewareSuccess, HttpMiddlewares,
+    HttpAuthenticationMiddleware, HttpCors as CorsPreflight, HttpMiddlewareIn, HttpMiddlewareOut,
+    HttpMiddlewares, MiddlewareInError, MiddlewareOutError, MiddlewareSuccess,
 };
 use crate::gateway_rib_interpreter::{EvaluationError, WorkerServiceRibInterpreter};
 use crate::gateway_security::{IdentityProviderResolver, SecuritySchemeWithProviderMetadata};
@@ -234,10 +237,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
             .await;
 
         authorisation_result
-            .to_response(
-                &input.http_request_details,
-                &input.session_store,
-            )
+            .to_response(&input.http_request_details, &input.session_store)
             .await
     }
 
@@ -251,8 +251,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         CorsPreflight: HttpMiddlewareOut<poem::Response>,
         MiddlewareInError: ToHttpResponseFromSafeDisplay,
     {
-        let input_middleware_result=
-            middlewares.process_middleware_in(input).await;
+        let input_middleware_result = middlewares.process_middleware_in(input).await;
 
         match input_middleware_result {
             Ok(incoming_middleware_result) => match incoming_middleware_result {
@@ -269,8 +268,8 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
 }
 
 #[async_trait]
-impl<Namespace: Send + Sync + Clone>
-    GatewayHttpInputExecutor<Namespace> for DefaultGatewayInputExecutor<Namespace>
+impl<Namespace: Send + Sync + Clone> GatewayHttpInputExecutor<Namespace>
+    for DefaultGatewayInputExecutor<Namespace>
 {
     async fn execute_binding(&self, input: &GatewayHttpInput<Namespace>) -> poem::Response
     where
@@ -288,60 +287,60 @@ impl<Namespace: Send + Sync + Clone>
         let binding = &input.resolved_gateway_binding;
         let middleware_opt = &input.http_request_details.http_middlewares;
 
-        let middleware_response =  if let Some(middleware) = middleware_opt {
+        let middleware_response = if let Some(middleware) = middleware_opt {
             Self::redirect_or_continue(input, middleware).await
         } else {
             None
         };
 
         match middleware_response {
-            Some(r) => r ,
-            None => {
-                match &binding {
-                    ResolvedBinding::Static(StaticBinding::HttpCorsPreflight(cors_preflight)) => {
-                        cors_preflight
-                            .clone()
-                            .to_response(&input.http_request_details, &input.session_store)
-                            .await
-                    }
+            Some(r) => r,
+            None => match &binding {
+                ResolvedBinding::Static(StaticBinding::HttpCorsPreflight(cors_preflight)) => {
+                    cors_preflight
+                        .clone()
+                        .to_response(&input.http_request_details, &input.session_store)
+                        .await
+                }
 
-                    ResolvedBinding::Static(StaticBinding::HttpAuthCallBack(auth_call_back)) => {
-                        self.handle_http_auth_call_binding(&auth_call_back.security_scheme, input)
-                            .await
-                    }
+                ResolvedBinding::Static(StaticBinding::HttpAuthCallBack(auth_call_back)) => {
+                    self.handle_http_auth_call_binding(&auth_call_back.security_scheme, input)
+                        .await
+                }
 
-                    ResolvedBinding::Worker(resolved_worker_binding) => {
-                        let mut response = self
-                            .handle_worker_binding(
-                                &input.http_request_details,
-                                resolved_worker_binding,
-                                &input.session_store,
-                            )
-                            .await;
-
-                        if let Some(middleware) = middleware_opt {
-                            let result = middleware.process_middleware_out(&input.session_store, &mut response).await;
-                            match result {
-                                Ok(_) => response,
-                                Err(err) => err.to_response_from_safe_display(|_| {
-                                    StatusCode::INTERNAL_SERVER_ERROR
-                                }),
-                            }
-                        } else {
-                            response
-                        }
-                    }
-
-                    ResolvedBinding::FileServer(resolved_file_server_binding) => {
-                        self.handle_file_server_binding(
+                ResolvedBinding::Worker(resolved_worker_binding) => {
+                    let mut response = self
+                        .handle_worker_binding(
                             &input.http_request_details,
-                            resolved_file_server_binding,
+                            resolved_worker_binding,
                             &input.session_store,
                         )
-                            .await
+                        .await;
+
+                    if let Some(middleware) = middleware_opt {
+                        let result = middleware
+                            .process_middleware_out(&input.session_store, &mut response)
+                            .await;
+                        match result {
+                            Ok(_) => response,
+                            Err(err) => err.to_response_from_safe_display(|_| {
+                                StatusCode::INTERNAL_SERVER_ERROR
+                            }),
+                        }
+                    } else {
+                        response
                     }
                 }
-            }
+
+                ResolvedBinding::FileServer(resolved_file_server_binding) => {
+                    self.handle_file_server_binding(
+                        &input.http_request_details,
+                        resolved_file_server_binding,
+                        &input.session_store,
+                    )
+                    .await
+                }
+            },
         }
     }
 }

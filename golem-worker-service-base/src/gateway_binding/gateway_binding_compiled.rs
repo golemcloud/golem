@@ -165,7 +165,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
                         .map(rib::WorkerFunctionsInRib::try_from)
                         .transpose()?,
                 };
-                
+
                 let binding_type = value.binding_type.ok_or("Missing binding_type")?;
 
                 if binding_type == 0 {
@@ -200,10 +200,8 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
 
 mod internal {
     use crate::gateway_binding::WorkerBindingCompiled;
-    
-    
+
     use golem_common::model::GatewayBindingType;
-    
 
     pub(crate) fn to_gateway_binding_compiled_proto(
         worker_binding: WorkerBindingCompiled,

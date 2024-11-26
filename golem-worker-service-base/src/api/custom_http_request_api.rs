@@ -28,7 +28,7 @@ use crate::gateway_execution::api_definition_lookup::ApiDefinitionsLookup;
 use crate::gateway_binding::{GatewayBindingResolver, GatewayRequestDetails};
 use crate::gateway_execution::auth_call_back_binding_handler::DefaultAuthCallBack;
 use crate::gateway_execution::gateway_http_input_executor::{
-    DefaultGatewayInputExecutor, GatewayHttpInputExecutor, GatewayHttpInput,
+    DefaultGatewayInputExecutor, GatewayHttpInput, GatewayHttpInputExecutor,
 };
 use crate::gateway_execution::gateway_session::GatewaySessionStore;
 use crate::gateway_execution::GatewayWorkerRequestExecutor;
@@ -46,8 +46,7 @@ pub struct CustomHttpRequestApi<Namespace> {
             > + Sync
             + Send,
     >,
-    pub gateway_binding_executor:
-        Arc<dyn GatewayHttpInputExecutor<Namespace> + Sync + Send>,
+    pub gateway_binding_executor: Arc<dyn GatewayHttpInputExecutor<Namespace> + Sync + Send>,
     pub gateway_session_store: GatewaySessionStore,
 }
 
@@ -112,10 +111,9 @@ impl<Namespace: Clone + Send + Sync + 'static> CustomHttpRequestApi<Namespace> {
                     .resolve_gateway_binding(possible_api_definitions)
                     .await
                 {
-
                     Ok(resolved_gateway_binding) => {
                         let request = match resolved_gateway_binding.request_details {
-                            GatewayRequestDetails::Http(http) => http
+                            GatewayRequestDetails::Http(http) => http,
                         };
 
                         let input = GatewayHttpInput::new(

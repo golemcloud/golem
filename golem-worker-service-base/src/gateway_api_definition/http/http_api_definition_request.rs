@@ -46,18 +46,19 @@ pub struct RouteRequest {
 
 impl From<Route> for RouteRequest {
     fn from(value: Route) -> Self {
-        let security_middleware =
-            value.middlewares.clone().and_then(|x| x.get_http_authentication_middleware());
+        let security_middleware = value
+            .middlewares
+            .clone()
+            .and_then(|x| x.get_http_authentication_middleware());
 
-        let cors_middleware =
-            value.middlewares.and_then(|x| x.get_cors_middleware());
+        let cors_middleware = value.middlewares.and_then(|x| x.get_cors_middleware());
 
         RouteRequest {
             method: value.method,
             path: value.path,
             binding: value.binding,
             security: security_middleware.map(|x| SecuritySchemeReference::from(x.security_scheme)),
-            cors: cors_middleware
+            cors: cors_middleware,
         }
     }
 }

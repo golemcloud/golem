@@ -47,9 +47,7 @@ pub enum MiddlewareSuccess {
 }
 
 #[async_trait]
-impl<Namespace: Send + Sync> HttpMiddlewareIn<Namespace>
-    for HttpAuthenticationMiddleware
-{
+impl<Namespace: Send + Sync> HttpMiddlewareIn<Namespace> for HttpAuthenticationMiddleware {
     async fn process_input(
         &self,
         input: &GatewayHttpInput<Namespace>,
@@ -59,6 +57,6 @@ impl<Namespace: Send + Sync> HttpMiddlewareIn<Namespace>
             &input.session_store,
             &input.identity_provider_resolver,
         )
-            .await
+        .await
     }
 }

@@ -147,7 +147,7 @@ pub mod router {
         pub query_params: Vec<QueryInfo>,
         pub namespace: Namespace,
         pub binding: GatewayBindingCompiled,
-        pub middlewares: Option<HttpMiddlewares>
+        pub middlewares: Option<HttpMiddlewares>,
     }
 
     pub fn build<Namespace>(
@@ -175,7 +175,7 @@ pub mod router {
                 query_params: path.query_params,
                 namespace,
                 binding,
-                middlewares: route.middlewares
+                middlewares: route.middlewares,
             };
 
             let path: Vec<RouterPattern> = path

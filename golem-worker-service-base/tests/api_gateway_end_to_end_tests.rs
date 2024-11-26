@@ -29,11 +29,12 @@ use golem_worker_service_base::gateway_api_deployment::ApiSiteString;
 use golem_worker_service_base::gateway_execution::auth_call_back_binding_handler::DefaultAuthCallBack;
 use golem_worker_service_base::gateway_execution::gateway_binding_resolver::GatewayBindingResolver;
 use golem_worker_service_base::gateway_execution::gateway_http_input_executor::{
-    DefaultGatewayInputExecutor, GatewayHttpInputExecutor, GatewayHttpInput,
+    DefaultGatewayInputExecutor, GatewayHttpInput, GatewayHttpInputExecutor,
 };
 use golem_worker_service_base::gateway_execution::gateway_session::GatewaySessionStore;
 use golem_worker_service_base::gateway_middleware::HttpCors;
 use golem_worker_service_base::gateway_request::http_request::{ApiInputPath, InputHttpRequest};
+use golem_worker_service_base::gateway_request::request_details::GatewayRequestDetails;
 use golem_worker_service_base::gateway_security::{
     Provider, SecurityScheme, SecuritySchemeIdentifier,
 };
@@ -45,7 +46,6 @@ use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use poem::Response;
 use serde_json::Value;
 use url::Url;
-use golem_worker_service_base::gateway_request::request_details::GatewayRequestDetails;
 
 // The tests that focus on end to end workflow of API Gateway, without involving any real workers,
 // and stays independent of other modules.
@@ -80,7 +80,7 @@ async fn execute(
     );
 
     let http = match resolved_gateway_binding.request_details {
-        GatewayRequestDetails::Http(http) => http
+        GatewayRequestDetails::Http(http) => http,
     };
     let input = GatewayHttpInput::new(
         &http,

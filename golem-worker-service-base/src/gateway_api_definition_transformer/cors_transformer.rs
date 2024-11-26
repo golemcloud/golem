@@ -33,10 +33,10 @@ impl ApiDefinitionTransformer for CorsTransformer {
 }
 
 mod internal {
-    use poem_openapi::types::Type;
     use crate::gateway_api_definition::http::{AllPathPatterns, MethodPattern, Route};
     use crate::gateway_api_definition_transformer::ApiDefTransformationError;
     use crate::gateway_middleware::{HttpCors, HttpMiddleware, HttpMiddlewares};
+    use poem_openapi::types::Type;
 
     pub(crate) fn update_routes_with_cors_middleware(
         routes: &mut [Route],
@@ -104,10 +104,8 @@ mod internal {
                 if middlewares.get_cors_middleware().is_empty() {
                     middlewares.add_cors(cors);
                 }
-            },
-            None => {
-                *middlewares = Some(HttpMiddlewares(vec![HttpMiddleware::cors(cors)]))
             }
+            None => *middlewares = Some(HttpMiddlewares(vec![HttpMiddleware::cors(cors)])),
         }
 
         Ok(())
@@ -126,7 +124,7 @@ mod tests {
         ApiDefTransformationError, ApiDefinitionTransformer, CorsTransformer,
     };
     use crate::gateway_binding::{GatewayBinding, ResponseMapping, StaticBinding, WorkerBinding};
-    use crate::gateway_middleware::{HttpCors, HttpMiddleware, Middleware, HttpMiddlewares};
+    use crate::gateway_middleware::{HttpCors, HttpMiddleware, HttpMiddlewares, Middleware};
     use golem_common::model::ComponentId;
     use golem_service_base::model::VersionedComponentId;
     use rib::Expr;

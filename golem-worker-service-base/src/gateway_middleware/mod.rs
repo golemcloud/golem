@@ -38,7 +38,6 @@ mod middleware_out;
 pub struct HttpMiddlewares(pub Vec<HttpMiddleware>);
 
 impl HttpMiddlewares {
-
     pub fn add_cors(&mut self, cors: HttpCors) {
         self.0.push(HttpMiddleware::cors(cors));
     }

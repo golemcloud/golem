@@ -59,7 +59,12 @@ impl HttpApiDefinition {
     pub fn security_schemes(&self) -> Vec<SecuritySchemeReference> {
         self.routes
             .iter()
-            .filter_map(|route| route.middlewares.clone().and_then(|x| x.get_http_authentication_middleware()))
+            .filter_map(|route| {
+                route
+                    .middlewares
+                    .clone()
+                    .and_then(|x| x.get_http_authentication_middleware())
+            })
             .map(|x| SecuritySchemeReference::from(x.security_scheme))
             .collect()
     }
@@ -96,13 +101,11 @@ impl HttpApiDefinition {
 
             if let Some(security) = route.security {
                 let security_scheme = security_scheme_service
-                        .get(&security.security_scheme_identifier, namespace)
-                        .await
-                        .map_err(ApiDefinitionError::SecuritySchemeError)?;
+                    .get(&security.security_scheme_identifier, namespace)
+                    .await
+                    .map_err(ApiDefinitionError::SecuritySchemeError)?;
 
-                http_middlewares.push(HttpMiddleware::authenticate_request(
-                    security_scheme
-                ));
+                http_middlewares.push(HttpMiddleware::authenticate_request(security_scheme));
             }
 
             if let Some(cors) = route.cors {
@@ -118,7 +121,7 @@ impl HttpApiDefinition {
                     Some(HttpMiddlewares(http_middlewares))
                 },
 
-                binding: route.binding
+                binding: route.binding,
             })
         }
 
@@ -487,14 +490,16 @@ impl TryFrom<HttpRoute> for Route {
 
     fn try_from(http_route: HttpRoute) -> Result<Self, Self::Error> {
         let binding = http_route.binding.ok_or("Missing binding")?;
-        let middlewares =
-            http_route.middleware.map(|x| HttpMiddlewares::try_from(x)).transpose()?;
+        let middlewares = http_route
+            .middleware
+            .map(|x| HttpMiddlewares::try_from(x))
+            .transpose()?;
 
         Ok(Route {
             method: MethodPattern::try_from(http_route.method)?,
             path: AllPathPatterns::from_str(http_route.path.as_str())?,
             binding: GatewayBinding::try_from(binding)?,
-            middlewares
+            middlewares,
         })
     }
 }
@@ -513,7 +518,7 @@ pub struct CompiledRoute {
     pub method: MethodPattern,
     pub path: AllPathPatterns,
     pub binding: GatewayBindingCompiled,
-    pub middlewares: Option<HttpMiddlewares>
+    pub middlewares: Option<HttpMiddlewares>,
 }
 
 #[derive(Debug)]
@@ -563,7 +568,7 @@ impl CompiledRoute {
                     method: route.method.clone(),
                     path: route.path.clone(),
                     binding: GatewayBindingCompiled::Worker(binding),
-                    middlewares: route.middlewares.clone()
+                    middlewares: route.middlewares.clone(),
                 })
             }
 
@@ -583,7 +588,7 @@ impl CompiledRoute {
                     method: route.method.clone(),
                     path: route.path.clone(),
                     binding: GatewayBindingCompiled::FileServer(binding),
-                    middlewares: route.middlewares.clone()
+                    middlewares: route.middlewares.clone(),
                 })
             }
 
@@ -591,7 +596,7 @@ impl CompiledRoute {
                 method: route.method.clone(),
                 path: route.path.clone(),
                 binding: GatewayBindingCompiled::Static(static_binding.clone()),
-                middlewares: route.middlewares.clone()
+                middlewares: route.middlewares.clone(),
             }),
         }
     }

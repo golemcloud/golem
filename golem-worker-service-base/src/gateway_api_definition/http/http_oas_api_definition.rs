@@ -124,9 +124,7 @@ mod internal {
     use serde_json::Value;
 
     use crate::gateway_binding::{GatewayBinding, ResponseMapping, StaticBinding, WorkerBinding};
-    use crate::gateway_middleware::{
-        CorsPreflightExpr, HttpCors
-    };
+    use crate::gateway_middleware::{CorsPreflightExpr, HttpCors};
     use crate::gateway_security::{SecuritySchemeIdentifier, SecuritySchemeReference};
     use golem_service_base::model::VersionedComponentId;
     use uuid::Uuid;
@@ -296,7 +294,7 @@ mod internal {
                         method,
                         binding: GatewayBinding::static_binding(binding),
                         security,
-                        cors: None
+                        cors: None,
                     })
                 } else {
                     Err(format!(
@@ -381,7 +379,6 @@ mod internal {
         Ok(binding_type_optional.unwrap_or(GatewayBindingType::Default))
     }
 
-
     pub(crate) fn get_response_mapping(
         gateway_binding_value: &Value,
     ) -> Result<ResponseMapping, String> {
@@ -443,7 +440,7 @@ mod tests {
     use super::*;
     use crate::gateway_api_definition::http::{AllPathPatterns, MethodPattern, RouteRequest};
     use crate::gateway_binding::{GatewayBinding, ResponseMapping, StaticBinding, WorkerBinding};
-    use crate::gateway_middleware::{HttpCors, HttpMiddleware, Middleware, HttpMiddlewares};
+    use crate::gateway_middleware::{HttpCors, HttpMiddleware, HttpMiddlewares, Middleware};
     use golem_common::model::ComponentId;
     use openapiv3::Operation;
     use rib::Expr;
@@ -602,17 +599,19 @@ mod tests {
                     .into_iter()
                     .collect(),
                 )),
-                middleware: Some(HttpMiddlewares(vec![Middleware::Http(HttpMiddleware::cors(
-                    HttpCors::from_parameters(
-                        Some("*".to_string()),
-                        Some("GET, POST, PUT, DELETE, OPTIONS".to_string()),
-                        Some("Content-Type, Authorization".to_string()),
-                        None,
-                        Some(true),
-                        None,
-                    )
-                    .unwrap(),
-                ))])),
+                middleware: Some(HttpMiddlewares(vec![Middleware::Http(
+                    HttpMiddleware::cors(
+                        HttpCors::from_parameters(
+                            Some("*".to_string()),
+                            Some("GET, POST, PUT, DELETE, OPTIONS".to_string()),
+                            Some("Content-Type, Authorization".to_string()),
+                            None,
+                            Some(true),
+                            None,
+                        )
+                        .unwrap(),
+                    ),
+                )])),
             }),
         }
     }

@@ -168,7 +168,7 @@ impl<Namespace: Clone + Send + Sync + 'static>
             query_params,
             namespace,
             binding,
-            middlewares
+            middlewares,
         } = router
             .check_path(&api_request.req_method, &path)
             .ok_or("Failed to resolve route")?;
@@ -189,7 +189,7 @@ impl<Namespace: Clone + Send + Sync + 'static>
             query_params,
             request_body,
             headers.clone(),
-            middlewares
+            middlewares,
         )
         .map_err(|err| format!("Failed to fetch input request details {}", err.join(", ")))?;
 
@@ -224,7 +224,10 @@ impl<Namespace: Clone + Send + Sync + 'static>
 }
 
 mod internal {
-    use crate::gateway_binding::{GatewayBindingResolverError, GatewayRequestDetails, ResolvedWorkerBinding, RibInputValueResolver, WorkerBindingCompiled, WorkerDetail};
+    use crate::gateway_binding::{
+        GatewayBindingResolverError, GatewayRequestDetails, ResolvedWorkerBinding,
+        RibInputValueResolver, WorkerBindingCompiled, WorkerDetail,
+    };
     use golem_common::model::IdempotencyKey;
     use http::HeaderMap;
 
@@ -235,7 +238,7 @@ mod internal {
         headers: &HeaderMap,
     ) -> Result<ResolvedWorkerBinding<Namespace>, GatewayBindingResolverError> {
         let http_request_details = match gateway_request_details {
-            GatewayRequestDetails::Http(http) => http
+            GatewayRequestDetails::Http(http) => http,
         };
 
         let worker_name_opt = if let Some(worker_name_compiled) = &binding.worker_name_compiled {
