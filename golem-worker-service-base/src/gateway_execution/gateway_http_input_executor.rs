@@ -26,8 +26,8 @@ use crate::gateway_execution::gateway_session::GatewaySessionStore;
 use crate::gateway_execution::to_response::ToHttpResponse;
 use crate::gateway_execution::to_response_failure::ToHttpResponseFromSafeDisplay;
 use crate::gateway_middleware::{
-    HttpAuthenticationMiddleware, HttpCors as CorsPreflight, HttpMiddlewareIn, HttpMiddlewareOut,
-    HttpMiddlewares, MiddlewareInError, MiddlewareOutError, MiddlewareSuccess,
+    HttpAuthenticationMiddleware, HttpCors as CorsPreflight, HttpCors, HttpMiddlewareIn,
+    HttpMiddlewareOut, HttpMiddlewares, MiddlewareInError, MiddlewareOutError, MiddlewareSuccess,
 };
 use crate::gateway_rib_interpreter::{EvaluationError, WorkerServiceRibInterpreter};
 use crate::gateway_security::{IdentityProviderResolver, SecuritySchemeWithProviderMetadata};
@@ -282,7 +282,7 @@ impl<Namespace: Send + Sync + Clone> GatewayHttpInputExecutor<Namespace>
         CorsPreflight: ToHttpResponse, // Cors can be a direct response in a cors preflight endpoint
         AuthCallBackResult: ToHttpResponse, // AuthCallBackResult can be a direct response in auth callback endpoint
         HttpAuthenticationMiddleware: HttpMiddlewareIn<Namespace>, // HttpAuthorizer can authorise input
-        CorsPreflight: HttpMiddlewareOut<poem::Response>, // CorsPreflight can be a middleware in other endpoints
+        HttpCors: HttpMiddlewareOut<poem::Response>, // HttpCors can be a middleware in other endpoints
     {
         let binding = &input.resolved_gateway_binding;
         let middleware_opt = &input.http_request_details.http_middlewares;

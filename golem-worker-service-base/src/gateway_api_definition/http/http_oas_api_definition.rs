@@ -448,37 +448,6 @@ mod tests {
     use uuid::Uuid;
 
     #[test]
-    fn test_get_route_from_path_with_worker_binding_with_middleware() {
-        let path_item = Operation {
-            extensions: vec![("x-golem-api-gateway-binding".to_string(), json!({
-                "worker-name": "let x: str = request.body.user; \"worker-${x}\"",
-                "component-id": "00000000-0000-0000-0000-000000000000",
-                "component-version": 0,
-                "idempotency-key": "\"test-key\"",
-                "response": "${{headers : {ContentType: \"json\", user-id: \"foo\"}, body: worker.response, status: 200}}",
-                "middlewares": {
-                    "cors" : {
-                        "allowHeaders": "Content-Type, Authorization",
-                        "allowMethods": "GET, POST, PUT, DELETE, OPTIONS",
-                        "allowOrigin": "*",
-                        "allowCredentials": true
-                    }
-                }
-            }))]
-                .into_iter()
-                .collect(),
-            ..Default::default()
-        };
-
-        let path_pattern = AllPathPatterns::parse("/test").unwrap();
-
-        let result = get_route_from_path_item("get", &path_item, &path_pattern);
-
-        let expected = expected_route_with_middleware(&path_pattern);
-        assert_eq!(result, Ok(expected));
-    }
-
-    #[test]
     fn test_get_route_with_cors_preflight_binding() {
         let path_item = Operation {
             extensions: vec![(
@@ -545,6 +514,7 @@ mod tests {
                 HttpCors::default(),
             )),
             security: None,
+            cors: None,
         }
     }
 
@@ -556,6 +526,7 @@ mod tests {
             method: MethodPattern::Options,
             binding: GatewayBinding::static_binding(StaticBinding::from_http_cors(cors_preflight)),
             security: None,
+            cors: None,
         }
     }
 
@@ -564,6 +535,17 @@ mod tests {
             path: path_pattern.clone(),
             method: MethodPattern::Get,
             security: None,
+            cors: Some(
+                HttpCors::from_parameters(
+                    Some("*".to_string()),
+                    Some("GET, POST, PUT, DELETE, OPTIONS".to_string()),
+                    Some("Content-Type, Authorization".to_string()),
+                    None,
+                    Some(true),
+                    None,
+                )
+                .unwrap(),
+            ),
             binding: GatewayBinding::Default(WorkerBinding {
                 worker_name: Some(Expr::expr_block(vec![
                     Expr::let_binding_with_type(
@@ -599,19 +581,6 @@ mod tests {
                     .into_iter()
                     .collect(),
                 )),
-                middleware: Some(HttpMiddlewares(vec![Middleware::Http(
-                    HttpMiddleware::cors(
-                        HttpCors::from_parameters(
-                            Some("*".to_string()),
-                            Some("GET, POST, PUT, DELETE, OPTIONS".to_string()),
-                            Some("Content-Type, Authorization".to_string()),
-                            None,
-                            Some(true),
-                            None,
-                        )
-                        .unwrap(),
-                    ),
-                )])),
             }),
         }
     }

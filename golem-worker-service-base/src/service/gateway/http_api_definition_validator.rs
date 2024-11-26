@@ -135,8 +135,8 @@ mod tests {
                     worker_name: Some(Expr::identifier("request")),
                     idempotency_key: None,
                     response_mapping: ResponseMapping(Expr::literal("sample")),
-                    middleware: None,
                 }),
+                middlewares: None,
             }
         }
 
