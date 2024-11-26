@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{
     ComponentType, OwnedWorkerId, ShardId, Timestamp, WorkerId, WorkerMetadata, WorkerStatus,
-    WorkerStatusRecord,
+    WorkerStatusRecord, WorkerStatusRecordExtensions,
 };
 use tracing::{debug, warn};
 
@@ -129,7 +129,7 @@ impl WorkerService for DefaultWorkerService {
             worker_metadata.parent.clone(),
             worker_metadata.last_known_status.component_size,
             worker_metadata.last_known_status.total_linear_memory_size,
-            worker_metadata.last_known_status.active_plugins.clone(),
+            worker_metadata.last_known_status.active_plugins().clone(),
         );
         self.oplog_service
             .create(&owned_worker_id, initial_oplog_entry, component_type)
@@ -256,7 +256,9 @@ impl WorkerService for DefaultWorkerService {
                         component_version,
                         component_size,
                         total_linear_memory_size: initial_total_linear_memory_size,
-                        active_plugins: initial_active_plugins,
+                        extensions: WorkerStatusRecordExtensions::Extension1 {
+                            active_plugins: initial_active_plugins,
+                        },
                         ..WorkerStatusRecord::default()
                     },
                 };

@@ -14,7 +14,7 @@
 
 use crate::error::GolemError;
 use crate::grpc::{authorised_grpc_request, UriBackConversion};
-use crate::services::golem_config::ComponentServiceConfig;
+use crate::services::golem_config::PluginServiceConfig;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
 use golem_api_grpc::proto::golem::component::v1::plugin_service_client::PluginServiceClient;
@@ -99,25 +99,28 @@ pub trait Plugins<Owner: PluginOwner, Scope: PluginScope>: PluginsObservations {
 }
 
 pub fn default_configured(
-    config: &ComponentServiceConfig,
+    config: &PluginServiceConfig,
 ) -> (
     Arc<dyn Plugins<DefaultPluginOwner, DefaultPluginScope> + Send + Sync>,
     Arc<dyn PluginsObservations + Send + Sync>,
 ) {
     match config {
-        ComponentServiceConfig::Grpc(config) => {
-            let client1 = CachedPlugins::new(DefaultGrpcPlugins::new(
-                config.uri(),
-                config
-                    .access_token
-                    .parse::<Uuid>()
-                    .expect("Access token must be an UUID"),
-                config.retries.clone(),
-            ));
+        PluginServiceConfig::Grpc(config) => {
+            let client1 = CachedPlugins::new(
+                DefaultGrpcPlugins::new(
+                    config.uri(),
+                    config
+                        .access_token
+                        .parse::<Uuid>()
+                        .expect("Access token must be an UUID"),
+                    config.retries.clone(),
+                ),
+                config.plugin_cache_size,
+            );
             let client2 = client1.clone();
             (Arc::new(client1), Arc::new(client2))
         }
-        ComponentServiceConfig::Local(_) => {
+        PluginServiceConfig::Local(_) => {
             let client1 = PluginsUnavailable::new();
             let client2 = client1.clone();
             (Arc::new(client1), Arc::new(client2))
@@ -146,18 +149,17 @@ struct CachedPlugins<Owner: PluginOwner, Scope: PluginScope, Inner: Plugins<Owne
 impl<Owner: PluginOwner, Scope: PluginScope, Inner: Plugins<Owner, Scope>>
     CachedPlugins<Owner, Scope, Inner>
 {
-    pub fn new(inner: Inner) -> Self {
-        // TODO: configuration
+    pub fn new(inner: Inner, plugin_cache_capacity: usize) -> Self {
         Self {
             inner,
             cached_plugin_installations: Cache::new(
-                Some(1024),
+                Some(plugin_cache_capacity),
                 FullCacheEvictionMode::LeastRecentlyUsed(1),
                 BackgroundEvictionMode::None,
                 "plugin_installations",
             ),
             cached_plugin_definitions: Cache::new(
-                Some(1024),
+                Some(plugin_cache_capacity),
                 FullCacheEvictionMode::LeastRecentlyUsed(1),
                 BackgroundEvictionMode::None,
                 "plugin_definitions",
@@ -343,7 +345,6 @@ impl Plugins<DefaultPluginOwner, DefaultPluginScope> for DefaultGrpcPlugins {
             .await
             .map_err(|err| {
                 GolemError::runtime(format!("Failed to get installed plugins: {err:?}"))
-                // TODO: new error cases
             })?
             .into_inner();
         let installations: Vec<PluginInstallation> = match response.result {
@@ -353,9 +354,9 @@ impl Plugins<DefaultPluginOwner, DefaultPluginScope> for DefaultGrpcPlugins {
                 .into_iter()
                 .map(|i| i.try_into())
                 .collect::<Result<Vec<_>, _>>()
-                .map_err(GolemError::runtime)?, // TODO: new error cases
+                .map_err(GolemError::runtime)?,
             Some(get_installed_plugins_response::Result::Error(error)) => {
-                Err(GolemError::runtime(format!("{error:?}")))? // TODO: new error cases
+                Err(GolemError::runtime(format!("{error:?}")))?
             }
         };
 
@@ -374,7 +375,7 @@ impl Plugins<DefaultPluginOwner, DefaultPluginScope> for DefaultGrpcPlugins {
             }
         }
 
-        result.ok_or(GolemError::runtime("Plugin installation not found")) // TODO: new error cases
+        result.ok_or(GolemError::runtime("Plugin installation not found"))
     }
 
     async fn get_plugin_definition(
@@ -399,22 +400,19 @@ impl Plugins<DefaultPluginOwner, DefaultPluginScope> for DefaultGrpcPlugins {
             .await
             .map_err(|err| {
                 GolemError::runtime(format!("Failed to get plugin definition: {err:?}"))
-                // TODO: new error cases
             })?
             .into_inner();
 
         match response.result {
             None => Err(GolemError::runtime("Empty response"))?,
-            Some(get_plugin_response::Result::Success(response)) => {
-                Ok(response
-                    .plugin
-                    .ok_or("Missing plugin field")
-                    .map_err(GolemError::runtime)? // TODO: new error cases
-                    .try_into()
-                    .map_err(GolemError::runtime)?) // TODO: new error cases
-            }
+            Some(get_plugin_response::Result::Success(response)) => Ok(response
+                .plugin
+                .ok_or("Missing plugin field")
+                .map_err(GolemError::runtime)?
+                .try_into()
+                .map_err(GolemError::runtime)?),
             Some(get_plugin_response::Result::Error(error)) => {
-                Err(GolemError::runtime(format!("{error:?}")))? // TODO: new error cases
+                Err(GolemError::runtime(format!("{error:?}")))?
             }
         }
     }

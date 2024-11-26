@@ -39,7 +39,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::public_oplog::PublicOplogEntry;
 use golem_common::model::regions::DeletedRegions;
-use golem_common::model::AccountId;
+use golem_common::model::{AccountId, WorkerStatusRecordExtensions};
 use golem_common::model::{
     ComponentFileSystemNode, ComponentId, ComponentType, ComponentVersion, FailedUpdateRecord,
     IdempotencyKey, InitialComponentFile, InitialComponentFileKey, ScanCursor,
@@ -1307,13 +1307,15 @@ pub fn to_worker_metadata(
                         )
                     })
                     .collect(),
-                active_plugins: HashSet::from_iter(
-                    metadata
-                        .active_plugins
-                        .iter()
-                        .cloned()
-                        .map(|id| id.try_into().expect("invalid plugin installation id")),
-                ),
+                extensions: WorkerStatusRecordExtensions::Extension1 {
+                    active_plugins: HashSet::from_iter(
+                        metadata
+                            .active_plugins
+                            .iter()
+                            .cloned()
+                            .map(|id| id.try_into().expect("invalid plugin installation id")),
+                    ),
+                },
             },
             parent: None,
         },

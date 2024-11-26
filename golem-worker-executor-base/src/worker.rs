@@ -47,7 +47,9 @@ use golem_common::model::oplog::{
     WorkerResourceId,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
-use golem_common::model::{exports, ComponentFilePath, ComponentType, PluginInstallationId};
+use golem_common::model::{
+    exports, ComponentFilePath, ComponentType, PluginInstallationId, WorkerStatusRecordExtensions,
+};
 use golem_common::model::{
     ComponentVersion, FailedUpdateRecord, IdempotencyKey, OwnedWorkerId, SuccessfulUpdateRecord,
     Timestamp, TimestampedWorkerInvocation, WorkerId, WorkerInvocation, WorkerMetadata,
@@ -1987,6 +1989,8 @@ where
             )
             .await;
 
+        let active_plugins = last_known.active_plugins().clone();
+
         let overridden_retry_config = calculate_overridden_retry_policy(
             last_known.overridden_retry_config.clone(),
             &new_entries,
@@ -2043,7 +2047,7 @@ where
 
         let owned_resources = calculate_owned_resources(last_known.owned_resources, &new_entries);
 
-        let active_plugins = calculate_active_plugins(last_known.active_plugins, &new_entries);
+        let active_plugins = calculate_active_plugins(active_plugins, &new_entries);
 
         let result = WorkerStatusRecord {
             oplog_idx: last_oplog_index,
@@ -2060,7 +2064,7 @@ where
             component_size,
             owned_resources,
             total_linear_memory_size,
-            active_plugins,
+            extensions: WorkerStatusRecordExtensions::Extension1 { active_plugins },
         };
         Ok(result)
     }

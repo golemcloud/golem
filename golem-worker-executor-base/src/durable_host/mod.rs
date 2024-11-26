@@ -585,7 +585,12 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                         .on_worker_update_succeeded(
                                             target_version,
                                             component_metadata.size,
-                                            HashSet::new(), // TODO: get it from component_metadata
+                                            HashSet::from_iter(
+                                                component_metadata
+                                                    .plugin_installations
+                                                    .into_iter()
+                                                    .map(|installation| installation.id),
+                                            ),
                                         )
                                         .await;
                                     RetryDecision::None
@@ -622,7 +627,12 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                             .on_worker_update_succeeded(
                                 target_version,
                                 component_metadata.size,
-                                HashSet::new(), // TODO: get from component_metadata
+                                HashSet::from_iter(
+                                    component_metadata
+                                        .plugin_installations
+                                        .into_iter()
+                                        .map(|installation| installation.id),
+                                ),
                             )
                             .await;
                         RetryDecision::None
@@ -1078,7 +1088,7 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
                 timestamp,
                 target_version,
             });
-            status.active_plugins = new_active_plugins;
+            *status.active_plugins_mut() = new_active_plugins;
         })
         .await;
     }

@@ -1031,7 +1031,14 @@ pub struct WorkerStatusRecord {
     pub total_linear_memory_size: u64,
     pub owned_resources: HashMap<WorkerResourceId, WorkerResourceDescription>,
     pub oplog_idx: OplogIndex,
-    pub active_plugins: HashSet<PluginInstallationId>,
+    pub extensions: WorkerStatusRecordExtensions,
+}
+
+#[derive(Clone, Debug, PartialEq, Encode, Decode)]
+pub enum WorkerStatusRecordExtensions {
+    Extension1 {
+        active_plugins: HashSet<PluginInstallationId>,
+    },
 }
 
 impl ::bincode::Decode for WorkerStatusRecord {
@@ -1051,9 +1058,11 @@ impl ::bincode::Decode for WorkerStatusRecord {
             total_linear_memory_size: Decode::decode(decoder)?,
             owned_resources: Decode::decode(decoder)?,
             oplog_idx: Decode::decode(decoder)?,
-            active_plugins: Decode::decode(decoder).or_else(|err| {
+            extensions: Decode::decode(decoder).or_else(|err| {
                 if let DecodeError::UnexpectedEnd { .. } = &err {
-                    Ok(HashSet::new())
+                    Ok(WorkerStatusRecordExtensions::Extension1 {
+                        active_plugins: HashSet::new(),
+                    })
                 } else {
                     Err(err)
                 }
@@ -1078,14 +1087,30 @@ impl<'__de> BorrowDecode<'__de> for WorkerStatusRecord {
             total_linear_memory_size: BorrowDecode::borrow_decode(decoder)?,
             owned_resources: BorrowDecode::borrow_decode(decoder)?,
             oplog_idx: BorrowDecode::borrow_decode(decoder)?,
-            active_plugins: BorrowDecode::borrow_decode(decoder).or_else(|err| {
+            extensions: BorrowDecode::borrow_decode(decoder).or_else(|err| {
                 if let DecodeError::UnexpectedEnd { .. } = &err {
-                    Ok(HashSet::new())
+                    Ok(WorkerStatusRecordExtensions::Extension1 {
+                        active_plugins: HashSet::new(),
+                    })
                 } else {
                     Err(err)
                 }
             })?,
         })
+    }
+}
+
+impl WorkerStatusRecord {
+    pub fn active_plugins(&self) -> &HashSet<PluginInstallationId> {
+        match &self.extensions {
+            WorkerStatusRecordExtensions::Extension1 { active_plugins } => active_plugins,
+        }
+    }
+
+    pub fn active_plugins_mut(&mut self) -> &mut HashSet<PluginInstallationId> {
+        match &mut self.extensions {
+            WorkerStatusRecordExtensions::Extension1 { active_plugins } => active_plugins,
+        }
     }
 }
 
@@ -1105,8 +1130,10 @@ impl Default for WorkerStatusRecord {
             component_size: 0,
             total_linear_memory_size: 0,
             owned_resources: HashMap::new(),
-            active_plugins: HashSet::new(),
             oplog_idx: OplogIndex::default(),
+            extensions: WorkerStatusRecordExtensions::Extension1 {
+                active_plugins: HashSet::new(),
+            },
         }
     }
 }

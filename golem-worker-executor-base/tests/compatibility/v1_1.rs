@@ -24,7 +24,7 @@ use golem_common::model::oplog::{
 use golem_common::model::{
     AccountId, ComponentId, IdempotencyKey, PluginInstallationId, Timestamp,
     TimestampedWorkerInvocation, WorkerId, WorkerInvocation, WorkerResourceDescription,
-    WorkerStatus, WorkerStatusRecord,
+    WorkerStatus, WorkerStatusRecord, WorkerStatusRecordExtensions,
 };
 use golem_wasm_ast::analysis::analysed_type::bool;
 use golem_wasm_rpc::{Value, ValueAndType};
@@ -206,10 +206,16 @@ pub fn worker_status_record_v11() {
             },
         )]),
         oplog_idx: OplogIndex::from_u64(10000),
-        active_plugins: HashSet::from_iter(vec![
-            PluginInstallationId(Uuid::parse_str("E7AA7893-B8F8-4DC7-B3AC-3A9E3472EA18").unwrap()),
-            PluginInstallationId(Uuid::parse_str("339ED9E3-9D93-440C-BC07-377F56642ABB").unwrap()),
-        ]),
+        extensions: WorkerStatusRecordExtensions::Extension1 {
+            active_plugins: HashSet::from_iter(vec![
+                PluginInstallationId(
+                    Uuid::parse_str("E7AA7893-B8F8-4DC7-B3AC-3A9E3472EA18").unwrap(),
+                ),
+                PluginInstallationId(
+                    Uuid::parse_str("339ED9E3-9D93-440C-BC07-377F56642ABB").unwrap(),
+                ),
+            ]),
+        },
     };
 
     let mut mint = Mint::new("tests/goldenfiles");

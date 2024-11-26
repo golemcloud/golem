@@ -1368,7 +1368,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 // Worker exists
 
                 if worker_status
-                    .active_plugins
+                    .active_plugins()
                     .contains(&plugin_installation_id)
                 {
                     Err(GolemError::invalid_request("Plugin is already activated"))
@@ -1441,7 +1441,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 // Worker exists
 
                 if !worker_status
-                    .active_plugins
+                    .active_plugins()
                     .contains(&plugin_installation_id)
                 {
                     Err(GolemError::invalid_request("Plugin is not activate"))
@@ -1539,7 +1539,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         });
 
         let mut owned_resources = HashMap::new();
-        for (resource_id, resource) in metadata.last_known_status.owned_resources {
+        for (resource_id, resource) in metadata.last_known_status.owned_resources.clone() {
             owned_resources.insert(
                 resource_id.0,
                 ResourceMetadata {
@@ -1549,7 +1549,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             );
         }
 
-        let active_plugins = metadata.last_known_status.active_plugins.clone();
+        let active_plugins = metadata.last_known_status.active_plugins().clone();
 
         golem::worker::WorkerMetadata {
             worker_id: Some(metadata.worker_id.into()),

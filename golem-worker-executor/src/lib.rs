@@ -78,7 +78,7 @@ impl Bootstrap<Context> for ServerBootstrap {
         >,
         Arc<dyn PluginsObservations + Send + Sync>,
     ) {
-        plugins::default_configured(&golem_config.component_service)
+        plugins::default_configured(&golem_config.plugin_service)
     }
 
     async fn create_services(

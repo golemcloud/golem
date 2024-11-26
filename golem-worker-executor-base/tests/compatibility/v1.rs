@@ -34,6 +34,7 @@ use golem_common::model::{
     AccountId, ComponentId, FailedUpdateRecord, IdempotencyKey, OwnedWorkerId, PromiseId,
     ScheduledAction, ShardId, SuccessfulUpdateRecord, Timestamp, TimestampedWorkerInvocation,
     WorkerId, WorkerInvocation, WorkerResourceDescription, WorkerStatus, WorkerStatusRecord,
+    WorkerStatusRecordExtensions,
 };
 use golem_common::serialization::{deserialize, serialize};
 use golem_wasm_ast::analysis::{
@@ -448,7 +449,9 @@ pub fn worker_status_record() {
             },
         )]),
         oplog_idx: OplogIndex::from_u64(10000),
-        active_plugins: HashSet::new(),
+        extensions: WorkerStatusRecordExtensions::Extension1 {
+            active_plugins: HashSet::new(),
+        },
     };
 
     let wsr2 = WorkerStatusRecord {
@@ -485,7 +488,9 @@ pub fn worker_status_record() {
             },
         )]),
         oplog_idx: OplogIndex::from_u64(10000),
-        active_plugins: HashSet::new(),
+        extensions: WorkerStatusRecordExtensions::Extension1 {
+            active_plugins: HashSet::new(),
+        },
     };
 
     let mut mint = Mint::new("tests/goldenfiles");
