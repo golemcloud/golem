@@ -286,7 +286,7 @@ mod test {
     use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, TypedRecord};
     use test_r::test;
 
-    use crate::gateway_binding::{GatewayRequestDetails, HttpRequestDetails};
+    use crate::gateway_binding::HttpRequestDetails;
     use crate::gateway_execution::gateway_session::GatewaySessionStore;
     use crate::gateway_execution::to_response::ToHttpResponse;
     use http::header::CONTENT_TYPE;

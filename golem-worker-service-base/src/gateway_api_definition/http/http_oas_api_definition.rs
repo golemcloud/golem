@@ -440,7 +440,7 @@ mod tests {
     use super::*;
     use crate::gateway_api_definition::http::{AllPathPatterns, MethodPattern, RouteRequest};
     use crate::gateway_binding::{GatewayBinding, ResponseMapping, StaticBinding, WorkerBinding};
-    use crate::gateway_middleware::{HttpCors, HttpMiddleware, HttpMiddlewares, Middleware};
+    use crate::gateway_middleware::HttpCors;
     use golem_common::model::ComponentId;
     use openapiv3::Operation;
     use rib::Expr;
@@ -527,61 +527,6 @@ mod tests {
             binding: GatewayBinding::static_binding(StaticBinding::from_http_cors(cors_preflight)),
             security: None,
             cors: None,
-        }
-    }
-
-    fn expected_route_with_middleware(path_pattern: &AllPathPatterns) -> RouteRequest {
-        RouteRequest {
-            path: path_pattern.clone(),
-            method: MethodPattern::Get,
-            security: None,
-            cors: Some(
-                HttpCors::from_parameters(
-                    Some("*".to_string()),
-                    Some("GET, POST, PUT, DELETE, OPTIONS".to_string()),
-                    Some("Content-Type, Authorization".to_string()),
-                    None,
-                    Some(true),
-                    None,
-                )
-                .unwrap(),
-            ),
-            binding: GatewayBinding::Default(WorkerBinding {
-                worker_name: Some(Expr::expr_block(vec![
-                    Expr::let_binding_with_type(
-                        "x",
-                        rib::TypeName::Str,
-                        Expr::select_field(
-                            Expr::select_field(Expr::identifier("request"), "body"),
-                            "user",
-                        ),
-                    ),
-                    Expr::concat(vec![Expr::literal("worker-"), Expr::identifier("x")]),
-                ])),
-                component_id: golem_service_base::model::VersionedComponentId {
-                    component_id: ComponentId(Uuid::nil()),
-                    version: 0,
-                },
-                idempotency_key: Some(Expr::literal("test-key")),
-                response_mapping: ResponseMapping(Expr::record(
-                    vec![
-                        (
-                            "headers".to_string(),
-                            Expr::record(vec![
-                                ("ContentType".to_string(), Expr::literal("json")),
-                                ("user-id".to_string(), Expr::literal("foo")),
-                            ]),
-                        ),
-                        (
-                            "body".to_string(),
-                            Expr::select_field(Expr::identifier("worker"), "response"),
-                        ),
-                        ("status".to_string(), Expr::untyped_number(200f64)),
-                    ]
-                    .into_iter()
-                    .collect(),
-                )),
-            }),
         }
     }
 }

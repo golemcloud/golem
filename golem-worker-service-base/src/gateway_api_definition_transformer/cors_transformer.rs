@@ -124,7 +124,7 @@ mod tests {
         ApiDefTransformationError, ApiDefinitionTransformer, CorsTransformer,
     };
     use crate::gateway_binding::{GatewayBinding, ResponseMapping, StaticBinding, WorkerBinding};
-    use crate::gateway_middleware::{HttpCors, HttpMiddleware, HttpMiddlewares, Middleware};
+    use crate::gateway_middleware::{HttpCors, HttpMiddleware, HttpMiddlewares};
     use golem_common::model::ComponentId;
     use golem_service_base::model::VersionedComponentId;
     use rib::Expr;
@@ -291,7 +291,7 @@ mod tests {
 
         let cors_transformer = CorsTransformer;
 
-        let result = cors_transformer.transform(&mut api_definition);
+        let _ = cors_transformer.transform(&mut api_definition);
 
         assert_eq!(api_definition, expected);
     }
