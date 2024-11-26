@@ -45,11 +45,14 @@ use golem_worker_service_base::api;
 use golem_worker_service_base::gateway_api_deployment::{
     ApiDeploymentRequest, ApiSite, ApiSiteString,
 };
-use golem_worker_service_base::gateway_security::DefaultIdentityProviderResolver;
+use golem_worker_service_base::gateway_security::{
+    DefaultIdentityProviderResolver, Provider, SecurityScheme, SecuritySchemeIdentifier,
+};
 use golem_worker_service_base::repo::security_scheme::{DbSecuritySchemeRepo, SecuritySchemeRepo};
 use golem_worker_service_base::service::gateway::security_scheme::{
     DefaultSecuritySchemeService, SecuritySchemeService,
 };
+use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use std::sync::Arc;
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, ImageExt};
@@ -598,6 +601,21 @@ async fn test_deployment_conflict(
     );
 }
 
+async fn test_security_crud(
+    security_scheme_service: Arc<dyn SecuritySchemeService<DefaultNamespace> + Sync + Send>,
+) {
+    let security_identifier = SecuritySchemeIdentifier::new("test".to_string());
+
+    let security_scheme = get_security(security_identifier);
+
+    let result = security_scheme_service
+        .create(&DefaultNamespace(), &security_scheme)
+        .await
+        .expect("Failed to create security scheme");
+
+    assert_eq!(result.security_scheme, security_scheme);
+}
+
 async fn test_definition_crud(
     definition_service: Arc<dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace> + Sync + Send>,
 ) {
@@ -781,6 +799,21 @@ fn get_api_deployment(
             subdomain: subdomain.map(|s| s.to_string()),
         },
     }
+}
+
+fn get_security(security_schema_identifier: SecuritySchemeIdentifier) -> SecurityScheme {
+    SecurityScheme::new(
+        Provider::Google,
+        security_schema_identifier,
+        ClientId::new("client_id_foo".to_string()),
+        ClientSecret::new("client_secret_foo".to_string()),
+        RedirectUrl::new("http://localhost:8080/auth/callback".to_string()).unwrap(),
+        vec![
+            Scope::new("openid".to_string()),
+            Scope::new("user".to_string()),
+            Scope::new("email".to_string()),
+        ],
+    )
 }
 
 fn get_api_definition(
