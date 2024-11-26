@@ -1806,7 +1806,7 @@ mod internal {
     }
 }
 
-mod security {
+pub mod security {
     use async_trait::async_trait;
     use chrono::{TimeZone, Utc};
     use golem_service_base::auth::DefaultNamespace;

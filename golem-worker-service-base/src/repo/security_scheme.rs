@@ -177,9 +177,9 @@ impl SecuritySchemeRepo for DbSecuritySchemeRepo<sqlx::Postgres> {
         sqlx::query(
             r#"
                   INSERT INTO security_schemes
-                    (namespace, security_scheme_id, provider_type, client_id, client_secret, redirect_uri, scopes, security_scheme_metadata)
+                    (namespace, security_scheme_id, provider_type, client_id, client_secret, redirect_url, scopes, security_scheme_metadata)
                   VALUES
-                    ($1, $2, $3)
+                    ($1, $2, $3, $4, $5, $6, $7, $8)
                    "#,
         )
             .bind(security.namespace.clone())
@@ -210,7 +210,7 @@ impl SecuritySchemeRepo for DbSecuritySchemeRepo<sqlx::Postgres> {
                     c.provider_type AS provider_type,
                     c.client_id AS client_id,
                     c.client_secret AS client_secret,
-                    c.redirect_uri AS redirect_uri,
+                    c.redirect_url AS redirect_url,
                     c.scopes AS scopes,
                     c.security_scheme_metadata AS security_scheme_metadata
                 FROM security_schemes
@@ -238,7 +238,7 @@ impl SecuritySchemeRepo for DbSecuritySchemeRepo<sqlx::Postgres> {
                     c.provider_type AS provider_type,
                     c.client_id AS client_id,
                     c.client_secret AS client_secret,
-                    c.redirect_uri AS redirect_uri,
+                    c.redirect_url AS redirect_url,
                     c.security_scheme_metadata AS security_scheme_metadata
                 FROM security_schemes
                 WHERE c.security_scheme_metadata = $1

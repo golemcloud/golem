@@ -46,13 +46,26 @@ use golem_worker_service_base::gateway_api_deployment::{
     ApiDeploymentRequest, ApiSite, ApiSiteString,
 };
 use golem_worker_service_base::gateway_security::{
-    DefaultIdentityProviderResolver, Provider, SecurityScheme, SecuritySchemeIdentifier,
+    AuthorizationUrl, DefaultIdentityProvider, GolemIdentityProviderMetadata, IdentityProvider,
+    IdentityProviderError, IdentityProviderResolver, OpenIdClient, Provider, SecurityScheme,
+    SecuritySchemeIdentifier, SecuritySchemeWithProviderMetadata,
 };
 use golem_worker_service_base::repo::security_scheme::{DbSecuritySchemeRepo, SecuritySchemeRepo};
 use golem_worker_service_base::service::gateway::security_scheme::{
     DefaultSecuritySchemeService, SecuritySchemeService,
 };
-use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
+use openidconnect::core::{
+    CoreClaimName, CoreClaimType, CoreClientAuthMethod, CoreGrantType, CoreIdTokenClaims,
+    CoreIdTokenFields, CoreIdTokenVerifier, CoreJweContentEncryptionAlgorithm,
+    CoreJweKeyManagementAlgorithm, CoreJwsSigningAlgorithm, CoreProviderMetadata, CoreResponseMode,
+    CoreResponseType, CoreSubjectIdentifierType, CoreTokenResponse, CoreTokenType,
+};
+use openidconnect::{
+    AccessToken, AuthUrl, AuthenticationContextClass, AuthorizationCode, ClientId, ClientSecret,
+    CsrfToken, EmptyExtraTokenFields, IssuerUrl, JsonWebKeySetUrl, Nonce, RedirectUrl,
+    RegistrationUrl, ResponseTypes, Scope, TokenUrl, UserInfoUrl,
+};
+use rsa::pkcs8::DecodePublicKey;
 use std::sync::Arc;
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, ImageExt};
@@ -250,7 +263,9 @@ async fn test_services(
 
     let api_definition_validator_service = Arc::new(HttpApiDefinitionValidator {});
 
-    let identity_provider_resolver = Arc::new(DefaultIdentityProviderResolver);
+    let identity_provider_resolver = Arc::new(TestIdentityProviderResolver {
+        test_identity_provider: TestIdentityProvider,
+    });
 
     let security_scheme_service: Arc<dyn SecuritySchemeService<DefaultNamespace> + Send + Sync> =
         Arc::new(DefaultSecuritySchemeService::new(
@@ -264,7 +279,7 @@ async fn test_services(
         component_service.clone(),
         api_definition_repo.clone(),
         api_deployment_repo.clone(),
-        security_scheme_service,
+        security_scheme_service.clone(),
         api_definition_validator_service.clone(),
     ));
 
@@ -276,6 +291,7 @@ async fn test_services(
         component_service.clone(),
     ));
 
+    test_security_crud(security_scheme_service.clone()).await;
     test_definition_crud(definition_service.clone()).await;
     test_delete_non_existing(definition_service.clone()).await;
     test_deployment(definition_service.clone(), deployment_service.clone()).await;
@@ -860,4 +876,252 @@ fn contains_definitions(
     }
 
     true
+}
+
+#[derive(Clone)]
+pub struct TestIdentityProviderResolver {
+    test_identity_provider: TestIdentityProvider,
+}
+
+impl TestIdentityProviderResolver {
+    pub fn new(test_identity_provider: TestIdentityProvider) -> TestIdentityProviderResolver {
+        TestIdentityProviderResolver {
+            test_identity_provider,
+        }
+    }
+}
+
+impl IdentityProviderResolver for TestIdentityProviderResolver {
+    fn resolve(&self, _provider_type: &Provider) -> Arc<dyn IdentityProvider + Sync + Send> {
+        Arc::new(self.test_identity_provider.clone())
+    }
+}
+
+#[derive(Clone)]
+pub struct TestIdentityProvider;
+
+#[async_trait]
+impl IdentityProvider for TestIdentityProvider {
+    async fn get_provider_metadata(
+        &self,
+        _provider: &Provider,
+    ) -> Result<GolemIdentityProviderMetadata, IdentityProviderError> {
+        Ok(get_test_provider_metadata())
+    }
+
+    async fn exchange_code_for_tokens(
+        &self,
+        _client: &OpenIdClient,
+        _code: &AuthorizationCode,
+    ) -> Result<CoreTokenResponse, IdentityProviderError> {
+        Err(IdentityProviderError::ClientInitError(
+            "Not implemented".to_string(),
+        ))
+    }
+
+    fn get_id_token_verifier<'a>(&self, client: &'a OpenIdClient) -> CoreIdTokenVerifier<'a> {
+        let provider = DefaultIdentityProvider;
+        provider.get_id_token_verifier(client)
+    }
+
+    fn get_claims(
+        &self,
+        _id_token_verifier: &CoreIdTokenVerifier,
+        _core_token_response: CoreTokenResponse,
+        _nonce: &Nonce,
+    ) -> Result<CoreIdTokenClaims, IdentityProviderError> {
+        Err(IdentityProviderError::ClientInitError(
+            "Not implemented".to_string(),
+        ))
+    }
+
+    fn get_authorization_url(
+        &self,
+        client: &OpenIdClient,
+        scopes: Vec<Scope>,
+        _state: Option<CsrfToken>,
+        _nonce: Option<Nonce>,
+    ) -> AuthorizationUrl {
+        let identity_provider = DefaultIdentityProvider;
+        identity_provider.get_authorization_url(
+            client,
+            scopes,
+            Some(CsrfToken::new("token".to_string())),
+            Some(Nonce::new("nonce".to_string())),
+        )
+    }
+
+    fn get_client(
+        &self,
+        security_scheme: &SecuritySchemeWithProviderMetadata,
+    ) -> Result<OpenIdClient, IdentityProviderError> {
+        let identity_provider = DefaultIdentityProvider;
+        identity_provider.get_client(security_scheme)
+    }
+}
+
+fn get_test_provider_metadata() -> GolemIdentityProviderMetadata {
+    let all_signing_algs = vec![
+        CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256,
+        CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha384,
+        CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha512,
+        CoreJwsSigningAlgorithm::EcdsaP256Sha256,
+        CoreJwsSigningAlgorithm::EcdsaP384Sha384,
+        CoreJwsSigningAlgorithm::EcdsaP521Sha512,
+        CoreJwsSigningAlgorithm::HmacSha256,
+        CoreJwsSigningAlgorithm::HmacSha384,
+        CoreJwsSigningAlgorithm::HmacSha512,
+        CoreJwsSigningAlgorithm::RsaSsaPssSha256,
+        CoreJwsSigningAlgorithm::RsaSsaPssSha384,
+        CoreJwsSigningAlgorithm::RsaSsaPssSha512,
+        CoreJwsSigningAlgorithm::None,
+    ];
+    let all_encryption_algs = vec![
+        CoreJweKeyManagementAlgorithm::RsaPkcs1V15,
+        CoreJweKeyManagementAlgorithm::RsaOaep,
+        CoreJweKeyManagementAlgorithm::RsaOaepSha256,
+        CoreJweKeyManagementAlgorithm::AesKeyWrap128,
+        CoreJweKeyManagementAlgorithm::AesKeyWrap192,
+        CoreJweKeyManagementAlgorithm::AesKeyWrap256,
+        CoreJweKeyManagementAlgorithm::EcdhEs,
+        CoreJweKeyManagementAlgorithm::EcdhEsAesKeyWrap128,
+        CoreJweKeyManagementAlgorithm::EcdhEsAesKeyWrap192,
+        CoreJweKeyManagementAlgorithm::EcdhEsAesKeyWrap256,
+    ];
+    let new_provider_metadata = CoreProviderMetadata::new(
+        IssuerUrl::new("https://accounts.google.com".to_string()).unwrap(),
+        AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string()).unwrap(),
+        JsonWebKeySetUrl::new("https://www.googleapis.com/oauth2/v3/certs".to_string()).unwrap(),
+        vec![ResponseTypes::new(vec![CoreResponseType::Code])],
+        vec![
+            CoreSubjectIdentifierType::Public,
+            CoreSubjectIdentifierType::Pairwise,
+        ],
+        all_signing_algs.clone(),
+        Default::default(),
+    )
+    .set_request_object_signing_alg_values_supported(Some(all_signing_algs.clone()))
+    .set_token_endpoint_auth_signing_alg_values_supported(Some(vec![
+        CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256,
+        CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha384,
+        CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha512,
+        CoreJwsSigningAlgorithm::EcdsaP256Sha256,
+        CoreJwsSigningAlgorithm::EcdsaP384Sha384,
+        CoreJwsSigningAlgorithm::EcdsaP521Sha512,
+        CoreJwsSigningAlgorithm::HmacSha256,
+        CoreJwsSigningAlgorithm::HmacSha384,
+        CoreJwsSigningAlgorithm::HmacSha512,
+        CoreJwsSigningAlgorithm::RsaSsaPssSha256,
+        CoreJwsSigningAlgorithm::RsaSsaPssSha384,
+        CoreJwsSigningAlgorithm::RsaSsaPssSha512,
+    ]))
+    .set_scopes_supported(Some(vec![
+        Scope::new("email".to_string()),
+        Scope::new("phone".to_string()),
+        Scope::new("profile".to_string()),
+        Scope::new("openid".to_string()),
+        Scope::new("address".to_string()),
+        Scope::new("offline_access".to_string()),
+        Scope::new("openid".to_string()),
+    ]))
+    .set_userinfo_signing_alg_values_supported(Some(all_signing_algs))
+    .set_id_token_encryption_enc_values_supported(Some(vec![
+        CoreJweContentEncryptionAlgorithm::Aes128CbcHmacSha256,
+        CoreJweContentEncryptionAlgorithm::Aes192CbcHmacSha384,
+        CoreJweContentEncryptionAlgorithm::Aes256CbcHmacSha512,
+        CoreJweContentEncryptionAlgorithm::Aes128Gcm,
+        CoreJweContentEncryptionAlgorithm::Aes192Gcm,
+        CoreJweContentEncryptionAlgorithm::Aes256Gcm,
+    ]))
+    .set_grant_types_supported(Some(vec![
+        CoreGrantType::AuthorizationCode,
+        CoreGrantType::Implicit,
+        CoreGrantType::JwtBearer,
+        CoreGrantType::RefreshToken,
+    ]))
+    .set_response_modes_supported(Some(vec![
+        CoreResponseMode::Query,
+        CoreResponseMode::Fragment,
+        CoreResponseMode::FormPost,
+    ]))
+    .set_require_request_uri_registration(Some(true))
+    .set_registration_endpoint(Some(
+        RegistrationUrl::new(
+            "https://accounts.google.com/openidconnect-rs/\
+                 rp-response_type-code/registration"
+                .to_string(),
+        )
+        .unwrap(),
+    ))
+    .set_claims_parameter_supported(Some(true))
+    .set_request_object_encryption_enc_values_supported(Some(vec![
+        CoreJweContentEncryptionAlgorithm::Aes128CbcHmacSha256,
+        CoreJweContentEncryptionAlgorithm::Aes192CbcHmacSha384,
+        CoreJweContentEncryptionAlgorithm::Aes256CbcHmacSha512,
+        CoreJweContentEncryptionAlgorithm::Aes128Gcm,
+        CoreJweContentEncryptionAlgorithm::Aes192Gcm,
+        CoreJweContentEncryptionAlgorithm::Aes256Gcm,
+    ]))
+    .set_userinfo_endpoint(Some(
+        UserInfoUrl::new("https://openidconnect.googleapis.com/v1/userinfo".to_string()).unwrap(),
+    ))
+    .set_token_endpoint_auth_methods_supported(Some(vec![
+        CoreClientAuthMethod::ClientSecretPost,
+        CoreClientAuthMethod::ClientSecretBasic,
+        CoreClientAuthMethod::ClientSecretJwt,
+        CoreClientAuthMethod::PrivateKeyJwt,
+    ]))
+    .set_claims_supported(Some(
+        vec![
+            "name",
+            "given_name",
+            "middle_name",
+            "picture",
+            "email_verified",
+            "birthdate",
+            "sub",
+            "address",
+            "zoneinfo",
+            "email",
+            "gender",
+            "preferred_username",
+            "family_name",
+            "website",
+            "profile",
+            "phone_number_verified",
+            "nickname",
+            "updated_at",
+            "phone_number",
+            "locale",
+        ]
+        .iter()
+        .map(|claim| CoreClaimName::new((*claim).to_string()))
+        .collect(),
+    ))
+    .set_request_object_encryption_alg_values_supported(Some(all_encryption_algs.clone()))
+    .set_claim_types_supported(Some(vec![
+        CoreClaimType::Normal,
+        CoreClaimType::Aggregated,
+        CoreClaimType::Distributed,
+    ]))
+    .set_request_uri_parameter_supported(Some(true))
+    .set_request_parameter_supported(Some(true))
+    .set_token_endpoint(Some(
+        TokenUrl::new("https://oauth2.googleapis.com/token".to_string()).unwrap(),
+    ))
+    .set_id_token_encryption_alg_values_supported(Some(all_encryption_algs.clone()))
+    .set_userinfo_encryption_alg_values_supported(Some(all_encryption_algs))
+    .set_userinfo_encryption_enc_values_supported(Some(vec![
+        CoreJweContentEncryptionAlgorithm::Aes128CbcHmacSha256,
+        CoreJweContentEncryptionAlgorithm::Aes192CbcHmacSha384,
+        CoreJweContentEncryptionAlgorithm::Aes256CbcHmacSha512,
+        CoreJweContentEncryptionAlgorithm::Aes128Gcm,
+        CoreJweContentEncryptionAlgorithm::Aes192Gcm,
+        CoreJweContentEncryptionAlgorithm::Aes256Gcm,
+    ]))
+    .set_acr_values_supported(Some(vec![AuthenticationContextClass::new(
+        "PASSWORD".to_string(),
+    )]));
+
+    new_provider_metadata
 }

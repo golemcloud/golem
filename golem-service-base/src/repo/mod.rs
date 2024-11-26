@@ -50,7 +50,10 @@ impl Display for RepoError {
 impl SafeDisplay for RepoError {
     fn to_safe_string(&self) -> String {
         match self {
-            RepoError::Internal(_) => "Internal repository error".to_string(),
+            RepoError::Internal(message) => {
+                dbg!(message);
+                "Internal repository error".to_string()
+            },
             RepoError::UniqueViolation(_) => {
                 "Internal repository error (unique key violation)".to_string()
             }
