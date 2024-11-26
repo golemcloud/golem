@@ -12,15 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use async_zip::ZipEntry;
-use bytes::Bytes;
-use std::collections::{HashMap, HashSet};
-use std::fmt::{Debug, Display, Formatter};
-use std::pin::Pin;
-use std::sync::Arc;
-use std::vec;
-
-use crate::model::ComponentPluginInstallationTarget;
 use crate::model::InitialComponentFilesArchiveAndPermissions;
 use crate::model::{Component, ComponentConstraints};
 use crate::repo::component::{record_metadata_serde, ComponentRecord, FileRecord};
@@ -30,13 +21,16 @@ use crate::service::component_object_store::ComponentObjectStore;
 use crate::service::plugin::PluginError;
 use async_trait::async_trait;
 use async_zip::tokio::read::seek::ZipFileReader;
+use async_zip::ZipEntry;
+use bytes::Bytes;
 use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component::v1::component_error;
 use golem_common::model::component::ComponentOwner;
 use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_common::model::component_metadata::{ComponentMetadata, ComponentProcessingError};
 use golem_common::model::plugin::{
-    PluginInstallation, PluginInstallationCreation, PluginInstallationUpdate,
+    ComponentPluginInstallationTarget, PluginInstallation, PluginInstallationCreation,
+    PluginInstallationUpdate,
 };
 use golem_common::model::ComponentVersion;
 use golem_common::model::{AccountId, PluginInstallationId};
@@ -51,6 +45,11 @@ use golem_service_base::repo::RepoError;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_wasm_ast::analysis::AnalysedType;
 use rib::{FunctionTypeRegistry, RegistryKey, RegistryValue};
+use std::collections::{HashMap, HashSet};
+use std::fmt::{Debug, Display, Formatter};
+use std::pin::Pin;
+use std::sync::Arc;
+use std::vec;
 use tap::TapFallible;
 use tokio::io::BufReader;
 use tokio_stream::Stream;
@@ -569,6 +568,7 @@ impl<Owner: ComponentOwner> ComponentServiceDefault<Owner> {
             component_type,
             &data,
             uploaded_files,
+            Vec::new(),
             owner.clone(),
         )?;
 

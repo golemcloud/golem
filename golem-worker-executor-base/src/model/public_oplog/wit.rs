@@ -16,12 +16,13 @@ use crate::model::public_oplog::{PublicOplogEntry, PublicUpdateDescription};
 use crate::preview2::golem::api1_1_0_rc1::oplog;
 use crate::preview2::wasi::clocks::wall_clock::Datetime;
 use golem_common::model::public_oplog::{
-    ChangeRetryPolicyParameters, CreateParameters, DescribeResourceParameters, EndRegionParameters,
-    ErrorParameters, ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters,
+    ActivatePluginParameters, ChangeRetryPolicyParameters, CreateParameters,
+    DeactivatePluginParameters, DescribeResourceParameters, EndRegionParameters, ErrorParameters,
+    ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters,
     ExportedFunctionParameters, FailedUpdateParameters, GrowMemoryParameters,
     ImportedFunctionInvokedParameters, JumpParameters, LogParameters, ManualUpdateParameters,
-    PendingUpdateParameters, PendingWorkerInvocationParameters, PublicRetryConfig,
-    PublicWorkerInvocation, PublicWrappedFunctionType, ResourceParameters,
+    PendingUpdateParameters, PendingWorkerInvocationParameters, PluginInstallationDescription,
+    PublicRetryConfig, PublicWorkerInvocation, PublicWrappedFunctionType, ResourceParameters,
     SnapshotBasedUpdateParameters, SuccessfulUpdateParameters, TimestampParameter,
     WriteRemoteBatchedParameters,
 };
@@ -40,6 +41,7 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 parent,
                 component_size,
                 initial_total_linear_memory_size,
+                initial_active_plugins,
             }) => Self::Create(oplog::CreateParameters {
                 timestamp: timestamp.into(),
                 worker_id: worker_id.into(),
@@ -52,6 +54,10 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 parent: parent.map(|id| id.into()),
                 component_size,
                 initial_total_linear_memory_size,
+                initial_active_plugins: initial_active_plugins
+                    .into_iter()
+                    .map(|pr| pr.into())
+                    .collect(),
             }),
             PublicOplogEntry::ImportedFunctionInvoked(ImportedFunctionInvokedParameters {
                 timestamp,
@@ -158,10 +164,12 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 timestamp,
                 target_version,
                 new_component_size,
+                new_active_plugins,
             }) => Self::SuccessfulUpdate(oplog::SuccessfulUpdateParameters {
                 timestamp: timestamp.into(),
                 target_version,
                 new_component_size,
+                new_active_plugins: new_active_plugins.into_iter().map(|pr| pr.into()).collect(),
             }),
             PublicOplogEntry::FailedUpdate(FailedUpdateParameters {
                 timestamp,
@@ -218,6 +226,19 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
             PublicOplogEntry::Restart(TimestampParameter { timestamp }) => {
                 Self::Restart(timestamp.into())
             }
+            PublicOplogEntry::ActivatePlugin(ActivatePluginParameters { timestamp, plugin }) => {
+                Self::ActivatePlugin(oplog::ActivatePluginParameters {
+                    timestamp: timestamp.into(),
+                    plugin: plugin.into(),
+                })
+            }
+            PublicOplogEntry::DeactivatePlugin(DeactivatePluginParameters {
+                timestamp,
+                plugin,
+            }) => Self::DeactivatePlugin(oplog::DeactivatePluginParameters {
+                timestamp: timestamp.into(),
+                plugin: plugin.into(),
+            }),
         }
     }
 }
@@ -299,6 +320,17 @@ impl From<PublicRetryConfig> for oplog::RetryPolicy {
             max_delay: value.max_delay.as_nanos() as u64,
             multiplier: value.multiplier,
             max_jitter_factor: value.max_jitter_factor,
+        }
+    }
+}
+
+impl From<PluginInstallationDescription> for oplog::PluginInstallationDescription {
+    fn from(value: PluginInstallationDescription) -> Self {
+        Self {
+            installation_id: value.installation_id.0.into(),
+            name: value.plugin_name,
+            version: value.plugin_version,
+            parameters: value.parameters.into_iter().collect(),
         }
     }
 }

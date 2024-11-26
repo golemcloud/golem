@@ -12,6 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::config::RetryConfig;
+use crate::model::regions::OplogRegion;
+use crate::model::{
+    AccountId, ComponentVersion, IdempotencyKey, PluginInstallationId, Timestamp, WorkerId,
+    WorkerInvocation,
+};
 use bincode::de::read::Reader;
 use bincode::de::{BorrowDecoder, Decoder};
 use bincode::enc::write::Writer;
@@ -23,16 +29,11 @@ use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::{IntoValue, Value};
 use poem_openapi::{Enum, NewType};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use uuid::Uuid;
-
-use crate::config::RetryConfig;
-use crate::model::regions::OplogRegion;
-use crate::model::{
-    AccountId, ComponentVersion, IdempotencyKey, Timestamp, WorkerId, WorkerInvocation,
-};
 
 #[derive(
     Debug,
@@ -269,7 +270,7 @@ pub enum LogLevel {
 
 #[derive(Clone, Debug, PartialEq, Encode, Decode)]
 pub enum OplogEntry {
-    Create {
+    CreateV1 {
         timestamp: Timestamp,
         worker_id: WorkerId,
         component_version: ComponentVersion,
@@ -358,7 +359,7 @@ pub enum OplogEntry {
         description: UpdateDescription,
     },
     /// An update was successfully applied
-    SuccessfulUpdate {
+    SuccessfulUpdateV1 {
         timestamp: Timestamp,
         target_version: ComponentVersion,
         new_component_size: u64,
@@ -404,6 +405,36 @@ pub enum OplogEntry {
         response: OplogPayload,
         wrapped_function_type: WrappedFunctionType,
     },
+    /// The current version of the Create entry (previous is CreateV1)
+    Create {
+        timestamp: Timestamp,
+        worker_id: WorkerId,
+        component_version: ComponentVersion,
+        args: Vec<String>,
+        env: Vec<(String, String)>,
+        account_id: AccountId,
+        parent: Option<WorkerId>,
+        component_size: u64,
+        initial_total_linear_memory_size: u64,
+        initial_active_plugins: HashSet<PluginInstallationId>,
+    },
+    /// Activates a plugin for the worker
+    ActivatePlugin {
+        timestamp: Timestamp,
+        plugin: PluginInstallationId,
+    },
+    /// Deactivates a plugin for the worker
+    DeactivatePlugin {
+        timestamp: Timestamp,
+        plugin: PluginInstallationId,
+    },
+    /// An update was successfully applied
+    SuccessfulUpdate {
+        timestamp: Timestamp,
+        target_version: ComponentVersion,
+        new_component_size: u64,
+        new_active_plugins: HashSet<PluginInstallationId>,
+    },
 }
 
 impl OplogEntry {
@@ -416,6 +447,7 @@ impl OplogEntry {
         parent: Option<WorkerId>,
         component_size: u64,
         initial_total_linear_memory_size: u64,
+        initial_active_plugins: HashSet<PluginInstallationId>,
     ) -> OplogEntry {
         OplogEntry::Create {
             timestamp: Timestamp::now_utc(),
@@ -427,6 +459,7 @@ impl OplogEntry {
             parent,
             component_size,
             initial_total_linear_memory_size,
+            initial_active_plugins,
         }
     }
 
@@ -518,11 +551,13 @@ impl OplogEntry {
     pub fn successful_update(
         target_version: ComponentVersion,
         new_component_size: u64,
+        new_active_plugins: HashSet<PluginInstallationId>,
     ) -> OplogEntry {
         OplogEntry::SuccessfulUpdate {
             timestamp: Timestamp::now_utc(),
             target_version,
             new_component_size,
+            new_active_plugins,
         }
     }
 
@@ -578,6 +613,20 @@ impl OplogEntry {
     pub fn restart() -> OplogEntry {
         OplogEntry::Restart {
             timestamp: Timestamp::now_utc(),
+        }
+    }
+
+    pub fn activate_plugin(plugin: PluginInstallationId) -> OplogEntry {
+        OplogEntry::ActivatePlugin {
+            timestamp: Timestamp::now_utc(),
+            plugin,
+        }
+    }
+
+    pub fn deactivate_plugin(plugin: PluginInstallationId) -> OplogEntry {
+        OplogEntry::DeactivatePlugin {
+            timestamp: Timestamp::now_utc(),
+            plugin,
         }
     }
 
@@ -660,7 +709,11 @@ impl OplogEntry {
             | OplogEntry::DescribeResource { timestamp, .. }
             | OplogEntry::Log { timestamp, .. }
             | OplogEntry::Restart { timestamp }
-            | OplogEntry::ImportedFunctionInvoked { timestamp, .. } => *timestamp,
+            | OplogEntry::ImportedFunctionInvoked { timestamp, .. }
+            | OplogEntry::CreateV1 { timestamp, .. }
+            | OplogEntry::SuccessfulUpdateV1 { timestamp, .. }
+            | OplogEntry::ActivatePlugin { timestamp, .. }
+            | OplogEntry::DeactivatePlugin { timestamp, .. } => *timestamp,
         }
     }
 }

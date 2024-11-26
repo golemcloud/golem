@@ -43,6 +43,7 @@ use crate::services::oplog::{
     BlobOplogArchiveService, CompressedOplogArchiveService, MultiLayerOplogService,
     OplogArchiveService, OplogService, PrimaryOplogService,
 };
+use crate::services::plugins::{Plugins, PluginsObservations};
 use crate::services::promise::{DefaultPromiseService, PromiseService};
 use crate::services::scheduler::{SchedulerService, SchedulerServiceDefault};
 use crate::services::shard::{ShardService, ShardServiceDefault};
@@ -67,6 +68,7 @@ use async_trait::async_trait;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::WorkerExecutorServer;
 use golem_common::golem_version;
+use golem_common::model::component::ComponentOwner;
 use golem_common::redis::RedisPool;
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
@@ -98,6 +100,19 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
     /// Allows customizing the `ActiveWorkers` service.
     fn create_active_workers(&self, golem_config: &GolemConfig) -> Arc<ActiveWorkers<Ctx>>;
 
+    #[allow(clippy::type_complexity)]
+    fn create_plugins(
+        &self,
+        golem_config: &GolemConfig,
+    ) -> (
+        Arc<
+            dyn Plugins<<Ctx::ComponentOwner as ComponentOwner>::PluginOwner, Ctx::PluginScope>
+                + Send
+                + Sync,
+        >,
+        Arc<dyn PluginsObservations + Send + Sync>,
+    );
+
     /// Allows customizing the `All` service.
     /// This is the place to initialize additional services and store them in `All`'s `extra_deps`
     /// field.
@@ -124,6 +139,11 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
+        plugins: Arc<
+            dyn Plugins<<Ctx::ComponentOwner as ComponentOwner>::PluginOwner, Ctx::PluginScope>
+                + Send
+                + Sync,
+        >,
     ) -> anyhow::Result<All<Ctx>>;
 
     /// Can be overridden to customize the wasmtime configuration
@@ -299,12 +319,14 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
 
         let file_loader = Arc::new(FileLoader::new(initial_files_service.clone())?);
+        let (plugins, plugins_observations) = self.create_plugins(&golem_config);
 
         let component_service = component::configured(
             &golem_config.component_service,
             &golem_config.component_cache,
             &golem_config.compiled_component_service,
             blob_storage.clone(),
+            plugins_observations,
         )
         .await;
 
@@ -441,6 +463,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
                 worker_proxy,
                 events,
                 file_loader,
+                plugins,
             )
             .await?;
 

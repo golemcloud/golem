@@ -30,6 +30,7 @@ use crate::error::GolemError;
 use crate::model::InterruptKind;
 use crate::services::component::ComponentService;
 use crate::services::oplog::OplogService;
+use crate::services::plugins::Plugins;
 use crate::services::rpc::RpcError;
 use crate::services::worker_proxy::WorkerProxyError;
 use async_trait::async_trait;
@@ -38,9 +39,11 @@ use golem_api_grpc::proto::golem::worker::UpdateMode;
 use golem_common::model::exports::{find_resource_site, function_by_name};
 use golem_common::model::lucene::Query;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription};
+use golem_common::model::plugin::{PluginOwner, PluginScope};
 use golem_common::model::public_oplog::{
-    ChangeRetryPolicyParameters, CreateParameters, DescribeResourceParameters, EndRegionParameters,
-    ErrorParameters, ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters,
+    ActivatePluginParameters, ChangeRetryPolicyParameters, CreateParameters,
+    DeactivatePluginParameters, DescribeResourceParameters, EndRegionParameters, ErrorParameters,
+    ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters,
     ExportedFunctionParameters, FailedUpdateParameters, GrowMemoryParameters,
     ImportedFunctionInvokedParameters, JumpParameters, LogParameters, ManualUpdateParameters,
     PendingUpdateParameters, PendingWorkerInvocationParameters, PublicOplogEntry,
@@ -62,7 +65,7 @@ use golem_wasm_rpc::{
     type_annotated_value_from_str, IntoValue, IntoValueAndType, Value, ValueAndType, WitValue,
 };
 use rib::{ParsedFunctionName, ParsedFunctionReference};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::net::IpAddr;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -75,9 +78,10 @@ pub struct PublicOplogChunk {
     pub last_index: OplogIndex,
 }
 
-pub async fn get_public_oplog_chunk(
+pub async fn get_public_oplog_chunk<Owner: PluginOwner, Scope: PluginScope>(
     component_service: Arc<dyn ComponentService + Send + Sync>,
     oplog_service: Arc<dyn OplogService + Send + Sync>,
+    plugins: Arc<dyn Plugins<Owner, Scope> + Send + Sync>,
     owned_worker_id: &OwnedWorkerId,
     initial_component_version: ComponentVersion,
     initial_oplog_index: OplogIndex,
@@ -102,6 +106,7 @@ pub async fn get_public_oplog_chunk(
             raw_entry,
             oplog_service.clone(),
             component_service.clone(),
+            plugins.clone(),
             owned_worker_id,
             current_component_version,
         )
@@ -126,9 +131,10 @@ pub struct PublicOplogSearchResult {
     pub last_index: OplogIndex,
 }
 
-pub async fn search_public_oplog(
+pub async fn search_public_oplog<Owner: PluginOwner, Scope: PluginScope>(
     component_service: Arc<dyn ComponentService + Send + Sync>,
     oplog_service: Arc<dyn OplogService + Send + Sync>,
+    plugin_service: Arc<dyn Plugins<Owner, Scope> + Send + Sync>,
     owned_worker_id: &OwnedWorkerId,
     initial_component_version: ComponentVersion,
     initial_oplog_index: OplogIndex,
@@ -146,6 +152,7 @@ pub async fn search_public_oplog(
         let chunk = get_public_oplog_chunk(
             component_service.clone(),
             oplog_service.clone(),
+            plugin_service.clone(),
             owned_worker_id,
             current_component_version,
             current_index,
@@ -211,27 +218,31 @@ pub async fn find_component_version_at(
 }
 
 #[async_trait]
-pub trait PublicOplogEntryOps: Sized {
+pub trait PublicOplogEntryOps<Owner: PluginOwner, Scope: PluginScope>: Sized {
     async fn from_oplog_entry(
         value: OplogEntry,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         components: Arc<dyn ComponentService + Send + Sync>,
+        plugins: Arc<dyn Plugins<Owner, Scope> + Send + Sync>,
         owned_worker_id: &OwnedWorkerId,
         component_version: ComponentVersion,
     ) -> Result<Self, String>;
 }
 
 #[async_trait]
-impl PublicOplogEntryOps for PublicOplogEntry {
+impl<Owner: PluginOwner, Scope: PluginScope> PublicOplogEntryOps<Owner, Scope>
+    for PublicOplogEntry
+{
     async fn from_oplog_entry(
         value: OplogEntry,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         components: Arc<dyn ComponentService + Send + Sync>,
+        plugins: Arc<dyn Plugins<Owner, Scope> + Send + Sync>,
         owned_worker_id: &OwnedWorkerId,
         component_version: ComponentVersion,
     ) -> Result<Self, String> {
         match value {
-            OplogEntry::Create {
+            OplogEntry::CreateV1 {
                 timestamp,
                 worker_id,
                 component_version,
@@ -251,7 +262,47 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 parent,
                 component_size,
                 initial_total_linear_memory_size,
+                initial_active_plugins: BTreeSet::new(),
             })),
+            OplogEntry::Create {
+                timestamp,
+                worker_id,
+                component_version,
+                args,
+                env,
+                account_id,
+                parent,
+                component_size,
+                initial_total_linear_memory_size,
+                initial_active_plugins,
+            } => {
+                let mut initial_plugins = BTreeSet::new();
+                for installation_id in initial_active_plugins {
+                    let (installation, _definition) = plugins
+                        .get(
+                            &account_id,
+                            &worker_id.component_id,
+                            component_version,
+                            &installation_id,
+                        )
+                        .await
+                        .map_err(|err| err.to_string())?;
+                    let desc = installation.into();
+                    initial_plugins.insert(desc);
+                }
+                Ok(PublicOplogEntry::Create(CreateParameters {
+                    timestamp,
+                    worker_id,
+                    component_version,
+                    args,
+                    env: env.into_iter().collect(),
+                    account_id,
+                    parent,
+                    component_size,
+                    initial_total_linear_memory_size,
+                    initial_active_plugins: initial_plugins,
+                }))
+            }
             OplogEntry::ImportedFunctionInvokedV1 {
                 timestamp,
                 function_name,
@@ -317,6 +368,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
 
                 let metadata = components
                     .get_metadata(
+                        &owned_worker_id.account_id,
                         &owned_worker_id.worker_id.component_id,
                         Some(component_version),
                     )
@@ -434,6 +486,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     } => {
                         let metadata = components
                             .get_metadata(
+                                &owned_worker_id.account_id,
                                 &owned_worker_id.worker_id.component_id,
                                 Some(component_version),
                             )
@@ -506,7 +559,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     description: public_description,
                 }))
             }
-            OplogEntry::SuccessfulUpdate {
+            OplogEntry::SuccessfulUpdateV1 {
                 timestamp,
                 target_version,
                 new_component_size,
@@ -515,8 +568,38 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     timestamp,
                     target_version,
                     new_component_size,
+                    new_active_plugins: BTreeSet::new(),
                 },
             )),
+            OplogEntry::SuccessfulUpdate {
+                timestamp,
+                target_version,
+                new_component_size,
+                new_active_plugins,
+            } => {
+                let mut new_plugins = BTreeSet::new();
+                for installation_id in new_active_plugins {
+                    let (installation, _definition) = plugins
+                        .get(
+                            &owned_worker_id.account_id,
+                            &owned_worker_id.worker_id.component_id,
+                            target_version,
+                            &installation_id,
+                        )
+                        .await
+                        .map_err(|err| err.to_string())?;
+                    let desc = installation.into();
+                    new_plugins.insert(desc);
+                }
+                Ok(PublicOplogEntry::SuccessfulUpdate(
+                    SuccessfulUpdateParameters {
+                        timestamp,
+                        target_version,
+                        new_component_size,
+                        new_active_plugins: new_plugins,
+                    },
+                ))
+            }
             OplogEntry::FailedUpdate {
                 timestamp,
                 target_version,
@@ -551,6 +634,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             } => {
                 let metadata = components
                     .get_metadata(
+                        &owned_worker_id.account_id,
                         &owned_worker_id.worker_id.component_id,
                         Some(component_version),
                     )
@@ -607,6 +691,38 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             })),
             OplogEntry::Restart { timestamp } => {
                 Ok(PublicOplogEntry::Restart(TimestampParameter { timestamp }))
+            }
+            OplogEntry::ActivatePlugin { timestamp, plugin } => {
+                let (installation, _definition) = plugins
+                    .get(
+                        &owned_worker_id.account_id,
+                        &owned_worker_id.worker_id.component_id,
+                        component_version,
+                        &plugin,
+                    )
+                    .await
+                    .map_err(|err| err.to_string())?;
+                Ok(PublicOplogEntry::ActivatePlugin(ActivatePluginParameters {
+                    timestamp,
+                    plugin: installation.into(),
+                }))
+            }
+            OplogEntry::DeactivatePlugin { timestamp, plugin } => {
+                let (installation, _definition) = plugins
+                    .get(
+                        &owned_worker_id.account_id,
+                        &owned_worker_id.worker_id.component_id,
+                        component_version,
+                        &plugin,
+                    )
+                    .await
+                    .map_err(|err| err.to_string())?;
+                Ok(PublicOplogEntry::DeactivatePlugin(
+                    DeactivatePluginParameters {
+                        timestamp,
+                        plugin: installation.into(),
+                    },
+                ))
             }
         }
     }

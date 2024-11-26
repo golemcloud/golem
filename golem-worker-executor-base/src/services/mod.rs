@@ -16,8 +16,11 @@ use crate::services::worker_activator::WorkerActivator;
 use std::sync::Arc;
 
 use crate::services::events::Events;
+use crate::services::plugins::Plugins;
 use crate::workerctx::WorkerCtx;
 use file_loader::FileLoader;
+use golem_common::model::component::ComponentOwner;
+use golem_common::model::plugin::{PluginOwner, PluginScope};
 use tokio::runtime::Handle;
 
 pub mod active_workers;
@@ -29,6 +32,7 @@ pub mod file_loader;
 pub mod golem_config;
 pub mod key_value;
 pub mod oplog;
+pub mod plugins;
 pub mod promise;
 pub mod rpc;
 pub mod scheduler;
@@ -39,7 +43,6 @@ pub mod worker_activator;
 pub mod worker_enumeration;
 pub mod worker_event;
 pub mod worker_proxy;
-
 // HasXXX traits for fine-grained control of which dependencies a function needs
 
 pub trait HasActiveWorkers<Ctx: WorkerCtx> {
@@ -136,6 +139,10 @@ pub trait HasFileLoader {
     fn file_loader(&self) -> Arc<FileLoader>;
 }
 
+pub trait HasPlugins<Owner: PluginOwner, Scope: PluginScope> {
+    fn plugins(&self) -> Arc<dyn Plugins<Owner, Scope> + Send + Sync>;
+}
+
 /// HasAll is a shortcut for requiring all available service dependencies
 pub trait HasAll<Ctx: WorkerCtx>:
     HasActiveWorkers<Ctx>
@@ -157,6 +164,7 @@ pub trait HasAll<Ctx: WorkerCtx>:
     + HasShardManagerService
     + HasShardService
     + HasFileLoader
+    + HasPlugins<<Ctx::ComponentOwner as ComponentOwner>::PluginOwner, Ctx::PluginScope>
     + HasExtraDeps<Ctx>
     + Clone
 {
@@ -183,6 +191,7 @@ impl<
             + HasShardManagerService
             + HasShardService
             + HasFileLoader
+            + HasPlugins<<Ctx::ComponentOwner as ComponentOwner>::PluginOwner, Ctx::PluginScope>
             + HasExtraDeps<Ctx>
             + Clone,
     > HasAll<Ctx> for T
@@ -214,6 +223,11 @@ pub struct All<Ctx: WorkerCtx> {
     worker_proxy: Arc<dyn worker_proxy::WorkerProxy + Send + Sync>,
     events: Arc<Events>,
     file_loader: Arc<FileLoader>,
+    plugins: Arc<
+        dyn Plugins<<Ctx::ComponentOwner as ComponentOwner>::PluginOwner, Ctx::PluginScope>
+            + Send
+            + Sync,
+    >,
     extra_deps: Ctx::ExtraDeps,
 }
 
@@ -241,6 +255,7 @@ impl<Ctx: WorkerCtx> Clone for All<Ctx> {
             worker_proxy: self.worker_proxy.clone(),
             events: self.events.clone(),
             file_loader: self.file_loader.clone(),
+            plugins: self.plugins.clone(),
             extra_deps: self.extra_deps.clone(),
         }
     }
@@ -274,6 +289,11 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         worker_proxy: Arc<dyn worker_proxy::WorkerProxy + Send + Sync>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
+        plugins: Arc<
+            dyn Plugins<<Ctx::ComponentOwner as ComponentOwner>::PluginOwner, Ctx::PluginScope>
+                + Send
+                + Sync,
+        >,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
         Self {
@@ -298,6 +318,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             worker_proxy,
             events,
             file_loader,
+            plugins,
             extra_deps,
         }
     }
@@ -325,6 +346,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             this.worker_proxy(),
             this.events(),
             this.file_loader(),
+            this.plugins(),
             this.extra_deps(),
         )
     }
@@ -467,6 +489,20 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasEvents for T {
 impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasFileLoader for T {
     fn file_loader(&self) -> Arc<FileLoader> {
         self.all().file_loader.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>>
+    HasPlugins<<Ctx::ComponentOwner as ComponentOwner>::PluginOwner, Ctx::PluginScope> for T
+{
+    fn plugins(
+        &self,
+    ) -> Arc<
+        dyn Plugins<<Ctx::ComponentOwner as ComponentOwner>::PluginOwner, Ctx::PluginScope>
+            + Send
+            + Sync,
+    > {
+        self.all().plugins.clone()
     }
 }
 

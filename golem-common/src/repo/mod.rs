@@ -14,6 +14,7 @@
 
 pub mod component;
 pub mod plugin;
+pub mod plugin_installation;
 
 use sqlx::query_builder::Separated;
 use sqlx::{Database, QueryBuilder};

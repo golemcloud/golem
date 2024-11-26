@@ -1,5 +1,6 @@
 use anyhow::Error;
 use async_trait::async_trait;
+use std::collections::HashSet;
 
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::storage::blob::BlobStorage;
@@ -17,7 +18,8 @@ use std::sync::{Arc, RwLock, Weak};
 
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId,
-    ScanCursor, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+    PluginInstallationId, ScanCursor, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
+    WorkerStatusRecord,
 };
 use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
 use golem_worker_executor_base::error::GolemError;
@@ -46,7 +48,7 @@ use golem_worker_executor_base::services::shard_manager::ShardManagerService;
 use golem_worker_executor_base::services::worker::WorkerService;
 use golem_worker_executor_base::services::worker_activator::WorkerActivator;
 use golem_worker_executor_base::services::worker_event::WorkerEventService;
-use golem_worker_executor_base::services::{All, HasAll, HasConfig, HasOplogService};
+use golem_worker_executor_base::services::{plugins, All, HasAll, HasConfig, HasOplogService};
 use golem_worker_executor_base::wasi_host::create_linker;
 use golem_worker_executor_base::workerctx::{
     ExternalOperations, FileSystemReading, FuelManagement, IndexedResourceStore, InvocationHooks,
@@ -66,7 +68,9 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataSuccessResponse,
     GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse,
 };
+use golem_common::model::component::{ComponentOwner, DefaultComponentOwner};
 use golem_common::model::oplog::WorkerResourceId;
+use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope};
 use golem_test_framework::components::component_compilation_service::ComponentCompilationService;
 use golem_test_framework::components::rdb::Rdb;
 use golem_test_framework::components::redis::Redis;
@@ -78,6 +82,7 @@ use golem_test_framework::dsl::to_worker_metadata;
 use golem_worker_executor_base::preview2::golem;
 use golem_worker_executor_base::preview2::golem::api1_1_0_rc1;
 use golem_worker_executor_base::services::events::Events;
+use golem_worker_executor_base::services::plugins::{Plugins, PluginsObservations};
 use golem_worker_executor_base::services::rpc::{
     DirectWorkerInvocationRpc, RemoteInvocationRpc, Rpc,
 };
@@ -618,9 +623,10 @@ impl UpdateManagement for TestWorkerCtx {
         &self,
         target_version: ComponentVersion,
         new_component_size: u64,
+        new_active_plugins: HashSet<PluginInstallationId>,
     ) {
         self.durable_ctx
-            .on_worker_update_succeeded(target_version, new_component_size)
+            .on_worker_update_succeeded(target_version, new_component_size, new_active_plugins)
             .await
     }
 }
@@ -630,6 +636,8 @@ struct ServerBootstrap {}
 #[async_trait]
 impl WorkerCtx for TestWorkerCtx {
     type PublicState = PublicDurableWorkerState<TestWorkerCtx>;
+    type ComponentOwner = DefaultComponentOwner;
+    type PluginScope = DefaultPluginScope;
 
     async fn create(
         owned_worker_id: OwnedWorkerId,
@@ -653,6 +661,11 @@ impl WorkerCtx for TestWorkerCtx {
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
+        plugins: Arc<
+            dyn Plugins<<Self::ComponentOwner as ComponentOwner>::PluginOwner, Self::PluginScope>
+                + Send
+                + Sync,
+        >,
     ) -> Result<Self, GolemError> {
         let durable_ctx = DurableWorkerCtx::create(
             owned_worker_id,
@@ -674,6 +687,7 @@ impl WorkerCtx for TestWorkerCtx {
             worker_config,
             execution_status,
             file_loader,
+            plugins,
         )
         .await?;
         Ok(Self { durable_ctx })
@@ -771,6 +785,22 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         Arc::new(ActiveWorkers::<TestWorkerCtx>::new(&golem_config.memory))
     }
 
+    fn create_plugins(
+        &self,
+        golem_config: &GolemConfig,
+    ) -> (
+        Arc<
+            dyn Plugins<
+                    <<TestWorkerCtx as WorkerCtx>::ComponentOwner as ComponentOwner>::PluginOwner,
+                    <TestWorkerCtx as WorkerCtx>::PluginScope,
+                > + Send
+                + Sync,
+        >,
+        Arc<dyn PluginsObservations + Send + Sync>,
+    ) {
+        plugins::default_configured(&golem_config.plugin_service)
+    }
+
     async fn create_services(
         &self,
         active_workers: Arc<ActiveWorkers<TestWorkerCtx>>,
@@ -793,6 +823,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
+        plugins: Arc<dyn Plugins<DefaultPluginOwner, DefaultPluginScope> + Send + Sync>,
     ) -> anyhow::Result<All<TestWorkerCtx>> {
         let rpc = Arc::new(DirectWorkerInvocationRpc::new(
             Arc::new(RemoteInvocationRpc::new(
@@ -818,6 +849,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             worker_activator.clone(),
             events.clone(),
             file_loader.clone(),
+            plugins.clone(),
             (),
         ));
         Ok(All::new(
@@ -840,8 +872,9 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             scheduler_service,
             worker_activator,
             worker_proxy,
-            events.clone(),
+            events,
             file_loader,
+            plugins,
             (),
         ))
     }

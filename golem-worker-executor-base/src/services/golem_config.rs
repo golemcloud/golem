@@ -43,6 +43,7 @@ pub struct GolemConfig {
     pub component_service: ComponentServiceConfig,
     pub compiled_component_service: CompiledComponentServiceConfig,
     pub shard_manager_service: ShardManagerServiceConfig,
+    pub plugin_service: PluginServiceConfig,
     pub oplog: OplogConfig,
     pub suspend: SuspendConfig,
     pub active_workers: ActiveWorkersConfig,
@@ -94,6 +95,27 @@ pub struct ComponentServiceGrpcConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ComponentServiceLocalConfig {
+    pub root: PathBuf,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "type", content = "config")]
+pub enum PluginServiceConfig {
+    Grpc(PluginServiceGrpcConfig),
+    Local(PluginServiceLocalConfig),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PluginServiceGrpcConfig {
+    pub host: String,
+    pub port: u16,
+    pub access_token: String,
+    pub retries: RetryConfig,
+    pub plugin_cache_size: usize,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PluginServiceLocalConfig {
     pub root: PathBuf,
 }
 
@@ -183,6 +205,22 @@ impl ComponentServiceGrpcConfig {
             .path_and_query("/")
             .build()
             .expect("Failed to build component service URI")
+    }
+}
+
+impl PluginServiceGrpcConfig {
+    pub fn url(&self) -> Url {
+        Url::parse(&format!("http://{}:{}", self.host, self.port))
+            .expect("Failed to parse plugin service URL")
+    }
+
+    pub fn uri(&self) -> Uri {
+        Uri::builder()
+            .scheme("http")
+            .authority(format!("{}:{}", self.host, self.port).as_str())
+            .path_and_query("/")
+            .build()
+            .expect("Failed to build plugin service URI")
     }
 }
 
@@ -311,6 +349,7 @@ impl Default for GolemConfig {
             component_service: ComponentServiceConfig::default(),
             compiled_component_service: CompiledComponentServiceConfig::default(),
             shard_manager_service: ShardManagerServiceConfig::default(),
+            plugin_service: PluginServiceConfig::default(),
             oplog: OplogConfig::default(),
             suspend: SuspendConfig::default(),
             scheduler: SchedulerConfig::default(),
@@ -390,6 +429,24 @@ impl Default for ComponentServiceGrpcConfig {
             access_token: "2a354594-7a63-4091-a46b-cc58d379f677".to_string(),
             retries: RetryConfig::max_attempts_3(),
             max_component_size: 50 * 1024 * 1024,
+        }
+    }
+}
+
+impl Default for PluginServiceConfig {
+    fn default() -> Self {
+        Self::Grpc(PluginServiceGrpcConfig::default())
+    }
+}
+
+impl Default for PluginServiceGrpcConfig {
+    fn default() -> Self {
+        Self {
+            host: "localhost".to_string(),
+            port: 9090,
+            access_token: "2a354594-7a63-4091-a46b-cc58d379f677".to_string(),
+            retries: RetryConfig::max_attempts_3(),
+            plugin_cache_size: 1024,
         }
     }
 }

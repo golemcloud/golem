@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::ComponentPluginInstallationTarget;
-use golem_common::model::ComponentId;
-use golem_common::repo::RowMeta;
+use crate::model::plugin::ComponentPluginInstallationTarget;
+use crate::model::ComponentId;
+use crate::repo::RowMeta;
 use sqlx::query_builder::Separated;
 use sqlx::{Database, Encode, QueryBuilder};
 use std::fmt::Display;

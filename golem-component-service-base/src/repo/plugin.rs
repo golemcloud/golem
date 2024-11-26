@@ -12,20 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::{
-    ComponentTransformerDefinition, OplogProcessorDefinition, PluginDefinition, PluginScope,
-    PluginTypeSpecificDefinition,
-};
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
-use golem_common::model::plugin::{ComponentPluginScope, DefaultPluginScope, PluginOwner};
+use golem_common::model::plugin::{
+    ComponentTransformerDefinition, OplogProcessorDefinition, PluginDefinition, PluginOwner,
+    PluginScope, PluginTypeSpecificDefinition,
+};
 use golem_common::model::ComponentId;
-use golem_common::model::Empty;
 use golem_common::repo::RowMeta;
 use golem_service_base::repo::RepoError;
-use sqlx::query_builder::Separated;
-use sqlx::{Database, Encode, Pool, QueryBuilder, Type};
-use std::fmt::{Debug, Display, Formatter};
+use sqlx::{Database, Pool, QueryBuilder};
+use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -154,60 +151,6 @@ impl<Owner: PluginOwner, Scope: PluginScope> TryFrom<PluginRecord<Owner, Scope>>
             scope: value.scope.try_into()?,
             owner: value.owner.try_into()?,
         })
-    }
-}
-
-#[derive(sqlx::FromRow, Debug, Clone)]
-pub struct DefaultPluginScopeRow {
-    scope_component_id: Option<Uuid>,
-}
-
-impl From<DefaultPluginScope> for DefaultPluginScopeRow {
-    fn from(value: DefaultPluginScope) -> Self {
-        match value {
-            DefaultPluginScope::Global(_) => Self {
-                scope_component_id: None,
-            },
-            DefaultPluginScope::Component(component) => Self {
-                scope_component_id: Some(component.component_id.0),
-            },
-        }
-    }
-}
-
-impl TryFrom<DefaultPluginScopeRow> for DefaultPluginScope {
-    type Error = String;
-
-    fn try_from(value: DefaultPluginScopeRow) -> Result<Self, Self::Error> {
-        match value.scope_component_id {
-            Some(component_id) => Ok(DefaultPluginScope::Component(ComponentPluginScope {
-                component_id: ComponentId(component_id),
-            })),
-            None => Ok(DefaultPluginScope::Global(Empty {})),
-        }
-    }
-}
-
-impl<DB: Database> RowMeta<DB> for DefaultPluginScopeRow
-where
-    Uuid: for<'q> Encode<'q, DB> + Type<DB>,
-    Option<Uuid>: for<'q> Encode<'q, DB> + Type<DB>,
-{
-    fn add_column_list<Sep: Display>(builder: &mut Separated<DB, Sep>) {
-        builder.push("scope_component_id");
-    }
-
-    fn add_where_clause<'a>(&'a self, builder: &mut QueryBuilder<'a, DB>) {
-        if let Some(component_id) = &self.scope_component_id {
-            builder.push("scope_component_id = ");
-            builder.push_bind(component_id);
-        } else {
-            builder.push("scope_component_id IS NULL");
-        }
-    }
-
-    fn push_bind<'a, Sep: Display>(&'a self, builder: &mut Separated<'_, 'a, DB, Sep>) {
-        builder.push_bind(self.scope_component_id);
     }
 }
 
