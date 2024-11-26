@@ -56,9 +56,7 @@ use sozu_command_lib::{
 struct Proxy {
     metrics_port: u16,
     component_service_port: u16,
-    worker_service_port: u16,
-    // exporter: BoxEndpoint<'static>,
-    // routes: Vec<(Regex, u16)>,
+    worker_service_port: u16
 }
 
 impl Proxy {
@@ -67,92 +65,98 @@ impl Proxy {
         component_service_port: u16,
         worker_service_port: u16,
     ) -> Result<Self, anyhow::Error> {
-        // let prometheus_registry = Registry::default();
-        // let exporter = PrometheusExporter::new(prometheus_registry.clone())
-        //     .into_endpoint()
-        //     .boxed();
-
-        // let routes = vec![
-        //     (Regex::new(r#"^/v1/api$"#)?, component_service_port),
-        //     (Regex::new(r#"^/v1/components/[^/]+/workers.*"#)?, worker_service_port),
-        //     (Regex::new(r#"^/v1/components/[^/]+/invoke$"#)?, worker_service_port),
-        //     (Regex::new(r#"^/v1/components/[^/]+/invoke-and-await$"#)?, worker_service_port),
-        //     (Regex::new(r#"^/v1/components.*"#)?, component_service_port),
-        //     (Regex::new(r#"^/.*"#)?, worker_service_port),
-        // ];
-
         Ok(Self {
             metrics_port,
             component_service_port,
             worker_service_port,
-            // exporter,
-            // routes,
         })
     }
 
-    async fn start(&self) -> Result<(), anyhow::Error> {
+    pub async fn start(&self) -> Result<(), anyhow::Error> {
+        let listener_address = SocketAddress::new_v4(127,0,0,1,8080);
 
-        let http_listener = ListenerBuilder::new_http(SocketAddress::new_v4(127,0,0,1,8080)).to_http(None)?;
+        let http_listener = ListenerBuilder::new_http(listener_address).to_http(None)?;
 
         let (mut command_channel, proxy_channel) = Channel::generate(1000, 10000).with_context(|| "should create a channel")?;
 
-        let worker_thread_join_handle = thread::spawn(move || {
+        let _worker_thread_join_handle = thread::spawn(move || {
             let max_buffers = 500;
             let buffer_size = 16384;
             sozu_lib::http::testing::start_http_worker(http_listener, proxy_channel, max_buffers, buffer_size)
                 .expect("The worker could not be started, or shut down");
         });
 
-        let cluster = Cluster {
-            cluster_id: "my-cluster".to_string(),
-            sticky_session: false,
-            https_redirect: false,
-            load_balancing: LoadBalancingAlgorithms::RoundRobin as i32,
-            answer_503: Some("A custom forbidden message".to_string()),
-            ..Default::default()
-        };
+        let metrics_backend = "golem-metrics";
+        let component_backend = "golem-component";
+        let worker_backend = "golem-worker";
 
-        let http_front = RequestHttpFrontend {
-            cluster_id: Some("my-cluster".to_string()),
-            address: SocketAddress::new_v4(127,0,0,1,8080),
-            hostname: "example.com".to_string(),
-            path: PathRule::prefix(String::from("/")),
-            position: RulePosition::Pre.into(),
-            tags: BTreeMap::from([
-                ("owner".to_owned(), "John".to_owned()),
-                ("id".to_owned(), "my-own-http-front".to_owned()),
-            ]),
-            ..Default::default()
-        };
+        // set up the clusters. We'll have one per service with a single backend per cluster
+        {
 
-        let http_backend = AddBackend {
-            cluster_id: "my-cluster".to_string(),
-            backend_id: "test-backend".to_string(),
-            address: SocketAddress::new_v4(127,0,0,1,8000),
-            load_balancing_parameters: Some(LoadBalancingParams::default()),
-            ..Default::default()
-        };
+            let mut add_backend = |(name, port): (&str, u16)| {
+                command_channel
+                  .write_message(&WorkerRequest {
+                        id: format!("add-{name}-cluster"),
+                        content: RequestType::AddCluster(
+                            Cluster {
+                                cluster_id: name.to_string(),
+                                sticky_session: false,
+                                https_redirect: false,
+                                load_balancing: LoadBalancingAlgorithms::Random as i32,
+                                ..Default::default()
+                            }
+                        ).into(),
+                    })?;
 
-        command_channel
-            .write_message(&WorkerRequest {
-                id: String::from("add-the-cluster"),
-                content: RequestType::AddCluster(cluster).into(),
-            })?;
+                command_channel
+                    .write_message(&WorkerRequest {
+                        id: format!("add-{name}-backend"),
+                        content: RequestType::AddBackend(
+                            AddBackend {
+                                cluster_id: name.to_string(),
+                                backend_id: name.to_string(),
+                                address: SocketAddress::new_v4(127,0,0,1, port),
+                                ..Default::default()
+                            }
+                        ).into(),
+                    })
+            };
 
-        command_channel
-            .write_message(&WorkerRequest {
-                id: String::from("add-the-frontend"),
-                content: RequestType::AddHttpFrontend(http_front).into(),
-            })?;
+            add_backend((metrics_backend, self.metrics_port))?;
+            add_backend((component_backend, self.component_service_port))?;
+            add_backend((worker_backend, self.worker_service_port))?;
 
-        command_channel
-            .write_message(&WorkerRequest {
-                id: String::from("add-the-backend"),
-                content: RequestType::AddBackend(http_backend).into(),
-            })?;
+        }
 
-        println!("HTTP -> {:?}", command_channel.read_message());
-        println!("HTTP -> {:?}", command_channel.read_message());
+        // set up routing
+        {
+            let mut route_counter = -1;
+            let mut add_route = |(path, cluster_id): (PathRule, &str)| {
+                route_counter += 1;
+                command_channel.write_message(&WorkerRequest {
+                        id: format!("add-golem-frontend-${route_counter}"),
+                        content: RequestType::AddHttpFrontend(
+                            RequestHttpFrontend {
+                                cluster_id: Some(cluster_id.to_string()),
+                                address: SocketAddress::new_v4(127,0,0,1,8080),
+                                hostname: "*".to_string(),
+                                path,
+                                position: RulePosition::Post.into(),
+                                ..Default::default()
+                            }
+                        ).into(),
+                    })
+            };
+
+            add_route((PathRule::regex("/v1/components/[^/]+/workers/[^/]+/connect$"), worker_backend))?;
+            add_route((PathRule::prefix("/v1/api"), worker_backend))?;
+            add_route((PathRule::regex("/v1/components/[^/]+/workers"), worker_backend))?;
+            add_route((PathRule::regex("/v1/components/[^/]+/invoke"), worker_backend))?;
+            add_route((PathRule::regex("/v1/components/[^/]+/invoke-and-await"), worker_backend))?;
+            add_route((PathRule::prefix("/v1/components"), component_backend))?;
+            add_route((PathRule::prefix("/"), component_backend))?;
+        }
+
         Ok(())
 
         // uncomment to let it run in the background
