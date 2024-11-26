@@ -53,7 +53,7 @@ impl SafeDisplay for RepoError {
             RepoError::Internal(message) => {
                 dbg!(message);
                 "Internal repository error".to_string()
-            },
+            }
             RepoError::UniqueViolation(_) => {
                 "Internal repository error (unique key violation)".to_string()
             }
