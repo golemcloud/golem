@@ -101,30 +101,16 @@ fn main() -> Result<(), anyhow::Error> {
 async fn run_all() -> Result<(), anyhow::Error> {
     let mut join_set = JoinSet::new();
 
-    run_metrics(9881, &default_registry(), &mut join_set).await?;
     run_worker_executor(&mut join_set).await?;
     run_shard_manager(&mut join_set).await?;
     run_component_service(&mut join_set).await?;
     run_worker_service(&mut join_set).await?;
 
-    let prometheus_registry = Registry::default();
-    let metrics = PrometheusExporter::new(prometheus_registry.clone());
-
-    // let proxy = proxy::Proxy::new(9999, 8083, 9005);
-
     proxy::start_proxy(&proxy::Ports {
         listener_port: 9882,
-        metrics_port: 9881,
         component_service_port: 8083,
         worker_service_port: 9005,
     }, &mut join_set)?;
-
-    // join_set.spawn(async move {
-    //     poem::Server::new(TcpListener::bind(format!("0.0.0.0:{}", 9881)))
-    //         .run(proxy)
-    //         .await
-    //         .map_err(|err| anyhow!(err).context("HTTP server failed"))
-    // });
 
     while let Some(res) = join_set.join_next().await {
         let result = res?;

@@ -55,7 +55,6 @@ use tracing::info;
 
 pub struct Ports {
     pub listener_port: u16,
-    pub metrics_port: u16,
     pub component_service_port: u16,
     pub worker_service_port: u16,
 }
@@ -87,7 +86,6 @@ pub fn start_proxy(
         sozu_lib::http::testing::start_http_worker(http_listener, proxy_channel, max_buffers, buffer_size)
     });
 
-    let metrics_backend = "golem-metrics";
     let component_backend = "golem-component";
     let worker_backend = "golem-worker";
 
@@ -121,10 +119,8 @@ pub fn start_proxy(
             })
         };
 
-        add_backend((metrics_backend, ports.metrics_port))?;
         add_backend((component_backend, ports.component_service_port))?;
         add_backend((worker_backend, ports.worker_service_port))?;
-
     }
 
     // set up routing
@@ -157,10 +153,6 @@ pub fn start_proxy(
         add_route((PathRule::regex("/v1/components/[^/]+/invoke-and-await"), worker_backend))?;
         add_route((PathRule::prefix("/v1/components"), component_backend))?;
         add_route((PathRule::prefix("/"), component_backend))?;
-
-        while let Ok(message) = command_channel.read_message() {
-            tracing::info!("Proxy initialization message: {:?}", message);
-        }
     }
 
     Ok(())
