@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
 #[async_trait]
-pub trait GatewayData {
+pub trait GatewaySession {
     async fn insert(
         &self,
         session_id: SessionId,
@@ -42,7 +42,7 @@ pub trait GatewayData {
 }
 
 #[derive(Clone)]
-pub struct GatewaySessionStore(pub Arc<dyn GatewayData + Send + Sync>);
+pub struct GatewaySessionStore(pub Arc<dyn GatewaySession + Send + Sync>);
 
 impl GatewaySessionStore {
     pub fn in_memory(eviction_strategy: &EvictionStrategy) -> Self {
@@ -172,7 +172,7 @@ impl Default for InMemoryGatewaySession {
 }
 
 #[async_trait]
-impl GatewayData for InMemoryGatewaySession {
+impl GatewaySession for InMemoryGatewaySession {
     async fn insert(
         &self,
         session_id: SessionId,
