@@ -43,6 +43,7 @@ rustls = { workspace = true }
 sqlx = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
+tracing = { workspace = true }
 
 # Sozu builds with simd support by default, but it only works on x86_64
 

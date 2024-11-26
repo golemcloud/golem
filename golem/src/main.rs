@@ -57,7 +57,7 @@ use sqlx::migrate::{Migration, MigrationSource};
 use std::path::Path;
 use std::sync::Arc;
 use tokio::net::TcpStream;
-use tokio::runtime::Runtime;
+use tokio::runtime::{Handle, Runtime};
 use tokio::task::JoinSet;
 
 fn main() -> Result<(), anyhow::Error> {
@@ -95,17 +95,15 @@ fn main() -> Result<(), anyhow::Error> {
             .build()?,
     );
 
-    runtime.block_on(run_all(runtime.clone()))
+    runtime.block_on(run_all())
 }
 
-async fn run_all(runtime: Arc<Runtime>) -> Result<(), anyhow::Error> {
+async fn run_all() -> Result<(), anyhow::Error> {
     let mut join_set = JoinSet::new();
 
-    let _worker_executor = join_set.spawn({
-        let runtime = runtime.clone();
-        async move { run_worker_executor(runtime).await }
-    });
-    let _shard_manager = join_set.spawn(async { run_shard_manager().await });
+    run_metrics(9881, &default_registry(), &mut join_set).await?;
+    run_worker_executor(&mut join_set).await?;
+    run_shard_manager(&mut join_set).await?;
     run_component_service(&mut join_set).await?;
     run_worker_service(&mut join_set).await?;
 
@@ -115,8 +113,8 @@ async fn run_all(runtime: Arc<Runtime>) -> Result<(), anyhow::Error> {
     // let proxy = proxy::Proxy::new(9999, 8083, 9005);
 
     proxy::start_proxy(&proxy::Ports {
-        listener_port: 9881,
-        metrics_port: 9882,
+        listener_port: 9882,
+        metrics_port: 9881,
         component_service_port: 8083,
         worker_service_port: 9005,
     }, &mut join_set)?;
@@ -198,17 +196,40 @@ fn worker_service_config() -> WorkerServiceBaseConfig {
     }
 }
 
-async fn run_worker_executor(runtime: Arc<Runtime>) -> Result<(), anyhow::Error> {
+async fn run_metrics(
+    port: u16,
+    prometheus_registry: &Registry,
+    join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+) -> Result<(), anyhow::Error> {
+    let exporter = PrometheusExporter::new(prometheus_registry.clone());
+
+    let _server = join_set.spawn(async move {
+        poem::Server::new(TcpListener::bind(format!("0.0.0.0:{}", port)))
+            .run(exporter)
+            .await
+            .map_err(|err| anyhow!(err).context("Metrics HTTP server failed"))
+    });
+
+    Ok(())
+}
+
+async fn run_worker_executor(
+    join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+) -> Result<(), anyhow::Error> {
     let golem_config = worker_executor_config();
     let prometheus_registry = golem_worker_executor_base::metrics::register_all();
 
-    golem_worker_executor::run(golem_config, prometheus_registry, runtime.handle().clone()).await
+    let _server = join_set.spawn(async move { golem_worker_executor::run(golem_config, prometheus_registry, Handle::current()).await });
+    Ok(())
 }
 
-async fn run_shard_manager() -> Result<(), anyhow::Error> {
+async fn run_shard_manager(
+    join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+) -> Result<(), anyhow::Error> {
     let config = shard_manager_config();
     let prometheus_registry = default_registry().clone();
-    golem_shard_manager::async_main(&config, prometheus_registry).await
+    let _server = join_set.spawn(async move { golem_shard_manager::async_main(&config, prometheus_registry).await });
+    Ok(())
 }
 
 async fn run_component_service(
@@ -218,9 +239,7 @@ async fn run_component_service(
     let prometheus_registry = golem_component_service::metrics::register_all();
     let migration_path = IncludedMigrationsDir::new(include_dir!("$CARGO_MANIFEST_DIR/../golem-component-service/db/migration"));
 
-    let component_service =
-        ComponentService::new(config, prometheus_registry, migration_path).await?;
-
+    let component_service = ComponentService::new(config, prometheus_registry, migration_path).await?;
     let _server = join_set.spawn(async move { component_service.run().await });
     Ok(())
 }
@@ -233,7 +252,6 @@ async fn run_worker_service(
     let migration_path = IncludedMigrationsDir::new(include_dir!("$CARGO_MANIFEST_DIR/../golem-worker-service/db/migration"));
 
     let worker_service = WorkerService::new(config, prometheus_registry, migration_path).await?;
-
     let _server = join_set.spawn(async move { worker_service.run().await });
     Ok(())
 }
