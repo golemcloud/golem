@@ -716,6 +716,20 @@ impl OplogEntry {
             | OplogEntry::DeactivatePlugin { timestamp, .. } => *timestamp,
         }
     }
+
+    pub fn specifies_component_version(&self) -> Option<ComponentVersion> {
+        match self {
+            OplogEntry::Create {
+                component_version, ..
+            } => Some(*component_version),
+            OplogEntry::CreateV1 {
+                component_version, ..
+            } => Some(*component_version),
+            OplogEntry::SuccessfulUpdate { target_version, .. } => Some(*target_version),
+            OplogEntry::SuccessfulUpdateV1 { target_version, .. } => Some(*target_version),
+            _ => None,
+        }
+    }
 }
 
 /// Describes a pending update

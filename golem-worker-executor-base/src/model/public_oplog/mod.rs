@@ -98,8 +98,8 @@ pub async fn get_public_oplog_chunk<Owner: PluginOwner, Scope: PluginScope>(
     let mut next_oplog_index = initial_oplog_index;
 
     for (index, raw_entry) in raw_entries {
-        if let OplogEntry::SuccessfulUpdate { target_version, .. } = &raw_entry {
-            current_component_version = *target_version;
+        if let Some(version) = raw_entry.specifies_component_version() {
+            current_component_version = version;
         }
 
         let entry = PublicOplogEntry::from_oplog_entry(
@@ -203,14 +203,10 @@ pub async fn find_component_version_at(
             .next()
             .map(|(_, v)| v.clone());
 
-        if let Some(OplogEntry::Create {
-            component_version, ..
-        }) = entry
-        {
-            initial_component_version = component_version;
-        } else if let Some(OplogEntry::SuccessfulUpdate { target_version, .. }) = entry {
-            initial_component_version = target_version;
+        if let Some(version) = entry.and_then(|entry| entry.specifies_component_version()) {
+            initial_component_version = version;
         }
+
         current = current.next();
     }
 
@@ -375,8 +371,8 @@ impl<Owner: PluginOwner, Scope: PluginScope> PublicOplogEntryOps<Owner, Scope>
                     .await
                     .map_err(|err| err.to_string())?;
                 let function = function_by_name(&metadata.exports, &function_name)?.ok_or(
-                    format!("Exported function {function_name} not found in component {} version {component_version}", owned_worker_id.component_id())
-                )?;
+                        format!("Exported function {function_name} not found in component {} version {component_version}", owned_worker_id.component_id())
+                    )?;
                 let request = function
                     .parameters
                     .iter()
@@ -654,8 +650,8 @@ impl<Owner: PluginOwner, Scope: PluginScope> PublicOplogEntryOps<Owner, Scope>
                     },
                 );
                 let constructor_def = function_by_name(&metadata.exports, &resource_constructor_name.to_string())?.ok_or(
-                    format!("Resource constructor {resource_constructor_name} not found in component {} version {component_version}", owned_worker_id.component_id())
-                )?;
+                        format!("Resource constructor {resource_constructor_name} not found in component {} version {component_version}", owned_worker_id.component_id())
+                    )?;
 
                 let mut resource_params = Vec::new();
                 for (value_str, param) in indexed_resource
