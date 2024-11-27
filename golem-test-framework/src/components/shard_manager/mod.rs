@@ -96,7 +96,10 @@ impl ShardManagerEnvVars for GolemEnvVars {
             .with("GOLEM__HTTP_PORT", http_port.to_string())
             .with("GOLEM__PERSISTENCE__TYPE", "Redis".to_string())
             .with("GOLEM__PERSISTENCE__CONFIG__HOST", redis.private_host())
-            .with("GOLEM__PERSISTENCE__CONFIG__PORT", redis.private_port().to_string())
+            .with(
+                "GOLEM__PERSISTENCE__CONFIG__PORT",
+                redis.private_port().to_string(),
+            )
             .with_str("GOLEM__PERSISTENCE__CONFIG__KEY_PREFIX", redis.prefix());
 
         if let Some(number_of_shards) = number_of_shards_override {

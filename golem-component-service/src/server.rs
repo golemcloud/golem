@@ -64,7 +64,7 @@ async fn dump_openapi_yaml() -> Result<(), anyhow::Error> {
     let service = ComponentService::new(
         config,
         Registry::default(),
-        MigrationsDir::new("./db/migration".into()),
+        MigrationsDir::new("./golem-component-service/db/migration".into()),
     )
     .await?;
     let yaml = service.http_service().spec_yaml();

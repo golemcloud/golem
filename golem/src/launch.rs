@@ -15,11 +15,7 @@
 use crate::migration::IncludedMigrationsDir;
 use anyhow::Context;
 use golem_common::config::DbConfig;
-use golem_common::tracing::init_tracing_with_default_debug_env_filter;
-use golem_common::{
-    config::DbSqliteConfig,
-    tracing::{init_tracing_with_default_env_filter, TracingConfig},
-};
+use golem_common::config::DbSqliteConfig;
 use golem_component_service::config::ComponentServiceConfig;
 use golem_component_service::ComponentService;
 use golem_component_service_base::config::{ComponentStoreConfig, ComponentStoreLocalConfig};
@@ -43,23 +39,18 @@ use tokio::task::JoinSet;
 use crate::proxy;
 
 pub struct LaunchArgs {
-    pub verbose: bool,
     pub port: u16,
     pub data_dir: PathBuf,
 }
 
-pub fn launch_golem_services(args: &LaunchArgs) -> Result<(), anyhow::Error> {
-    // TODO: start component compilation service
+struct ServiceArgs {
+    data_dir: PathBuf,
+}
+
+pub async fn launch_golem_services(args: &LaunchArgs) -> Result<(), anyhow::Error> {
     rustls::crypto::ring::default_provider()
         .install_default()
         .expect("Failed to install crypto provider");
-
-    let tracing_config = tracing_config();
-    if args.verbose {
-        init_tracing_with_default_debug_env_filter(&tracing_config);
-    } else {
-        init_tracing_with_default_env_filter(&tracing_config);
-    }
 
     let exporter = opentelemetry_prometheus::exporter()
         .with_registry(Registry::default())
@@ -71,18 +62,6 @@ pub fn launch_golem_services(args: &LaunchArgs) -> Result<(), anyhow::Error> {
             .build(),
     );
 
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?;
-
-    runtime.block_on(run_all(args))
-}
-
-struct ServiceArgs {
-    data_dir: PathBuf,
-}
-
-async fn run_all(args: &LaunchArgs) -> Result<(), anyhow::Error> {
     let mut join_set = JoinSet::new();
 
     let service_args = ServiceArgs {
@@ -119,10 +98,6 @@ async fn run_all(args: &LaunchArgs) -> Result<(), anyhow::Error> {
     }
 
     Ok(())
-}
-
-fn tracing_config() -> TracingConfig {
-    TracingConfig::test_pretty_without_time("golem")
 }
 
 fn blob_storage_config(args: &ServiceArgs) -> BlobStorageConfig {

@@ -16,19 +16,17 @@ mod launch;
 mod migration;
 mod proxy;
 
-use clap::Parser;
-use launch::{launch_golem_services, LaunchArgs};
 use std::{path::PathBuf, process::ExitCode};
 
-#[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
-struct Args {
-    #[clap(subcommand)]
-    command: Option<SubCommand>,
-}
+use clap::Parser;
+use golem_cli::{
+    command::CliCommand,
+    model::{GolemError, GolemResult},
+};
+use launch::{launch_golem_services, LaunchArgs};
 
 #[derive(Parser, Debug)]
-enum SubCommand {
+enum ExtraCommands {
     #[clap(name = "start", about = "Start a golem server for local development")]
     Start {
         /// Port to listen on
@@ -38,41 +36,26 @@ enum SubCommand {
         /// Directory to store data in. Defaults to $XDG_STATE_HOME/golem
         #[clap(short, long)]
         data_dir: Option<PathBuf>,
-
-        /// Verbose mode
-        #[clap(short, long, default_value_t = false)]
-        verbose: bool,
     },
 }
 
-fn main() -> ExitCode {
-    let args = Args::parse();
+impl<Ctx> CliCommand<Ctx> for ExtraCommands {
+    async fn run(self, _ctx: Ctx) -> Result<GolemResult, GolemError> {
+        match self {
+            ExtraCommands::Start { port, data_dir } => {
+                let base_directories = xdg::BaseDirectories::with_prefix("golem")
+                    .expect("Failed to get XDG base directories");
+                let data_dir = data_dir.unwrap_or_else(|| base_directories.get_state_home());
 
-    let base_directories =
-        xdg::BaseDirectories::with_prefix("golem").expect("Failed to get XDG base directories");
-
-    match args.command {
-        Some(SubCommand::Start {
-            port,
-            verbose,
-            data_dir,
-        }) => {
-            let data_dir = data_dir.unwrap_or_else(|| base_directories.get_state_home());
-
-            let result = launch_golem_services(&LaunchArgs {
-                port,
-                verbose,
-                data_dir,
-            });
-
-            match result {
-                Ok(_) => ExitCode::SUCCESS,
-                Err(e) => {
-                    eprintln!("Error: {:?}", e);
-                    ExitCode::FAILURE
+                match launch_golem_services(&LaunchArgs { port, data_dir }).await {
+                    Ok(_) => Ok(GolemResult::Str("".to_string())),
+                    Err(e) => Err(GolemError(format!("{e:#}"))),
                 }
             }
         }
-        None => golem_cli::run_main(),
     }
+}
+
+fn main() -> ExitCode {
+    golem_cli::run_main::<ExtraCommands>()
 }

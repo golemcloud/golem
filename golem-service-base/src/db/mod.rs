@@ -81,7 +81,7 @@ pub async fn postgres_migrate(
     }
 
     let migrator = sqlx::migrate::Migrator::new(migrations).await?;
-    migrator.run_direct(&mut conn).await?;
+    migrator.run(&mut conn).await?;
 
     let _ = conn.close().await;
     Ok(())
@@ -110,7 +110,7 @@ pub async fn sqlite_migrate(
     info!("DB migration: sqlite://{}", config.database);
     let mut conn = SqliteConnection::connect_with(&create_sqlite_options(config)).await?;
     let migrator = sqlx::migrate::Migrator::new(migrations).await?;
-    migrator.run_direct(&mut conn).await?;
+    migrator.run(&mut conn).await?;
     let _ = conn.close().await;
     Ok(())
 }

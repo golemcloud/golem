@@ -16,5 +16,5 @@ use golem_cli::run_main;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    crate::run_main()
+    crate::run_main::<golem_cli::command::EmptyCommand>()
 }
