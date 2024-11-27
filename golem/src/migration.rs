@@ -14,7 +14,6 @@
 
 use futures::future::BoxFuture;
 use golem_service_base::migration::Migrations;
-use http_body_util::BodyExt;
 use include_dir::Dir;
 use sqlx::error::BoxDynError;
 use sqlx::migrate::{Migration, MigrationSource};

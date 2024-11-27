@@ -262,7 +262,7 @@ pub async fn async_main(
                 Arc::new(RoutingTableFileSystemPersistence::new(
                     &fs.path,
                     shard_manager_config.number_of_shards,
-                ))
+                ).await?)
             }
         };
     let worker_executors = Arc::new(WorkerExecutorServiceDefault::new(
