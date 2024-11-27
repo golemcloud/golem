@@ -1,7 +1,131 @@
 package wasi:rdbms@0.0.1;
 
 interface postgres {
-  use types.{db-result-set, db-value, error};
+
+  variant error {
+    connection-failure(string),
+    query-parameter-failure(string),
+    query-execution-failure(string),
+    query-response-failure(string),
+    other(string)
+  }
+
+//   variant db-column-type {
+//     int2,
+//     int4,
+//     int8,
+//     float4,
+//     float8,
+//     numeric,
+//     bool,
+//     text,
+//     varchar,
+//     timestamp,
+//     timestamptz,
+//     date,
+//     time,
+//     timetz,
+//     interval,
+//     bytea,
+//     uuid,
+//     xml,
+//     json,
+//     jsonb,
+//     inet,
+//     macaddr,
+//     cidr,
+//     point,
+//     line,
+//     lseg,
+//     box,
+//     polygon,
+//     circle,
+//     path,
+//     box2d,
+//     polygonz,
+//     circlez,
+//     pathz,
+//     hstore,
+//     tsvector,
+//     tsquery,
+//     range,
+//     tstzrange,
+//     int4range,
+//     int8range,
+//     numrange,
+//     tsrange,
+//     tstzrange
+//   }
+
+  variant db-column-type-primitive {
+    int8,
+    int16,
+    int32,
+    int64,
+    float,
+    double,
+    decimal,
+    boolean,
+    timestamp,
+    date,
+    time,
+    interval,
+    text,
+    blob,
+    json,
+    xml,
+    uuid
+  }
+
+  variant db-column-type {
+    primitive(db-column-type-primitive),
+    array(db-column-type-primitive)
+  }
+
+  record db-column {
+    ordinal:     u64,
+    name:        string,
+    db-type:     db-column-type,
+    db-type-name: string
+  }
+
+  /// Value descriptor for a single database value
+  variant db-value-primitive {
+    int8(s8),
+    int16(s16),
+    int32(s32),
+    int64(s64),
+    float(float32),
+    double(float64),
+    decimal(string),
+    boolean(bool),
+    timestamp(s64),
+    date(s64),
+    time(s64),
+    interval(s64),
+    text(string),
+    blob(list<u8>),
+    json(string),
+    xml(string),
+    uuid(tuple<u64, u64>),
+    db-null
+  }
+
+  variant db-value {
+    primitive(db-value-primitive),
+    array(list<db-value-primitive>) // Flatteneed
+  }
+
+  /// A single row of values
+  record db-row {
+    values: list<db-value>
+  }
+
+  /// A potentially very large and lazy stream of rows:
+  resource db-result-set {
+    get-columns: func() -> list<db-column>;
+    get-next: func() -> option<list<db-row>>;
+  }
 
   resource db-connection {
     open: static func(address: string) -> result<db-connection, error>;

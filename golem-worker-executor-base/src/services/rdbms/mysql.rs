@@ -13,14 +13,13 @@
 // limitations under the License.
 
 use crate::services::golem_config::{RdbmsConfig, RdbmsPoolConfig};
+use crate::services::rdbms::mysql::types::{
+    DbColumn, DbColumnType, DbColumnTypePrimitive, DbValue, DbValuePrimitive,
+};
 use crate::services::rdbms::sqlx_common::{
     PoolCreator, QueryExecutor, QueryParamsBinder, SqlxRdbms, StreamDbResultSet,
 };
-use crate::services::rdbms::types::{
-    DbColumn, DbColumnType, DbColumnTypePrimitive, DbResultSet, DbRow, DbValue, DbValuePrimitive,
-    Error,
-};
-use crate::services::rdbms::{Rdbms, RdbmsPoolKey, RdbmsType};
+use crate::services::rdbms::{DbResultSet, DbRow, Error, Rdbms, RdbmsPoolKey, RdbmsType};
 use async_trait::async_trait;
 use futures_util::stream::BoxStream;
 use sqlx::{Column, ConnectOptions, Pool, Row, TypeInfo};
@@ -39,7 +38,10 @@ impl MysqlType {
     }
 }
 
-impl RdbmsType for MysqlType {}
+impl RdbmsType for MysqlType {
+    type DbColumn = types::DbColumn;
+    type DbValue = types::DbValue;
+}
 
 impl Display for MysqlType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -67,7 +69,7 @@ impl PoolCreator<sqlx::MySql> for RdbmsPoolKey {
 }
 
 #[async_trait]
-impl QueryExecutor for Pool<sqlx::MySql> {
+impl QueryExecutor<MysqlType> for Pool<sqlx::MySql> {
     async fn execute(&self, statement: &str, params: Vec<DbValue>) -> Result<u64, Error> {
         let query: sqlx::query::Query<sqlx::MySql, sqlx::mysql::MySqlArguments> =
             sqlx::query(statement).bind_params(params)?;
@@ -84,19 +86,19 @@ impl QueryExecutor for Pool<sqlx::MySql> {
         statement: &str,
         params: Vec<DbValue>,
         batch: usize,
-    ) -> Result<Arc<dyn DbResultSet + Send + Sync>, Error> {
+    ) -> Result<Arc<dyn DbResultSet<MysqlType> + Send + Sync>, Error> {
         let query: sqlx::query::Query<sqlx::MySql, sqlx::mysql::MySqlArguments> =
             sqlx::query(statement.to_string().leak()).bind_params(params)?;
 
         let stream: BoxStream<Result<sqlx::mysql::MySqlRow, sqlx::Error>> = query.fetch(self);
 
-        let response: StreamDbResultSet<sqlx::mysql::MySql> =
+        let response: StreamDbResultSet<MysqlType, sqlx::mysql::MySql> =
             StreamDbResultSet::create(MYSQL, stream, batch).await?;
         Ok(Arc::new(response))
     }
 }
 
-impl<'q> QueryParamsBinder<'q, sqlx::MySql>
+impl<'q> QueryParamsBinder<'q, MysqlType, sqlx::MySql>
     for sqlx::query::Query<'q, sqlx::MySql, sqlx::mysql::MySqlArguments>
 {
     fn bind_params(
@@ -145,7 +147,7 @@ fn bind_value_primitive(
     }
 }
 
-impl TryFrom<&sqlx::mysql::MySqlRow> for DbRow {
+impl TryFrom<&sqlx::mysql::MySqlRow> for DbRow<DbValue> {
     type Error = String;
 
     fn try_from(value: &sqlx::mysql::MySqlRow) -> Result<Self, Self::Error> {
@@ -365,4 +367,185 @@ pub(crate) mod mysql_type_name {
 
     pub(crate) const LONGBLOB: &str = "LONGBLOB";
     pub(crate) const LONGTEXT: &str = "LONGTEXT";
+}
+
+pub mod types {
+    use bigdecimal::BigDecimal;
+    use itertools::Itertools;
+    use std::fmt::Display;
+    use uuid::Uuid;
+
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    pub enum DbColumnTypePrimitive {
+        Int8,
+        Int16,
+        Int32,
+        Int64,
+        Float,
+        Double,
+        Decimal,
+        Boolean,
+        Timestamp,
+        Date,
+        Time,
+        Interval,
+        Text,
+        Blob,
+        Json,
+        Xml,
+        Uuid,
+    }
+
+    impl Display for DbColumnTypePrimitive {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                DbColumnTypePrimitive::Int8 => write!(f, "int8"),
+                DbColumnTypePrimitive::Int16 => write!(f, "int16"),
+                DbColumnTypePrimitive::Int32 => write!(f, "int32"),
+                DbColumnTypePrimitive::Int64 => write!(f, "int64"),
+                DbColumnTypePrimitive::Float => write!(f, "float"),
+                DbColumnTypePrimitive::Double => write!(f, "double"),
+                DbColumnTypePrimitive::Decimal => write!(f, "decimal"),
+                DbColumnTypePrimitive::Boolean => write!(f, "boolean"),
+                DbColumnTypePrimitive::Timestamp => write!(f, "timestamp"),
+                DbColumnTypePrimitive::Date => write!(f, "date"),
+                DbColumnTypePrimitive::Time => write!(f, "time"),
+                DbColumnTypePrimitive::Interval => write!(f, "interval"),
+                DbColumnTypePrimitive::Text => write!(f, "text"),
+                DbColumnTypePrimitive::Blob => write!(f, "blob"),
+                DbColumnTypePrimitive::Json => write!(f, "json"),
+                DbColumnTypePrimitive::Xml => write!(f, "xml"),
+                DbColumnTypePrimitive::Uuid => write!(f, "uuid"),
+            }
+        }
+    }
+
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    pub enum DbColumnType {
+        Primitive(DbColumnTypePrimitive),
+        Array(DbColumnTypePrimitive),
+    }
+
+    impl Display for DbColumnType {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                DbColumnType::Primitive(v) => write!(f, "{}", v),
+                DbColumnType::Array(v) => write!(f, "{}[]", v),
+            }
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq)]
+    pub enum DbValuePrimitive {
+        Int8(i8),
+        Int16(i16),
+        Int32(i32),
+        Int64(i64),
+        Float(f32),
+        Double(f64),
+        Decimal(BigDecimal),
+        Boolean(bool),
+        Timestamp(chrono::DateTime<chrono::Utc>),
+        Date(chrono::NaiveDate),
+        Time(i64),
+        Interval(chrono::Duration),
+        Text(String),
+        Blob(Vec<u8>),
+        Json(String),
+        Xml(String),
+        Uuid(Uuid),
+        DbNull,
+    }
+
+    impl Display for DbValuePrimitive {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                DbValuePrimitive::Int8(v) => write!(f, "{}", v),
+                DbValuePrimitive::Int16(v) => write!(f, "{}", v),
+                DbValuePrimitive::Int32(v) => write!(f, "{}", v),
+                DbValuePrimitive::Int64(v) => write!(f, "{}", v),
+                DbValuePrimitive::Float(v) => write!(f, "{}", v),
+                DbValuePrimitive::Double(v) => write!(f, "{}", v),
+                DbValuePrimitive::Decimal(v) => write!(f, "{}", v),
+                DbValuePrimitive::Boolean(v) => write!(f, "{}", v),
+                DbValuePrimitive::Timestamp(v) => write!(f, "{}", v),
+                DbValuePrimitive::Date(v) => write!(f, "{}", v),
+                DbValuePrimitive::Time(v) => write!(f, "{}", v),
+                DbValuePrimitive::Interval(v) => write!(f, "{}", v),
+                DbValuePrimitive::Text(v) => write!(f, "{}", v),
+                DbValuePrimitive::Blob(v) => write!(f, "{:?}", v),
+                DbValuePrimitive::Json(v) => write!(f, "{}", v),
+                DbValuePrimitive::Xml(v) => write!(f, "{}", v),
+                DbValuePrimitive::Uuid(v) => write!(f, "{}", v),
+                DbValuePrimitive::DbNull => write!(f, "NULL"),
+            }
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq)]
+    pub enum DbValue {
+        Primitive(DbValuePrimitive),
+        Array(Vec<DbValuePrimitive>),
+    }
+
+    impl Display for DbValue {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                DbValue::Primitive(v) => write!(f, "{}", v),
+                DbValue::Array(v) => write!(f, "[{}]", v.iter().format(", ")),
+            }
+        }
+    }
+
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    pub struct DbColumn {
+        pub ordinal: u64,
+        pub name: String,
+        pub db_type: DbColumnType,
+        pub db_type_name: String,
+    }
+
+    // pub enum MySqlType {
+    //     TinyInt(i8),
+    //     SmallInt(i16),
+    //     MediumInt(i32),
+    //     Int(i32),
+    //     BigInt(i64),
+    //     TinyUnsigned(u8),
+    //     SmallUnsigned(u16),
+    //     MediumUnsigned(u32),
+    //     Unsigned(u32),
+    //     BigUnsigned(u64),
+    //     Float,
+    //     Double,
+    //     Decimal,
+    //     Date,
+    //     Datetime,
+    //     Timestamp,
+    //     Year,
+    //     Char(usize),
+    //     VarChar(usize),
+    //     TinyText,
+    //     Text,
+    //     MediumText,
+    //     LongText,
+    //     Binary(usize),
+    //     VarBinary(usize),
+    //     TinyBlob,
+    //     Blob,
+    //     MediumBlob,
+    //     LongBlob,
+    //     Enum(Vec<String>),
+    //     Set(Vec<String>),
+    //     Bit(u8),
+    //     Json,
+    //     Geometry,
+    //     Point,
+    //     LineString,
+    //     Polygon,
+    //     MultiPoint,
+    //     MultiLineString,
+    //     MultiPolygon,
+    //     GeometryCollection,
+    // }
 }

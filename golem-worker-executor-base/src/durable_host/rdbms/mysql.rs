@@ -12,15 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::rdbms::types::DbResultSetEntry;
 use crate::durable_host::DurableWorkerCtx;
 use crate::metrics::wasm::record_host_function_call;
-use crate::preview2::wasi::rdbms::mysql::Host;
-use crate::preview2::wasi::rdbms::mysql::HostDbConnection;
-use crate::preview2::wasi::rdbms::types::{DbValue, Error};
+use crate::preview2::wasi::rdbms::mysql::{
+    DbColumn, DbColumnType, DbRow, DbValue, Error, Host, HostDbConnection, HostDbResultSet,
+};
 use crate::services::rdbms::RdbmsPoolKey;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
+use std::ops::Deref;
+use std::str::FromStr;
+
+use crate::services::rdbms::mysql::MysqlType;
+use std::sync::Arc;
+use uuid::Uuid;
 use wasmtime::component::Resource;
 use wasmtime_wasi::WasiView;
 
@@ -196,6 +201,182 @@ impl<Ctx: WorkerCtx> HostDbConnection for &mut DurableWorkerCtx<Ctx> {
     }
 
     fn drop(&mut self, rep: Resource<MysqlDbConnection>) -> anyhow::Result<()> {
-        (*self).drop(rep)
+        // (*self).drop(rep)
+        HostDbConnection::drop(*self, rep)
     }
 }
+
+pub struct DbResultSetEntry {
+    pub internal: Arc<dyn crate::services::rdbms::DbResultSet<MysqlType> + Send + Sync>,
+}
+
+impl crate::durable_host::rdbms::mysql::DbResultSetEntry {
+    pub fn new(
+        internal: Arc<dyn crate::services::rdbms::DbResultSet<MysqlType> + Send + Sync>,
+    ) -> Self {
+        Self { internal }
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> HostDbResultSet for DurableWorkerCtx<Ctx> {
+    async fn get_columns(
+        &mut self,
+        self_: Resource<crate::durable_host::rdbms::mysql::DbResultSetEntry>,
+    ) -> anyhow::Result<Vec<DbColumn>> {
+        let _permit = self.begin_async_host_function().await?;
+        record_host_function_call("rdbms::types::db-result-set", "get-column-metadata");
+
+        let internal = self
+            .as_wasi_view()
+            .table()
+            .get::<crate::durable_host::rdbms::mysql::DbResultSetEntry>(&self_)?
+            .internal
+            .clone();
+
+        let columns = internal.deref().get_columns().await.map_err(Error::from)?;
+
+        let columns = columns.into_iter().map(|c| c.into()).collect();
+        Ok(columns)
+    }
+
+    async fn get_next(
+        &mut self,
+        self_: Resource<crate::durable_host::rdbms::mysql::DbResultSetEntry>,
+    ) -> anyhow::Result<Option<Vec<DbRow>>> {
+        let _permit = self.begin_async_host_function().await?;
+        record_host_function_call("rdbms::types::db-result-set", "get-next");
+        let internal = self
+            .as_wasi_view()
+            .table()
+            .get::<crate::durable_host::rdbms::mysql::DbResultSetEntry>(&self_)?
+            .internal
+            .clone();
+
+        let rows = internal.deref().get_next().await.map_err(Error::from)?;
+
+        let rows = rows.map(|r| r.into_iter().map(|r| r.into()).collect());
+        Ok(rows)
+    }
+
+    fn drop(
+        &mut self,
+        rep: Resource<crate::durable_host::rdbms::mysql::DbResultSetEntry>,
+    ) -> anyhow::Result<()> {
+        record_host_function_call("rdbms::types::db-result-set", "drop");
+        self.as_wasi_view()
+            .table()
+            .delete::<crate::durable_host::rdbms::mysql::DbResultSetEntry>(rep)?;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> HostDbResultSet for &mut DurableWorkerCtx<Ctx> {
+    async fn get_columns(
+        &mut self,
+        self_: Resource<crate::durable_host::rdbms::mysql::DbResultSetEntry>,
+    ) -> anyhow::Result<Vec<DbColumn>> {
+        (*self).get_columns(self_).await
+    }
+
+    async fn get_next(
+        &mut self,
+        self_: Resource<crate::durable_host::rdbms::mysql::DbResultSetEntry>,
+    ) -> anyhow::Result<Option<Vec<DbRow>>> {
+        (*self).get_next(self_).await
+    }
+
+    fn drop(
+        &mut self,
+        rep: Resource<crate::durable_host::rdbms::mysql::DbResultSetEntry>,
+    ) -> anyhow::Result<()> {
+        // (*self).drop(rep)
+        HostDbResultSet::drop(*self, rep)
+    }
+}
+
+impl TryFrom<DbValue> for crate::services::rdbms::mysql::types::DbValue {
+    type Error = String;
+    fn try_from(value: DbValue) -> Result<Self, Self::Error> {
+        todo!()
+    }
+}
+
+impl From<crate::services::rdbms::mysql::types::DbValue> for DbValue {
+    fn from(value: crate::services::rdbms::mysql::types::DbValue) -> Self {
+        todo!()
+    }
+}
+
+impl From<crate::services::rdbms::DbRow<crate::services::rdbms::mysql::types::DbValue>> for DbRow {
+    fn from(
+        value: crate::services::rdbms::DbRow<crate::services::rdbms::mysql::types::DbValue>,
+    ) -> Self {
+        Self {
+            values: value.values.into_iter().map(|v| v.into()).collect(),
+        }
+    }
+}
+
+impl From<crate::services::rdbms::mysql::types::DbColumnType> for DbColumnType {
+    fn from(value: crate::services::rdbms::mysql::types::DbColumnType) -> Self {
+        todo!()
+    }
+}
+
+impl From<crate::services::rdbms::mysql::types::DbColumn> for DbColumn {
+    fn from(value: crate::services::rdbms::mysql::types::DbColumn) -> Self {
+        Self {
+            ordinal: value.ordinal,
+            name: value.name,
+            db_type: value.db_type.into(),
+            db_type_name: value.db_type_name,
+        }
+    }
+}
+
+impl From<crate::services::rdbms::Error> for Error {
+    fn from(value: crate::services::rdbms::Error) -> Self {
+        match value {
+            crate::services::rdbms::Error::ConnectionFailure(v) => Self::ConnectionFailure(v),
+            crate::services::rdbms::Error::QueryParameterFailure(v) => {
+                Self::QueryParameterFailure(v)
+            }
+            crate::services::rdbms::Error::QueryExecutionFailure(v) => {
+                Self::QueryExecutionFailure(v)
+            }
+            crate::services::rdbms::Error::QueryResponseFailure(v) => Self::QueryResponseFailure(v),
+            crate::services::rdbms::Error::Other(v) => Self::Other(v),
+        }
+    }
+}
+
+// impl From<rdbms_types::DbColumnTypeMeta> for DbColumnTypeMeta {
+//     fn from(value: rdbms_types::DbColumnTypeMeta) -> Self {
+//         Self {
+//             name: value.name,
+//             db_type: value.db_type.into(),
+//             db_type_flags: value
+//                 .db_type_flags
+//                 .iter()
+//                 .fold(DbColumnTypeFlags::empty(), |a, b| a | b.clone().into()),
+//             foreign_key: value.foreign_key,
+//         }
+//     }
+// }
+//
+// impl From<rdbms_types::DbColumnTypeFlag> for DbColumnTypeFlags {
+//     fn from(value: rdbms_types::DbColumnTypeFlag) -> Self {
+//         match value {
+//             rdbms_types::DbColumnTypeFlag::PrimaryKey => DbColumnTypeFlags::PRIMARY_KEY,
+//             rdbms_types::DbColumnTypeFlag::ForeignKey => DbColumnTypeFlags::FOREIGN_KEY,
+//             rdbms_types::DbColumnTypeFlag::Unique => DbColumnTypeFlags::UNIQUE,
+//             rdbms_types::DbColumnTypeFlag::Nullable => DbColumnTypeFlags::NULLABLE,
+//             rdbms_types::DbColumnTypeFlag::Generated => DbColumnTypeFlags::GENERATED,
+//             rdbms_types::DbColumnTypeFlag::AutoIncrement => DbColumnTypeFlags::AUTO_INCREMENT,
+//             rdbms_types::DbColumnTypeFlag::DefaultValue => DbColumnTypeFlags::DEFAULT_VALUE,
+//             rdbms_types::DbColumnTypeFlag::Indexed => DbColumnTypeFlags::INDEXED,
+//         }
+//     }
+// }

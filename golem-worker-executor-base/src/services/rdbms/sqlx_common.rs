@@ -14,8 +14,9 @@
 
 use crate::services::golem_config::{RdbmsConfig, RdbmsPoolConfig};
 use crate::services::rdbms::metrics::{record_rdbms_failure, record_rdbms_success};
-use crate::services::rdbms::types::{DbColumn, DbResultSet, DbRow, DbValue, Error};
-use crate::services::rdbms::{Rdbms, RdbmsPoolKey, RdbmsStatus, RdbmsType};
+use crate::services::rdbms::{
+    DbResultSet, DbRow, Error, Rdbms, RdbmsPoolKey, RdbmsStatus, RdbmsType,
+};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use futures_util::stream::BoxStream;
@@ -43,8 +44,9 @@ where
 
 impl<DB> SqlxRdbms<DB>
 where
+    // T: RdbmsType,
     DB: Database,
-    Pool<DB>: QueryExecutor,
+    // Pool<DB>: QueryExecutor<T>,
     RdbmsPoolKey: PoolCreator<DB>,
 {
     pub(crate) fn new(rdbms_type: &'static str, config: RdbmsConfig) -> Self {
@@ -146,7 +148,7 @@ impl<T, DB> Rdbms<T> for SqlxRdbms<DB>
 where
     T: RdbmsType,
     DB: Database,
-    Pool<DB>: QueryExecutor,
+    Pool<DB>: QueryExecutor<T>,
     RdbmsPoolKey: PoolCreator<DB>,
 {
     async fn create(&self, address: &str, worker_id: &WorkerId) -> Result<RdbmsPoolKey, Error> {
@@ -185,8 +187,11 @@ where
         key: &RdbmsPoolKey,
         worker_id: &WorkerId,
         statement: &str,
-        params: Vec<DbValue>,
-    ) -> Result<u64, Error> {
+        params: Vec<T::DbValue>,
+    ) -> Result<u64, Error>
+    where
+        <T as RdbmsType>::DbValue: 'async_trait,
+    {
         let start = Instant::now();
         debug!(
             rdbms_type = self.rdbms_type,
@@ -219,8 +224,11 @@ where
         key: &RdbmsPoolKey,
         worker_id: &WorkerId,
         statement: &str,
-        params: Vec<DbValue>,
-    ) -> Result<Arc<dyn DbResultSet + Send + Sync>, Error> {
+        params: Vec<T::DbValue>,
+    ) -> Result<Arc<dyn DbResultSet<T> + Send + Sync>, Error>
+    where
+        <T as RdbmsType>::DbValue: 'async_trait,
+    {
         let start = Instant::now();
         debug!(
             rdbms_type = self.rdbms_type,
@@ -266,36 +274,36 @@ pub(crate) trait PoolCreator<DB: Database> {
 }
 
 #[async_trait]
-pub(crate) trait QueryExecutor {
-    async fn execute(&self, statement: &str, params: Vec<DbValue>) -> Result<u64, Error>;
+pub(crate) trait QueryExecutor<T: RdbmsType> {
+    async fn execute(&self, statement: &str, params: Vec<T::DbValue>) -> Result<u64, Error>;
 
     async fn query_stream(
         &self,
         statement: &str,
-        params: Vec<DbValue>,
+        params: Vec<T::DbValue>,
         batch: usize,
-    ) -> Result<Arc<dyn DbResultSet + Send + Sync>, Error>;
+    ) -> Result<Arc<dyn DbResultSet<T> + Send + Sync>, Error>;
 }
 
 #[derive(Clone)]
 #[allow(clippy::type_complexity)]
-pub struct StreamDbResultSet<'q, DB: Database> {
+pub struct StreamDbResultSet<'q, T: RdbmsType, DB: Database> {
     rdbms_type: &'static str,
-    columns: Vec<DbColumn>,
-    first_rows: Arc<async_mutex::Mutex<Option<Vec<DbRow>>>>,
+    columns: Vec<T::DbColumn>,
+    first_rows: Arc<async_mutex::Mutex<Option<Vec<DbRow<T::DbValue>>>>>,
     row_stream: Arc<async_mutex::Mutex<BoxStream<'q, Vec<Result<DB::Row, sqlx::Error>>>>>,
 }
 
-impl<'q, DB: Database> StreamDbResultSet<'q, DB>
+impl<'q, T: RdbmsType, DB: Database> StreamDbResultSet<'q, T, DB>
 where
     DB::Row: Row,
-    DbRow: for<'a> TryFrom<&'a DB::Row, Error = String>,
-    DbColumn: for<'a> TryFrom<&'a DB::Column, Error = String>,
+    DbRow<T::DbValue>: for<'a> TryFrom<&'a DB::Row, Error = String>,
+    T::DbColumn: for<'a> TryFrom<&'a DB::Column, Error = String>,
 {
     fn new(
         rdbms_type: &'static str,
-        columns: Vec<DbColumn>,
-        first_rows: Vec<DbRow>,
+        columns: Vec<T::DbColumn>,
+        first_rows: Vec<DbRow<T::DbValue>>,
         row_stream: BoxStream<'q, Vec<Result<DB::Row, sqlx::Error>>>,
     ) -> Self {
         Self {
@@ -310,7 +318,7 @@ where
         rdbms_type: &'static str,
         stream: BoxStream<'q, Result<DB::Row, sqlx::Error>>,
         batch: usize,
-    ) -> Result<StreamDbResultSet<'q, DB>, Error> {
+    ) -> Result<StreamDbResultSet<'q, T, DB>, Error> {
         let mut row_stream: BoxStream<'q, Vec<Result<DB::Row, sqlx::Error>>> =
             Box::pin(stream.chunks(batch));
 
@@ -351,17 +359,17 @@ where
 }
 
 #[async_trait]
-impl<DB: Database> DbResultSet for StreamDbResultSet<'_, DB>
+impl<T: RdbmsType, DB: Database> DbResultSet<T> for StreamDbResultSet<'_, T, DB>
 where
     DB::Row: Row,
-    DbRow: for<'a> TryFrom<&'a DB::Row, Error = String>,
+    DbRow<T::DbValue>: for<'a> TryFrom<&'a DB::Row, Error = String>,
 {
-    async fn get_columns(&self) -> Result<Vec<DbColumn>, Error> {
+    async fn get_columns(&self) -> Result<Vec<T::DbColumn>, Error> {
         debug!(rdbms_type = self.rdbms_type, "get columns");
         Ok(self.columns.clone())
     }
 
-    async fn get_next(&self) -> Result<Option<Vec<DbRow>>, Error> {
+    async fn get_next(&self) -> Result<Option<Vec<DbRow<T::DbValue>>>, Error> {
         let mut rows = self.first_rows.lock().await;
         if rows.is_some() {
             debug!(rdbms_type = self.rdbms_type, "get next - initial");
@@ -388,9 +396,9 @@ where
     }
 }
 
-pub(crate) trait QueryParamsBinder<'q, DB: Database> {
+pub(crate) trait QueryParamsBinder<'q, T: RdbmsType, DB: Database> {
     fn bind_params(
         self,
-        params: Vec<DbValue>,
+        params: Vec<T::DbValue>,
     ) -> Result<sqlx::query::Query<'q, DB, <DB as HasArguments<'q>>::Arguments>, Error>;
 }

@@ -95,7 +95,7 @@ where
     crate::preview2::wasi::keyvalue::types::add_to_linker_get_host(&mut linker, get)?;
     crate::preview2::wasi::keyvalue::wasi_keyvalue_error::add_to_linker_get_host(&mut linker, get)?;
     crate::preview2::wasi::logging::logging::add_to_linker_get_host(&mut linker, get)?;
-    crate::preview2::wasi::rdbms::types::add_to_linker_get_host(&mut linker, get)?;
+    // crate::preview2::wasi::rdbms::types::add_to_linker_get_host(&mut linker, get)?;
     crate::preview2::wasi::rdbms::mysql::add_to_linker_get_host(&mut linker, get)?;
     crate::preview2::wasi::rdbms::postgres::add_to_linker_get_host(&mut linker, get)?;
 

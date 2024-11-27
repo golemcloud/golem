@@ -16,7 +16,6 @@ pub(crate) mod metrics;
 pub mod mysql;
 pub mod postgres;
 pub(crate) mod sqlx_common;
-pub mod types;
 
 #[cfg(test)]
 mod tests;
@@ -24,7 +23,6 @@ mod tests;
 use crate::services::golem_config::RdbmsConfig;
 use crate::services::rdbms::mysql::MysqlType;
 use crate::services::rdbms::postgres::PostgresType;
-use crate::services::rdbms::types::{DbResultSet, DbValue, Error};
 use async_trait::async_trait;
 use golem_common::model::WorkerId;
 use itertools::Itertools;
@@ -33,7 +31,10 @@ use std::fmt::Display;
 use std::sync::Arc;
 use url::Url;
 
-pub trait RdbmsType {}
+pub trait RdbmsType {
+    type DbColumn: Clone + Send + Sync + PartialEq;
+    type DbValue: Clone + Send + Sync + PartialEq;
+}
 
 #[derive(Clone)]
 pub struct RdbmsStatus {
@@ -63,16 +64,20 @@ pub trait Rdbms<T: RdbmsType> {
         key: &RdbmsPoolKey,
         worker_id: &WorkerId,
         statement: &str,
-        params: Vec<DbValue>,
-    ) -> Result<u64, Error>;
+        params: Vec<T::DbValue>,
+    ) -> Result<u64, Error>
+    where
+        <T as RdbmsType>::DbValue: 'async_trait;
 
     async fn query(
         &self,
         key: &RdbmsPoolKey,
         worker_id: &WorkerId,
         statement: &str,
-        params: Vec<DbValue>,
-    ) -> Result<Arc<dyn DbResultSet + Send + Sync>, Error>;
+        params: Vec<T::DbValue>,
+    ) -> Result<Arc<dyn DbResultSet<T> + Send + Sync>, Error>
+    where
+        <T as RdbmsType>::DbValue: 'async_trait;
 
     fn status(&self) -> RdbmsStatus;
 }
@@ -183,5 +188,38 @@ impl RdbmsPoolKey {
 impl Display for RdbmsPoolKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.masked_address())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct DbRow<V> {
+    pub values: Vec<V>,
+}
+
+#[async_trait]
+pub trait DbResultSet<T: RdbmsType> {
+    async fn get_columns(&self) -> Result<Vec<T::DbColumn>, Error>;
+
+    async fn get_next(&self) -> Result<Option<Vec<DbRow<T::DbValue>>>, Error>;
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Error {
+    ConnectionFailure(String),
+    QueryParameterFailure(String),
+    QueryExecutionFailure(String),
+    QueryResponseFailure(String),
+    Other(String),
+}
+
+impl Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::ConnectionFailure(msg) => write!(f, "ConnectionFailure: {}", msg),
+            Error::QueryParameterFailure(msg) => write!(f, "QueryParameterFailure: {}", msg),
+            Error::QueryExecutionFailure(msg) => write!(f, "QueryExecutionFailure: {}", msg),
+            Error::QueryResponseFailure(msg) => write!(f, "QueryResponseFailure: {}", msg),
+            Error::Other(msg) => write!(f, "Other: {}", msg),
+        }
     }
 }

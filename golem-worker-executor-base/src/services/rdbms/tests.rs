@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::services::rdbms::types::{
-    DbColumn, DbColumnType, DbColumnTypePrimitive, DbRow, DbValue, DbValuePrimitive, Error,
-};
+use crate::services::rdbms::mysql::types as mysql_types;
+use crate::services::rdbms::postgres::types as postgres_types;
+use crate::services::rdbms::{DbRow, Error};
 use crate::services::rdbms::{Rdbms, RdbmsServiceDefault, RdbmsType};
 use crate::services::rdbms::{RdbmsPoolKey, RdbmsService};
 use assert2::check;
@@ -108,17 +108,24 @@ async fn postgres_execute_test_create_insert_select(
 
     let count = 100;
 
-    let mut rows: Vec<DbRow> = Vec::with_capacity(count);
+    let mut rows: Vec<DbRow<postgres_types::DbValue>> = Vec::with_capacity(count);
 
     for _ in 0..count {
-        let params: Vec<DbValue> = vec![
-            DbValue::Primitive(DbValuePrimitive::Uuid(Uuid::new_v4())),
-            DbValue::Primitive(DbValuePrimitive::Text("default".to_string())),
-            DbValue::Primitive(DbValuePrimitive::Text(format!("name-{}", Uuid::new_v4()))),
-            DbValue::Array(vec![
-                DbValuePrimitive::Text("tag1".to_string()),
-                DbValuePrimitive::Text("tag2".to_string()),
-                DbValuePrimitive::Text("tag3".to_string()),
+        let params: Vec<postgres_types::DbValue> = vec![
+            postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Uuid(
+                Uuid::new_v4(),
+            )),
+            postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Text(
+                "default".to_string(),
+            )),
+            postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Text(format!(
+                "name-{}",
+                Uuid::new_v4()
+            ))),
+            postgres_types::DbValue::Array(vec![
+                postgres_types::DbValuePrimitive::Text("tag1".to_string()),
+                postgres_types::DbValuePrimitive::Text("tag2".to_string()),
+                postgres_types::DbValuePrimitive::Text("tag3".to_string()),
             ]),
         ];
 
@@ -135,28 +142,36 @@ async fn postgres_execute_test_create_insert_select(
     }
 
     let expected_columns = vec![
-        DbColumn {
+        postgres_types::DbColumn {
             name: "component_id".to_string(),
             ordinal: 0,
-            db_type: DbColumnType::Primitive(DbColumnTypePrimitive::Uuid),
+            db_type: postgres_types::DbColumnType::Primitive(
+                postgres_types::DbColumnTypePrimitive::Uuid,
+            ),
             db_type_name: "UUID".to_string(),
         },
-        DbColumn {
+        postgres_types::DbColumn {
             name: "namespace".to_string(),
             ordinal: 1,
-            db_type: DbColumnType::Primitive(DbColumnTypePrimitive::Text),
+            db_type: postgres_types::DbColumnType::Primitive(
+                postgres_types::DbColumnTypePrimitive::Text,
+            ),
             db_type_name: "TEXT".to_string(),
         },
-        DbColumn {
+        postgres_types::DbColumn {
             name: "name".to_string(),
             ordinal: 2,
-            db_type: DbColumnType::Primitive(DbColumnTypePrimitive::Text),
+            db_type: postgres_types::DbColumnType::Primitive(
+                postgres_types::DbColumnTypePrimitive::Text,
+            ),
             db_type_name: "TEXT".to_string(),
         },
-        DbColumn {
+        postgres_types::DbColumn {
             name: "tags".to_string(),
             ordinal: 3,
-            db_type: DbColumnType::Array(DbColumnTypePrimitive::Text),
+            db_type: postgres_types::DbColumnType::Array(
+                postgres_types::DbColumnTypePrimitive::Text,
+            ),
             db_type_name: "TEXT[]".to_string(),
         },
     ];
@@ -286,13 +301,21 @@ async fn mysql_execute_test_create_insert_select(
 
     let count = 100;
 
-    let mut rows: Vec<DbRow> = Vec::with_capacity(count);
+    let mut rows: Vec<DbRow<mysql_types::DbValue>> = Vec::with_capacity(count);
 
     for i in 0..count {
-        let params: Vec<DbValue> = vec![
-            DbValue::Primitive(DbValuePrimitive::Text(format!("{:03}", i))),
-            DbValue::Primitive(DbValuePrimitive::Text("default".to_string())),
-            DbValue::Primitive(DbValuePrimitive::Text(format!("name-{}", Uuid::new_v4()))),
+        let params: Vec<mysql_types::DbValue> = vec![
+            mysql_types::DbValue::Primitive(mysql_types::DbValuePrimitive::Text(format!(
+                "{:03}",
+                i
+            ))),
+            mysql_types::DbValue::Primitive(mysql_types::DbValuePrimitive::Text(
+                "default".to_string(),
+            )),
+            mysql_types::DbValue::Primitive(mysql_types::DbValuePrimitive::Text(format!(
+                "name-{}",
+                Uuid::new_v4()
+            ))),
         ];
 
         rdbms_execute_test(
@@ -308,22 +331,22 @@ async fn mysql_execute_test_create_insert_select(
     }
 
     let expected_columns = vec![
-        DbColumn {
+        mysql_types::DbColumn {
             name: "component_id".to_string(),
             ordinal: 0,
-            db_type: DbColumnType::Primitive(DbColumnTypePrimitive::Text),
+            db_type: mysql_types::DbColumnType::Primitive(mysql_types::DbColumnTypePrimitive::Text),
             db_type_name: "VARCHAR".to_string(),
         },
-        DbColumn {
+        mysql_types::DbColumn {
             name: "namespace".to_string(),
             ordinal: 1,
-            db_type: DbColumnType::Primitive(DbColumnTypePrimitive::Text),
+            db_type: mysql_types::DbColumnType::Primitive(mysql_types::DbColumnTypePrimitive::Text),
             db_type_name: "VARCHAR".to_string(),
         },
-        DbColumn {
+        mysql_types::DbColumn {
             name: "name".to_string(),
             ordinal: 2,
-            db_type: DbColumnType::Primitive(DbColumnTypePrimitive::Text),
+            db_type: mysql_types::DbColumnType::Primitive(mysql_types::DbColumnTypePrimitive::Text),
             db_type_name: "VARCHAR".to_string(),
         },
     ];
@@ -352,7 +375,7 @@ async fn rdbms_execute_test<T: RdbmsType>(
     rdbms: Arc<dyn Rdbms<T> + Send + Sync>,
     db_address: &str,
     query: &str,
-    params: Vec<DbValue>,
+    params: Vec<T::DbValue>,
     expected: Option<u64>,
 ) {
     let worker_id = new_worker_id();
@@ -384,9 +407,9 @@ async fn rdbms_query_test<T: RdbmsType>(
     rdbms: Arc<dyn Rdbms<T> + Send + Sync>,
     db_address: &str,
     query: &str,
-    params: Vec<DbValue>,
-    expected_columns: Option<Vec<DbColumn>>,
-    expected_rows: Option<Vec<DbRow>>,
+    params: Vec<T::DbValue>,
+    expected_columns: Option<Vec<T::DbColumn>>,
+    expected_rows: Option<Vec<DbRow<T::DbValue>>>,
 ) {
     let worker_id = new_worker_id();
     let connection = rdbms.create(db_address, &worker_id).await;
@@ -414,7 +437,7 @@ async fn rdbms_query_test<T: RdbmsType>(
         );
     }
 
-    let mut rows: Vec<DbRow> = vec![];
+    let mut rows: Vec<DbRow<T::DbValue>> = vec![];
 
     while let Some(vs) = result.get_next().await.unwrap() {
         rows.extend(vs);
@@ -440,7 +463,7 @@ async fn rdbms_par_test<T: RdbmsType + 'static>(
     db_addresses: Vec<String>,
     count: u8,
     query: &'static str,
-    params: Vec<DbValue>,
+    params: Vec<T::DbValue>,
     expected: Option<u64>,
 ) {
     let mut fibers = JoinSet::new();
@@ -551,9 +574,9 @@ async fn postgres_query_err_test(
         rdbms.clone(),
         &db_address,
         "SELECT 1",
-        vec![DbValue::Array(vec![
-            DbValuePrimitive::Text("tag1".to_string()),
-            DbValuePrimitive::Int8(0),
+        vec![postgres_types::DbValue::Array(vec![
+            postgres_types::DbValuePrimitive::Text("tag1".to_string()),
+            postgres_types::DbValuePrimitive::Int8(0),
         ])],
         Error::QueryParameterFailure(
             "Array element '0' with index 1 has different type than expected".to_string(),
@@ -585,9 +608,9 @@ async fn postgres_execute_err_test(
         rdbms.clone(),
         &db_address,
         "SELECT 1",
-        vec![DbValue::Array(vec![
-            DbValuePrimitive::Text("tag1".to_string()),
-            DbValuePrimitive::Int8(0),
+        vec![postgres_types::DbValue::Array(vec![
+            postgres_types::DbValuePrimitive::Text("tag1".to_string()),
+            postgres_types::DbValuePrimitive::Int8(0),
         ])],
         Error::QueryParameterFailure(
             "Array element '0' with index 1 has different type than expected".to_string(),
@@ -618,8 +641,12 @@ async fn mysql_query_err_test(mysql: &DockerMysqlRdbs, rdbms_service: &RdbmsServ
         &db_address,
         "SELECT 1",
         vec![
-            DbValue::Primitive(DbValuePrimitive::Text("default".to_string())),
-            DbValue::Array(vec![DbValuePrimitive::Text("tag1".to_string())]),
+            mysql_types::DbValue::Primitive(mysql_types::DbValuePrimitive::Text(
+                "default".to_string(),
+            )),
+            mysql_types::DbValue::Array(vec![mysql_types::DbValuePrimitive::Text(
+                "tag1".to_string(),
+            )]),
         ],
         Error::QueryParameterFailure("Array type is not supported".to_string()),
     )
@@ -656,9 +683,9 @@ async fn mysql_execute_err_test(mysql: &DockerMysqlRdbs, rdbms_service: &RdbmsSe
         rdbms.clone(),
         &db_address,
         "SELECT 1",
-        vec![DbValue::Array(vec![DbValuePrimitive::Text(
-            "tag1".to_string(),
-        )])],
+        vec![mysql_types::DbValue::Array(vec![
+            mysql_types::DbValuePrimitive::Text("tag1".to_string()),
+        ])],
         Error::QueryParameterFailure("Array type is not supported".to_string()),
     )
     .await;
@@ -703,7 +730,7 @@ async fn rdbms_query_err_test<T: RdbmsType>(
     rdbms: Arc<dyn Rdbms<T> + Send + Sync>,
     db_address: &str,
     query: &str,
-    params: Vec<DbValue>,
+    params: Vec<T::DbValue>,
     expected: Error,
 ) {
     let worker_id = new_worker_id();
@@ -736,7 +763,7 @@ async fn rdbms_execute_err_test<T: RdbmsType>(
     rdbms: Arc<dyn Rdbms<T> + Send + Sync>,
     db_address: &str,
     query: &str,
-    params: Vec<DbValue>,
+    params: Vec<T::DbValue>,
     expected: Error,
 ) {
     let worker_id = new_worker_id();

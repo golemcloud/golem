@@ -1,22 +1,28 @@
 package golem:it;
 
 interface api {
-  use wasi:rdbms/types@0.0.1.{db-row, db-column};
+  use wasi:rdbms/postgres@0.0.1.{db-row as postgres-db-row, db-column as postgres-db-column};
+  use wasi:rdbms/mysql@0.0.1.{db-row as mysql-db-row, db-column as mysql-db-column};
 
-  record query-result {
-    columns: list<db-column>,
-    rows: list<db-row>,
+  record postgres-query-result {
+    columns: list<postgres-db-column>,
+    rows: list<postgres-db-row>
+  }
+
+  record mysql-query-result {
+    columns: list<mysql-db-column>,
+    rows: list<mysql-db-row>
   }
 
   check: func() -> string;
 
   mysql-execute: func(statement: string, params: list<string>) -> result<u64, string>;
 
-  mysql-query: func(statement: string, params: list<string>) -> result<query-result, string>;
+  mysql-query: func(statement: string, params: list<string>) -> result<mysql-query-result, string>;
 
   postgres-execute: func(statement: string, params: list<string>) -> result<u64, string>;
 
-  postgres-query: func(statement: string, params: list<string>) -> result<query-result, string>;
+  postgres-query: func(statement: string, params: list<string>) -> result<postgres-query-result, string>;
 }
 
 world rdbms-service {

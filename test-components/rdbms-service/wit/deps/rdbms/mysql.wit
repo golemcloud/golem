@@ -1,7 +1,122 @@
 package wasi:rdbms@0.0.1;
 
 interface mysql {
-  use types.{db-result-set, db-value, error};
+
+  variant error {
+    connection-failure(string),
+    query-parameter-failure(string),
+    query-execution-failure(string),
+    query-response-failure(string),
+    other(string)
+  }
+
+  variant db-column-type {
+         tinyint,
+         smallint,
+         mediumint,
+         int,
+         bigint,
+         tinyunsigned,
+         smallunsigned,
+         mediumunsigned,
+         unsigned,
+         bigunsigned,
+         float,
+         double,
+         decimal,
+         date,
+         datetime,
+         timestamp,
+         year,
+         fixedchar,
+         varchar,
+         tinytext,
+         text,
+         mediumtext,
+         longtext,
+         binary,
+         varbinary,
+         tinyblob,
+         blob,
+         mediumblob,
+         longblob,
+         enumeration,
+         set,
+         bit,
+         json
+//          geometry,
+//          point,
+//          linestring,
+//          polygon,
+//          multipoint,
+//          multilinestring,
+//          multipolygon,
+//          geometrycollection
+  }
+
+  record db-column {
+    ordinal:     u64,
+    name:        string,
+    db-type:     db-column-type,
+    db-type-name: string
+  }
+
+  /// Value descriptor for a single database value
+  variant db-value {
+       tinyint(s8),
+       smallint(s16),
+       mediumint(s32), // s24
+       int(s32),
+       bigint(s64),
+       tinyunsigned(u8),
+       smallunsigned(u16),
+       mediumunsigned(u32), // u24
+       unsigned(u32),
+       bigunsigned(u64),
+       float(float32),
+       double(float64),
+       decimal(string),
+       date(s64),
+       datetime(s64),
+       timestamp(s64),
+       year(s8),
+       fixedchar(string),
+       varchar(string),
+       tinytext(string),
+       text(string),
+       mediumtext(string),
+       longtext(string),
+       binary(list<u8>),
+       varbinary(list<u8>),
+       tinyblob(list<u8>),
+       blob(list<u8>),
+       mediumblob(list<u8>),
+       longblob(list<u8>),
+       enumeration(string),
+       set(string),
+       bit(u8),
+       json(string)
+//        geometry,
+//        point,
+//        linestring,
+//        polygon,
+//        multipoint,
+//        multilinestring,
+//        multipolygon,
+//        geometrycollection
+
+  }
+
+  /// A single row of values
+  record db-row {
+    values: list<db-value>
+  }
+
+  /// A potentially very large and lazy stream of rows:
+  resource db-result-set {
+    get-columns: func() -> list<db-column>;
+    get-next: func() -> option<list<db-row>>;
+  }
 
   resource db-connection {
     open: static func(address: string) -> result<db-connection, error>;
