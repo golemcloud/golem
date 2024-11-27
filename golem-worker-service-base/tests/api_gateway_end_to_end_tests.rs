@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::sync::Arc;
+use std::time::Duration;
 use test_r::test;
 
 test_r::enable!();
@@ -238,6 +239,117 @@ async fn test_end_to_end_api_gateway_with_security_invalid_signatures() {
         test_response_from_actual_endpoint.status(),
         StatusCode::UNAUTHORIZED
     )
+}
+
+#[test]
+async fn test_end_to_end_api_gateway_with_expired_session() {
+    let empty_headers = HeaderMap::new();
+    let api_request = get_api_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
+
+    let worker_name = r#"
+      let id: u64 = request.path.user-id;
+      "shopping-cart-${id}"
+    "#;
+
+    let response_mapping = r#"
+      let response = golem:it/api.{get-cart-contents}("a", "b");
+      response
+    "#;
+
+    let auth_call_back_url =
+        RedirectUrl::new("http://localhost/auth/callback".to_string()).unwrap();
+
+    let invalid_identity_provider_resolver =
+        TestIdentityProviderResolver::new(TestIdentityProvider::get_provider_with_valid_id_token());
+
+    let api_specification: HttpApiDefinition = get_api_spec_with_security_configuration(
+        "/foo/{user-id}",
+        worker_name,
+        response_mapping,
+        &auth_call_back_url,
+        &invalid_identity_provider_resolver,
+    )
+    .await;
+
+    let session_store = GatewaySessionStore::in_memory(&EvictionStrategy {
+        ttl: Duration::from_secs(0),
+        period: Duration::from_millis(1),
+    });
+
+    let initial_response_to_identity_provider = execute(
+        &api_request,
+        &api_specification,
+        &session_store,
+        &invalid_identity_provider_resolver,
+    )
+    .await;
+
+    let initial_redirect_response_headers = initial_response_to_identity_provider.headers();
+
+    let initial_redirect_location = initial_redirect_response_headers
+        .get(LOCATION)
+        .expect("Expecting location")
+        .to_str()
+        .expect("Location should be a string");
+
+    let initial_redirect_url = Url::parse(initial_redirect_location)
+        .expect("Expect the initial redirection to be a full URL");
+
+    let initial_redirect_data = security::get_initial_redirect_data(
+        &ApiInputPath::query_components_from_str(initial_redirect_url.query().unwrap_or_default()),
+    );
+
+    let actual_auth_call_back_url = internal::decode_url(&initial_redirect_data.auth_call_back_url);
+
+    let call_back_request_from_identity_provider =
+        security::request_from_identity_provider_to_auth_call_back_endpoint(
+            initial_redirect_data.state.as_str(),
+            "foo_code", // Decided by IdentityProvider
+            initial_redirect_data.scope.as_str(),
+            &actual_auth_call_back_url.to_string(),
+            "localhost",
+        );
+
+    let request_to_auth_call_back_endpoint =
+        InputHttpRequest::from_request(call_back_request_from_identity_provider)
+            .await
+            .expect("Failed to get request");
+
+    let auth_call_back_response = execute(
+        &request_to_auth_call_back_endpoint,
+        &api_specification,
+        &session_store,
+        &invalid_identity_provider_resolver,
+    )
+    .await;
+
+    // The auth call back endpoint results in another redirect response
+    // which will now have the actual URL to the original protected resource
+    let redirect_response_headers = auth_call_back_response.headers();
+
+    // Manually calling it back as we are the browser
+    let api_request_from_browser =
+        security::create_request_from_redirect(redirect_response_headers).await;
+
+    // Just a bit of sleep such that session is expired
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    // Hitting the protected resource with an expired token
+    let test_response_from_actual_endpoint = execute(
+        &api_request_from_browser,
+        &api_specification,
+        &session_store,
+        &invalid_identity_provider_resolver,
+    )
+    .await;
+
+    // And it should be a redirect which is same as the initial redirect to identity provider
+    let final_redirect = test_response_from_actual_endpoint.headers();
+
+    // The final redirect from the protected endpoint should be the same as
+    // the initial redirect for unauthenticated request
+    assert!(final_redirect.contains_key(LOCATION));
+    assert_eq!(final_redirect, initial_redirect_response_headers)
 }
 
 #[test]
