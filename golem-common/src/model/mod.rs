@@ -2948,10 +2948,6 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::FileSystemNode> for Component
         }
     }
 }
-
-// AuthCallBack is not exposed to users and is internal
-// If we needed we could expose it back to users, however
-// user hardly hits this endpoint and is often used by identity provider
 #[derive(Debug, Clone, PartialEq, Serialize, Encode, Decode, Enum, Default)]
 #[serde(rename_all = "kebab-case")]
 #[oai(rename_all = "kebab-case")]

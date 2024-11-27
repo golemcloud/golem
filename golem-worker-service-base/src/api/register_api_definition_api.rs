@@ -378,7 +378,7 @@ impl From<HttpMiddlewares> for MiddlewareData {
     }
 }
 
-// Security Scheme data that's exposed to the users of API definition registration
+// Security-scheme that's exposed to the users of API definition registration
 // and deployment. Here we don't care any other part other than specifying the
 // name of the security scheme. It is expected that this scheme is already registered with golem.
 // Probably scopes are needed here as this is dynamic to each operation.

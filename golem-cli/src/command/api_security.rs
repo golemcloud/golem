@@ -47,14 +47,14 @@ pub enum ApiSecuritySchemeSubcommand<ProjectRef: clap::Args> {
         redirect_url: String,
     },
 
-    /// Get api deployment
+    /// Get api security
     #[command()]
     Get {
         /// The newly created component's owner project
         #[command(flatten)]
         project_ref: ProjectRef,
 
-        /// Deployment site
+        /// Security Scheme Id
         #[arg(value_name = "scheme.id")]
         id: String,
     },

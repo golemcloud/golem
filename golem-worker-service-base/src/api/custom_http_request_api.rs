@@ -46,7 +46,7 @@ pub struct CustomHttpRequestApi<Namespace> {
             > + Sync
             + Send,
     >,
-    pub gateway_binding_executor: Arc<dyn GatewayHttpInputExecutor<Namespace> + Sync + Send>,
+    pub gateway_http_input_executor: Arc<dyn GatewayHttpInputExecutor<Namespace> + Sync + Send>,
     pub gateway_session_store: GatewaySessionStore,
 }
 
@@ -80,7 +80,7 @@ impl<Namespace: Clone + Send + Sync + 'static> CustomHttpRequestApi<Namespace> {
 
         Self {
             api_definition_lookup_service,
-            gateway_binding_executor,
+            gateway_http_input_executor: gateway_binding_executor,
             gateway_session_store,
         }
     }
@@ -121,8 +121,10 @@ impl<Namespace: Clone + Send + Sync + 'static> CustomHttpRequestApi<Namespace> {
                             &self.gateway_session_store,
                             Arc::new(DefaultIdentityProviderResolver),
                         );
-                        let response: poem::Response =
-                            self.gateway_binding_executor.execute_binding(&input).await;
+                        let response: poem::Response = self
+                            .gateway_http_input_executor
+                            .execute_binding(&input)
+                            .await;
 
                         response
                     }
