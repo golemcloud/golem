@@ -15,6 +15,7 @@
 use crate::gateway_api_definition::http::{QueryInfo, VarInfo};
 
 use crate::gateway_api_deployment::ApiSiteString;
+use crate::gateway_execution::gateway_session::{DataKey, GatewaySessionStore, SessionId};
 use crate::gateway_middleware::HttpMiddlewares;
 use crate::gateway_request::http_request::ApiInputPath;
 use http::uri::Scheme;
@@ -75,9 +76,30 @@ pub struct HttpRequestDetails {
     pub request_query_values: RequestQueryValues,
     pub request_header_values: RequestHeaderValues,
     pub http_middlewares: Option<HttpMiddlewares>,
+    pub request_custom_values: Option<HashMap<String, Value>>,
 }
 
 impl HttpRequestDetails {
+    pub async fn inject_auth_details(
+        &mut self,
+        session_id: &SessionId,
+        gateway_session_store: &GatewaySessionStore,
+    ) -> Result<(), String> {
+        let mut http_request_details = self.clone();
+        let session_details = gateway_session_store.0.get(session_id).await?;
+        if let Some(session_data) = session_details {
+            let mut custom_values = HashMap::new();
+            for (data_key, data_value) in session_data.value.iter() {
+                if data_key == &DataKey::claims() {
+                    custom_values.insert("auth".to_string(), data_value.0.clone());
+                }
+            }
+            http_request_details.request_custom_values = Some(custom_values);
+        }
+
+        Ok(())
+    }
+
     pub fn as_json(&self) -> Value {
         let typed_path_values = self.request_path_values.clone().0;
         let typed_query_values = self.request_query_values.clone().0;
@@ -102,11 +124,20 @@ impl HttpRequestDetails {
 
         let header_value = Value::Object(header_records);
 
-        Value::Object(serde_json::Map::from_iter(vec![
+        let mut basic = serde_json::Map::from_iter(vec![
             ("path".to_string(), merged_request_path_and_query),
             ("body".to_string(), self.request_body.0.clone()),
             ("headers".to_string(), header_value),
-        ]))
+        ]);
+
+        // Add custom values to the JSON
+        let custom = self.request_custom_values.clone().unwrap_or_default();
+
+        for (key, value) in custom.iter() {
+            basic.insert(key.clone(), value.clone());
+        }
+
+        Value::Object(basic)
     }
 
     pub fn url(&self) -> Result<Url, String> {
@@ -137,6 +168,7 @@ impl HttpRequestDetails {
             request_query_values: RequestQueryValues(JsonKeyValues::default()),
             request_header_values: RequestHeaderValues(JsonKeyValues::default()),
             http_middlewares: None,
+            request_custom_values: None,
         }
     }
 
@@ -242,6 +274,7 @@ impl HttpRequestDetails {
             request_query_values: query_params,
             request_header_values: header_params,
             http_middlewares: http_middlewares.clone(),
+            request_custom_values: None,
         })
     }
 }

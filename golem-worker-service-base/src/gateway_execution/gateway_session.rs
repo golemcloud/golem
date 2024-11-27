@@ -61,6 +61,10 @@ impl DataKey {
         DataKey("nonce".to_string())
     }
 
+    pub fn claims() -> DataKey {
+        DataKey("claims".to_string())
+    }
+
     pub fn redirect_url() -> DataKey {
         DataKey("redirect_url".to_string())
     }

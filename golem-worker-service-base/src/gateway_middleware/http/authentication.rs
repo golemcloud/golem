@@ -145,7 +145,9 @@ mod internal {
                 Ok(claims) => {
                     store_claims_in_session_store(session_id, claims, session_store).await?;
 
-                    Ok(MiddlewareSuccess::PassThrough)
+                    Ok(MiddlewareSuccess::PassThrough {
+                        session_id: Some(session_id.clone()),
+                    })
                 }
                 Err(ClaimsVerificationError::Expired(_)) => {
                     redirect(
@@ -217,7 +219,7 @@ mod internal {
         claims: &CoreIdTokenClaims,
         session_store: &GatewaySessionStore,
     ) -> Result<(), MiddlewareInError> {
-        let claims_data_key = DataKey("claims".to_string());
+        let claims_data_key = DataKey::claims();
         let json = serde_json::to_value(claims)
             .map_err(|err| err.to_string())
             .unwrap();

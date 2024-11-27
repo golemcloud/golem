@@ -49,6 +49,8 @@ impl HttpMiddlewares {
     where
         HttpAuthenticationMiddleware: HttpMiddlewareIn<Namespace>,
     {
+        let mut final_session_id = None;
+
         for middleware in self.0.iter() {
             match middleware {
                 HttpMiddleware::AddCorsHeaders(_) => {}
@@ -59,13 +61,17 @@ impl HttpMiddlewares {
                         MiddlewareSuccess::Redirect(response) => {
                             return Ok(MiddlewareSuccess::Redirect(response))
                         }
-                        MiddlewareSuccess::PassThrough => {}
+                        MiddlewareSuccess::PassThrough { session_id } => {
+                            final_session_id = session_id;
+                        }
                     }
                 }
             }
         }
 
-        Ok(MiddlewareSuccess::PassThrough)
+        Ok(MiddlewareSuccess::PassThrough {
+            session_id: final_session_id,
+        })
     }
 
     pub async fn process_middleware_out<Out>(

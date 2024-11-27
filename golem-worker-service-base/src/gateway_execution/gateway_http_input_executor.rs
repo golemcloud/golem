@@ -22,7 +22,7 @@ use crate::gateway_execution::auth_call_back_binding_handler::{
 use crate::gateway_execution::file_server_binding_handler::{
     FileServerBindingHandler, FileServerBindingResult,
 };
-use crate::gateway_execution::gateway_session::GatewaySessionStore;
+use crate::gateway_execution::gateway_session::{GatewaySessionStore, SessionId};
 use crate::gateway_execution::to_response::ToHttpResponse;
 use crate::gateway_execution::to_response_failure::ToHttpResponseFromSafeDisplay;
 use crate::gateway_middleware::{
@@ -104,12 +104,26 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
 
     async fn resolve_rib_inputs(
         &self,
-        request_details: &HttpRequestDetails,
+        session_id: Option<SessionId>,
+        session_store: &GatewaySessionStore,
+        request_details: &mut HttpRequestDetails,
         resolved_worker_binding: &ResolvedWorkerBinding<Namespace>,
     ) -> Result<(RibInput, RibInput), poem::Response>
     where
         RibInputTypeMismatch: ToHttpResponseFromSafeDisplay,
     {
+        if let Some(session_id) = session_id {
+            let result = request_details
+                .inject_auth_details(&session_id, session_store)
+                .await;
+
+            if let Err(err_response) = result {
+                return Err(poem::Response::builder()
+                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                    .body(err_response));
+            }
+        }
+
         let request_rib_input = request_details
             .resolve_rib_input_value(&resolved_worker_binding.compiled_response_mapping.rib_input)
             .map_err(|err| err.to_response_from_safe_display(|_| StatusCode::BAD_REQUEST))?;
@@ -148,9 +162,10 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
 
     async fn handle_worker_binding(
         &self,
-        request_details: &HttpRequestDetails,
-        resolved_binding: &ResolvedWorkerBinding<Namespace>,
+        session_id: Option<SessionId>,
         session_store: &GatewaySessionStore,
+        request_details: &mut HttpRequestDetails,
+        resolved_binding: &ResolvedWorkerBinding<Namespace>,
     ) -> poem::Response
     where
         RibResult: ToHttpResponse,
@@ -158,7 +173,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         RibInputTypeMismatch: ToHttpResponseFromSafeDisplay,
     {
         match self
-            .resolve_rib_inputs(request_details, resolved_binding)
+            .resolve_rib_inputs(session_id, session_store, request_details, resolved_binding)
             .await
         {
             Ok((request_rib_input, worker_rib_input)) => {
@@ -178,9 +193,10 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
 
     async fn handle_file_server_binding(
         &self,
-        request_details: &HttpRequestDetails,
-        resolved_binding: &ResolvedWorkerBinding<Namespace>,
+        session_id: Option<SessionId>,
         session_store: &GatewaySessionStore,
+        request_details: &mut HttpRequestDetails,
+        resolved_binding: &ResolvedWorkerBinding<Namespace>,
     ) -> poem::Response
     where
         RibResult: ToHttpResponse,
@@ -189,7 +205,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         FileServerBindingResult: ToHttpResponse,
     {
         match self
-            .resolve_rib_inputs(request_details, resolved_binding)
+            .resolve_rib_inputs(session_id, session_store, request_details, resolved_binding)
             .await
         {
             Ok((request_rib_input, worker_rib_input)) => {
@@ -241,11 +257,12 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
             .await
     }
 
-    // If redirects, it instantly responds with Some(response)
+    // If redirects, it responds with Err(response)
+    // or else it returns the session_id to continue with the rest.
     async fn redirect_or_continue(
         input: &GatewayHttpInput<Namespace>,
         middlewares: &HttpMiddlewares,
-    ) -> Option<poem::Response>
+    ) -> Result<Option<SessionId>, poem::Response>
     where
         HttpAuthenticationMiddleware: HttpMiddlewareIn<Namespace>,
         CorsPreflight: HttpMiddlewareOut<poem::Response>,
@@ -255,11 +272,11 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
 
         match input_middleware_result {
             Ok(incoming_middleware_result) => match incoming_middleware_result {
-                MiddlewareSuccess::Redirect(response) => Some(response),
-                MiddlewareSuccess::PassThrough => None,
+                MiddlewareSuccess::Redirect(response) => Err(response),
+                MiddlewareSuccess::PassThrough { session_id } => Ok(session_id),
             },
 
-            Err(err) => Some(err.to_response_from_safe_display(|error| match error {
+            Err(err) => Err(err.to_response_from_safe_display(|error| match error {
                 MiddlewareInError::Unauthorized(_) => StatusCode::UNAUTHORIZED,
                 MiddlewareInError::InternalServerError(_) => StatusCode::INTERNAL_SERVER_ERROR,
             })),
@@ -286,16 +303,17 @@ impl<Namespace: Send + Sync + Clone> GatewayHttpInputExecutor<Namespace>
     {
         let binding = &input.resolved_gateway_binding;
         let middleware_opt = &input.http_request_details.http_middlewares;
+        let mut request_details = input.http_request_details.clone();
 
         let middleware_response = if let Some(middleware) = middleware_opt {
             Self::redirect_or_continue(input, middleware).await
         } else {
-            None
+            Ok(None)
         };
 
         match middleware_response {
-            Some(r) => r,
-            None => match &binding {
+            Err(redirect_response) => redirect_response,
+            Ok(session) => match &binding {
                 ResolvedBinding::Static(StaticBinding::HttpCorsPreflight(cors_preflight)) => {
                     cors_preflight
                         .clone()
@@ -311,9 +329,10 @@ impl<Namespace: Send + Sync + Clone> GatewayHttpInputExecutor<Namespace>
                 ResolvedBinding::Worker(resolved_worker_binding) => {
                     let mut response = self
                         .handle_worker_binding(
-                            &input.http_request_details,
-                            resolved_worker_binding,
+                            session,
                             &input.session_store,
+                            &mut request_details,
+                            resolved_worker_binding,
                         )
                         .await;
 
@@ -334,9 +353,10 @@ impl<Namespace: Send + Sync + Clone> GatewayHttpInputExecutor<Namespace>
 
                 ResolvedBinding::FileServer(resolved_file_server_binding) => {
                     self.handle_file_server_binding(
-                        &input.http_request_details,
-                        resolved_file_server_binding,
+                        session,
                         &input.session_store,
+                        &mut request_details,
+                        resolved_file_server_binding,
                     )
                     .await
                 }

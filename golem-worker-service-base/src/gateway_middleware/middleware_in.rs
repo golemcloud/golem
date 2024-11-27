@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::gateway_execution::gateway_http_input_executor::GatewayHttpInput;
+use crate::gateway_execution::gateway_session::SessionId;
 use crate::gateway_middleware::HttpAuthenticationMiddleware;
 use async_trait::async_trait;
 use golem_common::SafeDisplay;
@@ -42,7 +43,7 @@ impl SafeDisplay for MiddlewareInError {
 }
 
 pub enum MiddlewareSuccess {
-    PassThrough,
+    PassThrough { session_id: Option<SessionId> },
     Redirect(poem::Response),
 }
 
