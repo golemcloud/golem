@@ -12,20 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::error::GolemError;
 use anyhow::anyhow;
 use async_lock::Mutex;
+use futures::TryStreamExt;
 use golem_common::model::{AccountId, InitialComponentFileKey};
+use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::AtomicU64;
 use std::sync::Weak;
 use std::{path::PathBuf, sync::Arc};
 use tempfile::TempDir;
+use tokio::io::AsyncWriteExt;
 use tracing::debug;
-
-use crate::error::GolemError;
-
-use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 
 // Opaque token for read-only files. This is used to ensure that the file is not deleted while it is in use.
 // Make sure to not drop this token until you are done with the file.
@@ -258,14 +258,21 @@ impl FileLoader {
     ) -> Result<(), anyhow::Error> {
         debug!("Downloading {} to {}", key, path.display());
 
-        let data = self
+        let mut data = self
             .initial_component_files_service
             .get(account_id, key)
             .await
             .map_err(|e| anyhow!(e))?
             .ok_or_else(|| anyhow!("File not found"))?;
 
-        tokio::fs::write(&path, data).await?;
+        let file = tokio::fs::File::create(path).await?;
+        let mut writer = tokio::io::BufWriter::new(file);
+
+        while let Some(chunk) = data.try_next().await.map_err(|e| anyhow!(e))? {
+            writer.write_all(&chunk).await?;
+        }
+
+        writer.flush().await?;
         Ok(())
     }
 
