@@ -16,11 +16,13 @@ use async_trait::async_trait;
 use itertools::Itertools;
 
 use crate::clients::api_deployment::ApiDeploymentClient;
+use crate::clients::api_security::ApiSecurityClient;
+use crate::model::{
+    ApiDefinitionId, ApiDefinitionIdWithVersion, ApiDeployment, ApiSecurityScheme, GolemError,
+};
+use crate::oss::model::OssContext;
 use golem_client::model::{ApiDefinitionInfo, ApiSite, Provider, SecuritySchemeData};
 use tracing::info;
-use crate::clients::api_security::ApiSecurityClient;
-use crate::model::{ApiDefinitionId, ApiDefinitionIdWithVersion, ApiDeployment, GolemError};
-use crate::oss::model::OssContext;
 
 #[derive(Clone)]
 pub struct ApiSecurityClientLive<C: golem_client::api::ApiSecurityClient + Sync + Send> {
@@ -29,29 +31,47 @@ pub struct ApiSecurityClientLive<C: golem_client::api::ApiSecurityClient + Sync 
 
 #[async_trait]
 impl<C: golem_client::api::ApiSecurityClient + Sync + Send> ApiSecurityClient
-for ApiSecurityClientLive<C>
+    for ApiSecurityClientLive<C>
 {
     type ProjectContext = OssContext;
 
-    async fn get(&self, id: &str) -> Result<SecuritySchemeData, GolemError> {
-        info!("Getting api deployment for site {site}");
+    async fn get(&self, id: &str) -> Result<ApiSecurityScheme, GolemError> {
+        info!("Getting api security scheme for {id}");
 
-        let result = self.client.get(id).await.map_err(
-            |err| GolemError::from(err))?;
+        let result = self
+            .client
+            .get(id)
+            .await
+            .map_err(|err| GolemError::from(err))?;
 
-        Ok(result)
+        Ok(ApiSecurityScheme::from(result))
     }
 
-    async fn create(&self, id: String, provider_type: Provider, client_id: String, client_secret: String, scopes: Vec<String>, redirect_url: String, _project: &Self::ProjectContext) -> Result<SecuritySchemeData, GolemError> {
+    async fn create(
+        &self,
+        id: String,
+        provider_type: Provider,
+        client_id: String,
+        client_secret: String,
+        scopes: Vec<String>,
+        redirect_url: String,
+        _project: &Self::ProjectContext,
+    ) -> Result<ApiSecurityScheme, GolemError> {
         info!("Creating security scheme {}", id);
 
-        self.client.create(&SecuritySchemeData {
-            scheme_identifier: id,
-            provider_type,
-            client_id,
-            client_secret,
-            scopes,
-            redirect_url,
-        }).await.map_err(GolemError::from)
+        let result = self
+            .client
+            .create(&SecuritySchemeData {
+                scheme_identifier: id,
+                provider_type,
+                client_id,
+                client_secret,
+                scopes,
+                redirect_url,
+            })
+            .await
+            .map_err(GolemError::from)?;
+
+        Ok(ApiSecurityScheme::from(result))
     }
 }

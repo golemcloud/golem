@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::{GolemError, GolemResult};
+use crate::clients::api_security::ApiSecurityClient;
+use crate::model::{GolemError, GolemResult, IdentityProviderType};
+use crate::service::api_security::ApiSecuritySchemeService;
 use crate::service::project::ProjectResolver;
 use clap::Subcommand;
-use golem_client::model::Provider;
-use crate::clients::api_security::ApiSecurityClient;
 
 #[derive(Subcommand, Debug)]
 #[command()]
@@ -33,7 +33,7 @@ pub enum ApiSecuritySchemeSubcommand<ProjectRef: clap::Args> {
         id: String,
 
         #[arg(short = 'p', long = "provider.type")]
-        provider_type: Provider,
+        provider_type: IdentityProviderType,
 
         #[arg(long = "client.id")]
         client_id: String,
@@ -41,10 +41,10 @@ pub enum ApiSecuritySchemeSubcommand<ProjectRef: clap::Args> {
         #[arg(long = "client.secret")]
         client_secret: String,
 
-        #[arg(long = "scope")]
+        #[arg(short = 's', long = "scopes")]
         scopes: Vec<String>,
 
-        #[arg(long = "redirect.url")]
+        #[arg(short = 'r', long = "redirect.url")]
         redirect_url: String,
     },
 
@@ -64,7 +64,7 @@ pub enum ApiSecuritySchemeSubcommand<ProjectRef: clap::Args> {
 impl<ProjectRef: clap::Args + Send + Sync + 'static> ApiSecuritySchemeSubcommand<ProjectRef> {
     pub async fn handle<ProjectContext>(
         self,
-        service: &(dyn ApiSecurityClient<ProjectContext = ProjectContext> + Send + Sync),
+        service: &(dyn ApiSecuritySchemeService<ProjectContext = ProjectContext> + Send + Sync),
         projects: &(dyn ProjectResolver<ProjectRef, ProjectContext> + Send + Sync),
     ) -> Result<GolemResult, GolemError> {
         match self {
@@ -81,15 +81,15 @@ impl<ProjectRef: clap::Args + Send + Sync + 'static> ApiSecuritySchemeSubcommand
                 service
                     .create(
                         id,
-                        provider_type,
+                        provider_type.into(),
                         client_id,
                         client_secret,
-                        scope,
+                        scopes,
                         redirect_url,
                         &project_id,
                     )
                     .await
-            },
+            }
             ApiSecuritySchemeSubcommand::Get { id, .. } => service.get(id).await,
         }
     }

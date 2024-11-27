@@ -254,6 +254,59 @@ pub mod fmt {
     }
 }
 
+pub mod api_security {
+    use crate::model::text::fmt::*;
+    use crate::model::ApiSecurityScheme;
+    use cli_table::Table;
+    use golem_client::model::SecuritySchemeData;
+    use indoc::printdoc;
+
+    pub fn format_scopes(scopes: &Vec<String>) -> String {
+        scopes.join(", ")
+    }
+
+    impl TextFormat for ApiSecurityScheme {
+        fn print(&self) {
+            printdoc!(
+                    "
+                    API Security Scheme: ID: {}, scopes: {}, client ID: {}, client secret: {}, redirect URL: {}
+                    ",
+                    format_message_highlight(&self.scheme_identifier),
+                    format_scopes(&self.scopes),
+                    format_message_highlight(&self.client_id),
+                    format_message_highlight(&self.client_secret),
+                    format_message_highlight(&self.redirect_url),
+                );
+        }
+    }
+
+    #[derive(Table)]
+    struct ApiSecuritySchemeTableView {
+        #[table(title = "ID")]
+        pub id: String,
+        #[table(title = "Provider")]
+        pub provider: String,
+        #[table(title = "Client ID")]
+        pub client_id: String,
+        #[table(title = "Client Secret")]
+        pub client_secret: String,
+        #[table(title = "Redirect URL")]
+        pub redirect_url: String,
+    }
+
+    impl From<&SecuritySchemeData> for ApiSecuritySchemeTableView {
+        fn from(value: &SecuritySchemeData) -> Self {
+            Self {
+                id: value.scheme_identifier.clone(),
+                provider: value.provider_type.to_string(),
+                client_id: value.client_id.clone(),
+                client_secret: value.client_secret.clone(),
+                redirect_url: value.redirect_url.clone(),
+            }
+        }
+    }
+}
+
 pub mod api_definition {
     use crate::model::text::fmt::*;
     use cli_table::{format::Justify, Table};

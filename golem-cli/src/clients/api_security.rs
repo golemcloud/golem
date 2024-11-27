@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::{GolemError};
+use crate::model::{ApiSecurityScheme, GolemError};
 use async_trait::async_trait;
-use golem_client::model::{Provider, SecuritySchemeData};
+use golem_client::model::Provider;
 
 #[async_trait]
 pub trait ApiSecurityClient {
@@ -29,7 +29,7 @@ pub trait ApiSecurityClient {
         scope: Vec<String>,
         redirect_url: String,
         project: &Self::ProjectContext,
-    ) -> Result<SecuritySchemeData, GolemError>;
+    ) -> Result<ApiSecurityScheme, GolemError>;
 
-    async fn get(&self, id: &str) -> Result<SecuritySchemeData, GolemError>;
+    async fn get(&self, id: &str) -> Result<ApiSecurityScheme, GolemError>;
 }

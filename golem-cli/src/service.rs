@@ -14,9 +14,9 @@
 
 pub mod api_definition;
 pub mod api_deployment;
+pub mod api_security;
 pub mod component;
 pub mod deploy;
 pub mod project;
 pub mod version;
 pub mod worker;
-mod api_security;

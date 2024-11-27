@@ -14,8 +14,8 @@
 
 use crate::model::ResponseContentErrorMapper;
 use golem_client::api::{
-    ApiDefinitionError, ApiDeploymentError, ComponentError, HealthCheckError, PluginError,
-    WorkerError,
+    ApiDefinitionError, ApiDeploymentError, ApiSecurityError, ComponentError, HealthCheckError,
+    PluginError, WorkerError,
 };
 use golem_client::model::{
     GolemError, GolemErrorComponentDownloadFailed, GolemErrorComponentParseFailed,
@@ -83,6 +83,19 @@ impl ResponseContentErrorMapper for ApiDefinitionError {
             ApiDefinitionError::Error404(error) => error.error,
             ApiDefinitionError::Error409(error) => error.to_string(),
             ApiDefinitionError::Error500(error) => error.error,
+        }
+    }
+}
+
+impl ResponseContentErrorMapper for ApiSecurityError {
+    fn map(self) -> String {
+        match self {
+            ApiSecurityError::Error400(error) => display_worker_service_errors_body(error),
+            ApiSecurityError::Error401(error) => error.error,
+            ApiSecurityError::Error403(error) => error.error,
+            ApiSecurityError::Error404(error) => error.error,
+            ApiSecurityError::Error409(error) => error.to_string(),
+            ApiSecurityError::Error500(error) => error.error,
         }
     }
 }

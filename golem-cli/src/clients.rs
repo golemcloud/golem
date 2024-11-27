@@ -14,9 +14,9 @@
 
 pub mod api_definition;
 pub mod api_deployment;
+pub mod api_security;
 pub mod component;
 pub mod file_download;
 pub mod health_check;
 pub mod plugin;
 pub mod worker;
-pub mod api_security;

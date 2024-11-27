@@ -13,10 +13,10 @@
 // limitations under the License.
 
 use crate::clients::api_deployment::ApiDeploymentClient;
+use crate::clients::api_security::ApiSecurityClient;
 use crate::model::{ApiDefinitionId, ApiDefinitionIdWithVersion, GolemError, GolemResult};
 use async_trait::async_trait;
 use golem_client::model::Provider;
-use crate::clients::api_security::ApiSecurityClient;
 
 #[async_trait]
 pub trait ApiSecuritySchemeService {
@@ -42,16 +42,35 @@ pub struct ApiSecuritySchemeServiceLive<ProjectContext> {
 
 #[async_trait]
 impl<ProjectContext: Send + Sync> ApiSecuritySchemeService
-for ApiSecuritySchemeServiceLive<ProjectContext>
+    for ApiSecuritySchemeServiceLive<ProjectContext>
 {
     type ProjectContext = ProjectContext;
 
-    async fn create(&self, id: String, provider_type: Provider, client_id: String, client_secret: String, scope: Vec<String>, redirect_url: String, project: &Self::ProjectContext) -> Result<GolemResult, GolemError> {
-        let deployment = self.client.create(id, provider_type, client_id, client_secret, scope, redirect_url, project).await?;
+    async fn create(
+        &self,
+        id: String,
+        provider_type: Provider,
+        client_id: String,
+        client_secret: String,
+        scope: Vec<String>,
+        redirect_url: String,
+        project: &Self::ProjectContext,
+    ) -> Result<GolemResult, GolemError> {
+        let deployment = self
+            .client
+            .create(
+                id,
+                provider_type,
+                client_id,
+                client_secret,
+                scope,
+                redirect_url,
+                project,
+            )
+            .await?;
 
         Ok(GolemResult::Ok(Box::new(deployment)))
     }
-
 
     async fn get(&self, site: String) -> Result<GolemResult, GolemError> {
         let deployment = self.client.get(&site).await?;

@@ -108,6 +108,17 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
                 )
                 .await
         }
+
+        OssCommand::ApiSecurityScheme { subcommand } => {
+            let factory = factory().await?;
+
+            subcommand
+                .handle(
+                    factory.api_security_scheme_service().as_ref(),
+                    factory.project_resolver().as_ref(),
+                )
+                .await
+        }
         OssCommand::Profile { subcommand } => {
             subcommand.handle(cli_kind, &config_dir, profile_auth).await
         }
