@@ -16,6 +16,7 @@ mod component;
 
 pub use component::*;
 use golem_common::model::{ComponentFilePathWithPermissionsList, ComponentType};
+use golem_service_base::poem::TempFileUpload;
 use poem_openapi::types::multipart::Upload;
 use poem_openapi::Multipart;
 
@@ -25,5 +26,5 @@ pub struct UpdatePayload {
     pub component_type: Option<ComponentType>,
     pub component: Upload,
     pub files_permissions: Option<ComponentFilePathWithPermissionsList>,
-    pub files: Option<Upload>,
+    pub files: Option<TempFileUpload>,
 }

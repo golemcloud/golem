@@ -15,10 +15,15 @@
 use crate::storage::blob::{BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult};
 use async_trait::async_trait;
 use bytes::Bytes;
+use futures::TryStreamExt;
 use golem_common::model::Timestamp;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::time::SystemTime;
+use tokio::io::AsyncWriteExt;
 use tokio_stream::StreamExt;
+
+use super::ReplayableStream;
 
 #[derive(Debug)]
 pub struct FileSystemBlobStorage {
@@ -123,6 +128,28 @@ impl BlobStorage for FileSystemBlobStorage {
         }
     }
 
+    async fn get_stream(
+        &self,
+        _target_label: &'static str,
+        _op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<Option<Pin<Box<dyn futures::Stream<Item = Result<Bytes, String>> + Send>>>, String>
+    {
+        let full_path = self.path_of(&namespace, path);
+        self.ensure_path_is_inside_root(&full_path)?;
+
+        if async_fs::metadata(&full_path).await.is_ok() {
+            let file = tokio::fs::File::open(&full_path)
+                .await
+                .map_err(|err| format!("Failed to open file at {full_path:?}: {err}"))?;
+            let stream = tokio_util::io::ReaderStream::new(file);
+            Ok(Some(Box::pin(stream.map_err(|err| err.to_string()))))
+        } else {
+            Ok(None)
+        }
+    }
+
     async fn get_metadata(
         &self,
         _target_label: &'static str,
@@ -173,6 +200,44 @@ impl BlobStorage for FileSystemBlobStorage {
             .map_err(|err| format!("Failed to store file at {full_path:?}: {err}"))
     }
 
+    async fn put_stream(
+        &self,
+        _target_label: &'static str,
+        _op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        stream: &dyn ReplayableStream<Item = Result<Bytes, String>>,
+    ) -> Result<(), String> {
+        let full_path = self.path_of(&namespace, path);
+        self.ensure_path_is_inside_root(&full_path)?;
+
+        if let Some(parent) = full_path.parent() {
+            if async_fs::metadata(parent).await.is_err() {
+                async_fs::create_dir_all(parent).await.map_err(|err| {
+                    format!("Failed to create parent directory {parent:?}: {err}")
+                })?;
+            }
+        }
+
+        let file = tokio::fs::File::create(&full_path)
+            .await
+            .map_err(|err| format!("Failed to create file at {full_path:?}: {err}"))?;
+
+        let mut writer = tokio::io::BufWriter::new(file);
+
+        let mut stream = stream.make_stream().await?;
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|err| err.to_string())?;
+            writer
+                .write_all(&chunk)
+                .await
+                .map_err(|err| err.to_string())?;
+        }
+
+        writer.flush().await.map_err(|err| err.to_string())?;
+        Ok(())
+    }
+
     async fn delete(
         &self,
         _target_label: &'static str,
@@ -219,7 +284,10 @@ impl BlobStorage for FileSystemBlobStorage {
             .map_err(|err| err.to_string())?;
 
         let mut result = Vec::new();
-        while let Some(entry) = entries.try_next().await.map_err(|err| err.to_string())? {
+        while let Some(entry) = TryStreamExt::try_next(&mut entries)
+            .await
+            .map_err(|err| err.to_string())?
+        {
             if let Ok(path) = entry.path().strip_prefix(&namespace_root) {
                 result.push(path.to_path_buf());
             }

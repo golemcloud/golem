@@ -16,6 +16,7 @@ pub mod auth;
 pub mod config;
 pub mod db;
 pub mod model;
+pub mod poem;
 pub mod repo;
 pub mod service;
 pub mod storage;

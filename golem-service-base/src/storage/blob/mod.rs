@@ -12,15 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt::Debug;
-use std::path::{Path, PathBuf};
-
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use bytes::Bytes;
-
+use futures::Stream;
 use golem_common::model::{AccountId, ComponentId, Timestamp, WorkerId};
 use golem_common::serialization::{deserialize, serialize};
+use std::fmt::Debug;
+use std::path::{Path, PathBuf};
+use std::pin::Pin;
 
 pub mod fs;
 pub mod memory;
@@ -36,6 +36,14 @@ pub trait BlobStorage: Debug {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<Bytes>, String>;
+
+    async fn get_stream(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<Option<Pin<Box<dyn futures::Stream<Item = Result<Bytes, String>> + Send>>>, String>;
 
     async fn get_raw_slice(
         &self,
@@ -67,6 +75,15 @@ pub trait BlobStorage: Debug {
         namespace: BlobStorageNamespace,
         path: &Path,
         data: &[u8],
+    ) -> Result<(), String>;
+
+    async fn put_stream(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        stream: &dyn ReplayableStream<Item = Result<Bytes, String>>,
     ) -> Result<(), String>;
 
     async fn delete(
@@ -354,4 +371,25 @@ pub enum ExistsResult {
 pub struct BlobMetadata {
     pub last_modified_at: Timestamp,
     pub size: u64,
+}
+
+#[async_trait]
+pub trait ReplayableStream: Send + Sync {
+    type Item;
+
+    async fn make_stream(
+        &self,
+    ) -> Result<Pin<Box<dyn Stream<Item = Self::Item> + Send + Sync>>, String>;
+}
+
+#[async_trait]
+impl ReplayableStream for Bytes {
+    type Item = Result<Bytes, String>;
+
+    async fn make_stream(
+        &self,
+    ) -> Result<Pin<Box<dyn Stream<Item = Self::Item> + Send + Sync>>, String> {
+        let data = self.clone();
+        Ok(Box::pin(futures::stream::once(async move { Ok(data) })))
+    }
 }

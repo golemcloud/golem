@@ -23,7 +23,7 @@ use golem_service_base::model::{ComponentName, VersionedComponentId};
 use rib::WorkerFunctionsInRib;
 use std::fmt::Debug;
 use std::time::SystemTime;
-use tokio::fs::File;
+use tempfile::NamedTempFile;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Component<Owner: ComponentOwner> {
@@ -180,6 +180,6 @@ impl<Owner: ComponentOwner> ComponentConstraints<Owner> {
 
 #[derive(Debug)]
 pub struct InitialComponentFilesArchiveAndPermissions {
-    pub archive: File,
+    pub archive: NamedTempFile,
     pub files: Vec<ComponentFilePathWithPermissions>,
 }
