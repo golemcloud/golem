@@ -261,10 +261,6 @@ pub mod api_security {
     use golem_client::model::SecuritySchemeData;
     use indoc::printdoc;
 
-    pub fn format_scopes(scopes: &Vec<String>) -> String {
-        scopes.join(", ")
-    }
-
     impl TextFormat for ApiSecurityScheme {
         fn print(&self) {
             printdoc!(
@@ -272,7 +268,7 @@ pub mod api_security {
                     API Security Scheme: ID: {}, scopes: {}, client ID: {}, client secret: {}, redirect URL: {}
                     ",
                     format_message_highlight(&self.scheme_identifier),
-                    format_scopes(&self.scopes),
+                    &self.scopes.join(", "),
                     format_message_highlight(&self.client_id),
                     format_message_highlight(&self.client_secret),
                     format_message_highlight(&self.redirect_url),

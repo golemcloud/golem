@@ -1,4 +1,5 @@
 use golem_common::{recorded_http_api_request, safe};
+use golem_service_base::api_tags::ApiTags;
 use golem_service_base::auth::DefaultNamespace;
 use golem_worker_service_base::api::{ApiEndpointError, SecuritySchemeData};
 use golem_worker_service_base::gateway_security::{SecurityScheme, SecuritySchemeIdentifier};
@@ -7,7 +8,6 @@ use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use poem_openapi::OpenApi;
 use std::sync::Arc;
-use golem_service_base::api_tags::ApiTags;
 
 use tracing::Instrument;
 
@@ -30,7 +30,11 @@ impl SecuritySchemeApi {
     /// Get a security scheme
     ///
     /// Get a security scheme by name
-    #[oai(path = "/{security_scheme_identifier}", method = "get", operation_id = "get")]
+    #[oai(
+        path = "/{security_scheme_identifier}",
+        method = "get",
+        operation_id = "get"
+    )]
     async fn get(
         &self,
         security_scheme_identifier: Path<String>,

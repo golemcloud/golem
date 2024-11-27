@@ -200,6 +200,8 @@ fn golem_def_with_response(
         routes: vec![RouteRequestData {
             method: MethodPattern::Get,
             path: "/{user-id}/get-cart-contents".to_string(),
+            cors: None,
+            security: None,
             binding: GatewayBindingData {
                 component_id: Some(VersionedComponentId {
                     component_id: Uuid::parse_str(component_id).unwrap(),
@@ -208,7 +210,6 @@ fn golem_def_with_response(
                 worker_name: Some("\"foo\"".to_string()),
                 idempotency_key: None,
                 response: Some(response),
-                middleware: None,
                 allow_origin: None,
                 allow_methods: None,
                 allow_headers: None,
@@ -388,7 +389,6 @@ pub fn to_api_definition_with_type_info(
                         idempotency_key_input: None,
                         binding_type: Some(GatewayBindingType::Default),
                         cors_preflight: None,
-                        middleware: None,
                     },
                 }
             })

@@ -34,11 +34,7 @@ impl<C: golem_client::api::ApiSecurityClient + Sync + Send> ApiSecurityClient
     async fn get(&self, id: &str) -> Result<ApiSecurityScheme, GolemError> {
         info!("Getting api security scheme for {id}");
 
-        let result = self
-            .client
-            .get(id)
-            .await
-            .map_err(|err| GolemError::from(err))?;
+        let result = self.client.get(id).await.map_err(GolemError::from)?;
 
         Ok(ApiSecurityScheme::from(result))
     }
