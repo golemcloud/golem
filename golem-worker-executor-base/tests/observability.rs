@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use assert2::check;
 use golem_wasm_rpc::Value;
+use log::info;
 use test_r::{inherit_test_dep, test};
 
 use crate::common::{start, TestContext};
@@ -194,4 +196,80 @@ async fn search_oplog_1(
     assert_eq!(result1.len(), 4); // two invocations and two log messages
     assert_eq!(result2.len(), 2); // get_preopened_directories, get_random_bytes
     assert_eq!(result3.len(), 2); // two invocations
+}
+
+#[test]
+#[tracing::instrument]
+async fn get_oplog_with_api_changing_updates(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
+
+    let component_id = executor.store_unique_component("update-test-v1").await;
+    let worker_id = executor
+        .start_worker(&component_id, "get_oplog_with_api_changing_updates")
+        .await;
+
+    let target_version = executor
+        .update_component(&component_id, "update-test-v2")
+        .await;
+    info!("Updated component to version {target_version}");
+
+    let _ = executor
+        .invoke_and_await(&worker_id, "golem:component/api.{f3}", vec![])
+        .await
+        .unwrap();
+    let _ = executor
+        .invoke_and_await(&worker_id, "golem:component/api.{f3}", vec![])
+        .await
+        .unwrap();
+
+    executor
+        .auto_update_worker(&worker_id, target_version)
+        .await;
+
+    let result = executor
+        .invoke_and_await(&worker_id, "golem:component/api.{f4}", vec![])
+        .await
+        .unwrap();
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
+
+    check!(result[0] == Value::U64(11));
+    assert_eq!(oplog.len(), 13);
+}
+
+#[test]
+#[tracing::instrument]
+async fn get_oplog_starting_with_updated_component(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
+
+    let component_id = executor.store_unique_component("update-test-v1").await;
+    let target_version = executor
+        .update_component(&component_id, "update-test-v2")
+        .await;
+    info!("Updated component to version {target_version}");
+
+    let worker_id = executor
+        .start_worker(&component_id, "get_oplog_starting_with_updated_component")
+        .await;
+    let result = executor
+        .invoke_and_await(&worker_id, "golem:component/api.{f4}", vec![])
+        .await
+        .unwrap();
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
+
+    check!(result[0] == Value::U64(11));
+    assert_eq!(oplog.len(), 3);
+    println!("oplog length\n{:#?}", oplog.len());
+    println!("oplog\n{:#?}", oplog);
 }
