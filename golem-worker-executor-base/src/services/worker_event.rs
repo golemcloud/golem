@@ -18,6 +18,7 @@ use golem_common::model::{IdempotencyKey, LogLevel, WorkerEvent};
 use ringbuf::storage::Heap;
 use ringbuf::traits::{Consumer, Producer, Split};
 use ringbuf::*;
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::broadcast::*;
@@ -86,14 +87,14 @@ struct WorkerEventEntry {
 }
 
 pub struct WorkerEventReceiver {
-    history: Vec<WorkerEventEntry>,
+    history: VecDeque<WorkerEventEntry>,
     receiver: Receiver<WorkerEvent>,
 }
 
 impl WorkerEventReceiver {
     pub async fn recv(&mut self) -> Result<WorkerEvent, RecvError> {
         loop {
-            let popped = self.history.pop();
+            let popped = self.history.pop_front();
             match popped {
                 Some(entry) if entry.is_live => break Ok(entry.event),
                 Some(_) => continue,
@@ -164,7 +165,7 @@ impl WorkerEventService for WorkerEventServiceDefault {
     fn receiver(&self) -> WorkerEventReceiver {
         let receiver = self.sender.subscribe();
         let ring_cons = self.ring_cons.lock().unwrap();
-        let history = ring_cons.iter().rev().cloned().collect();
+        let history = ring_cons.iter().cloned().collect();
         WorkerEventReceiver { history, receiver }
     }
 
@@ -201,6 +202,7 @@ fn label(event: &WorkerEvent) -> &'static str {
 mod tests {
     use test_r::{non_flaky, test, timeout};
 
+    use futures_util::StreamExt;
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::sync::broadcast::error::RecvError;
@@ -268,6 +270,120 @@ mod tests {
                     }
                 }
             }
+        });
+
+        ready_rx.await.unwrap();
+
+        for b in 5..=8u8 {
+            svc.emit_event(WorkerEvent::stdout(vec![b]), true);
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+
+        drop(svc);
+
+        task1.await.unwrap();
+        task2.await.unwrap();
+
+        let result1: Vec<WorkerEvent> = rx1_events.lock().await.iter().cloned().collect();
+        let result2: Vec<WorkerEvent> = rx2_events.lock().await.iter().cloned().collect();
+
+        assert_eq!(
+            result1
+                .into_iter()
+                .filter_map(|event| match event {
+                    WorkerEvent::StdOut { bytes, .. } => Some(bytes.to_vec()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                vec![1],
+                vec![2],
+                vec![3],
+                vec![4],
+                vec![5],
+                vec![6],
+                vec![7],
+                vec![8],
+            ],
+            "result1"
+        );
+        assert_eq!(
+            result2
+                .into_iter()
+                .filter_map(|event| match event {
+                    WorkerEvent::StdOut { bytes, .. } => Some(bytes.to_vec()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                vec![1],
+                vec![2],
+                vec![3],
+                vec![4],
+                vec![5],
+                vec![6],
+                vec![7],
+                vec![8],
+            ],
+            "result2"
+        );
+    }
+
+    #[test]
+    #[timeout(120000)]
+    pub async fn both_subscriber_gets_events_stream_small() {
+        let svc = Arc::new(WorkerEventServiceDefault::new(4, 16));
+        let rx1_events = Arc::new(Mutex::new(Vec::<WorkerEvent>::new()));
+        let rx2_events = Arc::new(Mutex::new(Vec::<WorkerEvent>::new()));
+
+        let svc1 = svc.clone();
+        let rx1_events_clone = rx1_events.clone();
+        let task1 = tokio::task::spawn(async move {
+            let rx1 = svc1.receiver();
+            drop(svc1);
+            rx1.to_stream()
+                .for_each(|item| async {
+                    match item {
+                        Ok(WorkerEvent::Close) => {}
+                        Ok(event) => {
+                            rx1_events_clone.lock().await.push(event);
+                        }
+                        Err(_) => {}
+                    }
+                })
+                .await;
+        });
+
+        for b in 1..=4u8 {
+            svc.emit_event(WorkerEvent::stdout(vec![b]), true);
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+
+        loop {
+            let received_count = rx1_events.lock().await.len();
+            if received_count == 4 {
+                break;
+            }
+        }
+
+        let svc2 = svc.clone();
+        let rx2_events_clone = rx2_events.clone();
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let task2 = tokio::task::spawn(async move {
+            let rx2 = svc2.receiver();
+            drop(svc2);
+            ready_tx.send(()).unwrap();
+            rx2.to_stream()
+                .for_each(|item| async {
+                    match item {
+                        Ok(WorkerEvent::Close) => {}
+                        Ok(event) => {
+                            rx2_events_clone.lock().await.push(event);
+                        }
+                        Err(_) => {}
+                    }
+                })
+                .await;
         });
 
         ready_rx.await.unwrap();
