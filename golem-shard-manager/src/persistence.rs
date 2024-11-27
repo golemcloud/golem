@@ -87,11 +87,12 @@ pub struct RoutingTableFileSystemPersistence {
 }
 
 impl RoutingTableFileSystemPersistence {
-    pub fn new(path: &Path, number_of_shards: usize) -> Self {
-        Self {
+    pub async fn new(path: &Path, number_of_shards: usize) -> std::io::Result<Self> {
+        tokio::fs::create_dir_all(path.parent().unwrap()).await?;
+        Ok(Self {
             path: path.to_path_buf(),
             number_of_shards,
-        }
+        })
     }
 }
 
