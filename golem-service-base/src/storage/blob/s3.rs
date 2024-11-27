@@ -20,14 +20,21 @@ use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::operation::copy_object::CopyObjectError;
 use aws_sdk_s3::operation::get_object::GetObjectError::NoSuchKey;
 use aws_sdk_s3::operation::head_object::HeadObjectError;
+use aws_sdk_s3::operation::put_object::PutObjectError;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{Delete, Object, ObjectIdentifier};
+use aws_sdk_s3::Client;
 use bytes::Bytes;
+use futures::TryFutureExt;
 use golem_common::model::Timestamp;
 use golem_common::retries::with_retries_customized;
 use std::error::Error;
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use tracing::info;
+
+use super::ReplayableStream;
 
 #[derive(Debug)]
 pub struct S3BlobStorage {
@@ -337,6 +344,57 @@ impl BlobStorage for S3BlobStorage {
         }
     }
 
+    async fn get_stream(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<Option<Pin<Box<dyn futures::Stream<Item = Result<Bytes, String>> + Send>>>, String>
+    {
+        let bucket = self.bucket_of(&namespace);
+        let key = self.prefix_of(&namespace).join(path);
+
+        let result = with_retries_customized(
+            target_label,
+            op_label,
+            Some(format!("{bucket} - {key:?}")),
+            &self.config.retries,
+            &(self.client.clone(), bucket, key),
+            |(client, bucket, key)| {
+                Box::pin(async move {
+                    client
+                        .get_object()
+                        .bucket(*bucket)
+                        .key(key.to_string_lossy())
+                        .send()
+                        .await
+                })
+            },
+            Self::is_get_object_error_retriable,
+            Self::get_object_error_as_loggable,
+        )
+        .await;
+
+        match result {
+            Ok(response) => {
+                let stream = futures::stream::unfold(response.body, |mut body| async {
+                    body.next()
+                        .await
+                        .map(|x| (x.map_err(|e| e.to_string()), body))
+                });
+                let pinned: Pin<Box<dyn futures::Stream<Item = Result<Bytes, String>> + Send>> =
+                    Box::pin(stream);
+                Ok(Some(pinned))
+            }
+            Err(SdkError::ServiceError(service_error)) => match service_error.err() {
+                NoSuchKey(_) => Ok(None),
+                err => Err(err.to_string()),
+            },
+            Err(err) => Err(Self::error_string(&err)),
+        }
+    }
+
     async fn get_raw_slice(
         &self,
         target_label: &'static str,
@@ -512,6 +570,62 @@ impl BlobStorage for S3BlobStorage {
         .await
         .map(|_| ())
         .map_err(|err| err.to_string())
+    }
+
+    async fn put_stream(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        stream: &dyn ReplayableStream<Item = Result<Bytes, String>>,
+    ) -> Result<(), String> {
+        let bucket = self.bucket_of(&namespace);
+        let key = self.prefix_of(&namespace).join(path);
+
+        fn go<'a>(
+            args: &'a (
+                Client,
+                &String,
+                PathBuf,
+                &dyn ReplayableStream<Item = Result<Bytes, String>>,
+            ),
+        ) -> Pin<
+            Box<dyn Future<Output = Result<(), SdkErrorOrCustomError<PutObjectError>>> + 'a + Send>,
+        > {
+            let (client, bucket, key, stream) = args;
+            Box::pin(async move {
+                let stream = stream
+                    .make_stream()
+                    .await
+                    .map_err(SdkErrorOrCustomError::custom_error)?;
+                let body = reqwest::Body::wrap_stream(stream);
+                let byte_stream = ByteStream::from_body_1_x(body);
+
+                client
+                    .put_object()
+                    .bucket(*bucket)
+                    .key(key.to_string_lossy())
+                    .body(byte_stream)
+                    .send()
+                    .map_err(SdkErrorOrCustomError::sdk_error)
+                    .map_ok(|_| ())
+                    .await
+            })
+        }
+
+        with_retries_customized(
+            target_label,
+            op_label,
+            Some(format!("{bucket} - {key:?}")),
+            &self.config.retries,
+            &(self.client.clone(), bucket, key, stream),
+            go,
+            |err| err.is_retriable(Self::is_put_object_error_retriable),
+            SdkErrorOrCustomError::as_loggable,
+        )
+        .await
+        .map_err(SdkErrorOrCustomError::into_string)
     }
 
     async fn delete(
@@ -840,5 +954,50 @@ impl BlobStorage for S3BlobStorage {
         .await
         .map_err(|err| err.to_string())?;
         Ok(())
+    }
+}
+
+enum SdkErrorOrCustomError<T> {
+    SdkError(aws_sdk_s3::error::SdkError<T>),
+    CustomError(String),
+}
+
+impl<T> SdkErrorOrCustomError<T> {
+    fn sdk_error(err: aws_sdk_s3::error::SdkError<T>) -> Self {
+        SdkErrorOrCustomError::SdkError(err)
+    }
+
+    fn custom_error(err: String) -> Self {
+        SdkErrorOrCustomError::CustomError(err)
+    }
+
+    fn is_retriable<F: FnOnce(&aws_sdk_s3::error::SdkError<T>) -> bool>(
+        &self,
+        is_sdk_error_retryable: F,
+    ) -> bool {
+        match self {
+            SdkErrorOrCustomError::SdkError(err) => is_sdk_error_retryable(err),
+            SdkErrorOrCustomError::CustomError(_) => true,
+        }
+    }
+
+    fn as_loggable(&self) -> Option<String>
+    where
+        T: Error,
+    {
+        match self {
+            SdkErrorOrCustomError::SdkError(err) => S3BlobStorage::as_loggable_generic(err),
+            SdkErrorOrCustomError::CustomError(err) => Some(err.clone()),
+        }
+    }
+
+    fn into_string(self) -> String
+    where
+        T: Error,
+    {
+        match self {
+            SdkErrorOrCustomError::SdkError(err) => S3BlobStorage::error_string(&err),
+            SdkErrorOrCustomError::CustomError(err) => err,
+        }
     }
 }

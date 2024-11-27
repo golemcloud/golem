@@ -16,8 +16,14 @@ use crate::storage::blob::{BlobMetadata, BlobStorage, BlobStorageNamespace, Exis
 use async_trait::async_trait;
 use bytes::Bytes;
 use dashmap::DashMap;
+use futures::{Stream, TryStreamExt};
 use golem_common::model::Timestamp;
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    pin::Pin,
+};
+
+use super::ReplayableStream;
 
 #[derive(Debug)]
 pub struct InMemoryBlobStorage {
@@ -67,6 +73,37 @@ impl BlobStorage for InMemoryBlobStorage {
                 .get(&dir)
                 .and_then(|directory| directory.get(&key).map(|entry| entry.data.clone()))
         }))
+    }
+
+    async fn get_stream(
+        &self,
+        _target_label: &'static str,
+        _op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<Option<Pin<Box<dyn Stream<Item = Result<Bytes, String>> + Send>>>, String> {
+        let dir = path
+            .parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let key = path
+            .file_name()
+            .expect("Path must have a file name")
+            .to_string_lossy()
+            .to_string();
+
+        let maybe_stream = self.data.get(&namespace).and_then(|namespace_data| {
+            namespace_data.get(&dir).and_then(|directory| {
+                directory.get(&key).map(|entry| {
+                    let data = entry.data.clone();
+                    let stream = tokio_stream::once(Ok(data));
+                    let boxed: Pin<Box<dyn Stream<Item = Result<Bytes, String>> + Send>> =
+                        Box::pin(stream);
+                    boxed
+                })
+            })
+        });
+        Ok(maybe_stream)
     }
 
     async fn get_metadata(
@@ -122,6 +159,48 @@ impl BlobStorage for InMemoryBlobStorage {
             .entry(dir)
             .or_default()
             .insert(key, entry);
+        Ok(())
+    }
+
+    async fn put_stream(
+        &self,
+        _target_label: &'static str,
+        _op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        stream: &dyn ReplayableStream<Item = Result<Bytes, String>>,
+    ) -> Result<(), String> {
+        let dir = path
+            .parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        let key = path
+            .file_name()
+            .expect("Path must have a file name")
+            .to_string_lossy()
+            .to_string();
+
+        let stream = stream.make_stream().await?;
+        let data = stream
+            .try_collect::<Vec<_>>()
+            .await
+            .map_err(|e| e.to_string())?;
+        let entry = Entry {
+            data: Bytes::from(data.concat()),
+            metadata: BlobMetadata {
+                size: data.iter().map(|b| b.len() as u64).sum(),
+                last_modified_at: Timestamp::now_utc(),
+            },
+        };
+
+        self.data
+            .entry(namespace)
+            .or_default()
+            .entry(dir)
+            .or_default()
+            .insert(key, entry);
+
         Ok(())
     }
 
