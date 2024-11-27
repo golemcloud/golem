@@ -15,9 +15,7 @@
 use async_trait::async_trait;
 
 use crate::clients::api_security::ApiSecurityClient;
-use crate::model::{
-    ApiSecurityScheme, GolemError,
-};
+use crate::model::{ApiSecurityScheme, GolemError};
 use crate::oss::model::OssContext;
 use golem_client::model::{Provider, SecuritySchemeData};
 use tracing::info;
