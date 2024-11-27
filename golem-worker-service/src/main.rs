@@ -66,7 +66,7 @@ async fn dump_openapi_yaml() -> Result<(), anyhow::Error> {
     let service = WorkerService::new(
         config,
         Registry::default(),
-        MigrationsDir::new("./db/migration".into()),
+        MigrationsDir::new("../../golem-worker-service/db/migration".into()),
     )
     .await?;
     let yaml = service.http_service().spec_yaml();
