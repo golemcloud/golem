@@ -3948,7 +3948,7 @@ dependencies = [
  "proptest",
  "prost-types",
  "rand",
- "reqwest",
+ "reqwest 0.12.9",
  "serde 1.0.215",
  "serde_json",
  "sha2",
@@ -6230,26 +6230,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "oauth2"
-version = "4.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c38841cdd844847e3e7c8d29cef9dcfed8877f8f56f9071f77843ecf3baf937f"
-dependencies = [
-    "base64 0.13.1",
-    "chrono",
-    "getrandom",
-    "http 0.2.12",
-    "rand",
-    "reqwest 0.11.27",
-    "serde 1.0.215",
-    "serde_json",
-    "serde_path_to_error",
-    "sha2",
-    "thiserror",
-    "url",
-]
-
-[[package]]
 name = "num_cpus"
 version = "1.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6257,6 +6237,26 @@ checksum = "4161fcb6d602d4d2081af7c3a45852d875a03dd337a6bfdd6e06407b61342a43"
 dependencies = [
  "hermit-abi 0.3.9",
  "libc",
+]
+
+[[package]]
+name = "oauth2"
+version = "4.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c38841cdd844847e3e7c8d29cef9dcfed8877f8f56f9071f77843ecf3baf937f"
+dependencies = [
+ "base64 0.13.1",
+ "chrono",
+ "getrandom",
+ "http 0.2.12",
+ "rand",
+ "reqwest 0.11.27",
+ "serde 1.0.215",
+ "serde_json",
+ "serde_path_to_error",
+ "sha2",
+ "thiserror",
+ "url",
 ]
 
 [[package]]
