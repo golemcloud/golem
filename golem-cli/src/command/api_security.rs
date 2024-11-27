@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::clients::api_security::ApiSecurityClient;
 use crate::model::{GolemError, GolemResult, IdentityProviderType};
 use crate::service::api_security::ApiSecuritySchemeService;
 use crate::service::project::ProjectResolver;

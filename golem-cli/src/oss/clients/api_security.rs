@@ -13,15 +13,13 @@
 // limitations under the License.
 
 use async_trait::async_trait;
-use itertools::Itertools;
 
-use crate::clients::api_deployment::ApiDeploymentClient;
 use crate::clients::api_security::ApiSecurityClient;
 use crate::model::{
-    ApiDefinitionId, ApiDefinitionIdWithVersion, ApiDeployment, ApiSecurityScheme, GolemError,
+    ApiSecurityScheme, GolemError,
 };
 use crate::oss::model::OssContext;
-use golem_client::model::{ApiDefinitionInfo, ApiSite, Provider, SecuritySchemeData};
+use golem_client::model::{Provider, SecuritySchemeData};
 use tracing::info;
 
 #[derive(Clone)]

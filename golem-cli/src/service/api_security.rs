@@ -12,9 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::clients::api_deployment::ApiDeploymentClient;
 use crate::clients::api_security::ApiSecurityClient;
-use crate::model::{ApiDefinitionId, ApiDefinitionIdWithVersion, GolemError, GolemResult};
+use crate::model::{GolemError, GolemResult};
 use async_trait::async_trait;
 use golem_client::model::Provider;
 
