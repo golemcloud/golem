@@ -57,7 +57,7 @@ use wasmtime::Engine;
 #[cfg(test)]
 test_r::enable!();
 
-struct ServerBootstrap {}
+struct ServerBootstrap;
 
 #[async_trait]
 impl Bootstrap<Context> for ServerBootstrap {
@@ -179,9 +179,9 @@ pub async fn run(
     golem_config: GolemConfig,
     prometheus_registry: Registry,
     runtime: Handle,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), anyhow::Error> {
     info!("Golem Worker Executor starting up...");
-    Ok(ServerBootstrap {}
+    ServerBootstrap
         .run(golem_config, prometheus_registry, runtime)
-        .await?)
+        .await
 }

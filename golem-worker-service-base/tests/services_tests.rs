@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_service_base::migration::{Migrations, MigrationsDir};
 use test_r::test;
 
 use async_trait::async_trait;
@@ -100,9 +101,12 @@ impl Drop for SqliteDb {
 pub async fn test_with_postgres_db() {
     let (db_config, _container) = start_docker_postgres().await;
 
-    db::postgres_migrate(&db_config, "../golem-worker-service/db/migration/postgres")
-        .await
-        .unwrap();
+    db::postgres_migrate(
+        &db_config,
+        MigrationsDir::new("../golem-worker-service/db/migration".into()).postgres_migrations(),
+    )
+    .await
+    .unwrap();
 
     let db_pool = db::create_postgres_pool(&db_config).await.unwrap();
 
@@ -124,9 +128,12 @@ pub async fn test_with_sqlite_db() {
         max_connections: 10,
     };
 
-    db::sqlite_migrate(&db_config, "../golem-worker-service/db/migration/sqlite")
-        .await
-        .unwrap();
+    db::sqlite_migrate(
+        &db_config,
+        MigrationsDir::new("../golem-worker-service/db/migration".into()).sqlite_migrations(),
+    )
+    .await
+    .unwrap();
 
     let db_pool = db::create_sqlite_pool(&db_config).await.unwrap();
 

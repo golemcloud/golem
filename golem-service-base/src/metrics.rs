@@ -12,9 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_cli::run_main;
-use std::process::ExitCode;
+use lazy_static::lazy_static;
+use prometheus::*;
 
-fn main() -> ExitCode {
-    crate::run_main()
+lazy_static! {
+    pub static ref VERSION_INFO: IntCounterVec =
+        register_int_counter_vec!("version_info", "Version info of the server", &["version"])
+            .unwrap();
 }

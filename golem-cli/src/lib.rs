@@ -12,15 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::command::profile::OssProfileAdd;
 use crate::config::ProfileName;
+use crate::config::{NamedProfile, Profile};
 use crate::init::CliKind;
+use crate::init::GolemInitCommand;
 use crate::model::text::fmt::format_error;
 use crate::model::{Format, GolemError, GolemResult, HasFormatConfig, HasVerbosity};
+use crate::oss::command::GolemOssCommand;
 use crate::service::version::{VersionCheckResult, VersionService};
+use clap::Parser;
 use clap_verbosity_flag::Verbosity;
 use colored::Colorize;
 use completion::PrintCompletion;
+use config::{get_config_dir, Config};
 use golem_common::golem_version;
+use indoc::eprintdoc;
 use lenient_bool::LenientBool;
 use log::Level;
 use std::future::Future;
@@ -135,7 +142,7 @@ where
     }
 }
 
-pub fn run_main<F, A>(main: fn(A) -> F, args: A) -> ExitCode
+fn run_sub_main<F, A>(main: fn(A) -> F, args: A) -> ExitCode
 where
     A: MainArgs,
     F: Future<Output = Result<GolemResult, GolemError>>,
@@ -226,5 +233,57 @@ pub async fn check_for_newer_server_version(
         Err(error) => {
             warn!("{}", error.0)
         }
+    }
+}
+
+pub fn run_main() -> ExitCode {
+    let config_dir = get_config_dir();
+    let cli_kind = CliKind::Oss;
+
+    let oss_profile = match Config::get_active_profile(cli_kind, &config_dir) {
+        Some(NamedProfile {
+            name,
+            profile: Profile::Golem(p),
+        }) => Some((name, p)),
+        Some(NamedProfile {
+            name: _,
+            profile: Profile::GolemCloud(_),
+        }) => {
+            eprintdoc!(
+                    "Golem Cloud profile is not supported in this CLI version.
+                    To use Golem Cloud please install golem-cloud-cli with feature 'universal' to replace golem-cli
+                    cargo install --features universal golem-cloud-cli
+                    And remove golem-cli:
+                    cargo remove golem-cli
+                    To create another default profile use `golem-cli init`.
+                    To manage profiles use `golem-cli profile` command.
+                    "
+                );
+
+            None
+        }
+        None => None,
+    };
+
+    if let Some((profile_name, profile)) = oss_profile {
+        run_sub_main(
+            crate::oss::main::async_main,
+            ConfiguredMainArgs {
+                cli_kind,
+                config_dir,
+                profile_name,
+                profile,
+                command: GolemOssCommand::<OssProfileAdd>::parse(),
+            },
+        )
+    } else {
+        run_sub_main(
+            crate::init::async_main,
+            InitMainArgs {
+                cli_kind,
+                config_dir,
+                command: GolemInitCommand::<OssProfileAdd>::parse(),
+            },
+        )
     }
 }
