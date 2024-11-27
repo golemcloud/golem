@@ -120,7 +120,7 @@ where
     .await
 }
 
-pub async fn with_retries_customized<In, F, R, E: std::error::Error>(
+pub async fn with_retries_customized<In, F, R, E>(
     target_label: &'static str,
     op_label: &'static str,
     op_id: Option<String>,

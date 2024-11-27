@@ -27,6 +27,7 @@ use golem_component_service_base::model::{
 use golem_component_service_base::service::component::ComponentService;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::*;
+use golem_service_base::poem::TempFileUpload;
 use poem::Body;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::{Binary, Json};
@@ -479,5 +480,5 @@ pub struct UploadPayload {
     component_type: Option<ComponentType>,
     component: Upload,
     files_permissions: Option<ComponentFilePathWithPermissionsList>,
-    files: Option<Upload>,
+    files: Option<TempFileUpload>,
 }

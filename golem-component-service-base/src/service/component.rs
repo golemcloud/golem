@@ -23,6 +23,7 @@ use async_trait::async_trait;
 use async_zip::tokio::read::seek::ZipFileReader;
 use async_zip::ZipEntry;
 use bytes::Bytes;
+use futures::TryStreamExt;
 use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component::v1::component_error;
 use golem_common::model::component::ComponentOwner;
@@ -43,6 +44,7 @@ use golem_service_base::model::{ComponentName, VersionedComponentId};
 use golem_service_base::repo::plugin_installation::PluginInstallationRecord;
 use golem_service_base::repo::RepoError;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
+use golem_service_base::storage::blob::ReplayableStream;
 use golem_wasm_ast::analysis::AnalysedType;
 use reqwest::multipart::{Form, Part};
 use rib::{FunctionTypeRegistry, RegistryKey, RegistryValue};
@@ -52,8 +54,11 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::vec;
 use tap::TapFallible;
+use tempfile::NamedTempFile;
 use tokio::io::BufReader;
 use tokio_stream::Stream;
+use tokio_util::compat::FuturesAsyncReadCompatExt;
+use tokio_util::io::ReaderStream;
 use tracing::{debug, error, info, info_span};
 use tracing_futures::Instrument;
 
@@ -485,7 +490,6 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
         account_id: &AccountId,
         payload: InitialComponentFilesArchiveAndPermissions,
     ) -> Result<Vec<InitialComponentFile>, ComponentError> {
-        let files_file = payload.archive;
         let path_permissions: HashMap<ComponentFilePath, ComponentFilePermissions> =
             HashMap::from_iter(
                 payload
@@ -494,7 +498,64 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
                     .map(|f| (f.path.clone(), f.permissions)),
             );
 
-        let mut buf_reader = BufReader::new(files_file);
+        let to_upload = self
+            .prepare_component_files_for_upload(&path_permissions, payload)
+            .await?;
+        let tasks = to_upload
+            .into_iter()
+            .map(|(path, permissions, stream)| async move {
+                info!("Uploading file: {}", path.to_string());
+
+                self.initial_component_files_service
+                    .put_if_not_exists(account_id, &stream)
+                    .await
+                    .map_err(|e| {
+                        ComponentError::initial_component_file_upload_error(
+                            "Failed to upload component files",
+                            e,
+                        )
+                    })
+                    .map(|key| InitialComponentFile {
+                        key,
+                        path,
+                        permissions,
+                    })
+            });
+
+        let uploaded = futures::future::try_join_all(tasks).await?;
+
+        let uploaded_paths = uploaded
+            .iter()
+            .map(|f| f.path.clone())
+            .collect::<HashSet<_>>();
+
+        for path in path_permissions.keys() {
+            if !uploaded_paths.contains(path) {
+                return Err(ComponentError::malformed_component_archive_from_message(
+                    format!("Didn't find expected file in the archive: {path}"),
+                ));
+            }
+        }
+
+        Ok(uploaded)
+    }
+
+    async fn prepare_component_files_for_upload(
+        &self,
+        path_permissions: &HashMap<ComponentFilePath, ComponentFilePermissions>,
+        payload: InitialComponentFilesArchiveAndPermissions,
+    ) -> Result<Vec<(ComponentFilePath, ComponentFilePermissions, ZipEntryStream)>, ComponentError>
+    {
+        let files_file = Arc::new(payload.archive);
+
+        let tokio_file = tokio::fs::File::from_std(files_file.reopen().map_err(|e| {
+            ComponentError::initial_component_file_upload_error(
+                "Failed to open provided component files",
+                e.to_string(),
+            )
+        })?);
+
+        let mut buf_reader = BufReader::new(tokio_file);
 
         let mut zip_archive = ZipFileReader::with_tokio(&mut buf_reader)
             .await
@@ -505,85 +566,42 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
                 )
             })?;
 
-        let mut uploaded: Vec<InitialComponentFile> = vec![];
+        let mut result = vec![];
 
         for i in 0..zip_archive.file().entries().len() {
-            let (path, permissions, content) = {
-                let mut entry_reader = zip_archive.reader_with_entry(i).await.map_err(|e| {
-                    ComponentError::malformed_component_archive_from_error(
-                        "Failed to read entry from archive",
-                        e.into(),
-                    )
-                })?;
+            let entry_reader = zip_archive.reader_with_entry(i).await.map_err(|e| {
+                ComponentError::malformed_component_archive_from_error(
+                    "Failed to read entry from archive",
+                    e.into(),
+                )
+            })?;
 
-                let entry = entry_reader.entry();
+            let entry = entry_reader.entry();
 
-                let is_dir = entry.dir().map_err(|e| {
-                    ComponentError::malformed_component_archive_from_error(
-                        "Failed to check if entry is a directory",
-                        e.into(),
-                    )
-                })?;
+            let is_dir = entry.dir().map_err(|e| {
+                ComponentError::malformed_component_archive_from_error(
+                    "Failed to check if entry is a directory",
+                    e.into(),
+                )
+            })?;
 
-                if is_dir {
-                    continue;
-                }
-
-                let path = initial_component_file_path_from_zip_entry(entry)?;
-
-                let mut buffer = Vec::new();
-                entry_reader
-                    .read_to_end_checked(&mut buffer)
-                    .await
-                    .map_err(|e| {
-                        ComponentError::malformed_component_archive_from_error(
-                            "Failed to read entry content",
-                            e.into(),
-                        )
-                    })?;
-
-                // if permissions are not provided, default to read-only
-                let permissions = path_permissions
-                    .get(&path)
-                    .cloned()
-                    .unwrap_or(ComponentFilePermissions::ReadOnly);
-
-                (path, permissions, Bytes::from(buffer))
-            };
-
-            info!("Uploading file: {}", path.to_string());
-
-            let key = self
-                .initial_component_files_service
-                .put_if_not_exists(account_id, &content)
-                .await
-                .map_err(|e| {
-                    ComponentError::initial_component_file_upload_error(
-                        "Failed to upload component files",
-                        e,
-                    )
-                })?;
-
-            uploaded.push(InitialComponentFile {
-                key,
-                path,
-                permissions,
-            });
-        }
-
-        let uploaded_paths = uploaded
-            .iter()
-            .map(|f| f.path.clone())
-            .collect::<HashSet<_>>();
-        for path in path_permissions.keys() {
-            if !uploaded_paths.contains(path) {
-                return Err(ComponentError::malformed_component_archive_from_message(
-                    format!("Didn't find expected file in the archive: {path}"),
-                ));
+            if is_dir {
+                continue;
             }
+
+            let path = initial_component_file_path_from_zip_entry(entry)?;
+
+            let permissions = path_permissions
+                .get(&path)
+                .cloned()
+                .unwrap_or(ComponentFilePermissions::ReadOnly);
+
+            let stream = ZipEntryStream::from_zip_file_and_index(files_file.clone(), i);
+
+            result.push((path, permissions, stream));
         }
 
-        Ok(uploaded)
+        Ok(result)
     }
 
     // All files must be confirmed to be in the blob store before calling this method
@@ -1619,6 +1637,43 @@ fn initial_component_file_path_from_zip_entry(
             e
         ))
     })
+}
+
+struct ZipEntryStream {
+    file: Arc<NamedTempFile>,
+    index: usize,
+}
+
+impl ZipEntryStream {
+    pub fn from_zip_file_and_index(file: Arc<NamedTempFile>, index: usize) -> Self {
+        Self { file, index }
+    }
+}
+
+#[async_trait]
+impl ReplayableStream for ZipEntryStream {
+    type Item = Result<Bytes, String>;
+
+    async fn make_stream(
+        &self,
+    ) -> Result<Pin<Box<dyn Stream<Item = Self::Item> + Send + Sync>>, String> {
+        let reopened = self
+            .file
+            .reopen()
+            .map_err(|e| format!("Failed to reopen file: {e}"))?;
+        let file = tokio::fs::File::from_std(reopened);
+        let buf_reader = BufReader::new(file);
+        let zip_archive = ZipFileReader::with_tokio(buf_reader)
+            .await
+            .map_err(|e| format!("Failed to open zip archive: {e}"))?;
+        let entry_reader = zip_archive
+            .into_entry(self.index)
+            .await
+            .map_err(|e| format!("Failed to read entry from archive: {e}"))?;
+        let stream = ReaderStream::new(entry_reader.compat());
+        let mapped_stream = stream.map_err(|e| format!("Error reading entry: {e}"));
+        Ok(Box::pin(mapped_stream))
+    }
 }
 
 mod internal {

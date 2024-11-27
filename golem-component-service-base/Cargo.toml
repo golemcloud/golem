@@ -39,6 +39,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 sqlx = { workspace = true }
 tap = { workspace = true }
+tempfile = { workspace = true }
 thiserror = { workspace = true }
 tonic = { workspace = true }
 tokio = { workspace = true }

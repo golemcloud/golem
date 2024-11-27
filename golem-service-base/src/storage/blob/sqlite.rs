@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 
 use crate::storage::sqlite::DBValue;
 use crate::storage::{
@@ -22,6 +23,9 @@ use crate::storage::{
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::NaiveDateTime;
+use futures::TryStreamExt;
+
+use super::ReplayableStream;
 
 #[derive(Debug)]
 pub struct SqliteBlobStorage {
@@ -113,6 +117,25 @@ impl BlobStorage for SqliteBlobStorage {
             .map(|r| r.map(|op| op.into_bytes()))
     }
 
+    async fn get_stream(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<Option<Pin<Box<dyn futures::Stream<Item = Result<Bytes, String>> + Send>>>, String>
+    {
+        let result = self
+            .get_raw(target_label, op_label, namespace, path)
+            .await?;
+        Ok(result.map(|bytes| {
+            let stream = tokio_stream::once(Ok(bytes));
+            let boxed: Pin<Box<dyn futures::Stream<Item = Result<Bytes, String>> + Send>> =
+                Box::pin(stream);
+            boxed
+        }))
+    }
+
     async fn get_metadata(
         &self,
         target_label: &'static str,
@@ -161,6 +184,20 @@ impl BlobStorage for SqliteBlobStorage {
             .execute(query)
             .await
             .map(|_| ())
+    }
+
+    async fn put_stream(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        stream: &dyn ReplayableStream<Item = Result<Bytes, String>>,
+    ) -> Result<(), String> {
+        let data = stream.make_stream().await?.try_collect::<Vec<_>>().await?;
+        let data = Bytes::from(data.concat());
+        self.put_raw(target_label, op_label, namespace, path, &data)
+            .await
     }
 
     async fn delete(

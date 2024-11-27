@@ -48,7 +48,6 @@ use rib::RegistryKey;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::fs::File;
 use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
@@ -416,6 +415,10 @@ async fn test_initial_component_file_upload(
 
     let component_name = ComponentName("shopping-cart-initial-component-file-upload".to_string());
     let component_id = ComponentId::new_v4();
+
+    let named_temp_file = tempfile::NamedTempFile::new().unwrap();
+    std::fs::copy(COMPONENT_ARCHIVE, &named_temp_file).unwrap();
+
     let component = component_service
         .create(
             &component_id,
@@ -423,7 +426,7 @@ async fn test_initial_component_file_upload(
             ComponentType::Durable,
             data,
             Some(InitialComponentFilesArchiveAndPermissions {
-                archive: File::open(COMPONENT_ARCHIVE).await.unwrap(),
+                archive: named_temp_file,
                 files: vec![ComponentFilePathWithPermissions {
                     path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
                     permissions: ComponentFilePermissions::ReadWrite,
@@ -468,6 +471,10 @@ async fn test_initial_component_file_data_sharing(
 
     let component_name = ComponentName("test_initial_component_file_data_sharing".to_string());
     let component_id = ComponentId::new_v4();
+
+    let named_temp_file1 = tempfile::NamedTempFile::new().unwrap();
+    std::fs::copy(COMPONENT_ARCHIVE, &named_temp_file1).unwrap();
+
     let component1 = component_service
         .create(
             &component_id,
@@ -475,7 +482,7 @@ async fn test_initial_component_file_data_sharing(
             ComponentType::Durable,
             data.clone(),
             Some(InitialComponentFilesArchiveAndPermissions {
-                archive: File::open(COMPONENT_ARCHIVE).await.unwrap(),
+                archive: named_temp_file1,
                 files: vec![],
             }),
             vec![],
@@ -484,13 +491,16 @@ async fn test_initial_component_file_data_sharing(
         .await
         .unwrap();
 
+    let named_temp_file2 = tempfile::NamedTempFile::new().unwrap();
+    std::fs::copy(COMPONENT_ARCHIVE, &named_temp_file2).unwrap();
+
     let component2 = component_service
         .update(
             &component_id,
             data,
             None,
             Some(InitialComponentFilesArchiveAndPermissions {
-                archive: File::open(COMPONENT_ARCHIVE).await.unwrap(),
+                archive: named_temp_file2,
                 files: vec![ComponentFilePathWithPermissions {
                     path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
                     permissions: ComponentFilePermissions::ReadWrite,

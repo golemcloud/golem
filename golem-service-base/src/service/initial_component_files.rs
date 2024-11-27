@@ -12,14 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{path::PathBuf, sync::Arc};
+use std::{path::PathBuf, pin::Pin, sync::Arc};
 
+use crate::storage::blob::{BlobStorage, BlobStorageNamespace, ReplayableStream};
 use bytes::Bytes;
-use sha2::{Digest, Sha256};
-use tracing::debug;
-
-use crate::storage::blob::{BlobStorage, BlobStorageNamespace};
+use futures::TryStreamExt;
 use golem_common::model::{AccountId, InitialComponentFileKey};
+use tracing::debug;
 
 const INITIAL_COMPONENT_FILES_LABEL: &str = "initial_component_files";
 
@@ -60,9 +59,10 @@ impl InitialComponentFilesService {
         &self,
         account_id: &AccountId,
         key: &InitialComponentFileKey,
-    ) -> Result<Option<Bytes>, String> {
+    ) -> Result<Option<Pin<Box<dyn futures::Stream<Item = Result<Bytes, String>> + Send>>>, String>
+    {
         self.blob_storage
-            .get_raw(
+            .get_stream(
                 INITIAL_COMPONENT_FILES_LABEL,
                 "get",
                 BlobStorageNamespace::InitialComponentFiles {
@@ -76,11 +76,11 @@ impl InitialComponentFilesService {
     pub async fn put_if_not_exists(
         &self,
         account_id: &AccountId,
-        bytes: &Bytes,
+        data: &impl ReplayableStream<Item = Result<Bytes, String>>,
     ) -> Result<InitialComponentFileKey, String> {
-        let mut hasher = Sha256::new();
-        hasher.update(bytes);
-        let hash = hex::encode(hasher.finalize());
+        let hash = content_hash_stream(data)
+            .await
+            .map_err(|err| format!("Failed to hash content: {}", err))?;
 
         let key = PathBuf::from(hash.clone());
 
@@ -101,17 +101,37 @@ impl InitialComponentFilesService {
             debug!("Storing initial component file with hash: {}", hash);
 
             self.blob_storage
-                .put_raw(
+                .put_stream(
                     INITIAL_COMPONENT_FILES_LABEL,
                     "put",
                     BlobStorageNamespace::InitialComponentFiles {
                         account_id: account_id.clone(),
                     },
                     &key,
-                    bytes,
+                    data,
                 )
                 .await?;
         };
         Ok(InitialComponentFileKey(hash))
     }
 }
+
+async fn content_hash_stream(
+    stream: &impl ReplayableStream<Item = Result<Bytes, String>>,
+) -> Result<String, HashingError> {
+    let stream = stream.make_stream().await.map_err(HashingError)?;
+    let stream = stream.map_ok(|b| b.to_vec()).map_err(HashingError);
+    let hash = async_hash::hash_try_stream::<async_hash::Sha256, _, _, _>(stream).await?;
+    Ok(hex::encode(hash))
+}
+
+#[derive(Debug, Clone)]
+struct HashingError(String);
+
+impl std::fmt::Display for HashingError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "Hashing error: {}", self.0)
+    }
+}
+
+impl std::error::Error for HashingError {}
