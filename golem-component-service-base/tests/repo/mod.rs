@@ -248,10 +248,8 @@ async fn test_repo_component_name_unique_in_namespace(
 }
 
 async fn test_repo_component_delete(
-    component_repo: Arc<dyn ComponentRepo<UuidOwner> + Sync + Send>,
+    component_repo: Arc<dyn ComponentRepo<DefaultComponentOwner> + Sync + Send>,
 ) {
-    let owner1 = UuidOwner(Uuid::new_v4());
-
     let component_name1 = ComponentName("shopping-cart1-component-delete".to_string());
     let data = get_component_data("shopping-cart");
 
@@ -262,7 +260,7 @@ async fn test_repo_component_delete(
         &data,
         vec![],
         vec![],
-        owner1.clone(),
+        DefaultComponentOwner,
     )
     .unwrap();
 
@@ -272,21 +270,21 @@ async fn test_repo_component_delete(
 
     let result2 = component_repo
         .get(
-            &owner1.to_string(),
+            &DefaultComponentOwner.to_string(),
             &component1.versioned_component_id.component_id.0,
         )
         .await;
 
     let result3 = component_repo
         .delete(
-            &owner1.to_string(),
+            &DefaultComponentOwner.to_string(),
             &component1.versioned_component_id.component_id.0,
         )
         .await;
 
     let result4 = component_repo
         .get(
-            &owner1.to_string(),
+            &DefaultComponentOwner.to_string(),
             &component1.versioned_component_id.component_id.0,
         )
         .await;

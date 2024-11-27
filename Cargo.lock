@@ -3757,6 +3757,7 @@ dependencies = [
  "poem-openapi",
  "prost",
  "prost-types",
+ "reqwest",
  "sanitize-filename",
  "serde 1.0.215",
  "serde_json",
@@ -3789,7 +3790,7 @@ dependencies = [
  "derive_more 0.99.18",
  "dir-diff",
  "fancy-regex",
- "golem-wit 1.0.3",
+ "golem-wit",
  "include_dir",
  "once_cell",
  "regex",
@@ -4057,14 +4058,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wit"
-version = "0.0.0"
-source = "git+https://github.com/golemcloud/golem-wit?branch=plugin1#b377c91a92a0d78ecf334583c340ae9838c07d0b"
-
-[[package]]
-name = "golem-wit"
-version = "1.0.3"
+version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1569dc406fb17db6eafddcb5d23fccf22720f2c384350d2e62954de09eb052a"
+checksum = "0302470bda270f73b70cec83c78aa9e1fda7aab77d15058c9ad39a75af4b8b60"
 
 [[package]]
 name = "golem-worker-executor"
@@ -4139,7 +4135,7 @@ dependencies = [
  "golem-test-framework",
  "golem-wasm-ast",
  "golem-wasm-rpc",
- "golem-wit 0.0.0",
+ "golem-wit",
  "hex",
  "http 0.2.12",
  "http 1.1.0",
@@ -9002,8 +8998,6 @@ dependencies = [
 [[package]]
 name = "test-r"
 version = "1.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e5776522dacf8f8445080f791dac7e51e773a4586d5d7af0fdb89fa6f8ebfe5"
 dependencies = [
  "ctor",
  "test-r-core",
@@ -9014,8 +9008,6 @@ dependencies = [
 [[package]]
 name = "test-r-core"
 version = "1.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d9cc450cf56552e65def3f68467888afc16e8a01df4cf3868b1dc5a9d721554e"
 dependencies = [
  "anstream",
  "anstyle",
@@ -9037,8 +9029,6 @@ dependencies = [
 [[package]]
 name = "test-r-macro"
 version = "1.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "96db1f2e6bb47f20bb58489cd994e2e346674e71af6f230a3ef235c1dee260b4"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",

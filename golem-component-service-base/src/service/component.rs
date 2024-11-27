@@ -18,7 +18,7 @@ use crate::repo::component::{record_metadata_serde, ComponentRecord, FileRecord}
 use crate::repo::component::{ComponentConstraintsRecord, ComponentRepo};
 use crate::service::component_compilation::ComponentCompilationService;
 use crate::service::component_object_store::ComponentObjectStore;
-use crate::service::plugin::PluginError;
+use crate::service::plugin::{PluginError, PluginService};
 use async_trait::async_trait;
 use async_zip::tokio::read::seek::ZipFileReader;
 use async_zip::ZipEntry;
@@ -30,7 +30,7 @@ use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_common::model::component_metadata::{ComponentMetadata, ComponentProcessingError};
 use golem_common::model::plugin::{
     ComponentPluginInstallationTarget, PluginInstallation, PluginInstallationCreation,
-    PluginInstallationUpdate,
+    PluginInstallationUpdate, PluginScope, PluginTypeSpecificDefinition,
 };
 use golem_common::model::ComponentVersion;
 use golem_common::model::{AccountId, PluginInstallationId};
@@ -44,6 +44,7 @@ use golem_service_base::repo::plugin_installation::PluginInstallationRecord;
 use golem_service_base::repo::RepoError;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_wasm_ast::analysis::AnalysedType;
+use reqwest::multipart::{Form, Part};
 use rib::{FunctionTypeRegistry, RegistryKey, RegistryValue};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display, Formatter};
@@ -53,7 +54,8 @@ use std::vec;
 use tap::TapFallible;
 use tokio::io::BufReader;
 use tokio_stream::Stream;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, info_span};
+use tracing_futures::Instrument;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ComponentError {
@@ -85,6 +87,15 @@ pub enum ComponentError {
     InitialComponentFileUploadError { message: String, error: String },
     #[error("Provided component file not found: {path} (key: {key})")]
     InitialComponentFileNotFound { path: String, key: String },
+    #[error("Component transformation plugin was not found ({plugin_name}:{plugin_version})")]
+    TransformationPluginNotFound {
+        plugin_name: String,
+        plugin_version: String,
+    },
+    #[error(transparent)]
+    InternalPluginError(#[from] Box<PluginError>),
+    #[error("Component transformation failed: {0}")]
+    TransformationFailed(String),
 }
 
 impl ComponentError {
@@ -155,6 +166,9 @@ impl SafeDisplay for ComponentError {
             ComponentError::MalformedComponentArchiveError { .. } => self.to_string(),
             ComponentError::InitialComponentFileUploadError { .. } => self.to_string(),
             ComponentError::InitialComponentFileNotFound { .. } => self.to_string(),
+            ComponentError::TransformationPluginNotFound { .. } => self.to_string(),
+            ComponentError::InternalPluginError(_) => self.to_string(),
+            ComponentError::TransformationFailed(_) => self.to_string(),
         }
     }
 }
@@ -222,6 +236,21 @@ impl From<ComponentError> for golem_api_grpc::proto::golem::component::v1::Compo
                     error: value.to_safe_string(),
                 })
             }
+            ComponentError::TransformationPluginNotFound { .. } => {
+                component_error::Error::InternalError(ErrorBody {
+                    error: value.to_safe_string(),
+                })
+            }
+            ComponentError::InternalPluginError(_) => {
+                component_error::Error::InternalError(ErrorBody {
+                    error: value.to_safe_string(),
+                })
+            }
+            ComponentError::TransformationFailed(_) => {
+                component_error::Error::InternalError(ErrorBody {
+                    error: value.to_safe_string(),
+                })
+            }
         };
         Self { error: Some(error) }
     }
@@ -243,6 +272,7 @@ pub trait ComponentService<Owner: ComponentOwner>: Debug {
         component_type: ComponentType,
         data: Vec<u8>,
         files: Option<InitialComponentFilesArchiveAndPermissions>,
+        installed_plugins: Vec<PluginInstallation>,
         owner: &Owner,
     ) -> Result<Component<Owner>, ComponentError>;
 
@@ -254,6 +284,7 @@ pub trait ComponentService<Owner: ComponentOwner>: Debug {
         component_type: ComponentType,
         data: Vec<u8>,
         files: Vec<InitialComponentFile>,
+        installed_plugins: Vec<PluginInstallation>,
         owner: &Owner,
     ) -> Result<Component<Owner>, ComponentError>;
 
@@ -371,31 +402,34 @@ pub trait ComponentService<Owner: ComponentOwner>: Debug {
     ) -> Result<(), PluginError>;
 }
 
-pub struct ComponentServiceDefault<Owner: ComponentOwner> {
+pub struct ComponentServiceDefault<Owner: ComponentOwner, Scope: PluginScope> {
     component_repo: Arc<dyn ComponentRepo<Owner> + Sync + Send>,
     object_store: Arc<dyn ComponentObjectStore + Sync + Send>,
     component_compilation: Arc<dyn ComponentCompilationService + Sync + Send>,
     initial_component_files_service: Arc<InitialComponentFilesService>,
+    plugin_service: Arc<dyn PluginService<Owner::PluginOwner, Scope> + Sync + Send>,
 }
 
-impl<Owner: ComponentOwner> Debug for ComponentServiceDefault<Owner> {
+impl<Owner: ComponentOwner, Scope: PluginScope> Debug for ComponentServiceDefault<Owner, Scope> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ComponentServiceDefault").finish()
     }
 }
 
-impl<Owner: ComponentOwner> ComponentServiceDefault<Owner> {
+impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, Scope> {
     pub fn new(
         component_repo: Arc<dyn ComponentRepo<Owner> + Sync + Send>,
         object_store: Arc<dyn ComponentObjectStore + Sync + Send>,
         component_compilation: Arc<dyn ComponentCompilationService + Sync + Send>,
         initial_component_files_service: Arc<InitialComponentFilesService>,
+        plugin_service: Arc<dyn PluginService<Owner::PluginOwner, Scope> + Sync + Send>,
     ) -> Self {
         ComponentServiceDefault {
             component_repo,
             object_store,
             component_compilation,
             initial_component_files_service,
+            plugin_service,
         }
     }
 
@@ -560,6 +594,7 @@ impl<Owner: ComponentOwner> ComponentServiceDefault<Owner> {
         component_type: ComponentType,
         data: Vec<u8>,
         uploaded_files: Vec<InitialComponentFile>,
+        installed_plugins: Vec<PluginInstallation>,
         owner: &Owner,
     ) -> Result<Component<Owner>, ComponentError> {
         let component = Component::new(
@@ -568,19 +603,26 @@ impl<Owner: ComponentOwner> ComponentServiceDefault<Owner> {
             component_type,
             &data,
             uploaded_files,
-            Vec::new(),
+            installed_plugins,
             owner.clone(),
         )?;
 
-        info!(owner = %owner,"Uploaded component - exports {:?}",component.metadata.exports
-        );
+        info!(owner = %owner,"Uploaded component - exports {:?}",component.metadata.exports);
+
+        let transformed_data = self.apply_transformations(&component, data.clone()).await?;
+        let transformed_metadata = ComponentMetadata::analyse_component(&transformed_data)
+            .map_err(ComponentError::ComponentProcessingError)?;
+
         tokio::try_join!(
-            self.upload_user_component(&component, data.clone()),
-            self.upload_protected_component(&component, data)
+            self.upload_user_component(&component, data),
+            self.upload_protected_component(&component, transformed_data)
         )?;
 
-        let record = ComponentRecord::try_from_model(component.clone(), true)
+        let mut record = ComponentRecord::try_from_model(component.clone(), true)
             .map_err(|e| ComponentError::conversion_error("record", e))?;
+        record.metadata = record_metadata_serde::serialize(&transformed_metadata)
+            .map_err(|err| ComponentError::conversion_error("metadata", err))?
+            .to_vec();
 
         let result = self.component_repo.create(&record).await;
         if let Err(RepoError::UniqueViolation(_)) = result {
@@ -652,12 +694,17 @@ impl<Owner: ComponentOwner> ComponentServiceDefault<Owner> {
             .map_err(|e| ComponentError::conversion_error("record", e))?;
         let object_store_key = component.versioned_component_id.to_string();
         component.object_store_key = Some(object_store_key.clone());
+        component.transformed_object_store_key = Some(object_store_key.clone());
 
         debug!("Result component: {component:?}");
 
+        let transformed_data = self.apply_transformations(&component, data.clone()).await?;
+        let transformed_metadata = ComponentMetadata::analyse_component(&transformed_data)
+            .map_err(ComponentError::ComponentProcessingError)?;
+
         tokio::try_join!(
-            self.upload_user_component(&component, data.clone()),
-            self.upload_protected_component(&component, data)
+            self.upload_user_component(&component, data),
+            self.upload_protected_component(&component, transformed_data)
         )?;
 
         self.component_compilation
@@ -670,6 +717,10 @@ impl<Owner: ComponentOwner> ComponentServiceDefault<Owner> {
                 &component_id.0,
                 component.versioned_component_id.version as i64,
                 &object_store_key,
+                &object_store_key,
+                record_metadata_serde::serialize(&transformed_metadata)
+                    .map_err(|err| ComponentError::conversion_error("metadata", err))?
+                    .to_vec(),
             )
             .await?;
 
@@ -701,10 +752,173 @@ impl<Owner: ComponentOwner> ComponentServiceDefault<Owner> {
                 ComponentError::component_store_error("Failed to upload protected component", e)
             })
     }
+
+    async fn apply_transformations(
+        &self,
+        component: &Component<Owner>,
+        mut data: Vec<u8>,
+    ) -> Result<Vec<u8>, ComponentError> {
+        if !component.installed_plugins.is_empty() {
+            let mut installed_plugins = component.installed_plugins.clone();
+            installed_plugins.sort_by_key(|p| p.priority);
+
+            let plugin_owner = component.owner.clone().into();
+
+            for installation in installed_plugins {
+                let plugin = self
+                    .plugin_service
+                    .get(&plugin_owner, &installation.name, &installation.version)
+                    .await
+                    .map_err(Box::new)?;
+
+                if let Some(plugin) = plugin {
+                    if let PluginTypeSpecificDefinition::ComponentTransformer(spec) = plugin.specs {
+                        let span = info_span!("component transformation",
+                            owner = %component.owner,
+                            component_id = %component.versioned_component_id,
+                            plugin_name = %installation.name,
+                            plugin_version = %installation.version,
+                            plugin_installation_id = %installation.id,
+                        );
+
+                        data = self
+                            .apply_transformation(
+                                component,
+                                &data,
+                                spec.transform_url,
+                                &installation.parameters,
+                            )
+                            .instrument(span)
+                            .await?;
+                    }
+                } else {
+                    Err(ComponentError::TransformationPluginNotFound {
+                        plugin_name: installation.name.clone(),
+                        plugin_version: installation.version.clone(),
+                    })?
+                }
+            }
+        }
+
+        Ok(data)
+    }
+
+    async fn apply_transformation(
+        &self,
+        component: &Component<Owner>,
+        data: &[u8],
+        url: String,
+        parameters: &HashMap<String, String>,
+    ) -> Result<Vec<u8>, ComponentError> {
+        info!(%url, "Applying component transformation plugin");
+
+        // TODO: retries
+
+        let client = reqwest::Client::new(); // TODO: connection pool
+        let serializable_component: golem_service_base::model::Component = component.clone().into();
+
+        let mut form = Form::new();
+        form = form.part("component", Part::bytes(data.to_vec()));
+        form = form.part(
+            "metadata",
+            Part::text(
+                serde_json::to_string(&serializable_component).map_err(|err| {
+                    ComponentError::conversion_error("component metadata", err.to_string())
+                })?,
+            )
+            .mime_str("application/json")
+            .unwrap(),
+        );
+        for (key, value) in parameters {
+            if key == "component" {
+                return Err(ComponentError::TransformationFailed(
+                    "Parameter key 'component' is reserved".to_string(),
+                ));
+            }
+            if key == "metadata" {
+                return Err(ComponentError::TransformationFailed(
+                    "Parameter key 'metadata' is reserved".to_string(),
+                ));
+            }
+            form = form.part(key.clone(), Part::text(value.clone()));
+        }
+
+        let request = client.post(url).multipart(form);
+
+        let response = request.send().await.map_err(|err| {
+            ComponentError::TransformationFailed(format!(
+                "Failed to send request to transformation plugin: {}",
+                err
+            ))
+        })?;
+
+        if response.status().is_success() {
+            let body = response.bytes().await.map_err(|err| {
+                ComponentError::TransformationFailed(format!(
+                    "Failed to read response from transformation plugin: {}",
+                    err
+                ))
+            })?;
+
+            Ok(body.to_vec())
+        } else {
+            Err(ComponentError::TransformationFailed(format!(
+                "Component transformation returned with status {}",
+                response.status()
+            )))
+        }
+    }
+
+    async fn retransform(
+        &self,
+        namespace: &str,
+        new_component: Component<Owner>,
+    ) -> Result<(), PluginError> {
+        let data = self
+            .object_store
+            .get(&new_component.user_object_store_key())
+            .await
+            .map_err(|err| {
+                ComponentError::component_store_error("Failed to download user component", err)
+            })?;
+
+        let transformed_data = self.apply_transformations(&new_component, data).await?;
+        let transformed_metadata = ComponentMetadata::analyse_component(&transformed_data)
+            .map_err(ComponentError::ComponentProcessingError)?;
+
+        self.object_store
+            .put(
+                &new_component.protected_object_store_key(),
+                transformed_data,
+            )
+            .await
+            .map_err(|e| {
+                ComponentError::component_store_error("Failed to upload protected component", e)
+            })?;
+
+        self.component_repo
+            .activate(
+                namespace,
+                &new_component.versioned_component_id.component_id.0,
+                new_component.versioned_component_id.version as i64,
+                &new_component
+                    .object_store_key
+                    .unwrap_or(new_component.versioned_component_id.to_string()),
+                &new_component.versioned_component_id.to_string(),
+                record_metadata_serde::serialize(&transformed_metadata)
+                    .map_err(|err| ComponentError::conversion_error("metadata", err))?
+                    .to_vec(),
+            )
+            .await?;
+
+        Ok(())
+    }
 }
 
 #[async_trait]
-impl<Owner: ComponentOwner> ComponentService<Owner> for ComponentServiceDefault<Owner> {
+impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
+    for ComponentServiceDefault<Owner, Scope>
+{
     async fn create(
         &self,
         component_id: &ComponentId,
@@ -712,6 +926,7 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for ComponentServiceDefault<
         component_type: ComponentType,
         data: Vec<u8>,
         files: Option<InitialComponentFilesArchiveAndPermissions>,
+        installed_plugins: Vec<PluginInstallation>,
         owner: &Owner,
     ) -> Result<Component<Owner>, ComponentError> {
         info!(owner = %owner, "Create component");
@@ -734,6 +949,7 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for ComponentServiceDefault<
             component_type,
             data,
             uploaded_files,
+            installed_plugins,
             owner,
         )
         .await
@@ -746,6 +962,7 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for ComponentServiceDefault<
         component_type: ComponentType,
         data: Vec<u8>,
         files: Vec<InitialComponentFile>,
+        installed_plugins: Vec<PluginInstallation>,
         owner: &Owner,
     ) -> Result<Component<Owner>, ComponentError> {
         info!(owner = %owner, "Create component");
@@ -779,6 +996,7 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for ComponentServiceDefault<
             component_type,
             data,
             files,
+            installed_plugins,
             owner,
         )
         .await
@@ -1145,12 +1363,13 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for ComponentServiceDefault<
         component_id: &ComponentId,
         installation: PluginInstallationCreation,
     ) -> Result<PluginInstallation, PluginError> {
+        let namespace = owner.to_string();
         let owner: Owner::Row = owner.clone().into();
         let plugin_owner = owner.into();
 
         let latest = self
             .component_repo
-            .get_latest_version(&plugin_owner.to_string(), &component_id.0)
+            .get_latest_version(&namespace, &component_id.0)
             .await?;
 
         if let Some(latest) = latest {
@@ -1171,7 +1390,19 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for ComponentServiceDefault<
                 owner: plugin_owner,
             };
 
-            self.component_repo.install_plugin(&record).await?;
+            let new_component_version = self.component_repo.install_plugin(&record).await?;
+            let new_versioned_component_id = VersionedComponentId {
+                component_id: component_id.clone(),
+                version: new_component_version,
+            };
+            let mut new_component: Component<Owner> = latest
+                .try_into()
+                .map_err(|err| ComponentError::conversion_error("component", err))?;
+            new_component.versioned_component_id = new_versioned_component_id;
+            new_component.transformed_object_store_key = None;
+            new_component.installed_plugins.push(installation.clone());
+
+            self.retransform(&namespace, new_component).await?;
 
             Ok(installation)
         } else {
@@ -1188,6 +1419,7 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for ComponentServiceDefault<
         component_id: &ComponentId,
         update: PluginInstallationUpdate,
     ) -> Result<(), PluginError> {
+        let namespace: String = owner.to_string();
         let owner_record: Owner::Row = owner.clone().into();
         let plugin_owner_record = owner_record.into();
 
@@ -1196,8 +1428,9 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for ComponentServiceDefault<
             .get_latest_version(&owner.to_string(), &component_id.0)
             .await?;
 
-        if latest.is_some() {
-            self.component_repo
+        if let Some(latest) = latest {
+            let new_component_version = self
+                .component_repo
                 .update_plugin_installation(
                     &plugin_owner_record,
                     &component_id.0,
@@ -1211,6 +1444,25 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for ComponentServiceDefault<
                     })?,
                 )
                 .await?;
+
+            let new_versioned_component_id = VersionedComponentId {
+                component_id: component_id.clone(),
+                version: new_component_version,
+            };
+            let mut new_component: Component<Owner> = latest
+                .try_into()
+                .map_err(|err| ComponentError::conversion_error("component", err))?;
+            new_component.versioned_component_id = new_versioned_component_id;
+            new_component.transformed_object_store_key = None;
+
+            for installation in &mut new_component.installed_plugins {
+                if &installation.id == installation_id {
+                    installation.priority = update.priority;
+                    installation.parameters = update.parameters.clone();
+                }
+            }
+
+            self.retransform(&namespace, new_component).await?;
 
             Ok(())
         } else {
@@ -1226,6 +1478,7 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for ComponentServiceDefault<
         installation_id: &PluginInstallationId,
         component_id: &ComponentId,
     ) -> Result<(), PluginError> {
+        let namespace: String = owner.to_string();
         let owner_record: Owner::Row = owner.clone().into();
         let plugin_owner_record = owner_record.into();
 
@@ -1234,10 +1487,26 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for ComponentServiceDefault<
             .get_latest_version(&owner.to_string(), &component_id.0)
             .await?;
 
-        if latest.is_some() {
-            self.component_repo
+        if let Some(latest) = latest {
+            let new_component_version = self
+                .component_repo
                 .uninstall_plugin(&plugin_owner_record, &component_id.0, &installation_id.0)
                 .await?;
+
+            let new_versioned_component_id = VersionedComponentId {
+                component_id: component_id.clone(),
+                version: new_component_version,
+            };
+            let mut new_component: Component<Owner> = latest
+                .try_into()
+                .map_err(|err| ComponentError::conversion_error("component", err))?;
+            new_component.versioned_component_id = new_versioned_component_id;
+            new_component.transformed_object_store_key = None;
+            new_component
+                .installed_plugins
+                .retain(|i| &i.id != installation_id);
+
+            self.retransform(&namespace, new_component).await?;
 
             Ok(())
         } else {
@@ -1358,7 +1627,7 @@ mod internal {
         let type_names = analysed_types
             .iter()
             .map(|x| {
-                rib::TypeName::try_from(x.clone()).map_or("unknwon".to_string(), |x| x.to_string())
+                rib::TypeName::try_from(x.clone()).map_or("unknown".to_string(), |x| x.to_string())
             })
             .collect::<Vec<_>>();
 

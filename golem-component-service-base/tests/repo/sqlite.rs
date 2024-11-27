@@ -41,7 +41,7 @@ mod tests {
     inherit_test_dep!(Tracing);
 
     #[test_dep]
-    async fn db_pool() -> SqliteDb {
+    async fn db_pool(_tracing: &Tracing) -> SqliteDb {
         SqliteDb::new().await
     }
 
@@ -89,7 +89,7 @@ mod tests {
     #[test]
     #[tracing::instrument]
     async fn repo_component_delete(
-        component_repo: &Arc<dyn ComponentRepo<UuidOwner> + Sync + Send>,
+        component_repo: &Arc<dyn ComponentRepo<DefaultComponentOwner> + Sync + Send>,
     ) {
         crate::repo::test_repo_component_delete(component_repo.clone()).await
     }

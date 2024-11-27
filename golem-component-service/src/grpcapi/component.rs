@@ -189,6 +189,7 @@ impl ComponentGrpcApi {
                 request.component_type().into(),
                 data,
                 files,
+                vec![],
                 &DefaultComponentOwner,
             )
             .await?;

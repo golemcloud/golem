@@ -90,7 +90,7 @@ mod tests {
 
     #[test]
     async fn repo_component_delete(
-        component_repo: &Arc<dyn ComponentRepo<UuidOwner> + Sync + Send>,
+        component_repo: &Arc<dyn ComponentRepo<DefaultComponentOwner> + Sync + Send>,
     ) {
         crate::repo::test_repo_component_delete(component_repo.clone()).await
     }

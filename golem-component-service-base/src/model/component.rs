@@ -35,6 +35,7 @@ pub struct Component<Owner: ComponentOwner> {
     pub created_at: chrono::DateTime<Utc>,
     pub component_type: ComponentType,
     pub object_store_key: Option<String>,
+    pub transformed_object_store_key: Option<String>,
     pub files: Vec<InitialComponentFile>,
     pub installed_plugins: Vec<PluginInstallation>,
 }
@@ -63,6 +64,7 @@ impl<Owner: ComponentOwner> Component<Owner> {
             metadata,
             created_at: Utc::now(),
             object_store_key: Some(versioned_component_id.to_string()),
+            transformed_object_store_key: Some(versioned_component_id.to_string()),
             versioned_component_id,
             component_type,
             files,
@@ -82,7 +84,7 @@ impl<Owner: ComponentOwner> Component<Owner> {
     pub fn protected_object_store_key(&self) -> String {
         format!(
             "{}:protected",
-            self.object_store_key
+            self.transformed_object_store_key
                 .as_ref()
                 .unwrap_or(&self.versioned_component_id.to_string())
         )

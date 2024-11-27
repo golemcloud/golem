@@ -74,6 +74,7 @@ impl ComponentApi {
                     payload.component_type.unwrap_or(ComponentType::Durable),
                     data,
                     files,
+                    vec![],
                     &DefaultComponentOwner,
                 )
                 .instrument(record.span.clone())

@@ -52,6 +52,7 @@ pub struct ComponentRecord<Owner: ComponentOwner> {
     pub component_type: i32,
     pub available: bool,
     pub object_store_key: String,
+    pub transformed_object_store_key: String,
     // one-to-many relationship. Retrieved separately
     #[sqlx(skip)]
     pub files: Vec<FileRecord>,
@@ -69,6 +70,10 @@ impl<Owner: ComponentOwner> ComponentRecord<Owner> {
         let component_owner_row: Owner::Row = component_owner.into();
         let plugin_owner_row: <Owner::PluginOwner as PluginOwner>::Row = component_owner_row.into();
 
+        let object_store_key = value
+            .object_store_key
+            .unwrap_or(value.versioned_component_id.to_string());
+
         Ok(Self {
             namespace: value.owner.to_string(),
             component_id: value.versioned_component_id.component_id.0,
@@ -79,9 +84,10 @@ impl<Owner: ComponentOwner> ComponentRecord<Owner> {
             created_at: value.created_at,
             component_type: value.component_type as i32,
             available,
-            object_store_key: value
-                .object_store_key
-                .unwrap_or(value.versioned_component_id.to_string()),
+            object_store_key: object_store_key.clone(),
+            transformed_object_store_key: value
+                .transformed_object_store_key
+                .unwrap_or(object_store_key),
             files: value
                 .files
                 .iter()
@@ -136,6 +142,7 @@ impl<Owner: ComponentOwner> TryFrom<ComponentRecord<Owner>> for Component<Owner>
             created_at: value.created_at,
             component_type: ComponentType::try_from(value.component_type)?,
             object_store_key: Some(value.object_store_key),
+            transformed_object_store_key: Some(value.transformed_object_store_key),
             files,
             installed_plugins: value
                 .installed_plugins
@@ -258,6 +265,8 @@ pub trait ComponentRepo<Owner: ComponentOwner>: Debug {
         component_id: &Uuid,
         component_version: i64,
         object_store_key: &str,
+        transformed_object_store_key: &str,
+        updated_metadata: Vec<u8>,
     ) -> Result<(), RepoError>;
 
     async fn get(
@@ -317,14 +326,14 @@ pub trait ComponentRepo<Owner: ComponentOwner>: Debug {
     async fn install_plugin(
         &self,
         record: &PluginInstallationRecord<Owner::PluginOwner, ComponentPluginInstallationTarget>,
-    ) -> Result<(), RepoError>;
+    ) -> Result<u64, RepoError>;
 
     async fn uninstall_plugin(
         &self,
         owner: &<<Owner as ComponentOwner>::PluginOwner as PluginOwner>::Row,
         component_id: &Uuid,
         plugin_installation_id: &Uuid,
-    ) -> Result<(), RepoError>;
+    ) -> Result<u64, RepoError>;
 
     async fn update_plugin_installation(
         &self,
@@ -333,7 +342,7 @@ pub trait ComponentRepo<Owner: ComponentOwner>: Debug {
         plugin_installation_id: &Uuid,
         new_priority: i32,
         new_parameters: Vec<u8>,
-    ) -> Result<(), RepoError>;
+    ) -> Result<u64, RepoError>;
 }
 
 pub struct LoggedComponentRepo<Owner: ComponentOwner, Repo: ComponentRepo<Owner>> {
@@ -420,10 +429,19 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
         component_id: &Uuid,
         component_version: i64,
         object_store_key: &str,
+        transformed_object_store_key: &str,
+        updated_metadata: Vec<u8>,
     ) -> Result<(), RepoError> {
         let result = self
             .repo
-            .activate(namespace, component_id, component_version, object_store_key)
+            .activate(
+                namespace,
+                component_id,
+                component_version,
+                object_store_key,
+                transformed_object_store_key,
+                updated_metadata,
+            )
             .await;
         Self::logged_with_id("activate", component_id, result)
     }
@@ -527,7 +545,7 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
     async fn install_plugin(
         &self,
         record: &PluginInstallationRecord<Owner::PluginOwner, ComponentPluginInstallationTarget>,
-    ) -> Result<(), RepoError> {
+    ) -> Result<u64, RepoError> {
         let result = self.repo.install_plugin(record).await;
         Self::logged_with_id("install_plugin", &record.target.component_id, result)
     }
@@ -537,7 +555,7 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
         owner: &<<Owner as ComponentOwner>::PluginOwner as PluginOwner>::Row,
         component_id: &Uuid,
         plugin_installation_id: &Uuid,
-    ) -> Result<(), RepoError> {
+    ) -> Result<u64, RepoError> {
         let result = self
             .repo
             .uninstall_plugin(owner, component_id, plugin_installation_id)
@@ -552,7 +570,7 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
         plugin_installation_id: &Uuid,
         new_priority: i32,
         new_parameters: Vec<u8>,
-    ) -> Result<(), RepoError> {
+    ) -> Result<u64, RepoError> {
         let result = self
             .repo
             .update_plugin_installation(
@@ -733,9 +751,9 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         sqlx::query(
             r#"
               INSERT INTO component_versions
-                (component_id, version, size, metadata, created_at, component_type, available, object_store_key)
+                (component_id, version, size, metadata, created_at, component_type, available, object_store_key, transformed_object_store_key)
               VALUES
-                ($1, $2, $3, $4, $5, $6, $7, $8)
+                ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                "#,
         )
             .bind(component.component_id)
@@ -746,6 +764,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
             .bind(component.component_type)
             .bind(component.available)
             .bind(&component.object_store_key)
+            .bind(&component.transformed_object_store_key)
             .execute(&mut *transaction)
             .await?;
 
@@ -800,12 +819,12 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                 let new_version = if let Some(component_type) = component_type {
                     sqlx::query(
                         r#"
-                              WITH prev AS (SELECT component_id, version, object_store_key
+                              WITH prev AS (SELECT component_id, version, object_store_key, transformed_object_store_key
                                    FROM component_versions WHERE component_id = $1
                                    ORDER BY version DESC
                                    LIMIT 1)
                               INSERT INTO component_versions
-                              SELECT prev.component_id, prev.version + 1, $2, $3, $4, $5, FALSE, prev.object_store_key FROM prev
+                              SELECT prev.component_id, prev.version + 1, $2, $3, $4, $5, FALSE, prev.object_store_key, prev.transformed_object_store_key FROM prev
                               RETURNING *
                               "#,
                     )
@@ -820,12 +839,12 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                 } else {
                     sqlx::query(
                         r#"
-                              WITH prev AS (SELECT component_id, version, component_type, object_store_key
+                              WITH prev AS (SELECT component_id, version, component_type, object_store_key, transformed_object_store_key
                                    FROM component_versions WHERE component_id = $1
                                    ORDER BY version DESC
                                    LIMIT 1)
                               INSERT INTO component_versions
-                              SELECT prev.component_id, prev.version + 1, $2, $3, $4, prev.component_type, FALSE, prev.object_store_key FROM prev
+                              SELECT prev.component_id, prev.version + 1, $2, $3, $4, prev.component_type, FALSE, prev.object_store_key, prev.transformed_object_store_key FROM prev
                               RETURNING *
                               "#,
                     )
@@ -949,11 +968,13 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         component_id: &Uuid,
         component_version: i64,
         object_store_key: &str,
+        transformed_object_store_key: &str,
+        updated_metadata: Vec<u8>,
     ) -> Result<(), RepoError> {
         sqlx::query(
             r#"
               UPDATE component_versions
-              SET available = TRUE, object_store_key = $4
+              SET available = TRUE, object_store_key = $4, metadata = $5, transformed_object_store_key = $6
               WHERE component_id IN (SELECT component_id FROM components WHERE namespace = $1 AND component_id = $2)
                     AND version = $3
             "#,
@@ -961,6 +982,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
             .bind(component_id)
             .bind(component_version)
             .bind(object_store_key)
+            .bind(updated_metadata)
+            .bind(transformed_object_store_key)
             .execute(self.db_pool.deref())
             .await?;
 
@@ -985,7 +1008,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                     cv.created_at::timestamptz AS created_at,
                     cv.component_type AS component_type,
                     cv.available AS available,
-                    cv.object_store_key AS object_store_key
+                    cv.object_store_key AS object_store_key,
+                    cv.transformed_object_store_key as transformed_object_store_key
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.component_id = $1 AND c.namespace = $2
@@ -1019,7 +1043,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                     cv.created_at AS created_at,
                     cv.component_type AS component_type,
                     cv.available AS available,
-                    cv.object_store_key AS object_store_key
+                    cv.object_store_key AS object_store_key,
+                    cv.transformed_object_store_key AS transformed_object_store_key
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.component_id = $1 AND c.namespace = $2
@@ -1052,7 +1077,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                     cv.created_at::timestamptz AS created_at,
                     cv.component_type AS component_type,
                     cv.available AS available,
-                    cv.object_store_key AS object_store_key
+                    cv.object_store_key AS object_store_key,
+                    cv.transformed_object_store_key AS transformed_object_store_key
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.namespace = $1
@@ -1084,7 +1110,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                     cv.created_at AS created_at,
                     cv.component_type AS component_type,
                     cv.available AS available,
-                    cv.object_store_key AS object_store_key
+                    cv.object_store_key AS object_store_key,
+                    cv.transformed_object_store_key AS transformed_object_store_key
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.namespace = $1
@@ -1117,7 +1144,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                     cv.created_at::timestamptz AS created_at,
                     cv.component_type AS component_type,
                     cv.available AS available,
-                    cv.object_store_key AS object_store_key
+                    cv.object_store_key AS object_store_key,
+                    cv.transformed_object_store_key AS transformed_object_store_key
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.component_id = $1 AND c.namespace = $2 AND cv.available = TRUE
@@ -1155,7 +1183,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                     cv.created_at AS created_at,
                     cv.component_type AS component_type,
                     cv.available AS available,
-                    cv.object_store_key AS object_store_key
+                    cv.object_store_key AS object_store_key,
+                    cv.transformed_object_store_key AS transformed_object_store_key
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.component_id = $1 AND c.namespace = $2 AND cv.available = TRUE
@@ -1194,7 +1223,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                     cv.created_at::timestamptz AS created_at,
                     cv.component_type AS component_type,
                     cv.available AS available,
-                    cv.object_store_key AS object_store_key
+                    cv.object_store_key AS object_store_key,
+                    cv.transformed_object_store_key AS transformed_object_store_key
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.component_id = $1 AND cv.version = $2 AND c.namespace = $3
@@ -1232,7 +1262,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                     cv.created_at AS created_at,
                     cv.component_type AS component_type,
                     cv.available AS available,
-                    cv.object_store_key AS object_store_key
+                    cv.object_store_key AS object_store_key,
+                    cv.transformed_object_store_key AS transformed_object_store_key
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.component_id = $1 AND cv.version = $2 AND c.namespace = $3
@@ -1269,7 +1300,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                     cv.created_at::timestamptz AS created_at,
                     cv.component_type AS component_type,
                     cv.available AS available,
-                    cv.object_store_key AS object_store_key
+                    cv.object_store_key AS object_store_key,
+                    cv.transformed_object_store_key AS transformed_object_store_key
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.namespace = $1 AND c.name = $2
@@ -1303,7 +1335,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                     cv.created_at AS created_at,
                     cv.component_type AS component_type,
                     cv.available AS available,
-                    cv.object_store_key AS object_store_key
+                    cv.object_store_key AS object_store_key,
+                    cv.transformed_object_store_key AS transformed_object_store_key
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.namespace = $1 AND c.name = $2
@@ -1507,19 +1540,19 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
     async fn install_plugin(
         &self,
         record: &PluginInstallationRecord<Owner::PluginOwner, ComponentPluginInstallationTarget>,
-    ) -> Result<(), RepoError> {
+    ) -> Result<u64, RepoError> {
         let component_id = record.target.component_id;
 
         let mut transaction = self.db_pool.begin().await?;
 
         let new_version = sqlx::query(
             r#"
-              WITH prev AS (SELECT component_id, version, size, metadata, created_at, component_type, available, object_store_key
+              WITH prev AS (SELECT component_id, version, size, metadata, created_at, component_type, available, object_store_key, transformed_object_store_key
                    FROM component_versions WHERE component_id = $1
                    ORDER BY version DESC
                    LIMIT 1)
               INSERT INTO component_versions
-              SELECT prev.component_id, prev.version + 1, prev.size, $2, prev.metadata, prev.component_type, prev.available, prev.object_store_key FROM prev
+              SELECT prev.component_id, prev.version + 1, prev.size, $2, prev.metadata, prev.component_type, FALSE, prev.object_store_key, prev.transformed_object_store_key FROM prev
               RETURNING *
               "#,
         )
@@ -1579,7 +1612,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
 
         transaction.commit().await?;
 
-        Ok(())
+        Ok(new_version as u64)
     }
 
     async fn uninstall_plugin(
@@ -1587,17 +1620,17 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         owner: &<<Owner as ComponentOwner>::PluginOwner as PluginOwner>::Row,
         component_id: &Uuid,
         plugin_installation_id: &Uuid,
-    ) -> Result<(), RepoError> {
+    ) -> Result<u64, RepoError> {
         let mut transaction = self.db_pool.begin().await?;
 
         let new_version = sqlx::query(
             r#"
-              WITH prev AS (SELECT component_id, version, size, metadata, created_at, component_type, available, object_store_key
+              WITH prev AS (SELECT component_id, version, size, metadata, created_at, component_type, available, object_store_key, transformed_object_store_key
                    FROM component_versions WHERE component_id = $1
                    ORDER BY version DESC
                    LIMIT 1)
               INSERT INTO component_versions
-              SELECT prev.component_id, prev.version + 1, prev.size, $2, prev.metadata, prev.component_type, prev.available, prev.object_store_key FROM prev
+              SELECT prev.component_id, prev.version + 1, prev.size, $2, prev.metadata, prev.component_type, FALSE, prev.object_store_key, prev.transformed_object_store_key FROM prev
               RETURNING *
               "#,
         )
@@ -1650,7 +1683,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
 
         transaction.commit().await?;
 
-        Ok(())
+        Ok(new_version as u64)
     }
 
     async fn update_plugin_installation(
@@ -1660,17 +1693,17 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         plugin_installation_id: &Uuid,
         new_priority: i32,
         new_parameters: Vec<u8>,
-    ) -> Result<(), RepoError> {
+    ) -> Result<u64, RepoError> {
         let mut transaction = self.db_pool.begin().await?;
 
         let new_version = sqlx::query(
             r#"
-              WITH prev AS (SELECT component_id, version, size, metadata, created_at, component_type, available, object_store_key
+              WITH prev AS (SELECT component_id, version, size, metadata, created_at, component_type, available, object_store_key, transformed_object_store_key
                    FROM component_versions WHERE component_id = $1
                    ORDER BY version DESC
                    LIMIT 1)
               INSERT INTO component_versions
-              SELECT prev.component_id, prev.version + 1, prev.size, $2, prev.metadata, prev.component_type, prev.available, prev.object_store_key FROM prev
+              SELECT prev.component_id, prev.version + 1, prev.size, $2, prev.metadata, prev.component_type, FALSE, prev.object_store_key, prev.transformed_object_store_key FROM prev
               RETURNING *
               "#,
         )
@@ -1739,7 +1772,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
 
         transaction.commit().await?;
 
-        Ok(())
+        Ok(new_version as u64)
     }
 }
 
