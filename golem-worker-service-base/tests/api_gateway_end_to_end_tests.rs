@@ -358,7 +358,8 @@ async fn test_end_to_end_api_gateway_with_security_successful_authentication() {
 
     let response_mapping = r#"
       let response = golem:it/api.{get-cart-contents}("a", "b");
-      response
+      let email: str = request.auth.email;
+      { body: response, headers: {email: email} }
     "#;
 
     let identity_provider_resolver = TestIdentityProviderResolver::valid_provider();
@@ -454,7 +455,11 @@ async fn test_end_to_end_api_gateway_with_security_successful_authentication() {
 
     let test_response = internal::get_details_from_response(response).await;
 
-    let result = (test_response.function_name, test_response.function_params);
+    let result = (
+        test_response.function_name,
+        test_response.function_params,
+        test_response.user_email,
+    );
 
     let expected = (
         "golem:it/api.{get-cart-contents}".to_string(),
@@ -462,6 +467,7 @@ async fn test_end_to_end_api_gateway_with_security_successful_authentication() {
             Value::String("a".to_string()),
             Value::String("b".to_string()),
         ]),
+        Some("bob@example.com".to_string()),
     );
 
     assert_eq!(result, expected);
@@ -1496,6 +1502,7 @@ mod internal {
         pub worker_name: String,
         pub function_name: String,
         pub function_params: Value,
+        pub user_email: Option<String>,
         pub cors_middleware_headers: Option<CorsMiddlewareHeadersInResponse>, // if binding has cors middleware configured
     }
 
@@ -1684,6 +1691,11 @@ mod internal {
     }
 
     pub async fn get_details_from_response(response: Response) -> DefaultResult {
+        let user_email = &response
+            .headers()
+            .get("email")
+            .map(|x| x.to_str().unwrap().to_string());
+
         let bytes = response
             .into_body()
             .into_bytes()
@@ -1709,6 +1721,7 @@ mod internal {
             worker_name: worker_name.expect("Worker response expects worker_name"),
             function_name: function_name.expect("Worker response expects function_name"),
             function_params: function_params.expect("Worker response expects function_params"),
+            user_email: user_email.clone(),
             cors_middleware_headers: None,
         }
     }
@@ -1737,12 +1750,17 @@ mod internal {
             .and_then(|v| v.as_str())
             .map(String::from);
 
+        let user_email = headers
+            .get("email")
+            .map(|x| x.to_str().unwrap().to_string());
+
         let function_params = body_json.get("function_params").cloned();
 
         DefaultResult {
             worker_name: worker_name.expect("Worker response expects worker_name"),
             function_name: function_name.expect("Worker response expects function_name"),
             function_params: function_params.expect("Worker response expects function_params"),
+            user_email,
             cors_middleware_headers: {
                 let cors_header_allow_origin = headers
                     .get(ACCESS_CONTROL_ALLOW_ORIGIN)

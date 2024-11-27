@@ -85,7 +85,6 @@ impl HttpRequestDetails {
         session_id: &SessionId,
         gateway_session_store: &GatewaySessionStore,
     ) -> Result<(), String> {
-        let mut http_request_details = self.clone();
         let session_details = gateway_session_store.0.get(session_id).await?;
         if let Some(session_data) = session_details {
             let mut custom_values = HashMap::new();
@@ -94,7 +93,7 @@ impl HttpRequestDetails {
                     custom_values.insert("auth".to_string(), data_value.0.clone());
                 }
             }
-            http_request_details.request_custom_values = Some(custom_values);
+            self.request_custom_values = Some(custom_values);
         }
 
         Ok(())
@@ -130,7 +129,6 @@ impl HttpRequestDetails {
             ("headers".to_string(), header_value),
         ]);
 
-        // Add custom values to the JSON
         let custom = self.request_custom_values.clone().unwrap_or_default();
 
         for (key, value) in custom.iter() {
