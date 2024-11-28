@@ -21,6 +21,7 @@ use golem_component_service::config::ComponentServiceConfig;
 use golem_component_service::ComponentService;
 use golem_component_service_base::config::{ComponentStoreConfig, ComponentStoreLocalConfig};
 use golem_service_base::config::BlobStorageConfig;
+use golem_service_base::config::LocalFileSystemBlobStorageConfig;
 use golem_shard_manager::shard_manager_config::{
     FileSystemPersistenceConfig, PersistenceConfig, ShardManagerConfig,
 };
@@ -103,13 +104,8 @@ pub async fn launch_golem_services(args: &LaunchArgs) -> Result<(), anyhow::Erro
 }
 
 fn blob_storage_config(args: &ServiceArgs) -> BlobStorageConfig {
-    BlobStorageConfig::Sqlite(DbSqliteConfig {
-        database: args
-            .data_dir
-            .join("blob-storage.db")
-            .to_string_lossy()
-            .to_string(),
-        max_connections: 32,
+    BlobStorageConfig::LocalFileSystem(LocalFileSystemBlobStorageConfig {
+        root: args.data_dir.join("blobs"),
     })
 }
 
