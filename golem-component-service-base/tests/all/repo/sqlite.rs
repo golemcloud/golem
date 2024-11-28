@@ -27,7 +27,7 @@ mod tests {
     use super::SqliteDb;
     use crate::Tracing;
 
-    use crate::repo::UuidOwner;
+    use crate::all::repo::UuidOwner;
     use golem_common::model::component::DefaultComponentOwner;
     use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope};
     use golem_component_service_base::repo::component::{
@@ -75,7 +75,7 @@ mod tests {
     async fn repo_component_id_unique(
         component_repo: &Arc<dyn ComponentRepo<UuidOwner> + Sync + Send>,
     ) {
-        crate::repo::test_repo_component_id_unique(component_repo.clone()).await
+        crate::all::repo::test_repo_component_id_unique(component_repo.clone()).await
     }
 
     #[test]
@@ -83,7 +83,7 @@ mod tests {
     async fn repo_component_name_unique_in_namespace(
         component_repo: &Arc<dyn ComponentRepo<UuidOwner> + Sync + Send>,
     ) {
-        crate::repo::test_repo_component_name_unique_in_namespace(component_repo.clone()).await
+        crate::all::repo::test_repo_component_name_unique_in_namespace(component_repo.clone()).await
     }
 
     #[test]
@@ -91,7 +91,7 @@ mod tests {
     async fn repo_component_delete(
         component_repo: &Arc<dyn ComponentRepo<DefaultComponentOwner> + Sync + Send>,
     ) {
-        crate::repo::test_repo_component_delete(component_repo.clone()).await
+        crate::all::repo::test_repo_component_delete(component_repo.clone()).await
     }
 
     #[test]
@@ -99,7 +99,7 @@ mod tests {
     async fn repo_component_constraints(
         component_repo: &Arc<dyn ComponentRepo<UuidOwner> + Sync + Send>,
     ) {
-        crate::repo::test_repo_component_constraints(component_repo.clone()).await
+        crate::all::repo::test_repo_component_constraints(component_repo.clone()).await
     }
 
     #[test]
@@ -108,7 +108,8 @@ mod tests {
         component_repo: &Arc<dyn ComponentRepo<DefaultComponentOwner> + Sync + Send>,
         plugin_repo: &Arc<dyn PluginRepo<DefaultPluginOwner, DefaultPluginScope> + Send + Sync>,
     ) -> Result<(), RepoError> {
-        crate::repo::test_default_plugin_repo(component_repo.clone(), plugin_repo.clone()).await
+        crate::all::repo::test_default_plugin_repo(component_repo.clone(), plugin_repo.clone())
+            .await
     }
 
     #[test]
@@ -117,7 +118,7 @@ mod tests {
         component_repo: &Arc<dyn ComponentRepo<DefaultComponentOwner> + Sync + Send>,
         plugin_repo: &Arc<dyn PluginRepo<DefaultPluginOwner, DefaultPluginScope> + Send + Sync>,
     ) -> Result<(), RepoError> {
-        crate::repo::test_default_component_plugin_installation(
+        crate::all::repo::test_default_component_plugin_installation(
             component_repo.clone(),
             plugin_repo.clone(),
         )

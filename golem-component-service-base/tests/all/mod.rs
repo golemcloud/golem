@@ -12,28 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
-use test_r::{sequential_suite, test_dep};
+use crate::Tracing;
+use test_r::{inherit_test_dep, sequential_suite};
 
-test_r::enable!();
+pub mod repo;
+pub mod service;
 
-pub mod all;
+inherit_test_dep!(Tracing);
 
-sequential_suite!(all);
-
-#[derive(Debug)]
-pub struct Tracing;
-
-impl Tracing {
-    pub fn init() -> Self {
-        init_tracing_with_default_debug_env_filter(&TracingConfig::test_pretty_without_time(
-            "component-service-base-tests",
-        ));
-        Self
-    }
-}
-
-#[test_dep]
-fn tracing() -> Tracing {
-    Tracing::init()
-}
+sequential_suite!(repo);
+sequential_suite!(service);

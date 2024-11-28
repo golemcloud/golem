@@ -16,7 +16,7 @@ use std::error::Error;
 use std::path::Path;
 
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use sqlx::{Connection, Executor, PgConnection, Pool, Postgres, Sqlite, SqliteConnection};
 use tracing::info;
 
@@ -93,6 +93,7 @@ fn create_sqlite_options(config: &DbSqliteConfig) -> SqliteConnectOptions {
     SqliteConnectOptions::new()
         .filename(Path::new(config.database.as_str()))
         .create_if_missing(true)
+        .journal_mode(SqliteJournalMode::Wal)
 }
 
 pub async fn create_sqlite_pool(config: &DbSqliteConfig) -> Result<Pool<Sqlite>, Box<dyn Error>> {

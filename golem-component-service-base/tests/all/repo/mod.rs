@@ -42,7 +42,7 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::str::FromStr;
 use std::sync::Arc;
-use test_r::inherit_test_dep;
+use test_r::{inherit_test_dep, sequential_suite};
 use uuid::Uuid;
 
 pub mod constraint_data;
@@ -50,6 +50,9 @@ pub mod postgres;
 pub mod sqlite;
 
 inherit_test_dep!(Tracing);
+
+sequential_suite!(postgres);
+sequential_suite!(sqlite);
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, NewType)]
 struct UuidOwner(Uuid);

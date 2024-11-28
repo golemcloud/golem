@@ -14,8 +14,8 @@
 
 use test_r::{inherit_test_dep, test, test_dep};
 
-use crate::repo::sqlite::SqliteDb;
-use crate::repo::{constraint_data, get_component_data};
+use crate::all::repo::sqlite::SqliteDb;
+use crate::all::repo::{constraint_data, get_component_data};
 use crate::Tracing;
 use golem_common::model::component::DefaultComponentOwner;
 use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope};
