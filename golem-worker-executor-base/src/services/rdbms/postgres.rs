@@ -37,7 +37,7 @@ pub struct PostgresType;
 
 impl PostgresType {
     pub fn new_rdbms(config: RdbmsConfig) -> Arc<dyn Rdbms<PostgresType> + Send + Sync> {
-        let sqlx: SqlxRdbms<sqlx::postgres::Postgres> = SqlxRdbms::new(POSTGRES, config);
+        let sqlx: SqlxRdbms<PostgresType, sqlx::postgres::Postgres> = SqlxRdbms::new(config);
         Arc::new(sqlx)
     }
 }
@@ -56,7 +56,7 @@ impl Display for PostgresType {
 #[async_trait]
 impl PoolCreator<sqlx::Postgres> for RdbmsPoolKey {
     async fn create_pool(&self, config: &RdbmsPoolConfig) -> Result<Pool<sqlx::Postgres>, Error> {
-        if self.address.scheme() != "postgres" && self.address.scheme() != "postgresql" {
+        if self.address.scheme() != POSTGRES && self.address.scheme() != "postgresql" {
             Err(Error::ConnectionFailure(format!(
                 "scheme '{}' in url is invalid",
                 self.address.scheme()
@@ -97,7 +97,7 @@ impl QueryExecutor<PostgresType> for sqlx::Pool<sqlx::Postgres> {
         let stream: BoxStream<Result<sqlx::postgres::PgRow, sqlx::Error>> = query.fetch(self);
 
         let response: StreamDbResultSet<PostgresType, sqlx::postgres::Postgres> =
-            StreamDbResultSet::create(POSTGRES, stream, batch).await?;
+            StreamDbResultSet::create(stream, batch).await?;
         Ok(Arc::new(response))
     }
 }
@@ -265,9 +265,9 @@ fn bind_value(
                     })?;
                     Ok(query.bind(values))
                 }
-                DbValuePrimitive::DbNull => {
+                DbValuePrimitive::Null => {
                     let values: Vec<Option<String>> = get_plain_values(vs, |v| {
-                        if let DbValuePrimitive::DbNull = v {
+                        if let DbValuePrimitive::Null = v {
                             Some(None)
                         } else {
                             None
@@ -305,7 +305,7 @@ fn bind_value_primitive(
         DbValuePrimitive::Timestamp(v) => Ok(query.bind(v)),
         DbValuePrimitive::Date(v) => Ok(query.bind(v)),
         DbValuePrimitive::Interval(v) => Ok(query.bind(v)),
-        DbValuePrimitive::DbNull => Ok(query.bind(None::<String>)),
+        DbValuePrimitive::Null => Ok(query.bind(None::<String>)),
         _ => Err(format!("Type '{}' is not supported", value)),
     }
 }
@@ -331,77 +331,77 @@ fn get_db_value(index: usize, row: &sqlx::postgres::PgRow) -> Result<DbValue, St
             let v: Option<bool> = row.try_get(index).map_err(|e| e.to_string())?;
             match v {
                 Some(v) => DbValue::Primitive(DbValuePrimitive::Boolean(v)),
-                None => DbValue::Primitive(DbValuePrimitive::DbNull),
+                None => DbValue::Primitive(DbValuePrimitive::Null),
             }
         }
         pg_type_name::INT2 => {
             let v: Option<i16> = row.try_get(index).map_err(|e| e.to_string())?;
             match v {
                 Some(v) => DbValue::Primitive(DbValuePrimitive::Int16(v)),
-                None => DbValue::Primitive(DbValuePrimitive::DbNull),
+                None => DbValue::Primitive(DbValuePrimitive::Null),
             }
         }
         pg_type_name::INT4 => {
             let v: Option<i32> = row.try_get(index).map_err(|e| e.to_string())?;
             match v {
                 Some(v) => DbValue::Primitive(DbValuePrimitive::Int32(v)),
-                None => DbValue::Primitive(DbValuePrimitive::DbNull),
+                None => DbValue::Primitive(DbValuePrimitive::Null),
             }
         }
         pg_type_name::INT8 => {
             let v: Option<i64> = row.try_get(index).map_err(|e| e.to_string())?;
             match v {
                 Some(v) => DbValue::Primitive(DbValuePrimitive::Int64(v)),
-                None => DbValue::Primitive(DbValuePrimitive::DbNull),
+                None => DbValue::Primitive(DbValuePrimitive::Null),
             }
         }
         pg_type_name::FLOAT4 => {
             let v: Option<f32> = row.try_get(index).map_err(|e| e.to_string())?;
             match v {
                 Some(v) => DbValue::Primitive(DbValuePrimitive::Float(v)),
-                None => DbValue::Primitive(DbValuePrimitive::DbNull),
+                None => DbValue::Primitive(DbValuePrimitive::Null),
             }
         }
         pg_type_name::FLOAT8 => {
             let v: Option<f64> = row.try_get(index).map_err(|e| e.to_string())?;
             match v {
                 Some(v) => DbValue::Primitive(DbValuePrimitive::Double(v)),
-                None => DbValue::Primitive(DbValuePrimitive::DbNull),
+                None => DbValue::Primitive(DbValuePrimitive::Null),
             }
         }
         pg_type_name::TEXT | pg_type_name::VARCHAR | pg_type_name::BPCHAR => {
             let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
             match v {
                 Some(v) => DbValue::Primitive(DbValuePrimitive::Text(v)),
-                None => DbValue::Primitive(DbValuePrimitive::DbNull),
+                None => DbValue::Primitive(DbValuePrimitive::Null),
             }
         }
         pg_type_name::JSON => {
             let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
             match v {
                 Some(v) => DbValue::Primitive(DbValuePrimitive::Json(v)),
-                None => DbValue::Primitive(DbValuePrimitive::DbNull),
+                None => DbValue::Primitive(DbValuePrimitive::Null),
             }
         }
         pg_type_name::XML => {
             let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
             match v {
                 Some(v) => DbValue::Primitive(DbValuePrimitive::Json(v)),
-                None => DbValue::Primitive(DbValuePrimitive::DbNull),
+                None => DbValue::Primitive(DbValuePrimitive::Null),
             }
         }
         pg_type_name::BYTEA => {
             let v: Option<Vec<u8>> = row.try_get(index).map_err(|e| e.to_string())?;
             match v {
                 Some(v) => DbValue::Primitive(DbValuePrimitive::Blob(v)),
-                None => DbValue::Primitive(DbValuePrimitive::DbNull),
+                None => DbValue::Primitive(DbValuePrimitive::Null),
             }
         }
         pg_type_name::UUID => {
             let v: Option<Uuid> = row.try_get(index).map_err(|e| e.to_string())?;
             match v {
                 Some(v) => DbValue::Primitive(DbValuePrimitive::Uuid(v)),
-                None => DbValue::Primitive(DbValuePrimitive::DbNull),
+                None => DbValue::Primitive(DbValuePrimitive::Null),
             }
         }
         pg_type_name::INTERVAL => {
@@ -411,7 +411,7 @@ fn get_db_value(index: usize, row: &sqlx::postgres::PgRow) -> Result<DbValue, St
                     let d = get_duration(v)?;
                     DbValue::Primitive(DbValuePrimitive::Interval(d))
                 }
-                None => DbValue::Primitive(DbValuePrimitive::DbNull),
+                None => DbValue::Primitive(DbValuePrimitive::Null),
             }
         }
         pg_type_name::TIMESTAMP | pg_type_name::TIMESTAMPTZ => {
@@ -419,14 +419,14 @@ fn get_db_value(index: usize, row: &sqlx::postgres::PgRow) -> Result<DbValue, St
                 row.try_get(index).map_err(|e| e.to_string())?;
             match v {
                 Some(v) => DbValue::Primitive(DbValuePrimitive::Timestamp(v)),
-                None => DbValue::Primitive(DbValuePrimitive::DbNull),
+                None => DbValue::Primitive(DbValuePrimitive::Null),
             }
         }
         pg_type_name::DATE => {
             let v: Option<chrono::NaiveDate> = row.try_get(index).map_err(|e| e.to_string())?;
             match v {
                 Some(v) => DbValue::Primitive(DbValuePrimitive::Date(v)),
-                None => DbValue::Primitive(DbValuePrimitive::DbNull),
+                None => DbValue::Primitive(DbValuePrimitive::Null),
             }
         }
         pg_type_name::BOOL_ARRAY => {
@@ -527,7 +527,7 @@ fn get_db_value(index: usize, row: &sqlx::postgres::PgRow) -> Result<DbValue, St
                 Some(vs) => {
                     DbValue::Array(vs.into_iter().map(DbValuePrimitive::Timestamp).collect())
                 }
-                None => DbValue::Primitive(DbValuePrimitive::DbNull),
+                None => DbValue::Primitive(DbValuePrimitive::Null),
             }
         }
         pg_type_name::DATE_ARRAY => {
@@ -535,7 +535,7 @@ fn get_db_value(index: usize, row: &sqlx::postgres::PgRow) -> Result<DbValue, St
                 row.try_get(index).map_err(|e| e.to_string())?;
             match vs {
                 Some(vs) => DbValue::Array(vs.into_iter().map(DbValuePrimitive::Date).collect()),
-                None => DbValue::Primitive(DbValuePrimitive::DbNull),
+                None => DbValue::Primitive(DbValuePrimitive::Null),
             }
         }
         // _ => match column.type_info().kind() { // enum in postgres is custom type
@@ -543,7 +543,7 @@ fn get_db_value(index: usize, row: &sqlx::postgres::PgRow) -> Result<DbValue, St
         //         let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
         //         match v {
         //             Some(v) => DbValue::Primitive(DbValuePrimitive::Text(v)),
-        //             None => DbValue::Primitive(DbValuePrimitive::DbNull),
+        //             None => DbValue::Primitive(DbValuePrimitive::Null),
         //         }
         //     }
         //     PgTypeKind::Array(element) => match element.kind() {
@@ -835,7 +835,7 @@ pub mod types {
         Json(String),
         Xml(String),
         Uuid(Uuid),
-        DbNull,
+        Null,
     }
 
     impl Display for DbValuePrimitive {
@@ -858,7 +858,7 @@ pub mod types {
                 DbValuePrimitive::Json(v) => write!(f, "{}", v),
                 DbValuePrimitive::Xml(v) => write!(f, "{}", v),
                 DbValuePrimitive::Uuid(v) => write!(f, "{}", v),
-                DbValuePrimitive::DbNull => write!(f, "NULL"),
+                DbValuePrimitive::Null => write!(f, "NULL"),
             }
         }
     }

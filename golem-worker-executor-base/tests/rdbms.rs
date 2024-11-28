@@ -316,14 +316,12 @@ async fn rdbms_mysql_create_insert_select(
                     {
                        "values":[
                           {
-                             "primitive":{
-                                "text": user_id
-                             }
+                              "varchar": user_id
+
                           },
                           {
-                             "primitive":{
-                                "text": name
-                             }
+
+                              "varchar": name
                           }
                        ]
                     }
@@ -349,9 +347,7 @@ async fn rdbms_mysql_create_insert_select(
                      "columns":[
                         {
                            "db-type":{
-                              "primitive":{
-                                 "text":null
-                              }
+                              "varchar":null
                            },
                            "db-type-name":"VARCHAR",
                            "name":"user_id",
@@ -359,9 +355,7 @@ async fn rdbms_mysql_create_insert_select(
                         },
                         {
                            "db-type":{
-                              "primitive":{
-                                 "text":null
-                              }
+                              "varchar":null
                            },
                            "db-type-name":"VARCHAR",
                            "name":"name",
@@ -405,9 +399,7 @@ async fn rdbms_mysql_select1(
                      "columns":[
                         {
                            "db-type":{
-                              "primitive":{
-                                 "int64":null
-                              }
+                              "bigint":null
                            },
                            "db-type-name":"BIGINT",
                            "name":"1",
@@ -418,9 +410,7 @@ async fn rdbms_mysql_select1(
                         {
                            "values":[
                               {
-                                 "primitive":{
-                                    "int64":1
-                                 }
+                                 "bigint":1
                               }
                            ]
                         }

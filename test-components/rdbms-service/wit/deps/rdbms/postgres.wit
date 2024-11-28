@@ -108,7 +108,7 @@ interface postgres {
     json(string),
     xml(string),
     uuid(tuple<u64, u64>),
-    db-null
+    null
   }
 
   variant db-value {

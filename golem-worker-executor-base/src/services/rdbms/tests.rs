@@ -305,17 +305,9 @@ async fn mysql_execute_test_create_insert_select(
 
     for i in 0..count {
         let params: Vec<mysql_types::DbValue> = vec![
-            mysql_types::DbValue::Primitive(mysql_types::DbValuePrimitive::Text(format!(
-                "{:03}",
-                i
-            ))),
-            mysql_types::DbValue::Primitive(mysql_types::DbValuePrimitive::Text(
-                "default".to_string(),
-            )),
-            mysql_types::DbValue::Primitive(mysql_types::DbValuePrimitive::Text(format!(
-                "name-{}",
-                Uuid::new_v4()
-            ))),
+            mysql_types::DbValue::Varchar(format!("{:03}", i)),
+            mysql_types::DbValue::Varchar("default".to_string()),
+            mysql_types::DbValue::Varchar(format!("name-{}", Uuid::new_v4())),
         ];
 
         rdbms_execute_test(
@@ -334,19 +326,19 @@ async fn mysql_execute_test_create_insert_select(
         mysql_types::DbColumn {
             name: "component_id".to_string(),
             ordinal: 0,
-            db_type: mysql_types::DbColumnType::Primitive(mysql_types::DbColumnTypePrimitive::Text),
+            db_type: mysql_types::DbColumnType::Varchar,
             db_type_name: "VARCHAR".to_string(),
         },
         mysql_types::DbColumn {
             name: "namespace".to_string(),
             ordinal: 1,
-            db_type: mysql_types::DbColumnType::Primitive(mysql_types::DbColumnTypePrimitive::Text),
+            db_type: mysql_types::DbColumnType::Varchar,
             db_type_name: "VARCHAR".to_string(),
         },
         mysql_types::DbColumn {
             name: "name".to_string(),
             ordinal: 2,
-            db_type: mysql_types::DbColumnType::Primitive(mysql_types::DbColumnTypePrimitive::Text),
+            db_type: mysql_types::DbColumnType::Varchar,
             db_type_name: "VARCHAR".to_string(),
         },
     ];
@@ -639,22 +631,6 @@ async fn mysql_query_err_test(mysql: &DockerMysqlRdbs, rdbms_service: &RdbmsServ
     rdbms_query_err_test(
         rdbms.clone(),
         &db_address,
-        "SELECT 1",
-        vec![
-            mysql_types::DbValue::Primitive(mysql_types::DbValuePrimitive::Text(
-                "default".to_string(),
-            )),
-            mysql_types::DbValue::Array(vec![mysql_types::DbValuePrimitive::Text(
-                "tag1".to_string(),
-            )]),
-        ],
-        Error::QueryParameterFailure("Array type is not supported".to_string()),
-    )
-    .await;
-
-    rdbms_query_err_test(
-        rdbms.clone(),
-        &db_address,
         "SELECT YEAR(\"2017-06-15\");",
         vec![],
         Error::QueryResponseFailure("Type 'YEAR' is not supported".to_string()),
@@ -676,17 +652,6 @@ async fn mysql_execute_err_test(mysql: &DockerMysqlRdbs, rdbms_service: &RdbmsSe
             "error returned from database: 1146 (42S02): Table 'mysql.xxx' doesn't exist"
                 .to_string(),
         ),
-    )
-    .await;
-
-    rdbms_execute_err_test(
-        rdbms.clone(),
-        &db_address,
-        "SELECT 1",
-        vec![mysql_types::DbValue::Array(vec![
-            mysql_types::DbValuePrimitive::Text("tag1".to_string()),
-        ])],
-        Error::QueryParameterFailure("Array type is not supported".to_string()),
     )
     .await;
 }

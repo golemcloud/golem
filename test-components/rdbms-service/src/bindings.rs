@@ -226,7 +226,7 @@ pub mod wasi {
                 Json(_rt::String),
                 Xml(_rt::String),
                 Uuid((u64, u64)),
-                DbNull,
+                Null,
             }
             impl ::core::fmt::Debug for DbValuePrimitive {
                 fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
@@ -284,9 +284,7 @@ pub mod wasi {
                         DbValuePrimitive::Uuid(e) => {
                             f.debug_tuple("DbValuePrimitive::Uuid").field(e).finish()
                         }
-                        DbValuePrimitive::DbNull => {
-                            f.debug_tuple("DbValuePrimitive::DbNull").finish()
-                        }
+                        DbValuePrimitive::Null => f.debug_tuple("DbValuePrimitive::Null").finish(),
                     }
                 }
             }
@@ -807,7 +805,7 @@ pub mod wasi {
                                                                     }
                                                                     n => {
                                                                         debug_assert_eq!(n, 17, "invalid enum discriminant");
-                                                                        DbValuePrimitive::DbNull
+                                                                        DbValuePrimitive::Null
                                                                     }
                                                                 };
 
@@ -1004,7 +1002,7 @@ pub mod wasi {
                                                                             }
                                                                             n => {
                                                                                 debug_assert_eq!(n, 17, "invalid enum discriminant");
-                                                                                DbValuePrimitive::DbNull
+                                                                                DbValuePrimitive::Null
                                                                             }
                                                                         };
 
@@ -1298,7 +1296,7 @@ pub mod wasi {
                                                 *base.add(16).cast::<i64>() = _rt::as_i64(t6_0);
                                                 *base.add(24).cast::<i64>() = _rt::as_i64(t6_1);
                                             }
-                                            DbValuePrimitive::DbNull => {
+                                            DbValuePrimitive::Null => {
                                                 *base.add(8).cast::<u8>() = (17i32) as u8;
                                             }
                                         }
@@ -1430,7 +1428,7 @@ pub mod wasi {
                                                         *base.add(16).cast::<i64>() =
                                                             _rt::as_i64(t12_1);
                                                     }
-                                                    DbValuePrimitive::DbNull => {
+                                                    DbValuePrimitive::Null => {
                                                         *base.add(0).cast::<u8>() = (17i32) as u8;
                                                     }
                                                 }
@@ -1714,7 +1712,7 @@ pub mod wasi {
                                                 *base.add(16).cast::<i64>() = _rt::as_i64(t6_0);
                                                 *base.add(24).cast::<i64>() = _rt::as_i64(t6_1);
                                             }
-                                            DbValuePrimitive::DbNull => {
+                                            DbValuePrimitive::Null => {
                                                 *base.add(8).cast::<u8>() = (17i32) as u8;
                                             }
                                         }
@@ -1846,7 +1844,7 @@ pub mod wasi {
                                                         *base.add(16).cast::<i64>() =
                                                             _rt::as_i64(t12_1);
                                                     }
-                                                    DbValuePrimitive::DbNull => {
+                                                    DbValuePrimitive::Null => {
                                                         *base.add(0).cast::<u8>() = (17i32) as u8;
                                                     }
                                                 }
@@ -2051,24 +2049,26 @@ pub mod wasi {
             impl std::error::Error for Error {}
             #[derive(Clone, Copy)]
             pub enum DbColumnType {
+                Boolean,
                 Tinyint,
                 Smallint,
                 Mediumint,
                 Int,
                 Bigint,
-                Tinyunsigned,
-                Smallunsigned,
-                Mediumunsigned,
+                TinyUnsigned,
+                SmallUnsigned,
+                MediumUnsigned,
                 Unsigned,
-                Bigunsigned,
+                BigUnsigned,
                 Float,
                 Double,
                 Decimal,
                 Date,
                 Datetime,
                 Timestamp,
+                Time,
                 Year,
-                Fixedchar,
+                Fixchar,
                 Varchar,
                 Tinytext,
                 Text,
@@ -2088,6 +2088,7 @@ pub mod wasi {
             impl ::core::fmt::Debug for DbColumnType {
                 fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
                     match self {
+                        DbColumnType::Boolean => f.debug_tuple("DbColumnType::Boolean").finish(),
                         DbColumnType::Tinyint => f.debug_tuple("DbColumnType::Tinyint").finish(),
                         DbColumnType::Smallint => f.debug_tuple("DbColumnType::Smallint").finish(),
                         DbColumnType::Mediumint => {
@@ -2095,18 +2096,18 @@ pub mod wasi {
                         }
                         DbColumnType::Int => f.debug_tuple("DbColumnType::Int").finish(),
                         DbColumnType::Bigint => f.debug_tuple("DbColumnType::Bigint").finish(),
-                        DbColumnType::Tinyunsigned => {
-                            f.debug_tuple("DbColumnType::Tinyunsigned").finish()
+                        DbColumnType::TinyUnsigned => {
+                            f.debug_tuple("DbColumnType::TinyUnsigned").finish()
                         }
-                        DbColumnType::Smallunsigned => {
-                            f.debug_tuple("DbColumnType::Smallunsigned").finish()
+                        DbColumnType::SmallUnsigned => {
+                            f.debug_tuple("DbColumnType::SmallUnsigned").finish()
                         }
-                        DbColumnType::Mediumunsigned => {
-                            f.debug_tuple("DbColumnType::Mediumunsigned").finish()
+                        DbColumnType::MediumUnsigned => {
+                            f.debug_tuple("DbColumnType::MediumUnsigned").finish()
                         }
                         DbColumnType::Unsigned => f.debug_tuple("DbColumnType::Unsigned").finish(),
-                        DbColumnType::Bigunsigned => {
-                            f.debug_tuple("DbColumnType::Bigunsigned").finish()
+                        DbColumnType::BigUnsigned => {
+                            f.debug_tuple("DbColumnType::BigUnsigned").finish()
                         }
                         DbColumnType::Float => f.debug_tuple("DbColumnType::Float").finish(),
                         DbColumnType::Double => f.debug_tuple("DbColumnType::Double").finish(),
@@ -2116,10 +2117,9 @@ pub mod wasi {
                         DbColumnType::Timestamp => {
                             f.debug_tuple("DbColumnType::Timestamp").finish()
                         }
+                        DbColumnType::Time => f.debug_tuple("DbColumnType::Time").finish(),
                         DbColumnType::Year => f.debug_tuple("DbColumnType::Year").finish(),
-                        DbColumnType::Fixedchar => {
-                            f.debug_tuple("DbColumnType::Fixedchar").finish()
-                        }
+                        DbColumnType::Fixchar => f.debug_tuple("DbColumnType::Fixchar").finish(),
                         DbColumnType::Varchar => f.debug_tuple("DbColumnType::Varchar").finish(),
                         DbColumnType::Tinytext => f.debug_tuple("DbColumnType::Tinytext").finish(),
                         DbColumnType::Text => f.debug_tuple("DbColumnType::Text").finish(),
@@ -2166,26 +2166,28 @@ pub mod wasi {
             /// Value descriptor for a single database value
             #[derive(Clone)]
             pub enum DbValue {
+                Boolean(bool),
                 Tinyint(i8),
                 Smallint(i16),
                 Mediumint(i32),
                 /// s24
                 Int(i32),
                 Bigint(i64),
-                Tinyunsigned(u8),
-                Smallunsigned(u16),
-                Mediumunsigned(u32),
+                TinyUnsigned(u8),
+                SmallUnsigned(u16),
+                MediumUnsigned(u32),
                 /// u24
                 Unsigned(u32),
-                Bigunsigned(u64),
+                BigUnsigned(u64),
                 Float(f32),
                 Double(f64),
                 Decimal(_rt::String),
                 Date(i64),
                 Datetime(i64),
                 Timestamp(i64),
+                Time(i64),
                 Year(i8),
-                Fixedchar(_rt::String),
+                Fixchar(_rt::String),
                 Varchar(_rt::String),
                 Tinytext(_rt::String),
                 Text(_rt::String),
@@ -2201,10 +2203,12 @@ pub mod wasi {
                 Set(_rt::String),
                 Bit(u8),
                 Json(_rt::String),
+                Null,
             }
             impl ::core::fmt::Debug for DbValue {
                 fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
                     match self {
+                        DbValue::Boolean(e) => f.debug_tuple("DbValue::Boolean").field(e).finish(),
                         DbValue::Tinyint(e) => f.debug_tuple("DbValue::Tinyint").field(e).finish(),
                         DbValue::Smallint(e) => {
                             f.debug_tuple("DbValue::Smallint").field(e).finish()
@@ -2214,20 +2218,20 @@ pub mod wasi {
                         }
                         DbValue::Int(e) => f.debug_tuple("DbValue::Int").field(e).finish(),
                         DbValue::Bigint(e) => f.debug_tuple("DbValue::Bigint").field(e).finish(),
-                        DbValue::Tinyunsigned(e) => {
-                            f.debug_tuple("DbValue::Tinyunsigned").field(e).finish()
+                        DbValue::TinyUnsigned(e) => {
+                            f.debug_tuple("DbValue::TinyUnsigned").field(e).finish()
                         }
-                        DbValue::Smallunsigned(e) => {
-                            f.debug_tuple("DbValue::Smallunsigned").field(e).finish()
+                        DbValue::SmallUnsigned(e) => {
+                            f.debug_tuple("DbValue::SmallUnsigned").field(e).finish()
                         }
-                        DbValue::Mediumunsigned(e) => {
-                            f.debug_tuple("DbValue::Mediumunsigned").field(e).finish()
+                        DbValue::MediumUnsigned(e) => {
+                            f.debug_tuple("DbValue::MediumUnsigned").field(e).finish()
                         }
                         DbValue::Unsigned(e) => {
                             f.debug_tuple("DbValue::Unsigned").field(e).finish()
                         }
-                        DbValue::Bigunsigned(e) => {
-                            f.debug_tuple("DbValue::Bigunsigned").field(e).finish()
+                        DbValue::BigUnsigned(e) => {
+                            f.debug_tuple("DbValue::BigUnsigned").field(e).finish()
                         }
                         DbValue::Float(e) => f.debug_tuple("DbValue::Float").field(e).finish(),
                         DbValue::Double(e) => f.debug_tuple("DbValue::Double").field(e).finish(),
@@ -2239,10 +2243,9 @@ pub mod wasi {
                         DbValue::Timestamp(e) => {
                             f.debug_tuple("DbValue::Timestamp").field(e).finish()
                         }
+                        DbValue::Time(e) => f.debug_tuple("DbValue::Time").field(e).finish(),
                         DbValue::Year(e) => f.debug_tuple("DbValue::Year").field(e).finish(),
-                        DbValue::Fixedchar(e) => {
-                            f.debug_tuple("DbValue::Fixedchar").field(e).finish()
-                        }
+                        DbValue::Fixchar(e) => f.debug_tuple("DbValue::Fixchar").field(e).finish(),
                         DbValue::Varchar(e) => f.debug_tuple("DbValue::Varchar").field(e).finish(),
                         DbValue::Tinytext(e) => {
                             f.debug_tuple("DbValue::Tinytext").field(e).finish()
@@ -2274,6 +2277,7 @@ pub mod wasi {
                         DbValue::Set(e) => f.debug_tuple("DbValue::Set").field(e).finish(),
                         DbValue::Bit(e) => f.debug_tuple("DbValue::Bit").field(e).finish(),
                         DbValue::Json(e) => f.debug_tuple("DbValue::Json").field(e).finish(),
+                        DbValue::Null => f.debug_tuple("DbValue::Null").finish(),
                     }
                 }
             }
@@ -2414,40 +2418,42 @@ pub mod wasi {
                                 let bytes6 = _rt::Vec::from_raw_parts(l4.cast(), len6, len6);
                                 let l7 = i32::from(*base.add(16).cast::<u8>());
                                 let v8 = match l7 {
-                                    0 => DbColumnType::Tinyint,
-                                    1 => DbColumnType::Smallint,
-                                    2 => DbColumnType::Mediumint,
-                                    3 => DbColumnType::Int,
-                                    4 => DbColumnType::Bigint,
-                                    5 => DbColumnType::Tinyunsigned,
-                                    6 => DbColumnType::Smallunsigned,
-                                    7 => DbColumnType::Mediumunsigned,
-                                    8 => DbColumnType::Unsigned,
-                                    9 => DbColumnType::Bigunsigned,
-                                    10 => DbColumnType::Float,
-                                    11 => DbColumnType::Double,
-                                    12 => DbColumnType::Decimal,
-                                    13 => DbColumnType::Date,
-                                    14 => DbColumnType::Datetime,
-                                    15 => DbColumnType::Timestamp,
-                                    16 => DbColumnType::Year,
-                                    17 => DbColumnType::Fixedchar,
-                                    18 => DbColumnType::Varchar,
-                                    19 => DbColumnType::Tinytext,
-                                    20 => DbColumnType::Text,
-                                    21 => DbColumnType::Mediumtext,
-                                    22 => DbColumnType::Longtext,
-                                    23 => DbColumnType::Binary,
-                                    24 => DbColumnType::Varbinary,
-                                    25 => DbColumnType::Tinyblob,
-                                    26 => DbColumnType::Blob,
-                                    27 => DbColumnType::Mediumblob,
-                                    28 => DbColumnType::Longblob,
-                                    29 => DbColumnType::Enumeration,
-                                    30 => DbColumnType::Set,
-                                    31 => DbColumnType::Bit,
+                                    0 => DbColumnType::Boolean,
+                                    1 => DbColumnType::Tinyint,
+                                    2 => DbColumnType::Smallint,
+                                    3 => DbColumnType::Mediumint,
+                                    4 => DbColumnType::Int,
+                                    5 => DbColumnType::Bigint,
+                                    6 => DbColumnType::TinyUnsigned,
+                                    7 => DbColumnType::SmallUnsigned,
+                                    8 => DbColumnType::MediumUnsigned,
+                                    9 => DbColumnType::Unsigned,
+                                    10 => DbColumnType::BigUnsigned,
+                                    11 => DbColumnType::Float,
+                                    12 => DbColumnType::Double,
+                                    13 => DbColumnType::Decimal,
+                                    14 => DbColumnType::Date,
+                                    15 => DbColumnType::Datetime,
+                                    16 => DbColumnType::Timestamp,
+                                    17 => DbColumnType::Time,
+                                    18 => DbColumnType::Year,
+                                    19 => DbColumnType::Fixchar,
+                                    20 => DbColumnType::Varchar,
+                                    21 => DbColumnType::Tinytext,
+                                    22 => DbColumnType::Text,
+                                    23 => DbColumnType::Mediumtext,
+                                    24 => DbColumnType::Longtext,
+                                    25 => DbColumnType::Binary,
+                                    26 => DbColumnType::Varbinary,
+                                    27 => DbColumnType::Tinyblob,
+                                    28 => DbColumnType::Blob,
+                                    29 => DbColumnType::Mediumblob,
+                                    30 => DbColumnType::Longblob,
+                                    31 => DbColumnType::Enumeration,
+                                    32 => DbColumnType::Set,
+                                    33 => DbColumnType::Bit,
                                     n => {
-                                        debug_assert_eq!(n, 32, "invalid enum discriminant");
+                                        debug_assert_eq!(n, 34, "invalid enum discriminant");
                                         DbColumnType::Json
                                     }
                                 };
@@ -2497,475 +2503,498 @@ pub mod wasi {
                                 let e = {
                                     let l2 = *ptr0.add(4).cast::<*mut u8>();
                                     let l3 = *ptr0.add(8).cast::<usize>();
-                                    let base74 = l2;
-                                    let len74 = l3;
-                                    let mut result74 = _rt::Vec::with_capacity(len74);
-                                    for i in 0..len74 {
-                                        let base = base74.add(i * 8);
-                                        let e74 = {
+                                    let base76 = l2;
+                                    let len76 = l3;
+                                    let mut result76 = _rt::Vec::with_capacity(len76);
+                                    for i in 0..len76 {
+                                        let base = base76.add(i * 8);
+                                        let e76 = {
                                             let l4 = *base.add(0).cast::<*mut u8>();
                                             let l5 = *base.add(4).cast::<usize>();
-                                            let base73 = l4;
-                                            let len73 = l5;
-                                            let mut result73 = _rt::Vec::with_capacity(len73);
-                                            for i in 0..len73 {
-                                                let base = base73.add(i * 16);
-                                                let e73 = {
+                                            let base75 = l4;
+                                            let len75 = l5;
+                                            let mut result75 = _rt::Vec::with_capacity(len75);
+                                            for i in 0..len75 {
+                                                let base = base75.add(i * 16);
+                                                let e75 = {
                                                     let l6 = i32::from(*base.add(0).cast::<u8>());
-                                                    let v72 = match l6 {
+                                                    let v74 = match l6 {
                                                         0 => {
-                                                            let e72 = {
+                                                            let e74 = {
                                                                 let l7 = i32::from(
+                                                                    *base.add(8).cast::<u8>(),
+                                                                );
+
+                                                                _rt::bool_lift(l7 as u8)
+                                                            };
+                                                            DbValue::Boolean(e74)
+                                                        }
+                                                        1 => {
+                                                            let e74 = {
+                                                                let l8 = i32::from(
                                                                     *base.add(8).cast::<i8>(),
                                                                 );
 
-                                                                l7 as i8
+                                                                l8 as i8
                                                             };
-                                                            DbValue::Tinyint(e72)
+                                                            DbValue::Tinyint(e74)
                                                         }
-                                                        1 => {
-                                                            let e72 = {
-                                                                let l8 = i32::from(
+                                                        2 => {
+                                                            let e74 = {
+                                                                let l9 = i32::from(
                                                                     *base.add(8).cast::<i16>(),
                                                                 );
 
-                                                                l8 as i16
+                                                                l9 as i16
                                                             };
-                                                            DbValue::Smallint(e72)
-                                                        }
-                                                        2 => {
-                                                            let e72 = {
-                                                                let l9 = *base.add(8).cast::<i32>();
-
-                                                                l9
-                                                            };
-                                                            DbValue::Mediumint(e72)
+                                                            DbValue::Smallint(e74)
                                                         }
                                                         3 => {
-                                                            let e72 = {
+                                                            let e74 = {
                                                                 let l10 =
                                                                     *base.add(8).cast::<i32>();
 
                                                                 l10
                                                             };
-                                                            DbValue::Int(e72)
+                                                            DbValue::Mediumint(e74)
                                                         }
                                                         4 => {
-                                                            let e72 = {
+                                                            let e74 = {
                                                                 let l11 =
-                                                                    *base.add(8).cast::<i64>();
+                                                                    *base.add(8).cast::<i32>();
 
                                                                 l11
                                                             };
-                                                            DbValue::Bigint(e72)
+                                                            DbValue::Int(e74)
                                                         }
                                                         5 => {
-                                                            let e72 = {
-                                                                let l12 = i32::from(
+                                                            let e74 = {
+                                                                let l12 =
+                                                                    *base.add(8).cast::<i64>();
+
+                                                                l12
+                                                            };
+                                                            DbValue::Bigint(e74)
+                                                        }
+                                                        6 => {
+                                                            let e74 = {
+                                                                let l13 = i32::from(
                                                                     *base.add(8).cast::<u8>(),
                                                                 );
 
-                                                                l12 as u8
+                                                                l13 as u8
                                                             };
-                                                            DbValue::Tinyunsigned(e72)
+                                                            DbValue::TinyUnsigned(e74)
                                                         }
-                                                        6 => {
-                                                            let e72 = {
-                                                                let l13 = i32::from(
+                                                        7 => {
+                                                            let e74 = {
+                                                                let l14 = i32::from(
                                                                     *base.add(8).cast::<u16>(),
                                                                 );
 
-                                                                l13 as u16
+                                                                l14 as u16
                                                             };
-                                                            DbValue::Smallunsigned(e72)
-                                                        }
-                                                        7 => {
-                                                            let e72 = {
-                                                                let l14 =
-                                                                    *base.add(8).cast::<i32>();
-
-                                                                l14 as u32
-                                                            };
-                                                            DbValue::Mediumunsigned(e72)
+                                                            DbValue::SmallUnsigned(e74)
                                                         }
                                                         8 => {
-                                                            let e72 = {
+                                                            let e74 = {
                                                                 let l15 =
                                                                     *base.add(8).cast::<i32>();
 
                                                                 l15 as u32
                                                             };
-                                                            DbValue::Unsigned(e72)
+                                                            DbValue::MediumUnsigned(e74)
                                                         }
                                                         9 => {
-                                                            let e72 = {
+                                                            let e74 = {
                                                                 let l16 =
-                                                                    *base.add(8).cast::<i64>();
+                                                                    *base.add(8).cast::<i32>();
 
-                                                                l16 as u64
+                                                                l16 as u32
                                                             };
-                                                            DbValue::Bigunsigned(e72)
+                                                            DbValue::Unsigned(e74)
                                                         }
                                                         10 => {
-                                                            let e72 = {
+                                                            let e74 = {
                                                                 let l17 =
-                                                                    *base.add(8).cast::<f32>();
+                                                                    *base.add(8).cast::<i64>();
 
-                                                                l17
+                                                                l17 as u64
                                                             };
-                                                            DbValue::Float(e72)
+                                                            DbValue::BigUnsigned(e74)
                                                         }
                                                         11 => {
-                                                            let e72 = {
+                                                            let e74 = {
                                                                 let l18 =
-                                                                    *base.add(8).cast::<f64>();
+                                                                    *base.add(8).cast::<f32>();
 
                                                                 l18
                                                             };
-                                                            DbValue::Double(e72)
+                                                            DbValue::Float(e74)
                                                         }
                                                         12 => {
-                                                            let e72 = {
+                                                            let e74 = {
                                                                 let l19 =
-                                                                    *base.add(8).cast::<*mut u8>();
-                                                                let l20 =
-                                                                    *base.add(12).cast::<usize>();
-                                                                let len21 = l20;
-                                                                let bytes21 =
-                                                                    _rt::Vec::from_raw_parts(
-                                                                        l19.cast(),
-                                                                        len21,
-                                                                        len21,
-                                                                    );
+                                                                    *base.add(8).cast::<f64>();
 
-                                                                _rt::string_lift(bytes21)
+                                                                l19
                                                             };
-                                                            DbValue::Decimal(e72)
+                                                            DbValue::Double(e74)
                                                         }
                                                         13 => {
-                                                            let e72 = {
-                                                                let l22 =
-                                                                    *base.add(8).cast::<i64>();
+                                                            let e74 = {
+                                                                let l20 =
+                                                                    *base.add(8).cast::<*mut u8>();
+                                                                let l21 =
+                                                                    *base.add(12).cast::<usize>();
+                                                                let len22 = l21;
+                                                                let bytes22 =
+                                                                    _rt::Vec::from_raw_parts(
+                                                                        l20.cast(),
+                                                                        len22,
+                                                                        len22,
+                                                                    );
 
-                                                                l22
+                                                                _rt::string_lift(bytes22)
                                                             };
-                                                            DbValue::Date(e72)
+                                                            DbValue::Decimal(e74)
                                                         }
                                                         14 => {
-                                                            let e72 = {
+                                                            let e74 = {
                                                                 let l23 =
                                                                     *base.add(8).cast::<i64>();
 
                                                                 l23
                                                             };
-                                                            DbValue::Datetime(e72)
+                                                            DbValue::Date(e74)
                                                         }
                                                         15 => {
-                                                            let e72 = {
+                                                            let e74 = {
                                                                 let l24 =
                                                                     *base.add(8).cast::<i64>();
 
                                                                 l24
                                                             };
-                                                            DbValue::Timestamp(e72)
+                                                            DbValue::Datetime(e74)
                                                         }
                                                         16 => {
-                                                            let e72 = {
-                                                                let l25 = i32::from(
+                                                            let e74 = {
+                                                                let l25 =
+                                                                    *base.add(8).cast::<i64>();
+
+                                                                l25
+                                                            };
+                                                            DbValue::Timestamp(e74)
+                                                        }
+                                                        17 => {
+                                                            let e74 = {
+                                                                let l26 =
+                                                                    *base.add(8).cast::<i64>();
+
+                                                                l26
+                                                            };
+                                                            DbValue::Time(e74)
+                                                        }
+                                                        18 => {
+                                                            let e74 = {
+                                                                let l27 = i32::from(
                                                                     *base.add(8).cast::<i8>(),
                                                                 );
 
-                                                                l25 as i8
+                                                                l27 as i8
                                                             };
-                                                            DbValue::Year(e72)
-                                                        }
-                                                        17 => {
-                                                            let e72 = {
-                                                                let l26 =
-                                                                    *base.add(8).cast::<*mut u8>();
-                                                                let l27 =
-                                                                    *base.add(12).cast::<usize>();
-                                                                let len28 = l27;
-                                                                let bytes28 =
-                                                                    _rt::Vec::from_raw_parts(
-                                                                        l26.cast(),
-                                                                        len28,
-                                                                        len28,
-                                                                    );
-
-                                                                _rt::string_lift(bytes28)
-                                                            };
-                                                            DbValue::Fixedchar(e72)
-                                                        }
-                                                        18 => {
-                                                            let e72 = {
-                                                                let l29 =
-                                                                    *base.add(8).cast::<*mut u8>();
-                                                                let l30 =
-                                                                    *base.add(12).cast::<usize>();
-                                                                let len31 = l30;
-                                                                let bytes31 =
-                                                                    _rt::Vec::from_raw_parts(
-                                                                        l29.cast(),
-                                                                        len31,
-                                                                        len31,
-                                                                    );
-
-                                                                _rt::string_lift(bytes31)
-                                                            };
-                                                            DbValue::Varchar(e72)
+                                                            DbValue::Year(e74)
                                                         }
                                                         19 => {
-                                                            let e72 = {
-                                                                let l32 =
+                                                            let e74 = {
+                                                                let l28 =
                                                                     *base.add(8).cast::<*mut u8>();
-                                                                let l33 =
+                                                                let l29 =
                                                                     *base.add(12).cast::<usize>();
-                                                                let len34 = l33;
-                                                                let bytes34 =
+                                                                let len30 = l29;
+                                                                let bytes30 =
                                                                     _rt::Vec::from_raw_parts(
-                                                                        l32.cast(),
-                                                                        len34,
-                                                                        len34,
+                                                                        l28.cast(),
+                                                                        len30,
+                                                                        len30,
                                                                     );
 
-                                                                _rt::string_lift(bytes34)
+                                                                _rt::string_lift(bytes30)
                                                             };
-                                                            DbValue::Tinytext(e72)
+                                                            DbValue::Fixchar(e74)
                                                         }
                                                         20 => {
-                                                            let e72 = {
-                                                                let l35 =
+                                                            let e74 = {
+                                                                let l31 =
                                                                     *base.add(8).cast::<*mut u8>();
-                                                                let l36 =
+                                                                let l32 =
                                                                     *base.add(12).cast::<usize>();
-                                                                let len37 = l36;
-                                                                let bytes37 =
+                                                                let len33 = l32;
+                                                                let bytes33 =
                                                                     _rt::Vec::from_raw_parts(
-                                                                        l35.cast(),
-                                                                        len37,
-                                                                        len37,
+                                                                        l31.cast(),
+                                                                        len33,
+                                                                        len33,
                                                                     );
 
-                                                                _rt::string_lift(bytes37)
+                                                                _rt::string_lift(bytes33)
                                                             };
-                                                            DbValue::Text(e72)
+                                                            DbValue::Varchar(e74)
                                                         }
                                                         21 => {
-                                                            let e72 = {
-                                                                let l38 =
+                                                            let e74 = {
+                                                                let l34 =
                                                                     *base.add(8).cast::<*mut u8>();
-                                                                let l39 =
+                                                                let l35 =
                                                                     *base.add(12).cast::<usize>();
-                                                                let len40 = l39;
-                                                                let bytes40 =
+                                                                let len36 = l35;
+                                                                let bytes36 =
                                                                     _rt::Vec::from_raw_parts(
-                                                                        l38.cast(),
-                                                                        len40,
-                                                                        len40,
+                                                                        l34.cast(),
+                                                                        len36,
+                                                                        len36,
                                                                     );
 
-                                                                _rt::string_lift(bytes40)
+                                                                _rt::string_lift(bytes36)
                                                             };
-                                                            DbValue::Mediumtext(e72)
+                                                            DbValue::Tinytext(e74)
                                                         }
                                                         22 => {
-                                                            let e72 = {
-                                                                let l41 =
+                                                            let e74 = {
+                                                                let l37 =
                                                                     *base.add(8).cast::<*mut u8>();
-                                                                let l42 =
+                                                                let l38 =
                                                                     *base.add(12).cast::<usize>();
-                                                                let len43 = l42;
-                                                                let bytes43 =
+                                                                let len39 = l38;
+                                                                let bytes39 =
                                                                     _rt::Vec::from_raw_parts(
-                                                                        l41.cast(),
-                                                                        len43,
-                                                                        len43,
+                                                                        l37.cast(),
+                                                                        len39,
+                                                                        len39,
                                                                     );
 
-                                                                _rt::string_lift(bytes43)
+                                                                _rt::string_lift(bytes39)
                                                             };
-                                                            DbValue::Longtext(e72)
+                                                            DbValue::Text(e74)
                                                         }
                                                         23 => {
-                                                            let e72 = {
-                                                                let l44 =
+                                                            let e74 = {
+                                                                let l40 =
                                                                     *base.add(8).cast::<*mut u8>();
-                                                                let l45 =
+                                                                let l41 =
                                                                     *base.add(12).cast::<usize>();
-                                                                let len46 = l45;
+                                                                let len42 = l41;
+                                                                let bytes42 =
+                                                                    _rt::Vec::from_raw_parts(
+                                                                        l40.cast(),
+                                                                        len42,
+                                                                        len42,
+                                                                    );
 
-                                                                _rt::Vec::from_raw_parts(
-                                                                    l44.cast(),
-                                                                    len46,
-                                                                    len46,
-                                                                )
+                                                                _rt::string_lift(bytes42)
                                                             };
-                                                            DbValue::Binary(e72)
+                                                            DbValue::Mediumtext(e74)
                                                         }
                                                         24 => {
-                                                            let e72 = {
-                                                                let l47 =
+                                                            let e74 = {
+                                                                let l43 =
                                                                     *base.add(8).cast::<*mut u8>();
-                                                                let l48 =
+                                                                let l44 =
                                                                     *base.add(12).cast::<usize>();
-                                                                let len49 = l48;
+                                                                let len45 = l44;
+                                                                let bytes45 =
+                                                                    _rt::Vec::from_raw_parts(
+                                                                        l43.cast(),
+                                                                        len45,
+                                                                        len45,
+                                                                    );
 
-                                                                _rt::Vec::from_raw_parts(
-                                                                    l47.cast(),
-                                                                    len49,
-                                                                    len49,
-                                                                )
+                                                                _rt::string_lift(bytes45)
                                                             };
-                                                            DbValue::Varbinary(e72)
+                                                            DbValue::Longtext(e74)
                                                         }
                                                         25 => {
-                                                            let e72 = {
-                                                                let l50 =
+                                                            let e74 = {
+                                                                let l46 =
                                                                     *base.add(8).cast::<*mut u8>();
-                                                                let l51 =
+                                                                let l47 =
                                                                     *base.add(12).cast::<usize>();
-                                                                let len52 = l51;
+                                                                let len48 = l47;
 
                                                                 _rt::Vec::from_raw_parts(
-                                                                    l50.cast(),
-                                                                    len52,
-                                                                    len52,
+                                                                    l46.cast(),
+                                                                    len48,
+                                                                    len48,
                                                                 )
                                                             };
-                                                            DbValue::Tinyblob(e72)
+                                                            DbValue::Binary(e74)
                                                         }
                                                         26 => {
-                                                            let e72 = {
-                                                                let l53 =
+                                                            let e74 = {
+                                                                let l49 =
                                                                     *base.add(8).cast::<*mut u8>();
-                                                                let l54 =
+                                                                let l50 =
                                                                     *base.add(12).cast::<usize>();
-                                                                let len55 = l54;
+                                                                let len51 = l50;
 
                                                                 _rt::Vec::from_raw_parts(
-                                                                    l53.cast(),
-                                                                    len55,
-                                                                    len55,
+                                                                    l49.cast(),
+                                                                    len51,
+                                                                    len51,
                                                                 )
                                                             };
-                                                            DbValue::Blob(e72)
+                                                            DbValue::Varbinary(e74)
                                                         }
                                                         27 => {
-                                                            let e72 = {
-                                                                let l56 =
+                                                            let e74 = {
+                                                                let l52 =
                                                                     *base.add(8).cast::<*mut u8>();
-                                                                let l57 =
+                                                                let l53 =
                                                                     *base.add(12).cast::<usize>();
-                                                                let len58 = l57;
+                                                                let len54 = l53;
 
                                                                 _rt::Vec::from_raw_parts(
-                                                                    l56.cast(),
-                                                                    len58,
-                                                                    len58,
+                                                                    l52.cast(),
+                                                                    len54,
+                                                                    len54,
                                                                 )
                                                             };
-                                                            DbValue::Mediumblob(e72)
+                                                            DbValue::Tinyblob(e74)
                                                         }
                                                         28 => {
-                                                            let e72 = {
-                                                                let l59 =
+                                                            let e74 = {
+                                                                let l55 =
                                                                     *base.add(8).cast::<*mut u8>();
-                                                                let l60 =
+                                                                let l56 =
                                                                     *base.add(12).cast::<usize>();
-                                                                let len61 = l60;
+                                                                let len57 = l56;
 
                                                                 _rt::Vec::from_raw_parts(
-                                                                    l59.cast(),
-                                                                    len61,
-                                                                    len61,
+                                                                    l55.cast(),
+                                                                    len57,
+                                                                    len57,
                                                                 )
                                                             };
-                                                            DbValue::Longblob(e72)
+                                                            DbValue::Blob(e74)
                                                         }
                                                         29 => {
-                                                            let e72 = {
-                                                                let l62 =
+                                                            let e74 = {
+                                                                let l58 =
                                                                     *base.add(8).cast::<*mut u8>();
-                                                                let l63 =
+                                                                let l59 =
                                                                     *base.add(12).cast::<usize>();
-                                                                let len64 = l63;
-                                                                let bytes64 =
-                                                                    _rt::Vec::from_raw_parts(
-                                                                        l62.cast(),
-                                                                        len64,
-                                                                        len64,
-                                                                    );
+                                                                let len60 = l59;
 
-                                                                _rt::string_lift(bytes64)
+                                                                _rt::Vec::from_raw_parts(
+                                                                    l58.cast(),
+                                                                    len60,
+                                                                    len60,
+                                                                )
                                                             };
-                                                            DbValue::Enumeration(e72)
+                                                            DbValue::Mediumblob(e74)
                                                         }
                                                         30 => {
-                                                            let e72 = {
-                                                                let l65 =
+                                                            let e74 = {
+                                                                let l61 =
                                                                     *base.add(8).cast::<*mut u8>();
-                                                                let l66 =
+                                                                let l62 =
                                                                     *base.add(12).cast::<usize>();
-                                                                let len67 = l66;
-                                                                let bytes67 =
-                                                                    _rt::Vec::from_raw_parts(
-                                                                        l65.cast(),
-                                                                        len67,
-                                                                        len67,
-                                                                    );
+                                                                let len63 = l62;
 
-                                                                _rt::string_lift(bytes67)
+                                                                _rt::Vec::from_raw_parts(
+                                                                    l61.cast(),
+                                                                    len63,
+                                                                    len63,
+                                                                )
                                                             };
-                                                            DbValue::Set(e72)
+                                                            DbValue::Longblob(e74)
                                                         }
                                                         31 => {
-                                                            let e72 = {
-                                                                let l68 = i32::from(
+                                                            let e74 = {
+                                                                let l64 =
+                                                                    *base.add(8).cast::<*mut u8>();
+                                                                let l65 =
+                                                                    *base.add(12).cast::<usize>();
+                                                                let len66 = l65;
+                                                                let bytes66 =
+                                                                    _rt::Vec::from_raw_parts(
+                                                                        l64.cast(),
+                                                                        len66,
+                                                                        len66,
+                                                                    );
+
+                                                                _rt::string_lift(bytes66)
+                                                            };
+                                                            DbValue::Enumeration(e74)
+                                                        }
+                                                        32 => {
+                                                            let e74 = {
+                                                                let l67 =
+                                                                    *base.add(8).cast::<*mut u8>();
+                                                                let l68 =
+                                                                    *base.add(12).cast::<usize>();
+                                                                let len69 = l68;
+                                                                let bytes69 =
+                                                                    _rt::Vec::from_raw_parts(
+                                                                        l67.cast(),
+                                                                        len69,
+                                                                        len69,
+                                                                    );
+
+                                                                _rt::string_lift(bytes69)
+                                                            };
+                                                            DbValue::Set(e74)
+                                                        }
+                                                        33 => {
+                                                            let e74 = {
+                                                                let l70 = i32::from(
                                                                     *base.add(8).cast::<u8>(),
                                                                 );
 
-                                                                l68 as u8
+                                                                l70 as u8
                                                             };
-                                                            DbValue::Bit(e72)
+                                                            DbValue::Bit(e74)
+                                                        }
+                                                        34 => {
+                                                            let e74 = {
+                                                                let l71 =
+                                                                    *base.add(8).cast::<*mut u8>();
+                                                                let l72 =
+                                                                    *base.add(12).cast::<usize>();
+                                                                let len73 = l72;
+                                                                let bytes73 =
+                                                                    _rt::Vec::from_raw_parts(
+                                                                        l71.cast(),
+                                                                        len73,
+                                                                        len73,
+                                                                    );
+
+                                                                _rt::string_lift(bytes73)
+                                                            };
+                                                            DbValue::Json(e74)
                                                         }
                                                         n => {
                                                             debug_assert_eq!(
-                                                                n, 32,
+                                                                n, 35,
                                                                 "invalid enum discriminant"
                                                             );
-                                                            let e72 = {
-                                                                let l69 =
-                                                                    *base.add(8).cast::<*mut u8>();
-                                                                let l70 =
-                                                                    *base.add(12).cast::<usize>();
-                                                                let len71 = l70;
-                                                                let bytes71 =
-                                                                    _rt::Vec::from_raw_parts(
-                                                                        l69.cast(),
-                                                                        len71,
-                                                                        len71,
-                                                                    );
-
-                                                                _rt::string_lift(bytes71)
-                                                            };
-                                                            DbValue::Json(e72)
+                                                            DbValue::Null
                                                         }
                                                     };
 
-                                                    v72
+                                                    v74
                                                 };
-                                                result73.push(e73);
+                                                result75.push(e75);
                                             }
-                                            _rt::cabi_dealloc(base73, len73 * 16, 8);
+                                            _rt::cabi_dealloc(base75, len75 * 16, 8);
 
-                                            DbRow { values: result73 }
+                                            DbRow { values: result75 }
                                         };
-                                        result74.push(e74);
+                                        result76.push(e76);
                                     }
-                                    _rt::cabi_dealloc(base74, len74 * 8, 4);
+                                    _rt::cabi_dealloc(base76, len76 * 8, 4);
 
-                                    result74
+                                    result76
                                 };
                                 Some(e)
                             }
@@ -3128,56 +3157,64 @@ pub mod wasi {
                             let base = result17.add(i * 16);
                             {
                                 match e {
-                                    DbValue::Tinyint(e) => {
+                                    DbValue::Boolean(e) => {
                                         *base.add(0).cast::<u8>() = (0i32) as u8;
+                                        *base.add(8).cast::<u8>() = (match e {
+                                            true => 1,
+                                            false => 0,
+                                        })
+                                            as u8;
+                                    }
+                                    DbValue::Tinyint(e) => {
+                                        *base.add(0).cast::<u8>() = (1i32) as u8;
                                         *base.add(8).cast::<u8>() = (_rt::as_i32(e)) as u8;
                                     }
                                     DbValue::Smallint(e) => {
-                                        *base.add(0).cast::<u8>() = (1i32) as u8;
+                                        *base.add(0).cast::<u8>() = (2i32) as u8;
                                         *base.add(8).cast::<u16>() = (_rt::as_i32(e)) as u16;
                                     }
                                     DbValue::Mediumint(e) => {
-                                        *base.add(0).cast::<u8>() = (2i32) as u8;
-                                        *base.add(8).cast::<i32>() = _rt::as_i32(e);
-                                    }
-                                    DbValue::Int(e) => {
                                         *base.add(0).cast::<u8>() = (3i32) as u8;
                                         *base.add(8).cast::<i32>() = _rt::as_i32(e);
                                     }
-                                    DbValue::Bigint(e) => {
+                                    DbValue::Int(e) => {
                                         *base.add(0).cast::<u8>() = (4i32) as u8;
-                                        *base.add(8).cast::<i64>() = _rt::as_i64(e);
-                                    }
-                                    DbValue::Tinyunsigned(e) => {
-                                        *base.add(0).cast::<u8>() = (5i32) as u8;
-                                        *base.add(8).cast::<u8>() = (_rt::as_i32(e)) as u8;
-                                    }
-                                    DbValue::Smallunsigned(e) => {
-                                        *base.add(0).cast::<u8>() = (6i32) as u8;
-                                        *base.add(8).cast::<u16>() = (_rt::as_i32(e)) as u16;
-                                    }
-                                    DbValue::Mediumunsigned(e) => {
-                                        *base.add(0).cast::<u8>() = (7i32) as u8;
                                         *base.add(8).cast::<i32>() = _rt::as_i32(e);
                                     }
-                                    DbValue::Unsigned(e) => {
+                                    DbValue::Bigint(e) => {
+                                        *base.add(0).cast::<u8>() = (5i32) as u8;
+                                        *base.add(8).cast::<i64>() = _rt::as_i64(e);
+                                    }
+                                    DbValue::TinyUnsigned(e) => {
+                                        *base.add(0).cast::<u8>() = (6i32) as u8;
+                                        *base.add(8).cast::<u8>() = (_rt::as_i32(e)) as u8;
+                                    }
+                                    DbValue::SmallUnsigned(e) => {
+                                        *base.add(0).cast::<u8>() = (7i32) as u8;
+                                        *base.add(8).cast::<u16>() = (_rt::as_i32(e)) as u16;
+                                    }
+                                    DbValue::MediumUnsigned(e) => {
                                         *base.add(0).cast::<u8>() = (8i32) as u8;
                                         *base.add(8).cast::<i32>() = _rt::as_i32(e);
                                     }
-                                    DbValue::Bigunsigned(e) => {
+                                    DbValue::Unsigned(e) => {
                                         *base.add(0).cast::<u8>() = (9i32) as u8;
+                                        *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                    }
+                                    DbValue::BigUnsigned(e) => {
+                                        *base.add(0).cast::<u8>() = (10i32) as u8;
                                         *base.add(8).cast::<i64>() = _rt::as_i64(e);
                                     }
                                     DbValue::Float(e) => {
-                                        *base.add(0).cast::<u8>() = (10i32) as u8;
+                                        *base.add(0).cast::<u8>() = (11i32) as u8;
                                         *base.add(8).cast::<f32>() = _rt::as_f32(e);
                                     }
                                     DbValue::Double(e) => {
-                                        *base.add(0).cast::<u8>() = (11i32) as u8;
+                                        *base.add(0).cast::<u8>() = (12i32) as u8;
                                         *base.add(8).cast::<f64>() = _rt::as_f64(e);
                                     }
                                     DbValue::Decimal(e) => {
-                                        *base.add(0).cast::<u8>() = (12i32) as u8;
+                                        *base.add(0).cast::<u8>() = (13i32) as u8;
                                         let vec1 = e;
                                         let ptr1 = vec1.as_ptr().cast::<u8>();
                                         let len1 = vec1.len();
@@ -3185,23 +3222,27 @@ pub mod wasi {
                                         *base.add(8).cast::<*mut u8>() = ptr1.cast_mut();
                                     }
                                     DbValue::Date(e) => {
-                                        *base.add(0).cast::<u8>() = (13i32) as u8;
-                                        *base.add(8).cast::<i64>() = _rt::as_i64(e);
-                                    }
-                                    DbValue::Datetime(e) => {
                                         *base.add(0).cast::<u8>() = (14i32) as u8;
                                         *base.add(8).cast::<i64>() = _rt::as_i64(e);
                                     }
-                                    DbValue::Timestamp(e) => {
+                                    DbValue::Datetime(e) => {
                                         *base.add(0).cast::<u8>() = (15i32) as u8;
                                         *base.add(8).cast::<i64>() = _rt::as_i64(e);
                                     }
-                                    DbValue::Year(e) => {
+                                    DbValue::Timestamp(e) => {
                                         *base.add(0).cast::<u8>() = (16i32) as u8;
+                                        *base.add(8).cast::<i64>() = _rt::as_i64(e);
+                                    }
+                                    DbValue::Time(e) => {
+                                        *base.add(0).cast::<u8>() = (17i32) as u8;
+                                        *base.add(8).cast::<i64>() = _rt::as_i64(e);
+                                    }
+                                    DbValue::Year(e) => {
+                                        *base.add(0).cast::<u8>() = (18i32) as u8;
                                         *base.add(8).cast::<u8>() = (_rt::as_i32(e)) as u8;
                                     }
-                                    DbValue::Fixedchar(e) => {
-                                        *base.add(0).cast::<u8>() = (17i32) as u8;
+                                    DbValue::Fixchar(e) => {
+                                        *base.add(0).cast::<u8>() = (19i32) as u8;
                                         let vec2 = e;
                                         let ptr2 = vec2.as_ptr().cast::<u8>();
                                         let len2 = vec2.len();
@@ -3209,7 +3250,7 @@ pub mod wasi {
                                         *base.add(8).cast::<*mut u8>() = ptr2.cast_mut();
                                     }
                                     DbValue::Varchar(e) => {
-                                        *base.add(0).cast::<u8>() = (18i32) as u8;
+                                        *base.add(0).cast::<u8>() = (20i32) as u8;
                                         let vec3 = e;
                                         let ptr3 = vec3.as_ptr().cast::<u8>();
                                         let len3 = vec3.len();
@@ -3217,7 +3258,7 @@ pub mod wasi {
                                         *base.add(8).cast::<*mut u8>() = ptr3.cast_mut();
                                     }
                                     DbValue::Tinytext(e) => {
-                                        *base.add(0).cast::<u8>() = (19i32) as u8;
+                                        *base.add(0).cast::<u8>() = (21i32) as u8;
                                         let vec4 = e;
                                         let ptr4 = vec4.as_ptr().cast::<u8>();
                                         let len4 = vec4.len();
@@ -3225,7 +3266,7 @@ pub mod wasi {
                                         *base.add(8).cast::<*mut u8>() = ptr4.cast_mut();
                                     }
                                     DbValue::Text(e) => {
-                                        *base.add(0).cast::<u8>() = (20i32) as u8;
+                                        *base.add(0).cast::<u8>() = (22i32) as u8;
                                         let vec5 = e;
                                         let ptr5 = vec5.as_ptr().cast::<u8>();
                                         let len5 = vec5.len();
@@ -3233,7 +3274,7 @@ pub mod wasi {
                                         *base.add(8).cast::<*mut u8>() = ptr5.cast_mut();
                                     }
                                     DbValue::Mediumtext(e) => {
-                                        *base.add(0).cast::<u8>() = (21i32) as u8;
+                                        *base.add(0).cast::<u8>() = (23i32) as u8;
                                         let vec6 = e;
                                         let ptr6 = vec6.as_ptr().cast::<u8>();
                                         let len6 = vec6.len();
@@ -3241,7 +3282,7 @@ pub mod wasi {
                                         *base.add(8).cast::<*mut u8>() = ptr6.cast_mut();
                                     }
                                     DbValue::Longtext(e) => {
-                                        *base.add(0).cast::<u8>() = (22i32) as u8;
+                                        *base.add(0).cast::<u8>() = (24i32) as u8;
                                         let vec7 = e;
                                         let ptr7 = vec7.as_ptr().cast::<u8>();
                                         let len7 = vec7.len();
@@ -3249,7 +3290,7 @@ pub mod wasi {
                                         *base.add(8).cast::<*mut u8>() = ptr7.cast_mut();
                                     }
                                     DbValue::Binary(e) => {
-                                        *base.add(0).cast::<u8>() = (23i32) as u8;
+                                        *base.add(0).cast::<u8>() = (25i32) as u8;
                                         let vec8 = e;
                                         let ptr8 = vec8.as_ptr().cast::<u8>();
                                         let len8 = vec8.len();
@@ -3257,7 +3298,7 @@ pub mod wasi {
                                         *base.add(8).cast::<*mut u8>() = ptr8.cast_mut();
                                     }
                                     DbValue::Varbinary(e) => {
-                                        *base.add(0).cast::<u8>() = (24i32) as u8;
+                                        *base.add(0).cast::<u8>() = (26i32) as u8;
                                         let vec9 = e;
                                         let ptr9 = vec9.as_ptr().cast::<u8>();
                                         let len9 = vec9.len();
@@ -3265,7 +3306,7 @@ pub mod wasi {
                                         *base.add(8).cast::<*mut u8>() = ptr9.cast_mut();
                                     }
                                     DbValue::Tinyblob(e) => {
-                                        *base.add(0).cast::<u8>() = (25i32) as u8;
+                                        *base.add(0).cast::<u8>() = (27i32) as u8;
                                         let vec10 = e;
                                         let ptr10 = vec10.as_ptr().cast::<u8>();
                                         let len10 = vec10.len();
@@ -3273,7 +3314,7 @@ pub mod wasi {
                                         *base.add(8).cast::<*mut u8>() = ptr10.cast_mut();
                                     }
                                     DbValue::Blob(e) => {
-                                        *base.add(0).cast::<u8>() = (26i32) as u8;
+                                        *base.add(0).cast::<u8>() = (28i32) as u8;
                                         let vec11 = e;
                                         let ptr11 = vec11.as_ptr().cast::<u8>();
                                         let len11 = vec11.len();
@@ -3281,7 +3322,7 @@ pub mod wasi {
                                         *base.add(8).cast::<*mut u8>() = ptr11.cast_mut();
                                     }
                                     DbValue::Mediumblob(e) => {
-                                        *base.add(0).cast::<u8>() = (27i32) as u8;
+                                        *base.add(0).cast::<u8>() = (29i32) as u8;
                                         let vec12 = e;
                                         let ptr12 = vec12.as_ptr().cast::<u8>();
                                         let len12 = vec12.len();
@@ -3289,7 +3330,7 @@ pub mod wasi {
                                         *base.add(8).cast::<*mut u8>() = ptr12.cast_mut();
                                     }
                                     DbValue::Longblob(e) => {
-                                        *base.add(0).cast::<u8>() = (28i32) as u8;
+                                        *base.add(0).cast::<u8>() = (30i32) as u8;
                                         let vec13 = e;
                                         let ptr13 = vec13.as_ptr().cast::<u8>();
                                         let len13 = vec13.len();
@@ -3297,7 +3338,7 @@ pub mod wasi {
                                         *base.add(8).cast::<*mut u8>() = ptr13.cast_mut();
                                     }
                                     DbValue::Enumeration(e) => {
-                                        *base.add(0).cast::<u8>() = (29i32) as u8;
+                                        *base.add(0).cast::<u8>() = (31i32) as u8;
                                         let vec14 = e;
                                         let ptr14 = vec14.as_ptr().cast::<u8>();
                                         let len14 = vec14.len();
@@ -3305,7 +3346,7 @@ pub mod wasi {
                                         *base.add(8).cast::<*mut u8>() = ptr14.cast_mut();
                                     }
                                     DbValue::Set(e) => {
-                                        *base.add(0).cast::<u8>() = (30i32) as u8;
+                                        *base.add(0).cast::<u8>() = (32i32) as u8;
                                         let vec15 = e;
                                         let ptr15 = vec15.as_ptr().cast::<u8>();
                                         let len15 = vec15.len();
@@ -3313,16 +3354,19 @@ pub mod wasi {
                                         *base.add(8).cast::<*mut u8>() = ptr15.cast_mut();
                                     }
                                     DbValue::Bit(e) => {
-                                        *base.add(0).cast::<u8>() = (31i32) as u8;
+                                        *base.add(0).cast::<u8>() = (33i32) as u8;
                                         *base.add(8).cast::<u8>() = (_rt::as_i32(e)) as u8;
                                     }
                                     DbValue::Json(e) => {
-                                        *base.add(0).cast::<u8>() = (32i32) as u8;
+                                        *base.add(0).cast::<u8>() = (34i32) as u8;
                                         let vec16 = e;
                                         let ptr16 = vec16.as_ptr().cast::<u8>();
                                         let len16 = vec16.len();
                                         *base.add(12).cast::<usize>() = len16;
                                         *base.add(8).cast::<*mut u8>() = ptr16.cast_mut();
+                                    }
+                                    DbValue::Null => {
+                                        *base.add(0).cast::<u8>() = (35i32) as u8;
                                     }
                                 }
                             }
@@ -3494,56 +3538,64 @@ pub mod wasi {
                             let base = result17.add(i * 16);
                             {
                                 match e {
-                                    DbValue::Tinyint(e) => {
+                                    DbValue::Boolean(e) => {
                                         *base.add(0).cast::<u8>() = (0i32) as u8;
+                                        *base.add(8).cast::<u8>() = (match e {
+                                            true => 1,
+                                            false => 0,
+                                        })
+                                            as u8;
+                                    }
+                                    DbValue::Tinyint(e) => {
+                                        *base.add(0).cast::<u8>() = (1i32) as u8;
                                         *base.add(8).cast::<u8>() = (_rt::as_i32(e)) as u8;
                                     }
                                     DbValue::Smallint(e) => {
-                                        *base.add(0).cast::<u8>() = (1i32) as u8;
+                                        *base.add(0).cast::<u8>() = (2i32) as u8;
                                         *base.add(8).cast::<u16>() = (_rt::as_i32(e)) as u16;
                                     }
                                     DbValue::Mediumint(e) => {
-                                        *base.add(0).cast::<u8>() = (2i32) as u8;
-                                        *base.add(8).cast::<i32>() = _rt::as_i32(e);
-                                    }
-                                    DbValue::Int(e) => {
                                         *base.add(0).cast::<u8>() = (3i32) as u8;
                                         *base.add(8).cast::<i32>() = _rt::as_i32(e);
                                     }
-                                    DbValue::Bigint(e) => {
+                                    DbValue::Int(e) => {
                                         *base.add(0).cast::<u8>() = (4i32) as u8;
-                                        *base.add(8).cast::<i64>() = _rt::as_i64(e);
-                                    }
-                                    DbValue::Tinyunsigned(e) => {
-                                        *base.add(0).cast::<u8>() = (5i32) as u8;
-                                        *base.add(8).cast::<u8>() = (_rt::as_i32(e)) as u8;
-                                    }
-                                    DbValue::Smallunsigned(e) => {
-                                        *base.add(0).cast::<u8>() = (6i32) as u8;
-                                        *base.add(8).cast::<u16>() = (_rt::as_i32(e)) as u16;
-                                    }
-                                    DbValue::Mediumunsigned(e) => {
-                                        *base.add(0).cast::<u8>() = (7i32) as u8;
                                         *base.add(8).cast::<i32>() = _rt::as_i32(e);
                                     }
-                                    DbValue::Unsigned(e) => {
+                                    DbValue::Bigint(e) => {
+                                        *base.add(0).cast::<u8>() = (5i32) as u8;
+                                        *base.add(8).cast::<i64>() = _rt::as_i64(e);
+                                    }
+                                    DbValue::TinyUnsigned(e) => {
+                                        *base.add(0).cast::<u8>() = (6i32) as u8;
+                                        *base.add(8).cast::<u8>() = (_rt::as_i32(e)) as u8;
+                                    }
+                                    DbValue::SmallUnsigned(e) => {
+                                        *base.add(0).cast::<u8>() = (7i32) as u8;
+                                        *base.add(8).cast::<u16>() = (_rt::as_i32(e)) as u16;
+                                    }
+                                    DbValue::MediumUnsigned(e) => {
                                         *base.add(0).cast::<u8>() = (8i32) as u8;
                                         *base.add(8).cast::<i32>() = _rt::as_i32(e);
                                     }
-                                    DbValue::Bigunsigned(e) => {
+                                    DbValue::Unsigned(e) => {
                                         *base.add(0).cast::<u8>() = (9i32) as u8;
+                                        *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                    }
+                                    DbValue::BigUnsigned(e) => {
+                                        *base.add(0).cast::<u8>() = (10i32) as u8;
                                         *base.add(8).cast::<i64>() = _rt::as_i64(e);
                                     }
                                     DbValue::Float(e) => {
-                                        *base.add(0).cast::<u8>() = (10i32) as u8;
+                                        *base.add(0).cast::<u8>() = (11i32) as u8;
                                         *base.add(8).cast::<f32>() = _rt::as_f32(e);
                                     }
                                     DbValue::Double(e) => {
-                                        *base.add(0).cast::<u8>() = (11i32) as u8;
+                                        *base.add(0).cast::<u8>() = (12i32) as u8;
                                         *base.add(8).cast::<f64>() = _rt::as_f64(e);
                                     }
                                     DbValue::Decimal(e) => {
-                                        *base.add(0).cast::<u8>() = (12i32) as u8;
+                                        *base.add(0).cast::<u8>() = (13i32) as u8;
                                         let vec1 = e;
                                         let ptr1 = vec1.as_ptr().cast::<u8>();
                                         let len1 = vec1.len();
@@ -3551,23 +3603,27 @@ pub mod wasi {
                                         *base.add(8).cast::<*mut u8>() = ptr1.cast_mut();
                                     }
                                     DbValue::Date(e) => {
-                                        *base.add(0).cast::<u8>() = (13i32) as u8;
-                                        *base.add(8).cast::<i64>() = _rt::as_i64(e);
-                                    }
-                                    DbValue::Datetime(e) => {
                                         *base.add(0).cast::<u8>() = (14i32) as u8;
                                         *base.add(8).cast::<i64>() = _rt::as_i64(e);
                                     }
-                                    DbValue::Timestamp(e) => {
+                                    DbValue::Datetime(e) => {
                                         *base.add(0).cast::<u8>() = (15i32) as u8;
                                         *base.add(8).cast::<i64>() = _rt::as_i64(e);
                                     }
-                                    DbValue::Year(e) => {
+                                    DbValue::Timestamp(e) => {
                                         *base.add(0).cast::<u8>() = (16i32) as u8;
+                                        *base.add(8).cast::<i64>() = _rt::as_i64(e);
+                                    }
+                                    DbValue::Time(e) => {
+                                        *base.add(0).cast::<u8>() = (17i32) as u8;
+                                        *base.add(8).cast::<i64>() = _rt::as_i64(e);
+                                    }
+                                    DbValue::Year(e) => {
+                                        *base.add(0).cast::<u8>() = (18i32) as u8;
                                         *base.add(8).cast::<u8>() = (_rt::as_i32(e)) as u8;
                                     }
-                                    DbValue::Fixedchar(e) => {
-                                        *base.add(0).cast::<u8>() = (17i32) as u8;
+                                    DbValue::Fixchar(e) => {
+                                        *base.add(0).cast::<u8>() = (19i32) as u8;
                                         let vec2 = e;
                                         let ptr2 = vec2.as_ptr().cast::<u8>();
                                         let len2 = vec2.len();
@@ -3575,7 +3631,7 @@ pub mod wasi {
                                         *base.add(8).cast::<*mut u8>() = ptr2.cast_mut();
                                     }
                                     DbValue::Varchar(e) => {
-                                        *base.add(0).cast::<u8>() = (18i32) as u8;
+                                        *base.add(0).cast::<u8>() = (20i32) as u8;
                                         let vec3 = e;
                                         let ptr3 = vec3.as_ptr().cast::<u8>();
                                         let len3 = vec3.len();
@@ -3583,7 +3639,7 @@ pub mod wasi {
                                         *base.add(8).cast::<*mut u8>() = ptr3.cast_mut();
                                     }
                                     DbValue::Tinytext(e) => {
-                                        *base.add(0).cast::<u8>() = (19i32) as u8;
+                                        *base.add(0).cast::<u8>() = (21i32) as u8;
                                         let vec4 = e;
                                         let ptr4 = vec4.as_ptr().cast::<u8>();
                                         let len4 = vec4.len();
@@ -3591,7 +3647,7 @@ pub mod wasi {
                                         *base.add(8).cast::<*mut u8>() = ptr4.cast_mut();
                                     }
                                     DbValue::Text(e) => {
-                                        *base.add(0).cast::<u8>() = (20i32) as u8;
+                                        *base.add(0).cast::<u8>() = (22i32) as u8;
                                         let vec5 = e;
                                         let ptr5 = vec5.as_ptr().cast::<u8>();
                                         let len5 = vec5.len();
@@ -3599,7 +3655,7 @@ pub mod wasi {
                                         *base.add(8).cast::<*mut u8>() = ptr5.cast_mut();
                                     }
                                     DbValue::Mediumtext(e) => {
-                                        *base.add(0).cast::<u8>() = (21i32) as u8;
+                                        *base.add(0).cast::<u8>() = (23i32) as u8;
                                         let vec6 = e;
                                         let ptr6 = vec6.as_ptr().cast::<u8>();
                                         let len6 = vec6.len();
@@ -3607,7 +3663,7 @@ pub mod wasi {
                                         *base.add(8).cast::<*mut u8>() = ptr6.cast_mut();
                                     }
                                     DbValue::Longtext(e) => {
-                                        *base.add(0).cast::<u8>() = (22i32) as u8;
+                                        *base.add(0).cast::<u8>() = (24i32) as u8;
                                         let vec7 = e;
                                         let ptr7 = vec7.as_ptr().cast::<u8>();
                                         let len7 = vec7.len();
@@ -3615,7 +3671,7 @@ pub mod wasi {
                                         *base.add(8).cast::<*mut u8>() = ptr7.cast_mut();
                                     }
                                     DbValue::Binary(e) => {
-                                        *base.add(0).cast::<u8>() = (23i32) as u8;
+                                        *base.add(0).cast::<u8>() = (25i32) as u8;
                                         let vec8 = e;
                                         let ptr8 = vec8.as_ptr().cast::<u8>();
                                         let len8 = vec8.len();
@@ -3623,7 +3679,7 @@ pub mod wasi {
                                         *base.add(8).cast::<*mut u8>() = ptr8.cast_mut();
                                     }
                                     DbValue::Varbinary(e) => {
-                                        *base.add(0).cast::<u8>() = (24i32) as u8;
+                                        *base.add(0).cast::<u8>() = (26i32) as u8;
                                         let vec9 = e;
                                         let ptr9 = vec9.as_ptr().cast::<u8>();
                                         let len9 = vec9.len();
@@ -3631,7 +3687,7 @@ pub mod wasi {
                                         *base.add(8).cast::<*mut u8>() = ptr9.cast_mut();
                                     }
                                     DbValue::Tinyblob(e) => {
-                                        *base.add(0).cast::<u8>() = (25i32) as u8;
+                                        *base.add(0).cast::<u8>() = (27i32) as u8;
                                         let vec10 = e;
                                         let ptr10 = vec10.as_ptr().cast::<u8>();
                                         let len10 = vec10.len();
@@ -3639,7 +3695,7 @@ pub mod wasi {
                                         *base.add(8).cast::<*mut u8>() = ptr10.cast_mut();
                                     }
                                     DbValue::Blob(e) => {
-                                        *base.add(0).cast::<u8>() = (26i32) as u8;
+                                        *base.add(0).cast::<u8>() = (28i32) as u8;
                                         let vec11 = e;
                                         let ptr11 = vec11.as_ptr().cast::<u8>();
                                         let len11 = vec11.len();
@@ -3647,7 +3703,7 @@ pub mod wasi {
                                         *base.add(8).cast::<*mut u8>() = ptr11.cast_mut();
                                     }
                                     DbValue::Mediumblob(e) => {
-                                        *base.add(0).cast::<u8>() = (27i32) as u8;
+                                        *base.add(0).cast::<u8>() = (29i32) as u8;
                                         let vec12 = e;
                                         let ptr12 = vec12.as_ptr().cast::<u8>();
                                         let len12 = vec12.len();
@@ -3655,7 +3711,7 @@ pub mod wasi {
                                         *base.add(8).cast::<*mut u8>() = ptr12.cast_mut();
                                     }
                                     DbValue::Longblob(e) => {
-                                        *base.add(0).cast::<u8>() = (28i32) as u8;
+                                        *base.add(0).cast::<u8>() = (30i32) as u8;
                                         let vec13 = e;
                                         let ptr13 = vec13.as_ptr().cast::<u8>();
                                         let len13 = vec13.len();
@@ -3663,7 +3719,7 @@ pub mod wasi {
                                         *base.add(8).cast::<*mut u8>() = ptr13.cast_mut();
                                     }
                                     DbValue::Enumeration(e) => {
-                                        *base.add(0).cast::<u8>() = (29i32) as u8;
+                                        *base.add(0).cast::<u8>() = (31i32) as u8;
                                         let vec14 = e;
                                         let ptr14 = vec14.as_ptr().cast::<u8>();
                                         let len14 = vec14.len();
@@ -3671,7 +3727,7 @@ pub mod wasi {
                                         *base.add(8).cast::<*mut u8>() = ptr14.cast_mut();
                                     }
                                     DbValue::Set(e) => {
-                                        *base.add(0).cast::<u8>() = (30i32) as u8;
+                                        *base.add(0).cast::<u8>() = (32i32) as u8;
                                         let vec15 = e;
                                         let ptr15 = vec15.as_ptr().cast::<u8>();
                                         let len15 = vec15.len();
@@ -3679,16 +3735,19 @@ pub mod wasi {
                                         *base.add(8).cast::<*mut u8>() = ptr15.cast_mut();
                                     }
                                     DbValue::Bit(e) => {
-                                        *base.add(0).cast::<u8>() = (31i32) as u8;
+                                        *base.add(0).cast::<u8>() = (33i32) as u8;
                                         *base.add(8).cast::<u8>() = (_rt::as_i32(e)) as u8;
                                     }
                                     DbValue::Json(e) => {
-                                        *base.add(0).cast::<u8>() = (32i32) as u8;
+                                        *base.add(0).cast::<u8>() = (34i32) as u8;
                                         let vec16 = e;
                                         let ptr16 = vec16.as_ptr().cast::<u8>();
                                         let len16 = vec16.len();
                                         *base.add(12).cast::<usize>() = len16;
                                         *base.add(8).cast::<*mut u8>() = ptr16.cast_mut();
+                                    }
+                                    DbValue::Null => {
+                                        *base.add(0).cast::<u8>() = (35i32) as u8;
                                     }
                                 }
                             }
@@ -4031,104 +4090,110 @@ pub mod exports {
                                     *base.add(8).cast::<*mut u8>() = ptr9.cast_mut();
                                     use super::super::super::super::wasi::rdbms::mysql::DbColumnType as V10;
                                     match db_type8 {
-                                        V10::Tinyint => {
+                                        V10::Boolean => {
                                             *base.add(16).cast::<u8>() = (0i32) as u8;
                                         }
-                                        V10::Smallint => {
+                                        V10::Tinyint => {
                                             *base.add(16).cast::<u8>() = (1i32) as u8;
                                         }
-                                        V10::Mediumint => {
+                                        V10::Smallint => {
                                             *base.add(16).cast::<u8>() = (2i32) as u8;
                                         }
-                                        V10::Int => {
+                                        V10::Mediumint => {
                                             *base.add(16).cast::<u8>() = (3i32) as u8;
                                         }
-                                        V10::Bigint => {
+                                        V10::Int => {
                                             *base.add(16).cast::<u8>() = (4i32) as u8;
                                         }
-                                        V10::Tinyunsigned => {
+                                        V10::Bigint => {
                                             *base.add(16).cast::<u8>() = (5i32) as u8;
                                         }
-                                        V10::Smallunsigned => {
+                                        V10::TinyUnsigned => {
                                             *base.add(16).cast::<u8>() = (6i32) as u8;
                                         }
-                                        V10::Mediumunsigned => {
+                                        V10::SmallUnsigned => {
                                             *base.add(16).cast::<u8>() = (7i32) as u8;
                                         }
-                                        V10::Unsigned => {
+                                        V10::MediumUnsigned => {
                                             *base.add(16).cast::<u8>() = (8i32) as u8;
                                         }
-                                        V10::Bigunsigned => {
+                                        V10::Unsigned => {
                                             *base.add(16).cast::<u8>() = (9i32) as u8;
                                         }
-                                        V10::Float => {
+                                        V10::BigUnsigned => {
                                             *base.add(16).cast::<u8>() = (10i32) as u8;
                                         }
-                                        V10::Double => {
+                                        V10::Float => {
                                             *base.add(16).cast::<u8>() = (11i32) as u8;
                                         }
-                                        V10::Decimal => {
+                                        V10::Double => {
                                             *base.add(16).cast::<u8>() = (12i32) as u8;
                                         }
-                                        V10::Date => {
+                                        V10::Decimal => {
                                             *base.add(16).cast::<u8>() = (13i32) as u8;
                                         }
-                                        V10::Datetime => {
+                                        V10::Date => {
                                             *base.add(16).cast::<u8>() = (14i32) as u8;
                                         }
-                                        V10::Timestamp => {
+                                        V10::Datetime => {
                                             *base.add(16).cast::<u8>() = (15i32) as u8;
                                         }
-                                        V10::Year => {
+                                        V10::Timestamp => {
                                             *base.add(16).cast::<u8>() = (16i32) as u8;
                                         }
-                                        V10::Fixedchar => {
+                                        V10::Time => {
                                             *base.add(16).cast::<u8>() = (17i32) as u8;
                                         }
-                                        V10::Varchar => {
+                                        V10::Year => {
                                             *base.add(16).cast::<u8>() = (18i32) as u8;
                                         }
-                                        V10::Tinytext => {
+                                        V10::Fixchar => {
                                             *base.add(16).cast::<u8>() = (19i32) as u8;
                                         }
-                                        V10::Text => {
+                                        V10::Varchar => {
                                             *base.add(16).cast::<u8>() = (20i32) as u8;
                                         }
-                                        V10::Mediumtext => {
+                                        V10::Tinytext => {
                                             *base.add(16).cast::<u8>() = (21i32) as u8;
                                         }
-                                        V10::Longtext => {
+                                        V10::Text => {
                                             *base.add(16).cast::<u8>() = (22i32) as u8;
                                         }
-                                        V10::Binary => {
+                                        V10::Mediumtext => {
                                             *base.add(16).cast::<u8>() = (23i32) as u8;
                                         }
-                                        V10::Varbinary => {
+                                        V10::Longtext => {
                                             *base.add(16).cast::<u8>() = (24i32) as u8;
                                         }
-                                        V10::Tinyblob => {
+                                        V10::Binary => {
                                             *base.add(16).cast::<u8>() = (25i32) as u8;
                                         }
-                                        V10::Blob => {
+                                        V10::Varbinary => {
                                             *base.add(16).cast::<u8>() = (26i32) as u8;
                                         }
-                                        V10::Mediumblob => {
+                                        V10::Tinyblob => {
                                             *base.add(16).cast::<u8>() = (27i32) as u8;
                                         }
-                                        V10::Longblob => {
+                                        V10::Blob => {
                                             *base.add(16).cast::<u8>() = (28i32) as u8;
                                         }
-                                        V10::Enumeration => {
+                                        V10::Mediumblob => {
                                             *base.add(16).cast::<u8>() = (29i32) as u8;
                                         }
-                                        V10::Set => {
+                                        V10::Longblob => {
                                             *base.add(16).cast::<u8>() = (30i32) as u8;
                                         }
-                                        V10::Bit => {
+                                        V10::Enumeration => {
                                             *base.add(16).cast::<u8>() = (31i32) as u8;
                                         }
-                                        V10::Json => {
+                                        V10::Set => {
                                             *base.add(16).cast::<u8>() = (32i32) as u8;
+                                        }
+                                        V10::Bit => {
+                                            *base.add(16).cast::<u8>() = (33i32) as u8;
+                                        }
+                                        V10::Json => {
+                                            *base.add(16).cast::<u8>() = (34i32) as u8;
                                         }
                                     }
                                     let vec11 = (db_type_name8.into_bytes()).into_boxed_slice();
@@ -4184,60 +4249,68 @@ pub mod exports {
                                         {
                                             use super::super::super::super::wasi::rdbms::mysql::DbValue as V30;
                                             match e {
-                                                V30::Tinyint(e) => {
+                                                V30::Boolean(e) => {
                                                     *base.add(0).cast::<u8>() = (0i32) as u8;
+                                                    *base.add(8).cast::<u8>() = (match e {
+                                                        true => 1,
+                                                        false => 0,
+                                                    })
+                                                        as u8;
+                                                }
+                                                V30::Tinyint(e) => {
+                                                    *base.add(0).cast::<u8>() = (1i32) as u8;
                                                     *base.add(8).cast::<u8>() =
                                                         (_rt::as_i32(e)) as u8;
                                                 }
                                                 V30::Smallint(e) => {
-                                                    *base.add(0).cast::<u8>() = (1i32) as u8;
+                                                    *base.add(0).cast::<u8>() = (2i32) as u8;
                                                     *base.add(8).cast::<u16>() =
                                                         (_rt::as_i32(e)) as u16;
                                                 }
                                                 V30::Mediumint(e) => {
-                                                    *base.add(0).cast::<u8>() = (2i32) as u8;
-                                                    *base.add(8).cast::<i32>() = _rt::as_i32(e);
-                                                }
-                                                V30::Int(e) => {
                                                     *base.add(0).cast::<u8>() = (3i32) as u8;
                                                     *base.add(8).cast::<i32>() = _rt::as_i32(e);
                                                 }
-                                                V30::Bigint(e) => {
+                                                V30::Int(e) => {
                                                     *base.add(0).cast::<u8>() = (4i32) as u8;
+                                                    *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                                }
+                                                V30::Bigint(e) => {
+                                                    *base.add(0).cast::<u8>() = (5i32) as u8;
                                                     *base.add(8).cast::<i64>() = _rt::as_i64(e);
                                                 }
-                                                V30::Tinyunsigned(e) => {
-                                                    *base.add(0).cast::<u8>() = (5i32) as u8;
+                                                V30::TinyUnsigned(e) => {
+                                                    *base.add(0).cast::<u8>() = (6i32) as u8;
                                                     *base.add(8).cast::<u8>() =
                                                         (_rt::as_i32(e)) as u8;
                                                 }
-                                                V30::Smallunsigned(e) => {
-                                                    *base.add(0).cast::<u8>() = (6i32) as u8;
+                                                V30::SmallUnsigned(e) => {
+                                                    *base.add(0).cast::<u8>() = (7i32) as u8;
                                                     *base.add(8).cast::<u16>() =
                                                         (_rt::as_i32(e)) as u16;
                                                 }
-                                                V30::Mediumunsigned(e) => {
-                                                    *base.add(0).cast::<u8>() = (7i32) as u8;
-                                                    *base.add(8).cast::<i32>() = _rt::as_i32(e);
-                                                }
-                                                V30::Unsigned(e) => {
+                                                V30::MediumUnsigned(e) => {
                                                     *base.add(0).cast::<u8>() = (8i32) as u8;
                                                     *base.add(8).cast::<i32>() = _rt::as_i32(e);
                                                 }
-                                                V30::Bigunsigned(e) => {
+                                                V30::Unsigned(e) => {
                                                     *base.add(0).cast::<u8>() = (9i32) as u8;
+                                                    *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                                }
+                                                V30::BigUnsigned(e) => {
+                                                    *base.add(0).cast::<u8>() = (10i32) as u8;
                                                     *base.add(8).cast::<i64>() = _rt::as_i64(e);
                                                 }
                                                 V30::Float(e) => {
-                                                    *base.add(0).cast::<u8>() = (10i32) as u8;
+                                                    *base.add(0).cast::<u8>() = (11i32) as u8;
                                                     *base.add(8).cast::<f32>() = _rt::as_f32(e);
                                                 }
                                                 V30::Double(e) => {
-                                                    *base.add(0).cast::<u8>() = (11i32) as u8;
+                                                    *base.add(0).cast::<u8>() = (12i32) as u8;
                                                     *base.add(8).cast::<f64>() = _rt::as_f64(e);
                                                 }
                                                 V30::Decimal(e) => {
-                                                    *base.add(0).cast::<u8>() = (12i32) as u8;
+                                                    *base.add(0).cast::<u8>() = (13i32) as u8;
                                                     let vec14 = (e.into_bytes()).into_boxed_slice();
                                                     let ptr14 = vec14.as_ptr().cast::<u8>();
                                                     let len14 = vec14.len();
@@ -4247,24 +4320,28 @@ pub mod exports {
                                                         ptr14.cast_mut();
                                                 }
                                                 V30::Date(e) => {
-                                                    *base.add(0).cast::<u8>() = (13i32) as u8;
-                                                    *base.add(8).cast::<i64>() = _rt::as_i64(e);
-                                                }
-                                                V30::Datetime(e) => {
                                                     *base.add(0).cast::<u8>() = (14i32) as u8;
                                                     *base.add(8).cast::<i64>() = _rt::as_i64(e);
                                                 }
-                                                V30::Timestamp(e) => {
+                                                V30::Datetime(e) => {
                                                     *base.add(0).cast::<u8>() = (15i32) as u8;
                                                     *base.add(8).cast::<i64>() = _rt::as_i64(e);
                                                 }
-                                                V30::Year(e) => {
+                                                V30::Timestamp(e) => {
                                                     *base.add(0).cast::<u8>() = (16i32) as u8;
+                                                    *base.add(8).cast::<i64>() = _rt::as_i64(e);
+                                                }
+                                                V30::Time(e) => {
+                                                    *base.add(0).cast::<u8>() = (17i32) as u8;
+                                                    *base.add(8).cast::<i64>() = _rt::as_i64(e);
+                                                }
+                                                V30::Year(e) => {
+                                                    *base.add(0).cast::<u8>() = (18i32) as u8;
                                                     *base.add(8).cast::<u8>() =
                                                         (_rt::as_i32(e)) as u8;
                                                 }
-                                                V30::Fixedchar(e) => {
-                                                    *base.add(0).cast::<u8>() = (17i32) as u8;
+                                                V30::Fixchar(e) => {
+                                                    *base.add(0).cast::<u8>() = (19i32) as u8;
                                                     let vec15 = (e.into_bytes()).into_boxed_slice();
                                                     let ptr15 = vec15.as_ptr().cast::<u8>();
                                                     let len15 = vec15.len();
@@ -4274,7 +4351,7 @@ pub mod exports {
                                                         ptr15.cast_mut();
                                                 }
                                                 V30::Varchar(e) => {
-                                                    *base.add(0).cast::<u8>() = (18i32) as u8;
+                                                    *base.add(0).cast::<u8>() = (20i32) as u8;
                                                     let vec16 = (e.into_bytes()).into_boxed_slice();
                                                     let ptr16 = vec16.as_ptr().cast::<u8>();
                                                     let len16 = vec16.len();
@@ -4284,7 +4361,7 @@ pub mod exports {
                                                         ptr16.cast_mut();
                                                 }
                                                 V30::Tinytext(e) => {
-                                                    *base.add(0).cast::<u8>() = (19i32) as u8;
+                                                    *base.add(0).cast::<u8>() = (21i32) as u8;
                                                     let vec17 = (e.into_bytes()).into_boxed_slice();
                                                     let ptr17 = vec17.as_ptr().cast::<u8>();
                                                     let len17 = vec17.len();
@@ -4294,7 +4371,7 @@ pub mod exports {
                                                         ptr17.cast_mut();
                                                 }
                                                 V30::Text(e) => {
-                                                    *base.add(0).cast::<u8>() = (20i32) as u8;
+                                                    *base.add(0).cast::<u8>() = (22i32) as u8;
                                                     let vec18 = (e.into_bytes()).into_boxed_slice();
                                                     let ptr18 = vec18.as_ptr().cast::<u8>();
                                                     let len18 = vec18.len();
@@ -4304,7 +4381,7 @@ pub mod exports {
                                                         ptr18.cast_mut();
                                                 }
                                                 V30::Mediumtext(e) => {
-                                                    *base.add(0).cast::<u8>() = (21i32) as u8;
+                                                    *base.add(0).cast::<u8>() = (23i32) as u8;
                                                     let vec19 = (e.into_bytes()).into_boxed_slice();
                                                     let ptr19 = vec19.as_ptr().cast::<u8>();
                                                     let len19 = vec19.len();
@@ -4314,7 +4391,7 @@ pub mod exports {
                                                         ptr19.cast_mut();
                                                 }
                                                 V30::Longtext(e) => {
-                                                    *base.add(0).cast::<u8>() = (22i32) as u8;
+                                                    *base.add(0).cast::<u8>() = (24i32) as u8;
                                                     let vec20 = (e.into_bytes()).into_boxed_slice();
                                                     let ptr20 = vec20.as_ptr().cast::<u8>();
                                                     let len20 = vec20.len();
@@ -4324,7 +4401,7 @@ pub mod exports {
                                                         ptr20.cast_mut();
                                                 }
                                                 V30::Binary(e) => {
-                                                    *base.add(0).cast::<u8>() = (23i32) as u8;
+                                                    *base.add(0).cast::<u8>() = (25i32) as u8;
                                                     let vec21 = (e).into_boxed_slice();
                                                     let ptr21 = vec21.as_ptr().cast::<u8>();
                                                     let len21 = vec21.len();
@@ -4334,7 +4411,7 @@ pub mod exports {
                                                         ptr21.cast_mut();
                                                 }
                                                 V30::Varbinary(e) => {
-                                                    *base.add(0).cast::<u8>() = (24i32) as u8;
+                                                    *base.add(0).cast::<u8>() = (26i32) as u8;
                                                     let vec22 = (e).into_boxed_slice();
                                                     let ptr22 = vec22.as_ptr().cast::<u8>();
                                                     let len22 = vec22.len();
@@ -4344,7 +4421,7 @@ pub mod exports {
                                                         ptr22.cast_mut();
                                                 }
                                                 V30::Tinyblob(e) => {
-                                                    *base.add(0).cast::<u8>() = (25i32) as u8;
+                                                    *base.add(0).cast::<u8>() = (27i32) as u8;
                                                     let vec23 = (e).into_boxed_slice();
                                                     let ptr23 = vec23.as_ptr().cast::<u8>();
                                                     let len23 = vec23.len();
@@ -4354,7 +4431,7 @@ pub mod exports {
                                                         ptr23.cast_mut();
                                                 }
                                                 V30::Blob(e) => {
-                                                    *base.add(0).cast::<u8>() = (26i32) as u8;
+                                                    *base.add(0).cast::<u8>() = (28i32) as u8;
                                                     let vec24 = (e).into_boxed_slice();
                                                     let ptr24 = vec24.as_ptr().cast::<u8>();
                                                     let len24 = vec24.len();
@@ -4364,7 +4441,7 @@ pub mod exports {
                                                         ptr24.cast_mut();
                                                 }
                                                 V30::Mediumblob(e) => {
-                                                    *base.add(0).cast::<u8>() = (27i32) as u8;
+                                                    *base.add(0).cast::<u8>() = (29i32) as u8;
                                                     let vec25 = (e).into_boxed_slice();
                                                     let ptr25 = vec25.as_ptr().cast::<u8>();
                                                     let len25 = vec25.len();
@@ -4374,7 +4451,7 @@ pub mod exports {
                                                         ptr25.cast_mut();
                                                 }
                                                 V30::Longblob(e) => {
-                                                    *base.add(0).cast::<u8>() = (28i32) as u8;
+                                                    *base.add(0).cast::<u8>() = (30i32) as u8;
                                                     let vec26 = (e).into_boxed_slice();
                                                     let ptr26 = vec26.as_ptr().cast::<u8>();
                                                     let len26 = vec26.len();
@@ -4384,7 +4461,7 @@ pub mod exports {
                                                         ptr26.cast_mut();
                                                 }
                                                 V30::Enumeration(e) => {
-                                                    *base.add(0).cast::<u8>() = (29i32) as u8;
+                                                    *base.add(0).cast::<u8>() = (31i32) as u8;
                                                     let vec27 = (e.into_bytes()).into_boxed_slice();
                                                     let ptr27 = vec27.as_ptr().cast::<u8>();
                                                     let len27 = vec27.len();
@@ -4394,7 +4471,7 @@ pub mod exports {
                                                         ptr27.cast_mut();
                                                 }
                                                 V30::Set(e) => {
-                                                    *base.add(0).cast::<u8>() = (30i32) as u8;
+                                                    *base.add(0).cast::<u8>() = (32i32) as u8;
                                                     let vec28 = (e.into_bytes()).into_boxed_slice();
                                                     let ptr28 = vec28.as_ptr().cast::<u8>();
                                                     let len28 = vec28.len();
@@ -4404,12 +4481,12 @@ pub mod exports {
                                                         ptr28.cast_mut();
                                                 }
                                                 V30::Bit(e) => {
-                                                    *base.add(0).cast::<u8>() = (31i32) as u8;
+                                                    *base.add(0).cast::<u8>() = (33i32) as u8;
                                                     *base.add(8).cast::<u8>() =
                                                         (_rt::as_i32(e)) as u8;
                                                 }
                                                 V30::Json(e) => {
-                                                    *base.add(0).cast::<u8>() = (32i32) as u8;
+                                                    *base.add(0).cast::<u8>() = (34i32) as u8;
                                                     let vec29 = (e.into_bytes()).into_boxed_slice();
                                                     let ptr29 = vec29.as_ptr().cast::<u8>();
                                                     let len29 = vec29.len();
@@ -4417,6 +4494,9 @@ pub mod exports {
                                                     *base.add(12).cast::<usize>() = len29;
                                                     *base.add(8).cast::<*mut u8>() =
                                                         ptr29.cast_mut();
+                                                }
+                                                V30::Null => {
+                                                    *base.add(0).cast::<u8>() = (35i32) as u8;
                                                 }
                                             }
                                         }
@@ -4490,103 +4570,106 @@ pub mod exports {
                                                 9 => (),
                                                 10 => (),
                                                 11 => (),
-                                                12 => {
+                                                12 => (),
+                                                13 => {
                                                     let l9 = *base.add(8).cast::<*mut u8>();
                                                     let l10 = *base.add(12).cast::<usize>();
                                                     _rt::cabi_dealloc(l9, l10, 1);
                                                 }
-                                                13 => (),
                                                 14 => (),
                                                 15 => (),
                                                 16 => (),
-                                                17 => {
+                                                17 => (),
+                                                18 => (),
+                                                19 => {
                                                     let l11 = *base.add(8).cast::<*mut u8>();
                                                     let l12 = *base.add(12).cast::<usize>();
                                                     _rt::cabi_dealloc(l11, l12, 1);
                                                 }
-                                                18 => {
+                                                20 => {
                                                     let l13 = *base.add(8).cast::<*mut u8>();
                                                     let l14 = *base.add(12).cast::<usize>();
                                                     _rt::cabi_dealloc(l13, l14, 1);
                                                 }
-                                                19 => {
+                                                21 => {
                                                     let l15 = *base.add(8).cast::<*mut u8>();
                                                     let l16 = *base.add(12).cast::<usize>();
                                                     _rt::cabi_dealloc(l15, l16, 1);
                                                 }
-                                                20 => {
+                                                22 => {
                                                     let l17 = *base.add(8).cast::<*mut u8>();
                                                     let l18 = *base.add(12).cast::<usize>();
                                                     _rt::cabi_dealloc(l17, l18, 1);
                                                 }
-                                                21 => {
+                                                23 => {
                                                     let l19 = *base.add(8).cast::<*mut u8>();
                                                     let l20 = *base.add(12).cast::<usize>();
                                                     _rt::cabi_dealloc(l19, l20, 1);
                                                 }
-                                                22 => {
+                                                24 => {
                                                     let l21 = *base.add(8).cast::<*mut u8>();
                                                     let l22 = *base.add(12).cast::<usize>();
                                                     _rt::cabi_dealloc(l21, l22, 1);
                                                 }
-                                                23 => {
+                                                25 => {
                                                     let l23 = *base.add(8).cast::<*mut u8>();
                                                     let l24 = *base.add(12).cast::<usize>();
                                                     let base25 = l23;
                                                     let len25 = l24;
                                                     _rt::cabi_dealloc(base25, len25 * 1, 1);
                                                 }
-                                                24 => {
+                                                26 => {
                                                     let l26 = *base.add(8).cast::<*mut u8>();
                                                     let l27 = *base.add(12).cast::<usize>();
                                                     let base28 = l26;
                                                     let len28 = l27;
                                                     _rt::cabi_dealloc(base28, len28 * 1, 1);
                                                 }
-                                                25 => {
+                                                27 => {
                                                     let l29 = *base.add(8).cast::<*mut u8>();
                                                     let l30 = *base.add(12).cast::<usize>();
                                                     let base31 = l29;
                                                     let len31 = l30;
                                                     _rt::cabi_dealloc(base31, len31 * 1, 1);
                                                 }
-                                                26 => {
+                                                28 => {
                                                     let l32 = *base.add(8).cast::<*mut u8>();
                                                     let l33 = *base.add(12).cast::<usize>();
                                                     let base34 = l32;
                                                     let len34 = l33;
                                                     _rt::cabi_dealloc(base34, len34 * 1, 1);
                                                 }
-                                                27 => {
+                                                29 => {
                                                     let l35 = *base.add(8).cast::<*mut u8>();
                                                     let l36 = *base.add(12).cast::<usize>();
                                                     let base37 = l35;
                                                     let len37 = l36;
                                                     _rt::cabi_dealloc(base37, len37 * 1, 1);
                                                 }
-                                                28 => {
+                                                30 => {
                                                     let l38 = *base.add(8).cast::<*mut u8>();
                                                     let l39 = *base.add(12).cast::<usize>();
                                                     let base40 = l38;
                                                     let len40 = l39;
                                                     _rt::cabi_dealloc(base40, len40 * 1, 1);
                                                 }
-                                                29 => {
+                                                31 => {
                                                     let l41 = *base.add(8).cast::<*mut u8>();
                                                     let l42 = *base.add(12).cast::<usize>();
                                                     _rt::cabi_dealloc(l41, l42, 1);
                                                 }
-                                                30 => {
+                                                32 => {
                                                     let l43 = *base.add(8).cast::<*mut u8>();
                                                     let l44 = *base.add(12).cast::<usize>();
                                                     _rt::cabi_dealloc(l43, l44, 1);
                                                 }
-                                                31 => (),
-                                                _ => {
+                                                33 => (),
+                                                34 => {
                                                     let l45 = *base.add(8).cast::<*mut u8>();
                                                     let l46 = *base.add(12).cast::<usize>();
                                                     _rt::cabi_dealloc(l45, l46, 1);
                                                 }
+                                                _ => (),
                                             }
                                         }
                                     }
@@ -5036,7 +5119,7 @@ pub mod exports {
                                                             *base.add(24).cast::<i64>() =
                                                                 _rt::as_i64(t21_1);
                                                         }
-                                                        V22::DbNull => {
+                                                        V22::Null => {
                                                             *base.add(8).cast::<u8>() =
                                                                 (17i32) as u8;
                                                         }
@@ -5225,7 +5308,7 @@ pub mod exports {
                                                                     *base.add(16).cast::<i64>() =
                                                                         _rt::as_i64(t28_1);
                                                                 }
-                                                                V29::DbNull => {
+                                                                V29::Null => {
                                                                     *base.add(0).cast::<u8>() =
                                                                         (17i32) as u8;
                                                                 }
@@ -5826,8 +5909,8 @@ pub(crate) use __export_rdbms_service_impl as export;
 #[cfg(target_arch = "wasm32")]
 #[link_section = "component-type:wit-bindgen:0.25.0:rdbms-service:encoded world"]
 #[doc(hidden)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 3005] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xb9\x16\x01A\x02\x01\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 3049] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xe5\x16\x01A\x02\x01\
 A\x0a\x01B(\x01q\x05\x12connection-failure\x01s\0\x17query-parameter-failure\x01\
 s\0\x17query-execution-failure\x01s\0\x16query-response-failure\x01s\0\x05other\x01\
 s\0\x04\0\x05error\x03\0\0\x01q\x11\x04int8\0\0\x05int16\0\0\x05int32\0\0\x05int\
@@ -5839,44 +5922,45 @@ ordinalw\x04names\x07db-type\x05\x0cdb-type-names\x04\0\x09db-column\x03\0\x06\x
 p}\x01o\x02ww\x01q\x12\x04int8\x01~\0\x05int16\x01|\0\x05int32\x01z\0\x05int64\x01\
 x\0\x05float\x01v\0\x06double\x01u\0\x07decimal\x01s\0\x07boolean\x01\x7f\0\x09t\
 imestamp\x01x\0\x04date\x01x\0\x04time\x01x\0\x08interval\x01x\0\x04text\x01s\0\x04\
-blob\x01\x08\0\x04json\x01s\0\x03xml\x01s\0\x04uuid\x01\x09\0\x07db-null\0\0\x04\
-\0\x12db-value-primitive\x03\0\x0a\x01p\x0b\x01q\x02\x09primitive\x01\x0b\0\x05a\
-rray\x01\x0c\0\x04\0\x08db-value\x03\0\x0d\x01p\x0e\x01r\x01\x06values\x0f\x04\0\
-\x06db-row\x03\0\x10\x04\0\x0ddb-result-set\x03\x01\x04\0\x0ddb-connection\x03\x01\
-\x01h\x12\x01p\x07\x01@\x01\x04self\x14\0\x15\x04\0![method]db-result-set.get-co\
-lumns\x01\x16\x01p\x11\x01k\x17\x01@\x01\x04self\x14\0\x18\x04\0\x1e[method]db-r\
-esult-set.get-next\x01\x19\x01i\x13\x01j\x01\x1a\x01\x01\x01@\x01\x07addresss\0\x1b\
-\x04\0\x1a[static]db-connection.open\x01\x1c\x01h\x13\x01i\x12\x01j\x01\x1e\x01\x01\
-\x01@\x03\x04self\x1d\x09statements\x06params\x0f\0\x1f\x04\0\x1b[method]db-conn\
-ection.query\x01\x20\x01j\x01w\x01\x01\x01@\x03\x04self\x1d\x09statements\x06par\
-ams\x0f\0!\x04\0\x1d[method]db-connection.execute\x01\"\x03\x01\x19wasi:rdbms/po\
-stgres@0.0.1\x05\0\x01B\"\x01q\x05\x12connection-failure\x01s\0\x17query-paramet\
-er-failure\x01s\0\x17query-execution-failure\x01s\0\x16query-response-failure\x01\
-s\0\x05other\x01s\0\x04\0\x05error\x03\0\0\x01q!\x07tinyint\0\0\x08smallint\0\0\x09\
-mediumint\0\0\x03int\0\0\x06bigint\0\0\x0ctinyunsigned\0\0\x0dsmallunsigned\0\0\x0e\
-mediumunsigned\0\0\x08unsigned\0\0\x0bbigunsigned\0\0\x05float\0\0\x06double\0\0\
-\x07decimal\0\0\x04date\0\0\x08datetime\0\0\x09timestamp\0\0\x04year\0\0\x09fixe\
-dchar\0\0\x07varchar\0\0\x08tinytext\0\0\x04text\0\0\x0amediumtext\0\0\x08longte\
-xt\0\0\x06binary\0\0\x09varbinary\0\0\x08tinyblob\0\0\x04blob\0\0\x0amediumblob\0\
-\0\x08longblob\0\0\x0benumeration\0\0\x03set\0\0\x03bit\0\0\x04json\0\0\x04\0\x0e\
-db-column-type\x03\0\x02\x01r\x04\x07ordinalw\x04names\x07db-type\x03\x0cdb-type\
--names\x04\0\x09db-column\x03\0\x04\x01p}\x01q!\x07tinyint\x01~\0\x08smallint\x01\
-|\0\x09mediumint\x01z\0\x03int\x01z\0\x06bigint\x01x\0\x0ctinyunsigned\x01}\0\x0d\
-smallunsigned\x01{\0\x0emediumunsigned\x01y\0\x08unsigned\x01y\0\x0bbigunsigned\x01\
-w\0\x05float\x01v\0\x06double\x01u\0\x07decimal\x01s\0\x04date\x01x\0\x08datetim\
-e\x01x\0\x09timestamp\x01x\0\x04year\x01~\0\x09fixedchar\x01s\0\x07varchar\x01s\0\
-\x08tinytext\x01s\0\x04text\x01s\0\x0amediumtext\x01s\0\x08longtext\x01s\0\x06bi\
-nary\x01\x06\0\x09varbinary\x01\x06\0\x08tinyblob\x01\x06\0\x04blob\x01\x06\0\x0a\
-mediumblob\x01\x06\0\x08longblob\x01\x06\0\x0benumeration\x01s\0\x03set\x01s\0\x03\
-bit\x01}\0\x04json\x01s\0\x04\0\x08db-value\x03\0\x07\x01p\x08\x01r\x01\x06value\
-s\x09\x04\0\x06db-row\x03\0\x0a\x04\0\x0ddb-result-set\x03\x01\x04\0\x0ddb-conne\
-ction\x03\x01\x01h\x0c\x01p\x05\x01@\x01\x04self\x0e\0\x0f\x04\0![method]db-resu\
-lt-set.get-columns\x01\x10\x01p\x0b\x01k\x11\x01@\x01\x04self\x0e\0\x12\x04\0\x1e\
-[method]db-result-set.get-next\x01\x13\x01i\x0d\x01j\x01\x14\x01\x01\x01@\x01\x07\
-addresss\0\x15\x04\0\x1a[static]db-connection.open\x01\x16\x01h\x0d\x01i\x0c\x01\
-j\x01\x18\x01\x01\x01@\x03\x04self\x17\x09statements\x06params\x09\0\x19\x04\0\x1b\
-[method]db-connection.query\x01\x1a\x01j\x01w\x01\x01\x01@\x03\x04self\x17\x09st\
-atements\x06params\x09\0\x1b\x04\0\x1d[method]db-connection.execute\x01\x1c\x03\x01\
+blob\x01\x08\0\x04json\x01s\0\x03xml\x01s\0\x04uuid\x01\x09\0\x04null\0\0\x04\0\x12\
+db-value-primitive\x03\0\x0a\x01p\x0b\x01q\x02\x09primitive\x01\x0b\0\x05array\x01\
+\x0c\0\x04\0\x08db-value\x03\0\x0d\x01p\x0e\x01r\x01\x06values\x0f\x04\0\x06db-r\
+ow\x03\0\x10\x04\0\x0ddb-result-set\x03\x01\x04\0\x0ddb-connection\x03\x01\x01h\x12\
+\x01p\x07\x01@\x01\x04self\x14\0\x15\x04\0![method]db-result-set.get-columns\x01\
+\x16\x01p\x11\x01k\x17\x01@\x01\x04self\x14\0\x18\x04\0\x1e[method]db-result-set\
+.get-next\x01\x19\x01i\x13\x01j\x01\x1a\x01\x01\x01@\x01\x07addresss\0\x1b\x04\0\
+\x1a[static]db-connection.open\x01\x1c\x01h\x13\x01i\x12\x01j\x01\x1e\x01\x01\x01\
+@\x03\x04self\x1d\x09statements\x06params\x0f\0\x1f\x04\0\x1b[method]db-connecti\
+on.query\x01\x20\x01j\x01w\x01\x01\x01@\x03\x04self\x1d\x09statements\x06params\x0f\
+\0!\x04\0\x1d[method]db-connection.execute\x01\"\x03\x01\x19wasi:rdbms/postgres@\
+0.0.1\x05\0\x01B\"\x01q\x05\x12connection-failure\x01s\0\x17query-parameter-fail\
+ure\x01s\0\x17query-execution-failure\x01s\0\x16query-response-failure\x01s\0\x05\
+other\x01s\0\x04\0\x05error\x03\0\0\x01q#\x07boolean\0\0\x07tinyint\0\0\x08small\
+int\0\0\x09mediumint\0\0\x03int\0\0\x06bigint\0\0\x0dtiny-unsigned\0\0\x0esmall-\
+unsigned\0\0\x0fmedium-unsigned\0\0\x08unsigned\0\0\x0cbig-unsigned\0\0\x05float\
+\0\0\x06double\0\0\x07decimal\0\0\x04date\0\0\x08datetime\0\0\x09timestamp\0\0\x04\
+time\0\0\x04year\0\0\x07fixchar\0\0\x07varchar\0\0\x08tinytext\0\0\x04text\0\0\x0a\
+mediumtext\0\0\x08longtext\0\0\x06binary\0\0\x09varbinary\0\0\x08tinyblob\0\0\x04\
+blob\0\0\x0amediumblob\0\0\x08longblob\0\0\x0benumeration\0\0\x03set\0\0\x03bit\0\
+\0\x04json\0\0\x04\0\x0edb-column-type\x03\0\x02\x01r\x04\x07ordinalw\x04names\x07\
+db-type\x03\x0cdb-type-names\x04\0\x09db-column\x03\0\x04\x01p}\x01q$\x07boolean\
+\x01\x7f\0\x07tinyint\x01~\0\x08smallint\x01|\0\x09mediumint\x01z\0\x03int\x01z\0\
+\x06bigint\x01x\0\x0dtiny-unsigned\x01}\0\x0esmall-unsigned\x01{\0\x0fmedium-uns\
+igned\x01y\0\x08unsigned\x01y\0\x0cbig-unsigned\x01w\0\x05float\x01v\0\x06double\
+\x01u\0\x07decimal\x01s\0\x04date\x01x\0\x08datetime\x01x\0\x09timestamp\x01x\0\x04\
+time\x01x\0\x04year\x01~\0\x07fixchar\x01s\0\x07varchar\x01s\0\x08tinytext\x01s\0\
+\x04text\x01s\0\x0amediumtext\x01s\0\x08longtext\x01s\0\x06binary\x01\x06\0\x09v\
+arbinary\x01\x06\0\x08tinyblob\x01\x06\0\x04blob\x01\x06\0\x0amediumblob\x01\x06\
+\0\x08longblob\x01\x06\0\x0benumeration\x01s\0\x03set\x01s\0\x03bit\x01}\0\x04js\
+on\x01s\0\x04null\0\0\x04\0\x08db-value\x03\0\x07\x01p\x08\x01r\x01\x06values\x09\
+\x04\0\x06db-row\x03\0\x0a\x04\0\x0ddb-result-set\x03\x01\x04\0\x0ddb-connection\
+\x03\x01\x01h\x0c\x01p\x05\x01@\x01\x04self\x0e\0\x0f\x04\0![method]db-result-se\
+t.get-columns\x01\x10\x01p\x0b\x01k\x11\x01@\x01\x04self\x0e\0\x12\x04\0\x1e[met\
+hod]db-result-set.get-next\x01\x13\x01i\x0d\x01j\x01\x14\x01\x01\x01@\x01\x07add\
+resss\0\x15\x04\0\x1a[static]db-connection.open\x01\x16\x01h\x0d\x01i\x0c\x01j\x01\
+\x18\x01\x01\x01@\x03\x04self\x17\x09statements\x06params\x09\0\x19\x04\0\x1b[me\
+thod]db-connection.query\x01\x1a\x01j\x01w\x01\x01\x01@\x03\x04self\x17\x09state\
+ments\x06params\x09\0\x1b\x04\0\x1d[method]db-connection.execute\x01\x1c\x03\x01\
 \x16wasi:rdbms/mysql@0.0.1\x05\x01\x02\x03\0\0\x06db-row\x02\x03\0\0\x09db-colum\
 n\x02\x03\0\x01\x06db-row\x02\x03\0\x01\x09db-column\x01B\x1d\x02\x03\x02\x01\x02\
 \x04\0\x0fpostgres-db-row\x03\0\0\x02\x03\x02\x01\x03\x04\0\x12postgres-db-colum\

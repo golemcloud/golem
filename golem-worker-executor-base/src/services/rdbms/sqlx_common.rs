@@ -26,30 +26,32 @@ use golem_common::model::WorkerId;
 use sqlx::database::HasArguments;
 use sqlx::{Database, Pool, Row};
 use std::collections::{HashMap, HashSet};
+use std::fmt::Display;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, error, info};
 
 #[derive(Clone)]
-pub(crate) struct SqlxRdbms<DB>
+pub(crate) struct SqlxRdbms<T, DB>
 where
+    T: RdbmsType + Display,
     DB: Database,
 {
-    rdbms_type: &'static str,
+    rdbms_type: T,
     config: RdbmsConfig,
     pool_cache: Cache<RdbmsPoolKey, (), Arc<Pool<DB>>, Error>,
     pool_workers_cache: DashMap<RdbmsPoolKey, HashSet<WorkerId>>,
 }
 
-impl<DB> SqlxRdbms<DB>
+impl<T, DB> SqlxRdbms<T, DB>
 where
-    // T: RdbmsType,
+    T: RdbmsType + Display + Default + Send + Sync,
     DB: Database,
-    // Pool<DB>: QueryExecutor<T>,
     RdbmsPoolKey: PoolCreator<DB>,
 {
-    pub(crate) fn new(rdbms_type: &'static str, config: RdbmsConfig) -> Self {
+    pub(crate) fn new(config: RdbmsConfig) -> Self {
+        let rdbms_type = T::default();
         let cache_name: &'static str = format!("rdbms-{}-pools", rdbms_type).leak();
         let pool_cache = Cache::new(
             None,
@@ -130,13 +132,14 @@ where
         result: Result<R, Error>,
     ) -> Result<R, Error> {
         let end = Instant::now();
+        let rdbms_type = self.rdbms_type.to_string();
         match result {
             Ok(result) => {
-                record_rdbms_success(self.rdbms_type, name, end.duration_since(start));
+                record_rdbms_success(&rdbms_type, name, end.duration_since(start));
                 Ok(result)
             }
             Err(err) => {
-                record_rdbms_failure(self.rdbms_type, name);
+                record_rdbms_failure(&rdbms_type, name);
                 Err(err)
             }
         }
@@ -144,9 +147,9 @@ where
 }
 
 #[async_trait]
-impl<T, DB> Rdbms<T> for SqlxRdbms<DB>
+impl<T, DB> Rdbms<T> for SqlxRdbms<T, DB>
 where
-    T: RdbmsType,
+    T: RdbmsType + Display + Default + Send + Sync,
     DB: Database,
     Pool<DB>: QueryExecutor<T>,
     RdbmsPoolKey: PoolCreator<DB>,
@@ -157,7 +160,7 @@ where
         let result = {
             let key = RdbmsPoolKey::from(address).map_err(Error::ConnectionFailure)?;
             info!(
-                rdbms_type = self.rdbms_type,
+                rdbms_type = self.rdbms_type.to_string(),
                 pool_key = key.to_string(),
                 "create connection",
             );
@@ -194,7 +197,7 @@ where
     {
         let start = Instant::now();
         debug!(
-            rdbms_type = self.rdbms_type,
+            rdbms_type = self.rdbms_type.to_string(),
             pool_key = key.to_string(),
             "execute - statement: {}, params count: {}",
             statement,
@@ -208,7 +211,7 @@ where
 
         let result = result.map_err(|e| {
             error!(
-                rdbms_type = self.rdbms_type,
+                rdbms_type = self.rdbms_type.to_string(),
                 pool_key = key.to_string(),
                 "execute - statement: {}, error: {}",
                 statement,
@@ -231,7 +234,7 @@ where
     {
         let start = Instant::now();
         debug!(
-            rdbms_type = self.rdbms_type,
+            rdbms_type = self.rdbms_type.to_string(),
             pool_key = key.to_string(),
             "query - statement: {}, params count: {}",
             statement,
@@ -247,7 +250,7 @@ where
 
         let result = result.map_err(|e| {
             error!(
-                rdbms_type = self.rdbms_type,
+                rdbms_type = self.rdbms_type.to_string(),
                 pool_key = key.to_string(),
                 "query - statement: {}, error: {}",
                 statement,
@@ -288,24 +291,26 @@ pub(crate) trait QueryExecutor<T: RdbmsType> {
 #[derive(Clone)]
 #[allow(clippy::type_complexity)]
 pub struct StreamDbResultSet<'q, T: RdbmsType, DB: Database> {
-    rdbms_type: &'static str,
+    rdbms_type: T,
     columns: Vec<T::DbColumn>,
     first_rows: Arc<async_mutex::Mutex<Option<Vec<DbRow<T::DbValue>>>>>,
     row_stream: Arc<async_mutex::Mutex<BoxStream<'q, Vec<Result<DB::Row, sqlx::Error>>>>>,
 }
 
-impl<'q, T: RdbmsType, DB: Database> StreamDbResultSet<'q, T, DB>
+impl<'q, T, DB> StreamDbResultSet<'q, T, DB>
 where
+    T: RdbmsType + Display + Default + Send + Sync,
+    DB: Database,
     DB::Row: Row,
     DbRow<T::DbValue>: for<'a> TryFrom<&'a DB::Row, Error = String>,
     T::DbColumn: for<'a> TryFrom<&'a DB::Column, Error = String>,
 {
     fn new(
-        rdbms_type: &'static str,
         columns: Vec<T::DbColumn>,
         first_rows: Vec<DbRow<T::DbValue>>,
         row_stream: BoxStream<'q, Vec<Result<DB::Row, sqlx::Error>>>,
     ) -> Self {
+        let rdbms_type = T::default();
         Self {
             rdbms_type,
             columns,
@@ -315,7 +320,6 @@ where
     }
 
     pub(crate) async fn create(
-        rdbms_type: &'static str,
         stream: BoxStream<'q, Result<DB::Row, sqlx::Error>>,
         batch: usize,
     ) -> Result<StreamDbResultSet<'q, T, DB>, Error> {
@@ -344,40 +348,38 @@ where
                     .collect::<Result<Vec<_>, String>>()
                     .map_err(Error::QueryResponseFailure)?;
 
-                Ok(StreamDbResultSet::new(
-                    rdbms_type, columns, first_rows, row_stream,
-                ))
+                Ok(StreamDbResultSet::new(columns, first_rows, row_stream))
             }
-            _ => Ok(StreamDbResultSet::new(
-                rdbms_type,
-                vec![],
-                vec![],
-                row_stream,
-            )),
+            _ => Ok(StreamDbResultSet::new(vec![], vec![], row_stream)),
         }
     }
 }
 
 #[async_trait]
-impl<T: RdbmsType, DB: Database> DbResultSet<T> for StreamDbResultSet<'_, T, DB>
+impl<T, DB> DbResultSet<T> for StreamDbResultSet<'_, T, DB>
 where
+    T: RdbmsType + Display + Default + Send + Sync,
+    DB: Database,
     DB::Row: Row,
     DbRow<T::DbValue>: for<'a> TryFrom<&'a DB::Row, Error = String>,
 {
     async fn get_columns(&self) -> Result<Vec<T::DbColumn>, Error> {
-        debug!(rdbms_type = self.rdbms_type, "get columns");
+        debug!(rdbms_type = self.rdbms_type.to_string(), "get columns");
         Ok(self.columns.clone())
     }
 
     async fn get_next(&self) -> Result<Option<Vec<DbRow<T::DbValue>>>, Error> {
         let mut rows = self.first_rows.lock().await;
         if rows.is_some() {
-            debug!(rdbms_type = self.rdbms_type, "get next - initial");
+            debug!(
+                rdbms_type = self.rdbms_type.to_string(),
+                "get next - initial"
+            );
             let result = rows.clone();
             *rows = None;
             Ok(result)
         } else {
-            debug!(rdbms_type = self.rdbms_type, "get next");
+            debug!(rdbms_type = self.rdbms_type.to_string(), "get next");
             let mut stream = self.row_stream.lock().await;
             let next = stream.next().await;
 

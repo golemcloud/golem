@@ -225,7 +225,7 @@ impl<Ctx: WorkerCtx> HostDbResultSet for DurableWorkerCtx<Ctx> {
         self_: Resource<crate::durable_host::rdbms::postgres::DbResultSetEntry>,
     ) -> anyhow::Result<Vec<DbColumn>> {
         let _permit = self.begin_async_host_function().await?;
-        record_host_function_call("rdbms::types::db-result-set", "get-column-metadata");
+        record_host_function_call("rdbms::postgres::db-result-set", "get-columns");
 
         let internal = self
             .as_wasi_view()
@@ -245,7 +245,7 @@ impl<Ctx: WorkerCtx> HostDbResultSet for DurableWorkerCtx<Ctx> {
         self_: Resource<crate::durable_host::rdbms::postgres::DbResultSetEntry>,
     ) -> anyhow::Result<Option<Vec<DbRow>>> {
         let _permit = self.begin_async_host_function().await?;
-        record_host_function_call("rdbms::types::db-result-set", "get-next");
+        record_host_function_call("rdbms::postgres::db-result-set", "get-next");
         let internal = self
             .as_wasi_view()
             .table()
@@ -263,7 +263,7 @@ impl<Ctx: WorkerCtx> HostDbResultSet for DurableWorkerCtx<Ctx> {
         &mut self,
         rep: Resource<crate::durable_host::rdbms::postgres::DbResultSetEntry>,
     ) -> anyhow::Result<()> {
-        record_host_function_call("rdbms::types::db-result-set", "drop");
+        record_host_function_call("rdbms::postgres::db-result-set", "drop");
         self.as_wasi_view()
             .table()
             .delete::<crate::durable_host::rdbms::postgres::DbResultSetEntry>(rep)?;
@@ -328,7 +328,7 @@ impl TryFrom<DbValuePrimitive> for crate::services::rdbms::postgres::types::DbVa
             DbValuePrimitive::Json(s) => Ok(Self::Json(s)),
             DbValuePrimitive::Xml(s) => Ok(Self::Xml(s)),
             DbValuePrimitive::Uuid((h, l)) => Ok(Self::Uuid(Uuid::from_u64_pair(h, l))),
-            DbValuePrimitive::DbNull => Ok(Self::DbNull),
+            DbValuePrimitive::Null => Ok(Self::Null),
         }
     }
 }
@@ -366,7 +366,7 @@ impl From<crate::services::rdbms::postgres::types::DbValuePrimitive> for DbValue
             crate::services::rdbms::postgres::types::DbValuePrimitive::Uuid(uuid) => {
                 Self::Uuid(uuid.as_u64_pair())
             }
-            crate::services::rdbms::postgres::types::DbValuePrimitive::DbNull => Self::DbNull,
+            crate::services::rdbms::postgres::types::DbValuePrimitive::Null => Self::Null,
         }
     }
 }

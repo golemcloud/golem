@@ -13,9 +13,7 @@
 // limitations under the License.
 
 use crate::services::golem_config::{RdbmsConfig, RdbmsPoolConfig};
-use crate::services::rdbms::mysql::types::{
-    DbColumn, DbColumnType, DbColumnTypePrimitive, DbValue, DbValuePrimitive,
-};
+use crate::services::rdbms::mysql::types::{DbColumn, DbColumnType, DbValue};
 use crate::services::rdbms::sqlx_common::{
     PoolCreator, QueryExecutor, QueryParamsBinder, SqlxRdbms, StreamDbResultSet,
 };
@@ -33,7 +31,7 @@ pub struct MysqlType;
 
 impl MysqlType {
     pub fn new_rdbms(config: RdbmsConfig) -> Arc<dyn Rdbms<MysqlType> + Send + Sync> {
-        let sqlx: SqlxRdbms<sqlx::mysql::MySql> = SqlxRdbms::new(MYSQL, config);
+        let sqlx: SqlxRdbms<MysqlType, sqlx::mysql::MySql> = SqlxRdbms::new(config);
         Arc::new(sqlx)
     }
 }
@@ -52,7 +50,7 @@ impl Display for MysqlType {
 #[async_trait]
 impl PoolCreator<sqlx::MySql> for RdbmsPoolKey {
     async fn create_pool(&self, config: &RdbmsPoolConfig) -> Result<Pool<sqlx::MySql>, Error> {
-        if self.address.scheme() != "mysql" {
+        if self.address.scheme() != MYSQL {
             Err(Error::ConnectionFailure(format!(
                 "scheme '{}' in url is invalid",
                 self.address.scheme()
@@ -93,7 +91,7 @@ impl QueryExecutor<MysqlType> for Pool<sqlx::MySql> {
         let stream: BoxStream<Result<sqlx::mysql::MySqlRow, sqlx::Error>> = query.fetch(self);
 
         let response: StreamDbResultSet<MysqlType, sqlx::mysql::MySql> =
-            StreamDbResultSet::create(MYSQL, stream, batch).await?;
+            StreamDbResultSet::create(stream, batch).await?;
         Ok(Arc::new(response))
     }
 }
@@ -117,32 +115,39 @@ fn bind_value(
     value: DbValue,
 ) -> Result<sqlx::query::Query<sqlx::MySql, sqlx::mysql::MySqlArguments>, String> {
     match value {
-        DbValue::Primitive(v) => bind_value_primitive(query, v),
-        DbValue::Array(_) => Err("Array type is not supported".to_string()),
-    }
-}
-
-fn bind_value_primitive(
-    query: sqlx::query::Query<sqlx::MySql, sqlx::mysql::MySqlArguments>,
-    value: DbValuePrimitive,
-) -> Result<sqlx::query::Query<sqlx::MySql, sqlx::mysql::MySqlArguments>, String> {
-    match value {
-        DbValuePrimitive::Int8(v) => Ok(query.bind(v)),
-        DbValuePrimitive::Int16(v) => Ok(query.bind(v)),
-        DbValuePrimitive::Int32(v) => Ok(query.bind(v)),
-        DbValuePrimitive::Int64(v) => Ok(query.bind(v)),
-        DbValuePrimitive::Decimal(v) => Ok(query.bind(v)),
-        DbValuePrimitive::Float(v) => Ok(query.bind(v)),
-        DbValuePrimitive::Boolean(v) => Ok(query.bind(v)),
-        DbValuePrimitive::Text(v) => Ok(query.bind(v)),
-        DbValuePrimitive::Blob(v) => Ok(query.bind(v)),
-        DbValuePrimitive::Uuid(v) => Ok(query.bind(v)),
-        DbValuePrimitive::Json(v) => Ok(query.bind(v)),
-        // DbValuePrimitive::Xml(v) => Ok(query.bind(v)),
-        DbValuePrimitive::Timestamp(v) => Ok(query.bind(v)),
-        DbValuePrimitive::Date(v) => Ok(query.bind(v)),
-        // DbValuePrimitive::Interval(v) => Ok(query.bind(chrono::Duration::milliseconds(v))),
-        DbValuePrimitive::DbNull => Ok(query.bind(None::<String>)),
+        DbValue::Tinyint(v) => Ok(query.bind(v)),
+        DbValue::Smallint(v) => Ok(query.bind(v)),
+        DbValue::Mediumint(v) => Ok(query.bind(v)),
+        DbValue::Int(v) => Ok(query.bind(v)),
+        DbValue::Bigint(v) => Ok(query.bind(v)),
+        DbValue::TinyUnsigned(v) => Ok(query.bind(v)),
+        DbValue::SmallUnsigned(v) => Ok(query.bind(v)),
+        DbValue::MediumUnsigned(v) => Ok(query.bind(v)),
+        DbValue::Unsigned(v) => Ok(query.bind(v)),
+        DbValue::BigUnsigned(v) => Ok(query.bind(v)),
+        DbValue::Decimal(v) => Ok(query.bind(v)),
+        DbValue::Float(v) => Ok(query.bind(v)),
+        DbValue::Double(v) => Ok(query.bind(v)),
+        DbValue::Boolean(v) => Ok(query.bind(v)),
+        DbValue::Text(v) => Ok(query.bind(v)),
+        DbValue::Tinytext(v) => Ok(query.bind(v)),
+        DbValue::Mediumtext(v) => Ok(query.bind(v)),
+        DbValue::Longtext(v) => Ok(query.bind(v)),
+        DbValue::Varchar(v) => Ok(query.bind(v)),
+        DbValue::Fixchar(v) => Ok(query.bind(v)),
+        DbValue::Blob(v) => Ok(query.bind(v)),
+        DbValue::Tinyblob(v) => Ok(query.bind(v)),
+        DbValue::Mediumblob(v) => Ok(query.bind(v)),
+        DbValue::Longblob(v) => Ok(query.bind(v)),
+        DbValue::Binary(v) => Ok(query.bind(v)),
+        DbValue::Varbinary(v) => Ok(query.bind(v)),
+        // DbValue::Uuid(v) => Ok(query.bind(v)),
+        DbValue::Json(v) => Ok(query.bind(v)),
+        // DbValue::Xml(v) => Ok(query.bind(v)),
+        DbValue::Timestamp(v) => Ok(query.bind(v)),
+        DbValue::Date(v) => Ok(query.bind(v)),
+        // DbValue::Interval(v) => Ok(query.bind(chrono::Duration::milliseconds(v))),
+        DbValue::Null => Ok(query.bind(None::<String>)),
         _ => Err(format!("Type '{}' is not supported", value)),
     }
 }
@@ -166,101 +171,124 @@ fn get_db_value(index: usize, row: &sqlx::mysql::MySqlRow) -> Result<DbValue, St
     let value = match type_name {
         mysql_type_name::BOOLEAN => {
             let v: Option<bool> = row.try_get(index).map_err(|e| e.to_string())?;
-            match v {
-                Some(v) => DbValue::Primitive(DbValuePrimitive::Boolean(v)),
-                None => DbValue::Primitive(DbValuePrimitive::DbNull),
-            }
+            v.map(DbValue::Boolean).unwrap_or(DbValue::Null)
         }
         mysql_type_name::TINYINT => {
             let v: Option<i8> = row.try_get(index).map_err(|e| e.to_string())?;
-            match v {
-                Some(v) => DbValue::Primitive(DbValuePrimitive::Int8(v)),
-                None => DbValue::Primitive(DbValuePrimitive::DbNull),
-            }
+            v.map(DbValue::Tinyint).unwrap_or(DbValue::Null)
         }
         mysql_type_name::SMALLINT => {
             let v: Option<i16> = row.try_get(index).map_err(|e| e.to_string())?;
-            match v {
-                Some(v) => DbValue::Primitive(DbValuePrimitive::Int16(v)),
-                None => DbValue::Primitive(DbValuePrimitive::DbNull),
-            }
+            v.map(DbValue::Smallint).unwrap_or(DbValue::Null)
         }
         mysql_type_name::INT => {
             let v: Option<i32> = row.try_get(index).map_err(|e| e.to_string())?;
-            match v {
-                Some(v) => DbValue::Primitive(DbValuePrimitive::Int32(v)),
-                None => DbValue::Primitive(DbValuePrimitive::DbNull),
-            }
+            v.map(DbValue::Mediumint).unwrap_or(DbValue::Null)
         }
         mysql_type_name::BIGINT => {
             let v: Option<i64> = row.try_get(index).map_err(|e| e.to_string())?;
-            match v {
-                Some(v) => DbValue::Primitive(DbValuePrimitive::Int64(v)),
-                None => DbValue::Primitive(DbValuePrimitive::DbNull),
-            }
+            v.map(DbValue::Bigint).unwrap_or(DbValue::Null)
+        }
+        mysql_type_name::TINYINT_UNSIGNED => {
+            let v: Option<u8> = row.try_get(index).map_err(|e| e.to_string())?;
+            v.map(DbValue::TinyUnsigned).unwrap_or(DbValue::Null)
+        }
+        mysql_type_name::SMALLINT_UNSIGNED => {
+            let v: Option<u16> = row.try_get(index).map_err(|e| e.to_string())?;
+            v.map(DbValue::SmallUnsigned).unwrap_or(DbValue::Null)
+        }
+        mysql_type_name::INT_UNSIGNED => {
+            let v: Option<u32> = row.try_get(index).map_err(|e| e.to_string())?;
+            v.map(DbValue::MediumUnsigned).unwrap_or(DbValue::Null)
+        }
+        mysql_type_name::BIGINT_UNSIGNED => {
+            let v: Option<u64> = row.try_get(index).map_err(|e| e.to_string())?;
+            v.map(DbValue::BigUnsigned).unwrap_or(DbValue::Null)
         }
         mysql_type_name::FLOAT => {
             let v: Option<f32> = row.try_get(index).map_err(|e| e.to_string())?;
-            match v {
-                Some(v) => DbValue::Primitive(DbValuePrimitive::Float(v)),
-                None => DbValue::Primitive(DbValuePrimitive::DbNull),
-            }
+            v.map(DbValue::Float).unwrap_or(DbValue::Null)
         }
         mysql_type_name::DOUBLE => {
             let v: Option<f64> = row.try_get(index).map_err(|e| e.to_string())?;
-            match v {
-                Some(v) => DbValue::Primitive(DbValuePrimitive::Double(v)),
-                None => DbValue::Primitive(DbValuePrimitive::DbNull),
-            }
+            v.map(DbValue::Double).unwrap_or(DbValue::Null)
         }
-        mysql_type_name::TEXT | mysql_type_name::VARCHAR | mysql_type_name::CHAR => {
+        mysql_type_name::TEXT => {
             let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
-            match v {
-                Some(v) => DbValue::Primitive(DbValuePrimitive::Text(v)),
-                None => DbValue::Primitive(DbValuePrimitive::DbNull),
-            }
+            v.map(DbValue::Text).unwrap_or(DbValue::Null)
+        }
+        mysql_type_name::VARCHAR => {
+            let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
+            v.map(DbValue::Varchar).unwrap_or(DbValue::Null)
+        }
+        mysql_type_name::CHAR => {
+            let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
+            v.map(DbValue::Fixchar).unwrap_or(DbValue::Null)
+        }
+        mysql_type_name::TINYTEXT => {
+            let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
+            v.map(DbValue::Tinytext).unwrap_or(DbValue::Null)
+        }
+        mysql_type_name::MEDIUMTEXT => {
+            let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
+            v.map(DbValue::Mediumtext).unwrap_or(DbValue::Null)
+        }
+        mysql_type_name::LONGTEXT => {
+            let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
+            v.map(DbValue::Longtext).unwrap_or(DbValue::Null)
         }
         mysql_type_name::JSON => {
             let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
-            match v {
-                Some(v) => DbValue::Primitive(DbValuePrimitive::Json(v)),
-                None => DbValue::Primitive(DbValuePrimitive::DbNull),
-            }
+            v.map(DbValue::Json).unwrap_or(DbValue::Null)
         }
         mysql_type_name::ENUM => {
             let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
-            match v {
-                Some(v) => DbValue::Primitive(DbValuePrimitive::Text(v)),
-                None => DbValue::Primitive(DbValuePrimitive::DbNull),
-            }
+            v.map(DbValue::Enumeration).unwrap_or(DbValue::Null)
         }
-        mysql_type_name::VARBINARY | mysql_type_name::BINARY | mysql_type_name::BLOB => {
+        mysql_type_name::VARBINARY => {
             let v: Option<Vec<u8>> = row.try_get(index).map_err(|e| e.to_string())?;
-            match v {
-                Some(v) => DbValue::Primitive(DbValuePrimitive::Blob(v)),
-                None => DbValue::Primitive(DbValuePrimitive::DbNull),
-            }
+            v.map(DbValue::Varbinary).unwrap_or(DbValue::Null)
+        }
+        mysql_type_name::BINARY => {
+            let v: Option<Vec<u8>> = row.try_get(index).map_err(|e| e.to_string())?;
+            v.map(DbValue::Binary).unwrap_or(DbValue::Null)
+        }
+        mysql_type_name::BLOB => {
+            let v: Option<Vec<u8>> = row.try_get(index).map_err(|e| e.to_string())?;
+            v.map(DbValue::Blob).unwrap_or(DbValue::Null)
+        }
+        mysql_type_name::TINYBLOB => {
+            let v: Option<Vec<u8>> = row.try_get(index).map_err(|e| e.to_string())?;
+            v.map(DbValue::Tinyblob).unwrap_or(DbValue::Null)
+        }
+        mysql_type_name::MEDIUMBLOB => {
+            let v: Option<Vec<u8>> = row.try_get(index).map_err(|e| e.to_string())?;
+            v.map(DbValue::Mediumblob).unwrap_or(DbValue::Null)
+        }
+        mysql_type_name::LONGBLOB => {
+            let v: Option<Vec<u8>> = row.try_get(index).map_err(|e| e.to_string())?;
+            v.map(DbValue::Longblob).unwrap_or(DbValue::Null)
         }
         // mysql_type_name::UUID => {
         //     let v: Option<Uuid> = row.try_get(index).map_err(|e| e.to_string())?;
         //     match v {
-        //         Some(v) => DbValue::Primitive(DbValuePrimitive::Uuid(v)),
-        //         None => DbValue::Primitive(DbValuePrimitive::DbNull),
+        //         Some(v) => DbValue::Uuid(v),
+        //         None => DbValue::Null,
         //     }
         // }
         mysql_type_name::TIMESTAMP | mysql_type_name::DATETIME => {
             let v: Option<chrono::DateTime<chrono::Utc>> =
                 row.try_get(index).map_err(|e| e.to_string())?;
             match v {
-                Some(v) => DbValue::Primitive(DbValuePrimitive::Timestamp(v)),
-                None => DbValue::Primitive(DbValuePrimitive::DbNull),
+                Some(v) => DbValue::Timestamp(v),
+                None => DbValue::Null,
             }
         }
         mysql_type_name::DATE => {
             let v: Option<chrono::NaiveDate> = row.try_get(index).map_err(|e| e.to_string())?;
             match v {
-                Some(v) => DbValue::Primitive(DbValuePrimitive::Date(v)),
-                None => DbValue::Primitive(DbValuePrimitive::DbNull),
+                Some(v) => DbValue::Date(v),
+                None => DbValue::Null,
             }
         }
         _ => Err(format!("Type '{}' is not supported", type_name))?,
@@ -292,29 +320,40 @@ impl TryFrom<&sqlx::mysql::MySqlTypeInfo> for DbColumnType {
         let type_name = value.name();
 
         match type_name {
-            mysql_type_name::BOOLEAN => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Boolean)),
-            mysql_type_name::TINYINT => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Int8)),
-            mysql_type_name::SMALLINT => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Int16)),
-            mysql_type_name::INT => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Int32)),
-            mysql_type_name::BIGINT => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Int64)),
-            mysql_type_name::DECIMAL => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Decimal)),
-            mysql_type_name::FLOAT => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Float)),
-            mysql_type_name::DOUBLE => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Double)),
-            // mysql_type_name::UUID => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Uuid)),
-            mysql_type_name::TEXT | mysql_type_name::VARCHAR | mysql_type_name::CHAR => {
-                Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Text))
-            }
-            mysql_type_name::JSON => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Json)),
-            // mysql_type_name::XML => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Xml)),
-            mysql_type_name::TIMESTAMP | mysql_type_name::DATETIME => {
-                Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Timestamp))
-            }
-            mysql_type_name::DATE => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Date)),
-            mysql_type_name::TIME => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Time)),
-            mysql_type_name::VARBINARY | mysql_type_name::BINARY | mysql_type_name::BLOB => {
-                Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Blob))
-            }
-            mysql_type_name::ENUM => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Text)),
+            mysql_type_name::BOOLEAN => Ok(DbColumnType::Boolean),
+            mysql_type_name::TINYINT => Ok(DbColumnType::Tinyint),
+            mysql_type_name::SMALLINT => Ok(DbColumnType::Smallint),
+            mysql_type_name::MEDIUMINT => Ok(DbColumnType::Mediumint),
+            mysql_type_name::INT => Ok(DbColumnType::Int),
+            mysql_type_name::BIGINT => Ok(DbColumnType::Bigint),
+            mysql_type_name::TINYINT_UNSIGNED => Ok(DbColumnType::TinyUnsigned),
+            mysql_type_name::SMALLINT_UNSIGNED => Ok(DbColumnType::SmallUnsigned),
+            mysql_type_name::MEDIUMINT_UNSIGNED => Ok(DbColumnType::MediumUnsigned),
+            mysql_type_name::INT_UNSIGNED => Ok(DbColumnType::Unsigned),
+            mysql_type_name::BIGINT_UNSIGNED => Ok(DbColumnType::BigUnsigned),
+            mysql_type_name::DECIMAL => Ok(DbColumnType::Decimal),
+            mysql_type_name::FLOAT => Ok(DbColumnType::Float),
+            mysql_type_name::DOUBLE => Ok(DbColumnType::Double),
+            // mysql_type_name::UUID => Ok(DbColumnType::Uuid),
+            mysql_type_name::TEXT => Ok(DbColumnType::Text),
+            mysql_type_name::TINYTEXT => Ok(DbColumnType::Tinytext),
+            mysql_type_name::MEDIUMTEXT => Ok(DbColumnType::Mediumtext),
+            mysql_type_name::LONGTEXT => Ok(DbColumnType::Longtext),
+            mysql_type_name::VARCHAR => Ok(DbColumnType::Varchar),
+            mysql_type_name::CHAR => Ok(DbColumnType::Fixchar),
+            mysql_type_name::JSON => Ok(DbColumnType::Json),
+            // mysql_type_name::XML => Ok(DbColumnType::Xml),
+            mysql_type_name::TIMESTAMP | mysql_type_name::DATETIME => Ok(DbColumnType::Timestamp),
+            mysql_type_name::DATE => Ok(DbColumnType::Date),
+            mysql_type_name::TIME => Ok(DbColumnType::Time),
+            mysql_type_name::VARBINARY => Ok(DbColumnType::Varbinary),
+            mysql_type_name::BINARY => Ok(DbColumnType::Binary),
+            mysql_type_name::BLOB => Ok(DbColumnType::Blob),
+            mysql_type_name::TINYBLOB => Ok(DbColumnType::Tinyblob),
+            mysql_type_name::MEDIUMBLOB => Ok(DbColumnType::Mediumblob),
+            mysql_type_name::LONGBLOB => Ok(DbColumnType::Longblob),
+            mysql_type_name::SET => Ok(DbColumnType::Set),
+            mysql_type_name::ENUM => Ok(DbColumnType::Text),
             _ => Err(format!("Type '{}' is not supported", type_name))?,
         }
     }
@@ -371,128 +410,170 @@ pub(crate) mod mysql_type_name {
 
 pub mod types {
     use bigdecimal::BigDecimal;
-    use itertools::Itertools;
     use std::fmt::Display;
-    use uuid::Uuid;
-
-    #[derive(Clone, Debug, Eq, PartialEq)]
-    pub enum DbColumnTypePrimitive {
-        Int8,
-        Int16,
-        Int32,
-        Int64,
-        Float,
-        Double,
-        Decimal,
-        Boolean,
-        Timestamp,
-        Date,
-        Time,
-        Interval,
-        Text,
-        Blob,
-        Json,
-        Xml,
-        Uuid,
-    }
-
-    impl Display for DbColumnTypePrimitive {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            match self {
-                DbColumnTypePrimitive::Int8 => write!(f, "int8"),
-                DbColumnTypePrimitive::Int16 => write!(f, "int16"),
-                DbColumnTypePrimitive::Int32 => write!(f, "int32"),
-                DbColumnTypePrimitive::Int64 => write!(f, "int64"),
-                DbColumnTypePrimitive::Float => write!(f, "float"),
-                DbColumnTypePrimitive::Double => write!(f, "double"),
-                DbColumnTypePrimitive::Decimal => write!(f, "decimal"),
-                DbColumnTypePrimitive::Boolean => write!(f, "boolean"),
-                DbColumnTypePrimitive::Timestamp => write!(f, "timestamp"),
-                DbColumnTypePrimitive::Date => write!(f, "date"),
-                DbColumnTypePrimitive::Time => write!(f, "time"),
-                DbColumnTypePrimitive::Interval => write!(f, "interval"),
-                DbColumnTypePrimitive::Text => write!(f, "text"),
-                DbColumnTypePrimitive::Blob => write!(f, "blob"),
-                DbColumnTypePrimitive::Json => write!(f, "json"),
-                DbColumnTypePrimitive::Xml => write!(f, "xml"),
-                DbColumnTypePrimitive::Uuid => write!(f, "uuid"),
-            }
-        }
-    }
 
     #[derive(Clone, Debug, Eq, PartialEq)]
     pub enum DbColumnType {
-        Primitive(DbColumnTypePrimitive),
-        Array(DbColumnTypePrimitive),
+        Boolean,
+        Tinyint,
+        Smallint,
+        Mediumint,
+        Int,
+        Bigint,
+        TinyUnsigned,
+        SmallUnsigned,
+        MediumUnsigned,
+        Unsigned,
+        BigUnsigned,
+        Float,
+        Double,
+        Decimal,
+        Date,
+        Datetime,
+        Timestamp,
+        Time,
+        Year,
+        Fixchar,
+        Varchar,
+        Tinytext,
+        Text,
+        Mediumtext,
+        Longtext,
+        Binary,
+        Varbinary,
+        Tinyblob,
+        Blob,
+        Mediumblob,
+        Longblob,
+        Enumeration,
+        Set,
+        Bit,
+        Json,
     }
 
     impl Display for DbColumnType {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             match self {
-                DbColumnType::Primitive(v) => write!(f, "{}", v),
-                DbColumnType::Array(v) => write!(f, "{}[]", v),
-            }
-        }
-    }
-
-    #[derive(Clone, Debug, PartialEq)]
-    pub enum DbValuePrimitive {
-        Int8(i8),
-        Int16(i16),
-        Int32(i32),
-        Int64(i64),
-        Float(f32),
-        Double(f64),
-        Decimal(BigDecimal),
-        Boolean(bool),
-        Timestamp(chrono::DateTime<chrono::Utc>),
-        Date(chrono::NaiveDate),
-        Time(i64),
-        Interval(chrono::Duration),
-        Text(String),
-        Blob(Vec<u8>),
-        Json(String),
-        Xml(String),
-        Uuid(Uuid),
-        DbNull,
-    }
-
-    impl Display for DbValuePrimitive {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            match self {
-                DbValuePrimitive::Int8(v) => write!(f, "{}", v),
-                DbValuePrimitive::Int16(v) => write!(f, "{}", v),
-                DbValuePrimitive::Int32(v) => write!(f, "{}", v),
-                DbValuePrimitive::Int64(v) => write!(f, "{}", v),
-                DbValuePrimitive::Float(v) => write!(f, "{}", v),
-                DbValuePrimitive::Double(v) => write!(f, "{}", v),
-                DbValuePrimitive::Decimal(v) => write!(f, "{}", v),
-                DbValuePrimitive::Boolean(v) => write!(f, "{}", v),
-                DbValuePrimitive::Timestamp(v) => write!(f, "{}", v),
-                DbValuePrimitive::Date(v) => write!(f, "{}", v),
-                DbValuePrimitive::Time(v) => write!(f, "{}", v),
-                DbValuePrimitive::Interval(v) => write!(f, "{}", v),
-                DbValuePrimitive::Text(v) => write!(f, "{}", v),
-                DbValuePrimitive::Blob(v) => write!(f, "{:?}", v),
-                DbValuePrimitive::Json(v) => write!(f, "{}", v),
-                DbValuePrimitive::Xml(v) => write!(f, "{}", v),
-                DbValuePrimitive::Uuid(v) => write!(f, "{}", v),
-                DbValuePrimitive::DbNull => write!(f, "NULL"),
+                DbColumnType::Boolean => write!(f, "boolean"),
+                DbColumnType::Tinyint => write!(f, "tinyint"),
+                DbColumnType::Smallint => write!(f, "smallint"),
+                DbColumnType::Mediumint => write!(f, "mediumint"),
+                DbColumnType::Int => write!(f, "int"),
+                DbColumnType::Bigint => write!(f, "bigint"),
+                DbColumnType::TinyUnsigned => write!(f, "tinyunsigned"),
+                DbColumnType::SmallUnsigned => write!(f, "smallunsigned"),
+                DbColumnType::MediumUnsigned => write!(f, "mediumunsigned"),
+                DbColumnType::Unsigned => write!(f, "unsigned"),
+                DbColumnType::BigUnsigned => write!(f, "bigunsigned"),
+                DbColumnType::Float => write!(f, "float"),
+                DbColumnType::Double => write!(f, "double"),
+                DbColumnType::Decimal => write!(f, "decimal"),
+                DbColumnType::Date => write!(f, "date"),
+                DbColumnType::Datetime => write!(f, "datetime"),
+                DbColumnType::Timestamp => write!(f, "timestamp"),
+                DbColumnType::Time => write!(f, "time"),
+                DbColumnType::Year => write!(f, "year"),
+                DbColumnType::Fixchar => write!(f, "fixchar"),
+                DbColumnType::Varchar => write!(f, "varchar"),
+                DbColumnType::Tinytext => write!(f, "tinytext"),
+                DbColumnType::Text => write!(f, "text"),
+                DbColumnType::Mediumtext => write!(f, "mediumtext"),
+                DbColumnType::Longtext => write!(f, "longtext"),
+                DbColumnType::Binary => write!(f, "binary"),
+                DbColumnType::Varbinary => write!(f, "varbinary"),
+                DbColumnType::Tinyblob => write!(f, "tinyblob"),
+                DbColumnType::Blob => write!(f, "blob"),
+                DbColumnType::Mediumblob => write!(f, "mediumblob"),
+                DbColumnType::Longblob => write!(f, "longblob"),
+                DbColumnType::Enumeration => write!(f, "enum"),
+                DbColumnType::Set => write!(f, "set"),
+                DbColumnType::Bit => write!(f, "bit"),
+                DbColumnType::Json => write!(f, "json"),
             }
         }
     }
 
     #[derive(Clone, Debug, PartialEq)]
     pub enum DbValue {
-        Primitive(DbValuePrimitive),
-        Array(Vec<DbValuePrimitive>),
+        Boolean(bool),
+        Tinyint(i8),
+        Smallint(i16),
+        Mediumint(i32),
+        /// s24
+        Int(i32),
+        Bigint(i64),
+        TinyUnsigned(u8),
+        SmallUnsigned(u16),
+        MediumUnsigned(u32),
+        /// u24
+        Unsigned(u32),
+        BigUnsigned(u64),
+        Float(f32),
+        Double(f64),
+        Decimal(BigDecimal),
+        Date(chrono::NaiveDate),
+        Datetime(chrono::DateTime<chrono::Utc>),
+        Timestamp(chrono::DateTime<chrono::Utc>),
+        Time(i64),
+        Year(i8),
+        Fixchar(String),
+        Varchar(String),
+        Tinytext(String),
+        Text(String),
+        Mediumtext(String),
+        Longtext(String),
+        Binary(Vec<u8>),
+        Varbinary(Vec<u8>),
+        Tinyblob(Vec<u8>),
+        Blob(Vec<u8>),
+        Mediumblob(Vec<u8>),
+        Longblob(Vec<u8>),
+        Enumeration(String),
+        Set(String),
+        Bit(u8),
+        Json(String),
+        Null,
     }
 
     impl Display for DbValue {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             match self {
-                DbValue::Primitive(v) => write!(f, "{}", v),
-                DbValue::Array(v) => write!(f, "[{}]", v.iter().format(", ")),
+                DbValue::Boolean(v) => write!(f, "{}", v),
+                DbValue::Tinyint(v) => write!(f, "{}", v),
+                DbValue::Smallint(v) => write!(f, "{}", v),
+                DbValue::Mediumint(v) => write!(f, "{}", v),
+                DbValue::Int(v) => write!(f, "{}", v),
+                DbValue::Bigint(v) => write!(f, "{}", v),
+                DbValue::TinyUnsigned(v) => write!(f, "{}", v),
+                DbValue::SmallUnsigned(v) => write!(f, "{}", v),
+                DbValue::MediumUnsigned(v) => write!(f, "{}", v),
+                DbValue::Unsigned(v) => write!(f, "{}", v),
+                DbValue::BigUnsigned(v) => write!(f, "{}", v),
+                DbValue::Float(v) => write!(f, "{}", v),
+                DbValue::Double(v) => write!(f, "{}", v),
+                DbValue::Decimal(v) => write!(f, "{}", v),
+                DbValue::Date(v) => write!(f, "{}", v),
+                DbValue::Datetime(v) => write!(f, "{}", v),
+                DbValue::Timestamp(v) => write!(f, "{}", v),
+                DbValue::Time(v) => write!(f, "{}", v),
+                DbValue::Year(v) => write!(f, "{}", v),
+                DbValue::Fixchar(v) => write!(f, "{}", v),
+                DbValue::Varchar(v) => write!(f, "{}", v),
+                DbValue::Tinytext(v) => write!(f, "{}", v),
+                DbValue::Text(v) => write!(f, "{}", v),
+                DbValue::Mediumtext(v) => write!(f, "{}", v),
+                DbValue::Longtext(v) => write!(f, "{}", v),
+                DbValue::Binary(v) => write!(f, "{:?}", v),
+                DbValue::Varbinary(v) => write!(f, "{:?}", v),
+                DbValue::Tinyblob(v) => write!(f, "{:?}", v),
+                DbValue::Blob(v) => write!(f, "{:?}", v),
+                DbValue::Mediumblob(v) => write!(f, "{:?}", v),
+                DbValue::Longblob(v) => write!(f, "{:?}", v),
+                DbValue::Enumeration(v) => write!(f, "{}", v),
+                DbValue::Set(v) => write!(f, "{}", v),
+                DbValue::Bit(v) => write!(f, "{}", v),
+                DbValue::Json(v) => write!(f, "{}", v),
+                DbValue::Null => write!(f, "NULL"),
             }
         }
     }
@@ -504,48 +585,4 @@ pub mod types {
         pub db_type: DbColumnType,
         pub db_type_name: String,
     }
-
-    // pub enum MySqlType {
-    //     TinyInt(i8),
-    //     SmallInt(i16),
-    //     MediumInt(i32),
-    //     Int(i32),
-    //     BigInt(i64),
-    //     TinyUnsigned(u8),
-    //     SmallUnsigned(u16),
-    //     MediumUnsigned(u32),
-    //     Unsigned(u32),
-    //     BigUnsigned(u64),
-    //     Float,
-    //     Double,
-    //     Decimal,
-    //     Date,
-    //     Datetime,
-    //     Timestamp,
-    //     Year,
-    //     Char(usize),
-    //     VarChar(usize),
-    //     TinyText,
-    //     Text,
-    //     MediumText,
-    //     LongText,
-    //     Binary(usize),
-    //     VarBinary(usize),
-    //     TinyBlob,
-    //     Blob,
-    //     MediumBlob,
-    //     LongBlob,
-    //     Enum(Vec<String>),
-    //     Set(Vec<String>),
-    //     Bit(u8),
-    //     Json,
-    //     Geometry,
-    //     Point,
-    //     LineString,
-    //     Polygon,
-    //     MultiPoint,
-    //     MultiLineString,
-    //     MultiPolygon,
-    //     GeometryCollection,
-    // }
 }

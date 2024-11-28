@@ -34,13 +34,13 @@ lazy_static! {
     .unwrap();
 }
 
-pub fn record_rdbms_success(rdbms_type: &'static str, api_name: &'static str, duration: Duration) {
+pub fn record_rdbms_success(rdbms_type: &str, api_name: &str, duration: Duration) {
     RDBMS_SUCCESS_SECONDS
         .with_label_values(&[rdbms_type, api_name])
         .observe(duration.as_secs_f64());
 }
 
-pub fn record_rdbms_failure(rdbms_type: &'static str, api_name: &'static str) {
+pub fn record_rdbms_failure(rdbms_type: &str, api_name: &str) {
     RDBMS_FAILURE_TOTAL
         .with_label_values(&[rdbms_type, api_name])
         .inc();
