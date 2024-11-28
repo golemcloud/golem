@@ -111,13 +111,13 @@ impl ApiEndpointError {
 
 pub struct WorkerTraceErrorKind<'a>(pub &'a worker::v1::WorkerError);
 
-impl<'a> Debug for WorkerTraceErrorKind<'a> {
+impl Debug for WorkerTraceErrorKind<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)
     }
 }
 
-impl<'a> TraceErrorKind for WorkerTraceErrorKind<'a> {
+impl TraceErrorKind for WorkerTraceErrorKind<'_> {
     fn trace_error_kind(&self) -> &'static str {
         match &self.0.error {
             None => "None",
@@ -135,13 +135,13 @@ impl<'a> TraceErrorKind for WorkerTraceErrorKind<'a> {
 
 pub struct ApiDefinitionTraceErrorKind<'a>(pub &'a ApiDefinitionError);
 
-impl<'a> Debug for ApiDefinitionTraceErrorKind<'a> {
+impl Debug for ApiDefinitionTraceErrorKind<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)
     }
 }
 
-impl<'a> TraceErrorKind for ApiDefinitionTraceErrorKind<'a> {
+impl TraceErrorKind for ApiDefinitionTraceErrorKind<'_> {
     fn trace_error_kind(&self) -> &'static str {
         match &self.0.error {
             None => "None",

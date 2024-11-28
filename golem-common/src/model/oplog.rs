@@ -672,6 +672,7 @@ impl OplogEntry {
                 | OplogEntry::PendingWorkerInvocation { .. }
                 | OplogEntry::PendingUpdate { .. }
                 | OplogEntry::SuccessfulUpdate { .. }
+                | OplogEntry::SuccessfulUpdateV1 { .. }
                 | OplogEntry::FailedUpdate { .. }
                 | OplogEntry::GrowMemory { .. }
                 | OplogEntry::CreateResource { .. }
@@ -679,6 +680,8 @@ impl OplogEntry {
                 | OplogEntry::DescribeResource { .. }
                 | OplogEntry::Log { .. }
                 | OplogEntry::Restart { .. }
+                | OplogEntry::ActivatePlugin { .. }
+                | OplogEntry::DeactivatePlugin { .. }
         )
     }
 

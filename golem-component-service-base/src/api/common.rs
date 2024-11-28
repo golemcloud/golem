@@ -18,13 +18,13 @@ use std::fmt::{Debug, Formatter};
 
 pub struct ComponentTraceErrorKind<'a>(pub &'a ComponentError);
 
-impl<'a> Debug for ComponentTraceErrorKind<'a> {
+impl Debug for ComponentTraceErrorKind<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)
     }
 }
 
-impl<'a> TraceErrorKind for ComponentTraceErrorKind<'a> {
+impl TraceErrorKind for ComponentTraceErrorKind<'_> {
     fn trace_error_kind(&self) -> &'static str {
         match &self.0.error {
             None => "None",

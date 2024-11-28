@@ -2967,7 +2967,7 @@ impl<'de> Deserialize<'de> for GatewayBindingType {
     {
         struct GatewayBindingTypeVisitor;
 
-        impl<'de> de::Visitor<'de> for GatewayBindingTypeVisitor {
+        impl de::Visitor<'_> for GatewayBindingTypeVisitor {
             type Value = GatewayBindingType;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {

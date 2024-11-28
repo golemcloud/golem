@@ -132,13 +132,13 @@ impl IsRetriableError for HealthCheckError {
 
 pub struct ShardManagerTraceErrorKind<'a>(pub &'a golem::shardmanager::v1::ShardManagerError);
 
-impl<'a> Debug for ShardManagerTraceErrorKind<'a> {
+impl Debug for ShardManagerTraceErrorKind<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)
     }
 }
 
-impl<'a> TraceErrorKind for ShardManagerTraceErrorKind<'a> {
+impl TraceErrorKind for ShardManagerTraceErrorKind<'_> {
     fn trace_error_kind(&self) -> &'static str {
         match &self.0.error {
             None => "None",
