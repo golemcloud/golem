@@ -151,8 +151,7 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
         let state = state.ok_or(AuthorisationError::StateNotFound)?;
 
         let session_params = session_store
-            .0
-            .get_params(SessionId(state.clone()))
+            .get_params(&SessionId(state.clone()))
             .await
             .map_err(|_| AuthorisationError::MissingParametersInSession)?
             .ok_or(AuthorisationError::InvalidSession)?;
@@ -182,7 +181,6 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
 
         // access token in session store
         let _ = session_store
-            .0
             .insert(
                 SessionId(state.clone()),
                 DataKey("access_token".to_string()),
@@ -194,7 +192,6 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
         if let Some(id_token) = &id_token {
             // id token in session store
             let _ = session_store
-                .0
                 .insert(
                     SessionId(state.clone()),
                     DataKey("id_token".to_string()),

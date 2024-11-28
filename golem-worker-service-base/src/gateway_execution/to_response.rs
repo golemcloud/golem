@@ -284,10 +284,13 @@ mod test {
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::protobuf::Type;
     use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, TypedRecord};
+    use std::sync::Arc;
     use test_r::test;
 
     use crate::gateway_binding::HttpRequestDetails;
-    use crate::gateway_execution::gateway_session::{EvictionStrategy, GatewaySessionStore};
+    use crate::gateway_execution::gateway_session::{
+        EvictionStrategy, GatewaySession, InMemoryGatewaySession,
+    };
     use crate::gateway_execution::to_response::ToHttpResponse;
     use http::header::CONTENT_TYPE;
     use http::StatusCode;
@@ -337,11 +340,11 @@ mod test {
 
         let evaluation_result: RibResult = RibResult::Val(record);
 
+        let session_store: Arc<dyn GatewaySession + Send + Sync> =
+            Arc::new(InMemoryGatewaySession::new(&EvictionStrategy::default()));
+
         let http_response: poem::Response = evaluation_result
-            .to_response(
-                &HttpRequestDetails::empty(),
-                &GatewaySessionStore::in_memory(&EvictionStrategy::default()),
-            )
+            .to_response(&HttpRequestDetails::empty(), &session_store)
             .await;
 
         let (response_parts, body) = http_response.into_parts();
@@ -367,11 +370,11 @@ mod test {
         let evaluation_result: RibResult =
             RibResult::Val(TypeAnnotatedValue::Str("Healthy".to_string()));
 
+        let session_store: Arc<dyn GatewaySession + Send + Sync> =
+            Arc::new(InMemoryGatewaySession::new(&EvictionStrategy::default()));
+
         let http_response: poem::Response = evaluation_result
-            .to_response(
-                &HttpRequestDetails::empty(),
-                &GatewaySessionStore::in_memory(&EvictionStrategy::default()),
-            )
+            .to_response(&HttpRequestDetails::empty(), &session_store)
             .await;
 
         let (response_parts, body) = http_response.into_parts();

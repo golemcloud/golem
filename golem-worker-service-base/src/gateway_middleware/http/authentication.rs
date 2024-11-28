@@ -92,7 +92,6 @@ mod internal {
         let session_id = SessionId(state_from_request.to_string());
 
         let session_data = session_store
-            .0
             .get(&session_id)
             .await
             .map_err(MiddlewareInError::InternalServerError)?;
@@ -195,12 +194,10 @@ mod internal {
         let redirect_url_data_value = DataValue(serde_json::Value::String(redirect_uri));
 
         session_store
-            .0
             .insert(session_id.clone(), nonce_data_key, nonce_data_value)
             .await
             .map_err(MiddlewareInError::InternalServerError)?;
         session_store
-            .0
             .insert(session_id, redirect_url_data_key, redirect_url_data_value)
             .await
             .map_err(MiddlewareInError::InternalServerError)?;
@@ -227,7 +224,6 @@ mod internal {
         let claims_data_value = DataValue(json);
 
         session_store
-            .0
             .insert(session_id.clone(), claims_data_key, claims_data_value)
             .await
             .map_err(MiddlewareInError::InternalServerError)

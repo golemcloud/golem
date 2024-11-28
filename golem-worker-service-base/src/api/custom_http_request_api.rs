@@ -30,14 +30,15 @@ use crate::gateway_execution::auth_call_back_binding_handler::DefaultAuthCallBac
 use crate::gateway_execution::gateway_http_input_executor::{
     DefaultGatewayInputExecutor, GatewayHttpInput, GatewayHttpInputExecutor,
 };
-use crate::gateway_execution::gateway_session::{EvictionStrategy, GatewaySessionStore};
+use crate::gateway_execution::gateway_session::{
+    EvictionStrategy, GatewaySessionStore, InMemoryGatewaySession,
+};
 use crate::gateway_execution::GatewayWorkerRequestExecutor;
 use crate::gateway_request::http_request::InputHttpRequest;
 use crate::gateway_security::DefaultIdentityProviderResolver;
 
 // Executes custom request with the help of worker_request_executor and definition_service
 // This is a common API projects can make use of, similar to healthcheck service
-#[derive(Clone)]
 pub struct CustomHttpRequestApi<Namespace> {
     pub api_definition_lookup_service: Arc<
         dyn ApiDefinitionsLookup<
@@ -76,7 +77,8 @@ impl<Namespace: Clone + Send + Sync + 'static> CustomHttpRequestApi<Namespace> {
             auth_call_back_binding_handler,
         });
 
-        let gateway_session_store = GatewaySessionStore::in_memory(&EvictionStrategy::default());
+        let gateway_session_store =
+            Arc::new(InMemoryGatewaySession::new(&EvictionStrategy::default()));
 
         Self {
             api_definition_lookup_service,
@@ -118,7 +120,7 @@ impl<Namespace: Clone + Send + Sync + 'static> CustomHttpRequestApi<Namespace> {
                         let input = GatewayHttpInput::new(
                             &request,
                             resolved_gateway_binding.resolved_binding,
-                            &self.gateway_session_store,
+                            Arc::clone(&self.gateway_session_store),
                             Arc::new(DefaultIdentityProviderResolver),
                         );
                         let response: poem::Response = self

@@ -33,7 +33,7 @@ use golem_worker_service_base::gateway_execution::gateway_http_input_executor::{
     DefaultGatewayInputExecutor, GatewayHttpInput, GatewayHttpInputExecutor,
 };
 use golem_worker_service_base::gateway_execution::gateway_session::{
-    EvictionStrategy, GatewaySessionStore,
+    EvictionStrategy, GatewaySession, GatewaySessionStore, InMemoryGatewaySession,
 };
 use golem_worker_service_base::gateway_middleware::HttpCors;
 use golem_worker_service_base::gateway_request::http_request::{ApiInputPath, InputHttpRequest};
@@ -87,7 +87,7 @@ async fn execute(
     let input = GatewayHttpInput::new(
         &http,
         resolved_gateway_binding.resolved_binding,
-        session_store,
+        Arc::clone(session_store),
         Arc::new(test_identity_provider_resolver.clone()),
     );
 
@@ -112,7 +112,8 @@ async fn test_end_to_end_api_gateway_simple_worker() {
     let api_specification: HttpApiDefinition =
         get_api_spec_worker_binding("/foo/{user-id}", worker_name, response_mapping).await;
 
-    let session_store = GatewaySessionStore::in_memory(&EvictionStrategy::default());
+    let session_store: Arc<dyn GatewaySession + Sync + Send> =
+        Arc::new(InMemoryGatewaySession::new(&EvictionStrategy::default()));
     let response = execute(
         &api_request,
         &api_specification,
@@ -167,7 +168,7 @@ async fn test_end_to_end_api_gateway_with_security_invalid_signatures() {
     )
     .await;
 
-    let session_store = GatewaySessionStore::in_memory(&EvictionStrategy::default());
+    let session_store = internal::get_session_store();
 
     let initial_redirect_response = execute(
         &api_request,
@@ -271,10 +272,7 @@ async fn test_end_to_end_api_gateway_with_expired_session() {
     )
     .await;
 
-    let session_store = GatewaySessionStore::in_memory(&EvictionStrategy {
-        ttl: Duration::from_secs(0),
-        period: Duration::from_millis(1),
-    });
+    let session_store = internal::get_session_store_with_zero_ttl();
 
     let initial_response_to_identity_provider = execute(
         &api_request,
@@ -383,7 +381,7 @@ async fn test_end_to_end_api_gateway_with_security_expired_token() {
     )
     .await;
 
-    let session_store = GatewaySessionStore::in_memory(&EvictionStrategy::default());
+    let session_store = internal::get_session_store();
 
     let initial_response_to_identity_provider = execute(
         &api_request,
@@ -488,7 +486,7 @@ async fn test_end_to_end_api_gateway_with_security_successful_authentication() {
     )
     .await;
 
-    let session_store = GatewaySessionStore::in_memory(&EvictionStrategy::default());
+    let session_store = internal::get_session_store();
 
     let initial_response_to_identity_provider = execute(
         &api_request,
@@ -604,7 +602,7 @@ async fn test_end_to_end_api_gateway_cors_preflight() {
     let api_specification: HttpApiDefinition =
         get_api_spec_with_cors_preflight_configuration("/foo/{user-id}", &cors).await;
 
-    let session_store = GatewaySessionStore::in_memory(&EvictionStrategy::default());
+    let session_store = internal::get_session_store();
 
     let response = execute(
         &api_request,
@@ -628,7 +626,7 @@ async fn test_end_to_end_api_gateway_cors_preflight_default() {
     let api_specification: HttpApiDefinition =
         get_api_spec_with_default_cors_preflight_configuration("/foo/{user-id}").await;
 
-    let session_store = GatewaySessionStore::in_memory(&EvictionStrategy::default());
+    let session_store = internal::get_session_store();
 
     let response = execute(
         &api_request,
@@ -671,7 +669,7 @@ async fn test_end_to_end_api_gateway_cors_with_preflight_default_and_actual_requ
         )
         .await;
 
-    let session_store = GatewaySessionStore::in_memory(&EvictionStrategy::default());
+    let session_store = internal::get_session_store();
 
     let preflight_response = execute(
         &preflight_request,
@@ -742,7 +740,7 @@ async fn test_end_to_end_api_gateway_cors_with_preflight_and_actual_request() {
         )
         .await;
 
-    let session_store = GatewaySessionStore::in_memory(&EvictionStrategy::default());
+    let session_store = internal::get_session_store();
 
     let preflight_response = execute(
         &preflight_request,
@@ -811,7 +809,7 @@ async fn test_end_to_end_api_gateway_with_request_path_and_query_lookup() {
         get_api_spec_worker_binding("/foo/{user-id}?{token-id}", worker_name, response_mapping)
             .await;
 
-    let session_store = GatewaySessionStore::in_memory(&EvictionStrategy::default());
+    let session_store = internal::get_session_store();
 
     let response = execute(
         &api_request,
@@ -870,7 +868,7 @@ async fn test_end_to_end_api_gateway_with_request_path_and_query_lookup_complex(
     let api_specification: HttpApiDefinition =
         get_api_spec_worker_binding("/foo/{user-id}", worker_name, response_mapping).await;
 
-    let session_store = GatewaySessionStore::in_memory(&EvictionStrategy::default());
+    let session_store = internal::get_session_store();
 
     let response = execute(
         &api_request,
@@ -928,7 +926,7 @@ async fn test_end_to_end_api_gateway_with_with_request_body_lookup1() {
     let api_specification: HttpApiDefinition =
         get_api_spec_worker_binding("/foo/{user-id}", worker_name, response_mapping).await;
 
-    let session_store = GatewaySessionStore::in_memory(&EvictionStrategy::default());
+    let session_store = internal::get_session_store();
 
     let test_response = execute(
         &api_request,
@@ -1000,7 +998,8 @@ async fn test_end_to_end_api_gateway_with_with_request_body_lookup2() {
     let api_specification: HttpApiDefinition =
         get_api_spec_worker_binding("/foo/{user-id}", worker_name, response_mapping).await;
 
-    let session_store = GatewaySessionStore::in_memory(&EvictionStrategy::default());
+    let session_store = internal::get_session_store();
+
     let response = execute(
         &api_request,
         &api_specification,
@@ -1069,7 +1068,8 @@ async fn test_end_to_end_api_gateway_with_with_request_body_lookup3() {
     let api_specification: HttpApiDefinition =
         get_api_spec_worker_binding("/foo/{user-id}", worker_name, response_mapping).await;
 
-    let session_store = GatewaySessionStore::in_memory(&EvictionStrategy::default());
+    let session_store = internal::get_session_store();
+
     let response = execute(
         &api_request,
         &api_specification,
@@ -1576,9 +1576,13 @@ mod internal {
     use poem::Response;
     use rib::RibResult;
 
+    use golem_worker_service_base::gateway_execution::gateway_session::{
+        EvictionStrategy, GatewaySessionStore, InMemoryGatewaySession,
+    };
     use serde_json::Value;
     use std::collections::HashMap;
     use std::sync::Arc;
+    use std::time::Duration;
 
     pub struct TestApiGatewayWorkerRequestExecutor {}
 
@@ -1918,6 +1922,18 @@ mod internal {
         }
 
         decoded
+    }
+
+    pub fn get_session_store() -> GatewaySessionStore {
+        Arc::new(InMemoryGatewaySession::new(&EvictionStrategy::default()))
+    }
+
+    // Quickly evicted as soon as added
+    pub fn get_session_store_with_zero_ttl() -> GatewaySessionStore {
+        Arc::new(InMemoryGatewaySession::new(&EvictionStrategy::new(
+            &Duration::from_secs(0),
+            &Duration::from_millis(1),
+        )))
     }
 }
 

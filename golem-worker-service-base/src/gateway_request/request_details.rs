@@ -71,12 +71,12 @@ pub struct HttpRequestDetails {
     pub scheme: Option<Scheme>,
     pub host: ApiSiteString,
     pub api_input_path: ApiInputPath,
-    pub request_path_values: RequestPathValues,
-    pub request_body: RequestBody,
-    pub request_query_values: RequestQueryValues,
-    pub request_header_values: RequestHeaderValues,
+    pub request_path_params: RequestPathValues,
+    pub request_body_value: RequestBody,
+    pub request_query_params: RequestQueryValues,
+    pub request_headers: RequestHeaderValues,
     pub http_middlewares: Option<HttpMiddlewares>,
-    pub request_custom_values: Option<HashMap<String, Value>>,
+    pub request_custom_params: Option<HashMap<String, Value>>,
 }
 
 impl HttpRequestDetails {
@@ -85,23 +85,25 @@ impl HttpRequestDetails {
         session_id: &SessionId,
         gateway_session_store: &GatewaySessionStore,
     ) -> Result<(), String> {
-        let session_details = gateway_session_store.0.get(session_id).await?;
-        if let Some(session_data) = session_details {
-            let mut custom_values = HashMap::new();
-            for (data_key, data_value) in session_data.value.iter() {
-                if data_key == &DataKey::claims() {
-                    custom_values.insert("auth".to_string(), data_value.0.clone());
-                }
+        let claims_opt = gateway_session_store
+            .get_data_value(session_id, &DataKey::claims())
+            .await?;
+
+        if let Some(claims) = claims_opt {
+            if let Some(custom_params) = self.request_custom_params.as_mut() {
+                custom_params.insert("auth".to_string(), claims.0);
+            } else {
+                self.request_custom_params =
+                    Some(HashMap::from_iter([("auth".to_string(), claims.0)]));
             }
-            self.request_custom_values = Some(custom_values);
         }
 
         Ok(())
     }
 
     pub fn as_json(&self) -> Value {
-        let typed_path_values = self.request_path_values.clone().0;
-        let typed_query_values = self.request_query_values.clone().0;
+        let typed_path_values = self.request_path_params.clone().0;
+        let typed_query_values = self.request_query_params.clone().0;
 
         let mut path_values = serde_json::Map::new();
 
@@ -117,7 +119,7 @@ impl HttpRequestDetails {
 
         let mut header_records = serde_json::Map::new();
 
-        for field in self.request_header_values.0.fields.iter() {
+        for field in self.request_headers.0.fields.iter() {
             header_records.insert(field.name.clone(), field.value.clone());
         }
 
@@ -125,11 +127,11 @@ impl HttpRequestDetails {
 
         let mut basic = serde_json::Map::from_iter(vec![
             ("path".to_string(), merged_request_path_and_query),
-            ("body".to_string(), self.request_body.0.clone()),
+            ("body".to_string(), self.request_body_value.0.clone()),
             ("headers".to_string(), header_value),
         ]);
 
-        let custom = self.request_custom_values.clone().unwrap_or_default();
+        let custom = self.request_custom_params.clone().unwrap_or_default();
 
         for (key, value) in custom.iter() {
             basic.insert(key.clone(), value.clone());
@@ -161,12 +163,12 @@ impl HttpRequestDetails {
                 base_path: "".to_string(),
                 query_path: None,
             },
-            request_path_values: RequestPathValues(JsonKeyValues::default()),
-            request_body: RequestBody(Value::Null),
-            request_query_values: RequestQueryValues(JsonKeyValues::default()),
-            request_header_values: RequestHeaderValues(JsonKeyValues::default()),
+            request_path_params: RequestPathValues(JsonKeyValues::default()),
+            request_body_value: RequestBody(Value::Null),
+            request_query_params: RequestQueryValues(JsonKeyValues::default()),
+            request_headers: RequestHeaderValues(JsonKeyValues::default()),
             http_middlewares: None,
-            request_custom_values: None,
+            request_custom_params: None,
         }
     }
 
@@ -175,7 +177,7 @@ impl HttpRequestDetails {
     }
 
     pub fn get_access_token_from_cookie(&self) -> Option<String> {
-        self.request_header_values
+        self.request_headers
             .0
             .fields
             .iter()
@@ -196,7 +198,7 @@ impl HttpRequestDetails {
     }
 
     pub fn get_id_token_from_cookie(&self) -> Option<String> {
-        self.request_header_values
+        self.request_headers
             .0
             .fields
             .iter()
@@ -219,7 +221,7 @@ impl HttpRequestDetails {
     pub fn get_cookie_values(&self) -> HashMap<&str, &str> {
         let mut hash_map = HashMap::new();
 
-        for json_key_value in &self.request_header_values.0.fields {
+        for json_key_value in &self.request_headers.0.fields {
             let field_name = &json_key_value.name;
 
             if field_name == "cookie" || field_name == "Cookie" {
@@ -239,7 +241,7 @@ impl HttpRequestDetails {
     }
 
     pub fn get_accept_content_type_header(&self) -> Option<String> {
-        self.request_header_values
+        self.request_headers
             .0
             .fields
             .iter()
@@ -267,12 +269,12 @@ impl HttpRequestDetails {
             scheme: scheme.clone(),
             host: host.clone(),
             api_input_path: api_input_path.clone(),
-            request_path_values: path_params,
-            request_body,
-            request_query_values: query_params,
-            request_header_values: header_params,
+            request_path_params: path_params,
+            request_body_value: request_body,
+            request_query_params: query_params,
+            request_headers: header_params,
             http_middlewares: http_middlewares.clone(),
-            request_custom_values: None,
+            request_custom_params: None,
         })
     }
 }

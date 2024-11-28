@@ -32,23 +32,16 @@ pub trait GatewaySession {
 
     async fn get_data_value(
         &self,
-        session_id: SessionId,
-        data_key: DataKey,
+        session_id: &SessionId,
+        data_key: &DataKey,
     ) -> Result<Option<DataValue>, String>;
     async fn get_params(
         &self,
-        session_id: SessionId,
+        session_id: &SessionId,
     ) -> Result<Option<HashMap<DataKey, DataValue>>, String>;
 }
 
-#[derive(Clone)]
-pub struct GatewaySessionStore(pub Arc<dyn GatewaySession + Send + Sync>);
-
-impl GatewaySessionStore {
-    pub fn in_memory(eviction_strategy: &EvictionStrategy) -> Self {
-        GatewaySessionStore(Arc::new(InMemoryGatewaySession::new(eviction_strategy)))
-    }
-}
+pub type GatewaySessionStore = Arc<dyn GatewaySession + Send + Sync>;
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
 pub struct SessionId(pub String);
@@ -101,8 +94,17 @@ pub struct InMemoryGatewaySession {
 
 #[derive(Clone)]
 pub struct EvictionStrategy {
-    pub ttl: Duration,
-    pub period: Duration,
+    ttl: Duration,
+    period: Duration,
+}
+
+impl EvictionStrategy {
+    pub fn new(ttl: &Duration, period: &Duration) -> EvictionStrategy {
+        EvictionStrategy {
+            ttl: *ttl,
+            period: *period,
+        }
+    }
 }
 
 impl Default for EvictionStrategy {
@@ -166,15 +168,6 @@ impl InMemoryGatewaySession {
     }
 }
 
-impl Default for InMemoryGatewaySession {
-    fn default() -> Self {
-        InMemoryGatewaySession {
-            data: Arc::new(Mutex::new(HashMap::new())),
-            eviction_strategy: EvictionStrategy::default(),
-        }
-    }
-}
-
 #[async_trait]
 impl GatewaySession for InMemoryGatewaySession {
     async fn insert(
@@ -199,12 +192,12 @@ impl GatewaySession for InMemoryGatewaySession {
 
     async fn get_data_value(
         &self,
-        session_id: SessionId,
-        data_key: DataKey,
+        session_id: &SessionId,
+        data_key: &DataKey,
     ) -> Result<Option<DataValue>, String> {
         let data = self.data.lock().await;
-        match data.get(&session_id) {
-            Some(session_data) => match session_data.value.get(&data_key) {
+        match data.get(session_id) {
+            Some(session_data) => match session_data.value.get(data_key) {
                 Some(data_value) => Ok(Some(data_value.clone())),
                 None => Ok(None),
             },
@@ -214,10 +207,10 @@ impl GatewaySession for InMemoryGatewaySession {
 
     async fn get_params(
         &self,
-        session_id: SessionId,
+        session_id: &SessionId,
     ) -> Result<Option<HashMap<DataKey, DataValue>>, String> {
         let data = self.data.lock().await;
-        match data.get(&session_id) {
+        match data.get(session_id) {
             Some(session_data) => Ok(Some(session_data.value.clone())),
             None => Ok(None),
         }

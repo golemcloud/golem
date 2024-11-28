@@ -22,7 +22,7 @@ use crate::gateway_execution::auth_call_back_binding_handler::{
 use crate::gateway_execution::file_server_binding_handler::{
     FileServerBindingHandler, FileServerBindingResult,
 };
-use crate::gateway_execution::gateway_session::{GatewaySessionStore, SessionId};
+use crate::gateway_execution::gateway_session::{GatewaySession, GatewaySessionStore, SessionId};
 use crate::gateway_execution::to_response::ToHttpResponse;
 use crate::gateway_execution::to_response_failure::ToHttpResponseFromSafeDisplay;
 use crate::gateway_middleware::{
@@ -63,7 +63,7 @@ pub trait GatewayHttpInputExecutor<Namespace> {
 pub struct GatewayHttpInput<Namespace> {
     pub http_request_details: HttpRequestDetails,
     pub resolved_gateway_binding: ResolvedBinding<Namespace>,
-    pub session_store: GatewaySessionStore,
+    pub session_store: Arc<dyn GatewaySession + Send + Sync>,
     pub identity_provider_resolver: Arc<dyn IdentityProviderResolver + Send + Sync>,
 }
 
@@ -71,13 +71,13 @@ impl<Namespace: Clone> GatewayHttpInput<Namespace> {
     pub fn new(
         http_request_details: &HttpRequestDetails,
         resolved_gateway_binding: ResolvedBinding<Namespace>,
-        session_store: &GatewaySessionStore,
+        session_store: GatewaySessionStore,
         identity_provider_resolver: Arc<dyn IdentityProviderResolver + Send + Sync>,
     ) -> Self {
         GatewayHttpInput {
             http_request_details: http_request_details.clone(),
             resolved_gateway_binding,
-            session_store: session_store.clone(),
+            session_store,
             identity_provider_resolver,
         }
     }
