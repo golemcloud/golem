@@ -30,7 +30,7 @@ enum ExtraCommands {
     #[clap(name = "start", about = "Start a golem server for local development")]
     Start {
         /// Port to listen on
-        #[clap(short, long, default_value_t = 8080)]
+        #[clap(short, long, default_value_t = 9881)]
         port: u16,
 
         /// Directory to store data in. Defaults to $XDG_STATE_HOME/golem

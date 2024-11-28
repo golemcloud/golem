@@ -36,6 +36,7 @@ use std::time::Instant;
 use tokio::sync::mpsc;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
+use tracing::Instrument;
 use uuid::Uuid;
 use wasmtime::component::Component;
 use wasmtime::Engine;
@@ -87,29 +88,32 @@ impl CompileWorker {
             ),
         };
 
-        tokio::spawn(async move {
-            while let Some(request) = recv.recv().await {
-                crate::metrics::decrement_queue_length();
-                let result = worker.compile_component(&request.component).await;
-                match result {
-                    Err(_) => {}
-                    Ok(component) => {
-                        tracing::info!("Compiled component {}", request.component);
-                        let send_result = sender
-                            .send(CompiledComponent {
-                                component_and_version: request.component,
-                                component,
-                            })
-                            .await;
+        tokio::spawn(
+            async move {
+                while let Some(request) = recv.recv().await {
+                    crate::metrics::decrement_queue_length();
+                    let result = worker.compile_component(&request.component).await;
+                    match result {
+                        Err(_) => {}
+                        Ok(component) => {
+                            tracing::info!("Compiled component {}", request.component);
+                            let send_result = sender
+                                .send(CompiledComponent {
+                                    component_and_version: request.component,
+                                    component,
+                                })
+                                .await;
 
-                        if send_result.is_err() {
-                            tracing::error!("Failed to send compiled component");
-                            break;
+                            if send_result.is_err() {
+                                tracing::error!("Failed to send compiled component");
+                                break;
+                            }
                         }
-                    }
-                };
+                    };
+                }
             }
-        });
+            .in_current_span(),
+        );
     }
 
     async fn compile_component(

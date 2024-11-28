@@ -22,6 +22,7 @@ use tokio::sync::Mutex;
 use tokio::task::{yield_now, JoinHandle};
 
 use golem_common::model::oplog::OplogEntry;
+use tracing::Instrument;
 
 use crate::durable_host::replay_state::ReplayState;
 use crate::error::GolemError;
@@ -54,6 +55,7 @@ impl SyncHelper {
                 queue_size_clone,
                 replay_state,
             )
+            .in_current_span()
             .await;
         });
 

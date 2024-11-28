@@ -11,7 +11,7 @@ use golem_common::model::{
     AccountId, ComponentId, ScanCursor, WorkerFilter, WorkerMetadata, WorkerStatus,
 };
 use std::sync::Arc;
-use tracing::info;
+use tracing::{info, Instrument};
 
 #[async_trait]
 pub trait RunningWorkerEnumerationService {
@@ -114,10 +114,15 @@ impl DefaultWorkerEnumerationService {
         let (new_cursor, keys) = self
             .oplog_service
             .scan_for_component(account_id, component_id, cursor, count)
+            .instrument(tracing::info_span!("scan_for_component"))
             .await?;
 
         for owned_worker_id in keys {
-            let worker_metadata = self.worker_service.get(&owned_worker_id).await;
+            let worker_metadata = self
+                .worker_service
+                .get(&owned_worker_id)
+                .instrument(tracing::info_span!("get_worker_metadata"))
+                .await;
 
             if let Some(worker_metadata) = worker_metadata {
                 let metadata = if precise {
@@ -126,6 +131,7 @@ impl DefaultWorkerEnumerationService {
                         &owned_worker_id,
                         &Some(worker_metadata.clone()),
                     )
+                    .instrument(tracing::info_span!("calculate_last_known_status"))
                     .await?;
                     WorkerMetadata {
                         last_known_status,

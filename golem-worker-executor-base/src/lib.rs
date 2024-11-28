@@ -85,7 +85,7 @@ use storage::keyvalue::sqlite::SqliteKeyValueStorage;
 use tokio::runtime::Handle;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Server;
-use tracing::info;
+use tracing::{info, Instrument};
 use uuid::Uuid;
 use wasmtime::component::Linker;
 use wasmtime::{Config, Engine, WasmBacktraceDetails};
@@ -405,12 +405,15 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
 
         let mut epoch_interval = tokio::time::interval(golem_config.limits.epoch_interval);
         let engine_ref: Arc<Engine> = engine.clone();
-        tokio::spawn(async move {
-            loop {
-                epoch_interval.tick().await;
-                engine_ref.increment_epoch();
+        tokio::spawn(
+            async move {
+                loop {
+                    epoch_interval.tick().await;
+                    engine_ref.increment_epoch();
+                }
             }
-        });
+            .in_current_span(),
+        );
 
         let linker = Arc::new(linker);
 

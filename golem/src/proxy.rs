@@ -52,6 +52,8 @@ pub fn start_proxy(
     };
 
     let _join_handle = join_set.spawn_blocking(move || {
+        let span = tracing::info_span!("proxy");
+        let _enter = span.enter();
         let max_buffers = 500;
         let buffer_size = 16384;
         sozu_lib::http::testing::start_http_worker(

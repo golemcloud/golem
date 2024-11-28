@@ -19,7 +19,7 @@ use async_rwlock::RwLock;
 use itertools::Itertools;
 use tokio::sync::{Mutex, Notify};
 use tokio::task::JoinHandle;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, warn, Instrument};
 
 use crate::error::ShardManagerError;
 use crate::healthcheck::{get_unhealthy_pods, HealthCheck};
@@ -79,6 +79,7 @@ impl ShardManagement {
                     worker_executors,
                     threshold,
                 )
+                .in_current_span()
                 .await
             })))
         };

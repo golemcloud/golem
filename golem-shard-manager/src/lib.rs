@@ -115,12 +115,15 @@ impl ShardManagerServiceImpl {
         let shard_management = self.shard_management.clone();
         let health_check = self.health_check.clone();
 
-        tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(delay).await;
-                Self::health_check(shard_management.clone(), health_check.clone()).await
+        tokio::spawn(
+            async move {
+                loop {
+                    tokio::time::sleep(delay).await;
+                    Self::health_check(shard_management.clone(), health_check.clone()).await
+                }
             }
-        });
+            .in_current_span(),
+        );
     }
 
     async fn health_check(

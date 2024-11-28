@@ -18,7 +18,7 @@ use std::net::SocketAddr;
 use http_02::{Response, StatusCode};
 use prometheus::{Encoder, Registry, TextEncoder};
 use tokio::task::JoinHandle;
-use tracing::info;
+use tracing::{info, Instrument};
 use warp::hyper::Body;
 use warp::Filter;
 
@@ -33,7 +33,7 @@ impl HttpServerImpl {
         registry: Registry,
         body_message: &'static str,
     ) -> HttpServerImpl {
-        let handle = tokio::spawn(server(addr, registry, body_message));
+        let handle = tokio::spawn(server(addr, registry, body_message).in_current_span());
         HttpServerImpl { handle }
     }
 }

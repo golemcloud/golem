@@ -16,6 +16,7 @@ use crate::migration::IncludedMigrationsDir;
 use anyhow::Context;
 use golem_common::config::DbConfig;
 use golem_common::config::DbSqliteConfig;
+use golem_common::model::Empty;
 use golem_component_service::config::ComponentServiceConfig;
 use golem_component_service::ComponentService;
 use golem_component_service_base::config::{ComponentStoreConfig, ComponentStoreLocalConfig};
@@ -35,6 +36,7 @@ use prometheus::{default_registry, Registry};
 use std::path::PathBuf;
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
+use tracing::Instrument;
 
 use crate::proxy;
 
@@ -158,6 +160,9 @@ fn component_service_config(args: &ServiceArgs) -> ComponentServiceConfig {
             object_prefix: "".to_string(),
         }),
         blob_storage: blob_storage_config(args),
+        compilation: golem_component_service_base::config::ComponentCompilationConfig::Disabled(
+            Empty {},
+        ),
         ..Default::default()
     }
 }
@@ -184,8 +189,11 @@ async fn run_worker_executor(
     let golem_config = worker_executor_config(args);
     let prometheus_registry = golem_worker_executor_base::metrics::register_all();
 
+    let span = tracing::info_span!("worker-executor");
     let _server = join_set.spawn(async move {
-        golem_worker_executor::run(golem_config, prometheus_registry, Handle::current()).await
+        golem_worker_executor::run(golem_config, prometheus_registry, Handle::current())
+            .instrument(span)
+            .await
     });
     Ok(())
 }
@@ -196,8 +204,12 @@ async fn run_shard_manager(
 ) -> Result<(), anyhow::Error> {
     let config = shard_manager_config(args);
     let prometheus_registry = default_registry().clone();
-    let _server = join_set
-        .spawn(async move { golem_shard_manager::async_main(&config, prometheus_registry).await });
+    let span = tracing::info_span!("shard-manager");
+    let _server = join_set.spawn(async move {
+        golem_shard_manager::async_main(&config, prometheus_registry)
+            .instrument(span)
+            .await
+    });
     Ok(())
 }
 
@@ -213,7 +225,8 @@ async fn run_component_service(
 
     let component_service =
         ComponentService::new(config, prometheus_registry, migration_path).await?;
-    let _server = join_set.spawn(async move { component_service.run().await });
+    let span = tracing::info_span!("component-service", component = "component-service");
+    let _server = join_set.spawn(async move { component_service.run().instrument(span).await });
     Ok(())
 }
 
@@ -228,6 +241,7 @@ async fn run_worker_service(
     ));
 
     let worker_service = WorkerService::new(config, prometheus_registry, migration_path).await?;
-    let _server = join_set.spawn(async move { worker_service.run().await });
+    let span = tracing::info_span!("worker-service");
+    let _server = join_set.spawn(async move { worker_service.run().instrument(span).await });
     Ok(())
 }
