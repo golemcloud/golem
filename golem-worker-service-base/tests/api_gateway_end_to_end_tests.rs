@@ -23,7 +23,7 @@ use golem_service_base::auth::DefaultNamespace;
 use crate::gateway_api_definition::http::{CompiledHttpApiDefinition, HttpApiDefinition};
 
 use crate::internal::get_preflight_from_response;
-use crate::security::{TestIdentityProvider, TestIdentityProviderResolver};
+use crate::security::TestIdentityProvider;
 use chrono::{DateTime, Utc};
 use golem_common::model::IdempotencyKey;
 use golem_worker_service_base::gateway_api_deployment::ApiSiteString;
@@ -62,7 +62,7 @@ async fn execute(
     api_request: &InputHttpRequest,
     api_specification: &HttpApiDefinition,
     session_store: &GatewaySessionStore,
-    test_identity_provider_resolver: &TestIdentityProviderResolver,
+    test_identity_provider_resolver: &TestIdentityProvider,
 ) -> Response {
     let compiled = CompiledHttpApiDefinition::from_http_api_definition(
         api_specification,
@@ -118,7 +118,7 @@ async fn test_end_to_end_api_gateway_simple_worker() {
         &api_request,
         &api_specification,
         &session_store,
-        &TestIdentityProviderResolver::default(),
+        &TestIdentityProvider::default(),
     )
     .await;
 
@@ -155,9 +155,8 @@ async fn test_end_to_end_api_gateway_with_security_invalid_signatures() {
     let auth_call_back_url =
         RedirectUrl::new("http://localhost/auth/callback".to_string()).unwrap();
 
-    let invalid_identity_provider_resolver = TestIdentityProviderResolver::new(
-        TestIdentityProvider::get_provider_with_invalid_signatures(),
-    );
+    let invalid_identity_provider_resolver =
+        TestIdentityProvider::get_provider_with_invalid_signatures();
 
     let api_specification: HttpApiDefinition = get_api_spec_with_security_configuration(
         "/foo/{user-id}",
@@ -261,7 +260,7 @@ async fn test_end_to_end_api_gateway_with_expired_session() {
         RedirectUrl::new("http://localhost/auth/callback".to_string()).unwrap();
 
     let invalid_identity_provider_resolver =
-        TestIdentityProviderResolver::new(TestIdentityProvider::get_provider_with_valid_id_token());
+        TestIdentityProvider::get_provider_with_valid_id_token();
 
     let api_specification: HttpApiDefinition = get_api_spec_with_security_configuration(
         "/foo/{user-id}",
@@ -368,9 +367,8 @@ async fn test_end_to_end_api_gateway_with_security_expired_token() {
     let auth_call_back_url =
         RedirectUrl::new("http://localhost/auth/callback".to_string()).unwrap();
 
-    let invalid_identity_provider_resolver = TestIdentityProviderResolver::new(
-        TestIdentityProvider::get_provider_with_expired_id_token(),
-    );
+    let invalid_identity_provider_resolver =
+        TestIdentityProvider::get_provider_with_expired_id_token();
 
     let api_specification: HttpApiDefinition = get_api_spec_with_security_configuration(
         "/foo/{user-id}",
@@ -472,7 +470,7 @@ async fn test_end_to_end_api_gateway_with_security_successful_authentication() {
       { body: response, headers: {email: email} }
     "#;
 
-    let identity_provider_resolver = TestIdentityProviderResolver::valid_provider();
+    let identity_provider_resolver = TestIdentityProvider::get_provider_with_valid_id_token();
 
     let auth_call_back_url =
         RedirectUrl::new("http://localhost/auth/callback".to_string()).unwrap();
@@ -608,7 +606,7 @@ async fn test_end_to_end_api_gateway_cors_preflight() {
         &api_request,
         &api_specification,
         &session_store,
-        &TestIdentityProviderResolver::default(),
+        &TestIdentityProvider::get_provider_with_valid_id_token(),
     )
     .await;
 
@@ -632,7 +630,7 @@ async fn test_end_to_end_api_gateway_cors_preflight_default() {
         &api_request,
         &api_specification,
         &session_store,
-        &TestIdentityProviderResolver::default(),
+        &TestIdentityProvider::default(),
     )
     .await;
 
@@ -675,14 +673,14 @@ async fn test_end_to_end_api_gateway_cors_with_preflight_default_and_actual_requ
         &preflight_request,
         &api_specification,
         &session_store,
-        &TestIdentityProviderResolver::default(),
+        &TestIdentityProvider::default(),
     )
     .await;
     let response_from_other_endpoint = execute(
         &api_request,
         &api_specification,
         &session_store,
-        &TestIdentityProviderResolver::default(),
+        &TestIdentityProvider::default(),
     )
     .await;
 
@@ -746,14 +744,14 @@ async fn test_end_to_end_api_gateway_cors_with_preflight_and_actual_request() {
         &preflight_request,
         &api_specification,
         &session_store,
-        &TestIdentityProviderResolver::default(),
+        &TestIdentityProvider::default(),
     )
     .await;
     let actual_response = execute(
         &api_request,
         &api_specification,
         &session_store,
-        &TestIdentityProviderResolver::default(),
+        &TestIdentityProvider::default(),
     )
     .await;
 
@@ -815,7 +813,7 @@ async fn test_end_to_end_api_gateway_with_request_path_and_query_lookup() {
         &api_request,
         &api_specification,
         &session_store,
-        &TestIdentityProviderResolver::default(),
+        &TestIdentityProvider::default(),
     )
     .await;
 
@@ -874,7 +872,7 @@ async fn test_end_to_end_api_gateway_with_request_path_and_query_lookup_complex(
         &api_request,
         &api_specification,
         &session_store,
-        &TestIdentityProviderResolver::default(),
+        &TestIdentityProvider::default(),
     )
     .await;
 
@@ -932,7 +930,7 @@ async fn test_end_to_end_api_gateway_with_with_request_body_lookup1() {
         &api_request,
         &api_specification,
         &session_store,
-        &TestIdentityProviderResolver::default(),
+        &TestIdentityProvider::default(),
     )
     .await;
 
@@ -1004,7 +1002,7 @@ async fn test_end_to_end_api_gateway_with_with_request_body_lookup2() {
         &api_request,
         &api_specification,
         &session_store,
-        &TestIdentityProviderResolver::default(),
+        &TestIdentityProvider::default(),
     )
     .await;
 
@@ -1074,7 +1072,7 @@ async fn test_end_to_end_api_gateway_with_with_request_body_lookup3() {
         &api_request,
         &api_specification,
         &session_store,
-        &TestIdentityProviderResolver::default(),
+        &TestIdentityProvider::default(),
     )
     .await;
 
@@ -1259,7 +1257,7 @@ async fn get_api_spec_worker_binding(
         &DefaultNamespace(),
         core_request,
         create_at,
-        &security::get_test_security_scheme_service(TestIdentityProviderResolver::default()),
+        &security::get_test_security_scheme_service(TestIdentityProvider::default()),
     )
     .await
     .unwrap()
@@ -1271,12 +1269,12 @@ async fn get_api_spec_with_security_configuration(
     worker_name: &str,
     rib_expression: &str,
     auth_call_back_url: &RedirectUrl,
-    test_identity_provider_resolver: &TestIdentityProviderResolver,
+    test_identity_provider: &TestIdentityProvider,
 ) -> HttpApiDefinition {
     let security_scheme_identifier = SecuritySchemeIdentifier::new("openId1".to_string());
 
     let security_scheme_service =
-        security::get_test_security_scheme_service(test_identity_provider_resolver.clone());
+        security::get_test_security_scheme_service(test_identity_provider.clone());
 
     let security_scheme = SecurityScheme::new(
         Provider::Google,
@@ -1370,7 +1368,7 @@ async fn get_api_spec_with_default_cors_preflight_configuration(
         &DefaultNamespace(),
         core_request,
         create_at,
-        &security::get_test_security_scheme_service(TestIdentityProviderResolver::default()),
+        &security::get_test_security_scheme_service(TestIdentityProvider::default()),
     )
     .await
     .unwrap()
@@ -1421,7 +1419,7 @@ async fn get_api_spec_with_cors_preflight_configuration(
         &DefaultNamespace(),
         core_request,
         create_at,
-        &security::get_test_security_scheme_service(TestIdentityProviderResolver::default()),
+        &security::get_test_security_scheme_service(TestIdentityProvider::default()),
     )
     .await
     .unwrap()
@@ -1487,7 +1485,7 @@ async fn get_api_spec_with_cors_preflight_configuration_and_extra_endpoint(
         &DefaultNamespace(),
         core_request,
         create_at,
-        &security::get_test_security_scheme_service(TestIdentityProviderResolver::default()),
+        &security::get_test_security_scheme_service(TestIdentityProvider::default()),
     )
     .await
     .unwrap()
@@ -1534,7 +1532,7 @@ async fn get_api_spec_for_cors_preflight_default_and_actual_endpoint(
         &DefaultNamespace(),
         core_request,
         create_at,
-        &security::get_test_security_scheme_service(TestIdentityProviderResolver::default()),
+        &security::get_test_security_scheme_service(TestIdentityProvider::default()),
     )
     .await
     .unwrap()
@@ -1944,8 +1942,7 @@ pub mod security {
     use golem_service_base::repo::RepoError;
     use golem_worker_service_base::gateway_security::{
         AuthorizationUrl, DefaultIdentityProvider, GolemIdentityProviderMetadata, IdentityProvider,
-        IdentityProviderError, IdentityProviderResolver, OpenIdClient, Provider,
-        SecuritySchemeWithProviderMetadata,
+        IdentityProviderError, OpenIdClient, Provider, SecuritySchemeWithProviderMetadata,
     };
     use golem_worker_service_base::repo::security_scheme::{
         SecuritySchemeRecord, SecuritySchemeRepo,
@@ -2081,6 +2078,12 @@ nUhg4edJVHjqxYyoQT+YSPLlHl6AkLZt9/n1NJ+bft0=
         static_id_token: CoreIdToken,
     }
 
+    impl Default for TestIdentityProvider {
+        fn default() -> Self {
+            TestIdentityProvider::get_provider_with_valid_id_token()
+        }
+    }
+
     impl TestIdentityProvider {
         pub fn get_provider_with_valid_id_token() -> TestIdentityProvider {
             TestIdentityProvider {
@@ -2186,38 +2189,8 @@ nUhg4edJVHjqxYyoQT+YSPLlHl6AkLZt9/n1NJ+bft0=
         }
     }
 
-    #[derive(Clone)]
-    pub struct TestIdentityProviderResolver {
-        test_identity_provider: TestIdentityProvider,
-    }
-
-    impl TestIdentityProviderResolver {
-        pub fn new(test_identity_provider: TestIdentityProvider) -> TestIdentityProviderResolver {
-            TestIdentityProviderResolver {
-                test_identity_provider,
-            }
-        }
-        pub fn valid_provider() -> Self {
-            TestIdentityProviderResolver::default()
-        }
-    }
-
-    impl Default for TestIdentityProviderResolver {
-        fn default() -> Self {
-            TestIdentityProviderResolver {
-                test_identity_provider: TestIdentityProvider::get_provider_with_valid_id_token(),
-            }
-        }
-    }
-
-    impl IdentityProviderResolver for TestIdentityProviderResolver {
-        fn resolve(&self, _provider_type: &Provider) -> Arc<dyn IdentityProvider + Sync + Send> {
-            Arc::new(self.test_identity_provider.clone())
-        }
-    }
-
     pub fn get_test_security_scheme_service(
-        identity_provider: TestIdentityProviderResolver,
+        identity_provider: TestIdentityProvider,
     ) -> Arc<dyn SecuritySchemeService<DefaultNamespace> + Send + Sync> {
         let repo = Arc::new(TestSecuritySchemeRepo {
             security_scheme: Arc::new(Mutex::new(HashMap::new())),

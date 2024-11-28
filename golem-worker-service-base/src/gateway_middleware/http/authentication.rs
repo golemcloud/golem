@@ -1,7 +1,7 @@
 use crate::gateway_binding::HttpRequestDetails;
 use crate::gateway_execution::gateway_session::GatewaySessionStore;
 use crate::gateway_middleware::{MiddlewareInError, MiddlewareSuccess};
-use crate::gateway_security::{IdentityProviderResolver, SecuritySchemeWithProviderMetadata};
+use crate::gateway_security::{IdentityProvider, SecuritySchemeWithProviderMetadata};
 use golem_common::SafeDisplay;
 use openidconnect::Scope;
 use std::sync::Arc;
@@ -20,11 +20,8 @@ impl HttpAuthenticationMiddleware {
         &self,
         input: &HttpRequestDetails,
         session_store: &GatewaySessionStore,
-        identity_provider_resolver: &Arc<dyn IdentityProviderResolver + Send + Sync>,
+        identity_provider: &Arc<dyn IdentityProvider + Send + Sync>,
     ) -> Result<MiddlewareSuccess, MiddlewareInError> {
-        let identity_provider = identity_provider_resolver
-            .resolve(&self.security_scheme.security_scheme.provider_type());
-
         let client = identity_provider
             .get_client(&self.security_scheme)
             .map_err(|err| MiddlewareInError::Unauthorized(err.to_safe_string()))?;
@@ -47,7 +44,7 @@ impl HttpAuthenticationMiddleware {
                 id_token,
                 session_store,
                 input,
-                &identity_provider,
+                identity_provider,
                 &open_id_client,
                 self,
             )
@@ -56,7 +53,7 @@ impl HttpAuthenticationMiddleware {
             internal::redirect(
                 session_store,
                 input,
-                &identity_provider,
+                identity_provider,
                 &open_id_client,
                 self,
             )

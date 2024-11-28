@@ -52,7 +52,7 @@ use golem_common::config::RetryConfig;
 use golem_common::config::DbConfig;
 use golem_service_base::db;
 use golem_worker_service_base::gateway_request::http_request::InputHttpRequest;
-use golem_worker_service_base::gateway_security::DefaultIdentityProviderResolver;
+use golem_worker_service_base::gateway_security::DefaultIdentityProvider;
 use golem_worker_service_base::repo::security_scheme::{DbSecuritySchemeRepo, SecuritySchemeRepo};
 use golem_worker_service_base::service::gateway::api_deployment::{
     ApiDeploymentService, ApiDeploymentServiceDefault,
@@ -225,11 +225,11 @@ impl Services {
 
         let api_definition_validator_service = Arc::new(HttpApiDefinitionValidator {});
 
-        let identity_provider_resolver = Arc::new(DefaultIdentityProviderResolver);
+        let identity_provider = Arc::new(DefaultIdentityProvider);
 
         let security_scheme_service = Arc::new(DefaultSecuritySchemeService::new(
             security_scheme_repo,
-            identity_provider_resolver,
+            identity_provider,
         ));
 
         let definition_service: Arc<

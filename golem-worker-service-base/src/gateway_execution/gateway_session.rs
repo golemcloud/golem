@@ -146,22 +146,19 @@ impl InMemoryGatewaySession {
         }
     }
 
-    // Perform TTL-based eviction, removing sessions older than the TTL
     async fn perform_ttl_eviction(&self, ttl: Duration) {
         let mut data = self.data.lock().await;
         let now = Instant::now();
 
         let mut sessions_to_evict = Vec::new();
 
-        // Iterate through each session and check if it has expired
         for (session_id, session_data) in data.iter_mut() {
             let age = now.duration_since(session_data.created_at);
             if age > ttl {
-                sessions_to_evict.push(session_id.clone()); // Mark session for eviction
+                sessions_to_evict.push(session_id.clone());
             }
         }
 
-        // Evict the sessions that are expired
         for session_id in sessions_to_evict {
             data.remove(&session_id);
         }

@@ -56,7 +56,7 @@ impl<Namespace: Send + Sync> HttpMiddlewareIn<Namespace> for HttpAuthenticationM
         self.apply_http_auth(
             &input.http_request_details,
             &input.session_store,
-            &input.identity_provider_resolver,
+            &input.identity_provider,
         )
         .await
     }

@@ -35,7 +35,7 @@ use crate::gateway_execution::gateway_session::{
 };
 use crate::gateway_execution::GatewayWorkerRequestExecutor;
 use crate::gateway_request::http_request::InputHttpRequest;
-use crate::gateway_security::DefaultIdentityProviderResolver;
+use crate::gateway_security::DefaultIdentityProvider;
 
 // Executes custom request with the help of worker_request_executor and definition_service
 // This is a common API projects can make use of, similar to healthcheck service
@@ -121,7 +121,7 @@ impl<Namespace: Clone + Send + Sync + 'static> CustomHttpRequestApi<Namespace> {
                             &request,
                             resolved_gateway_binding.resolved_binding,
                             Arc::clone(&self.gateway_session_store),
-                            Arc::new(DefaultIdentityProviderResolver),
+                            Arc::new(DefaultIdentityProvider),
                         );
                         let response: poem::Response = self
                             .gateway_http_input_executor

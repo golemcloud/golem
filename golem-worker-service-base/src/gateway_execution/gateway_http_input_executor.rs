@@ -30,7 +30,7 @@ use crate::gateway_middleware::{
     HttpMiddlewareOut, HttpMiddlewares, MiddlewareInError, MiddlewareOutError, MiddlewareSuccess,
 };
 use crate::gateway_rib_interpreter::{EvaluationError, WorkerServiceRibInterpreter};
-use crate::gateway_security::{IdentityProviderResolver, SecuritySchemeWithProviderMetadata};
+use crate::gateway_security::{IdentityProvider, SecuritySchemeWithProviderMetadata};
 use async_trait::async_trait;
 use http::StatusCode;
 use rib::{RibInput, RibResult};
@@ -64,7 +64,7 @@ pub struct GatewayHttpInput<Namespace> {
     pub http_request_details: HttpRequestDetails,
     pub resolved_gateway_binding: ResolvedBinding<Namespace>,
     pub session_store: Arc<dyn GatewaySession + Send + Sync>,
-    pub identity_provider_resolver: Arc<dyn IdentityProviderResolver + Send + Sync>,
+    pub identity_provider: Arc<dyn IdentityProvider + Send + Sync>,
 }
 
 impl<Namespace: Clone> GatewayHttpInput<Namespace> {
@@ -72,13 +72,13 @@ impl<Namespace: Clone> GatewayHttpInput<Namespace> {
         http_request_details: &HttpRequestDetails,
         resolved_gateway_binding: ResolvedBinding<Namespace>,
         session_store: GatewaySessionStore,
-        identity_provider_resolver: Arc<dyn IdentityProviderResolver + Send + Sync>,
+        identity_provider: Arc<dyn IdentityProvider + Send + Sync>,
     ) -> Self {
         GatewayHttpInput {
             http_request_details: http_request_details.clone(),
             resolved_gateway_binding,
             session_store,
-            identity_provider_resolver,
+            identity_provider,
         }
     }
 }
@@ -248,7 +248,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
                 http_request,
                 security_scheme_with_metadata,
                 &input.session_store,
-                &input.identity_provider_resolver,
+                &input.identity_provider,
             )
             .await;
 

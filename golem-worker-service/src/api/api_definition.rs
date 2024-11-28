@@ -304,7 +304,7 @@ mod test {
     use golem_common::model::ComponentId;
     use golem_service_base::db;
     use golem_service_base::model::Component;
-    use golem_worker_service_base::gateway_security::DefaultIdentityProviderResolver;
+    use golem_worker_service_base::gateway_security::DefaultIdentityProvider;
     use golem_worker_service_base::repo::api_definition::{
         ApiDefinitionRepo, DbApiDefinitionRepo, LoggedApiDefinitionRepo,
     };
@@ -398,11 +398,11 @@ mod test {
             LoggedSecuritySchemeRepo::new(DbSecuritySchemeRepo::new(db_pool.clone().into())),
         );
 
-        let identity_provider_resolver = Arc::new(DefaultIdentityProviderResolver);
+        let identity_provider = Arc::new(DefaultIdentityProvider);
 
         let security_scheme_service = Arc::new(DefaultSecuritySchemeService::new(
             security_scheme_repo,
-            identity_provider_resolver,
+            identity_provider,
         ));
 
         let component_service: ComponentService = Arc::new(TestComponentService);

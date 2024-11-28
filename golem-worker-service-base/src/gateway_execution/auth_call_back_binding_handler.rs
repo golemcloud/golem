@@ -17,7 +17,7 @@ use crate::gateway_execution::gateway_session::{
     DataKey, DataValue, GatewaySessionStore, SessionId,
 };
 use crate::gateway_security::{
-    IdentityProviderError, IdentityProviderResolver, SecuritySchemeWithProviderMetadata,
+    IdentityProvider, IdentityProviderError, SecuritySchemeWithProviderMetadata,
 };
 use async_trait::async_trait;
 use golem_common::SafeDisplay;
@@ -34,7 +34,7 @@ pub trait AuthCallBackBindingHandler {
         http_request_details: &HttpRequestDetails,
         security_scheme: &SecuritySchemeWithProviderMetadata,
         gateway_session_store: &GatewaySessionStore,
-        identity_provider_resolver: &Arc<dyn IdentityProviderResolver + Send + Sync>,
+        identity_provider: &Arc<dyn IdentityProvider + Send + Sync>,
     ) -> AuthCallBackResult;
 }
 
@@ -122,19 +122,13 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
         http_request_details: &HttpRequestDetails,
         security_scheme_with_metadata: &SecuritySchemeWithProviderMetadata,
         session_store: &GatewaySessionStore,
-        identity_provider_resolver: &Arc<dyn IdentityProviderResolver + Send + Sync>,
+        identity_provider: &Arc<dyn IdentityProvider + Send + Sync>,
     ) -> Result<AuthorisationSuccess, AuthorisationError> {
         let api_url = &http_request_details
             .url()
             .map_err(AuthorisationError::Internal)?;
 
         let query_pairs = api_url.query_pairs();
-
-        let identity_provider = identity_provider_resolver.resolve(
-            &security_scheme_with_metadata
-                .security_scheme
-                .provider_type(),
-        );
 
         let mut code = None;
         let mut state = None;

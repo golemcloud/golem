@@ -47,8 +47,8 @@ use golem_worker_service_base::gateway_api_deployment::{
 };
 use golem_worker_service_base::gateway_security::{
     AuthorizationUrl, DefaultIdentityProvider, GolemIdentityProviderMetadata, IdentityProvider,
-    IdentityProviderError, IdentityProviderResolver, OpenIdClient, Provider, SecurityScheme,
-    SecuritySchemeIdentifier, SecuritySchemeWithProviderMetadata,
+    IdentityProviderError, OpenIdClient, Provider, SecurityScheme, SecuritySchemeIdentifier,
+    SecuritySchemeWithProviderMetadata,
 };
 use golem_worker_service_base::repo::security_scheme::{DbSecuritySchemeRepo, SecuritySchemeRepo};
 use golem_worker_service_base::service::gateway::security_scheme::{
@@ -263,9 +263,7 @@ async fn test_services(
 
     let api_definition_validator_service = Arc::new(HttpApiDefinitionValidator {});
 
-    let identity_provider_resolver = Arc::new(TestIdentityProviderResolver {
-        test_identity_provider: TestIdentityProvider,
-    });
+    let identity_provider_resolver = Arc::new(TestIdentityProvider);
 
     let security_scheme_service: Arc<dyn SecuritySchemeService<DefaultNamespace> + Send + Sync> =
         Arc::new(DefaultSecuritySchemeService::new(
@@ -884,25 +882,6 @@ fn contains_definitions(
     }
 
     true
-}
-
-#[derive(Clone)]
-pub struct TestIdentityProviderResolver {
-    test_identity_provider: TestIdentityProvider,
-}
-
-impl TestIdentityProviderResolver {
-    pub fn new(test_identity_provider: TestIdentityProvider) -> TestIdentityProviderResolver {
-        TestIdentityProviderResolver {
-            test_identity_provider,
-        }
-    }
-}
-
-impl IdentityProviderResolver for TestIdentityProviderResolver {
-    fn resolve(&self, _provider_type: &Provider) -> Arc<dyn IdentityProvider + Sync + Send> {
-        Arc::new(self.test_identity_provider.clone())
-    }
 }
 
 #[derive(Clone)]
