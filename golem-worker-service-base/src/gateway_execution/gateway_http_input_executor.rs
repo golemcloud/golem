@@ -26,8 +26,8 @@ use crate::gateway_execution::gateway_session::{GatewaySession, GatewaySessionSt
 use crate::gateway_execution::to_response::ToHttpResponse;
 use crate::gateway_execution::to_response_failure::ToHttpResponseFromSafeDisplay;
 use crate::gateway_middleware::{
-    HttpAuthenticationMiddleware, HttpCors as CorsPreflight, HttpCors, HttpMiddlewareIn,
-    HttpMiddlewareOut, HttpMiddlewares, MiddlewareInError, MiddlewareOutError, MiddlewareSuccess,
+    HttpCors as CorsPreflight, HttpMiddlewares, MiddlewareInError, MiddlewareOutError,
+    MiddlewareSuccess,
 };
 use crate::gateway_rib_interpreter::{EvaluationError, WorkerServiceRibInterpreter};
 use crate::gateway_security::{IdentityProvider, SecuritySchemeWithProviderMetadata};
@@ -53,9 +53,7 @@ pub trait GatewayHttpInputExecutor<Namespace> {
         RibResult: ToHttpResponse,
         FileServerBindingResult: ToHttpResponse,
         CorsPreflight: ToHttpResponse,
-        AuthCallBackResult: ToHttpResponse,
-        HttpAuthenticationMiddleware: HttpMiddlewareIn<Namespace>,
-        CorsPreflight: HttpMiddlewareOut<poem::Response>;
+        AuthCallBackResult: ToHttpResponse;
 }
 
 // A product of actual request input (contained in the ResolvedGatewayBinding)
@@ -264,8 +262,6 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         middlewares: &HttpMiddlewares,
     ) -> Result<Option<SessionId>, poem::Response>
     where
-        HttpAuthenticationMiddleware: HttpMiddlewareIn<Namespace>,
-        CorsPreflight: HttpMiddlewareOut<poem::Response>,
         MiddlewareInError: ToHttpResponseFromSafeDisplay,
     {
         let input_middleware_result = middlewares.process_middleware_in(input).await;
@@ -298,8 +294,6 @@ impl<Namespace: Send + Sync + Clone> GatewayHttpInputExecutor<Namespace>
         FileServerBindingResult: ToHttpResponse, // FileServerBindingResult can be a direct response in a file server endpoint
         CorsPreflight: ToHttpResponse, // Cors can be a direct response in a cors preflight endpoint
         AuthCallBackResult: ToHttpResponse, // AuthCallBackResult can be a direct response in auth callback endpoint
-        HttpAuthenticationMiddleware: HttpMiddlewareIn<Namespace>, // HttpAuthorizer can authorise input
-        HttpCors: HttpMiddlewareOut<poem::Response>, // HttpCors can be a middleware in other endpoints
     {
         let binding = &input.resolved_gateway_binding;
         let middleware_opt = &input.http_request_details.http_middlewares;
@@ -337,9 +331,7 @@ impl<Namespace: Send + Sync + Clone> GatewayHttpInputExecutor<Namespace>
                         .await;
 
                     if let Some(middleware) = middleware_opt {
-                        let result = middleware
-                            .process_middleware_out(&input.session_store, &mut response)
-                            .await;
+                        let result = middleware.process_middleware_out(&mut response).await;
                         match result {
                             Ok(_) => response,
                             Err(err) => err.to_response_from_safe_display(|_| {

@@ -12,12 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub use authentication::*;
-pub use cors::*;
-pub use http_middleware::*;
+use golem_common::SafeDisplay;
 
-mod authentication;
-mod cors;
-mod http_middleware;
-pub mod middleware_in;
-pub mod middleware_out;
+pub enum MiddlewareOutError {
+    InternalError(String),
+}
+
+impl SafeDisplay for MiddlewareOutError {
+    fn to_safe_string(&self) -> String {
+        match self {
+            MiddlewareOutError::InternalError(error) => error.to_string(),
+        }
+    }
+}

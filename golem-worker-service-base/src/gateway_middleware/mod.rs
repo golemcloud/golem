@@ -13,16 +13,12 @@
 // limitations under the License.
 
 use crate::gateway_execution::gateway_http_input_executor::GatewayHttpInput;
-use crate::gateway_execution::gateway_session::GatewaySessionStore;
 use crate::gateway_security::SecuritySchemeWithProviderMetadata;
+pub use http::middleware_in::*;
+pub use http::middleware_out::*;
 pub use http::*;
-pub use middleware_in::*;
-pub use middleware_out::*;
-use std::ops::Deref;
 
 mod http;
-mod middleware_in;
-mod middleware_out;
 
 // Middlewares will be processed in a sequential order.
 // The information contained in each middleware is made available to
@@ -45,17 +41,20 @@ impl HttpMiddlewares {
     pub async fn process_middleware_in<Namespace>(
         &self,
         input: &GatewayHttpInput<Namespace>,
-    ) -> Result<MiddlewareSuccess, MiddlewareInError>
-    where
-        HttpAuthenticationMiddleware: HttpMiddlewareIn<Namespace>,
-    {
+    ) -> Result<MiddlewareSuccess, MiddlewareInError> {
         let mut final_session_id = None;
 
         for middleware in self.0.iter() {
             match middleware {
                 HttpMiddleware::AddCorsHeaders(_) => {}
                 HttpMiddleware::AuthenticateRequest(auth) => {
-                    let result = auth.process_input(input).await?;
+                    let result = auth
+                        .apply_http_auth(
+                            &input.http_request_details,
+                            &input.session_store,
+                            &input.identity_provider,
+                        )
+                        .await?;
 
                     match result {
                         MiddlewareSuccess::Redirect(response) => {
@@ -74,18 +73,14 @@ impl HttpMiddlewares {
         })
     }
 
-    pub async fn process_middleware_out<Out>(
+    pub async fn process_middleware_out(
         &self,
-        session_store: &GatewaySessionStore,
-        response: &mut Out,
-    ) -> Result<(), MiddlewareOutError>
-    where
-        HttpCors: HttpMiddlewareOut<Out>,
-    {
+        response: &mut poem::Response,
+    ) -> Result<(), MiddlewareOutError> {
         for middleware in self.0.iter() {
             match middleware {
                 HttpMiddleware::AddCorsHeaders(cors) => {
-                    cors.process_output(session_store, response).await?;
+                    HttpMiddleware::apply_cors(response, cors);
                 }
                 HttpMiddleware::AuthenticateRequest(_) => {}
             }
@@ -110,32 +105,6 @@ impl HttpMiddlewares {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Middleware {
     Http(HttpMiddleware),
-}
-
-impl Middleware {
-    pub fn cors(cors: &HttpCors) -> Middleware {
-        Middleware::Http(HttpMiddleware::cors(cors.clone()))
-    }
-
-    pub fn get_cors(&self) -> Option<HttpCors> {
-        match self {
-            Middleware::Http(HttpMiddleware::AddCorsHeaders(cors)) => Some(cors.clone()),
-            _ => None,
-        }
-    }
-
-    pub fn get_http_authentication(&self) -> Option<HttpAuthenticationMiddleware> {
-        match self {
-            Middleware::Http(HttpMiddleware::AuthenticateRequest(auth)) => {
-                Some(auth.deref().clone())
-            }
-            _ => None,
-        }
-    }
-
-    pub fn http(http_middleware: HttpMiddleware) -> Middleware {
-        Middleware::Http(http_middleware)
-    }
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::apidefinition::Middleware> for HttpMiddlewares {

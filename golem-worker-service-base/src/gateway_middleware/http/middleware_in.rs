@@ -12,19 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::gateway_execution::gateway_http_input_executor::GatewayHttpInput;
 use crate::gateway_execution::gateway_session::SessionId;
-use crate::gateway_middleware::HttpAuthenticationMiddleware;
-use async_trait::async_trait;
 use golem_common::SafeDisplay;
-
-#[async_trait]
-pub trait HttpMiddlewareIn<Namespace> {
-    async fn process_input(
-        &self,
-        input: &GatewayHttpInput<Namespace>,
-    ) -> Result<MiddlewareSuccess, MiddlewareInError>;
-}
 
 pub enum MiddlewareInError {
     Unauthorized(String),
@@ -45,19 +34,4 @@ impl SafeDisplay for MiddlewareInError {
 pub enum MiddlewareSuccess {
     PassThrough { session_id: Option<SessionId> },
     Redirect(poem::Response),
-}
-
-#[async_trait]
-impl<Namespace: Send + Sync> HttpMiddlewareIn<Namespace> for HttpAuthenticationMiddleware {
-    async fn process_input(
-        &self,
-        input: &GatewayHttpInput<Namespace>,
-    ) -> Result<MiddlewareSuccess, MiddlewareInError> {
-        self.apply_http_auth(
-            &input.http_request_details,
-            &input.session_store,
-            &input.identity_provider,
-        )
-        .await
-    }
 }

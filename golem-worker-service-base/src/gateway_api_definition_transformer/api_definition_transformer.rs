@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::gateway_api_definition::http::{MethodPattern};
+use crate::gateway_api_definition::http::MethodPattern;
 use std::fmt::{Display, Formatter};
 
 #[derive(Debug)]

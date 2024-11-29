@@ -67,7 +67,7 @@ mod internal {
     use crate::gateway_execution::gateway_session::{
         DataKey, DataValue, GatewaySessionStore, SessionId,
     };
-    use crate::gateway_middleware::middleware_in::MiddlewareSuccess;
+    use crate::gateway_middleware::http::middleware_in::MiddlewareSuccess;
     use crate::gateway_middleware::{HttpAuthenticationMiddleware, MiddlewareInError};
     use crate::gateway_security::{IdentityProvider, OpenIdClient};
     use http::StatusCode;
