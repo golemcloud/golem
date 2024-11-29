@@ -29,6 +29,7 @@ pub struct Ports {
     pub listener_port: u16,
     pub component_service_port: u16,
     pub worker_service_port: u16,
+    pub healthcheck_port: u16,
 }
 
 pub fn start_proxy(
@@ -66,6 +67,7 @@ pub fn start_proxy(
 
     let component_backend = "golem-component";
     let worker_backend = "golem-worker";
+    let health_backend = "golem-health";
 
     // set up the clusters. We'll have one per service with a single backend per cluster
     {
@@ -96,6 +98,7 @@ pub fn start_proxy(
 
         add_backend((component_backend, ports.component_service_port))?;
         add_backend((worker_backend, ports.worker_service_port))?;
+        add_backend((health_backend, ports.healthcheck_port))?;
     }
 
     // set up routing
@@ -117,8 +120,8 @@ pub fn start_proxy(
             })
         };
 
-        // as we are sharing the metrics registry, all backends will work.
-        add_route((PathRule::equals("/metrics"), component_backend))?;
+        add_route((PathRule::equals("/healthcheck"), health_backend))?;
+        add_route((PathRule::equals("/metrics"), health_backend))?;
 
         add_route((
             PathRule::regex("/v1/components/[^/]+/workers/[^/]+/connect$"),

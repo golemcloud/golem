@@ -41,7 +41,9 @@ poem = { workspace = true }
 poem-openapi = { workspace = true }
 prometheus = { workspace = true }
 regex = { workspace = true }
+reqwest = { workspace = true }
 rustls = { workspace = true }
+serde = { workspace = true }
 sqlx = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }

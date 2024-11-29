@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::process::ExitCode;
-
-fn main() -> ExitCode {
-    golem_cli::run_main::<golem::command::SingleExecutableCommand>()
-}
+pub mod command;
+mod health;
+pub mod launch;
+mod migration;
+mod proxy;

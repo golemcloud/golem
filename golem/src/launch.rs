@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::health;
 use crate::migration::IncludedMigrationsDir;
 use anyhow::Context;
 use golem_common::config::DbConfig;
@@ -85,12 +86,20 @@ pub async fn launch_golem_services(args: &LaunchArgs) -> Result<(), anyhow::Erro
     run_component_service(&service_args, &mut join_set).await?;
     run_worker_service(&service_args, &mut join_set).await?;
 
+    let healthcheck_port = health::start_healthcheck_server(
+        vec![8083, 9005],
+        prometheus::default_registry().clone(),
+        &mut join_set,
+    )
+    .await?;
+
     // Don't drop the channel, it will cause the proxy to fail
     let _proxy_command_channel = proxy::start_proxy(
         &proxy::Ports {
             listener_port: args.port,
             component_service_port: 8083,
             worker_service_port: 9005,
+            healthcheck_port,
         },
         &mut join_set,
     )?;
