@@ -136,7 +136,10 @@ impl GatewaySession for RedisGatewaySession {
         let result: RedisResult<()> = self
             .redis
             .with("gateway_session", "insert")
-            .hset(Self::redis_key(&session_id), (data_key.0.as_str(), serialised))
+            .hset(
+                Self::redis_key(&session_id),
+                (data_key.0.as_str(), serialised),
+            )
             .await;
 
         let _: () = self
@@ -157,7 +160,7 @@ impl GatewaySession for RedisGatewaySession {
         let result: Option<Bytes> = self
             .redis
             .with("gateway_session", "get_data_value")
-            .hget(Self::redis_key(&session_id), data_key.0.as_str())
+            .hget(Self::redis_key(session_id), data_key.0.as_str())
             .await
             .map_err(|e| GatewaySessionError::InternalError(e.to_string()))?;
 
