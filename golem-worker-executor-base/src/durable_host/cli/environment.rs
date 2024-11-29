@@ -64,7 +64,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 }
 
 #[async_trait]
-impl<'a, Ctx: WorkerCtx> Host for &'a mut DurableWorkerCtx<Ctx> {
+impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {
     async fn get_environment(&mut self) -> anyhow::Result<Vec<(String, String)>> {
         (*self).get_environment().await
     }

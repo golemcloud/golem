@@ -66,7 +66,6 @@ use std::ops::Deref;
 ///
 /// This granularity improves the accuracy and clarity of type handling, particularly when working with intricate
 /// combinations and nested structures within type inference logic.
-
 pub trait TypeRefinement {
     fn refine(inferred_type: &InferredType) -> Option<RefinedType<Self>>
     where

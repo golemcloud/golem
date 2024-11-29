@@ -73,7 +73,7 @@ async fn execute(
 #[test]
 async fn test_end_to_end_api_gateway_simple_worker() {
     let empty_headers = HeaderMap::new();
-    let api_request = get_api_request("foo/1", None, &empty_headers, serde_json::Value::Null);
+    let api_request = get_api_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
 
     let worker_name = r#"
       let id: u64 = request.path.user-id;
@@ -86,7 +86,7 @@ async fn test_end_to_end_api_gateway_simple_worker() {
     "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_spec_worker_binding("foo/{user-id}", worker_name, response_mapping);
+        get_api_spec_worker_binding("/foo/{user-id}", worker_name, response_mapping);
 
     let test_response = execute(&api_request, &api_specification).await;
 
@@ -110,7 +110,7 @@ async fn test_end_to_end_api_gateway_simple_worker() {
 async fn test_end_to_end_api_gateway_cors_preflight() {
     let empty_headers = HeaderMap::new();
     let api_request =
-        get_preflight_api_request("foo/1", None, &empty_headers, serde_json::Value::Null);
+        get_preflight_api_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
 
     let cors = Cors::from_parameters(
         Some("http://example.com".to_string()),
@@ -123,7 +123,7 @@ async fn test_end_to_end_api_gateway_cors_preflight() {
     .unwrap();
 
     let api_specification: HttpApiDefinition =
-        get_api_spec_cors_preflight_binding("foo/{user-id}", &cors);
+        get_api_spec_cors_preflight_binding("/foo/{user-id}", &cors);
 
     let test_response = execute(&api_request, &api_specification).await;
 
@@ -135,10 +135,10 @@ async fn test_end_to_end_api_gateway_cors_preflight() {
 async fn test_end_to_end_api_gateway_cors_preflight_default() {
     let empty_headers = HeaderMap::new();
     let api_request =
-        get_preflight_api_request("foo/1", None, &empty_headers, serde_json::Value::Null);
+        get_preflight_api_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
 
     let api_specification: HttpApiDefinition =
-        get_api_spec_cors_preflight_binding_default_response("foo/{user-id}");
+        get_api_spec_cors_preflight_binding_default_response("/foo/{user-id}");
 
     let test_response = execute(&api_request, &api_specification).await;
 
@@ -153,9 +153,9 @@ async fn test_end_to_end_api_gateway_cors_preflight_default() {
 async fn test_end_to_end_api_gateway_cors_with_preflight_default_and_actual_request() {
     let empty_headers = HeaderMap::new();
     let preflight_request =
-        get_preflight_api_request("foo/1", None, &empty_headers, serde_json::Value::Null);
+        get_preflight_api_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
 
-    let api_request = get_api_request("foo/1", None, &empty_headers, serde_json::Value::Null);
+    let api_request = get_api_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
 
     let worker_name = r#"
       let id: u64 = request.path.user-id;
@@ -169,7 +169,7 @@ async fn test_end_to_end_api_gateway_cors_with_preflight_default_and_actual_requ
 
     let api_specification: HttpApiDefinition =
         get_api_spec_for_cors_preflight_default_and_actual_endpoint(
-            "foo/{user-id}",
+            "/foo/{user-id}",
             worker_name,
             response_mapping,
         );
@@ -194,9 +194,9 @@ async fn test_end_to_end_api_gateway_cors_with_preflight_default_and_actual_requ
 async fn test_end_to_end_api_gateway_cors_with_preflight_and_actual_request() {
     let empty_headers = HeaderMap::new();
     let preflight_request =
-        get_preflight_api_request("foo/1", None, &empty_headers, serde_json::Value::Null);
+        get_preflight_api_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
 
-    let api_request = get_api_request("foo/1", None, &empty_headers, serde_json::Value::Null);
+    let api_request = get_api_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
 
     let cors = Cors::from_parameters(
         Some("http://example.com".to_string()),
@@ -219,7 +219,7 @@ async fn test_end_to_end_api_gateway_cors_with_preflight_and_actual_request() {
     "#;
 
     let api_specification: HttpApiDefinition = get_api_spec_for_cors_preflight_and_actual_endpoint(
-        "foo/{user-id}",
+        "/foo/{user-id}",
         worker_name,
         response_mapping,
         &cors,
@@ -253,7 +253,7 @@ async fn test_end_to_end_api_gateway_cors_with_preflight_and_actual_request() {
 #[test]
 async fn test_end_to_end_api_gateway_with_request_path_and_query_lookup() {
     let empty_headers = HeaderMap::new();
-    let api_request = get_api_request("foo/1", Some("token-id=jon"), &empty_headers, Value::Null);
+    let api_request = get_api_request("/foo/1", Some("token-id=jon"), &empty_headers, Value::Null);
 
     let worker_name = r#"
         let x: u64 = request.path.user-id;
@@ -266,7 +266,7 @@ async fn test_end_to_end_api_gateway_with_request_path_and_query_lookup() {
     "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_spec_worker_binding("foo/{user-id}?{token-id}", worker_name, response_mapping);
+        get_api_spec_worker_binding("/foo/{user-id}?{token-id}", worker_name, response_mapping);
 
     let test_response = execute(&api_request, &api_specification).await;
 
@@ -292,7 +292,7 @@ async fn test_end_to_end_api_gateway_with_request_path_and_query_lookup() {
 async fn test_end_to_end_api_gateway_with_request_path_and_query_lookup_complex() {
     let empty_headers = HeaderMap::new();
     let api_request = get_api_request(
-        "foo/1",
+        "/foo/1",
         None,
         &empty_headers,
         Value::Object(serde_json::Map::from_iter(vec![(
@@ -315,7 +315,7 @@ async fn test_end_to_end_api_gateway_with_request_path_and_query_lookup_complex(
     "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_spec_worker_binding("foo/{user-id}", worker_name, response_mapping);
+        get_api_spec_worker_binding("/foo/{user-id}", worker_name, response_mapping);
 
     let test_response = execute(&api_request, &api_specification).await;
 
@@ -342,7 +342,7 @@ async fn test_end_to_end_api_gateway_with_with_request_body_lookup1() {
     let empty_headers = HeaderMap::new();
 
     let api_request = get_api_request(
-        "foo/2",
+        "/foo/2",
         None,
         &empty_headers,
         Value::String("address".to_string()),
@@ -363,7 +363,7 @@ async fn test_end_to_end_api_gateway_with_with_request_body_lookup1() {
     "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_spec_worker_binding("foo/{user-id}", worker_name, response_mapping);
+        get_api_spec_worker_binding("/foo/{user-id}", worker_name, response_mapping);
 
     let test_response = execute(&api_request, &api_specification).await;
 
@@ -402,7 +402,7 @@ async fn test_end_to_end_api_gateway_with_with_request_body_lookup2() {
     );
 
     let api_request = get_api_request(
-        "foo/bar",
+        "/foo/bar",
         None,
         &empty_headers,
         serde_json::Value::Object(request_body),
@@ -425,7 +425,7 @@ async fn test_end_to_end_api_gateway_with_with_request_body_lookup2() {
         "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_spec_worker_binding("foo/{user-id}", worker_name, response_mapping);
+        get_api_spec_worker_binding("/foo/{user-id}", worker_name, response_mapping);
 
     let test_response = execute(&api_request, &api_specification).await;
 
@@ -464,7 +464,7 @@ async fn test_end_to_end_api_gateway_with_with_request_body_lookup3() {
     );
 
     let api_request = get_api_request(
-        "foo/2",
+        "/foo/2",
         None,
         &empty_headers,
         Value::Object(request_body.clone()),
@@ -485,7 +485,7 @@ async fn test_end_to_end_api_gateway_with_with_request_body_lookup3() {
         "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_spec_worker_binding("foo/{user-id}", worker_name, response_mapping);
+        get_api_spec_worker_binding("/foo/{user-id}", worker_name, response_mapping);
 
     let test_response = execute(&api_request, &api_specification).await;
 
@@ -544,13 +544,7 @@ async fn test_api_gateway_rib_input_from_request_details() {
         assert_eq!(result.is_ok(), ok);
     }
 
-    test_paths("getcartcontent/{cart-id}", "/noexist", false).await;
-    test_paths("/getcartcontent/{cart-id}", "noexist", false).await;
-    test_paths("getcartcontent/{cart-id}", "noexist", false).await;
     test_paths("/getcartcontent/{cart-id}", "/noexist", false).await;
-    test_paths("getcartcontent/{cart-id}", "/getcartcontent/1", true).await;
-    test_paths("/getcartcontent/{cart-id}", "getcartcontent/1", true).await;
-    test_paths("getcartcontent/{cart-id}", "getcartcontent/1", true).await;
     test_paths("/getcartcontent/{cart-id}", "/getcartcontent/1", true).await;
 }
 
@@ -565,7 +559,7 @@ async fn test_api_gateway_idempotency_key_resolution() {
             "#;
 
         let api_specification: HttpApiDefinition = get_api_spec_worker_binding(
-            "getcartcontent/{cart-id}",
+            "/getcartcontent/{cart-id}",
             "${let x: u64 = request.path.cart-id; \"shopping-cart-${x}\"}",
             expression,
         );

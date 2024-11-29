@@ -13,12 +13,13 @@
 // limitations under the License.
 
 use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
-use test_r::test_dep;
-
-pub mod repo;
-pub mod service;
+use test_r::{sequential_suite, test_dep};
 
 test_r::enable!();
+
+pub mod all;
+
+sequential_suite!(all);
 
 #[derive(Debug)]
 pub struct Tracing;

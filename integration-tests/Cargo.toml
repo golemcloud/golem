@@ -17,6 +17,7 @@ golem-test-framework = { path = "../golem-test-framework", version = "0.0.0" }
 anyhow = { workspace = true }
 assert2 = { workspace = true }
 async-trait = { workspace = true }
+axum = { workspace = true }
 clap = { workspace = true }
 console-subscriber = { workspace = true }
 golem-wasm-rpc = { workspace = true }
@@ -33,6 +34,7 @@ warp = { workspace = true }
 
 [dev-dependencies]
 test-r = { workspace = true }
+wac-graph = "0.6.1"
 
 [lib]
 harness = false

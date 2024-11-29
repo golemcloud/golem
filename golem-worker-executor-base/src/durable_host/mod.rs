@@ -2171,7 +2171,7 @@ impl Display for SuspendForSleep {
 impl Error for SuspendForSleep {}
 
 // This wrapper forces the compiler to choose the wasmtime_wasi implementations for T: WasiView
-impl<'a, Ctx: WorkerCtx> WasiView for DurableWorkerCtxWasiView<'a, Ctx> {
+impl<Ctx: WorkerCtx> WasiView for DurableWorkerCtxWasiView<'_, Ctx> {
     fn table(&mut self) -> &mut ResourceTable {
         self.0.table()
     }
@@ -2181,7 +2181,7 @@ impl<'a, Ctx: WorkerCtx> WasiView for DurableWorkerCtxWasiView<'a, Ctx> {
     }
 }
 
-impl<'a, Ctx: WorkerCtx> WasiHttpView for DurableWorkerCtxWasiHttpView<'a, Ctx> {
+impl<Ctx: WorkerCtx> WasiHttpView for DurableWorkerCtxWasiHttpView<'_, Ctx> {
     fn ctx(&mut self) -> &mut WasiHttpCtx {
         &mut self.0.wasi_http
     }

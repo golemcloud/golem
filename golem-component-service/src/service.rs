@@ -137,17 +137,18 @@ impl Services {
                 }
             };
 
+        let plugin_service: Arc<
+            dyn PluginService<DefaultPluginOwner, DefaultPluginScope> + Sync + Send,
+        > = Arc::new(PluginServiceDefault::new(plugin_repo));
+
         let component_service: Arc<dyn ComponentService<DefaultComponentOwner> + Sync + Send> =
             Arc::new(ComponentServiceDefault::new(
                 component_repo.clone(),
                 object_store.clone(),
                 compilation_service.clone(),
                 initial_component_files_service.clone(),
+                plugin_service.clone(),
             ));
-
-        let plugin_service: Arc<
-            dyn PluginService<DefaultPluginOwner, DefaultPluginScope> + Sync + Send,
-        > = Arc::new(PluginServiceDefault::new(plugin_repo));
 
         Ok(Services {
             component_service,
