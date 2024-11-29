@@ -48,7 +48,9 @@ use golem_worker_executor_base::services::shard_manager::ShardManagerService;
 use golem_worker_executor_base::services::worker::WorkerService;
 use golem_worker_executor_base::services::worker_activator::WorkerActivator;
 use golem_worker_executor_base::services::worker_event::WorkerEventService;
-use golem_worker_executor_base::services::{plugins, rdbms, All, HasAll, HasConfig, HasOplogService};
+use golem_worker_executor_base::services::{
+    plugins, rdbms, All, HasAll, HasConfig, HasOplogService,
+};
 use golem_worker_executor_base::wasi_host::create_linker;
 use golem_worker_executor_base::workerctx::{
     ExternalOperations, FileSystemReading, FuelManagement, IndexedResourceStore, InvocationHooks,

@@ -300,23 +300,29 @@ impl TryFrom<DbValuePrimitive> for crate::services::rdbms::postgres::types::DbVa
     type Error = String;
     fn try_from(value: DbValuePrimitive) -> Result<Self, Self::Error> {
         match value {
+            DbValuePrimitive::Character(v) => Ok(Self::Character(v)),
+            DbValuePrimitive::Int2(i) => Ok(Self::Int2(i)),
+            DbValuePrimitive::Int4(i) => Ok(Self::Int4(i)),
             DbValuePrimitive::Int8(i) => Ok(Self::Int8(i)),
-            DbValuePrimitive::Int16(i) => Ok(Self::Int16(i)),
-            DbValuePrimitive::Int32(i) => Ok(Self::Int32(i)),
-            DbValuePrimitive::Int64(i) => Ok(Self::Int64(i)),
-            DbValuePrimitive::Decimal(s) => {
+            DbValuePrimitive::Numeric(s) => {
                 let v = bigdecimal::BigDecimal::from_str(&s).map_err(|e| e.to_string())?;
-                Ok(Self::Decimal(v))
+                Ok(Self::Numeric(v))
             }
-            DbValuePrimitive::Float(f) => Ok(Self::Float(f)),
-            DbValuePrimitive::Double(f) => Ok(Self::Double(f)),
+            DbValuePrimitive::Float4(f) => Ok(Self::Float4(f)),
+            DbValuePrimitive::Float8(f) => Ok(Self::Float8(f)),
             DbValuePrimitive::Boolean(b) => Ok(Self::Boolean(b)),
             DbValuePrimitive::Timestamp(v) => {
                 let t = chrono::DateTime::from_timestamp_millis(v)
                     .ok_or("Timestamp value is not valid")?;
                 Ok(Self::Timestamp(t))
             }
+            DbValuePrimitive::Timestamptz(v) => {
+                let t = chrono::DateTime::from_timestamp_millis(v)
+                    .ok_or("Timestamptz value is not valid")?;
+                Ok(Self::Timestamptz(t))
+            }
             DbValuePrimitive::Time(v) => Ok(Self::Time(v)),
+            DbValuePrimitive::Timetz(v) => Ok(Self::Timetz(v)),
             DbValuePrimitive::Interval(v) => Ok(Self::Interval(chrono::Duration::microseconds(v))),
             DbValuePrimitive::Date(v) => {
                 let t =
@@ -324,7 +330,9 @@ impl TryFrom<DbValuePrimitive> for crate::services::rdbms::postgres::types::DbVa
                 Ok(Self::Date(t.date_naive()))
             }
             DbValuePrimitive::Text(s) => Ok(Self::Text(s)),
-            DbValuePrimitive::Blob(u) => Ok(Self::Blob(u)),
+            DbValuePrimitive::Varchar(s) => Ok(Self::Varchar(s)),
+            DbValuePrimitive::Bpchar(s) => Ok(Self::Bpchar(s)),
+            DbValuePrimitive::Bytea(u) => Ok(Self::Bytea(u)),
             DbValuePrimitive::Json(s) => Ok(Self::Json(s)),
             DbValuePrimitive::Xml(s) => Ok(Self::Xml(s)),
             DbValuePrimitive::Uuid((h, l)) => Ok(Self::Uuid(Uuid::from_u64_pair(h, l))),
@@ -336,22 +344,28 @@ impl TryFrom<DbValuePrimitive> for crate::services::rdbms::postgres::types::DbVa
 impl From<crate::services::rdbms::postgres::types::DbValuePrimitive> for DbValuePrimitive {
     fn from(value: crate::services::rdbms::postgres::types::DbValuePrimitive) -> Self {
         match value {
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Int8(i) => Self::Int8(i),
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Int16(i) => Self::Int16(i),
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Int32(i) => Self::Int32(i),
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Int64(i) => Self::Int64(i),
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Decimal(s) => {
-                Self::Decimal(s.to_string())
+            crate::services::rdbms::postgres::types::DbValuePrimitive::Character(s) => {
+                Self::Character(s)
             }
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Float(f) => Self::Float(f),
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Double(f) => Self::Double(f),
+            crate::services::rdbms::postgres::types::DbValuePrimitive::Int2(i) => Self::Int2(i),
+            crate::services::rdbms::postgres::types::DbValuePrimitive::Int4(i) => Self::Int4(i),
+            crate::services::rdbms::postgres::types::DbValuePrimitive::Int8(i) => Self::Int8(i),
+            crate::services::rdbms::postgres::types::DbValuePrimitive::Numeric(s) => {
+                Self::Numeric(s.to_string())
+            }
+            crate::services::rdbms::postgres::types::DbValuePrimitive::Float4(f) => Self::Float4(f),
+            crate::services::rdbms::postgres::types::DbValuePrimitive::Float8(f) => Self::Float8(f),
             crate::services::rdbms::postgres::types::DbValuePrimitive::Boolean(b) => {
                 Self::Boolean(b)
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Timestamp(v) => {
                 Self::Timestamp(v.timestamp_millis())
             }
+            crate::services::rdbms::postgres::types::DbValuePrimitive::Timestamptz(v) => {
+                Self::Timestamptz(v.timestamp_millis())
+            }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Time(u) => Self::Time(u),
+            crate::services::rdbms::postgres::types::DbValuePrimitive::Timetz(v) => Self::Timetz(v),
             crate::services::rdbms::postgres::types::DbValuePrimitive::Interval(v) => {
                 Self::Interval(v.num_milliseconds())
             }
@@ -360,7 +374,11 @@ impl From<crate::services::rdbms::postgres::types::DbValuePrimitive> for DbValue
                 Self::Date(v)
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Text(s) => Self::Text(s),
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Blob(u) => Self::Blob(u),
+            crate::services::rdbms::postgres::types::DbValuePrimitive::Varchar(s) => {
+                Self::Varchar(s)
+            }
+            crate::services::rdbms::postgres::types::DbValuePrimitive::Bpchar(s) => Self::Bpchar(s),
+            crate::services::rdbms::postgres::types::DbValuePrimitive::Bytea(u) => Self::Bytea(u),
             crate::services::rdbms::postgres::types::DbValuePrimitive::Json(s) => Self::Json(s),
             crate::services::rdbms::postgres::types::DbValuePrimitive::Xml(s) => Self::Xml(s),
             crate::services::rdbms::postgres::types::DbValuePrimitive::Uuid(uuid) => {
@@ -420,28 +438,39 @@ impl From<crate::services::rdbms::postgres::types::DbColumnTypePrimitive>
 {
     fn from(value: crate::services::rdbms::postgres::types::DbColumnTypePrimitive) -> Self {
         match value {
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Int8 => Self::Int8,
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Int16 => Self::Int16,
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Int32 => Self::Int32,
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Int64 => Self::Int64,
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Decimal => {
-                Self::Decimal
+            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Character => {
+                Self::Character
             }
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Float => Self::Float,
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Double => Self::Double,
+            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Int2 => Self::Int2,
+            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Int4 => Self::Int4,
+            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Int8 => Self::Int8,
+            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Numeric => {
+                Self::Numeric
+            }
+            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Float4 => Self::Float4,
+            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Float8 => Self::Float8,
             crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Boolean => {
                 Self::Boolean
             }
             crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Timestamp => {
                 Self::Timestamp
             }
+            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Timestamptz => {
+                Self::Timestamptz
+            }
             crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Interval => {
                 Self::Interval
             }
             crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Time => Self::Time,
+            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Timetz => Self::Timetz,
             crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Date => Self::Date,
             crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Text => Self::Text,
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Blob => Self::Blob,
+            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Varchar => {
+                Self::Varchar
+            }
+            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Bpchar => Self::Bpchar,
+            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Bytea => Self::Bytea,
+            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Jsonb => Self::Jsonb,
             crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Json => Self::Json,
             crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Xml => Self::Xml,
             crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Uuid => Self::Uuid,

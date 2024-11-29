@@ -10,27 +10,29 @@ interface postgres {
     other(string)
   }
 
-//   variant db-column-type {
-//     int2,
-//     int4,
-//     int8,
-//     float4,
-//     float8,
-//     numeric,
-//     bool,
-//     text,
-//     varchar,
-//     timestamp,
-//     timestamptz,
-//     date,
-//     time,
-//     timetz,
-//     interval,
-//     bytea,
-//     uuid,
-//     xml,
-//     json,
-//     jsonb,
+  variant db-column-type-primitive {
+    character,
+    int2,
+    int4,
+    int8,
+    float4,
+    float8,
+    numeric,
+    boolean,
+    text,
+    varchar,
+    bpchar,
+    timestamp,
+    timestamptz,
+    date,
+    time,
+    timetz,
+    interval,
+    bytea,
+    uuid,
+    xml,
+    json,
+    jsonb
 //     inet,
 //     macaddr,
 //     cidr,
@@ -55,26 +57,31 @@ interface postgres {
 //     numrange,
 //     tsrange,
 //     tstzrange
-//   }
+  }
 
-  variant db-column-type-primitive {
-    int8,
-    int16,
-    int32,
-    int64,
-    float,
-    double,
-    decimal,
-    boolean,
-    timestamp,
-    date,
-    time,
-    interval,
-    text,
-    blob,
-    json,
-    xml,
-    uuid
+  variant db-value-primitive {
+      character(s8),
+      int2(s16),
+      int4(s32),
+      int8(s64),
+      float4(float32),
+      float8(float64),
+      numeric(string),
+      boolean(bool),
+      text(string),
+      varchar(string),
+      bpchar(string),
+      timestamp(s64),
+      timestamptz(s64),
+      date(s64),
+      time(s64),
+      timetz(s64),
+      interval(s64),
+      bytea(list<u8>),
+      json(string),
+      xml(string),
+      uuid(tuple<u64, u64>),
+      null
   }
 
   variant db-column-type {
@@ -87,28 +94,6 @@ interface postgres {
     name:        string,
     db-type:     db-column-type,
     db-type-name: string
-  }
-
-  /// Value descriptor for a single database value
-  variant db-value-primitive {
-    int8(s8),
-    int16(s16),
-    int32(s32),
-    int64(s64),
-    float(float32),
-    double(float64),
-    decimal(string),
-    boolean(bool),
-    timestamp(s64),
-    date(s64),
-    time(s64),
-    interval(s64),
-    text(string),
-    blob(list<u8>),
-    json(string),
-    xml(string),
-    uuid(tuple<u64, u64>),
-    null
   }
 
   variant db-value {

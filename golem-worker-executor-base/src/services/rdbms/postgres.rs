@@ -125,8 +125,38 @@ fn bind_value(
         DbValue::Array(vs) if !vs.is_empty() => {
             let first = &vs[0];
             match first {
-                DbValuePrimitive::Int8(_) => {
+                DbValuePrimitive::Character(_) => {
                     let values: Vec<i8> = get_plain_values(vs, |v| {
+                        if let DbValuePrimitive::Character(v) = v {
+                            Some(v)
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Int2(_) => {
+                    let values: Vec<i16> = get_plain_values(vs, |v| {
+                        if let DbValuePrimitive::Int2(v) = v {
+                            Some(v)
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Int4(_) => {
+                    let values: Vec<i32> = get_plain_values(vs, |v| {
+                        if let DbValuePrimitive::Int4(v) = v {
+                            Some(v)
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Int8(_) => {
+                    let values: Vec<i64> = get_plain_values(vs, |v| {
                         if let DbValuePrimitive::Int8(v) = v {
                             Some(v)
                         } else {
@@ -135,39 +165,9 @@ fn bind_value(
                     })?;
                     Ok(query.bind(values))
                 }
-                DbValuePrimitive::Int16(_) => {
-                    let values: Vec<i16> = get_plain_values(vs, |v| {
-                        if let DbValuePrimitive::Int16(v) = v {
-                            Some(v)
-                        } else {
-                            None
-                        }
-                    })?;
-                    Ok(query.bind(values))
-                }
-                DbValuePrimitive::Int32(_) => {
-                    let values: Vec<i32> = get_plain_values(vs, |v| {
-                        if let DbValuePrimitive::Int32(v) = v {
-                            Some(v)
-                        } else {
-                            None
-                        }
-                    })?;
-                    Ok(query.bind(values))
-                }
-                DbValuePrimitive::Int64(_) => {
-                    let values: Vec<i64> = get_plain_values(vs, |v| {
-                        if let DbValuePrimitive::Int64(v) = v {
-                            Some(v)
-                        } else {
-                            None
-                        }
-                    })?;
-                    Ok(query.bind(values))
-                }
-                DbValuePrimitive::Decimal(_) => {
+                DbValuePrimitive::Numeric(_) => {
                     let values: Vec<BigDecimal> = get_plain_values(vs, |v| {
-                        if let DbValuePrimitive::Decimal(v) = v {
+                        if let DbValuePrimitive::Numeric(v) = v {
                             Some(v)
                         } else {
                             None
@@ -175,9 +175,20 @@ fn bind_value(
                     })?;
                     Ok(query.bind(values))
                 }
-                DbValuePrimitive::Float(_) => {
+                DbValuePrimitive::Float4(_) => {
                     let values: Vec<f32> = get_plain_values(vs, |v| {
-                        if let DbValuePrimitive::Float(v) = v {
+                        if let DbValuePrimitive::Float4(v) = v {
+                            Some(v)
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+
+                DbValuePrimitive::Float8(_) => {
+                    let values: Vec<f64> = get_plain_values(vs, |v| {
+                        if let DbValuePrimitive::Float8(v) = v {
                             Some(v)
                         } else {
                             None
@@ -205,9 +216,29 @@ fn bind_value(
                     })?;
                     Ok(query.bind(values))
                 }
-                DbValuePrimitive::Blob(_) => {
+                DbValuePrimitive::Varchar(_) => {
+                    let values: Vec<String> = get_plain_values(vs, |v| {
+                        if let DbValuePrimitive::Varchar(v) = v {
+                            Some(v)
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Bpchar(_) => {
+                    let values: Vec<String> = get_plain_values(vs, |v| {
+                        if let DbValuePrimitive::Bpchar(v) = v {
+                            Some(v)
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Bytea(_) => {
                     let values: Vec<Vec<u8>> = get_plain_values(vs, |v| {
-                        if let DbValuePrimitive::Blob(v) = v {
+                        if let DbValuePrimitive::Bytea(v) = v {
                             Some(v)
                         } else {
                             None
@@ -290,19 +321,23 @@ fn bind_value_primitive(
     value: DbValuePrimitive,
 ) -> Result<sqlx::query::Query<sqlx::Postgres, sqlx::postgres::PgArguments>, String> {
     match value {
+        DbValuePrimitive::Character(v) => Ok(query.bind(v)),
+        DbValuePrimitive::Int2(v) => Ok(query.bind(v)),
+        DbValuePrimitive::Int4(v) => Ok(query.bind(v)),
         DbValuePrimitive::Int8(v) => Ok(query.bind(v)),
-        DbValuePrimitive::Int16(v) => Ok(query.bind(v)),
-        DbValuePrimitive::Int32(v) => Ok(query.bind(v)),
-        DbValuePrimitive::Int64(v) => Ok(query.bind(v)),
-        DbValuePrimitive::Decimal(v) => Ok(query.bind(v)),
-        DbValuePrimitive::Float(v) => Ok(query.bind(v)),
+        DbValuePrimitive::Float4(v) => Ok(query.bind(v)),
+        DbValuePrimitive::Float8(v) => Ok(query.bind(v)),
+        DbValuePrimitive::Numeric(v) => Ok(query.bind(v)),
         DbValuePrimitive::Boolean(v) => Ok(query.bind(v)),
         DbValuePrimitive::Text(v) => Ok(query.bind(v)),
-        DbValuePrimitive::Blob(v) => Ok(query.bind(v)),
+        DbValuePrimitive::Varchar(v) => Ok(query.bind(v)),
+        DbValuePrimitive::Bpchar(v) => Ok(query.bind(v)),
+        DbValuePrimitive::Bytea(v) => Ok(query.bind(v)),
         DbValuePrimitive::Uuid(v) => Ok(query.bind(v)),
         DbValuePrimitive::Json(v) => Ok(query.bind(v)),
         DbValuePrimitive::Xml(v) => Ok(query.bind(v)),
         DbValuePrimitive::Timestamp(v) => Ok(query.bind(v)),
+        DbValuePrimitive::Timestamptz(v) => Ok(query.bind(v)),
         DbValuePrimitive::Date(v) => Ok(query.bind(v)),
         DbValuePrimitive::Interval(v) => Ok(query.bind(v)),
         DbValuePrimitive::Null => Ok(query.bind(None::<String>)),
@@ -334,45 +369,66 @@ fn get_db_value(index: usize, row: &sqlx::postgres::PgRow) -> Result<DbValue, St
                 None => DbValue::Primitive(DbValuePrimitive::Null),
             }
         }
+        pg_type_name::CHAR => {
+            let v: Option<i8> = row.try_get(index).map_err(|e| e.to_string())?;
+            match v {
+                Some(v) => DbValue::Primitive(DbValuePrimitive::Character(v)),
+                None => DbValue::Primitive(DbValuePrimitive::Null),
+            }
+        }
         pg_type_name::INT2 => {
             let v: Option<i16> = row.try_get(index).map_err(|e| e.to_string())?;
             match v {
-                Some(v) => DbValue::Primitive(DbValuePrimitive::Int16(v)),
+                Some(v) => DbValue::Primitive(DbValuePrimitive::Int2(v)),
                 None => DbValue::Primitive(DbValuePrimitive::Null),
             }
         }
         pg_type_name::INT4 => {
             let v: Option<i32> = row.try_get(index).map_err(|e| e.to_string())?;
             match v {
-                Some(v) => DbValue::Primitive(DbValuePrimitive::Int32(v)),
+                Some(v) => DbValue::Primitive(DbValuePrimitive::Int4(v)),
                 None => DbValue::Primitive(DbValuePrimitive::Null),
             }
         }
         pg_type_name::INT8 => {
             let v: Option<i64> = row.try_get(index).map_err(|e| e.to_string())?;
             match v {
-                Some(v) => DbValue::Primitive(DbValuePrimitive::Int64(v)),
+                Some(v) => DbValue::Primitive(DbValuePrimitive::Int8(v)),
                 None => DbValue::Primitive(DbValuePrimitive::Null),
             }
         }
         pg_type_name::FLOAT4 => {
             let v: Option<f32> = row.try_get(index).map_err(|e| e.to_string())?;
             match v {
-                Some(v) => DbValue::Primitive(DbValuePrimitive::Float(v)),
+                Some(v) => DbValue::Primitive(DbValuePrimitive::Float4(v)),
                 None => DbValue::Primitive(DbValuePrimitive::Null),
             }
         }
         pg_type_name::FLOAT8 => {
             let v: Option<f64> = row.try_get(index).map_err(|e| e.to_string())?;
             match v {
-                Some(v) => DbValue::Primitive(DbValuePrimitive::Double(v)),
+                Some(v) => DbValue::Primitive(DbValuePrimitive::Float8(v)),
                 None => DbValue::Primitive(DbValuePrimitive::Null),
             }
         }
-        pg_type_name::TEXT | pg_type_name::VARCHAR | pg_type_name::BPCHAR => {
+        pg_type_name::TEXT => {
             let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
             match v {
                 Some(v) => DbValue::Primitive(DbValuePrimitive::Text(v)),
+                None => DbValue::Primitive(DbValuePrimitive::Null),
+            }
+        }
+        pg_type_name::VARCHAR => {
+            let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
+            match v {
+                Some(v) => DbValue::Primitive(DbValuePrimitive::Varchar(v)),
+                None => DbValue::Primitive(DbValuePrimitive::Null),
+            }
+        }
+        pg_type_name::BPCHAR => {
+            let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
+            match v {
+                Some(v) => DbValue::Primitive(DbValuePrimitive::Bpchar(v)),
                 None => DbValue::Primitive(DbValuePrimitive::Null),
             }
         }
@@ -383,6 +439,13 @@ fn get_db_value(index: usize, row: &sqlx::postgres::PgRow) -> Result<DbValue, St
                 None => DbValue::Primitive(DbValuePrimitive::Null),
             }
         }
+        // pg_type_name::JSONB => {
+        //     let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
+        //     match v {
+        //         Some(v) => DbValue::Primitive(DbValuePrimitive::Jsonb(v)),
+        //         None => DbValue::Primitive(DbValuePrimitive::Null),
+        //     }
+        // }
         pg_type_name::XML => {
             let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
             match v {
@@ -393,7 +456,7 @@ fn get_db_value(index: usize, row: &sqlx::postgres::PgRow) -> Result<DbValue, St
         pg_type_name::BYTEA => {
             let v: Option<Vec<u8>> = row.try_get(index).map_err(|e| e.to_string())?;
             match v {
-                Some(v) => DbValue::Primitive(DbValuePrimitive::Blob(v)),
+                Some(v) => DbValue::Primitive(DbValuePrimitive::Bytea(v)),
                 None => DbValue::Primitive(DbValuePrimitive::Null),
             }
         }
@@ -414,11 +477,19 @@ fn get_db_value(index: usize, row: &sqlx::postgres::PgRow) -> Result<DbValue, St
                 None => DbValue::Primitive(DbValuePrimitive::Null),
             }
         }
-        pg_type_name::TIMESTAMP | pg_type_name::TIMESTAMPTZ => {
+        pg_type_name::TIMESTAMP => {
             let v: Option<chrono::DateTime<chrono::Utc>> =
                 row.try_get(index).map_err(|e| e.to_string())?;
             match v {
                 Some(v) => DbValue::Primitive(DbValuePrimitive::Timestamp(v)),
+                None => DbValue::Primitive(DbValuePrimitive::Null),
+            }
+        }
+        pg_type_name::TIMESTAMPTZ => {
+            let v: Option<chrono::DateTime<chrono::Utc>> =
+                row.try_get(index).map_err(|e| e.to_string())?;
+            match v {
+                Some(v) => DbValue::Primitive(DbValuePrimitive::Timestamptz(v)),
                 None => DbValue::Primitive(DbValuePrimitive::Null),
             }
         }
@@ -439,35 +510,35 @@ fn get_db_value(index: usize, row: &sqlx::postgres::PgRow) -> Result<DbValue, St
         pg_type_name::INT2_ARRAY => {
             let vs: Option<Vec<i16>> = row.try_get(index).map_err(|e| e.to_string())?;
             match vs {
-                Some(vs) => DbValue::Array(vs.into_iter().map(DbValuePrimitive::Int16).collect()),
+                Some(vs) => DbValue::Array(vs.into_iter().map(DbValuePrimitive::Int2).collect()),
                 None => DbValue::Array(vec![]),
             }
         }
         pg_type_name::INT4_ARRAY => {
             let vs: Option<Vec<i32>> = row.try_get(index).map_err(|e| e.to_string())?;
             match vs {
-                Some(vs) => DbValue::Array(vs.into_iter().map(DbValuePrimitive::Int32).collect()),
+                Some(vs) => DbValue::Array(vs.into_iter().map(DbValuePrimitive::Int4).collect()),
                 None => DbValue::Array(vec![]),
             }
         }
         pg_type_name::INT8_ARRAY => {
             let vs: Option<Vec<i64>> = row.try_get(index).map_err(|e| e.to_string())?;
             match vs {
-                Some(vs) => DbValue::Array(vs.into_iter().map(DbValuePrimitive::Int64).collect()),
+                Some(vs) => DbValue::Array(vs.into_iter().map(DbValuePrimitive::Int8).collect()),
                 None => DbValue::Array(vec![]),
             }
         }
         pg_type_name::FLOAT4_ARRAY => {
             let vs: Option<Vec<f32>> = row.try_get(index).map_err(|e| e.to_string())?;
             match vs {
-                Some(vs) => DbValue::Array(vs.into_iter().map(DbValuePrimitive::Float).collect()),
+                Some(vs) => DbValue::Array(vs.into_iter().map(DbValuePrimitive::Float4).collect()),
                 None => DbValue::Array(vec![]),
             }
         }
         pg_type_name::FLOAT8_ARRAY => {
             let vs: Option<Vec<f64>> = row.try_get(index).map_err(|e| e.to_string())?;
             match vs {
-                Some(vs) => DbValue::Array(vs.into_iter().map(DbValuePrimitive::Double).collect()),
+                Some(vs) => DbValue::Array(vs.into_iter().map(DbValuePrimitive::Float8).collect()),
                 None => DbValue::Array(vec![]),
             }
         }
@@ -495,7 +566,7 @@ fn get_db_value(index: usize, row: &sqlx::postgres::PgRow) -> Result<DbValue, St
         pg_type_name::BYTEA_ARRAY => {
             let vs: Option<Vec<Vec<u8>>> = row.try_get(index).map_err(|e| e.to_string())?;
             match vs {
-                Some(vs) => DbValue::Array(vs.into_iter().map(DbValuePrimitive::Blob).collect()),
+                Some(vs) => DbValue::Array(vs.into_iter().map(DbValuePrimitive::Bytea).collect()),
                 None => DbValue::Array(vec![]),
             }
         }
@@ -591,47 +662,59 @@ impl TryFrom<&sqlx::postgres::PgTypeInfo> for DbColumnType {
 
         match type_name {
             pg_type_name::BOOL => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Boolean)),
-            pg_type_name::INT2 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Int16)),
-            pg_type_name::INT4 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Int32)),
-            pg_type_name::INT8 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Int64)),
-            pg_type_name::NUMERIC => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Decimal)),
-            pg_type_name::FLOAT4 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Float)),
-            pg_type_name::FLOAT8 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Double)),
+            pg_type_name::CHAR => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Character)),
+            pg_type_name::INT2 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Int2)),
+            pg_type_name::INT4 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Int4)),
+            pg_type_name::INT8 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Int8)),
+            pg_type_name::NUMERIC => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Numeric)),
+            pg_type_name::FLOAT4 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Float4)),
+            pg_type_name::FLOAT8 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Float8)),
             pg_type_name::UUID => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Uuid)),
-            pg_type_name::TEXT | pg_type_name::VARCHAR | pg_type_name::BPCHAR => {
-                Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Text))
-            }
+            pg_type_name::TEXT => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Text)),
+            pg_type_name::VARCHAR => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Varchar)),
+            pg_type_name::BPCHAR => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Bpchar)),
             pg_type_name::JSON => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Json)),
+            pg_type_name::JSONB => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Jsonb)),
             pg_type_name::XML => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Xml)),
             pg_type_name::TIMESTAMP => {
                 Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Timestamp))
             }
+            pg_type_name::TIMESTAMPTZ => {
+                Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Timestamptz))
+            }
             pg_type_name::DATE => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Date)),
             pg_type_name::TIME => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Time)),
+            pg_type_name::TIMETZ => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Timetz)),
             pg_type_name::INTERVAL => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Interval)),
-            pg_type_name::BYTEA => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Blob)),
+            pg_type_name::BYTEA => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Bytea)),
+            pg_type_name::CHAR_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Character)),
             pg_type_name::BOOL_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Boolean)),
-            pg_type_name::INT2_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Int16)),
-            pg_type_name::INT4_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Int32)),
-            pg_type_name::INT8_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Int64)),
-            pg_type_name::NUMERIC_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Decimal)),
-            pg_type_name::FLOAT4_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Float)),
-            pg_type_name::FLOAT8_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Double)),
+            pg_type_name::INT2_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Int2)),
+            pg_type_name::INT4_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Int4)),
+            pg_type_name::INT8_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Int8)),
+            pg_type_name::NUMERIC_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Numeric)),
+            pg_type_name::FLOAT4_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Float4)),
+            pg_type_name::FLOAT8_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Float8)),
             pg_type_name::UUID_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Uuid)),
-            pg_type_name::TEXT_ARRAY | pg_type_name::VARCHAR_ARRAY | pg_type_name::BPCHAR_ARRAY => {
-                Ok(DbColumnType::Array(DbColumnTypePrimitive::Text))
-            }
+            pg_type_name::TEXT_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Text)),
+            pg_type_name::VARCHAR_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Varchar)),
+            pg_type_name::BPCHAR_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Bpchar)),
             pg_type_name::JSON_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Json)),
+            pg_type_name::JSONB_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Jsonb)),
             pg_type_name::XML_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Xml)),
             pg_type_name::TIMESTAMP_ARRAY => {
                 Ok(DbColumnType::Array(DbColumnTypePrimitive::Timestamp))
             }
+            pg_type_name::TIMESTAMPTZ_ARRAY => {
+                Ok(DbColumnType::Array(DbColumnTypePrimitive::Timestamptz))
+            }
             pg_type_name::DATE_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Date)),
             pg_type_name::TIME_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Time)),
+            pg_type_name::TIMETZ_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Timetz)),
             pg_type_name::INTERVAL_ARRAY => {
                 Ok(DbColumnType::Array(DbColumnTypePrimitive::Interval))
             }
-            pg_type_name::BYTEA_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Blob)),
+            pg_type_name::BYTEA_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Bytea)),
             _ => match *type_kind {
                 PgTypeKind::Enum(_) => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Text)),
                 _ => Err(format!("Type '{}' is not supported", type_name))?,
@@ -758,43 +841,53 @@ pub mod types {
 
     #[derive(Clone, Debug, Eq, PartialEq)]
     pub enum DbColumnTypePrimitive {
+        Character,
+        Int2,
+        Int4,
         Int8,
-        Int16,
-        Int32,
-        Int64,
-        Float,
-        Double,
-        Decimal,
+        Float4,
+        Float8,
+        Numeric,
         Boolean,
+        Text,
+        Varchar,
+        Bpchar,
         Timestamp,
+        Timestamptz,
         Date,
         Time,
+        Timetz,
         Interval,
-        Text,
-        Blob,
-        Json,
-        Xml,
+        Bytea,
         Uuid,
+        Xml,
+        Json,
+        Jsonb,
     }
 
     impl Display for DbColumnTypePrimitive {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             match self {
+                DbColumnTypePrimitive::Character => write!(f, "char"),
+                DbColumnTypePrimitive::Int2 => write!(f, "int2"),
+                DbColumnTypePrimitive::Int4 => write!(f, "int4"),
                 DbColumnTypePrimitive::Int8 => write!(f, "int8"),
-                DbColumnTypePrimitive::Int16 => write!(f, "int16"),
-                DbColumnTypePrimitive::Int32 => write!(f, "int32"),
-                DbColumnTypePrimitive::Int64 => write!(f, "int64"),
-                DbColumnTypePrimitive::Float => write!(f, "float"),
-                DbColumnTypePrimitive::Double => write!(f, "double"),
-                DbColumnTypePrimitive::Decimal => write!(f, "decimal"),
+                DbColumnTypePrimitive::Float4 => write!(f, "float4"),
+                DbColumnTypePrimitive::Float8 => write!(f, "float8"),
+                DbColumnTypePrimitive::Numeric => write!(f, "numeric"),
                 DbColumnTypePrimitive::Boolean => write!(f, "boolean"),
                 DbColumnTypePrimitive::Timestamp => write!(f, "timestamp"),
                 DbColumnTypePrimitive::Date => write!(f, "date"),
                 DbColumnTypePrimitive::Time => write!(f, "time"),
+                DbColumnTypePrimitive::Timestamptz => write!(f, "timestamptz"),
+                DbColumnTypePrimitive::Timetz => write!(f, "timetz"),
                 DbColumnTypePrimitive::Interval => write!(f, "interval"),
                 DbColumnTypePrimitive::Text => write!(f, "text"),
-                DbColumnTypePrimitive::Blob => write!(f, "blob"),
+                DbColumnTypePrimitive::Varchar => write!(f, "varchar"),
+                DbColumnTypePrimitive::Bpchar => write!(f, "bpchar"),
+                DbColumnTypePrimitive::Bytea => write!(f, "bytea"),
                 DbColumnTypePrimitive::Json => write!(f, "json"),
+                DbColumnTypePrimitive::Jsonb => write!(f, "jsonb"),
                 DbColumnTypePrimitive::Xml => write!(f, "xml"),
                 DbColumnTypePrimitive::Uuid => write!(f, "uuid"),
             }
@@ -818,20 +911,24 @@ pub mod types {
 
     #[derive(Clone, Debug, PartialEq)]
     pub enum DbValuePrimitive {
-        Int8(i8),
-        Int16(i16),
-        Int32(i32),
-        Int64(i64),
-        Float(f32),
-        Double(f64),
-        Decimal(BigDecimal),
+        Character(i8),
+        Int2(i16),
+        Int4(i32),
+        Int8(i64),
+        Float4(f32),
+        Float8(f64),
+        Numeric(BigDecimal),
         Boolean(bool),
         Timestamp(chrono::DateTime<chrono::Utc>),
+        Timestamptz(chrono::DateTime<chrono::Utc>),
         Date(chrono::NaiveDate),
         Time(i64),
+        Timetz(i64),
         Interval(chrono::Duration),
         Text(String),
-        Blob(Vec<u8>),
+        Varchar(String),
+        Bpchar(String),
+        Bytea(Vec<u8>),
         Json(String),
         Xml(String),
         Uuid(Uuid),
@@ -841,20 +938,24 @@ pub mod types {
     impl Display for DbValuePrimitive {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             match self {
+                DbValuePrimitive::Character(v) => write!(f, "{}", v),
+                DbValuePrimitive::Int2(v) => write!(f, "{}", v),
+                DbValuePrimitive::Int4(v) => write!(f, "{}", v),
                 DbValuePrimitive::Int8(v) => write!(f, "{}", v),
-                DbValuePrimitive::Int16(v) => write!(f, "{}", v),
-                DbValuePrimitive::Int32(v) => write!(f, "{}", v),
-                DbValuePrimitive::Int64(v) => write!(f, "{}", v),
-                DbValuePrimitive::Float(v) => write!(f, "{}", v),
-                DbValuePrimitive::Double(v) => write!(f, "{}", v),
-                DbValuePrimitive::Decimal(v) => write!(f, "{}", v),
+                DbValuePrimitive::Float4(v) => write!(f, "{}", v),
+                DbValuePrimitive::Float8(v) => write!(f, "{}", v),
+                DbValuePrimitive::Numeric(v) => write!(f, "{}", v),
                 DbValuePrimitive::Boolean(v) => write!(f, "{}", v),
                 DbValuePrimitive::Timestamp(v) => write!(f, "{}", v),
+                DbValuePrimitive::Timestamptz(v) => write!(f, "{}", v),
                 DbValuePrimitive::Date(v) => write!(f, "{}", v),
                 DbValuePrimitive::Time(v) => write!(f, "{}", v),
+                DbValuePrimitive::Timetz(v) => write!(f, "{}", v),
                 DbValuePrimitive::Interval(v) => write!(f, "{}", v),
                 DbValuePrimitive::Text(v) => write!(f, "{}", v),
-                DbValuePrimitive::Blob(v) => write!(f, "{:?}", v),
+                DbValuePrimitive::Varchar(v) => write!(f, "{}", v),
+                DbValuePrimitive::Bpchar(v) => write!(f, "{}", v),
+                DbValuePrimitive::Bytea(v) => write!(f, "{:?}", v),
                 DbValuePrimitive::Json(v) => write!(f, "{}", v),
                 DbValuePrimitive::Xml(v) => write!(f, "{}", v),
                 DbValuePrimitive::Uuid(v) => write!(f, "{}", v),
@@ -886,26 +987,6 @@ pub mod types {
         pub db_type_name: String,
     }
 
-    // #[derive(Clone, Debug)]
-    // pub struct DbColumnTypeMeta {
-    //     pub name: String,
-    //     pub db_type: DbColumnType,
-    //     pub db_type_flags: HashSet<DbColumnTypeFlag>,
-    //     pub foreign_key: Option<String>,
-    // }
-    //
-    // #[derive(Clone, Debug)]
-    // pub enum DbColumnTypeFlag {
-    //     PrimaryKey,
-    //     ForeignKey,
-    //     Unique,
-    //     Nullable,
-    //     Generated,
-    //     AutoIncrement,
-    //     DefaultValue,
-    //     Indexed,
-    // }
-
     pub(crate) fn get_plain_values<T>(
         values: Vec<DbValuePrimitive>,
         f: impl Fn(DbValuePrimitive) -> Option<T>,
@@ -924,50 +1005,4 @@ pub mod types {
         }
         Ok(result)
     }
-
-    // pub enum PostgresType {
-    //     Bool,
-    //     Int2,
-    //     Int4,
-    //     Int8,
-    //     Float4,
-    //     Float8,
-    //     Numeric,
-    //     Text,
-    //     Varchar,
-    //     Timestamp,
-    //     Timestamptz,
-    //     Date,
-    //     Time,
-    //     Timetz,
-    //     Interval,
-    //     Bytea,
-    //     Uuid,
-    //     Xml,
-    //     Json,
-    //     Jsonb,
-    //     Inet,
-    //     Macaddr,
-    //     Cidr,
-    //     Point,
-    //     Line,
-    //     Lseg,
-    //     Box,
-    //     Polygon,
-    //     Circle,
-    //     Path,
-    //     Box2d,
-    //     Polygonz,
-    //     Circlez,
-    //     Pathz,
-    //     Hstore,
-    //     Tsvector,
-    //     Tsquery,
-    //     Range,
-    //     Int4Range,
-    //     Int8Range,
-    //     Numrange,
-    //     Tsrange,
-    //     Tstzrange,
-    // }
 }

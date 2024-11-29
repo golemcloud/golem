@@ -138,7 +138,6 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
-
     #[allow(clippy::too_many_arguments)]
     pub async fn create(
         owned_worker_id: OwnedWorkerId,
