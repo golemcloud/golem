@@ -33,7 +33,7 @@ use golem_worker_service_base::gateway_execution::gateway_http_input_executor::{
     DefaultGatewayInputExecutor, GatewayHttpInput, GatewayHttpInputExecutor,
 };
 use golem_worker_service_base::gateway_execution::gateway_session::{
-    EvictionStrategy, GatewaySession, GatewaySessionStore, GatewaySessionWithInMemoryCache,
+    GatewaySession, GatewaySessionStore, GatewaySessionWithInMemoryCache,
 };
 use golem_worker_service_base::gateway_middleware::HttpCors;
 use golem_worker_service_base::gateway_request::http_request::{ApiInputPath, InputHttpRequest};
@@ -112,9 +112,8 @@ async fn test_end_to_end_api_gateway_simple_worker() {
     let api_specification: HttpApiDefinition =
         get_api_spec_worker_binding("/foo/{user-id}", worker_name, response_mapping).await;
 
-    let session_store: Arc<dyn GatewaySession + Sync + Send> = Arc::new(
-        GatewaySessionWithInMemoryCache::new(&EvictionStrategy::default()),
-    );
+    let session_store: Arc<dyn GatewaySession + Sync + Send> = internal::get_session_store();
+
     let response = execute(
         &api_request,
         &api_specification,
@@ -1576,11 +1575,12 @@ mod internal {
     use rib::RibResult;
 
     use golem_worker_service_base::gateway_execution::gateway_session::{
-        GatewaySessionStore, GatewaySessionWithInMemoryCache,
+        DataKey, DataValue, GatewaySession, GatewaySessionError, GatewaySessionStore,
+        GatewaySessionWithInMemoryCache, SessionId,
     };
     use serde_json::Value;
     use std::collections::HashMap;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     pub struct TestApiGatewayWorkerRequestExecutor {}
@@ -1923,16 +1923,58 @@ mod internal {
         decoded
     }
 
+    // This redirection is to offload eviction policy testing to the inbuilt cache
+    // mechanism of golem
+    pub struct TestSessionBackEnd<'a> {
+        pub inner: &'a mut HashMap<(SessionId, DataKey), DataValue>,
+    }
+
+    impl TestSessionBackEnd {
+        pub fn new() -> Self {
+            TestSessionBackEnd {
+                inner: &mut HashMap::new(),
+            }
+        }
+    }
+    #[async_trait]
+    impl GatewaySession for TestSessionBackEnd {
+        async fn insert(
+            &self,
+            session_id: SessionId,
+            data_key: DataKey,
+            data_value: DataValue,
+        ) -> Result<(), GatewaySessionError> {
+            self.inner.insert((session_id, data_key), data_value);
+            Ok(())
+        }
+
+        async fn get(
+            &self,
+            session_id: &SessionId,
+            data_key: &DataKey,
+        ) -> Result<DataValue, GatewaySessionError> {
+            let value = self.inner.get(&(session_id.clone(), data_key.clone()));
+            value.cloned().ok_or(GatewaySessionError::MissingValue {
+                session_id: session_id.clone(),
+                data_key: data_key.clone(),
+            })
+        }
+    }
+
     pub fn get_session_store() -> GatewaySessionStore {
         Arc::new(GatewaySessionWithInMemoryCache::new(
-            &EvictionStrategy::default(),
+            TestSessionBackEnd::new(),
+            60 * 60,
+            60,
         ))
     }
 
     // Quickly evicted as soon as added
     pub fn get_session_store_with_zero_ttl() -> GatewaySessionStore {
         Arc::new(GatewaySessionWithInMemoryCache::new(
-            &EvictionStrategy::new(&Duration::from_secs(0), &Duration::from_millis(1)),
+            TestSessionBackEnd::new(),
+            0,
+            60,
         ))
     }
 }
