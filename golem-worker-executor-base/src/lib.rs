@@ -14,10 +14,8 @@
 
 pub mod durable_host;
 pub mod error;
-pub mod grpc;
-pub mod http_server;
-
 pub mod function_result_interpreter;
+pub mod grpc;
 pub mod invocation;
 pub mod metrics;
 pub mod model;
@@ -32,7 +30,6 @@ pub mod workerctx;
 test_r::enable!();
 
 use crate::grpc::WorkerExecutorImpl;
-use crate::http_server::HttpServerImpl;
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::blob_store::{BlobStoreService, DefaultBlobStoreService};
 use crate::services::component::ComponentService;
@@ -82,7 +79,10 @@ use prometheus::Registry;
 use services::file_loader::FileLoader;
 use std::sync::Arc;
 use storage::keyvalue::sqlite::SqliteKeyValueStorage;
+use tokio::net::TcpListener;
 use tokio::runtime::Handle;
+use tokio::task::JoinSet;
+use tokio_stream::wrappers::TcpListenerStream;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Server;
 use tracing::{info, Instrument};
@@ -91,6 +91,11 @@ use wasmtime::component::Linker;
 use wasmtime::{Config, Engine, WasmBacktraceDetails};
 
 const VERSION: &str = golem_version!();
+
+pub struct RunDetails {
+    pub http_port: u16,
+    pub grpc_port: u16,
+}
 
 /// The Bootstrap trait should be implemented by all Worker Executors to customize the initialization
 /// of its services.
@@ -170,7 +175,8 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         golem_config: GolemConfig,
         prometheus_registry: Registry,
         runtime: Handle,
-    ) -> anyhow::Result<()> {
+        join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+    ) -> anyhow::Result<RunDetails> {
         info!("Golem Worker Executor starting up...");
 
         let total_system_memory = golem_config.memory.total_system_memory();
@@ -192,11 +198,13 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             .register_encoded_file_descriptor_set(proto::FILE_DESCRIPTOR_SET)
             .build()?;
 
-        let http_server = HttpServerImpl::new(
+        let http_port = golem_service_base::observability::start_health_and_metrics_server(
             golem_config.http_addr()?,
             prometheus_registry,
             "Worker executor is running",
-        );
+            join_set,
+        )
+        .await?;
 
         let (redis, sqlite, key_value_storage): (
             Option<RedisPool>,
@@ -471,24 +479,37 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             .await?;
 
         let addr = golem_config.grpc_addr()?;
+
+        let listener = TcpListener::bind(addr).await?;
+        let grpc_port = listener.local_addr()?.port();
+
         let worker_executor =
-            WorkerExecutorImpl::<Ctx, All<Ctx>>::new(services, lazy_worker_activator, addr.port())
+            WorkerExecutorImpl::<Ctx, All<Ctx>>::new(services, lazy_worker_activator, grpc_port)
                 .await?;
 
         let service = WorkerExecutorServer::new(worker_executor)
             .accept_compressed(CompressionEncoding::Gzip)
             .send_compressed(CompressionEncoding::Gzip);
 
-        info!("Starting gRPC server on port {}", addr.port());
-        Server::builder()
-            .max_concurrent_streams(Some(golem_config.limits.max_concurrent_streams))
-            .add_service(reflection_service)
-            .add_service(service)
-            .add_service(health_service)
-            .serve(addr)
-            .await?;
+        info!("Starting gRPC server on port {grpc_port}");
 
-        drop(http_server); // explicitly keeping it alive until the end
-        Ok(())
+        join_set.spawn(
+            async move {
+                Server::builder()
+                    .max_concurrent_streams(Some(golem_config.limits.max_concurrent_streams))
+                    .add_service(reflection_service)
+                    .add_service(health_service)
+                    .add_service(service)
+                    .serve_with_incoming(TcpListenerStream::new(listener))
+                    .await
+                    .map_err(|err| anyhow!(err))
+            }
+            .in_current_span(),
+        );
+
+        Ok(RunDetails {
+            http_port,
+            grpc_port,
+        })
     }
 }

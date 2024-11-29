@@ -20,6 +20,7 @@ use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
 use golem_worker_service_base::metrics;
 use opentelemetry::global;
 use prometheus::Registry;
+use tokio::task::JoinSet;
 
 fn main() -> Result<(), anyhow::Error> {
     if std::env::args().any(|arg| arg == "--dump-openapi-yaml") {
@@ -45,20 +46,32 @@ fn main() -> Result<(), anyhow::Error> {
         Ok(tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()?
-            .block_on(run(config, prometheus))?)
+            .block_on(async_main(config, prometheus))?)
     } else {
         Ok(())
     }
 }
 
-async fn run(config: WorkerServiceBaseConfig, prometheus: Registry) -> Result<(), anyhow::Error> {
+async fn async_main(
+    config: WorkerServiceBaseConfig,
+    prometheus: Registry,
+) -> Result<(), anyhow::Error> {
     let server = WorkerService::new(
         config,
         prometheus,
         MigrationsDir::new("./db/migration".into()),
     )
     .await?;
-    server.run().await
+
+    let mut join_set = JoinSet::new();
+
+    server.run(&mut join_set).await?;
+
+    while let Some(res) = join_set.join_next().await {
+        res??;
+    }
+
+    Ok(())
 }
 
 async fn dump_openapi_yaml() -> Result<(), anyhow::Error> {

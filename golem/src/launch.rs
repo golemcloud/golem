@@ -14,6 +14,7 @@
 
 use crate::health;
 use crate::migration::IncludedMigrationsDir;
+use crate::AllRunDetails;
 use anyhow::Context;
 use golem_common::config::DbConfig;
 use golem_common::config::DbSqliteConfig;
@@ -23,9 +24,14 @@ use golem_component_service::ComponentService;
 use golem_component_service_base::config::{ComponentStoreConfig, ComponentStoreLocalConfig};
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::config::LocalFileSystemBlobStorageConfig;
+use golem_service_base::service::routing_table::RoutingTableConfig;
 use golem_shard_manager::shard_manager_config::{
     FileSystemPersistenceConfig, PersistenceConfig, ShardManagerConfig,
 };
+use golem_worker_executor_base::services::golem_config::CompiledComponentServiceConfig;
+use golem_worker_executor_base::services::golem_config::ComponentServiceGrpcConfig;
+use golem_worker_executor_base::services::golem_config::ShardManagerServiceConfig;
+use golem_worker_executor_base::services::golem_config::ShardManagerServiceGrpcConfig;
 use golem_worker_executor_base::services::golem_config::{
     GolemConfig, IndexedStorageConfig, KeyValueStorageConfig,
 };
@@ -43,12 +49,9 @@ use tracing::Instrument;
 use crate::proxy;
 
 pub struct LaunchArgs {
-    pub port: u16,
+    pub router_port: u16,
+    pub custom_request_port: u16,
     pub data_dir: PathBuf,
-}
-
-struct ServiceArgs {
-    data_dir: PathBuf,
 }
 
 pub async fn launch_golem_services(args: &LaunchArgs) -> Result<(), anyhow::Error> {
@@ -68,26 +71,38 @@ pub async fn launch_golem_services(args: &LaunchArgs) -> Result<(), anyhow::Erro
 
     let mut join_set = JoinSet::new();
 
-    let service_args = ServiceArgs {
-        data_dir: args.data_dir.clone(),
-    };
-
-    tokio::fs::create_dir_all(&service_args.data_dir)
+    tokio::fs::create_dir_all(&args.data_dir)
         .await
         .with_context(|| {
             format!(
                 "Failed to create data directory at {}",
-                service_args.data_dir.display()
+                args.data_dir.display()
             )
         })?;
 
-    run_worker_executor(&service_args, &mut join_set).await?;
-    run_shard_manager(&service_args, &mut join_set).await?;
-    run_component_service(&service_args, &mut join_set).await?;
-    run_worker_service(&service_args, &mut join_set).await?;
+    let shard_manager = run_shard_manager(shard_manager_config(args), &mut join_set).await?;
+    let component_service =
+        run_component_service(component_service_config(args), &mut join_set).await?;
+    let worker_executor = run_worker_executor(
+        worker_executor_config(args, &shard_manager, &component_service),
+        &mut join_set,
+    )
+    .await?;
+    let worker_service = run_worker_service(
+        worker_service_config(args, &shard_manager, &component_service),
+        &mut join_set,
+    )
+    .await?;
+
+    let all_run_details = AllRunDetails {
+        shard_manager,
+        worker_executor,
+        component_service,
+        worker_service,
+    };
 
     let healthcheck_port = health::start_healthcheck_server(
-        vec![8083, 9005],
+        all_run_details.healthcheck_ports(),
         prometheus::default_registry().clone(),
         &mut join_set,
     )
@@ -95,50 +110,29 @@ pub async fn launch_golem_services(args: &LaunchArgs) -> Result<(), anyhow::Erro
 
     // Don't drop the channel, it will cause the proxy to fail
     let _proxy_command_channel = proxy::start_proxy(
-        &proxy::Ports {
-            listener_port: args.port,
-            component_service_port: 8083,
-            worker_service_port: 9005,
-            healthcheck_port,
-        },
+        args.router_port,
+        healthcheck_port,
+        &all_run_details,
         &mut join_set,
     )?;
 
     while let Some(res) = join_set.join_next().await {
-        let result = res?;
-        result?;
+        res??;
     }
 
     Ok(())
 }
 
-fn blob_storage_config(args: &ServiceArgs) -> BlobStorageConfig {
+fn blob_storage_config(args: &LaunchArgs) -> BlobStorageConfig {
     BlobStorageConfig::LocalFileSystem(LocalFileSystemBlobStorageConfig {
         root: args.data_dir.join("blobs"),
     })
 }
 
-fn worker_executor_config(args: &ServiceArgs) -> GolemConfig {
-    let mut config = GolemConfig {
-        key_value_storage: KeyValueStorageConfig::Sqlite(DbSqliteConfig {
-            database: args
-                .data_dir
-                .join("kv-store.db")
-                .to_string_lossy()
-                .to_string(),
-            max_connections: 32,
-        }),
-        indexed_storage: IndexedStorageConfig::KVStoreSqlite,
-        blob_storage: blob_storage_config(args),
-        ..Default::default()
-    };
-
-    config.add_port_to_tracing_file_name_if_enabled();
-    config
-}
-
-fn shard_manager_config(args: &ServiceArgs) -> ShardManagerConfig {
+fn shard_manager_config(args: &LaunchArgs) -> ShardManagerConfig {
     ShardManagerConfig {
+        grpc_port: 0,
+        http_port: 0,
         persistence: PersistenceConfig::FileSystem(FileSystemPersistenceConfig {
             path: args.data_dir.join("sharding.bin"),
         }),
@@ -146,8 +140,10 @@ fn shard_manager_config(args: &ServiceArgs) -> ShardManagerConfig {
     }
 }
 
-fn component_service_config(args: &ServiceArgs) -> ComponentServiceConfig {
+fn component_service_config(args: &LaunchArgs) -> ComponentServiceConfig {
     ComponentServiceConfig {
+        http_port: 0,
+        grpc_port: 0,
         db: DbConfig::Sqlite(DbSqliteConfig {
             database: args
                 .data_dir
@@ -172,8 +168,53 @@ fn component_service_config(args: &ServiceArgs) -> ComponentServiceConfig {
     }
 }
 
-fn worker_service_config(args: &ServiceArgs) -> WorkerServiceBaseConfig {
+fn worker_executor_config(
+    args: &LaunchArgs,
+    shard_manager_run_details: &golem_shard_manager::RunDetails,
+    component_service_run_details: &golem_component_service::RunDetails,
+) -> GolemConfig {
+    let mut config = GolemConfig {
+        port: 0,
+        http_port: 0,
+        key_value_storage: KeyValueStorageConfig::Sqlite(DbSqliteConfig {
+            database: args
+                .data_dir
+                .join("kv-store.db")
+                .to_string_lossy()
+                .to_string(),
+            max_connections: 32,
+        }),
+        indexed_storage: IndexedStorageConfig::KVStoreSqlite,
+        blob_storage: blob_storage_config(args),
+        component_service: golem_worker_executor_base::services::golem_config::ComponentServiceConfig::Grpc(
+            ComponentServiceGrpcConfig {
+                host: "127.0.0.1".to_string(),
+                port: component_service_run_details.grpc_port,
+                ..ComponentServiceGrpcConfig::default()
+            }
+        ),
+        compiled_component_service: CompiledComponentServiceConfig::Disabled(golem_worker_executor_base::services::golem_config::CompiledComponentServiceDisabledConfig {  }),
+        shard_manager_service: ShardManagerServiceConfig::Grpc(ShardManagerServiceGrpcConfig {
+            host: "127.0.0.1".to_string(),
+            port: shard_manager_run_details.grpc_port,
+            ..ShardManagerServiceGrpcConfig::default()
+        }),
+        ..Default::default()
+    };
+
+    config.add_port_to_tracing_file_name_if_enabled();
+    config
+}
+
+fn worker_service_config(
+    args: &LaunchArgs,
+    shard_manager_run_details: &golem_shard_manager::RunDetails,
+    component_service_run_details: &golem_component_service::RunDetails,
+) -> WorkerServiceBaseConfig {
     WorkerServiceBaseConfig {
+        port: 0,
+        worker_grpc_port: 0,
+        custom_request_port: args.custom_request_port,
         db: DbConfig::Sqlite(DbSqliteConfig {
             database: args
                 .data_dir
@@ -183,70 +224,77 @@ fn worker_service_config(args: &ServiceArgs) -> WorkerServiceBaseConfig {
             max_connections: 32,
         }),
         blob_storage: blob_storage_config(args),
+        component_service: golem_worker_service_base::app_config::ComponentServiceConfig {
+            host: "127.0.0.1".to_string(),
+            port: component_service_run_details.grpc_port,
+            ..golem_worker_service_base::app_config::ComponentServiceConfig::default()
+        },
+        routing_table: RoutingTableConfig {
+            host: "127.0.0.1".to_string(),
+            port: shard_manager_run_details.grpc_port,
+            ..RoutingTableConfig::default()
+        },
         ..Default::default()
     }
 }
 
-async fn run_worker_executor(
-    args: &ServiceArgs,
-    join_set: &mut JoinSet<Result<(), anyhow::Error>>,
-) -> Result<(), anyhow::Error> {
-    let golem_config = worker_executor_config(args);
-    let prometheus_registry = golem_worker_executor_base::metrics::register_all();
-
-    let span = tracing::info_span!("worker-executor");
-    let _server = join_set.spawn(async move {
-        golem_worker_executor::run(golem_config, prometheus_registry, Handle::current())
-            .instrument(span)
-            .await
-    });
-    Ok(())
-}
-
 async fn run_shard_manager(
-    args: &ServiceArgs,
+    config: ShardManagerConfig,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
-) -> Result<(), anyhow::Error> {
-    let config = shard_manager_config(args);
+) -> Result<golem_shard_manager::RunDetails, anyhow::Error> {
     let prometheus_registry = default_registry().clone();
     let span = tracing::info_span!("shard-manager");
-    let _server = join_set.spawn(async move {
-        golem_shard_manager::async_main(&config, prometheus_registry)
-            .instrument(span)
-            .await
-    });
-    Ok(())
+
+    golem_shard_manager::run(&config, prometheus_registry, join_set)
+        .instrument(span)
+        .await
 }
 
 async fn run_component_service(
-    args: &ServiceArgs,
+    config: ComponentServiceConfig,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
-) -> Result<(), anyhow::Error> {
-    let config = component_service_config(args);
+) -> Result<golem_component_service::RunDetails, anyhow::Error> {
     let prometheus_registry = golem_component_service::metrics::register_all();
     let migration_path = IncludedMigrationsDir::new(include_dir!(
         "$CARGO_MANIFEST_DIR/../golem-component-service/db/migration"
     ));
 
-    let component_service =
-        ComponentService::new(config, prometheus_registry, migration_path).await?;
     let span = tracing::info_span!("component-service", component = "component-service");
-    let _server = join_set.spawn(async move { component_service.run().instrument(span).await });
-    Ok(())
+    ComponentService::new(config, prometheus_registry, migration_path)
+        .instrument(span.clone())
+        .await?
+        .run(join_set)
+        .instrument(span)
+        .await
+}
+
+async fn run_worker_executor(
+    config: GolemConfig,
+    join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+) -> Result<golem_worker_executor_base::RunDetails, anyhow::Error> {
+    let prometheus_registry = golem_worker_executor_base::metrics::register_all();
+
+    let span = tracing::info_span!("worker-executor");
+    golem_worker_executor::run(config, prometheus_registry, Handle::current(), join_set)
+        .instrument(span)
+        .await
 }
 
 async fn run_worker_service(
-    args: &ServiceArgs,
+    config: WorkerServiceBaseConfig,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
-) -> Result<(), anyhow::Error> {
-    let config = worker_service_config(args);
+) -> Result<golem_worker_service::RunDetails, anyhow::Error> {
     let prometheus_registry = golem_worker_executor_base::metrics::register_all();
     let migration_path = IncludedMigrationsDir::new(include_dir!(
         "$CARGO_MANIFEST_DIR/../golem-worker-service/db/migration"
     ));
 
-    let worker_service = WorkerService::new(config, prometheus_registry, migration_path).await?;
     let span = tracing::info_span!("worker-service");
-    let _server = join_set.spawn(async move { worker_service.run().instrument(span).await });
-    Ok(())
+
+    WorkerService::new(config, prometheus_registry, migration_path)
+        .instrument(span.clone())
+        .await?
+        .run(join_set)
+        .instrument(span)
+        .await
 }

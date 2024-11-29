@@ -56,7 +56,16 @@ async fn run(config: ComponentServiceConfig, prometheus: Registry) -> Result<(),
         MigrationsDir::new("./db/migration".into()),
     )
     .await?;
-    server.run().await
+
+    let mut join_set = tokio::task::JoinSet::new();
+
+    server.run(&mut join_set).await?;
+
+    while let Some(res) = join_set.join_next().await {
+        res??;
+    }
+
+    Ok(())
 }
 
 async fn dump_openapi_yaml() -> Result<(), anyhow::Error> {

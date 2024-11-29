@@ -25,20 +25,17 @@ use sozu_command_lib::{
 use tokio::task::JoinSet;
 use tracing::info;
 
-pub struct Ports {
-    pub listener_port: u16,
-    pub component_service_port: u16,
-    pub worker_service_port: u16,
-    pub healthcheck_port: u16,
-}
+use crate::AllRunDetails;
 
 pub fn start_proxy(
-    ports: &Ports,
+    listener_port: u16,
+    healthcheck_port: u16,
+    all_run_details: &AllRunDetails,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) -> Result<Channel<WorkerRequest, WorkerResponse>, anyhow::Error> {
     info!("Starting proxy");
 
-    let listener_address = SocketAddress::new_v4(127, 0, 0, 1, ports.listener_port);
+    let listener_address = SocketAddress::new_v4(127, 0, 0, 1, listener_port);
 
     let http_listener = ListenerBuilder::new_http(listener_address).to_http(None)?;
 
@@ -96,9 +93,12 @@ pub fn start_proxy(
             })
         };
 
-        add_backend((component_backend, ports.component_service_port))?;
-        add_backend((worker_backend, ports.worker_service_port))?;
-        add_backend((health_backend, ports.healthcheck_port))?;
+        add_backend((health_backend, healthcheck_port))?;
+        add_backend((
+            component_backend,
+            all_run_details.component_service.http_port,
+        ))?;
+        add_backend((worker_backend, all_run_details.worker_service.http_port))?;
     }
 
     // set up routing
@@ -110,7 +110,7 @@ pub fn start_proxy(
                 id: format!("add-golem-frontend-${route_counter}"),
                 content: RequestType::AddHttpFrontend(RequestHttpFrontend {
                     cluster_id: Some(cluster_id.to_string()),
-                    address: SocketAddress::new_v4(127, 0, 0, 1, ports.listener_port),
+                    address: SocketAddress::new_v4(127, 0, 0, 1, listener_port),
                     hostname: "*".to_string(),
                     path,
                     position: RulePosition::Post.into(),

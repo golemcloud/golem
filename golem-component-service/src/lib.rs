@@ -20,14 +20,15 @@ use golem_common::config::DbConfig;
 use golem_common::golem_version;
 use golem_service_base::db;
 use golem_service_base::migration::Migrations;
-use poem::listener::TcpListener;
+use poem::listener::Acceptor;
+use poem::listener::Listener;
 use poem::middleware::{OpenTelemetryMetrics, Tracing};
 use poem::EndpointExt;
 use poem_openapi::OpenApiService;
 use prometheus::Registry;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use tokio::task::JoinSet;
-use tracing::info;
+use tracing::{info, Instrument};
 
 pub mod api;
 pub mod config;
@@ -39,6 +40,11 @@ const VERSION: &str = golem_version!();
 
 #[cfg(test)]
 test_r::enable!();
+
+pub struct RunDetails {
+    pub http_port: u16,
+    pub grpc_port: u16,
+}
 
 #[derive(Clone)]
 pub struct ComponentService {
@@ -82,51 +88,62 @@ impl ComponentService {
         })
     }
 
-    pub async fn run(&self) -> Result<(), anyhow::Error> {
-        let mut join_set = JoinSet::new();
-        let _grpc_server = join_set.spawn({
-            let self_ = self.clone();
-            async move { self_.start_grpc_server().await }
-        });
-        let _http_server = join_set.spawn({
-            let self_ = self.clone();
-            async move { self_.start_http_server().await }
-        });
-
-        while let Some(res) = join_set.join_next().await {
-            let result = res?;
-            result?;
-        }
-
-        Ok(())
+    pub async fn run(
+        &self,
+        join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+    ) -> Result<RunDetails, anyhow::Error> {
+        let grpc_port = self.start_grpc_server(join_set).await?;
+        let http_port = self.start_http_server(join_set).await?;
+        Ok(RunDetails {
+            http_port,
+            grpc_port,
+        })
     }
 
     pub fn http_service(&self) -> OpenApiService<ApiServices, ()> {
         make_open_api_service(&self.services)
     }
 
-    pub async fn start_grpc_server(&self) -> Result<(), anyhow::Error> {
-        let grpc_services = self.services.clone();
+    pub async fn start_grpc_server(
+        &self,
+        join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+    ) -> Result<u16, anyhow::Error> {
         grpcapi::start_grpc_server(
             SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), self.config.grpc_port).into(),
-            &grpc_services,
+            self.services.clone(),
+            join_set,
         )
         .await
         .map_err(|err| anyhow!(err).context("gRPC server failed"))
     }
 
-    async fn start_http_server(&self) -> Result<(), anyhow::Error> {
+    async fn start_http_server(
+        &self,
+        join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+    ) -> Result<u16, anyhow::Error> {
         let prometheus_registry = self.prometheus_registry.clone();
         let app = api::combined_routes(prometheus_registry, &self.services)
             .with(OpenTelemetryMetrics::new())
             .with(Tracing);
 
-        poem::Server::new(TcpListener::bind(format!(
-            "0.0.0.0:{}",
-            self.config.http_port
-        )))
-        .run(app)
-        .await
-        .map_err(|err| anyhow!(err).context("HTTP server failed"))
+        let poem_listener =
+            poem::listener::TcpListener::bind(format!("0.0.0.0:{}", self.config.http_port));
+        let acceptor = poem_listener.into_acceptor().await?;
+        let port = acceptor.local_addr()[0]
+            .as_socket_addr()
+            .expect("socket address")
+            .port();
+
+        join_set.spawn(
+            async move {
+                poem::Server::new_with_acceptor(acceptor)
+                    .run(app)
+                    .await
+                    .map_err(|e| e.into())
+            }
+            .in_current_span(),
+        );
+
+        Ok(port)
     }
 }

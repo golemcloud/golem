@@ -24,12 +24,16 @@ use std::path::PathBuf;
 pub enum SingleExecutableCommand {
     #[clap(name = "start", about = "Start a golem server for local development")]
     Start {
-        /// Port to listen on
-        #[clap(short, long, default_value_t = 9881)]
-        port: u16,
+        /// Port to serve the main API on
+        #[clap(long, default_value_t = 9881)]
+        router_port: u16,
+
+        /// Port to serve custom requests on
+        #[clap(long, default_value_t = 9006)]
+        custom_request_port: u16,
 
         /// Directory to store data in. Defaults to $XDG_STATE_HOME/golem
-        #[clap(short, long)]
+        #[clap(long)]
         data_dir: Option<PathBuf>,
 
         /// Clean the data directory before starting
@@ -42,7 +46,8 @@ impl<Ctx> CliCommand<Ctx> for SingleExecutableCommand {
     async fn run(self, _ctx: Ctx) -> Result<GolemResult, GolemError> {
         match self {
             SingleExecutableCommand::Start {
-                port,
+                router_port,
+                custom_request_port,
                 data_dir,
                 clean,
             } => {
@@ -51,13 +56,19 @@ impl<Ctx> CliCommand<Ctx> for SingleExecutableCommand {
 
                 let data_dir = data_dir.unwrap_or_else(|| base_directories.get_state_home());
 
-                if clean {
+                if clean && tokio::fs::metadata(&data_dir).await.is_ok() {
                     tokio::fs::remove_dir_all(&data_dir)
                         .await
                         .map_err(|e| GolemError(format!("Failed cleaning data dir: {e:#}")))?;
                 };
 
-                match launch_golem_services(&LaunchArgs { port, data_dir }).await {
+                match launch_golem_services(&LaunchArgs {
+                    router_port,
+                    custom_request_port,
+                    data_dir,
+                })
+                .await
+                {
                     Ok(_) => Ok(GolemResult::Str("".to_string())),
                     Err(e) => Err(GolemError(format!("{e:#}"))),
                 }

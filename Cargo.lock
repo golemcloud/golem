@@ -3862,6 +3862,7 @@ dependencies = [
  "test-r",
  "thiserror",
  "tokio",
+ "tokio-stream",
  "tonic",
  "tonic-health",
  "tracing",
@@ -4075,6 +4076,8 @@ dependencies = [
  "tracing-futures",
  "url",
  "uuid",
+ "warp",
+ "wasmtime",
 ]
 
 [[package]]
@@ -4091,6 +4094,7 @@ dependencies = [
  "futures",
  "golem-api-grpc",
  "golem-common",
+ "golem-service-base",
  "http 0.2.12",
  "http 1.1.0",
  "humantime-serde",
@@ -4105,6 +4109,7 @@ dependencies = [
  "test-r",
  "thiserror",
  "tokio",
+ "tokio-stream",
  "tonic",
  "tonic-health",
  "tonic-reflection",

@@ -67,6 +67,8 @@ tracing = { workspace = true }
 tracing-futures = { version = "0.2.5", features = ["futures-03"] }
 url = { workspace = true }
 uuid = { workspace = true }
+warp = { workspace = true }
+wasmtime = { workspace = true }
 
 [dev-dependencies]
 golem-test-framework = { path = "../golem-test-framework", version = "0.0.0" }

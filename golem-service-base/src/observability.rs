@@ -12,44 +12,35 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt::Display;
-use std::net::SocketAddr;
+// Copyright 2024 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use http_02::{Response, StatusCode};
 use prometheus::{Encoder, Registry, TextEncoder};
-use tokio::task::JoinHandle;
+use tokio::net::{TcpListener, ToSocketAddrs};
+use tokio::task::JoinSet;
+use tokio_stream::wrappers::TcpListenerStream;
 use tracing::{info, Instrument};
 use warp::hyper::Body;
 use warp::Filter;
 
-/// The worker executor's HTTP interface provides Prometheus metrics and a healthcheck endpoint
-pub struct HttpServerImpl {
-    handle: JoinHandle<()>,
-}
-
-impl HttpServerImpl {
-    pub fn new(
-        addr: impl Into<SocketAddr> + Display + Send + 'static,
-        registry: Registry,
-        body_message: &'static str,
-    ) -> HttpServerImpl {
-        let handle = tokio::spawn(server(addr, registry, body_message).in_current_span());
-        HttpServerImpl { handle }
-    }
-}
-
-impl Drop for HttpServerImpl {
-    fn drop(&mut self) {
-        info!("Stopping Http server...");
-        self.handle.abort();
-    }
-}
-
-async fn server(
-    addr: impl Into<SocketAddr> + Display + Send,
+pub async fn start_health_and_metrics_server(
+    addr: impl ToSocketAddrs,
     registry: Registry,
     body_message: &'static str,
-) {
+    join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+) -> Result<u16, anyhow::Error> {
     let healthcheck = warp::path!("healthcheck").map(move || {
         Response::builder()
             .status(StatusCode::OK)
@@ -57,10 +48,24 @@ async fn server(
             .unwrap()
     });
 
+    let listener = TcpListener::bind(addr).await?;
+    let local_addr = listener.local_addr()?;
+
     let metrics = warp::path!("metrics").map(move || prometheus_metrics(registry.clone()));
 
-    info!("Http server started on {addr}");
-    warp::serve(healthcheck.or(metrics)).run(addr).await;
+    join_set.spawn(
+        async move {
+            warp::serve(healthcheck.or(metrics))
+                .run_incoming(TcpListenerStream::new(listener))
+                .await;
+            Ok(())
+        }
+        .in_current_span(),
+    );
+
+    info!("Http server started on {local_addr}");
+
+    Ok(local_addr.port())
 }
 
 fn prometheus_metrics(registry: Registry) -> Response<Body> {

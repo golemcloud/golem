@@ -58,7 +58,7 @@ use golem_worker_executor_base::Bootstrap;
 
 use tokio::runtime::Handle;
 
-use tokio::task::JoinHandle;
+use tokio::task::{JoinHandle, JoinSet};
 
 use golem::api0_2_0;
 use golem_common::config::RedisConfig;
@@ -375,11 +375,19 @@ async fn run(
     golem_config: GolemConfig,
     prometheus_registry: Registry,
     runtime: Handle,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), anyhow::Error> {
     info!("Golem Worker Executor starting up...");
-    Ok(ServerBootstrap {}
-        .run(golem_config, prometheus_registry, runtime)
-        .await?)
+    let mut join_set = JoinSet::new();
+
+    ServerBootstrap {}
+        .run(golem_config, prometheus_registry, runtime, &mut join_set)
+        .await?;
+
+    while let Some(res) = join_set.join_next().await {
+        res??
+    }
+
+    Ok(())
 }
 
 struct TestWorkerCtx {

@@ -32,7 +32,7 @@ pub async fn start_healthcheck_server(
         .at("/healthcheck", get(healtcheck_endpoint))
         .at("/metrics", metrics);
 
-    let poem_listener = poem::listener::TcpListener::bind("127.0.0.1:0");
+    let poem_listener = poem::listener::TcpListener::bind("0.0.0.0:0");
     let acceptor = poem_listener.into_acceptor().await?;
     let port = acceptor.local_addr()[0]
         .as_socket_addr()

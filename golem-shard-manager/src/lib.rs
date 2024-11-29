@@ -14,7 +14,6 @@
 
 mod error;
 mod healthcheck;
-mod http_server;
 mod model;
 mod persistence;
 mod rebalancing;
@@ -22,31 +21,28 @@ mod shard_management;
 pub mod shard_manager_config;
 mod worker_executor;
 
-use std::env;
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
-use std::sync::Arc;
-
 use crate::error::ShardManagerTraceErrorKind;
 use crate::healthcheck::{get_unhealthy_pods, GrpcHealthCheck, HealthCheck};
-use crate::http_server::HttpServerImpl;
-use crate::shard_manager_config::{
-    make_config_loader, HealthCheckK8sConfig, HealthCheckMode, PersistenceConfig,
-};
+use crate::persistence::RoutingTableFileSystemPersistence;
+use crate::shard_manager_config::{HealthCheckK8sConfig, HealthCheckMode, PersistenceConfig};
 use error::ShardManagerError;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_server::{
     ShardManagerService, ShardManagerServiceServer,
 };
-
-use crate::persistence::RoutingTableFileSystemPersistence;
 use golem_common::recorded_grpc_api_request;
-use golem_common::tracing::init_tracing_with_default_env_filter;
 use model::{Pod, RoutingTable};
 use persistence::{RoutingTablePersistence, RoutingTableRedisPersistence};
-use prometheus::{default_registry, Registry};
+use prometheus::Registry;
 use shard_management::ShardManagement;
 use shard_manager_config::ShardManagerConfig;
+use std::env;
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::sync::Arc;
+use tokio::net::TcpListener;
+use tokio::task::JoinSet;
+use tokio_stream::wrappers::TcpListenerStream;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Server;
 use tonic::Response;
@@ -56,6 +52,11 @@ use worker_executor::{WorkerExecutorService, WorkerExecutorServiceDefault};
 
 #[cfg(test)]
 test_r::enable!();
+
+pub struct RunDetails {
+    pub http_port: u16,
+    pub grpc_port: u16,
+}
 
 pub struct ShardManagerServiceImpl {
     shard_management: ShardManagement,
@@ -213,25 +214,11 @@ impl ShardManagerService for ShardManagerServiceImpl {
     }
 }
 
-pub fn server_main() -> Result<(), anyhow::Error> {
-    match make_config_loader().load_or_dump_config() {
-        Some(config) => {
-            init_tracing_with_default_env_filter(&config.tracing);
-            let registry = default_registry().clone();
-
-            tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()?
-                .block_on(async_main(&config, registry))
-        }
-        None => Ok(()),
-    }
-}
-
-pub async fn async_main(
+pub async fn run(
     shard_manager_config: &ShardManagerConfig,
     registry: Registry,
-) -> Result<(), anyhow::Error> {
+    join_set: &mut JoinSet<anyhow::Result<()>>,
+) -> anyhow::Result<RunDetails> {
     let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
     health_reporter
         .set_serving::<ShardManagerServiceServer<ShardManagerServiceImpl>>()
@@ -243,10 +230,13 @@ pub async fn async_main(
 
     info!("Golem Shard Manager starting up...");
 
-    let _ = HttpServerImpl::new(
+    let http_port = golem_service_base::observability::start_health_and_metrics_server(
         SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), shard_manager_config.http_port),
         registry,
-    );
+        "shard manager is running",
+        join_set,
+    )
+    .await?;
 
     let shard_manager_config = Arc::new(shard_manager_config.clone());
 
@@ -275,16 +265,6 @@ pub async fn async_main(
         shard_manager_config.worker_executors.clone(),
     ));
 
-    let shard_manager_port_str =
-        env::var("GOLEM_SHARD_MANAGER_PORT").unwrap_or(shard_manager_config.grpc_port.to_string());
-    info!("The port read from env is {}", shard_manager_port_str);
-    let shard_manager_port = shard_manager_port_str.parse::<u16>()?;
-    let shard_manager_addr = format!("0.0.0.0:{}", shard_manager_port);
-
-    info!("Listening on port {}", shard_manager_port);
-
-    let addr = shard_manager_addr.parse()?;
-
     let health_check: Arc<dyn HealthCheck + Send + Sync> =
         match &shard_manager_config.health_check.mode {
             HealthCheckMode::Grpc(_) => Arc::new(GrpcHealthCheck::new(
@@ -305,25 +285,45 @@ pub async fn async_main(
     let shard_manager = ShardManagerServiceImpl::new(
         persistence_service,
         worker_executors,
-        shard_manager_config,
+        shard_manager_config.clone(),
         health_check,
     )
     .await?;
 
     let service = ShardManagerServiceServer::new(shard_manager);
 
-    Server::builder()
-        .add_service(reflection_service)
-        .add_service(
-            service
-                .accept_compressed(CompressionEncoding::Gzip)
-                .send_compressed(CompressionEncoding::Gzip),
-        )
-        .add_service(health_service)
-        .serve(addr)
-        .await?;
+    let shard_manager_port_str =
+        env::var("GOLEM_SHARD_MANAGER_PORT").unwrap_or(shard_manager_config.grpc_port.to_string());
+    info!("The port read from env is {}", shard_manager_port_str);
+    let configured_port = shard_manager_port_str.parse::<u16>()?;
+    let listener = TcpListener::bind(SocketAddrV4::new(
+        Ipv4Addr::new(0, 0, 0, 0),
+        configured_port,
+    ))
+    .await?;
+    let grpc_port = listener.local_addr()?.port();
 
-    info!("Server started on port {}", shard_manager_port);
+    join_set.spawn(
+        async move {
+            Server::builder()
+                .add_service(reflection_service)
+                .add_service(
+                    service
+                        .accept_compressed(CompressionEncoding::Gzip)
+                        .send_compressed(CompressionEncoding::Gzip),
+                )
+                .add_service(health_service)
+                .serve_with_incoming(TcpListenerStream::new(listener))
+                .await
+                .map_err(|e| anyhow::anyhow!(e).context("gRPC server failed"))
+        }
+        .in_current_span(),
+    );
 
-    Ok(())
+    info!("Server started on port {}", grpc_port);
+
+    Ok(RunDetails {
+        http_port,
+        grpc_port,
+    })
 }
