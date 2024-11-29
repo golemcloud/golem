@@ -194,6 +194,20 @@ impl<'a> RedisLabelledApi<'a> {
         )
     }
 
+    pub async fn expire<R, K>(&self, key: K, seconds: i64) -> RedisResult<R>
+    where
+        R: FromRedis,
+        K: Into<RedisKey> + Send + AsRef<str>,
+    {
+        self.ensure_connected().await?;
+        let start = Instant::now();
+        self.record(
+            start,
+            "EXPIRE",
+            self.pool.expire(self.prefixed_key(key), seconds).await,
+        )
+    }
+
     pub async fn mget<R, K>(&self, keys: K) -> RedisResult<R>
     where
         R: FromRedis,

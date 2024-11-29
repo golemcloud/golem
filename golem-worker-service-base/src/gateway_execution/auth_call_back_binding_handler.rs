@@ -14,7 +14,7 @@
 
 use crate::gateway_binding::HttpRequestDetails;
 use crate::gateway_execution::gateway_session::{
-    DataKey, DataValue, GatewaySessionStore, SessionId,
+    DataKey, DataValue, GatewaySessionError, GatewaySessionStore, SessionId,
 };
 use crate::gateway_security::{
     IdentityProvider, IdentityProviderError, SecuritySchemeWithProviderMetadata,
@@ -54,6 +54,7 @@ pub enum AuthorisationError {
     StateNotFound,
     InvalidState,
     InvalidSession,
+    InvalidNonce,
     MissingParametersInSession,
     AccessTokenNotFound,
     InvalidToken,
@@ -63,7 +64,7 @@ pub enum AuthorisationError {
     FailedCodeExchange(IdentityProviderError),
     ClaimFetchError(IdentityProviderError),
     IdentityProviderError(IdentityProviderError),
-    SessionUpdateError(String),
+    SessionError(GatewaySessionError),
 }
 
 // Only SafeDisplay is allowed for AuthorisationError
@@ -71,6 +72,7 @@ impl SafeDisplay for AuthorisationError {
     fn to_safe_string(&self) -> String {
         match self {
             AuthorisationError::Internal(_) => "Failed authentication".to_string(),
+            AuthorisationError::InvalidNonce => "Failed authentication".to_string(),
             AuthorisationError::CodeNotFound => "The authorisation code is missing.".to_string(),
             AuthorisationError::InvalidCode => "The authorisation code is invalid.".to_string(),
             AuthorisationError::StateNotFound => {
@@ -107,9 +109,9 @@ impl SafeDisplay for AuthorisationError {
             AuthorisationError::NonceNotFound => {
                 "Suspicious authorisation attempt. Failed checks.".to_string()
             }
-            AuthorisationError::SessionUpdateError(err) => format!(
+            AuthorisationError::SessionError(err) => format!(
                 "An error occurred while updating the session. Error details: {}",
-                err
+                err.to_safe_string()
             ),
         }
     }
@@ -146,18 +148,13 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
         let authorisation_code = code.ok_or(AuthorisationError::CodeNotFound)?;
         let state = state.ok_or(AuthorisationError::StateNotFound)?;
 
-        let session_params = session_store
-            .get_params(&SessionId(state.clone()))
+        let target_path = session_store
+            .get(
+                &SessionId(state.clone()),
+                &DataKey("redirect_url".to_string()),
+            )
             .await
-            .map_err(|_| AuthorisationError::MissingParametersInSession)?
-            .ok_or(AuthorisationError::InvalidSession)?;
-
-        let target_path = session_params
-            .get(&DataKey("redirect_url".to_string()))
-            .ok_or(AuthorisationError::Internal(
-                "Failed to obtain redirect url of protected resource from session store"
-                    .to_string(),
-            ))?
+            .map_err(AuthorisationError::SessionError)?
             .as_string()
             .ok_or(AuthorisationError::Internal(
                 "Invalid redirect url (target url of the protected resource)".to_string(),
@@ -183,7 +180,7 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
                 DataValue(serde_json::Value::String(access_token.clone())),
             )
             .await
-            .map_err(|err| AuthorisationError::SessionUpdateError(err.to_string()))?;
+            .map_err(AuthorisationError::SessionError)?;
 
         if let Some(id_token) = &id_token {
             // id token in session store
@@ -194,7 +191,7 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
                     DataValue(serde_json::Value::String(id_token.to_string())),
                 )
                 .await
-                .map_err(|err| AuthorisationError::SessionUpdateError(err.to_string()))?;
+                .map_err(AuthorisationError::SessionError)?;
         }
 
         Ok(AuthorisationSuccess {

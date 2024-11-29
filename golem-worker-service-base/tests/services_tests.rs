@@ -45,6 +45,9 @@ use golem_worker_service_base::api;
 use golem_worker_service_base::gateway_api_deployment::{
     ApiDeploymentRequest, ApiSite, ApiSiteString,
 };
+use golem_worker_service_base::gateway_execution::gateway_session::{
+    DataKey, DataValue, GatewaySession, GatewaySessionError, SessionId,
+};
 use golem_worker_service_base::gateway_security::{
     AuthorizationUrl, DefaultIdentityProvider, GolemIdentityProviderMetadata, IdentityProvider,
     IdentityProviderError, OpenIdClient, Provider, SecurityScheme, SecuritySchemeIdentifier,
@@ -882,6 +885,31 @@ fn contains_definitions(
     }
 
     true
+}
+
+// This should be unused
+pub struct TestSessionStore;
+
+#[async_trait]
+impl GatewaySession for TestSessionStore {
+    async fn insert(
+        &self,
+        _session_id: SessionId,
+        _data_key: DataKey,
+        _data_value: DataValue,
+    ) -> Result<(), GatewaySessionError> {
+        Ok(())
+    }
+
+    async fn get(
+        &self,
+        _session_id: &SessionId,
+        _data_key: &DataKey,
+    ) -> Result<DataValue, GatewaySessionError> {
+        Err(GatewaySessionError::InternalError(
+            "Backend unimplemented".to_string(),
+        ))
+    }
 }
 
 #[derive(Clone)]
