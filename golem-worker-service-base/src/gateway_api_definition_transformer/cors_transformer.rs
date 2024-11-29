@@ -13,25 +13,13 @@
 // limitations under the License.
 
 use crate::gateway_api_definition::http::HttpApiDefinition;
-use crate::gateway_api_definition_transformer::{
-    ApiDefTransformationError, ApiDefinitionTransformer,
-};
+use crate::gateway_api_definition_transformer::ApiDefTransformationError;
 
-// If CORS preflight route is set for a resource, then
-// update all the routes under the the same resource with a cors::add_cors_headers
-// middleware
-// The transformation has to be idempotent
-pub struct CorsTransformer;
-
-impl ApiDefinitionTransformer for CorsTransformer {
-    fn transform(
-        &self,
-        api_definition: &mut HttpApiDefinition,
-    ) -> Result<(), ApiDefTransformationError> {
-        internal::update_routes_with_cors_middleware(&mut api_definition.routes)
-    }
+pub fn cors_transform(
+    api_definition: &mut HttpApiDefinition,
+) -> Result<(), ApiDefTransformationError> {
+    internal::update_routes_with_cors_middleware(&mut api_definition.routes)
 }
-
 mod internal {
     use crate::gateway_api_definition::http::{AllPathPatterns, MethodPattern, Route};
     use crate::gateway_api_definition_transformer::ApiDefTransformationError;
@@ -120,9 +108,8 @@ mod tests {
         AllPathPatterns, HttpApiDefinition, MethodPattern, Route,
     };
     use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
-    use crate::gateway_api_definition_transformer::{
-        ApiDefTransformationError, ApiDefinitionTransformer, CorsTransformer,
-    };
+    use crate::gateway_api_definition_transformer::cors_transformer::cors_transform;
+    use crate::gateway_api_definition_transformer::ApiDefTransformationError;
     use crate::gateway_binding::{GatewayBinding, ResponseMapping, StaticBinding, WorkerBinding};
     use crate::gateway_middleware::{HttpCors, HttpMiddleware, HttpMiddlewares};
     use golem_common::model::ComponentId;
@@ -218,8 +205,7 @@ mod tests {
             created_at: chrono::Utc::now(),
         };
 
-        let cors_transformer = CorsTransformer;
-        cors_transformer.transform(&mut api_definition).unwrap();
+        cors_transform(&mut api_definition).unwrap();
 
         let updated_route_with_worker_binding = api_definition
             .routes
@@ -253,14 +239,10 @@ mod tests {
             created_at: chrono::Utc::now(),
         };
 
-        let transformer = CorsTransformer;
-
-        let result = transformer
-            .transform(&mut api_definition)
-            .map_err(|x| match x {
-                ApiDefTransformationError::InvalidRoute { detail, .. } => detail,
-                ApiDefTransformationError::Custom(custom) => custom.to_string(),
-            });
+        let result = cors_transform(&mut api_definition).map_err(|x| match x {
+            ApiDefTransformationError::InvalidRoute { detail, .. } => detail,
+            ApiDefTransformationError::Custom(custom) => custom.to_string(),
+        });
 
         assert_eq!(result.err(), Some("Invalid binding for resource '/test' with method 'Get'. CORS binding is only supported for the OPTIONS method.".to_string()));
     }
@@ -289,9 +271,7 @@ mod tests {
 
         let expected = api_definition.clone();
 
-        let cors_transformer = CorsTransformer;
-
-        let _ = cors_transformer.transform(&mut api_definition);
+        let _ = cors_transform(&mut api_definition);
 
         assert_eq!(api_definition, expected);
     }

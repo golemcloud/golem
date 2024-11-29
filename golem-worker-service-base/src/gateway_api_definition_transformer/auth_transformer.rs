@@ -13,60 +13,52 @@
 // limitations under the License.
 
 use crate::gateway_api_definition::http::HttpApiDefinition;
-use crate::gateway_api_definition_transformer::{
-    ApiDefTransformationError, ApiDefinitionTransformer,
-};
+use crate::gateway_api_definition_transformer::ApiDefTransformationError;
 use std::collections::HashMap;
 
 // Auth transformer ensures that for all security schemes
 // configured in different parts of the ApiDefinition, there
 // exist a auth call back endpoint. We are not letting the users
 // define this to have a reasonable DX.
-pub struct AuthTransformer;
+pub fn auth_transform(
+    api_definition: &mut HttpApiDefinition,
+) -> Result<(), ApiDefTransformationError> {
+    let mut distinct_auth_middlewares = HashMap::new();
 
-impl ApiDefinitionTransformer for AuthTransformer {
-    fn transform(
-        &self,
-        api_definition: &mut HttpApiDefinition,
-    ) -> Result<(), ApiDefTransformationError> {
-        let mut distinct_auth_middlewares = HashMap::new();
+    for i in api_definition.routes.iter() {
+        let middlewares = &i.middlewares;
+        let auth_middleware = middlewares
+            .clone()
+            .and_then(|x| x.get_http_authentication_middleware());
 
-        for i in api_definition.routes.iter() {
-            let middlewares = &i.middlewares;
-            let auth_middleware = middlewares
-                .clone()
-                .and_then(|x| x.get_http_authentication_middleware());
-
-            if let Some(auth_middleware) = auth_middleware {
-                distinct_auth_middlewares.insert(
-                    auth_middleware
-                        .security_scheme
-                        .security_scheme
-                        .scheme_identifier(),
-                    auth_middleware.security_scheme,
-                );
-            }
+        if let Some(auth_middleware) = auth_middleware {
+            distinct_auth_middlewares.insert(
+                auth_middleware
+                    .security_scheme
+                    .security_scheme
+                    .scheme_identifier(),
+                auth_middleware.security_scheme,
+            );
         }
-
-        let auth_call_back_routes = internal::get_auth_call_back_routes(distinct_auth_middlewares)
-            .map_err(ApiDefTransformationError::Custom)?;
-
-        let routes = &mut api_definition.routes;
-
-        // Add if doesn't exist
-        for r in auth_call_back_routes.iter() {
-            if !routes
-                .iter()
-                .any(|x| (x.path == r.path) && (x.method == r.method))
-            {
-                routes.push(r.clone())
-            }
-        }
-
-        Ok(())
     }
-}
 
+    let auth_call_back_routes = internal::get_auth_call_back_routes(distinct_auth_middlewares)
+        .map_err(ApiDefTransformationError::Custom)?;
+
+    let routes = &mut api_definition.routes;
+
+    // Add if doesn't exist
+    for r in auth_call_back_routes.iter() {
+        if !routes
+            .iter()
+            .any(|x| (x.path == r.path) && (x.method == r.method))
+        {
+            routes.push(r.clone())
+        }
+    }
+
+    Ok(())
+}
 mod internal {
     use crate::gateway_api_definition::http::{AllPathPatterns, MethodPattern, Route};
     use crate::gateway_binding::{GatewayBinding, StaticBinding};

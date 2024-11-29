@@ -12,16 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::gateway_api_definition::http::{HttpApiDefinition, MethodPattern};
+use crate::gateway_api_definition::http::{MethodPattern};
 use std::fmt::{Display, Formatter};
-
-// Any pre-processing required for ApiDefinition
-pub trait ApiDefinitionTransformer {
-    fn transform(
-        &self,
-        api_definition: &mut HttpApiDefinition,
-    ) -> Result<(), ApiDefTransformationError>;
-}
 
 #[derive(Debug)]
 pub enum ApiDefTransformationError {
