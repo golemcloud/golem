@@ -26,6 +26,7 @@ use bytes::Bytes;
 use futures::TryStreamExt;
 use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component::v1::component_error;
+use golem_common::config::RetryConfig;
 use golem_common::model::component::ComponentOwner;
 use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_common::model::component_metadata::{ComponentMetadata, ComponentProcessingError};
@@ -39,6 +40,7 @@ use golem_common::model::{
     ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentType, InitialComponentFile,
     InitialComponentFileKey,
 };
+use golem_common::retries::with_retries;
 use golem_common::SafeDisplay;
 use golem_service_base::model::{ComponentName, VersionedComponentId};
 use golem_service_base::repo::plugin_installation::PluginInstallationRecord;
@@ -46,6 +48,7 @@ use golem_service_base::repo::RepoError;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::storage::blob::ReplayableStream;
 use golem_wasm_ast::analysis::AnalysedType;
+use http::StatusCode;
 use reqwest::multipart::{Form, Part};
 use rib::{FunctionTypeRegistry, RegistryKey, RegistryValue};
 use std::collections::{HashMap, HashSet};
@@ -100,7 +103,7 @@ pub enum ComponentError {
     #[error(transparent)]
     InternalPluginError(#[from] Box<PluginError>),
     #[error("Component transformation failed: {0}")]
-    TransformationFailed(String),
+    TransformationFailed(TransformationFailedReason),
 }
 
 impl ComponentError {
@@ -258,6 +261,29 @@ impl From<ComponentError> for golem_api_grpc::proto::golem::component::v1::Compo
             }
         };
         Self { error: Some(error) }
+    }
+}
+
+#[derive(Debug)]
+pub enum TransformationFailedReason {
+    Failure(String),
+    Request(reqwest::Error),
+    HttpStatus(StatusCode),
+}
+
+impl Display for TransformationFailedReason {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TransformationFailedReason::Failure(message) => write!(f, "{message}"),
+            TransformationFailedReason::Request(error) => write!(f, "Request error: {error}"),
+            TransformationFailedReason::HttpStatus(status) => write!(f, "HTTP status: {status}"),
+        }
+    }
+}
+
+impl SafeDisplay for TransformationFailedReason {
+    fn to_safe_string(&self) -> String {
+        self.to_string()
     }
 }
 
@@ -830,60 +856,93 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
     ) -> Result<Vec<u8>, ComponentError> {
         info!(%url, "Applying component transformation plugin");
 
-        // TODO: retries
-
-        let client = reqwest::Client::new(); // TODO: connection pool
+        // NOTE: the client could be cached per target url to keep connection pools open for component
+        //       transformer plugins, however this is not done yet as component update is not that frequent
+        let client = reqwest::Client::new();
         let serializable_component: golem_service_base::model::Component = component.clone().into();
+        let response = with_retries(
+            "component_transformer_plugin",
+            "transform",
+            None,
+            &RetryConfig::default(), // TODO
+            &(client, serializable_component, url, data, parameters),
+            |(client, serializable_component, url, data, parameters)| {
+                Box::pin(async move {
+                    let mut form = Form::new();
+                    form = form.part("component", Part::bytes(data.to_vec()));
+                    form = form.part(
+                        "metadata",
+                        Part::text(serde_json::to_string(&serializable_component).map_err(
+                            |err| {
+                                ComponentError::conversion_error(
+                                    "component metadata",
+                                    err.to_string(),
+                                )
+                            },
+                        )?)
+                        .mime_str("application/json")
+                        .unwrap(),
+                    );
+                    for (key, value) in *parameters {
+                        if key == "component" {
+                            return Err(ComponentError::TransformationFailed(
+                                TransformationFailedReason::Failure(
+                                    "Parameter key 'component' is reserved".to_string(),
+                                ),
+                            ));
+                        }
+                        if key == "metadata" {
+                            return Err(ComponentError::TransformationFailed(
+                                TransformationFailedReason::Failure(
+                                    "Parameter key 'metadata' is reserved".to_string(),
+                                ),
+                            ));
+                        }
+                        form = form.part(key.clone(), Part::text(value.clone()));
+                    }
 
-        let mut form = Form::new();
-        form = form.part("component", Part::bytes(data.to_vec()));
-        form = form.part(
-            "metadata",
-            Part::text(
-                serde_json::to_string(&serializable_component).map_err(|err| {
-                    ComponentError::conversion_error("component metadata", err.to_string())
-                })?,
-            )
-            .mime_str("application/json")
-            .unwrap(),
-        );
-        for (key, value) in parameters {
-            if key == "component" {
-                return Err(ComponentError::TransformationFailed(
-                    "Parameter key 'component' is reserved".to_string(),
-                ));
-            }
-            if key == "metadata" {
-                return Err(ComponentError::TransformationFailed(
-                    "Parameter key 'metadata' is reserved".to_string(),
-                ));
-            }
-            form = form.part(key.clone(), Part::text(value.clone()));
-        }
+                    let request = client.post(url).multipart(form);
 
-        let request = client.post(url).multipart(form);
+                    let response = request.send().await.map_err(|err| {
+                        ComponentError::TransformationFailed(TransformationFailedReason::Request(
+                            err,
+                        ))
+                    })?;
 
-        let response = request.send().await.map_err(|err| {
-            ComponentError::TransformationFailed(format!(
-                "Failed to send request to transformation plugin: {}",
-                err
-            ))
-        })?;
+                    if response.status().is_server_error() {
+                        return Err(ComponentError::TransformationFailed(
+                            TransformationFailedReason::HttpStatus(response.status()),
+                        ));
+                    }
+
+                    Ok(response)
+                })
+            },
+            |err| match err {
+                ComponentError::TransformationFailed(TransformationFailedReason::HttpStatus(_)) => {
+                    true
+                }
+                ComponentError::TransformationFailed(TransformationFailedReason::Request(_)) => {
+                    true
+                }
+                _ => false,
+            },
+        )
+        .await?;
 
         if response.status().is_success() {
             let body = response.bytes().await.map_err(|err| {
-                ComponentError::TransformationFailed(format!(
+                ComponentError::TransformationFailed(TransformationFailedReason::Failure(format!(
                     "Failed to read response from transformation plugin: {}",
                     err
-                ))
+                )))
             })?;
 
             Ok(body.to_vec())
         } else {
-            Err(ComponentError::TransformationFailed(format!(
-                "Component transformation returned with status {}",
-                response.status()
-            )))
+            Err(ComponentError::TransformationFailed(
+                TransformationFailedReason::HttpStatus(response.status()),
+            ))
         }
     }
 
