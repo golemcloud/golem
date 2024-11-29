@@ -285,12 +285,11 @@ mod test {
     use golem_wasm_rpc::protobuf::Type;
     use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, TypedRecord};
     use std::sync::Arc;
+    use async_trait::async_trait;
     use test_r::test;
 
     use crate::gateway_binding::HttpRequestDetails;
-    use crate::gateway_execution::gateway_session::{
-        EvictionStrategy, GatewaySession, GatewaySessionWithInMemoryCache,
-    };
+    use crate::gateway_execution::gateway_session::{DataKey, DataValue, GatewaySession, GatewaySessionError, SessionId};
     use crate::gateway_execution::to_response::ToHttpResponse;
     use http::header::CONTENT_TYPE;
     use http::StatusCode;
@@ -341,7 +340,7 @@ mod test {
         let evaluation_result: RibResult = RibResult::Val(record);
 
         let session_store: Arc<dyn GatewaySession + Send + Sync> = Arc::new(
-            GatewaySessionWithInMemoryCache::new(&EvictionStrategy::default()),
+            TestSessionStore,
         );
 
         let http_response: poem::Response = evaluation_result
@@ -372,7 +371,7 @@ mod test {
             RibResult::Val(TypeAnnotatedValue::Str("Healthy".to_string()));
 
         let session_store: Arc<dyn GatewaySession + Send + Sync> = Arc::new(
-            GatewaySessionWithInMemoryCache::new(&EvictionStrategy::default()),
+            TestSessionStore,
         );
 
         let http_response: poem::Response = evaluation_result
@@ -396,5 +395,18 @@ mod test {
         assert_eq!(body, expected_body);
         assert_eq!(headers.clone(), expected_headers);
         assert_eq!(status, expected_status);
+    }
+
+    struct TestSessionStore;
+
+    #[async_trait]
+    impl GatewaySession for TestSessionStore {
+        async fn insert(&self, _session_id: SessionId, _data_key: DataKey, _data_value: DataValue) -> Result<(), GatewaySessionError> {
+            Err(GatewaySessionError::InternalError("unimplemented".to_string()))
+        }
+
+        async fn get(&self, _session_id: &SessionId, _data_key: &DataKey) -> Result<DataValue, GatewaySessionError> {
+            Err(GatewaySessionError::InternalError("unimplemented".to_string()))
+        }
     }
 }

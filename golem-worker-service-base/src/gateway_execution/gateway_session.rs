@@ -106,14 +106,6 @@ pub struct SessionData {
     pub value: HashMap<DataKey, DataValue>,
 }
 
-impl Default for SessionData {
-    fn default() -> Self {
-        SessionData {
-            value: HashMap::new(),
-        }
-    }
-}
-
 pub struct RedisGatewaySession {
     redis: RedisPool,
     expire: i64,
@@ -179,7 +171,7 @@ impl GatewaySession for RedisGatewaySession {
 }
 
 pub struct GatewaySessionWithInMemoryCache<A> {
-    inner: A,
+    backend: A,
     cache: Cache<(SessionId, DataKey), (), DataValue, GatewaySessionError>,
 }
 
@@ -199,7 +191,7 @@ impl<A> GatewaySessionWithInMemoryCache<A> {
             "gateway_session_in_memory",
         );
 
-        Self { inner, cache }
+        Self { backend: inner, cache }
     }
 }
 
@@ -213,7 +205,7 @@ impl<A: GatewaySession + Sync + Clone + Send + 'static> GatewaySession
         data_key: DataKey,
         data_value: DataValue,
     ) -> Result<(), GatewaySessionError> {
-        self.inner.insert(session_id, data_key, data_value).await?;
+        self.backend.insert(session_id, data_key, data_value).await?;
         Ok(())
     }
 
@@ -224,7 +216,7 @@ impl<A: GatewaySession + Sync + Clone + Send + 'static> GatewaySession
     ) -> Result<DataValue, GatewaySessionError> {
         self.cache
             .get_or_insert_simple(&(session_id.clone(), data_key.clone()), || {
-                let inner = self.inner.clone();
+                let inner = self.backend.clone();
                 let session_id = session_id.clone();
                 let data_key = data_key.clone();
 

@@ -70,6 +70,7 @@ use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, ImageExt};
 use testcontainers_modules::postgres::Postgres;
 use uuid::Uuid;
+use golem_worker_service_base::gateway_execution::gateway_session::{DataKey, DataValue, GatewaySession, GatewaySessionError, SessionId};
 
 test_r::enable!();
 
@@ -882,6 +883,34 @@ fn contains_definitions(
     }
 
     true
+}
+
+// This should be unused
+pub struct TestSessionStore;
+
+#[async_trait]
+impl GatewaySession for TestSessionStore {
+    async fn insert(
+        &self,
+        _session_id: SessionId,
+        _data_key: DataKey,
+        _data_value: DataValue,
+    ) -> Result<(), GatewaySessionError> {
+
+        Ok(())
+    }
+
+    async fn get(
+        &self,
+        _session_id: &SessionId,
+        _data_key: &DataKey,
+    ) -> Result<DataValue, GatewaySessionError> {
+        Err(GatewaySessionError::InternalError("Backend unimplemented".to_string()))
+    }
+}
+
+fn get_session_store () -> Arc<dyn GatewaySession + Send + Sync> {
+    Arc::new(TestSessionStore)
 }
 
 #[derive(Clone)]

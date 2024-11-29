@@ -1582,6 +1582,7 @@ mod internal {
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
+    use golem_wasm_ast::core::Mut;
 
     pub struct TestApiGatewayWorkerRequestExecutor {}
 
@@ -1924,27 +1925,29 @@ mod internal {
     }
 
     // This redirection is to offload eviction policy testing to the inbuilt cache
-    // mechanism of golem
+    // mechanism of golem, and doesn't test the eviction policy itself
+    #[derive(Debug, Clone)]
     pub struct TestSessionBackEnd<'a> {
-        pub inner: &'a mut HashMap<(SessionId, DataKey), DataValue>,
+        pub inner: Arc<Mutex<HashMap<(SessionId, DataKey), DataValue>>>,
     }
 
-    impl TestSessionBackEnd {
+    impl<'a> TestSessionBackEnd<'a> {
         pub fn new() -> Self {
             TestSessionBackEnd {
-                inner: &mut HashMap::new(),
+                inner: Arc::new(Mutex::new(HashMap::new()))
             }
         }
     }
     #[async_trait]
-    impl GatewaySession for TestSessionBackEnd {
+    impl<'a> GatewaySession for TestSessionBackEnd<'a> {
         async fn insert(
             &self,
             session_id: SessionId,
             data_key: DataKey,
             data_value: DataValue,
         ) -> Result<(), GatewaySessionError> {
-            self.inner.insert((session_id, data_key), data_value);
+            let mut data = self.inner.lock().await;
+            data.((session_id, data_key), data_value);
             Ok(())
         }
 

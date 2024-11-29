@@ -154,7 +154,7 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
                 &DataKey("redirect_url".to_string()),
             )
             .await
-            .map_err(|err| AuthorisationError::SessionError(err))?
+            .map_err(AuthorisationError::SessionError)?
             .as_string()
             .ok_or(AuthorisationError::Internal(
                 "Invalid redirect url (target url of the protected resource)".to_string(),
@@ -180,7 +180,7 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
                 DataValue(serde_json::Value::String(access_token.clone())),
             )
             .await
-            .map_err(|err| AuthorisationError::SessionError(err))?;
+            .map_err(AuthorisationError::SessionError)?;
 
         if let Some(id_token) = &id_token {
             // id token in session store
@@ -191,7 +191,7 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
                     DataValue(serde_json::Value::String(id_token.to_string())),
                 )
                 .await
-                .map_err(|err| AuthorisationError::SessionError(err))?;
+                .map_err(AuthorisationError::SessionError)?;
         }
 
         Ok(AuthorisationSuccess {
