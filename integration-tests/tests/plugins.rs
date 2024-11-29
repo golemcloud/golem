@@ -17,7 +17,7 @@ use axum::body::Bytes;
 use axum::extract::Multipart;
 use axum::routing::post;
 use axum::Router;
-use golem_api_grpc::proto::golem::worker::{log_event, Log, LogEvent};
+use golem_api_grpc::proto::golem::worker::{log_event, Log};
 use golem_common::model::plugin::{
     ComponentTransformerDefinition, DefaultPluginOwner, DefaultPluginScope, PluginDefinition,
     PluginTypeSpecificDefinition,

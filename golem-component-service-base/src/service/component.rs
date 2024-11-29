@@ -918,14 +918,14 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
                     Ok(response)
                 })
             },
-            |err| match err {
-                ComponentError::TransformationFailed(TransformationFailedReason::HttpStatus(_)) => {
-                    true
-                }
-                ComponentError::TransformationFailed(TransformationFailedReason::Request(_)) => {
-                    true
-                }
-                _ => false,
+            |err| {
+                matches!(
+                    err,
+                    ComponentError::TransformationFailed(TransformationFailedReason::HttpStatus(_))
+                        | ComponentError::TransformationFailed(
+                            TransformationFailedReason::Request(_)
+                        )
+                )
             },
         )
         .await?;

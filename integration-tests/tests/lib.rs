@@ -20,8 +20,8 @@ use test_r::test_dep;
 
 test_r::enable!();
 
-mod worker;
 mod plugins;
+mod worker;
 
 #[derive(Debug)]
 pub struct Tracing;

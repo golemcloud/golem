@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::component_service::{new_client, new_plugins_client, wait_for_startup, ComponentService, ComponentServiceEnvVars};
+use crate::components::component_service::{
+    new_client, new_plugins_client, wait_for_startup, ComponentService, ComponentServiceEnvVars,
+};
 use crate::components::k8s::{
     K8sNamespace, K8sPod, K8sRouting, K8sRoutingType, K8sService, ManagedPod, ManagedService,
     Routing,
@@ -22,6 +24,7 @@ use crate::components::GolemEnvVars;
 use async_dropper_simple::AsyncDropper;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
+use golem_api_grpc::proto::golem::component::v1::plugin_service_client::PluginServiceClient;
 use k8s_openapi::api::core::v1::{Pod, Service};
 use kube::api::PostParams;
 use kube::{Api, Client};
@@ -31,7 +34,6 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use tonic::transport::Channel;
 use tracing::{info, Level};
-use golem_api_grpc::proto::golem::component::v1::plugin_service_client::PluginServiceClient;
 
 pub struct K8sComponentService {
     namespace: K8sNamespace,

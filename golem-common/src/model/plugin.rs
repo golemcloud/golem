@@ -280,7 +280,7 @@ impl PluginOwner for DefaultPluginOwner {
 #[derive(Debug, Clone, PartialEq, Serialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
-pub struct  PluginDefinition<Owner: PluginOwner, Scope: PluginScope> {
+pub struct PluginDefinition<Owner: PluginOwner, Scope: PluginScope> {
     pub name: String,
     pub version: String,
     pub description: String,
