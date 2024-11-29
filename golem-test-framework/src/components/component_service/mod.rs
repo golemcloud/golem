@@ -12,22 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use anyhow::anyhow;
+use async_trait::async_trait;
+use create_component_request::Data;
+use golem_api_grpc::proto::golem::component::v1::{
+    component_error, create_component_request, create_component_response, create_plugin_response,
+    get_component_metadata_response, get_components_response, install_plugin_response,
+    update_component_request, update_component_response, CreateComponentRequest,
+    CreateComponentRequestChunk, CreateComponentRequestHeader, CreatePluginRequest,
+    GetComponentsRequest, GetLatestComponentRequest, UpdateComponentRequest,
+    UpdateComponentRequestChunk, UpdateComponentRequestHeader,
+};
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-
-use async_trait::async_trait;
-use create_component_request::Data;
-use golem_api_grpc::proto::golem::component::v1::{
-    component_error, create_component_request, create_component_response,
-    get_component_metadata_response, get_components_response, update_component_request,
-    update_component_response, CreateComponentRequest, CreateComponentRequestChunk,
-    CreateComponentRequestHeader, GetComponentsRequest, GetLatestComponentRequest,
-    UpdateComponentRequest, UpdateComponentRequestChunk, UpdateComponentRequestHeader,
-};
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 use tokio::time::sleep;
@@ -35,11 +36,12 @@ use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tracing::{debug, info, Level};
 
-use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
-use golem_common::model::{ComponentId, ComponentType, InitialComponentFile};
-
 use crate::components::rdb::Rdb;
 use crate::components::{wait_for_startup_grpc, EnvVarBuilder, GolemEnvVars};
+use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
+use golem_api_grpc::proto::golem::component::v1::plugin_service_client::PluginServiceClient;
+use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope, PluginDefinition};
+use golem_common::model::{ComponentId, ComponentType, InitialComponentFile, PluginInstallationId};
 
 pub mod docker;
 pub mod filesystem;
@@ -50,6 +52,7 @@ pub mod spawned;
 #[async_trait]
 pub trait ComponentService {
     async fn client(&self) -> ComponentServiceClient<Channel>;
+    async fn plugins_client(&self) -> PluginServiceClient<Channel>;
 
     async fn get_or_add_component(
         &self,
@@ -367,6 +370,69 @@ pub trait ComponentService {
         }
     }
 
+    async fn create_plugin(
+        &self,
+        definition: PluginDefinition<DefaultPluginOwner, DefaultPluginScope>,
+    ) -> crate::Result<()> {
+        let mut client = self.plugins_client().await;
+        let response = client
+            .create_plugin(CreatePluginRequest {
+                plugin: Some(definition.into()),
+            })
+            .await?
+            .into_inner();
+        match response.result {
+            None => Err(anyhow!(
+                "Missing response from golem-component-service for create-plugin"
+            )),
+            Some(create_plugin_response::Result::Success(_)) => Ok(()),
+            Some(create_plugin_response::Result::Error(error)) => Err(anyhow!(
+                "Failed to create plugin in golem-component-service: {error:?}"
+            )),
+        }
+    }
+
+    async fn install_plugin_to_component(
+        &self,
+        component_id: &ComponentId,
+        plugin_name: &str,
+        plugin_version: &str,
+        priority: i32,
+        parameters: HashMap<String, String>,
+    ) -> crate::Result<PluginInstallationId> {
+        let mut client = self.client().await;
+        let response = client
+            .install_plugin(
+                golem_api_grpc::proto::golem::component::v1::InstallPluginRequest {
+                    component_id: Some(component_id.clone().into()),
+                    name: plugin_name.to_string(),
+                    version: plugin_version.to_string(),
+                    priority,
+                    parameters,
+                },
+            )
+            .await?
+            .into_inner();
+
+        match response.result {
+            None => Err(anyhow!(
+                "Missing response from golem-component-service for install-plugin"
+            )),
+            Some(install_plugin_response::Result::Success(result)) => Ok(result
+                .installation
+                .ok_or(anyhow!("Missing plugin_installation field"))?
+                .id
+                .ok_or(anyhow!("Missing plugin_installation_id field"))?
+                .try_into()
+                .map_err(|error| {
+                    anyhow!("plugin_installation_id has unexpected format: {error}")
+                })?),
+            Some(install_plugin_response::Result::Error(error)) => Err(anyhow!(
+                "Failed to install plugin in golem-component-service: {error:?}"
+            )),
+        }
+    }
+
     fn private_host(&self) -> String;
     fn private_http_port(&self) -> u16;
     fn private_grpc_port(&self) -> u16;
@@ -390,6 +456,14 @@ async fn new_client(host: &str, grpc_port: u16) -> ComponentServiceClient<Channe
     ComponentServiceClient::connect(format!("http://{host}:{grpc_port}"))
         .await
         .expect("Failed to connect to golem-component-service")
+        .send_compressed(CompressionEncoding::Gzip)
+        .accept_compressed(CompressionEncoding::Gzip)
+}
+
+async fn new_plugins_client(host: &str, grpc_port: u16) -> PluginServiceClient<Channel> {
+    PluginServiceClient::connect(format!("http://{host}:{grpc_port}"))
+        .await
+        .expect("Failed to connect to golem-component-service (plugins)")
         .send_compressed(CompressionEncoding::Gzip)
         .accept_compressed(CompressionEncoding::Gzip)
 }

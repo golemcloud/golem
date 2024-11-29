@@ -12,9 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::component_service::{
-    new_client, wait_for_startup, ComponentService, ComponentServiceEnvVars,
-};
+use crate::components::component_service::{new_client, new_plugins_client, wait_for_startup, ComponentService, ComponentServiceEnvVars};
 use crate::components::k8s::{
     K8sNamespace, K8sPod, K8sRouting, K8sRoutingType, K8sService, ManagedPod, ManagedService,
     Routing,
@@ -33,6 +31,7 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use tonic::transport::Channel;
 use tracing::{info, Level};
+use golem_api_grpc::proto::golem::component::v1::plugin_service_client::PluginServiceClient;
 
 pub struct K8sComponentService {
     namespace: K8sNamespace,
@@ -42,6 +41,7 @@ pub struct K8sComponentService {
     service: Arc<Mutex<Option<K8sService>>>,
     routing: Arc<Mutex<Option<K8sRouting>>>,
     client: Option<ComponentServiceClient<Channel>>,
+    plugins_client: Option<PluginServiceClient<Channel>>,
 }
 
 impl K8sComponentService {
@@ -207,6 +207,11 @@ impl K8sComponentService {
             } else {
                 None
             },
+            plugins_client: if shared_client {
+                Some(new_plugins_client(&local_host, local_port).await)
+            } else {
+                None
+            },
         }
     }
 }
@@ -217,6 +222,13 @@ impl ComponentService for K8sComponentService {
         match &self.client {
             Some(client) => client.clone(),
             None => new_client(&self.local_host, self.local_port).await,
+        }
+    }
+
+    async fn plugins_client(&self) -> PluginServiceClient<Channel> {
+        match &self.plugins_client {
+            Some(client) => client.clone(),
+            None => new_plugins_client(&self.local_host, self.local_port).await,
         }
     }
 

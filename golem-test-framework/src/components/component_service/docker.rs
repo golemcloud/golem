@@ -24,11 +24,14 @@ use tokio::sync::Mutex;
 use tonic::transport::Channel;
 use tracing::{info, Level};
 
-use crate::components::component_service::{new_client, ComponentService, ComponentServiceEnvVars};
+use crate::components::component_service::{
+    new_client, new_plugins_client, ComponentService, ComponentServiceEnvVars,
+};
 use crate::components::docker::KillContainer;
 use crate::components::rdb::Rdb;
 use crate::components::{GolemEnvVars, NETWORK};
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
+use golem_api_grpc::proto::golem::component::v1::plugin_service_client::PluginServiceClient;
 
 pub struct DockerComponentService {
     container: Arc<Mutex<Option<ContainerAsync<GolemComponentServiceImage>>>>,
@@ -36,6 +39,7 @@ pub struct DockerComponentService {
     public_http_port: u16,
     public_grpc_port: u16,
     client: Option<ComponentServiceClient<Channel>>,
+    plugins_client: Option<PluginServiceClient<Channel>>,
 }
 
 impl DockerComponentService {
@@ -107,6 +111,11 @@ impl DockerComponentService {
             } else {
                 None
             },
+            plugins_client: if shared_client {
+                Some(new_plugins_client("localhost", public_grpc_port).await)
+            } else {
+                None
+            },
         }
     }
 }
@@ -117,6 +126,13 @@ impl ComponentService for DockerComponentService {
         match &self.client {
             Some(client) => client.clone(),
             None => new_client("localhost", self.public_grpc_port).await,
+        }
+    }
+
+    async fn plugins_client(&self) -> PluginServiceClient<Channel> {
+        match &self.plugins_client {
+            Some(client) => client.clone(),
+            None => new_plugins_client("localhost", self.public_grpc_port).await,
         }
     }
 

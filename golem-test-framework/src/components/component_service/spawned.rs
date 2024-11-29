@@ -13,13 +13,14 @@
 // limitations under the License.
 
 use crate::components::component_service::{
-    new_client, wait_for_startup, ComponentService, ComponentServiceEnvVars,
+    new_client, new_plugins_client, wait_for_startup, ComponentService, ComponentServiceEnvVars,
 };
 use crate::components::rdb::Rdb;
 use crate::components::{ChildProcessLogger, GolemEnvVars};
 use async_trait::async_trait;
 
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
+use golem_api_grpc::proto::golem::component::v1::plugin_service_client::PluginServiceClient;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -34,6 +35,7 @@ pub struct SpawnedComponentService {
     child: Arc<Mutex<Option<Child>>>,
     _logger: ChildProcessLogger,
     client: Option<ComponentServiceClient<Channel>>,
+    plugins_client: Option<PluginServiceClient<Channel>>,
 }
 
 impl SpawnedComponentService {
@@ -122,6 +124,11 @@ impl SpawnedComponentService {
             } else {
                 None
             },
+            plugins_client: if shared_client {
+                Some(new_plugins_client("localhost", grpc_port).await)
+            } else {
+                None
+            },
         }
     }
 }
@@ -132,6 +139,13 @@ impl ComponentService for SpawnedComponentService {
         match &self.client {
             Some(client) => client.clone(),
             None => new_client("localhost", self.grpc_port).await,
+        }
+    }
+
+    async fn plugins_client(&self) -> PluginServiceClient<Channel> {
+        match &self.plugins_client {
+            Some(client) => client.clone(),
+            None => new_plugins_client("localhost", self.grpc_port).await,
         }
     }
 

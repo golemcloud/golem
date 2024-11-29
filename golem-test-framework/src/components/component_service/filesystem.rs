@@ -29,6 +29,7 @@ use std::{
 use tonic::transport::Channel;
 use tracing::{debug, info};
 use uuid::Uuid;
+use golem_api_grpc::proto::golem::component::v1::plugin_service_client::PluginServiceClient;
 
 pub struct FileSystemComponentService {
     root: PathBuf,
@@ -136,6 +137,10 @@ impl FileSystemComponentService {
 #[async_trait]
 impl ComponentService for FileSystemComponentService {
     async fn client(&self) -> ComponentServiceClient<Channel> {
+        panic!("No real component service running")
+    }
+
+    async fn plugins_client(&self) -> PluginServiceClient<Channel> {
         panic!("No real component service running")
     }
 

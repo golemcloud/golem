@@ -21,6 +21,7 @@ use test_r::test_dep;
 test_r::enable!();
 
 mod worker;
+mod plugins;
 
 #[derive(Debug)]
 pub struct Tracing;
