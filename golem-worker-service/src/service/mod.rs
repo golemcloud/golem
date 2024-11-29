@@ -29,7 +29,7 @@ use golem_worker_service_base::gateway_api_definition::http::{
 };
 
 use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
-use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
+use golem_worker_service_base::app_config::{KeyValueStorageConfig, WorkerServiceBaseConfig};
 
 use golem_worker_service_base::gateway_execution::api_definition_lookup::{
     ApiDefinitionsLookup, HttpApiDefinitionLookup,
@@ -50,7 +50,11 @@ use golem_common::client::{GrpcClientConfig, MultiTargetGrpcClient};
 use golem_common::config::RetryConfig;
 
 use golem_common::config::DbConfig;
+use golem_common::redis::RedisPool;
 use golem_service_base::db;
+use golem_worker_service_base::gateway_execution::gateway_session::{
+    GatewaySession, GatewaySessionWithInMemoryCache, RedisGatewaySession,
+};
 use golem_worker_service_base::gateway_request::http_request::InputHttpRequest;
 use golem_worker_service_base::gateway_security::DefaultIdentityProvider;
 use golem_worker_service_base::repo::security_scheme::{DbSecuritySchemeRepo, SecuritySchemeRepo};
@@ -82,6 +86,7 @@ pub struct Services {
     >,
     pub worker_to_http_service:
         Arc<dyn GatewayWorkerRequestExecutor<DefaultNamespace> + Sync + Send>,
+    pub gateway_session_store: Arc<dyn GatewaySession + Sync + Send>,
     pub api_definition_validator_service:
         Arc<dyn ApiDefinitionValidatorService<HttpApiDefinition> + Sync + Send>,
     pub fileserver_binding_handler:
@@ -136,6 +141,21 @@ impl Services {
         > = Arc::new(UnauthorisedWorkerRequestExecutor::new(
             worker_service.clone(),
         ));
+
+        let gateway_session_store = match &config.gateway_session_storage {
+            KeyValueStorageConfig::Redis(redis_config) => {
+                let redis = RedisPool::configured(redis_config)
+                    .await
+                    .map_err(|e| e.to_string())?;
+
+                let gateway_session_with_redis = RedisGatewaySession::new(redis, 60 * 60);
+
+                let with_in_memory_cache =
+                    GatewaySessionWithInMemoryCache::new(gateway_session_with_redis, 60 * 60, 60);
+
+                Arc::new(with_in_memory_cache)
+            }
+        };
 
         let (api_definition_repo, api_deployment_repo, security_scheme_repo) = match config
             .db
@@ -263,6 +283,7 @@ impl Services {
             component_service,
             api_definition_validator_service,
             fileserver_binding_handler,
+            gateway_session_store,
         })
     }
 }

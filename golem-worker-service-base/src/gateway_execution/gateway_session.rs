@@ -106,6 +106,7 @@ pub struct SessionData {
     pub value: HashMap<DataKey, DataValue>,
 }
 
+#[derive(Clone)]
 pub struct RedisGatewaySession {
     redis: RedisPool,
     expire: i64,

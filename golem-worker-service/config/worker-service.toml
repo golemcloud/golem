@@ -15,6 +15,9 @@ access_token = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
 host = "localhost"
 port = 9090
 
+[key_value_storage]
+type = "Redis"
+
 [component_service.retries]
 max_attempts = 3
 max_delay = "1s"

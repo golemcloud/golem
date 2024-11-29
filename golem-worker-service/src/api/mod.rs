@@ -48,6 +48,7 @@ pub fn custom_request_route(services: Services) -> Route {
         services.worker_to_http_service,
         services.http_definition_lookup_service,
         services.fileserver_binding_handler,
+        services.gateway_session_store,
     );
 
     Route::new().nest("/", custom_request_executor)
