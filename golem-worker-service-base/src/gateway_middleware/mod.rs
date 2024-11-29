@@ -14,8 +14,6 @@
 
 use crate::gateway_execution::gateway_http_input_executor::GatewayHttpInput;
 use crate::gateway_security::SecuritySchemeWithProviderMetadata;
-pub use http::middleware_in::*;
-pub use http::middleware_out::*;
 pub use http::*;
 
 mod http;
@@ -41,7 +39,7 @@ impl HttpMiddlewares {
     pub async fn process_middleware_in<Namespace>(
         &self,
         input: &GatewayHttpInput<Namespace>,
-    ) -> Result<MiddlewareSuccess, MiddlewareInError> {
+    ) -> Result<MiddlewareSuccess, MiddlewareError> {
         let mut final_session_id = None;
 
         for middleware in self.0.iter() {
@@ -76,7 +74,7 @@ impl HttpMiddlewares {
     pub async fn process_middleware_out(
         &self,
         response: &mut poem::Response,
-    ) -> Result<(), MiddlewareOutError> {
+    ) -> Result<(), MiddlewareError> {
         for middleware in self.0.iter() {
             match middleware {
                 HttpMiddleware::AddCorsHeaders(cors) => {

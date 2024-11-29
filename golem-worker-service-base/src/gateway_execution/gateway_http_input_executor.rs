@@ -26,8 +26,7 @@ use crate::gateway_execution::gateway_session::{GatewaySession, GatewaySessionSt
 use crate::gateway_execution::to_response::ToHttpResponse;
 use crate::gateway_execution::to_response_failure::ToHttpResponseFromSafeDisplay;
 use crate::gateway_middleware::{
-    HttpCors as CorsPreflight, HttpMiddlewares, MiddlewareInError, MiddlewareOutError,
-    MiddlewareSuccess,
+    HttpCors as CorsPreflight, HttpMiddlewares, MiddlewareError, MiddlewareSuccess,
 };
 use crate::gateway_rib_interpreter::{EvaluationError, WorkerServiceRibInterpreter};
 use crate::gateway_security::{IdentityProvider, SecuritySchemeWithProviderMetadata};
@@ -48,8 +47,7 @@ pub trait GatewayHttpInputExecutor<Namespace> {
     where
         EvaluationError: ToHttpResponseFromSafeDisplay,
         RibInputTypeMismatch: ToHttpResponseFromSafeDisplay,
-        MiddlewareInError: ToHttpResponseFromSafeDisplay,
-        MiddlewareOutError: ToHttpResponseFromSafeDisplay,
+        MiddlewareError: ToHttpResponseFromSafeDisplay,
         RibResult: ToHttpResponse,
         FileServerBindingResult: ToHttpResponse,
         CorsPreflight: ToHttpResponse,
@@ -262,7 +260,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         middlewares: &HttpMiddlewares,
     ) -> Result<Option<SessionId>, poem::Response>
     where
-        MiddlewareInError: ToHttpResponseFromSafeDisplay,
+        MiddlewareError: ToHttpResponseFromSafeDisplay,
     {
         let input_middleware_result = middlewares.process_middleware_in(input).await;
 
@@ -273,8 +271,8 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
             },
 
             Err(err) => Err(err.to_response_from_safe_display(|error| match error {
-                MiddlewareInError::Unauthorized(_) => StatusCode::UNAUTHORIZED,
-                MiddlewareInError::InternalServerError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+                MiddlewareError::Unauthorized(_) => StatusCode::UNAUTHORIZED,
+                MiddlewareError::InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
             })),
         }
     }
@@ -289,8 +287,7 @@ impl<Namespace: Send + Sync + Clone> GatewayHttpInputExecutor<Namespace>
         RibResult: ToHttpResponse,
         EvaluationError: ToHttpResponseFromSafeDisplay,
         RibInputTypeMismatch: ToHttpResponseFromSafeDisplay,
-        MiddlewareInError: ToHttpResponseFromSafeDisplay,
-        MiddlewareOutError: ToHttpResponseFromSafeDisplay,
+        MiddlewareError: ToHttpResponseFromSafeDisplay,
         FileServerBindingResult: ToHttpResponse, // FileServerBindingResult can be a direct response in a file server endpoint
         CorsPreflight: ToHttpResponse, // Cors can be a direct response in a cors preflight endpoint
         AuthCallBackResult: ToHttpResponse, // AuthCallBackResult can be a direct response in auth callback endpoint

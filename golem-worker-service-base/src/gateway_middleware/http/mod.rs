@@ -15,9 +15,9 @@
 pub use authentication::*;
 pub use cors::*;
 pub use http_middleware::*;
+pub use middleware_error::*;
 
 mod authentication;
 mod cors;
 mod http_middleware;
-pub mod middleware_in;
-pub mod middleware_out;
+mod middleware_error;

@@ -12,19 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::gateway_execution::auth_call_back_binding_handler::AuthorisationError;
 use crate::gateway_execution::gateway_session::SessionId;
 use golem_common::SafeDisplay;
 
-pub enum MiddlewareInError {
-    Unauthorized(String),
-    InternalServerError(String),
+pub enum MiddlewareError {
+    Unauthorized(AuthorisationError),
+    InternalError(String),
 }
 
-impl SafeDisplay for MiddlewareInError {
+impl SafeDisplay for MiddlewareError {
     fn to_safe_string(&self) -> String {
         match self {
-            MiddlewareInError::Unauthorized(msg) => format!("Unauthorized: {}", msg),
-            MiddlewareInError::InternalServerError(msg) => {
+            MiddlewareError::Unauthorized(msg) => format!("Unauthorized: {}", msg.to_safe_string()),
+            MiddlewareError::InternalError(msg) => {
                 format!("Internal Server Error: {}", msg)
             }
         }

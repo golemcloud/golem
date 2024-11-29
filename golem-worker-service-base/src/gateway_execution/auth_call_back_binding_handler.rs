@@ -56,6 +56,7 @@ pub enum AuthorisationError {
     InvalidSession,
     MissingParametersInSession,
     AccessTokenNotFound,
+    InvalidToken,
     IdTokenNotFound,
     ConflictingState, // Possible CSRF attack
     NonceNotFound,
@@ -86,6 +87,7 @@ impl SafeDisplay for AuthorisationError {
                     err.to_safe_string()
                 )
             }
+            AuthorisationError::InvalidToken => "Invalid token".to_string(),
             AuthorisationError::IdentityProviderError(err) => {
                 format!("Identity provider error: {}", err.to_safe_string())
             }
