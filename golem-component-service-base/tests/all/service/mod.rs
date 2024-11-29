@@ -14,10 +14,11 @@
 
 use test_r::{inherit_test_dep, test, test_dep};
 
-use crate::repo::sqlite::SqliteDb;
-use crate::repo::{constraint_data, get_component_data};
+use crate::all::repo::sqlite::SqliteDb;
+use crate::all::repo::{constraint_data, get_component_data};
 use crate::Tracing;
 use golem_common::model::component::DefaultComponentOwner;
+use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope};
 use golem_common::model::{
     ComponentFilePath, ComponentFilePathWithPermissions, ComponentFilePermissions, ComponentId,
     ComponentType,
@@ -28,6 +29,7 @@ use golem_component_service_base::model::InitialComponentFilesArchiveAndPermissi
 use golem_component_service_base::repo::component::{
     ComponentRepo, DbComponentRepo, LoggedComponentRepo,
 };
+use golem_component_service_base::repo::plugin::{DbPluginRepo, LoggedPluginRepo, PluginRepo};
 use golem_component_service_base::service::component::{
     ComponentError, ComponentService, ComponentServiceDefault, ConflictReport, ConflictingFunction,
 };
@@ -36,6 +38,7 @@ use golem_component_service_base::service::component_compilation::{
 };
 use golem_component_service_base::service::component_object_store;
 use golem_component_service_base::service::component_object_store::ComponentObjectStore;
+use golem_component_service_base::service::plugin::{PluginService, PluginServiceDefault};
 use golem_service_base::model::ComponentName;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
@@ -57,14 +60,21 @@ async fn db_pool() -> SqliteDb {
 #[test_dep]
 fn sqlite_component_repo(
     db: &SqliteDb,
-) -> Arc<dyn ComponentRepo<DefaultComponentOwner> + Sync + Send> {
+) -> Arc<dyn ComponentRepo<DefaultComponentOwner> + Send + Sync> {
     Arc::new(LoggedComponentRepo::new(DbComponentRepo::new(
         db.pool.clone(),
     )))
 }
 
 #[test_dep]
-fn object_store() -> Arc<dyn ComponentObjectStore + Sync + Send> {
+fn sqlite_plugin_repo(
+    db: &SqliteDb,
+) -> Arc<dyn PluginRepo<DefaultPluginOwner, DefaultPluginScope> + Send + Sync> {
+    Arc::new(LoggedPluginRepo::new(DbPluginRepo::new(db.pool.clone())))
+}
+
+#[test_dep]
+fn object_store() -> Arc<dyn ComponentObjectStore + Send + Sync> {
     Arc::new(
         component_object_store::FsComponentObjectStore::new(&ComponentStoreLocalConfig {
             root_path: "/tmp/component".to_string(),
@@ -75,7 +85,7 @@ fn object_store() -> Arc<dyn ComponentObjectStore + Sync + Send> {
 }
 
 #[test_dep]
-fn component_compilation_service() -> Arc<dyn ComponentCompilationService + Sync + Send> {
+fn component_compilation_service() -> Arc<dyn ComponentCompilationService + Send + Sync> {
     Arc::new(ComponentCompilationServiceDisabled)
 }
 
@@ -96,17 +106,27 @@ fn initial_component_files_service(
 }
 
 #[test_dep]
+fn plugin_service(
+    plugin_repo: &Arc<dyn PluginRepo<DefaultPluginOwner, DefaultPluginScope> + Send + Sync>,
+) -> Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope> + Send + Sync> {
+    Arc::new(PluginServiceDefault::new(plugin_repo.clone()))
+}
+
+#[test_dep]
 fn component_service(
-    component_repo: &Arc<dyn ComponentRepo<DefaultComponentOwner> + Sync + Send>,
-    object_store: &Arc<dyn ComponentObjectStore + Sync + Send>,
-    component_compilation_service: &Arc<dyn ComponentCompilationService + Sync + Send>,
+    component_repo: &Arc<dyn ComponentRepo<DefaultComponentOwner> + Send + Sync>,
+    object_store: &Arc<dyn ComponentObjectStore + Send + Sync>,
+    component_compilation_service: &Arc<dyn ComponentCompilationService + Send + Sync>,
     initial_component_files_service: &Arc<InitialComponentFilesService>,
-) -> Arc<dyn ComponentService<DefaultComponentOwner> + Sync + Send> {
+    plugin_service: &Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope> + Send + Sync>,
+    _tracing: &Tracing,
+) -> Arc<dyn ComponentService<DefaultComponentOwner> + Send + Sync> {
     Arc::new(ComponentServiceDefault::new(
         component_repo.clone(),
         object_store.clone(),
         component_compilation_service.clone(),
         initial_component_files_service.clone(),
+        plugin_service.clone(),
     ))
 }
 
@@ -115,7 +135,7 @@ const COMPONENT_ARCHIVE: &str = "../test-components/cli-project-yaml/data.zip";
 #[test]
 #[tracing::instrument]
 async fn test_services(
-    component_service: &Arc<dyn ComponentService<DefaultComponentOwner> + Sync + Send>,
+    component_service: &Arc<dyn ComponentService<DefaultComponentOwner> + Send + Sync>,
 ) {
     let component_name1 = ComponentName("shopping-cart-services".to_string());
     let component_name2 = ComponentName("rust-echo-services".to_string());
@@ -127,6 +147,7 @@ async fn test_services(
             ComponentType::Durable,
             get_component_data("shopping-cart"),
             None,
+            vec![],
             &DefaultComponentOwner,
         )
         .await
@@ -139,6 +160,7 @@ async fn test_services(
             ComponentType::Durable,
             get_component_data("rust-echo"),
             None,
+            vec![],
             &DefaultComponentOwner,
         )
         .await
@@ -387,7 +409,7 @@ async fn test_services(
 #[test]
 #[tracing::instrument]
 async fn test_initial_component_file_upload(
-    component_service: &Arc<dyn ComponentService<DefaultComponentOwner> + Sync + Send>,
+    component_service: &Arc<dyn ComponentService<DefaultComponentOwner> + Send + Sync>,
 ) {
     let data = get_component_data("shopping-cart");
 
@@ -410,6 +432,7 @@ async fn test_initial_component_file_upload(
                     permissions: ComponentFilePermissions::ReadWrite,
                 }],
             }),
+            vec![],
             &DefaultComponentOwner,
         )
         .await
@@ -442,7 +465,7 @@ async fn test_initial_component_file_upload(
 #[test]
 #[tracing::instrument]
 async fn test_initial_component_file_data_sharing(
-    component_service: &Arc<dyn ComponentService<DefaultComponentOwner> + Sync + Send>,
+    component_service: &Arc<dyn ComponentService<DefaultComponentOwner> + Send + Sync>,
 ) {
     let data = get_component_data("shopping-cart");
 
@@ -462,6 +485,7 @@ async fn test_initial_component_file_data_sharing(
                 archive: named_temp_file1,
                 files: vec![],
             }),
+            vec![],
             &DefaultComponentOwner,
         )
         .await
@@ -507,7 +531,7 @@ async fn test_initial_component_file_data_sharing(
 #[test]
 #[tracing::instrument]
 async fn test_component_constraint_incompatible_updates(
-    component_service: &Arc<dyn ComponentService<DefaultComponentOwner> + Sync + Send>,
+    component_service: &Arc<dyn ComponentService<DefaultComponentOwner> + Send + Sync>,
 ) {
     let component_name = ComponentName("shopping-cart-constraint-incompatible-updates".to_string());
 
@@ -519,6 +543,7 @@ async fn test_component_constraint_incompatible_updates(
             ComponentType::Durable,
             get_component_data("shopping-cart"),
             None,
+            vec![],
             &DefaultComponentOwner,
         )
         .await

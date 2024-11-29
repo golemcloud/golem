@@ -37,9 +37,10 @@ use golem_api_grpc::proto::golem::worker::{
 use golem_common::model::oplog::{
     OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerResourceId,
 };
+use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope, PluginDefinition};
 use golem_common::model::public_oplog::PublicOplogEntry;
 use golem_common::model::regions::DeletedRegions;
-use golem_common::model::{AccountId, WorkerStatusRecordExtensions};
+use golem_common::model::{AccountId, PluginInstallationId, WorkerStatusRecordExtensions};
 use golem_common::model::{
     ComponentFileSystemNode, ComponentId, ComponentType, ComponentVersion, FailedUpdateRecord,
     IdempotencyKey, InitialComponentFile, InitialComponentFileKey, ScanCursor,
@@ -216,6 +217,19 @@ pub trait TestDsl {
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         path: &str,
     ) -> crate::Result<Bytes>;
+
+    async fn create_plugin(
+        &self,
+        definition: PluginDefinition<DefaultPluginOwner, DefaultPluginScope>,
+    ) -> crate::Result<()>;
+    async fn install_plugin_to_component(
+        &self,
+        component_id: &ComponentId,
+        plugin_name: &str,
+        plugin_version: &str,
+        priority: i32,
+        parameters: HashMap<String, String>,
+    ) -> crate::Result<PluginInstallationId>;
 }
 
 #[async_trait]
@@ -1005,6 +1019,32 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
             })
             .await
     }
+
+    async fn create_plugin(
+        &self,
+        definition: PluginDefinition<DefaultPluginOwner, DefaultPluginScope>,
+    ) -> crate::Result<()> {
+        self.component_service().create_plugin(definition).await
+    }
+
+    async fn install_plugin_to_component(
+        &self,
+        component_id: &ComponentId,
+        plugin_name: &str,
+        plugin_version: &str,
+        priority: i32,
+        parameters: HashMap<String, String>,
+    ) -> crate::Result<PluginInstallationId> {
+        self.component_service()
+            .install_plugin_to_component(
+                component_id,
+                plugin_name,
+                plugin_version,
+                priority,
+                parameters,
+            )
+            .await
+    }
 }
 
 pub fn stdout_events(events: impl Iterator<Item = LogEvent>) -> Vec<String> {
@@ -1456,6 +1496,19 @@ pub trait TestDslUnsafe {
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         path: &str,
     ) -> Bytes;
+
+    async fn create_plugin(
+        &self,
+        definition: PluginDefinition<DefaultPluginOwner, DefaultPluginScope>,
+    );
+    async fn install_plugin_to_component(
+        &self,
+        component_id: &ComponentId,
+        plugin_name: &str,
+        plugin_version: &str,
+        priority: i32,
+        parameters: HashMap<String, String>,
+    ) -> PluginInstallationId;
 }
 
 #[async_trait]
@@ -1735,5 +1788,34 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         <T as TestDsl>::get_file_contents(self, worker_id, path)
             .await
             .expect("Failed to get file contents")
+    }
+
+    async fn create_plugin(
+        &self,
+        definition: PluginDefinition<DefaultPluginOwner, DefaultPluginScope>,
+    ) {
+        <T as TestDsl>::create_plugin(self, definition)
+            .await
+            .expect("Failed to create plugin")
+    }
+
+    async fn install_plugin_to_component(
+        &self,
+        component_id: &ComponentId,
+        plugin_name: &str,
+        plugin_version: &str,
+        priority: i32,
+        parameters: HashMap<String, String>,
+    ) -> PluginInstallationId {
+        <T as TestDsl>::install_plugin_to_component(
+            self,
+            component_id,
+            plugin_name,
+            plugin_version,
+            priority,
+            parameters,
+        )
+        .await
+        .expect("Failed to install plugin")
     }
 }

@@ -15,6 +15,7 @@
 use crate::components::component_service::{AddComponentError, ComponentService};
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
+use golem_api_grpc::proto::golem::component::v1::plugin_service_client::PluginServiceClient;
 use golem_common::model::plugin::PluginInstallation;
 use golem_common::model::{
     component_metadata::{LinearMemory, RawComponentMetadata},
@@ -136,6 +137,10 @@ impl FileSystemComponentService {
 #[async_trait]
 impl ComponentService for FileSystemComponentService {
     async fn client(&self) -> ComponentServiceClient<Channel> {
+        panic!("No real component service running")
+    }
+
+    async fn plugins_client(&self) -> PluginServiceClient<Channel> {
         panic!("No real component service running")
     }
 

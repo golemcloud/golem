@@ -54,7 +54,7 @@ pub trait ComponentOwner:
         + Unpin
         + 'static;
 
-    type PluginOwner: PluginOwner;
+    type PluginOwner: PluginOwner + From<Self>;
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
@@ -83,6 +83,12 @@ impl FromStr for DefaultComponentOwner {
 impl HasAccountId for DefaultComponentOwner {
     fn account_id(&self) -> AccountId {
         AccountId::placeholder()
+    }
+}
+
+impl From<DefaultComponentOwner> for DefaultPluginOwner {
+    fn from(_value: DefaultComponentOwner) -> Self {
+        DefaultPluginOwner
     }
 }
 

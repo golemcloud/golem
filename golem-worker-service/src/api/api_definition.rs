@@ -325,7 +325,7 @@ mod test {
         lifetime: PhantomData<&'c ()>,
     }
 
-    impl<'c> Default for SqliteDb<'c> {
+    impl Default for SqliteDb<'_> {
         fn default() -> Self {
             Self {
                 db_path: format!("/tmp/golem-worker-{}.db", uuid::Uuid::new_v4()),
@@ -334,7 +334,7 @@ mod test {
         }
     }
 
-    impl<'c> Drop for SqliteDb<'c> {
+    impl Drop for SqliteDb<'_> {
         fn drop(&mut self) {
             std::fs::remove_file(&self.db_path).unwrap();
         }

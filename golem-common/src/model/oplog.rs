@@ -672,6 +672,7 @@ impl OplogEntry {
                 | OplogEntry::PendingWorkerInvocation { .. }
                 | OplogEntry::PendingUpdate { .. }
                 | OplogEntry::SuccessfulUpdate { .. }
+                | OplogEntry::SuccessfulUpdateV1 { .. }
                 | OplogEntry::FailedUpdate { .. }
                 | OplogEntry::GrowMemory { .. }
                 | OplogEntry::CreateResource { .. }
@@ -679,6 +680,8 @@ impl OplogEntry {
                 | OplogEntry::DescribeResource { .. }
                 | OplogEntry::Log { .. }
                 | OplogEntry::Restart { .. }
+                | OplogEntry::ActivatePlugin { .. }
+                | OplogEntry::DeactivatePlugin { .. }
         )
     }
 
@@ -714,6 +717,20 @@ impl OplogEntry {
             | OplogEntry::SuccessfulUpdateV1 { timestamp, .. }
             | OplogEntry::ActivatePlugin { timestamp, .. }
             | OplogEntry::DeactivatePlugin { timestamp, .. } => *timestamp,
+        }
+    }
+
+    pub fn specifies_component_version(&self) -> Option<ComponentVersion> {
+        match self {
+            OplogEntry::Create {
+                component_version, ..
+            } => Some(*component_version),
+            OplogEntry::CreateV1 {
+                component_version, ..
+            } => Some(*component_version),
+            OplogEntry::SuccessfulUpdate { target_version, .. } => Some(*target_version),
+            OplogEntry::SuccessfulUpdateV1 { target_version, .. } => Some(*target_version),
+            _ => None,
         }
     }
 }

@@ -570,7 +570,7 @@ pub(crate) mod format {
         }
     }
 
-    impl<'a> io::Write for WriteAdaptor<'a> {
+    impl io::Write for WriteAdaptor<'_> {
         fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
             let s = std::str::from_utf8(buf)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;

@@ -1,0 +1,12 @@
+[package]
+name = "server"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.40"
+axum = { version = "0.7.9", features = ["multipart"] }
+tokio = { version = "1.0", features = ["full"] }
+tracing = "0.1.41"
+tracing-subscriber = "0.3.18"
+wac-graph = "0.6.1"
