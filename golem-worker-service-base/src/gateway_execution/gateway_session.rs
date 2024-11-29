@@ -13,11 +13,18 @@
 // limitations under the License.
 
 use async_trait::async_trait;
+use bincode::enc::Encoder;
+use bincode::error::EncodeError;
+use bincode::Encode;
+use bytes::Bytes;
+use fred::interfaces::RedisResult;
+use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
+use golem_common::redis::RedisPool;
+use golem_common::SafeDisplay;
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
-use tokio::sync::Mutex;
+use std::time::Duration;
 
 #[async_trait]
 pub trait GatewaySession {
@@ -26,19 +33,33 @@ pub trait GatewaySession {
         session_id: SessionId,
         data_key: DataKey,
         data_value: DataValue,
-    ) -> Result<(), String>;
+    ) -> Result<(), GatewaySessionError>;
 
-    async fn get(&self, session_id: &SessionId) -> Result<Option<SessionData>, String>;
-
-    async fn get_data_value(
+    async fn get(
         &self,
         session_id: &SessionId,
         data_key: &DataKey,
-    ) -> Result<Option<DataValue>, String>;
-    async fn get_params(
-        &self,
-        session_id: &SessionId,
-    ) -> Result<Option<HashMap<DataKey, DataValue>>, String>;
+    ) -> Result<DataValue, GatewaySessionError>;
+}
+
+#[derive(Debug, Clone)]
+pub enum GatewaySessionError {
+    InternalError(String),
+    MissingValue {
+        session_id: SessionId,
+        data_key: DataKey,
+    },
+}
+
+impl SafeDisplay for GatewaySessionError {
+    fn to_safe_string(&self) -> String {
+        match self {
+            GatewaySessionError::InternalError(e) => format!("Internal error: {}", e),
+            GatewaySessionError::MissingValue { session_id, .. } => {
+                format!("Invalid session {}", session_id.0)
+            }
+        }
+    }
 }
 
 pub type GatewaySessionStore = Arc<dyn GatewaySession + Send + Sync>;
@@ -66,6 +87,14 @@ impl DataKey {
 #[derive(Debug, Clone)]
 pub struct DataValue(pub serde_json::Value);
 
+impl Encode for DataValue {
+    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
+        let bytes =
+            serde_json::to_vec(&self.0).map_err(|e| EncodeError::OtherString(e.to_string()))?;
+        bytes.encode(encoder)
+    }
+}
+
 impl DataValue {
     pub fn as_string(&self) -> Option<String> {
         self.0.as_str().map(|s| s.to_string())
@@ -75,141 +104,132 @@ impl DataValue {
 #[derive(Clone)]
 pub struct SessionData {
     pub value: HashMap<DataKey, DataValue>,
-    created_at: Instant,
 }
 
 impl Default for SessionData {
     fn default() -> Self {
         SessionData {
             value: HashMap::new(),
-            created_at: Instant::now(),
         }
     }
 }
 
-pub struct InMemoryGatewaySession {
-    data: Arc<Mutex<HashMap<SessionId, SessionData>>>,
-    eviction_strategy: EvictionStrategy,
+pub struct RedisGatewaySession {
+    redis: RedisPool,
+    expire: i64,
 }
 
-#[derive(Clone)]
-pub struct EvictionStrategy {
-    ttl: Duration,
-    period: Duration,
-}
-
-impl EvictionStrategy {
-    pub fn new(ttl: &Duration, period: &Duration) -> EvictionStrategy {
-        EvictionStrategy {
-            ttl: *ttl,
-            period: *period,
-        }
-    }
-}
-
-impl Default for EvictionStrategy {
-    fn default() -> Self {
-        EvictionStrategy {
-            ttl: Duration::from_secs(60 * 60),
-            period: Duration::from_secs(60),
-        }
-    }
-}
-
-impl InMemoryGatewaySession {
-    pub fn new(expiry_strategy: &EvictionStrategy) -> Self {
-        let session = InMemoryGatewaySession {
-            data: Arc::new(Mutex::new(HashMap::new())),
-            eviction_strategy: expiry_strategy.clone(),
-        };
-
-        let data_clone = Arc::clone(&session.data);
-        let eviction_strategy_clone = session.eviction_strategy.clone();
-
-        // Start the eviction task in the background
-        tokio::spawn(async move {
-            let session = InMemoryGatewaySession {
-                data: data_clone,
-                eviction_strategy: eviction_strategy_clone,
-            };
-
-            session.start_eviction_task().await;
-        });
-
-        session
-    }
-
-    async fn start_eviction_task(self) {
-        loop {
-            tokio::time::sleep(self.eviction_strategy.period).await;
-            self.perform_ttl_eviction(self.eviction_strategy.ttl).await;
-        }
-    }
-
-    async fn perform_ttl_eviction(&self, ttl: Duration) {
-        let mut data = self.data.lock().await;
-        let now = Instant::now();
-
-        let mut sessions_to_evict = Vec::new();
-
-        for (session_id, session_data) in data.iter_mut() {
-            let age = now.duration_since(session_data.created_at);
-            if age > ttl {
-                sessions_to_evict.push(session_id.clone());
-            }
-        }
-
-        for session_id in sessions_to_evict {
-            data.remove(&session_id);
-        }
+impl RedisGatewaySession {
+    pub fn new(redis: RedisPool, expire: i64) -> Self {
+        Self { redis, expire }
     }
 }
 
 #[async_trait]
-impl GatewaySession for InMemoryGatewaySession {
+impl GatewaySession for RedisGatewaySession {
     async fn insert(
         &self,
         session_id: SessionId,
         data_key: DataKey,
         data_value: DataValue,
-    ) -> Result<(), String> {
-        let mut data = self.data.lock().await;
-        let session_data = data.entry(session_id).or_insert(SessionData::default());
-        session_data.value.insert(data_key, data_value);
-        Ok(())
+    ) -> Result<(), GatewaySessionError> {
+        let serialised = serde_json::to_vec(&data_value.0)
+            .map_err(|e| GatewaySessionError::InternalError(e.to_string()))?;
+
+        let result: RedisResult<()> = self
+            .redis
+            .with("gateway_session", "insert")
+            .hset(session_id.0.as_str(), (data_key.0.as_str(), serialised))
+            .await;
+
+        let _: () = self
+            .redis
+            .with("gateway_session", "insert")
+            .expire(session_id.0.as_str(), self.expire)
+            .await
+            .map_err(|e| GatewaySessionError::InternalError(e.to_string()))?;
+
+        result.map_err(|e| GatewaySessionError::InternalError(e.to_string()))
     }
 
-    async fn get(&self, session_id: &SessionId) -> Result<Option<SessionData>, String> {
-        let data = self.data.lock().await;
-        match data.get(session_id) {
-            Some(session_data) => Ok(Some(session_data.clone())),
-            None => Ok(None),
-        }
-    }
-
-    async fn get_data_value(
+    async fn get(
         &self,
         session_id: &SessionId,
         data_key: &DataKey,
-    ) -> Result<Option<DataValue>, String> {
-        let data = self.data.lock().await;
-        match data.get(session_id) {
-            Some(session_data) => match session_data.value.get(data_key) {
-                Some(data_value) => Ok(Some(data_value.clone())),
-                None => Ok(None),
-            },
-            None => Ok(None),
+    ) -> Result<DataValue, GatewaySessionError> {
+        let result: Option<Bytes> = self
+            .redis
+            .with("gateway_session", "get_data_value")
+            .hget(session_id.0.as_str(), data_key.0.as_str())
+            .await
+            .map_err(|e| GatewaySessionError::InternalError(e.to_string()))?;
+
+        if let Some(result) = result {
+            let data_value = serde_json::from_slice(&result)
+                .map_err(|e| GatewaySessionError::InternalError(e.to_string()))?;
+
+            Ok(DataValue(data_value))
+        } else {
+            Err(GatewaySessionError::MissingValue {
+                session_id: session_id.clone(),
+                data_key: data_key.clone(),
+            })
         }
     }
+}
 
-    async fn get_params(
+pub struct GatewaySessionWithInMemoryCache<A> {
+    inner: A,
+    cache: Cache<(SessionId, DataKey), (), DataValue, GatewaySessionError>,
+}
+
+impl<A> GatewaySessionWithInMemoryCache<A> {
+    pub fn new(
+        inner: A,
+        in_memory_expiration_in_seconds: i64,
+        eviction_period_in_seconds: u64,
+    ) -> Self {
+        let cache = Cache::new(
+            Some(1024),
+            FullCacheEvictionMode::None,
+            BackgroundEvictionMode::OlderThan {
+                ttl: Duration::from_secs(in_memory_expiration_in_seconds as u64),
+                period: Duration::from_secs(eviction_period_in_seconds),
+            },
+            "gateway_session_in_memory",
+        );
+
+        Self { inner, cache }
+    }
+}
+
+#[async_trait]
+impl<A: GatewaySession + Sync + Clone + Send + 'static> GatewaySession
+    for GatewaySessionWithInMemoryCache<A>
+{
+    async fn insert(
+        &self,
+        session_id: SessionId,
+        data_key: DataKey,
+        data_value: DataValue,
+    ) -> Result<(), GatewaySessionError> {
+        self.inner.insert(session_id, data_key, data_value).await?;
+        Ok(())
+    }
+
+    async fn get(
         &self,
         session_id: &SessionId,
-    ) -> Result<Option<HashMap<DataKey, DataValue>>, String> {
-        let data = self.data.lock().await;
-        match data.get(session_id) {
-            Some(session_data) => Ok(Some(session_data.value.clone())),
-            None => Ok(None),
-        }
+        data_key: &DataKey,
+    ) -> Result<DataValue, GatewaySessionError> {
+        self.cache
+            .get_or_insert_simple(&(session_id.clone(), data_key.clone()), || {
+                let inner = self.inner.clone();
+                let session_id = session_id.clone();
+                let data_key = data_key.clone();
+
+                Box::pin(async move { inner.get(&session_id, &data_key).await })
+            })
+            .await
     }
 }

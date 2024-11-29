@@ -33,7 +33,7 @@ use golem_worker_service_base::gateway_execution::gateway_http_input_executor::{
     DefaultGatewayInputExecutor, GatewayHttpInput, GatewayHttpInputExecutor,
 };
 use golem_worker_service_base::gateway_execution::gateway_session::{
-    EvictionStrategy, GatewaySession, GatewaySessionStore, InMemoryGatewaySession,
+    EvictionStrategy, GatewaySession, GatewaySessionStore, GatewaySessionWithInMemoryCache,
 };
 use golem_worker_service_base::gateway_middleware::HttpCors;
 use golem_worker_service_base::gateway_request::http_request::{ApiInputPath, InputHttpRequest};
@@ -112,8 +112,9 @@ async fn test_end_to_end_api_gateway_simple_worker() {
     let api_specification: HttpApiDefinition =
         get_api_spec_worker_binding("/foo/{user-id}", worker_name, response_mapping).await;
 
-    let session_store: Arc<dyn GatewaySession + Sync + Send> =
-        Arc::new(InMemoryGatewaySession::new(&EvictionStrategy::default()));
+    let session_store: Arc<dyn GatewaySession + Sync + Send> = Arc::new(
+        GatewaySessionWithInMemoryCache::new(&EvictionStrategy::default()),
+    );
     let response = execute(
         &api_request,
         &api_specification,
@@ -1575,7 +1576,7 @@ mod internal {
     use rib::RibResult;
 
     use golem_worker_service_base::gateway_execution::gateway_session::{
-        EvictionStrategy, GatewaySessionStore, InMemoryGatewaySession,
+        GatewaySessionStore, GatewaySessionWithInMemoryCache,
     };
     use serde_json::Value;
     use std::collections::HashMap;
@@ -1923,15 +1924,16 @@ mod internal {
     }
 
     pub fn get_session_store() -> GatewaySessionStore {
-        Arc::new(InMemoryGatewaySession::new(&EvictionStrategy::default()))
+        Arc::new(GatewaySessionWithInMemoryCache::new(
+            &EvictionStrategy::default(),
+        ))
     }
 
     // Quickly evicted as soon as added
     pub fn get_session_store_with_zero_ttl() -> GatewaySessionStore {
-        Arc::new(InMemoryGatewaySession::new(&EvictionStrategy::new(
-            &Duration::from_secs(0),
-            &Duration::from_millis(1),
-        )))
+        Arc::new(GatewaySessionWithInMemoryCache::new(
+            &EvictionStrategy::new(&Duration::from_secs(0), &Duration::from_millis(1)),
+        ))
     }
 }
 

@@ -289,7 +289,7 @@ mod test {
 
     use crate::gateway_binding::HttpRequestDetails;
     use crate::gateway_execution::gateway_session::{
-        EvictionStrategy, GatewaySession, InMemoryGatewaySession,
+        EvictionStrategy, GatewaySession, GatewaySessionWithInMemoryCache,
     };
     use crate::gateway_execution::to_response::ToHttpResponse;
     use http::header::CONTENT_TYPE;
@@ -340,8 +340,9 @@ mod test {
 
         let evaluation_result: RibResult = RibResult::Val(record);
 
-        let session_store: Arc<dyn GatewaySession + Send + Sync> =
-            Arc::new(InMemoryGatewaySession::new(&EvictionStrategy::default()));
+        let session_store: Arc<dyn GatewaySession + Send + Sync> = Arc::new(
+            GatewaySessionWithInMemoryCache::new(&EvictionStrategy::default()),
+        );
 
         let http_response: poem::Response = evaluation_result
             .to_response(&HttpRequestDetails::empty(), &session_store)
@@ -370,8 +371,9 @@ mod test {
         let evaluation_result: RibResult =
             RibResult::Val(TypeAnnotatedValue::Str("Healthy".to_string()));
 
-        let session_store: Arc<dyn GatewaySession + Send + Sync> =
-            Arc::new(InMemoryGatewaySession::new(&EvictionStrategy::default()));
+        let session_store: Arc<dyn GatewaySession + Send + Sync> = Arc::new(
+            GatewaySessionWithInMemoryCache::new(&EvictionStrategy::default()),
+        );
 
         let http_response: poem::Response = evaluation_result
             .to_response(&HttpRequestDetails::empty(), &session_store)

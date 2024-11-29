@@ -30,9 +30,7 @@ use crate::gateway_execution::auth_call_back_binding_handler::DefaultAuthCallBac
 use crate::gateway_execution::gateway_http_input_executor::{
     DefaultGatewayInputExecutor, GatewayHttpInput, GatewayHttpInputExecutor,
 };
-use crate::gateway_execution::gateway_session::{
-    EvictionStrategy, GatewaySessionStore, InMemoryGatewaySession,
-};
+use crate::gateway_execution::gateway_session::{GatewaySession, GatewaySessionStore};
 use crate::gateway_execution::GatewayWorkerRequestExecutor;
 use crate::gateway_request::http_request::InputHttpRequest;
 use crate::gateway_security::DefaultIdentityProvider;
@@ -64,6 +62,7 @@ impl<Namespace: Clone + Send + Sync + 'static> CustomHttpRequestApi<Namespace> {
                 + Send,
         >,
         file_server_binding_handler: Arc<dyn FileServerBindingHandler<Namespace> + Sync + Send>,
+        gateway_session_store: Arc<dyn GatewaySession + Sync + Send>,
     ) -> Self {
         let evaluator = Arc::new(DefaultRibInterpreter::from_worker_request_executor(
             worker_request_executor_service.clone(),
@@ -76,9 +75,6 @@ impl<Namespace: Clone + Send + Sync + 'static> CustomHttpRequestApi<Namespace> {
             file_server_binding_handler,
             auth_call_back_binding_handler,
         });
-
-        let gateway_session_store =
-            Arc::new(InMemoryGatewaySession::new(&EvictionStrategy::default()));
 
         Self {
             api_definition_lookup_service,

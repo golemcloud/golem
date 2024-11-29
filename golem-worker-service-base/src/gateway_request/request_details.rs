@@ -18,6 +18,7 @@ use crate::gateway_api_deployment::ApiSiteString;
 use crate::gateway_execution::gateway_session::{DataKey, GatewaySessionStore, SessionId};
 use crate::gateway_middleware::HttpMiddlewares;
 use crate::gateway_request::http_request::ApiInputPath;
+use golem_common::SafeDisplay;
 use http::uri::Scheme;
 use http::HeaderMap;
 use serde_json::Value;
@@ -85,17 +86,15 @@ impl HttpRequestDetails {
         session_id: &SessionId,
         gateway_session_store: &GatewaySessionStore,
     ) -> Result<(), String> {
-        let claims_opt = gateway_session_store
-            .get_data_value(session_id, &DataKey::claims())
-            .await?;
+        let claims = gateway_session_store
+            .get(session_id, &DataKey::claims())
+            .await
+            .map_err(|err| err.to_safe_string())?;
 
-        if let Some(claims) = claims_opt {
-            if let Some(custom_params) = self.request_custom_params.as_mut() {
-                custom_params.insert("auth".to_string(), claims.0);
-            } else {
-                self.request_custom_params =
-                    Some(HashMap::from_iter([("auth".to_string(), claims.0)]));
-            }
+        if let Some(custom_params) = self.request_custom_params.as_mut() {
+            custom_params.insert("auth".to_string(), claims.0);
+        } else {
+            self.request_custom_params = Some(HashMap::from_iter([("auth".to_string(), claims.0)]));
         }
 
         Ok(())
