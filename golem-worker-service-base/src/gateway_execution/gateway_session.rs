@@ -191,7 +191,10 @@ impl<A> GatewaySessionWithInMemoryCache<A> {
             "gateway_session_in_memory",
         );
 
-        Self { backend: inner, cache }
+        Self {
+            backend: inner,
+            cache,
+        }
     }
 }
 
@@ -205,7 +208,9 @@ impl<A: GatewaySession + Sync + Clone + Send + 'static> GatewaySession
         data_key: DataKey,
         data_value: DataValue,
     ) -> Result<(), GatewaySessionError> {
-        self.backend.insert(session_id, data_key, data_value).await?;
+        self.backend
+            .insert(session_id, data_key, data_value)
+            .await?;
         Ok(())
     }
 

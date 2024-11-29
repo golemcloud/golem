@@ -45,6 +45,9 @@ use golem_worker_service_base::api;
 use golem_worker_service_base::gateway_api_deployment::{
     ApiDeploymentRequest, ApiSite, ApiSiteString,
 };
+use golem_worker_service_base::gateway_execution::gateway_session::{
+    DataKey, DataValue, GatewaySession, GatewaySessionError, SessionId,
+};
 use golem_worker_service_base::gateway_security::{
     AuthorizationUrl, DefaultIdentityProvider, GolemIdentityProviderMetadata, IdentityProvider,
     IdentityProviderError, OpenIdClient, Provider, SecurityScheme, SecuritySchemeIdentifier,
@@ -70,7 +73,6 @@ use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, ImageExt};
 use testcontainers_modules::postgres::Postgres;
 use uuid::Uuid;
-use golem_worker_service_base::gateway_execution::gateway_session::{DataKey, DataValue, GatewaySession, GatewaySessionError, SessionId};
 
 test_r::enable!();
 
@@ -896,7 +898,6 @@ impl GatewaySession for TestSessionStore {
         _data_key: DataKey,
         _data_value: DataValue,
     ) -> Result<(), GatewaySessionError> {
-
         Ok(())
     }
 
@@ -905,12 +906,10 @@ impl GatewaySession for TestSessionStore {
         _session_id: &SessionId,
         _data_key: &DataKey,
     ) -> Result<DataValue, GatewaySessionError> {
-        Err(GatewaySessionError::InternalError("Backend unimplemented".to_string()))
+        Err(GatewaySessionError::InternalError(
+            "Backend unimplemented".to_string(),
+        ))
     }
-}
-
-fn get_session_store () -> Arc<dyn GatewaySession + Send + Sync> {
-    Arc::new(TestSessionStore)
 }
 
 #[derive(Clone)]

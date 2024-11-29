@@ -33,7 +33,7 @@ use golem_worker_service_base::gateway_execution::gateway_http_input_executor::{
     DefaultGatewayInputExecutor, GatewayHttpInput, GatewayHttpInputExecutor,
 };
 use golem_worker_service_base::gateway_execution::gateway_session::{
-    GatewaySession, GatewaySessionStore, GatewaySessionWithInMemoryCache,
+    GatewaySession, GatewaySessionStore,
 };
 use golem_worker_service_base::gateway_middleware::HttpCors;
 use golem_worker_service_base::gateway_request::http_request::{ApiInputPath, InputHttpRequest};
@@ -1581,8 +1581,6 @@ mod internal {
     use serde_json::Value;
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
-    use std::time::Duration;
-    use golem_wasm_ast::core::Mut;
 
     pub struct TestApiGatewayWorkerRequestExecutor {}
 
@@ -1927,27 +1925,27 @@ mod internal {
     // This redirection is to offload eviction policy testing to the inbuilt cache
     // mechanism of golem, and doesn't test the eviction policy itself
     #[derive(Debug, Clone)]
-    pub struct TestSessionBackEnd<'a> {
+    pub struct TestSessionBackEnd {
         pub inner: Arc<Mutex<HashMap<(SessionId, DataKey), DataValue>>>,
     }
 
-    impl<'a> TestSessionBackEnd<'a> {
+    impl TestSessionBackEnd {
         pub fn new() -> Self {
             TestSessionBackEnd {
-                inner: Arc::new(Mutex::new(HashMap::new()))
+                inner: Arc::new(Mutex::new(HashMap::new())),
             }
         }
     }
     #[async_trait]
-    impl<'a> GatewaySession for TestSessionBackEnd<'a> {
+    impl GatewaySession for TestSessionBackEnd {
         async fn insert(
             &self,
             session_id: SessionId,
             data_key: DataKey,
             data_value: DataValue,
         ) -> Result<(), GatewaySessionError> {
-            let mut data = self.inner.lock().await;
-            data.((session_id, data_key), data_value);
+            let mut data = self.inner.lock().unwrap();
+            data.insert((session_id, data_key), data_value);
             Ok(())
         }
 
@@ -1956,7 +1954,8 @@ mod internal {
             session_id: &SessionId,
             data_key: &DataKey,
         ) -> Result<DataValue, GatewaySessionError> {
-            let value = self.inner.get(&(session_id.clone(), data_key.clone()));
+            let data = self.inner.lock().unwrap();
+            let value = data.get(&(session_id.clone(), data_key.clone()));
             value.cloned().ok_or(GatewaySessionError::MissingValue {
                 session_id: session_id.clone(),
                 data_key: data_key.clone(),
