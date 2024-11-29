@@ -116,6 +116,10 @@ impl RedisGatewaySession {
     pub fn new(redis: RedisPool, expire: i64) -> Self {
         Self { redis, expire }
     }
+
+    pub fn redis_key(session_id: &SessionId) -> String {
+        format!("gateway_session:{}", session_id.0)
+    }
 }
 
 #[async_trait]
@@ -132,13 +136,13 @@ impl GatewaySession for RedisGatewaySession {
         let result: RedisResult<()> = self
             .redis
             .with("gateway_session", "insert")
-            .hset(session_id.0.as_str(), (data_key.0.as_str(), serialised))
+            .hset(Self::redis_key(&session_id), (data_key.0.as_str(), serialised))
             .await;
 
         let _: () = self
             .redis
             .with("gateway_session", "insert")
-            .expire(session_id.0.as_str(), self.expire)
+            .expire(Self::redis_key(&session_id), self.expire)
             .await
             .map_err(|e| GatewaySessionError::InternalError(e.to_string()))?;
 
@@ -153,7 +157,7 @@ impl GatewaySession for RedisGatewaySession {
         let result: Option<Bytes> = self
             .redis
             .with("gateway_session", "get_data_value")
-            .hget(session_id.0.as_str(), data_key.0.as_str())
+            .hget(Self::redis_key(&session_id), data_key.0.as_str())
             .await
             .map_err(|e| GatewaySessionError::InternalError(e.to_string()))?;
 
