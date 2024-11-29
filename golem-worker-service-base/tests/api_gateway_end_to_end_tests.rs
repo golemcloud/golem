@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use std::sync::Arc;
-use std::time::Duration;
 use test_r::test;
 
 test_r::enable!();
@@ -62,7 +61,7 @@ async fn execute(
     api_request: &InputHttpRequest,
     api_specification: &HttpApiDefinition,
     session_store: &GatewaySessionStore,
-    test_identity_provider_resolver: &TestIdentityProvider,
+    test_identity_provider: &TestIdentityProvider,
 ) -> Response {
     let compiled = CompiledHttpApiDefinition::from_http_api_definition(
         api_specification,
@@ -88,7 +87,7 @@ async fn execute(
         &http,
         resolved_gateway_binding.resolved_binding,
         Arc::clone(session_store),
-        Arc::new(test_identity_provider_resolver.clone()),
+        Arc::new(test_identity_provider.clone()),
     );
 
     test_executor.execute_binding(&input).await
@@ -259,25 +258,25 @@ async fn test_end_to_end_api_gateway_with_expired_session() {
     let auth_call_back_url =
         RedirectUrl::new("http://localhost/auth/callback".to_string()).unwrap();
 
-    let invalid_identity_provider_resolver =
-        TestIdentityProvider::get_provider_with_valid_id_token();
+    let invalid_identity_provider = TestIdentityProvider::get_provider_with_valid_id_token();
 
     let api_specification: HttpApiDefinition = get_api_spec_with_security_configuration(
         "/foo/{user-id}",
         worker_name,
         response_mapping,
         &auth_call_back_url,
-        &invalid_identity_provider_resolver,
+        &invalid_identity_provider,
     )
     .await;
 
-    let session_store = internal::get_session_store_with_zero_ttl();
+    // Until auth call back, we will use a valid session store
+    let session_store = internal::get_session_store();
 
     let initial_response_to_identity_provider = execute(
         &api_request,
         &api_specification,
         &session_store,
-        &invalid_identity_provider_resolver,
+        &invalid_identity_provider,
     )
     .await;
 
@@ -316,7 +315,7 @@ async fn test_end_to_end_api_gateway_with_expired_session() {
         &request_to_auth_call_back_endpoint,
         &api_specification,
         &session_store,
-        &invalid_identity_provider_resolver,
+        &invalid_identity_provider,
     )
     .await;
 
@@ -328,17 +327,19 @@ async fn test_end_to_end_api_gateway_with_expired_session() {
     let api_request_from_browser =
         security::create_request_from_redirect(redirect_response_headers).await;
 
-    // Just a bit of sleep such that session is expired
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    // Post auth call, we simulate the situation of an expired session
+    let session_store = internal::get_session_store_with_zero_ttl();
 
     // Hitting the protected resource with an expired token
     let test_response_from_actual_endpoint = execute(
         &api_request_from_browser,
         &api_specification,
         &session_store,
-        &invalid_identity_provider_resolver,
+        &invalid_identity_provider,
     )
     .await;
+
+    dbg!(&test_response_from_actual_endpoint);
 
     // And it should be a redirect which is same as the initial redirect to identity provider
     let final_redirect = test_response_from_actual_endpoint.headers();
@@ -1971,13 +1972,34 @@ mod internal {
         ))
     }
 
-    // Quickly evicted as soon as added
+    struct NoopTestSessionBackend;
+
+    #[async_trait]
+    impl GatewaySession for NoopTestSessionBackend {
+        async fn insert(
+            &self,
+            _session_id: SessionId,
+            _data_key: DataKey,
+            _data_value: DataValue,
+        ) -> Result<(), GatewaySessionError> {
+            Ok(())
+        }
+
+        async fn get(
+            &self,
+            session_id: &SessionId,
+            data_key: &DataKey,
+        ) -> Result<DataValue, GatewaySessionError> {
+            dbg!("damss");
+            Err(GatewaySessionError::MissingValue {
+                session_id: session_id.clone(),
+                data_key: data_key.clone(),
+            })
+        }
+    }
+
     pub fn get_session_store_with_zero_ttl() -> GatewaySessionStore {
-        Arc::new(GatewaySessionWithInMemoryCache::new(
-            TestSessionBackEnd::new(),
-            0,
-            60,
-        ))
+        Arc::new(NoopTestSessionBackend)
     }
 }
 

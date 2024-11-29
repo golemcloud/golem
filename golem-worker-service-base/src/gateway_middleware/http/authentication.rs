@@ -71,7 +71,7 @@ mod internal {
     use crate::gateway_binding::HttpRequestDetails;
     use crate::gateway_execution::auth_call_back_binding_handler::AuthorisationError;
     use crate::gateway_execution::gateway_session::{
-        DataKey, DataValue, GatewaySessionStore, SessionId,
+        DataKey, DataValue, GatewaySessionError, GatewaySessionStore, SessionId,
     };
     use crate::gateway_middleware::http::middleware_error::MiddlewareSuccess;
     use crate::gateway_middleware::{HttpAuthenticationMiddleware, MiddlewareError};
@@ -95,26 +95,40 @@ mod internal {
     ) -> Result<MiddlewareSuccess, MiddlewareError> {
         let session_id = SessionId(state_from_request.to_string());
 
-        let nonce_from_session = session_store
-            .get(&session_id, &DataKey::nonce())
-            .await
-            .map_err(|err| MiddlewareError::Unauthorized(AuthorisationError::SessionError(err)))?;
+        let nonce_from_session = session_store.get(&session_id, &DataKey::nonce()).await;
 
-        let id_token = CoreIdToken::from_str(id_token)
-            .map_err(|_| MiddlewareError::Unauthorized(AuthorisationError::InvalidToken))?;
+        match nonce_from_session {
+            Ok(nonce) => {
+                let id_token = CoreIdToken::from_str(id_token)
+                    .map_err(|_| MiddlewareError::Unauthorized(AuthorisationError::InvalidToken))?;
 
-        get_claims(
-            &nonce_from_session,
-            id_token,
-            identity_token_verifier,
-            &session_id,
-            session_store,
-            input,
-            identity_provider,
-            open_id_client,
-            http_authentication_details,
-        )
-        .await
+                get_claims(
+                    &nonce,
+                    id_token,
+                    identity_token_verifier,
+                    &session_id,
+                    session_store,
+                    input,
+                    identity_provider,
+                    open_id_client,
+                    http_authentication_details,
+                )
+                .await
+            }
+            Err(GatewaySessionError::MissingValue { .. }) => {
+                redirect(
+                    session_store,
+                    input,
+                    identity_provider,
+                    open_id_client,
+                    http_authentication_details,
+                )
+                .await
+            }
+            Err(err) => Err(MiddlewareError::Unauthorized(
+                AuthorisationError::SessionError(err),
+            )),
+        }
     }
     pub(crate) async fn get_claims<'a>(
         nonce: &DataValue,

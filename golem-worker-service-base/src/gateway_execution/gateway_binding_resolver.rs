@@ -24,7 +24,7 @@ use golem_service_base::model::VersionedComponentId;
 use openidconnect::{CsrfToken, Nonce};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 
 // Every type of request (example: InputHttpRequest (which corresponds to a Route)) can have an instance of this resolver,
 // which will resolve the gateway binding equired for that request.
