@@ -5,10 +5,10 @@ use crate::protobuf::{TypeAnnotatedValue as RootTypeAnnotatedValue, TypedResult}
 use crate::protobuf::{
     TypedEnum, TypedFlags, TypedHandle, TypedList, TypedRecord, TypedTuple, TypedVariant,
 };
-use crate::{Value, WitValue};
+use crate::{NodeIndex, Uri, Value, WitValue};
 use golem_wasm_ast::analysis::analysed_type::{
-    bool, chr, f32, f64, list, option, result, result_err, result_ok, s16, s32, s64, s8, str,
-    tuple, u16, u32, u64, u8,
+    bool, case, chr, f32, f64, field, list, option, record, result, result_err, result_ok, s16,
+    s32, s64, s8, str, tuple, u16, u32, u64, u8, variant,
 };
 use golem_wasm_ast::analysis::protobuf::Type;
 use golem_wasm_ast::analysis::AnalysedType;
@@ -95,7 +95,7 @@ impl TryFrom<ValueAndType> for crate::protobuf::TypeAnnotatedValue {
     }
 }
 
-/// Specific trait to convert a type into a `ValueAndType` type.
+/// Specific trait to convert a type into a pair of `Value` and `AnalysedType`.
 pub trait IntoValue {
     fn into_value(self) -> Value;
     fn get_type() -> AnalysedType;
@@ -348,6 +348,58 @@ impl IntoValue for Uuid {
 
     fn get_type() -> AnalysedType {
         str()
+    }
+}
+
+impl IntoValue for WitValue {
+    fn into_value(self) -> Value {
+        self.into()
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![field(
+            "nodes",
+            list(variant(vec![
+                case("record-value", list(NodeIndex::get_type())),
+                case(
+                    "variant-value",
+                    tuple(vec![u32(), option(NodeIndex::get_type())]),
+                ),
+                case("enum-value", u32()),
+                case("flags-value", list(bool())),
+                case("tuple-value", list(NodeIndex::get_type())),
+                case("list-value", list(NodeIndex::get_type())),
+                case("option-value", option(NodeIndex::get_type())),
+                case(
+                    "result-value",
+                    result(option(NodeIndex::get_type()), option(NodeIndex::get_type())),
+                ),
+                case("prim-u8", u8()),
+                case("prim-u16", u16()),
+                case("prim-u32", u32()),
+                case("prim-u64", u64()),
+                case("prim-s8", s8()),
+                case("prim-s16", s16()),
+                case("prim-s32", s32()),
+                case("prim-s64", s64()),
+                case("prim-float32", f32()),
+                case("prim-float64", f64()),
+                case("prim-char", chr()),
+                case("prim-bool", bool()),
+                case("prim-string", str()),
+                case("handle", tuple(vec![Uri::get_type(), u64()])),
+            ])),
+        )])
+    }
+}
+
+impl IntoValue for Uri {
+    fn into_value(self) -> Value {
+        Value::Record(vec![Value::String(self.value)])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![field("value", str())])
     }
 }
 
