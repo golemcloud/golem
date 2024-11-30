@@ -54,8 +54,10 @@ impl IncludedMigrationsDir {
 }
 
 impl Migrations for IncludedMigrationsDir {
-    type Output<'b> = SpecificIncludedMigrationsDir<'b>
-        where Self: 'b;
+    type Output<'b>
+        = SpecificIncludedMigrationsDir<'b>
+    where
+        Self: 'b;
 
     fn sqlite_migrations(&self) -> Self::Output<'_> {
         let sub_dir_name = "sqlite".to_string();

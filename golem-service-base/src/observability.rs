@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 use http_02::{Response, StatusCode};
 use prometheus::{Encoder, Registry, TextEncoder};
 use tokio::net::{TcpListener, ToSocketAddrs};

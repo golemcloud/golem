@@ -50,8 +50,10 @@ impl MigrationsDir {
 }
 
 impl Migrations for MigrationsDir {
-    type Output<'a> = SpecificMigrationsDir<'a>
-        where Self: 'a;
+    type Output<'a>
+        = SpecificMigrationsDir<'a>
+    where
+        Self: 'a;
 
     fn sqlite_migrations(&self) -> Self::Output<'_> {
         SpecificMigrationsDir {

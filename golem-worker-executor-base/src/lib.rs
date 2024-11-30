@@ -413,7 +413,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
 
         let mut epoch_interval = tokio::time::interval(golem_config.limits.epoch_interval);
         let engine_ref: Arc<Engine> = engine.clone();
-        tokio::spawn(
+        join_set.spawn(
             async move {
                 loop {
                     epoch_interval.tick().await;
