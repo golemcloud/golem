@@ -498,8 +498,8 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
                 Server::builder()
                     .max_concurrent_streams(Some(golem_config.limits.max_concurrent_streams))
                     .add_service(reflection_service)
-                    .add_service(health_service)
                     .add_service(service)
+                    .add_service(health_service)
                     .serve_with_incoming(TcpListenerStream::new(listener))
                     .await
                     .map_err(|err| anyhow!(err))

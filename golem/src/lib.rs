@@ -18,6 +18,9 @@ pub mod launch;
 mod migration;
 mod proxy;
 
+#[cfg(test)]
+test_r::enable!();
+
 pub struct AllRunDetails {
     pub component_service: golem_component_service::RunDetails,
     pub shard_manager: golem_shard_manager::RunDetails,

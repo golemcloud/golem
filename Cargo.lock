@@ -3660,6 +3660,7 @@ dependencies = [
  "sozu-lib",
  "sqlx",
  "tempfile",
+ "test-r",
  "tokio",
  "tracing",
  "xdg",

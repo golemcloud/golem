@@ -8,6 +8,9 @@ repository = "https://github.com/golemcloud/golem"
 readme = "README.md"
 description = "Single Golem executable for testing"
 
+[lib]
+harness = false
+
 [[bin]]
 name = "golem"
 path = "src/main.rs"
@@ -57,3 +60,6 @@ sozu-lib = { workspace = true }
 [target.'cfg(not(target_arch = "x86_64"))'.dependencies]
 sozu-command-lib = { workspace = true, default-features = false }
 sozu-lib = { workspace = true, default-features = false }
+
+[dev-dependencies]
+test-r = { workspace = true }
