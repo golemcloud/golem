@@ -5,7 +5,7 @@ use crate::protobuf::{TypeAnnotatedValue as RootTypeAnnotatedValue, TypedResult}
 use crate::protobuf::{
     TypedEnum, TypedFlags, TypedHandle, TypedList, TypedRecord, TypedTuple, TypedVariant,
 };
-use crate::{NodeIndex, Uri, Value, WitValue};
+use crate::{NodeIndex, Uri, Value, WitNode, WitValue};
 use golem_wasm_ast::analysis::analysed_type::{
     bool, case, chr, f32, f64, field, list, option, record, result, result_err, result_ok, s16,
     s32, s64, s8, str, tuple, u16, u32, u64, u8, variant,
@@ -353,43 +353,150 @@ impl IntoValue for Uuid {
 
 impl IntoValue for WitValue {
     fn into_value(self) -> Value {
-        self.into()
+        // NOTE: this is different than From<WitValue> for Value. That conversion creates
+        // the Value the WitValue describes, while this conversion creates a Value version of
+        // the WitValue representation itself.
+        Value::Record(vec![self.nodes.into_value()])
     }
 
     fn get_type() -> AnalysedType {
-        record(vec![field(
-            "nodes",
-            list(variant(vec![
-                case("record-value", list(NodeIndex::get_type())),
-                case(
-                    "variant-value",
-                    tuple(vec![u32(), option(NodeIndex::get_type())]),
-                ),
-                case("enum-value", u32()),
-                case("flags-value", list(bool())),
-                case("tuple-value", list(NodeIndex::get_type())),
-                case("list-value", list(NodeIndex::get_type())),
-                case("option-value", option(NodeIndex::get_type())),
-                case(
-                    "result-value",
-                    result(option(NodeIndex::get_type()), option(NodeIndex::get_type())),
-                ),
-                case("prim-u8", u8()),
-                case("prim-u16", u16()),
-                case("prim-u32", u32()),
-                case("prim-u64", u64()),
-                case("prim-s8", s8()),
-                case("prim-s16", s16()),
-                case("prim-s32", s32()),
-                case("prim-s64", s64()),
-                case("prim-float32", f32()),
-                case("prim-float64", f64()),
-                case("prim-char", chr()),
-                case("prim-bool", bool()),
-                case("prim-string", str()),
-                case("handle", tuple(vec![Uri::get_type(), u64()])),
-            ])),
-        )])
+        record(vec![field("nodes", list(WitNode::get_type()))])
+    }
+}
+
+impl IntoValue for WitNode {
+    fn into_value(self) -> Value {
+        match self {
+            WitNode::RecordValue(indices) => Value::Variant {
+                case_idx: 0,
+                case_value: Some(Box::new(indices.into_value())),
+            },
+            WitNode::VariantValue((idx, value)) => Value::Variant {
+                case_idx: 1,
+                case_value: Some(Box::new(Value::Tuple(vec![
+                    idx.into_value(),
+                    value
+                        .map(IntoValue::into_value)
+                        .unwrap_or(Value::Option(None)),
+                ]))),
+            },
+            WitNode::EnumValue(idx) => Value::Variant {
+                case_idx: 2,
+                case_value: Some(Box::new(idx.into_value())),
+            },
+            WitNode::FlagsValue(flags) => Value::Variant {
+                case_idx: 3,
+                case_value: Some(Box::new(flags.into_value())),
+            },
+            WitNode::TupleValue(indices) => Value::Variant {
+                case_idx: 4,
+                case_value: Some(Box::new(indices.into_value())),
+            },
+            WitNode::ListValue(indices) => Value::Variant {
+                case_idx: 5,
+                case_value: Some(Box::new(indices.into_value())),
+            },
+            WitNode::OptionValue(index) => Value::Variant {
+                case_idx: 6,
+                case_value: Some(Box::new(index.into_value())),
+            },
+            WitNode::ResultValue(result) => Value::Variant {
+                case_idx: 7,
+                case_value: Some(Box::new(result.into_value())),
+            },
+            WitNode::PrimU8(value) => Value::Variant {
+                case_idx: 8,
+                case_value: Some(Box::new(value.into_value())),
+            },
+            WitNode::PrimU16(value) => Value::Variant {
+                case_idx: 9,
+                case_value: Some(Box::new(value.into_value())),
+            },
+            WitNode::PrimU32(value) => Value::Variant {
+                case_idx: 10,
+                case_value: Some(Box::new(value.into_value())),
+            },
+            WitNode::PrimU64(value) => Value::Variant {
+                case_idx: 11,
+                case_value: Some(Box::new(value.into_value())),
+            },
+            WitNode::PrimS8(value) => Value::Variant {
+                case_idx: 12,
+                case_value: Some(Box::new(value.into_value())),
+            },
+            WitNode::PrimS16(value) => Value::Variant {
+                case_idx: 13,
+                case_value: Some(Box::new(value.into_value())),
+            },
+            WitNode::PrimS32(value) => Value::Variant {
+                case_idx: 14,
+                case_value: Some(Box::new(value.into_value())),
+            },
+            WitNode::PrimS64(value) => Value::Variant {
+                case_idx: 15,
+                case_value: Some(Box::new(value.into_value())),
+            },
+            WitNode::PrimFloat32(value) => Value::Variant {
+                case_idx: 16,
+                case_value: Some(Box::new(value.into_value())),
+            },
+            WitNode::PrimFloat64(value) => Value::Variant {
+                case_idx: 17,
+                case_value: Some(Box::new(value.into_value())),
+            },
+            WitNode::PrimChar(value) => Value::Variant {
+                case_idx: 18,
+                case_value: Some(Box::new(value.into_value())),
+            },
+            WitNode::PrimBool(value) => Value::Variant {
+                case_idx: 19,
+                case_value: Some(Box::new(value.into_value())),
+            },
+            WitNode::PrimString(value) => Value::Variant {
+                case_idx: 20,
+                case_value: Some(Box::new(value.into_value())),
+            },
+            WitNode::Handle((uri, resource_id)) => Value::Variant {
+                case_idx: 21,
+                case_value: Some(Box::new(Value::Tuple(vec![
+                    uri.into_value(),
+                    resource_id.into_value(),
+                ]))),
+            },
+        }
+    }
+
+    fn get_type() -> AnalysedType {
+        variant(vec![
+            case("record-value", list(NodeIndex::get_type())),
+            case(
+                "variant-value",
+                tuple(vec![u32(), option(NodeIndex::get_type())]),
+            ),
+            case("enum-value", u32()),
+            case("flags-value", list(bool())),
+            case("tuple-value", list(NodeIndex::get_type())),
+            case("list-value", list(NodeIndex::get_type())),
+            case("option-value", option(NodeIndex::get_type())),
+            case(
+                "result-value",
+                result(option(NodeIndex::get_type()), option(NodeIndex::get_type())),
+            ),
+            case("prim-u8", u8()),
+            case("prim-u16", u16()),
+            case("prim-u32", u32()),
+            case("prim-u64", u64()),
+            case("prim-s8", s8()),
+            case("prim-s16", s16()),
+            case("prim-s32", s32()),
+            case("prim-s64", s64()),
+            case("prim-float32", f32()),
+            case("prim-float64", f64()),
+            case("prim-char", chr()),
+            case("prim-bool", bool()),
+            case("prim-string", str()),
+            case("handle", tuple(vec![Uri::get_type(), u64()])),
+        ])
     }
 }
 
