@@ -205,7 +205,7 @@ impl StubDefinition {
     fn partition_world_items<'a>(
         &'a self,
         world_items: &'a IndexMap<WorldKey, WorldItem>,
-    ) -> WorldItemsByType {
+    ) -> WorldItemsByType<'a> {
         let mut types = Vec::<(String, TypeId)>::new();
         let mut functions = Vec::new();
         let mut interfaces = Vec::new();
