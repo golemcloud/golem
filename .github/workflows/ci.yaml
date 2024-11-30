@@ -504,7 +504,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
+        project:
+          - golem-cli
+          - golem
+        cfg:
           - rust-target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
           - rust-target: aarch64-unknown-linux-gnu
@@ -528,7 +531,7 @@ jobs:
       - name: Fetch tag
         run: git fetch origin --deepen=1
       - name: Setup Rust
-        run: rustup update stable --no-self-update && rustup default stable && rustup target add ${{ matrix.rust-target }}
+        run: rustup update stable --no-self-update && rustup default stable && rustup target add ${{ matrix.cfg.rust-target }}
       - uses: davidB/rust-cargo-make@v1
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
@@ -540,22 +543,22 @@ jobs:
         env:
           VERSION: ${{ steps.get_version.outputs.version-without-v }}
         run: cargo make --profile ci set-version
-      - run: cargo build -p golem-cli --release --target ${{ matrix.rust-target }}
-        if: ${{ ! matrix.cross }}
+      - run: cargo build -p ${{ matrix.project }} --release --target ${{ matrix.cfg.rust-target }}
+        if: ${{ ! matrix.cfg.cross }}
       - run: cargo install cross
-        if: ${{ matrix.cross }}
-      - run: cross build -p golem-cli --release --target ${{ matrix.rust-target }}
-        if: ${{ matrix.cross }}
-      - run: mv ./target/${{ matrix.rust-target }}/release/golem-cli.exe ./target/${{ matrix.rust-target }}/release/golem-cli-${{ matrix.rust-target }}.exe
+        if: ${{ matrix.cfg.cross }}
+      - run: cross build -p ${{ matrix.project }} --release --target ${{ matrix.cfg.rust-target }}
+        if: ${{ matrix.cfg.cross }}
+      - run: mv ./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}.exe ./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}.exe
         if: matrix.os == 'windows-latest'
-      - run: mv ./target/${{ matrix.rust-target }}/release/golem-cli ./target/${{ matrix.rust-target }}/release/golem-cli-${{ matrix.rust-target }}
+      - run: mv ./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }} ./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}
         if: matrix.os != 'windows-latest'
       - name: Login GH CLI
         shell: bash
         run: gh auth login --with-token < <(echo ${{ secrets.GITHUB_TOKEN }})
-      - run: gh release upload -R golemcloud/golem --clobber ${{ github.ref_name }} target/${{ matrix.rust-target }}/release/golem-cli-${{ matrix.rust-target }}.exe
+      - run: gh release upload -R golemcloud/golem --clobber ${{ github.ref_name }} target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}.exe
         if: matrix.os == 'windows-latest'
-      - run: gh release upload -R golemcloud/golem --clobber ${{ github.ref_name }} target/${{ matrix.rust-target }}/release/golem-cli-${{ matrix.rust-target }}
+      - run: gh release upload -R golemcloud/golem --clobber ${{ github.ref_name }} target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}
         if: matrix.os != 'windows-latest'
 
   publish-slack-notification:
