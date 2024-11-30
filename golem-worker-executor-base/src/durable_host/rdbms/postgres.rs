@@ -16,12 +16,14 @@ use crate::durable_host::DurableWorkerCtx;
 use crate::metrics::wasm::record_host_function_call;
 use crate::preview2::wasi::rdbms::postgres::{
     DbColumn, DbColumnType, DbColumnTypePrimitive, DbRow, DbValue, DbValuePrimitive, Error, Host,
-    HostDbConnection, HostDbResultSet,
+    HostDbConnection, HostDbResultSet, IpAddress,
 };
 use crate::services::rdbms::postgres::PostgresType;
 use crate::services::rdbms::RdbmsPoolKey;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
+use chrono::{Datelike, Offset, Timelike};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::ops::Deref;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -311,31 +313,102 @@ impl TryFrom<DbValuePrimitive> for crate::services::rdbms::postgres::types::DbVa
             DbValuePrimitive::Float4(f) => Ok(Self::Float4(f)),
             DbValuePrimitive::Float8(f) => Ok(Self::Float8(f)),
             DbValuePrimitive::Boolean(b) => Ok(Self::Boolean(b)),
-            DbValuePrimitive::Timestamp(v) => {
-                let t = chrono::DateTime::from_timestamp_millis(v)
-                    .ok_or("Timestamp value is not valid")?;
-                Ok(Self::Timestamp(t))
+            DbValuePrimitive::Timestamp((year, month, day, hour, minute, second, nanosecond)) => {
+                let date = chrono::naive::NaiveDate::from_ymd_opt(year, month as u32, day as u32)
+                    .ok_or("Date value is not valid")?;
+                let time = chrono::NaiveTime::from_hms_nano_opt(
+                    hour as u32,
+                    minute as u32,
+                    second as u32,
+                    nanosecond,
+                )
+                .ok_or("Time value is not valid")?;
+
+                Ok(Self::Timestamp(
+                    chrono::naive::NaiveDateTime::new(date, time).and_utc(),
+                ))
             }
-            DbValuePrimitive::Timestamptz(v) => {
-                let t = chrono::DateTime::from_timestamp_millis(v)
-                    .ok_or("Timestamptz value is not valid")?;
-                Ok(Self::Timestamptz(t))
+            DbValuePrimitive::Timestamptz((
+                year,
+                month,
+                day,
+                hour,
+                minute,
+                second,
+                nanosecond,
+                offset,
+            )) => {
+                let date = chrono::naive::NaiveDate::from_ymd_opt(year, month as u32, day as u32)
+                    .ok_or("Date value is not valid")?;
+                let time = chrono::NaiveTime::from_hms_nano_opt(
+                    hour as u32,
+                    minute as u32,
+                    second as u32,
+                    nanosecond,
+                )
+                .ok_or("Time value is not valid")?;
+                let offset = chrono::offset::FixedOffset::west_opt(offset)
+                    .ok_or("Offset value is not valid")?;
+                let datetime = chrono::naive::NaiveDateTime::new(date, time)
+                    .checked_add_offset(offset)
+                    .ok_or("Offset value is not valid")?;
+                Ok(Self::Timestamptz(datetime.and_utc()))
             }
-            DbValuePrimitive::Time(v) => Ok(Self::Time(v)),
-            DbValuePrimitive::Timetz(v) => Ok(Self::Timetz(v)),
+            DbValuePrimitive::Time((hour, minute, second, nanosecond)) => {
+                let time = chrono::NaiveTime::from_hms_nano_opt(
+                    hour as u32,
+                    minute as u32,
+                    second as u32,
+                    nanosecond,
+                )
+                .ok_or("Time value is not valid")?;
+                Ok(Self::Time(time))
+            }
+            DbValuePrimitive::Timetz((hour, minute, second, nanosecond, offset)) => {
+                let time = chrono::NaiveTime::from_hms_nano_opt(
+                    hour as u32,
+                    minute as u32,
+                    second as u32,
+                    nanosecond,
+                )
+                .ok_or("Time value is not valid")?;
+                let offset = chrono::offset::FixedOffset::west_opt(offset)
+                    .ok_or("Offset value is not valid")?;
+                Ok(Self::Timetz((time, offset)))
+            }
+            DbValuePrimitive::Date((year, month, day)) => {
+                let date = chrono::naive::NaiveDate::from_ymd_opt(year, month as u32, day as u32)
+                    .ok_or("Date value is not valid")?;
+                Ok(Self::Date(date))
+            }
             DbValuePrimitive::Interval(v) => Ok(Self::Interval(chrono::Duration::microseconds(v))),
-            DbValuePrimitive::Date(v) => {
-                let t =
-                    chrono::DateTime::from_timestamp_millis(v).ok_or("Date value is not valid")?;
-                Ok(Self::Date(t.date_naive()))
-            }
             DbValuePrimitive::Text(s) => Ok(Self::Text(s)),
             DbValuePrimitive::Varchar(s) => Ok(Self::Varchar(s)),
             DbValuePrimitive::Bpchar(s) => Ok(Self::Bpchar(s)),
             DbValuePrimitive::Bytea(u) => Ok(Self::Bytea(u)),
-            DbValuePrimitive::Json(s) => Ok(Self::Json(s)),
+            DbValuePrimitive::Json(v) => {
+                let v: serde_json::Value = serde_json::from_str(&v).map_err(|e| e.to_string())?;
+                Ok(Self::Json(v))
+            }
+            DbValuePrimitive::Jsonb(v) => {
+                let v: serde_json::Value = serde_json::from_str(&v).map_err(|e| e.to_string())?;
+                Ok(Self::Jsonb(v))
+            }
             DbValuePrimitive::Xml(s) => Ok(Self::Xml(s)),
             DbValuePrimitive::Uuid((h, l)) => Ok(Self::Uuid(Uuid::from_u64_pair(h, l))),
+            DbValuePrimitive::Bit(v) => Ok(Self::Bit(v)),
+            DbValuePrimitive::Varbit(v) => Ok(Self::Varbit(v)),
+            DbValuePrimitive::Oid(v) => Ok(Self::Oid(v)),
+            DbValuePrimitive::Inet(v) => match v {
+                IpAddress::Ipv4((a, b, c, d)) => {
+                    let v = Ipv4Addr::new(a, b, c, d);
+                    Ok(Self::Inet(IpAddr::V4(v)))
+                }
+                IpAddress::Ipv6((a, b, c, d, e, f, g, h)) => {
+                    let v = Ipv6Addr::new(a, b, c, d, e, f, g, h);
+                    Ok(Self::Inet(IpAddr::V6(v)))
+                }
+            },
             DbValuePrimitive::Null => Ok(Self::Null),
         }
     }
@@ -359,19 +432,49 @@ impl From<crate::services::rdbms::postgres::types::DbValuePrimitive> for DbValue
                 Self::Boolean(b)
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Timestamp(v) => {
-                Self::Timestamp(v.timestamp_millis())
+                let year = v.date_naive().year();
+                let month = v.date_naive().month() as u8;
+                let day = v.date_naive().day() as u8;
+                let hour = v.time().hour() as u8;
+                let minute = v.time().minute() as u8;
+                let second = v.time().second() as u8;
+                let nanosecond = v.time().nanosecond();
+                Self::Timestamp((year, month, day, hour, minute, second, nanosecond))
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Timestamptz(v) => {
-                Self::Timestamptz(v.timestamp_millis())
+                let year = v.date_naive().year();
+                let month = v.date_naive().month() as u8;
+                let day = v.date_naive().day() as u8;
+                let hour = v.time().hour() as u8;
+                let minute = v.time().minute() as u8;
+                let second = v.time().second() as u8;
+                let nanosecond = v.time().nanosecond();
+                let offset = v.offset().fix().local_minus_utc();
+                Self::Timestamptz((year, month, day, hour, minute, second, nanosecond, offset))
             }
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Time(u) => Self::Time(u),
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Timetz(v) => Self::Timetz(v),
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Interval(v) => {
-                Self::Interval(v.num_milliseconds())
+            crate::services::rdbms::postgres::types::DbValuePrimitive::Time(v) => {
+                let hour = v.hour() as u8;
+                let minute = v.minute() as u8;
+                let second = v.second() as u8;
+                let nanosecond = v.nanosecond();
+                Self::Time((hour, minute, second, nanosecond))
+            }
+            crate::services::rdbms::postgres::types::DbValuePrimitive::Timetz((v, o)) => {
+                let hour = v.hour() as u8;
+                let minute = v.minute() as u8;
+                let second = v.second() as u8;
+                let nanosecond = v.nanosecond();
+                let offset = o.local_minus_utc();
+                Self::Timetz((hour, minute, second, nanosecond, offset))
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Date(v) => {
-                let v = chrono::NaiveDateTime::from(v).and_utc().timestamp_millis();
-                Self::Date(v)
+                let year = v.year();
+                let month = v.month() as u8;
+                let day = v.day() as u8;
+                Self::Date((year, month, day))
+            }
+            crate::services::rdbms::postgres::types::DbValuePrimitive::Interval(v) => {
+                Self::Interval(v.num_milliseconds())
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Text(s) => Self::Text(s),
             crate::services::rdbms::postgres::types::DbValuePrimitive::Varchar(s) => {
@@ -379,11 +482,40 @@ impl From<crate::services::rdbms::postgres::types::DbValuePrimitive> for DbValue
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Bpchar(s) => Self::Bpchar(s),
             crate::services::rdbms::postgres::types::DbValuePrimitive::Bytea(u) => Self::Bytea(u),
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Json(s) => Self::Json(s),
+            crate::services::rdbms::postgres::types::DbValuePrimitive::Json(s) => {
+                Self::Json(s.to_string())
+            }
+            crate::services::rdbms::postgres::types::DbValuePrimitive::Jsonb(s) => {
+                Self::Jsonb(s.to_string())
+            }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Xml(s) => Self::Xml(s),
             crate::services::rdbms::postgres::types::DbValuePrimitive::Uuid(uuid) => {
                 Self::Uuid(uuid.as_u64_pair())
             }
+            crate::services::rdbms::postgres::types::DbValuePrimitive::Bit(v) => Self::Bit(v),
+            crate::services::rdbms::postgres::types::DbValuePrimitive::Varbit(v) => Self::Varbit(v),
+            crate::services::rdbms::postgres::types::DbValuePrimitive::Oid(v) => Self::Oid(v),
+            crate::services::rdbms::postgres::types::DbValuePrimitive::Inet(v) => match v {
+                IpAddr::V4(v) => {
+                    let octets = v.octets();
+                    Self::Inet(IpAddress::Ipv4((
+                        octets[0], octets[1], octets[2], octets[3],
+                    )))
+                }
+                IpAddr::V6(v) => {
+                    let segments = v.segments();
+                    Self::Inet(IpAddress::Ipv6((
+                        segments[0],
+                        segments[1],
+                        segments[2],
+                        segments[3],
+                        segments[4],
+                        segments[5],
+                        segments[6],
+                        segments[7],
+                    )))
+                }
+            },
             crate::services::rdbms::postgres::types::DbValuePrimitive::Null => Self::Null,
         }
     }
@@ -473,6 +605,10 @@ impl From<crate::services::rdbms::postgres::types::DbColumnTypePrimitive>
             crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Jsonb => Self::Jsonb,
             crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Json => Self::Json,
             crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Xml => Self::Xml,
+            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Bit => Self::Bit,
+            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Varbit => Self::Varbit,
+            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Oid => Self::Oid,
+            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Inet => Self::Inet,
             crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Uuid => Self::Uuid,
         }
     }

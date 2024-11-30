@@ -257,8 +257,18 @@ fn bind_value(
                     Ok(query.bind(values))
                 }
                 DbValuePrimitive::Json(_) => {
-                    let values: Vec<String> = get_plain_values(vs, |v| {
+                    let values: Vec<serde_json::Value> = get_plain_values(vs, |v| {
                         if let DbValuePrimitive::Json(v) = v {
+                            Some(v)
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Jsonb(_) => {
+                    let values: Vec<serde_json::Value> = get_plain_values(vs, |v| {
+                        if let DbValuePrimitive::Jsonb(v) = v {
                             Some(v)
                         } else {
                             None
@@ -433,23 +443,23 @@ fn get_db_value(index: usize, row: &sqlx::postgres::PgRow) -> Result<DbValue, St
             }
         }
         pg_type_name::JSON => {
-            let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
+            let v: Option<serde_json::Value> = row.try_get(index).map_err(|e| e.to_string())?;
             match v {
                 Some(v) => DbValue::Primitive(DbValuePrimitive::Json(v)),
                 None => DbValue::Primitive(DbValuePrimitive::Null),
             }
         }
-        // pg_type_name::JSONB => {
-        //     let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
-        //     match v {
-        //         Some(v) => DbValue::Primitive(DbValuePrimitive::Jsonb(v)),
-        //         None => DbValue::Primitive(DbValuePrimitive::Null),
-        //     }
-        // }
+        pg_type_name::JSONB => {
+            let v: Option<serde_json::Value> = row.try_get(index).map_err(|e| e.to_string())?;
+            match v {
+                Some(v) => DbValue::Primitive(DbValuePrimitive::Jsonb(v)),
+                None => DbValue::Primitive(DbValuePrimitive::Null),
+            }
+        }
         pg_type_name::XML => {
             let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
             match v {
-                Some(v) => DbValue::Primitive(DbValuePrimitive::Json(v)),
+                Some(v) => DbValue::Primitive(DbValuePrimitive::Xml(v)),
                 None => DbValue::Primitive(DbValuePrimitive::Null),
             }
         }
@@ -550,9 +560,18 @@ fn get_db_value(index: usize, row: &sqlx::postgres::PgRow) -> Result<DbValue, St
             }
         }
         pg_type_name::JSON_ARRAY => {
-            let vs: Option<Vec<String>> = row.try_get(index).map_err(|e| e.to_string())?;
+            let vs: Option<Vec<serde_json::Value>> =
+                row.try_get(index).map_err(|e| e.to_string())?;
             match vs {
                 Some(vs) => DbValue::Array(vs.into_iter().map(DbValuePrimitive::Json).collect()),
+                None => DbValue::Array(vec![]),
+            }
+        }
+        pg_type_name::JSONB_ARRAY => {
+            let vs: Option<Vec<serde_json::Value>> =
+                row.try_get(index).map_err(|e| e.to_string())?;
+            match vs {
+                Some(vs) => DbValue::Array(vs.into_iter().map(DbValuePrimitive::Jsonb).collect()),
                 None => DbValue::Array(vec![]),
             }
         }
@@ -837,6 +856,7 @@ pub mod types {
     use bigdecimal::BigDecimal;
     use itertools::Itertools;
     use std::fmt::Display;
+    use std::net::IpAddr;
     use uuid::Uuid;
 
     #[derive(Clone, Debug, Eq, PartialEq)]
@@ -863,6 +883,10 @@ pub mod types {
         Xml,
         Json,
         Jsonb,
+        Inet,
+        Bit,
+        Varbit,
+        Oid,
     }
 
     impl Display for DbColumnTypePrimitive {
@@ -890,6 +914,10 @@ pub mod types {
                 DbColumnTypePrimitive::Jsonb => write!(f, "jsonb"),
                 DbColumnTypePrimitive::Xml => write!(f, "xml"),
                 DbColumnTypePrimitive::Uuid => write!(f, "uuid"),
+                DbColumnTypePrimitive::Inet => write!(f, "inet"),
+                DbColumnTypePrimitive::Bit => write!(f, "bit"),
+                DbColumnTypePrimitive::Varbit => write!(f, "varbit"),
+                DbColumnTypePrimitive::Oid => write!(f, "oid"),
             }
         }
     }
@@ -922,16 +950,21 @@ pub mod types {
         Timestamp(chrono::DateTime<chrono::Utc>),
         Timestamptz(chrono::DateTime<chrono::Utc>),
         Date(chrono::NaiveDate),
-        Time(i64),
-        Timetz(i64),
+        Time(chrono::NaiveTime),
+        Timetz((chrono::NaiveTime, chrono::FixedOffset)),
         Interval(chrono::Duration),
         Text(String),
         Varchar(String),
         Bpchar(String),
         Bytea(Vec<u8>),
-        Json(String),
+        Json(serde_json::Value),
+        Jsonb(serde_json::Value),
         Xml(String),
         Uuid(Uuid),
+        Inet(IpAddr),
+        Bit(Vec<bool>),
+        Varbit(Vec<bool>),
+        Oid(u32),
         Null,
     }
 
@@ -950,15 +983,20 @@ pub mod types {
                 DbValuePrimitive::Timestamptz(v) => write!(f, "{}", v),
                 DbValuePrimitive::Date(v) => write!(f, "{}", v),
                 DbValuePrimitive::Time(v) => write!(f, "{}", v),
-                DbValuePrimitive::Timetz(v) => write!(f, "{}", v),
+                DbValuePrimitive::Timetz(v) => write!(f, "{} {}", v.0, v.1),
                 DbValuePrimitive::Interval(v) => write!(f, "{}", v),
                 DbValuePrimitive::Text(v) => write!(f, "{}", v),
                 DbValuePrimitive::Varchar(v) => write!(f, "{}", v),
                 DbValuePrimitive::Bpchar(v) => write!(f, "{}", v),
                 DbValuePrimitive::Bytea(v) => write!(f, "{:?}", v),
                 DbValuePrimitive::Json(v) => write!(f, "{}", v),
+                DbValuePrimitive::Jsonb(v) => write!(f, "{}", v),
                 DbValuePrimitive::Xml(v) => write!(f, "{}", v),
                 DbValuePrimitive::Uuid(v) => write!(f, "{}", v),
+                DbValuePrimitive::Inet(v) => write!(f, "{}", v),
+                DbValuePrimitive::Bit(v) => write!(f, "{:?}", v),
+                DbValuePrimitive::Varbit(v) => write!(f, "{:?}", v),
+                DbValuePrimitive::Oid(v) => write!(f, "{}", v),
                 DbValuePrimitive::Null => write!(f, "NULL"),
             }
         }

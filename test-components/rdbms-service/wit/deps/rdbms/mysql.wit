@@ -10,6 +10,13 @@ interface mysql {
     other(string)
   }
 
+
+  type date = tuple<s32, u8, u8>; // year, month, day
+  type time = tuple<u8, u8, u8, u32>; // hour, minute, second, nanosecond
+  type timestamp = tuple<s32, u8, u8, u8, u8, u8, u32>; // year, month, day, hour, minute, second, nanosecond
+
+  type bit-vec = list<bool>;
+
   variant db-column-type {
     boolean,
     tinyint,
@@ -79,10 +86,10 @@ interface mysql {
     float(float32),
     double(float64),
     decimal(string),
-    date(s64),
-    datetime(s64),
-    timestamp(s64),
-    time(s64),
+    date(date),
+    datetime(timestamp),
+    timestamp(timestamp),
+    time(time),
     year(s8),
     fixchar(string),
     varchar(string),
@@ -98,7 +105,7 @@ interface mysql {
     longblob(list<u8>),
     enumeration(string),
     set(string),
-    bit(u8),
+    bit(bit-vec),
     json(string),
     null
     //        geometry,

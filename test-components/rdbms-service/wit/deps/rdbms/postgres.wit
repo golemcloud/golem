@@ -10,6 +10,23 @@ interface postgres {
     other(string)
   }
 
+  type uuid = tuple<u64, u64>;
+
+  type ipv4-address = tuple<u8, u8, u8, u8>;
+  type ipv6-address = tuple<u16, u16, u16, u16, u16, u16, u16, u16>;
+  variant ip-address {
+    ipv4(ipv4-address),
+    ipv6(ipv6-address),
+  }
+
+  type date = tuple<s32, u8, u8>; // year, month, day
+  type time = tuple<u8, u8, u8, u32>; // hour, minute, second, nanosecond
+  type timetz = tuple<u8, u8, u8, u32, s32>; // hour, minute, second, nanosecond, timezone offset in seconds
+  type timestamp = tuple<s32, u8, u8, u8, u8, u8, u32>; // year, month, day, hour, minute, second, nanosecond
+  type timestamptz = tuple<s32, u8, u8, u8, u8, u8, u32, s32>; // year, month, day, hour, minute, second, nanosecond, timezone offset in seconds
+
+  type bit-vec = list<bool>;
+
   variant db-column-type-primitive {
     character,
     int2,
@@ -32,56 +49,64 @@ interface postgres {
     uuid,
     xml,
     json,
-    jsonb
-//     inet,
-//     macaddr,
-//     cidr,
-//     point,
-//     line,
-//     lseg,
-//     box,
-//     polygon,
-//     circle,
-//     path,
-//     box2d,
-//     polygonz,
-//     circlez,
-//     pathz,
-//     hstore,
-//     tsvector,
-//     tsquery,
-//     range,
-//     tstzrange,
-//     int4range,
-//     int8range,
-//     numrange,
-//     tsrange,
-//     tstzrange
+    jsonb,
+    inet,
+    bit,
+    varbit,
+    oid
+    //     macaddr,
+    //     cidr,
+    //     point,
+    //     line,
+    //     lseg,
+    //     box,
+    //     polygon,
+    //     circle,
+    //     path,
+    //     box2d,
+    //     polygonz,
+    //     circlez,
+    //     pathz,
+    //     hstore,
+    //     tsvector,
+    //     tsquery,
+    //     range,
+    //     tstzrange,
+    //     int4range,
+    //     int8range,
+    //     numrange,
+    //     tsrange,
+    //     tstzrange
   }
 
   variant db-value-primitive {
-      character(s8),
-      int2(s16),
-      int4(s32),
-      int8(s64),
-      float4(float32),
-      float8(float64),
-      numeric(string),
-      boolean(bool),
-      text(string),
-      varchar(string),
-      bpchar(string),
-      timestamp(s64),
-      timestamptz(s64),
-      date(s64),
-      time(s64),
-      timetz(s64),
-      interval(s64),
-      bytea(list<u8>),
-      json(string),
-      xml(string),
-      uuid(tuple<u64, u64>),
-      null
+    character(s8),
+    int2(s16),
+    int4(s32),
+    int8(s64),
+    float4(float32),
+    float8(float64),
+    numeric(string),
+    boolean(bool),
+    text(string),
+    varchar(string),
+    bpchar(string),
+    timestamp(timestamp),
+    timestamptz(timestamptz),
+    date(date),
+    time(time),
+    timetz(timetz),
+    interval(s64),
+    bytea(list<u8>),
+    json(string),
+    jsonb(string),
+    xml(string),
+    uuid(uuid),
+    inet(ip-address),
+    bit(bit-vec),
+    varbit(bit-vec),
+    oid(u32),
+    null
   }
 
   variant db-column-type {

@@ -238,7 +238,7 @@ fn get_db_value(index: usize, row: &sqlx::mysql::MySqlRow) -> Result<DbValue, St
             v.map(DbValue::Longtext).unwrap_or(DbValue::Null)
         }
         mysql_type_name::JSON => {
-            let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
+            let v: Option<serde_json::Value> = row.try_get(index).map_err(|e| e.to_string())?;
             v.map(DbValue::Json).unwrap_or(DbValue::Null)
         }
         mysql_type_name::ENUM => {
@@ -514,7 +514,7 @@ pub mod types {
         Date(chrono::NaiveDate),
         Datetime(chrono::DateTime<chrono::Utc>),
         Timestamp(chrono::DateTime<chrono::Utc>),
-        Time(i64),
+        Time(chrono::NaiveTime),
         Year(i8),
         Fixchar(String),
         Varchar(String),
@@ -530,8 +530,8 @@ pub mod types {
         Longblob(Vec<u8>),
         Enumeration(String),
         Set(String),
-        Bit(u8),
-        Json(String),
+        Bit(Vec<bool>),
+        Json(serde_json::Value),
         Null,
     }
 
@@ -571,7 +571,7 @@ pub mod types {
                 DbValue::Longblob(v) => write!(f, "{:?}", v),
                 DbValue::Enumeration(v) => write!(f, "{}", v),
                 DbValue::Set(v) => write!(f, "{}", v),
-                DbValue::Bit(v) => write!(f, "{}", v),
+                DbValue::Bit(v) => write!(f, "{:?}", v),
                 DbValue::Json(v) => write!(f, "{}", v),
                 DbValue::Null => write!(f, "NULL"),
             }

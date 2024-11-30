@@ -172,7 +172,9 @@ sqlx = { version = "0.8", features = [
     "migrate",
     "chrono",
     "json",
-    "bigdecimal"
+    "bigdecimal",
+    "bit-vec",
+    "ipnetwork"
 ] }
 strum = "0.26.3"
 strum_macros = "0.26.4"
