@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use async_trait::async_trait;
+use itertools::Itertools;
 use std::collections::HashSet;
 use std::convert::identity;
 use std::sync::{Arc, RwLock};
-
-use itertools::Itertools;
 use tracing::debug;
 
 use golem_common::model::{ShardAssignment, ShardId, WorkerId};
@@ -24,32 +24,30 @@ use golem_common::model::{ShardAssignment, ShardId, WorkerId};
 use crate::error::GolemError;
 use crate::metrics::sharding::*;
 use crate::model::ShardAssignmentCheck;
+use crate::services::oplog::plugin::OplogProcessorPlugin;
 
 /// Service for assigning shards to worker executors
+#[async_trait]
 pub trait ShardService {
     fn is_ready(&self) -> bool;
-    fn assign_shards(&self, shard_ids: &HashSet<ShardId>) -> Result<(), GolemError>;
+    async fn assign_shards(&self, shard_ids: &HashSet<ShardId>) -> Result<(), GolemError>;
     fn check_worker(&self, worker_id: &WorkerId) -> Result<(), GolemError>;
-    fn register(&self, number_of_shards: usize, shard_ids: &HashSet<ShardId>);
-    fn revoke_shards(&self, shard_ids: &HashSet<ShardId>) -> Result<(), GolemError>;
+    async fn register(&self, number_of_shards: usize, shard_ids: &HashSet<ShardId>) -> Result<(), GolemError>;
+    async fn revoke_shards(&self, shard_ids: &HashSet<ShardId>) -> Result<(), GolemError>;
     fn current_assignment(&self) -> Result<ShardAssignment, GolemError>;
     fn try_get_current_assignment(&self) -> Option<ShardAssignment>;
 }
 
 pub struct ShardServiceDefault {
     shard_assignment: Arc<RwLock<Option<ShardAssignment>>>,
-}
-
-impl Default for ShardServiceDefault {
-    fn default() -> Self {
-        Self::new()
-    }
+    oplog_plugins: Arc<dyn OplogProcessorPlugin + Send + Sync>,
 }
 
 impl ShardServiceDefault {
-    pub fn new() -> Self {
+    pub fn new(oplog_plugins: Arc<dyn OplogProcessorPlugin + Send + Sync>) -> Self {
         Self {
             shard_assignment: Arc::new(RwLock::new(None)),
+            oplog_plugins,
         }
     }
 
@@ -76,13 +74,14 @@ impl ShardServiceDefault {
     }
 }
 
+#[async_trait]
 impl ShardService for ShardServiceDefault {
     fn is_ready(&self) -> bool {
         self.shard_assignment.read().unwrap().is_some()
     }
 
-    fn assign_shards(&self, shard_ids: &HashSet<ShardId>) -> Result<(), GolemError> {
-        self.with_write_shard_assignment(|shard_assignment| match shard_assignment {
+    async fn assign_shards(&self, shard_ids: &HashSet<ShardId>) -> Result<(), GolemError> {
+        let result = self.with_write_shard_assignment(|shard_assignment| match shard_assignment {
             Some(shard_assignment) => {
                 debug!(
                     shard_ids_current = shard_assignment.shard_ids.iter().join(", "),
@@ -92,10 +91,13 @@ impl ShardService for ShardServiceDefault {
                 shard_assignment.assign_shards(shard_ids);
                 let assigned_shard_count = shard_assignment.shard_ids.len();
                 record_assigned_shard_count(assigned_shard_count);
+
                 Ok(())
             }
             None => Err(sharding_not_ready_error()),
-        })
+        });
+        self.oplog_plugins.on_shard_assignment_changed().await?;
+        result
     }
 
     fn check_worker(&self, worker_id: &WorkerId) -> Result<(), GolemError> {
@@ -105,11 +107,11 @@ impl ShardService for ShardServiceDefault {
         .and_then(identity)
     }
 
-    fn current_assignment(&self) -> Result<ShardAssignment, GolemError> {
-        self.with_read_shard_assignment(|shard_assignment| shard_assignment.clone())
-    }
-
-    fn register(&self, number_of_shards: usize, shard_ids: &HashSet<ShardId>) {
+    async fn register(
+        &self,
+        number_of_shards: usize,
+        shard_ids: &HashSet<ShardId>,
+    ) -> Result<(), GolemError> {
         self.with_write_shard_assignment(|shard_assignment| {
             let shard_assignment = match shard_assignment {
                 Some(shard_assignment) => shard_assignment,
@@ -127,11 +129,13 @@ impl ShardService for ShardServiceDefault {
             shard_assignment.register(number_of_shards, shard_ids);
             let assigned_shard_count = shard_assignment.shard_ids.len();
             record_assigned_shard_count(assigned_shard_count);
-        })
+        });
+        self.oplog_plugins.on_shard_assignment_changed().await?;
+        Ok(())
     }
 
-    fn revoke_shards(&self, shard_ids: &HashSet<ShardId>) -> Result<(), GolemError> {
-        self.with_write_shard_assignment(|shard_assignment| match shard_assignment {
+    async fn revoke_shards(&self, shard_ids: &HashSet<ShardId>) -> Result<(), GolemError> {
+        let result = self.with_write_shard_assignment(|shard_assignment| match shard_assignment {
             Some(shard_assignment) => {
                 debug!(
                     shard_ids_current = shard_assignment.shard_ids.iter().join(", "),
@@ -144,7 +148,13 @@ impl ShardService for ShardServiceDefault {
                 Ok(())
             }
             None => Err(sharding_not_ready_error()),
-        })
+        });
+        self.oplog_plugins.on_shard_assignment_changed().await?;
+        result
+    }
+
+    fn current_assignment(&self) -> Result<ShardAssignment, GolemError> {
+        self.with_read_shard_assignment(|shard_assignment| shard_assignment.clone())
     }
 
     fn try_get_current_assignment(&self) -> Option<ShardAssignment> {

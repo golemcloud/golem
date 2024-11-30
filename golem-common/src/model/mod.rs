@@ -32,7 +32,9 @@ use golem_api_grpc::proto::golem::shardmanager::{
     Pod as GrpcPod, RoutingTable as GrpcRoutingTable, RoutingTableEntry as GrpcRoutingTableEntry,
 };
 use golem_api_grpc::proto::golem::worker::Cursor;
-use golem_wasm_ast::analysis::analysed_type::{field, record, s64};
+use golem_wasm_ast::analysis::analysed_type::{
+    field, list, r#enum, record, s64, str, tuple, u32, u64,
+};
 use golem_wasm_ast::analysis::{analysed_type, AnalysedType};
 use golem_wasm_rpc::IntoValue;
 use poem::http::Uri;
@@ -239,6 +241,22 @@ impl From<prost_types::Timestamp> for Timestamp {
 impl From<u64> for Timestamp {
     fn from(value: u64) -> Self {
         Timestamp(iso8601_timestamp::Timestamp::UNIX_EPOCH.add(Duration::from_millis(value)))
+    }
+}
+
+impl IntoValue for Timestamp {
+    fn into_value(self) -> golem_wasm_rpc::Value {
+        let d = self
+            .0
+            .duration_since(iso8601_timestamp::Timestamp::UNIX_EPOCH);
+        golem_wasm_rpc::Value::Record(vec![
+            golem_wasm_rpc::Value::U64(d.whole_seconds() as u64),
+            golem_wasm_rpc::Value::U32(d.subsec_nanoseconds() as u32),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![field("seconds", u64()), field("nanoseconds", u32())])
     }
 }
 
@@ -1005,6 +1023,30 @@ impl WorkerMetadata {
     }
 }
 
+impl IntoValue for WorkerMetadata {
+    fn into_value(self) -> golem_wasm_rpc::Value {
+        golem_wasm_rpc::Value::Record(vec![
+            self.worker_id.into_value(),
+            self.args.into_value(),
+            self.env.into_value(),
+            self.last_known_status.status.into_value(),
+            self.last_known_status.component_version.into_value(),
+            0.into_value(), // retry count could be computed from the worker status record here but we don't support it yet
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("worker-id", WorkerId::get_type()),
+            field("args", list(str())),
+            field("env", list(tuple(vec![str(), str()]))),
+            field("status", WorkerStatus::get_type()),
+            field("component-version", u64()),
+            field("retry-count", u64()),
+        ])
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct WorkerResourceDescription {
     pub created_at: Timestamp,
@@ -1267,6 +1309,32 @@ impl From<WorkerStatus> for i32 {
     }
 }
 
+impl IntoValue for WorkerStatus {
+    fn into_value(self) -> golem_wasm_rpc::Value {
+        match self {
+            WorkerStatus::Running => golem_wasm_rpc::Value::Enum(0),
+            WorkerStatus::Idle => golem_wasm_rpc::Value::Enum(1),
+            WorkerStatus::Suspended => golem_wasm_rpc::Value::Enum(2),
+            WorkerStatus::Interrupted => golem_wasm_rpc::Value::Enum(3),
+            WorkerStatus::Retrying => golem_wasm_rpc::Value::Enum(4),
+            WorkerStatus::Failed => golem_wasm_rpc::Value::Enum(5),
+            WorkerStatus::Exited => golem_wasm_rpc::Value::Enum(6),
+        }
+    }
+
+    fn get_type() -> AnalysedType {
+        r#enum(&[
+            "running",
+            "idle",
+            "suspended",
+            "interrupted",
+            "retrying",
+            "failed",
+            "exited",
+        ])
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Encode, Decode)]
 pub enum WorkerInvocation {
     ExportedFunction {
@@ -1410,6 +1478,16 @@ impl ToJSON for AccountId {
 impl Display for AccountId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", &self.value)
+    }
+}
+
+impl IntoValue for AccountId {
+    fn into_value(self) -> golem_wasm_rpc::Value {
+        golem_wasm_rpc::Value::Record(vec![golem_wasm_rpc::Value::String(self.value)])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![field("value", str())])
     }
 }
 

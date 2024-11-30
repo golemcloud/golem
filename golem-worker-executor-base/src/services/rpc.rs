@@ -28,20 +28,12 @@ use crate::services::events::Events;
 use crate::services::plugins::Plugins;
 use crate::services::shard::ShardService;
 use crate::services::worker_proxy::{WorkerProxy, WorkerProxyError};
-use crate::services::{
-    active_workers, blob_store, component, golem_config, key_value, oplog, promise, scheduler,
-    shard, shard_manager, worker, worker_activator, worker_enumeration, HasActiveWorkers,
-    HasBlobStoreService, HasComponentService, HasConfig, HasEvents, HasExtraDeps, HasFileLoader,
-    HasKeyValueService, HasOplogService, HasPlugins, HasPromiseService, HasRpc,
-    HasRunningWorkerEnumerationService, HasSchedulerService, HasShardManagerService,
-    HasShardService, HasWasmtimeEngine, HasWorkerActivator, HasWorkerEnumerationService,
-    HasWorkerProxy, HasWorkerService,
-};
+use crate::services::{active_workers, blob_store, component, golem_config, key_value, oplog, promise, scheduler, shard, shard_manager, worker, worker_activator, worker_enumeration, HasActiveWorkers, HasBlobStoreService, HasComponentService, HasConfig, HasEvents, HasExtraDeps, HasFileLoader, HasKeyValueService, HasOplogProcessorPlugin, HasOplogService, HasPlugins, HasPromiseService, HasRpc, HasRunningWorkerEnumerationService, HasSchedulerService, HasShardManagerService, HasShardService, HasWasmtimeEngine, HasWorkerActivator, HasWorkerEnumerationService, HasWorkerProxy, HasWorkerService};
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::component::ComponentOwner;
 use golem_common::model::{IdempotencyKey, OwnedWorkerId, TargetWorkerId, WorkerId};
-
+use crate::services::oplog::plugin::OplogProcessorPlugin;
 use super::file_loader::FileLoader;
 
 #[async_trait]
@@ -282,6 +274,7 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
             + Send
             + Sync,
     >,
+    oplog_processor_plugin: Arc<dyn OplogProcessorPlugin + Send + Sync>,
     extra_deps: Ctx::ExtraDeps,
 }
 
@@ -309,6 +302,7 @@ impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
             events: self.events.clone(),
             file_loader: self.file_loader.clone(),
             plugins: self.plugins.clone(),
+            oplog_processor_plugin: self.oplog_processor_plugin.clone(),
             extra_deps: self.extra_deps.clone(),
         }
     }
@@ -461,6 +455,12 @@ impl<Ctx: WorkerCtx>
     }
 }
 
+impl<Ctx: WorkerCtx> HasOplogProcessorPlugin for DirectWorkerInvocationRpc<Ctx> {
+    fn oplog_processor_plugin(&self) -> Arc<dyn OplogProcessorPlugin + Send + Sync> {
+        self.oplog_processor_plugin.clone()
+    }
+}
+
 impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -493,6 +493,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
                 + Send
                 + Sync,
         >,
+        oplog_processor_plugin: Arc<dyn OplogProcessorPlugin + Send + Sync>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
         Self {
@@ -517,6 +518,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             events,
             file_loader,
             plugins,
+            oplog_processor_plugin,
             extra_deps,
         }
     }

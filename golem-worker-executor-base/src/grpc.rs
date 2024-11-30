@@ -698,7 +698,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let shard_ids = proto_shard_ids.into_iter().map(ShardId::from).collect();
 
-        self.shard_service().revoke_shards(&shard_ids)?;
+        self.shard_service().revoke_shards(&shard_ids).await?;
 
         for (worker_id, worker_details) in self.active_workers().iter() {
             if self.shard_service().check_worker(&worker_id).is_err() {
@@ -722,7 +722,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let shard_ids = proto_shard_ids.into_iter().map(ShardId::from).collect();
 
-        self.shard_service().assign_shards(&shard_ids)?;
+        self.shard_service().assign_shards(&shard_ids).await?;
         Ctx::on_shard_assignment_changed(self).await?;
 
         Ok(())

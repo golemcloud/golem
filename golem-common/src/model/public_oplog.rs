@@ -21,8 +21,11 @@ use crate::model::{
     AccountId, ComponentVersion, Empty, IdempotencyKey, PluginInstallationId, Timestamp, WorkerId,
 };
 use golem_api_grpc::proto::golem::worker::{oplog_entry, worker_invocation, wrapped_function_type};
+use golem_wasm_ast::analysis::analysed_type::{
+    case, field, list, option, record, str, tuple, u64, u8, unit_case, variant,
+};
 use golem_wasm_ast::analysis::{AnalysedType, NameOptionTypePair};
-use golem_wasm_rpc::{Value, ValueAndType};
+use golem_wasm_rpc::{IntoValue, Value, ValueAndType, WitValue};
 use poem_openapi::types::{ParseFromParameter, ParseResult};
 use poem_openapi::{Object, Union};
 use serde::{Deserialize, Serialize};
@@ -42,6 +45,28 @@ pub struct SnapshotBasedUpdateParameters {
 pub enum PublicUpdateDescription {
     Automatic(Empty),
     SnapshotBased(SnapshotBasedUpdateParameters),
+}
+
+impl IntoValue for PublicUpdateDescription {
+    fn into_value(self) -> Value {
+        match self {
+            PublicUpdateDescription::Automatic(_) => Value::Variant {
+                case_idx: 0,
+                case_value: None,
+            },
+            PublicUpdateDescription::SnapshotBased(params) => Value::Variant {
+                case_idx: 1,
+                case_value: Some(Box::new(params.payload.into_value())),
+            },
+        }
+    }
+
+    fn get_type() -> AnalysedType {
+        variant(vec![
+            unit_case("auto-update"),
+            case("snapshot-based", list(u8())),
+        ])
+    }
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
@@ -85,6 +110,43 @@ impl From<WrappedFunctionType> for PublicWrappedFunctionType {
                 })
             }
         }
+    }
+}
+
+impl IntoValue for PublicWrappedFunctionType {
+    fn into_value(self) -> Value {
+        match self {
+            PublicWrappedFunctionType::ReadLocal(_) => Value::Variant {
+                case_idx: 0,
+                case_value: None,
+            },
+            PublicWrappedFunctionType::WriteLocal(_) => Value::Variant {
+                case_idx: 1,
+                case_value: None,
+            },
+            PublicWrappedFunctionType::ReadRemote(_) => Value::Variant {
+                case_idx: 2,
+                case_value: None,
+            },
+            PublicWrappedFunctionType::WriteRemote(_) => Value::Variant {
+                case_idx: 3,
+                case_value: None,
+            },
+            PublicWrappedFunctionType::WriteRemoteBatched(params) => Value::Variant {
+                case_idx: 4,
+                case_value: Some(Box::new(params.index.into_value())),
+            },
+        }
+    }
+
+    fn get_type() -> AnalysedType {
+        variant(vec![
+            unit_case("read-local"),
+            unit_case("write-local"),
+            unit_case("read-remote"),
+            unit_case("write-remote"),
+            case("write-remote-batched", option(u64())),
+        ])
     }
 }
 
@@ -142,6 +204,30 @@ pub struct PluginInstallationDescription {
     pub plugin_name: String,
     pub plugin_version: String,
     pub parameters: BTreeMap<String, String>,
+}
+
+impl IntoValue for PluginInstallationDescription {
+    fn into_value(self) -> Value {
+        Value::Record(vec![
+            self.installation_id.into_value(),
+            self.plugin_name.into_value(),
+            self.plugin_version.into_value(),
+            self.parameters
+                .into_iter()
+                .map(|(k, v)| Value::Tuple(vec![k.into_value(), v.into_value()]))
+                .collect::<Vec<Value>>()
+                .into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("installation_id", PluginInstallationId::get_type()),
+            field("name", str()),
+            field("version", str()),
+            field("parameters", list(tuple(vec![str(), str()]))),
+        ])
+    }
 }
 
 impl From<PluginInstallation> for PluginInstallationDescription {
@@ -202,6 +288,49 @@ pub struct CreateParameters {
     pub initial_active_plugins: BTreeSet<PluginInstallationDescription>,
 }
 
+impl IntoValue for CreateParameters {
+    fn into_value(self) -> Value {
+        Value::Record(vec![
+            self.timestamp.into_value(),
+            self.worker_id.into_value(),
+            self.component_version.into_value(),
+            self.args.into_iter().map(Value::String).collect::<Vec<Value>>().into_value(),
+            self.env
+                .into_iter()
+                .map(|(k, v)| Value::Tuple(vec![k.into_value(), v.into_value()]))
+                .collect::<Vec<Value>>()
+                .into_value(),
+            self.account_id.into_value(),
+            self.parent.into_value(),
+            self.component_size.into_value(),
+            self.initial_total_linear_memory_size.into_value(),
+            self.initial_active_plugins
+                .into_iter()
+                .map(Value::from)
+                .collect::<Vec<Value>>()
+                .into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("timestamp", Timestamp::get_type()),
+            field("worker_id", WorkerId::get_type()),
+            field("component_version", ComponentVersion::get_type()),
+            field("args", list(str())),
+            field("env", list(tuple(vec![str(), str()]))),
+            field("account_id", AccountId::get_type()),
+            field("parent", option(WorkerId::get_type())),
+            field("component_size", u64()),
+            field("initial_total_linear_memory_size", u64()),
+            field(
+                "initial_active_plugins",
+                list(PluginInstallationDescription::get_type()),
+            ),
+        ])
+    }
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
 pub struct ImportedFunctionInvokedParameters {
     pub timestamp: Timestamp,
@@ -211,12 +340,62 @@ pub struct ImportedFunctionInvokedParameters {
     pub wrapped_function_type: PublicWrappedFunctionType,
 }
 
+impl IntoValue for ImportedFunctionInvokedParameters {
+    fn into_value(self) -> Value {
+        let request_wit_value: WitValue = self.request.into();
+        let response_wit_value: WitValue = self.response.into();
+        Value::Record(vec![
+            self.timestamp.into_value(),
+            self.function_name.into_value(),
+            request_wit_value.into_value(),
+            response_wit_value.into_value(),
+            self.wrapped_function_type.into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("timestamp", Timestamp::get_type()),
+            field("function_name", str()),
+            field("request", WitValue::get_type()),
+            field("response", WitValue::get_type()),
+            field("wrapped_function_type", PublicWrappedFunctionType::get_type()),
+        ])
+    }
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
 pub struct ExportedFunctionInvokedParameters {
     pub timestamp: Timestamp,
     pub function_name: String,
     pub request: Vec<ValueAndType>,
     pub idempotency_key: IdempotencyKey,
+}
+
+impl IntoValue for ExportedFunctionInvokedParameters {
+    fn into_value(self) -> Value {
+        Value::Record(vec![
+            self.timestamp.into_value(),
+            self.function_name.into_value(),
+            self.request
+                .into_iter()
+                .map(|value| {
+                    let wit_value: WitValue = value.into();
+                    wit_value.into_value()
+                })
+                .collect::<Vec<Value>>()
+                .into_value(),
+            self.idempotency_key.into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("timestamp", Timestamp::get_type()),
+            field("request", list(WitValue::get_type())),
+            field("idempotency-key", IdempotencyKey::get_type()),
+        ])
+    }
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]

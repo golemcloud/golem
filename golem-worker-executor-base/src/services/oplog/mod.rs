@@ -44,6 +44,7 @@ mod blob;
 mod compressed;
 mod ephemeral;
 mod multilayer;
+pub mod plugin;
 mod primary;
 
 #[cfg(test)]

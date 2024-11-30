@@ -143,6 +143,10 @@ pub trait HasPlugins<Owner: PluginOwner, Scope: PluginScope> {
     fn plugins(&self) -> Arc<dyn Plugins<Owner, Scope> + Send + Sync>;
 }
 
+pub trait HasOplogProcessorPlugin {
+    fn oplog_processor_plugin(&self) -> Arc<dyn oplog::plugin::OplogProcessorPlugin + Send + Sync>;
+}
+
 /// HasAll is a shortcut for requiring all available service dependencies
 pub trait HasAll<Ctx: WorkerCtx>:
     HasActiveWorkers<Ctx>
@@ -165,6 +169,7 @@ pub trait HasAll<Ctx: WorkerCtx>:
     + HasShardService
     + HasFileLoader
     + HasPlugins<<Ctx::ComponentOwner as ComponentOwner>::PluginOwner, Ctx::PluginScope>
+    + HasOplogProcessorPlugin
     + HasExtraDeps<Ctx>
     + Clone
 {
@@ -192,6 +197,7 @@ impl<
             + HasShardService
             + HasFileLoader
             + HasPlugins<<Ctx::ComponentOwner as ComponentOwner>::PluginOwner, Ctx::PluginScope>
+            + HasOplogProcessorPlugin
             + HasExtraDeps<Ctx>
             + Clone,
     > HasAll<Ctx> for T
@@ -228,6 +234,7 @@ pub struct All<Ctx: WorkerCtx> {
             + Send
             + Sync,
     >,
+    oplog_processor_plugin: Arc<dyn oplog::plugin::OplogProcessorPlugin + Send + Sync>,
     extra_deps: Ctx::ExtraDeps,
 }
 
@@ -256,6 +263,7 @@ impl<Ctx: WorkerCtx> Clone for All<Ctx> {
             events: self.events.clone(),
             file_loader: self.file_loader.clone(),
             plugins: self.plugins.clone(),
+            oplog_processor_plugin: self.oplog_processor_plugin.clone(),
             extra_deps: self.extra_deps.clone(),
         }
     }
@@ -294,6 +302,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
                 + Send
                 + Sync,
         >,
+        oplog_processor_plugin: Arc<dyn oplog::plugin::OplogProcessorPlugin + Send + Sync>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
         Self {
@@ -319,6 +328,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             events,
             file_loader,
             plugins,
+            oplog_processor_plugin,
             extra_deps,
         }
     }
@@ -347,6 +357,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             this.events(),
             this.file_loader(),
             this.plugins(),
+            this.oplog_processor_plugin(),
             this.extra_deps(),
         )
     }
@@ -503,6 +514,12 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>>
             + Sync,
     > {
         self.all().plugins.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasOplogProcessorPlugin for T {
+    fn oplog_processor_plugin(&self) -> Arc<dyn oplog::plugin::OplogProcessorPlugin + Send + Sync> {
+        self.all().oplog_processor_plugin.clone()
     }
 }
 
