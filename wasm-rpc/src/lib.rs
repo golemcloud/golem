@@ -132,7 +132,7 @@ pub use type_annotated_value::*;
 pub use text::{type_annotated_value_from_str, type_annotated_value_to_string};
 
 #[cfg(feature = "arbitrary")]
-impl<'a> arbitrary::Arbitrary<'a> for Uri {
+impl arbitrary::Arbitrary<'_> for Uri {
     fn arbitrary(u: &mut arbitrary::Unstructured) -> arbitrary::Result<Self> {
         let uri = u.arbitrary::<String>()?;
         Ok(Uri { value: uri })
