@@ -45,7 +45,7 @@ lazy_static = { workspace = true }
 mime_guess = "2.0.5"
 nom = { workspace = true }
 openapiv3 = { workspace = true }
-openidconnect = "3.5.0"
+openidconnect = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry-prometheus = { workspace = true }
 opentelemetry_sdk = { workspace = true }
