@@ -31,14 +31,12 @@ bytes = { workspace = true }
 clap = { workspace = true }
 http-body-util = "0.1.2"
 hyper = { workspace = true }
-hyper-util = "0.1.10"
 futures = { workspace = true }
 include_dir = "0.7.4"
 opentelemetry = { workspace = true }
 opentelemetry-prometheus = { workspace = true }
 opentelemetry_sdk = { workspace = true }
 poem = { workspace = true }
-poem-openapi = { workspace = true }
 prometheus = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true }
