@@ -3911,9 +3911,9 @@ dependencies = [
 
 [[package]]
 name = "golem-examples"
-version = "1.0.6"
+version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "31f5befbcc7d078f904ac2b62a7e97eafaddfcabe053c0de975919053ed4a87c"
+checksum = "9b2a21e0f16a33d3ccd3b6c136551c15cab1036a60ec851e674f4db2df6cc57c"
 dependencies = [
  "Inflector",
  "cargo_metadata",
@@ -4196,9 +4196,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wit"
-version = "1.0.4"
+version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0302470bda270f73b70cec83c78aa9e1fda7aab77d15058c9ad39a75af4b8b60"
+checksum = "32518bbe9eb0e5ba0954ece8bbc8e2a22c449401565e855ffb93881a42b32f47"
 
 [[package]]
 name = "golem-worker-executor"
