@@ -22,7 +22,6 @@ use crate::services::rdbms::postgres::PostgresType;
 use crate::services::rdbms::RdbmsPoolKey;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
-use chrono::{Datelike, Offset, Timelike};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::ops::Deref;
 use std::str::FromStr;
@@ -30,6 +29,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 use wasmtime::component::Resource;
 use wasmtime_wasi::WasiView;
+use crate::durable_host::rdbms::utils;
 
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
@@ -313,73 +313,25 @@ impl TryFrom<DbValuePrimitive> for crate::services::rdbms::postgres::types::DbVa
             DbValuePrimitive::Float4(f) => Ok(Self::Float4(f)),
             DbValuePrimitive::Float8(f) => Ok(Self::Float8(f)),
             DbValuePrimitive::Boolean(b) => Ok(Self::Boolean(b)),
-            DbValuePrimitive::Timestamp((year, month, day, hour, minute, second, nanosecond)) => {
-                let date = chrono::naive::NaiveDate::from_ymd_opt(year, month as u32, day as u32)
-                    .ok_or("Date value is not valid")?;
-                let time = chrono::NaiveTime::from_hms_nano_opt(
-                    hour as u32,
-                    minute as u32,
-                    second as u32,
-                    nanosecond,
-                )
-                .ok_or("Time value is not valid")?;
-
-                Ok(Self::Timestamp(
-                    chrono::naive::NaiveDateTime::new(date, time).and_utc(),
-                ))
+            DbValuePrimitive::Timestamp(v) => {
+                let value = utils::timestamp_to_datetime(v)?;
+                Ok(Self::Timestamp(value))
             }
-            DbValuePrimitive::Timestamptz((
-                year,
-                month,
-                day,
-                hour,
-                minute,
-                second,
-                nanosecond,
-                offset,
-            )) => {
-                let date = chrono::naive::NaiveDate::from_ymd_opt(year, month as u32, day as u32)
-                    .ok_or("Date value is not valid")?;
-                let time = chrono::NaiveTime::from_hms_nano_opt(
-                    hour as u32,
-                    minute as u32,
-                    second as u32,
-                    nanosecond,
-                )
-                .ok_or("Time value is not valid")?;
-                let offset = chrono::offset::FixedOffset::west_opt(offset)
-                    .ok_or("Offset value is not valid")?;
-                let datetime = chrono::naive::NaiveDateTime::new(date, time)
-                    .checked_add_offset(offset)
-                    .ok_or("Offset value is not valid")?;
-                Ok(Self::Timestamptz(datetime.and_utc()))
+            DbValuePrimitive::Timestamptz(v) => {
+                let value = utils::timestamptz_to_datetime(v)?;
+                Ok(Self::Timestamptz(value))
             }
-            DbValuePrimitive::Time((hour, minute, second, nanosecond)) => {
-                let time = chrono::NaiveTime::from_hms_nano_opt(
-                    hour as u32,
-                    minute as u32,
-                    second as u32,
-                    nanosecond,
-                )
-                .ok_or("Time value is not valid")?;
-                Ok(Self::Time(time))
+            DbValuePrimitive::Time(v) => {
+                let value = utils::time_to_nativetime(v)?;
+                Ok(Self::Time(value))
             }
-            DbValuePrimitive::Timetz((hour, minute, second, nanosecond, offset)) => {
-                let time = chrono::NaiveTime::from_hms_nano_opt(
-                    hour as u32,
-                    minute as u32,
-                    second as u32,
-                    nanosecond,
-                )
-                .ok_or("Time value is not valid")?;
-                let offset = chrono::offset::FixedOffset::west_opt(offset)
-                    .ok_or("Offset value is not valid")?;
-                Ok(Self::Timetz((time, offset)))
+            DbValuePrimitive::Timetz(v) => {
+                let value = utils::timetz_to_nativetime_and_offset(v)?;
+                Ok(Self::Timetz(value))
             }
-            DbValuePrimitive::Date((year, month, day)) => {
-                let date = chrono::naive::NaiveDate::from_ymd_opt(year, month as u32, day as u32)
-                    .ok_or("Date value is not valid")?;
-                Ok(Self::Date(date))
+            DbValuePrimitive::Date(v) => {
+                let value = utils::date_to_nativedate(v)?;
+                Ok(Self::Date(value))
             }
             DbValuePrimitive::Interval(v) => Ok(Self::Interval(chrono::Duration::microseconds(v))),
             DbValuePrimitive::Text(s) => Ok(Self::Text(s)),
@@ -432,46 +384,19 @@ impl From<crate::services::rdbms::postgres::types::DbValuePrimitive> for DbValue
                 Self::Boolean(b)
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Timestamp(v) => {
-                let year = v.date_naive().year();
-                let month = v.date_naive().month() as u8;
-                let day = v.date_naive().day() as u8;
-                let hour = v.time().hour() as u8;
-                let minute = v.time().minute() as u8;
-                let second = v.time().second() as u8;
-                let nanosecond = v.time().nanosecond();
-                Self::Timestamp((year, month, day, hour, minute, second, nanosecond))
+                Self::Timestamp(utils::datetime_to_timestamp(v))
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Timestamptz(v) => {
-                let year = v.date_naive().year();
-                let month = v.date_naive().month() as u8;
-                let day = v.date_naive().day() as u8;
-                let hour = v.time().hour() as u8;
-                let minute = v.time().minute() as u8;
-                let second = v.time().second() as u8;
-                let nanosecond = v.time().nanosecond();
-                let offset = v.offset().fix().local_minus_utc();
-                Self::Timestamptz((year, month, day, hour, minute, second, nanosecond, offset))
+                Self::Timestamptz(utils::datetime_to_timestamptz(v))
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Time(v) => {
-                let hour = v.hour() as u8;
-                let minute = v.minute() as u8;
-                let second = v.second() as u8;
-                let nanosecond = v.nanosecond();
-                Self::Time((hour, minute, second, nanosecond))
+                Self::Time(utils::naivetime_to_time(v))
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Timetz((v, o)) => {
-                let hour = v.hour() as u8;
-                let minute = v.minute() as u8;
-                let second = v.second() as u8;
-                let nanosecond = v.nanosecond();
-                let offset = o.local_minus_utc();
-                Self::Timetz((hour, minute, second, nanosecond, offset))
+                Self::Timetz(utils::naivetime_and_offset_to_time(v, o))
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Date(v) => {
-                let year = v.year();
-                let month = v.month() as u8;
-                let day = v.day() as u8;
-                Self::Date((year, month, day))
+                Self::Date(utils::naivedate_to_date(v))
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Interval(v) => {
                 Self::Interval(v.num_milliseconds())

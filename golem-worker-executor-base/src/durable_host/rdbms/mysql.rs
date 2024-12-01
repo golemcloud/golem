@@ -21,12 +21,12 @@ use crate::services::rdbms::mysql::MysqlType;
 use crate::services::rdbms::RdbmsPoolKey;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
-use chrono::{Datelike, Timelike};
 use std::ops::Deref;
 use std::str::FromStr;
 use std::sync::Arc;
 use wasmtime::component::Resource;
 use wasmtime_wasi::WasiView;
+use crate::durable_host::rdbms::utils;
 
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
@@ -332,49 +332,21 @@ impl TryFrom<DbValue> for crate::services::rdbms::mysql::types::DbValue {
                 let v: serde_json::Value = serde_json::from_str(&v).map_err(|e| e.to_string())?;
                 Ok(Self::Json(v))
             }
-            DbValue::Timestamp((year, month, day, hour, minute, second, nanosecond)) => {
-                let date = chrono::naive::NaiveDate::from_ymd_opt(year, month as u32, day as u32)
-                    .ok_or("Date value is not valid")?;
-                let time = chrono::NaiveTime::from_hms_nano_opt(
-                    hour as u32,
-                    minute as u32,
-                    second as u32,
-                    nanosecond as u32,
-                )
-                .ok_or("Time value is not valid")?;
-                Ok(Self::Timestamp(
-                    chrono::naive::NaiveDateTime::new(date, time).and_utc(),
-                ))
+            DbValue::Timestamp(v) => {
+                let value = utils::timestamp_to_datetime(v)?;
+                Ok(Self::Timestamp(value))
             }
-            DbValue::Date((year, month, day)) => {
-                let date = chrono::naive::NaiveDate::from_ymd_opt(year, month as u32, day as u32)
-                    .ok_or("Date value is not valid")?;
-                Ok(Self::Date(date))
+            DbValue::Date(v) => {
+                let value = utils::date_to_nativedate(v)?;
+                Ok(Self::Date(value))
             }
-            DbValue::Time((hour, minute, second, nanosecond)) => {
-                let time = chrono::NaiveTime::from_hms_nano_opt(
-                    hour as u32,
-                    minute as u32,
-                    second as u32,
-                    nanosecond,
-                )
-                .ok_or("Time value is not valid")?;
-                Ok(Self::Time(time))
+            DbValue::Time(v) => {
+                let value = utils::time_to_nativetime(v)?;
+                Ok(Self::Time(value))
             }
-            DbValue::Datetime((year, month, day, hour, minute, second, nanosecond)) => {
-                let date = chrono::naive::NaiveDate::from_ymd_opt(year, month as u32, day as u32)
-                    .ok_or("Date value is not valid")?;
-                let time = chrono::NaiveTime::from_hms_nano_opt(
-                    hour as u32,
-                    minute as u32,
-                    second as u32,
-                    nanosecond,
-                )
-                .ok_or("Time value is not valid")?;
-
-                Ok(Self::Timestamp(
-                    chrono::naive::NaiveDateTime::new(date, time).and_utc(),
-                ))
+            DbValue::Datetime(v) => {
+                let value = utils::timestamp_to_datetime(v)?;
+                Ok(Self::Datetime(value))
             }
             DbValue::Year(v) => Ok(Self::Year(v)),
             DbValue::Set(v) => Ok(Self::Set(v)),
@@ -422,37 +394,16 @@ impl From<crate::services::rdbms::mysql::types::DbValue> for DbValue {
             crate::services::rdbms::mysql::types::DbValue::Longtext(v) => Self::Longtext(v),
             crate::services::rdbms::mysql::types::DbValue::Json(v) => Self::Json(v.to_string()),
             crate::services::rdbms::mysql::types::DbValue::Timestamp(v) => {
-                let year = v.date_naive().year();
-                let month = v.date_naive().month() as u8;
-                let day = v.date_naive().day() as u8;
-                let hour = v.time().hour() as u8;
-                let minute = v.time().minute() as u8;
-                let second = v.time().second() as u8;
-                let nanosecond = v.time().nanosecond();
-                Self::Timestamp((year, month, day, hour, minute, second, nanosecond))
+                Self::Timestamp(utils::datetime_to_timestamp(v))
             }
             crate::services::rdbms::mysql::types::DbValue::Date(v) => {
-                let year = v.year();
-                let month = v.month() as u8;
-                let day = v.day() as u8;
-                Self::Date((year, month, day))
+                Self::Date(utils::naivedate_to_date(v))
             }
             crate::services::rdbms::mysql::types::DbValue::Time(v) => {
-                let hour = v.hour() as u8;
-                let minute = v.minute() as u8;
-                let second = v.second() as u8;
-                let nanosecond = v.nanosecond();
-                Self::Time((hour, minute, second, nanosecond))
+                Self::Time(utils::naivetime_to_time(v))
             }
             crate::services::rdbms::mysql::types::DbValue::Datetime(v) => {
-                let year = v.date_naive().year();
-                let month = v.date_naive().month() as u8;
-                let day = v.date_naive().day() as u8;
-                let hour = v.time().hour() as u8;
-                let minute = v.time().minute() as u8;
-                let second = v.time().second() as u8;
-                let nanosecond = v.time().nanosecond();
-                Self::Timestamp((year, month, day, hour, minute, second, nanosecond))
+                Self::Timestamp(utils::datetime_to_timestamp(v))
             }
             crate::services::rdbms::mysql::types::DbValue::Year(v) => Self::Year(v),
             crate::services::rdbms::mysql::types::DbValue::Set(v) => Self::Set(v),

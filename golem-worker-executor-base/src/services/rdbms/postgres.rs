@@ -27,6 +27,7 @@ use sqlx::postgres::types::PgInterval;
 use sqlx::postgres::{PgConnectOptions, PgTypeKind};
 use sqlx::{Column, ConnectOptions, Pool, Row, TypeInfo};
 use std::fmt::Display;
+use std::net::IpAddr;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -345,6 +346,7 @@ fn bind_value_primitive(
         DbValuePrimitive::Bytea(v) => Ok(query.bind(v)),
         DbValuePrimitive::Uuid(v) => Ok(query.bind(v)),
         DbValuePrimitive::Json(v) => Ok(query.bind(v)),
+        DbValuePrimitive::Jsonb(v) => Ok(query.bind(v)),
         DbValuePrimitive::Xml(v) => Ok(query.bind(v)),
         DbValuePrimitive::Timestamp(v) => Ok(query.bind(v)),
         DbValuePrimitive::Timestamptz(v) => Ok(query.bind(v)),
@@ -510,6 +512,13 @@ fn get_db_value(index: usize, row: &sqlx::postgres::PgRow) -> Result<DbValue, St
                 None => DbValue::Primitive(DbValuePrimitive::Null),
             }
         }
+        pg_type_name::INET => {
+            let v: Option<IpAddr> = row.try_get(index).map_err(|e| e.to_string())?;
+            match v {
+                Some(v) => DbValue::Primitive(DbValuePrimitive::Inet(v)),
+                None => DbValue::Primitive(DbValuePrimitive::Null),
+            }
+        }
         pg_type_name::BOOL_ARRAY => {
             let vs: Option<Vec<bool>> = row.try_get(index).map_err(|e| e.to_string())?;
             match vs {
@@ -610,7 +619,7 @@ fn get_db_value(index: usize, row: &sqlx::postgres::PgRow) -> Result<DbValue, St
                 None => DbValue::Array(vec![]),
             }
         }
-        pg_type_name::TIMESTAMP_ARRAY | pg_type_name::TIMESTAMPTZ_ARRAY => {
+        pg_type_name::TIMESTAMP_ARRAY => {
             let vs: Option<Vec<chrono::DateTime<chrono::Utc>>> =
                 row.try_get(index).map_err(|e| e.to_string())?;
             match vs {
@@ -620,11 +629,29 @@ fn get_db_value(index: usize, row: &sqlx::postgres::PgRow) -> Result<DbValue, St
                 None => DbValue::Primitive(DbValuePrimitive::Null),
             }
         }
+        pg_type_name::TIMESTAMPTZ_ARRAY => {
+            let vs: Option<Vec<chrono::DateTime<chrono::Utc>>> =
+                row.try_get(index).map_err(|e| e.to_string())?;
+            match vs {
+                Some(vs) => {
+                    DbValue::Array(vs.into_iter().map(DbValuePrimitive::Timestamptz).collect())
+                }
+                None => DbValue::Primitive(DbValuePrimitive::Null),
+            }
+        }
         pg_type_name::DATE_ARRAY => {
             let vs: Option<Vec<chrono::NaiveDate>> =
                 row.try_get(index).map_err(|e| e.to_string())?;
             match vs {
                 Some(vs) => DbValue::Array(vs.into_iter().map(DbValuePrimitive::Date).collect()),
+                None => DbValue::Primitive(DbValuePrimitive::Null),
+            }
+        }
+        pg_type_name::INET_ARRAY => {
+            let vs: Option<Vec<IpAddr>> =
+                row.try_get(index).map_err(|e| e.to_string())?;
+            match vs {
+                Some(vs) => DbValue::Array(vs.into_iter().map(DbValuePrimitive::Inet).collect()),
                 None => DbValue::Primitive(DbValuePrimitive::Null),
             }
         }
