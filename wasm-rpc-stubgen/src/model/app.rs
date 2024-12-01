@@ -1,5 +1,6 @@
 use crate::log::LogColorize;
-use crate::model::wasm_rpc::template::Template;
+use crate::model::app_raw;
+use crate::model::template::Template;
 use crate::naming::wit::package_dep_dir_name_from_parser;
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use crate::{fs, naming};
@@ -99,268 +100,10 @@ impl From<&str> for TemplateName {
     }
 }
 
-pub mod raw {
-    use crate::fs;
-    use serde::{Deserialize, Serialize};
-    use std::collections::HashMap;
-    use std::path::PathBuf;
-
-    #[derive(Clone, Debug)]
-    pub struct ApplicationWithSource {
-        pub source: PathBuf,
-        pub application: Application,
-    }
-
-    impl ApplicationWithSource {
-        pub fn from_yaml_file(file: PathBuf) -> anyhow::Result<Self> {
-            Ok(Self::from_yaml_string(
-                file.clone(),
-                fs::read_to_string(file)?,
-            )?)
-        }
-
-        pub fn from_yaml_string(source: PathBuf, string: String) -> serde_yaml::Result<Self> {
-            Ok(Self {
-                source,
-                application: Application::from_yaml_str(string.as_str())?,
-            })
-        }
-
-        pub fn source_as_string(&self) -> String {
-            self.source.to_string_lossy().to_string()
-        }
-    }
-
-    #[derive(Clone, Debug, Serialize, Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    pub struct Application {
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        pub include: Vec<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub temp_dir: Option<String>,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        pub wit_deps: Vec<String>,
-        #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-        pub templates: HashMap<String, ComponentTemplate>,
-        #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-        pub components: HashMap<String, Component>,
-        #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-        pub dependencies: HashMap<String, Dependency>,
-    }
-
-    impl Application {
-        pub fn from_yaml_str(yaml: &str) -> serde_yaml::Result<Self> {
-            serde_yaml::from_str(yaml)
-        }
-
-        pub fn to_yaml_string(&self) -> String {
-            serde_yaml::to_string(self).expect("Failed to serialize Application as YAML")
-        }
-    }
-
-    #[derive(Clone, Debug, Serialize, Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    pub struct ComponentTemplate {
-        #[serde(flatten)]
-        pub component_properties: ComponentProperties,
-        pub profiles: HashMap<String, ComponentProperties>,
-        pub default_profile: Option<String>,
-    }
-
-    #[derive(Clone, Debug, Serialize, Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    pub struct Component {
-        pub template: Option<String>,
-        #[serde(flatten)]
-        pub component_properties: ComponentProperties,
-        pub profiles: HashMap<String, ComponentProperties>,
-        pub default_profile: Option<String>,
-    }
-
-    #[derive(Clone, Debug, Serialize, Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    pub struct ComponentProperties {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub source_wit: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub generated_wit: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub component_wasm: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub linked_wasm: Option<String>,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        pub build: Vec<ExternalCommand>,
-        #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-        pub custom_commands: HashMap<String, Vec<ExternalCommand>>,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        pub clean: Vec<String>,
-    }
-
-    impl ComponentProperties {
-        pub fn defined_property_names(&self) -> Vec<&str> {
-            let mut vec = Vec::<&str>::new();
-
-            if self.source_wit.is_some() {
-                vec.push("sourceWit");
-            }
-
-            if self.generated_wit.is_some() {
-                vec.push("generatedWit");
-            }
-
-            if self.component_wasm.is_some() {
-                vec.push("componentWasm");
-            }
-
-            if self.linked_wasm.is_some() {
-                vec.push("linkedWasm");
-            }
-
-            if !self.build.is_empty() {
-                vec.push("build");
-            }
-
-            if !self.custom_commands.is_empty() {
-                vec.push("customCommands");
-            }
-
-            vec
-        }
-    }
-
-    #[derive(Clone, Debug, Serialize, Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    pub struct ExternalCommand {
-        pub command: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub dir: Option<String>,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        pub sources: Vec<String>,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        pub targets: Vec<String>,
-    }
-
-    #[derive(Clone, Debug, Serialize, Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    pub struct Dependency {
-        #[serde(rename = "type")]
-        pub type_: String,
-        pub target: Option<String>,
-    }
-}
-
-mod template {
-    use crate::model::wasm_rpc::raw;
-    use serde::Serialize;
-    use std::collections::HashMap;
-
-    pub trait Template<C: Serialize> {
-        type Rendered;
-
-        fn render(
-            &self,
-            env: &minijinja::Environment,
-            ctx: &C,
-        ) -> Result<Self::Rendered, minijinja::Error>;
-    }
-
-    impl<C: Serialize> Template<C> for String {
-        type Rendered = String;
-
-        fn render(
-            &self,
-            env: &minijinja::Environment,
-            ctx: &C,
-        ) -> Result<Self::Rendered, minijinja::Error> {
-            env.render_str(self, ctx)
-        }
-    }
-
-    impl<C: Serialize, T: Template<C>> Template<C> for Option<T> {
-        type Rendered = Option<T::Rendered>;
-
-        fn render(
-            &self,
-            env: &minijinja::Environment,
-            ctx: &C,
-        ) -> Result<Self::Rendered, minijinja::Error> {
-            match self {
-                Some(template) => Ok(Some(template.render(env, ctx)?)),
-                None => Ok(None),
-            }
-        }
-    }
-
-    impl<C: Serialize, T: Template<C>> Template<C> for Vec<T> {
-        type Rendered = Vec<T::Rendered>;
-
-        fn render(
-            &self,
-            env: &minijinja::Environment,
-            ctx: &C,
-        ) -> Result<Self::Rendered, minijinja::Error> {
-            self.iter().map(|elem| elem.render(env, ctx)).collect()
-        }
-    }
-
-    impl<C: Serialize, T: Template<C>> Template<C> for HashMap<String, T> {
-        type Rendered = HashMap<String, T::Rendered>;
-
-        fn render(
-            &self,
-            env: &minijinja::Environment,
-            ctx: &C,
-        ) -> Result<Self::Rendered, minijinja::Error> {
-            let mut rendered = HashMap::<String, T::Rendered>::new();
-            for (key, template) in self {
-                rendered.insert(key.clone(), template.render(env, ctx)?);
-            }
-            Ok(rendered)
-        }
-    }
-
-    impl<C: Serialize> Template<C> for raw::ExternalCommand {
-        type Rendered = raw::ExternalCommand;
-
-        fn render(
-            &self,
-            env: &minijinja::Environment,
-            ctx: &C,
-        ) -> Result<Self::Rendered, minijinja::Error> {
-            Ok(raw::ExternalCommand {
-                command: self.command.render(env, ctx)?,
-                dir: self.dir.render(env, ctx)?,
-                sources: self.sources.render(env, ctx)?,
-                targets: self.targets.render(env, ctx)?,
-            })
-        }
-    }
-
-    impl<C: Serialize> Template<C> for raw::ComponentProperties {
-        type Rendered = raw::ComponentProperties;
-
-        fn render(
-            &self,
-            env: &minijinja::Environment,
-            ctx: &C,
-        ) -> Result<Self::Rendered, minijinja::Error> {
-            Ok(raw::ComponentProperties {
-                source_wit: self.source_wit.render(env, ctx)?,
-                generated_wit: self.generated_wit.render(env, ctx)?,
-                component_wasm: self.component_wasm.render(env, ctx)?,
-                linked_wasm: self.linked_wasm.render(env, ctx)?,
-                build: self.build.render(env, ctx)?,
-                custom_commands: self.custom_commands.render(env, ctx)?,
-                clean: self.clean.render(env, ctx)?,
-            })
-        }
-    }
-}
-
 pub fn includes_from_yaml_file(source: &Path) -> Vec<String> {
     fs::read_to_string(source)
         .ok()
-        .and_then(|source| raw::Application::from_yaml_str(source.as_str()).ok())
+        .and_then(|source| app_raw::Application::from_yaml_str(source.as_str()).ok())
         .map(|app| app.include)
         .unwrap_or_default()
 }
@@ -397,7 +140,7 @@ pub struct Application {
 }
 
 impl Application {
-    pub fn from_raw_apps(apps: Vec<raw::ApplicationWithSource>) -> ValidatedResult<Self> {
+    pub fn from_raw_apps(apps: Vec<app_raw::ApplicationWithSource>) -> ValidatedResult<Self> {
         let mut validation = ValidationBuilder::new();
 
         let mut include = Vec::<String>::new();
@@ -409,14 +152,14 @@ impl Application {
         let mut wit_deps = Vec::<String>::new();
         let mut wit_deps_sources = Vec::<PathBuf>::new();
 
-        let mut templates = HashMap::<TemplateName, raw::ComponentTemplate>::new();
+        let mut templates = HashMap::<TemplateName, app_raw::ComponentTemplate>::new();
         let mut template_sources = HashMap::<TemplateName, Vec<PathBuf>>::new();
 
         let mut dependencies = BTreeMap::<ComponentName, BTreeSet<ComponentName>>::new();
         let mut dependency_sources =
             HashMap::<ComponentName, HashMap<ComponentName, Vec<PathBuf>>>::new();
 
-        let mut components = HashMap::<ComponentName, (PathBuf, raw::Component)>::new();
+        let mut components = HashMap::<ComponentName, (PathBuf, app_raw::Component)>::new();
         let mut component_sources = HashMap::<ComponentName, Vec<PathBuf>>::new();
 
         for app in apps {
@@ -1148,8 +891,8 @@ pub struct ComponentProperties {
     pub generated_wit: String,
     pub component_wasm: String,
     pub linked_wasm: Option<String>,
-    pub build: Vec<raw::ExternalCommand>,
-    pub custom_commands: HashMap<String, Vec<raw::ExternalCommand>>,
+    pub build: Vec<app_raw::ExternalCommand>,
+    pub custom_commands: HashMap<String, Vec<app_raw::ExternalCommand>>,
     pub clean: Vec<String>,
 }
 
@@ -1157,14 +900,14 @@ impl ComponentProperties {
     fn from_template<C: Serialize>(
         env: &minijinja::Environment,
         ctx: &C,
-        template_properties: &raw::ComponentProperties,
+        template_properties: &app_raw::ComponentProperties,
     ) -> anyhow::Result<Self> {
         Ok(ComponentProperties::from(
             template_properties.render(env, ctx)?,
         ))
     }
 
-    fn merge_with_overrides(mut self, overrides: raw::ComponentProperties) -> (Self, bool) {
+    fn merge_with_overrides(mut self, overrides: app_raw::ComponentProperties) -> (Self, bool) {
         let mut any_overrides = false;
 
         if let Some(source_wit) = overrides.source_wit {
@@ -1204,8 +947,8 @@ impl ComponentProperties {
     }
 }
 
-impl From<raw::ComponentProperties> for ComponentProperties {
-    fn from(value: raw::ComponentProperties) -> Self {
+impl From<app_raw::ComponentProperties> for ComponentProperties {
+    fn from(value: app_raw::ComponentProperties) -> Self {
         Self {
             source_wit: value.source_wit.unwrap_or_default(),
             generated_wit: value.generated_wit.unwrap_or_default(),

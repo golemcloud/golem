@@ -5,10 +5,11 @@ use crate::log::{
     log_action, log_skipping_up_to_date, log_validated_action_result, log_warn_action, LogColorize,
     LogIndent,
 };
-use crate::model::wasm_rpc::raw::ExternalCommand;
-use crate::model::wasm_rpc::{
-    includes_from_yaml_file, raw, Application, ComponentName, ProfileName, DEFAULT_CONFIG_FILE_NAME,
+use crate::model::app::{
+    includes_from_yaml_file, Application, ComponentName, ProfileName, DEFAULT_CONFIG_FILE_NAME,
 };
+use crate::model::app_raw;
+use crate::model::app_raw::ExternalCommand;
 use crate::stub::{StubConfig, StubDefinition};
 use crate::validation::ValidatedResult;
 use crate::wit_generate::{
@@ -636,7 +637,7 @@ fn load_app_validated(config: &Config) -> ValidatedResult<Application> {
         sources
             .into_iter()
             .map(|source| {
-                ValidatedResult::from_result(raw::ApplicationWithSource::from_yaml_file(source))
+                ValidatedResult::from_result(app_raw::ApplicationWithSource::from_yaml_file(source))
             })
             .collect::<ValidatedResult<Vec<_>>>()
     });
