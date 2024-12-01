@@ -1,6 +1,6 @@
 use crate::log::LogColorize;
 use itertools::Itertools;
-use std::fmt::Display;
+use std::fmt::Debug;
 
 pub struct ValidationContext {
     pub name: &'static str,
@@ -22,7 +22,7 @@ impl<T> ValidatedResult<T> {
         }
     }
 
-    pub fn from_result<E: Display>(result: Result<T, E>) -> Self {
+    pub fn from_result<E: Debug>(result: Result<T, E>) -> Self {
         ValidatedResult::Ok(result).flatten()
     }
 
@@ -120,16 +120,16 @@ impl<T, E> ValidatedResult<Result<T, E>> {
 
     pub fn flatten(self) -> ValidatedResult<T>
     where
-        E: Display,
+        E: Debug,
     {
         match self {
             ValidatedResult::Ok(value) => match value {
                 Ok(value) => ValidatedResult::Ok(value),
-                Err(err) => ValidatedResult::WarnsAndErrors(vec![], vec![format!("{}", err)]),
+                Err(err) => ValidatedResult::WarnsAndErrors(vec![], vec![format!("{:?}", err)]),
             },
             ValidatedResult::OkWithWarns(value, warns) => match value {
                 Ok(value) => ValidatedResult::OkWithWarns(value, warns),
-                Err(err) => ValidatedResult::WarnsAndErrors(warns, vec![format!("{}", err)]),
+                Err(err) => ValidatedResult::WarnsAndErrors(warns, vec![format!("{:?}", err)]),
             },
             ValidatedResult::WarnsAndErrors(warns, errors) => {
                 ValidatedResult::WarnsAndErrors(warns, errors)

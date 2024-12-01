@@ -32,7 +32,7 @@ async fn main() -> ExitCode {
             initialize_workspace(init_workspace_args, "wasm-rpc-stubgen", &[])
         }
         #[cfg(feature = "unstable-dec-dep")]
-        Command::App { subcommand } => run_declarative_command(subcommand).await,
+        Command::App { subcommand } => run_app_command(subcommand).await,
     };
 
     match result {

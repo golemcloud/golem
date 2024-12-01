@@ -20,7 +20,7 @@ use crate::wit_resolve::{ResolvedWitApplication, WitDepsResolver};
 use crate::{commands, naming, WasmRpcOverride};
 use anyhow::{anyhow, bail, Context, Error};
 use colored::Colorize;
-use glob::glob;
+use glob::{glob_with, MatchOptions};
 use golem_wasm_rpc::WASM_RPC_VERSION;
 use itertools::Itertools;
 use std::cell::OnceCell;
@@ -671,21 +671,20 @@ fn collect_sources(mode: &ApplicationSourceMode) -> ValidatedResult<Vec<PathBuf>
         ApplicationSourceMode::Automatic => match find_main_source() {
             Some(source) => {
                 // TODO: save original current dir and use it as a component filter
-                std::env::set_current_dir(PathExtra::new(&source).parent().unwrap())
+                let source_ext = PathExtra::new(&source);
+                let source_dir = source_ext.parent().unwrap();
+                std::env::set_current_dir(source_dir)
                     .expect("Failed to set current dir for config parent");
 
                 let includes = includes_from_yaml_file(source.as_path());
                 if includes.is_empty() {
                     ValidatedResult::Ok(vec![source])
                 } else {
-                    ValidatedResult::from_result(compile_and_collect_globs(
-                        source.as_path(),
-                        &includes,
-                    ))
-                    .map(|mut sources| {
-                        sources.insert(0, source);
-                        sources
-                    })
+                    ValidatedResult::from_result(compile_and_collect_globs(source_dir, &includes))
+                        .map(|mut sources| {
+                            sources.insert(0, source);
+                            sources
+                        })
                 }
             }
             None => ValidatedResult::from_error("No config file found!".to_string()),
@@ -852,8 +851,15 @@ fn compile_and_collect_globs(root_dir: &Path, globs: &[String]) -> Result<Vec<Pa
     globs
         .iter()
         .map(|pattern| {
-            glob(&format!("{}/{}", root_dir.to_string_lossy(), pattern))
-                .with_context(|| format!("Failed to compile glob expression: {}", pattern))
+            glob_with(
+                &format!("{}/{}", root_dir.to_string_lossy(), pattern),
+                MatchOptions {
+                    case_sensitive: true,
+                    require_literal_separator: false,
+                    require_literal_leading_dot: true,
+                },
+            )
+            .with_context(|| format!("Failed to compile glob expression: {}", pattern))
         })
         .collect::<Result<Vec<_>, _>>()
         .map_err(|err| anyhow!(err))

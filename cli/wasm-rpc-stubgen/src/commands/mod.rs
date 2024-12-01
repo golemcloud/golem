@@ -22,4 +22,4 @@ pub mod dependencies;
 pub mod composition;
 
 /// Declarative subcommands
-pub mod declarative;
+pub mod app;

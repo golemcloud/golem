@@ -1,4 +1,6 @@
 use crate::fs;
+use crate::log::LogColorize;
+use anyhow::{anyhow, Context};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -11,10 +13,8 @@ pub struct ApplicationWithSource {
 
 impl ApplicationWithSource {
     pub fn from_yaml_file(file: PathBuf) -> anyhow::Result<Self> {
-        Ok(Self::from_yaml_string(
-            file.clone(),
-            fs::read_to_string(file)?,
-        )?)
+        Self::from_yaml_string(file.clone(), fs::read_to_string(file.clone())?)
+            .with_context(|| anyhow!("Failed to load source {}", file.log_color_highlight()))
     }
 
     pub fn from_yaml_string(source: PathBuf, string: String) -> serde_yaml::Result<Self> {
@@ -30,10 +30,10 @@ impl ApplicationWithSource {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Application {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub include: Vec<String>,
+    pub includes: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temp_dir: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -43,7 +43,7 @@ pub struct Application {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub components: HashMap<String, Component>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub dependencies: HashMap<String, Dependency>,
+    pub dependencies: HashMap<String, Vec<Dependency>>,
 }
 
 impl Application {
@@ -57,26 +57,31 @@ impl Application {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ComponentTemplate {
     #[serde(flatten)]
     pub component_properties: ComponentProperties,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub profiles: HashMap<String, ComponentProperties>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_profile: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Component {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub template: Option<String>,
     #[serde(flatten)]
     pub component_properties: ComponentProperties,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub profiles: HashMap<String, ComponentProperties>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_profile: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ComponentProperties {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_wit: Option<String>,
@@ -127,7 +132,7 @@ impl ComponentProperties {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExternalCommand {
     pub command: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -139,7 +144,7 @@ pub struct ExternalCommand {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Dependency {
     #[serde(rename = "type")]
     pub type_: String,
