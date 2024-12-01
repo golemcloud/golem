@@ -25,6 +25,13 @@ interface postgres {
   type timestamp = tuple<s32, u8, u8, u8, u8, u8, u32>; // year, month, day, hour, minute, second, nanosecond
   type timestamptz = tuple<s32, u8, u8, u8, u8, u8, u32, s32>; // year, month, day, hour, minute, second, nanosecond, timezone offset in seconds
 
+  type int4range = tuple<option<tuple<s32, bool>>, option<tuple<s32, bool>>>;
+  type int8range = tuple<option<tuple<s64, bool>>, option<tuple<s64, bool>>>;
+  type numrange = tuple<option<tuple<string, bool>>, option<tuple<string, bool>>>;
+  type tsrange = tuple<option<tuple<timestamp, bool>>, option<tuple<timestamp, bool>>>;
+  type tstzrange = tuple<option<tuple<timestamptz, bool>>, option<tuple<timestamptz, bool>>>;
+  type daterange = tuple<option<tuple<date, bool>>, option<tuple<date, bool>>>;
+
   type bit-vec = list<bool>;
 
   variant db-column-type-primitive {
@@ -53,6 +60,12 @@ interface postgres {
     inet,
     bit,
     varbit,
+    int4range,
+    int8range,
+    numrange,
+    tsrange,
+    tstzrange,
+    daterange,
     oid
     //     macaddr,
     //     cidr,
@@ -105,6 +118,12 @@ interface postgres {
     inet(ip-address),
     bit(bit-vec),
     varbit(bit-vec),
+    int4range(int4range),
+    int8range(int8range),
+    numrange(numrange),
+    tsrange(tsrange),
+    tstzrange(tstzrange),
+    daterange(daterange),
     oid(u32),
     null
   }

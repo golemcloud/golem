@@ -23,12 +23,13 @@ use crate::services::rdbms::{DbResultSet, DbRow, Error, Rdbms, RdbmsPoolKey, Rdb
 use async_trait::async_trait;
 use bigdecimal::BigDecimal;
 use futures_util::stream::BoxStream;
-use sqlx::postgres::types::{Oid, PgInterval, PgTimeTz};
+use sqlx::postgres::types::{Oid, PgInterval, PgRange, PgTimeTz};
 use sqlx::postgres::{PgConnectOptions, PgTypeKind};
 use sqlx::types::BitVec;
 use sqlx::{Column, ConnectOptions, Pool, Row, TypeInfo};
 use std::fmt::Display;
 use std::net::IpAddr;
+use std::ops::Bound;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -388,6 +389,66 @@ fn bind_value(
                     })?;
                     Ok(query.bind(values))
                 }
+                DbValuePrimitive::Int4range(_) => {
+                    let values: Vec<_> = get_plain_values(vs, |v| {
+                        if let DbValuePrimitive::Int4range(v) = v {
+                            Some(get_range(v))
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Int8range(_) => {
+                    let values: Vec<_> = get_plain_values(vs, |v| {
+                        if let DbValuePrimitive::Int8range(v) = v {
+                            Some(get_range(v))
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Numrange(_) => {
+                    let values: Vec<_> = get_plain_values(vs, |v| {
+                        if let DbValuePrimitive::Numrange(v) = v {
+                            Some(get_range(v))
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Tsrange(_) => {
+                    let values: Vec<_> = get_plain_values(vs, |v| {
+                        if let DbValuePrimitive::Tsrange(v) = v {
+                            Some(get_range(v))
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Tstzrange(_) => {
+                    let values: Vec<_> = get_plain_values(vs, |v| {
+                        if let DbValuePrimitive::Tstzrange(v) = v {
+                            Some(get_range(v))
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Daterange(_) => {
+                    let values: Vec<_> = get_plain_values(vs, |v| {
+                        if let DbValuePrimitive::Daterange(v) = v {
+                            Some(get_range(v))
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
                 DbValuePrimitive::Null => {
                     let values: Vec<Option<String>> = get_plain_values(vs, |v| {
                         if let DbValuePrimitive::Null = v {
@@ -437,6 +498,12 @@ fn bind_value_primitive(
         DbValuePrimitive::Inet(v) => Ok(query.bind(v)),
         DbValuePrimitive::Bit(v) => Ok(query.bind(v)),
         DbValuePrimitive::Varbit(v) => Ok(query.bind(v)),
+        DbValuePrimitive::Int4range(v) => Ok(query.bind(get_range(v))),
+        DbValuePrimitive::Int8range(v) => Ok(query.bind(get_range(v))),
+        DbValuePrimitive::Numrange(v) => Ok(query.bind(get_range(v))),
+        DbValuePrimitive::Tsrange(v) => Ok(query.bind(get_range(v))),
+        DbValuePrimitive::Tstzrange(v) => Ok(query.bind(get_range(v))),
+        DbValuePrimitive::Daterange(v) => Ok(query.bind(get_range(v))),
         DbValuePrimitive::Oid(v) => Ok(query.bind(Oid(v))),
         DbValuePrimitive::Null => Ok(query.bind(None::<String>)),
         // _ => Err(format!("Type '{}' is not supported", value)),
@@ -634,6 +701,51 @@ fn get_db_value(index: usize, row: &sqlx::postgres::PgRow) -> Result<DbValue, St
                 None => DbValue::Primitive(DbValuePrimitive::Null),
             }
         }
+        pg_type_name::INT4RANGE => {
+            let v: Option<PgRange<i32>> = row.try_get(index).map_err(|e| e.to_string())?;
+            match v {
+                Some(v) => DbValue::Primitive(DbValuePrimitive::Int4range(get_bounds(v))),
+                None => DbValue::Primitive(DbValuePrimitive::Null),
+            }
+        }
+        pg_type_name::INT8RANGE => {
+            let v: Option<PgRange<i64>> = row.try_get(index).map_err(|e| e.to_string())?;
+            match v {
+                Some(v) => DbValue::Primitive(DbValuePrimitive::Int8range(get_bounds(v))),
+                None => DbValue::Primitive(DbValuePrimitive::Null),
+            }
+        }
+        pg_type_name::NUMRANGE => {
+            let v: Option<PgRange<BigDecimal>> = row.try_get(index).map_err(|e| e.to_string())?;
+            match v {
+                Some(v) => DbValue::Primitive(DbValuePrimitive::Numrange(get_bounds(v))),
+                None => DbValue::Primitive(DbValuePrimitive::Null),
+            }
+        }
+        pg_type_name::TSRANGE => {
+            let v: Option<PgRange<chrono::DateTime<chrono::Utc>>> =
+                row.try_get(index).map_err(|e| e.to_string())?;
+            match v {
+                Some(v) => DbValue::Primitive(DbValuePrimitive::Tsrange(get_bounds(v))),
+                None => DbValue::Primitive(DbValuePrimitive::Null),
+            }
+        }
+        pg_type_name::TSTZRANGE => {
+            let v: Option<PgRange<chrono::DateTime<chrono::Utc>>> =
+                row.try_get(index).map_err(|e| e.to_string())?;
+            match v {
+                Some(v) => DbValue::Primitive(DbValuePrimitive::Tstzrange(get_bounds(v))),
+                None => DbValue::Primitive(DbValuePrimitive::Null),
+            }
+        }
+        pg_type_name::DATERANGE => {
+            let v: Option<PgRange<chrono::NaiveDate>> =
+                row.try_get(index).map_err(|e| e.to_string())?;
+            match v {
+                Some(v) => DbValue::Primitive(DbValuePrimitive::Daterange(get_bounds(v))),
+                None => DbValue::Primitive(DbValuePrimitive::Null),
+            }
+        }
         pg_type_name::OID => {
             let v: Option<Oid> = row.try_get(index).map_err(|e| e.to_string())?;
             match v {
@@ -824,6 +936,76 @@ fn get_db_value(index: usize, row: &sqlx::postgres::PgRow) -> Result<DbValue, St
                 None => DbValue::Primitive(DbValuePrimitive::Null),
             }
         }
+        pg_type_name::INT4RANGE_ARRAY => {
+            let vs: Option<Vec<PgRange<i32>>> = row.try_get(index).map_err(|e| e.to_string())?;
+            match vs {
+                Some(vs) => DbValue::Array(
+                    vs.into_iter()
+                        .map(|v| DbValuePrimitive::Int4range(get_bounds(v)))
+                        .collect(),
+                ),
+                None => DbValue::Primitive(DbValuePrimitive::Null),
+            }
+        }
+        pg_type_name::INT8RANGE_ARRAY => {
+            let vs: Option<Vec<PgRange<i64>>> = row.try_get(index).map_err(|e| e.to_string())?;
+            match vs {
+                Some(vs) => DbValue::Array(
+                    vs.into_iter()
+                        .map(|v| DbValuePrimitive::Int8range(get_bounds(v)))
+                        .collect(),
+                ),
+                None => DbValue::Primitive(DbValuePrimitive::Null),
+            }
+        }
+        pg_type_name::NUMRANGE_ARRAY => {
+            let vs: Option<Vec<PgRange<BigDecimal>>> =
+                row.try_get(index).map_err(|e| e.to_string())?;
+            match vs {
+                Some(vs) => DbValue::Array(
+                    vs.into_iter()
+                        .map(|v| DbValuePrimitive::Numrange(get_bounds(v)))
+                        .collect(),
+                ),
+                None => DbValue::Primitive(DbValuePrimitive::Null),
+            }
+        }
+        pg_type_name::TSRANGE_ARRAY => {
+            let vs: Option<Vec<PgRange<chrono::DateTime<chrono::Utc>>>> =
+                row.try_get(index).map_err(|e| e.to_string())?;
+            match vs {
+                Some(vs) => DbValue::Array(
+                    vs.into_iter()
+                        .map(|v| DbValuePrimitive::Tsrange(get_bounds(v)))
+                        .collect(),
+                ),
+                None => DbValue::Primitive(DbValuePrimitive::Null),
+            }
+        }
+        pg_type_name::TSTZRANGE_ARRAY => {
+            let vs: Option<Vec<PgRange<chrono::DateTime<chrono::Utc>>>> =
+                row.try_get(index).map_err(|e| e.to_string())?;
+            match vs {
+                Some(vs) => DbValue::Array(
+                    vs.into_iter()
+                        .map(|v| DbValuePrimitive::Tstzrange(get_bounds(v)))
+                        .collect(),
+                ),
+                None => DbValue::Primitive(DbValuePrimitive::Null),
+            }
+        }
+        pg_type_name::DATERANGE_ARRAY => {
+            let vs: Option<Vec<PgRange<chrono::NaiveDate>>> =
+                row.try_get(index).map_err(|e| e.to_string())?;
+            match vs {
+                Some(vs) => DbValue::Array(
+                    vs.into_iter()
+                        .map(|v| DbValuePrimitive::Daterange(get_bounds(v)))
+                        .collect(),
+                ),
+                None => DbValue::Primitive(DbValuePrimitive::Null),
+            }
+        }
         pg_type_name::OID_ARRAY => {
             let vs: Option<Vec<Oid>> = row.try_get(index).map_err(|e| e.to_string())?;
             match vs {
@@ -833,29 +1015,30 @@ fn get_db_value(index: usize, row: &sqlx::postgres::PgRow) -> Result<DbValue, St
                 None => DbValue::Primitive(DbValuePrimitive::Null),
             }
         }
-        // _ => match column.type_info().kind() { // enum in postgres is custom type
-        //     PgTypeKind::Enum(_) => {
-        //         let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
-        //         match v {
-        //             Some(v) => DbValue::Primitive(DbValuePrimitive::Text(v)),
-        //             None => DbValue::Primitive(DbValuePrimitive::Null),
-        //         }
-        //     }
-        //     PgTypeKind::Array(element) => match element.kind() {
-        //         PgTypeKind::Enum(_) => {
-        //             let vs: Option<Vec<String>> = row.try_get(index).map_err(|e| e.to_string())?;
-        //             match vs {
-        //                 Some(vs) => {
-        //                     DbValue::Array(vs.into_iter().map(DbValuePrimitive::Text).collect())
-        //                 }
-        //                 None => DbValue::Array(vec![]),
-        //             }
-        //         }
-        //         _ => Err(format!("Type '{}' is not supported", type_name))?,
-        //     },
-        //     _ => Err(format!("Type '{}' is not supported", type_name))?,
-        // },
-        _ => Err(format!("Type '{}' is not supported", type_name))?,
+        _ => match column.type_info().kind() {
+            // enum in postgres is custom type
+            PgTypeKind::Enum(_) => {
+                let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
+                match v {
+                    Some(v) => DbValue::Primitive(DbValuePrimitive::Text(v)),
+                    None => DbValue::Primitive(DbValuePrimitive::Null),
+                }
+            }
+            //     PgTypeKind::Array(element) => match element.kind() {
+            //         PgTypeKind::Enum(_) => {
+            //             let vs: Option<Vec<String>> = row.try_get(index).map_err(|e| e.to_string())?;
+            //             match vs {
+            //                 Some(vs) => {
+            //                     DbValue::Array(vs.into_iter().map(DbValuePrimitive::Text).collect())
+            //                 }
+            //                 None => DbValue::Array(vec![]),
+            //             }
+            //         }
+            //         _ => Err(format!("Type '{}' is not supported", type_name))?,
+            //     },
+            _ => Err(format!("Type '{}' is not supported", type_name))?,
+        },
+        // _ => Err(format!("Type '{}' is not supported", type_name))?,
     };
     Ok(value)
 }
@@ -965,6 +1148,17 @@ fn get_duration(interval: PgInterval) -> Result<chrono::Duration, String> {
     }
 }
 
+fn get_bounds<T>(range: PgRange<T>) -> (Bound<T>, Bound<T>) {
+    (range.start, range.end)
+}
+
+fn get_range<T>(bounds: (Bound<T>, Bound<T>)) -> PgRange<T> {
+    PgRange {
+        start: bounds.0,
+        end: bounds.1,
+    }
+}
+
 /// sqlx::postgres::type_info::PgType is not publicly accessible.
 ///
 #[allow(dead_code)]
@@ -1071,6 +1265,7 @@ pub mod types {
     use sqlx::types::BitVec;
     use std::fmt::Display;
     use std::net::IpAddr;
+    use std::ops::Bound;
     use uuid::Uuid;
 
     #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1100,6 +1295,12 @@ pub mod types {
         Inet,
         Bit,
         Varbit,
+        Int4range,
+        Int8range,
+        Numrange,
+        Tsrange,
+        Tstzrange,
+        Daterange,
         Oid,
     }
 
@@ -1131,6 +1332,12 @@ pub mod types {
                 DbColumnTypePrimitive::Inet => write!(f, "inet"),
                 DbColumnTypePrimitive::Bit => write!(f, "bit"),
                 DbColumnTypePrimitive::Varbit => write!(f, "varbit"),
+                DbColumnTypePrimitive::Int4range => write!(f, "int4range"),
+                DbColumnTypePrimitive::Int8range => write!(f, "int8range"),
+                DbColumnTypePrimitive::Numrange => write!(f, "numrange"),
+                DbColumnTypePrimitive::Tsrange => write!(f, "tsrange"),
+                DbColumnTypePrimitive::Tstzrange => write!(f, "tstzrange"),
+                DbColumnTypePrimitive::Daterange => write!(f, "daterange"),
                 DbColumnTypePrimitive::Oid => write!(f, "oid"),
             }
         }
@@ -1178,6 +1385,22 @@ pub mod types {
         Inet(IpAddr),
         Bit(BitVec),
         Varbit(BitVec),
+        Int4range((Bound<i32>, Bound<i32>)),
+        Int8range((Bound<i64>, Bound<i64>)),
+        Numrange((Bound<BigDecimal>, Bound<BigDecimal>)),
+        Tsrange(
+            (
+                Bound<chrono::DateTime<chrono::Utc>>,
+                Bound<chrono::DateTime<chrono::Utc>>,
+            ),
+        ),
+        Tstzrange(
+            (
+                Bound<chrono::DateTime<chrono::Utc>>,
+                Bound<chrono::DateTime<chrono::Utc>>,
+            ),
+        ),
+        Daterange((Bound<chrono::NaiveDate>, Bound<chrono::NaiveDate>)),
         Oid(u32),
         Null,
     }
@@ -1210,6 +1433,12 @@ pub mod types {
                 DbValuePrimitive::Inet(v) => write!(f, "{}", v),
                 DbValuePrimitive::Bit(v) => write!(f, "{:?}", v),
                 DbValuePrimitive::Varbit(v) => write!(f, "{:?}", v),
+                DbValuePrimitive::Int4range(v) => write!(f, "{:?}, {:?}", v.0, v.1),
+                DbValuePrimitive::Int8range(v) => write!(f, "{:?}, {:?}", v.0, v.1),
+                DbValuePrimitive::Numrange(v) => write!(f, "{:?}, {:?}", v.0, v.1),
+                DbValuePrimitive::Tsrange(v) => write!(f, "{:?}, {:?}", v.0, v.1),
+                DbValuePrimitive::Tstzrange(v) => write!(f, "{:?}, {:?}", v.0, v.1),
+                DbValuePrimitive::Daterange(v) => write!(f, "{:?}, {:?}", v.0, v.1),
                 DbValuePrimitive::Oid(v) => write!(f, "{}", v),
                 DbValuePrimitive::Null => write!(f, "NULL"),
             }

@@ -362,6 +362,30 @@ impl TryFrom<DbValuePrimitive> for crate::services::rdbms::postgres::types::DbVa
                     Ok(Self::Inet(IpAddr::V6(v)))
                 }
             },
+            DbValuePrimitive::Int4range(v) => {
+                let v = utils::int4range_to_bounds(v)?;
+                Ok(Self::Int4range(v))
+            }
+            DbValuePrimitive::Int8range(v) => {
+                let v = utils::int8range_to_bounds(v)?;
+                Ok(Self::Int8range(v))
+            }
+            DbValuePrimitive::Numrange(v) => {
+                let v = utils::numrange_to_bounds(v)?;
+                Ok(Self::Numrange(v))
+            }
+            DbValuePrimitive::Tsrange(v) => {
+                let v = utils::tsrange_to_bounds(v)?;
+                Ok(Self::Tsrange(v))
+            }
+            DbValuePrimitive::Tstzrange(v) => {
+                let v = utils::tstzrange_to_bounds(v)?;
+                Ok(Self::Tstzrange(v))
+            }
+            DbValuePrimitive::Daterange(v) => {
+                let v = utils::daterange_to_bounds(v)?;
+                Ok(Self::Daterange(v))
+            }
             DbValuePrimitive::Null => Ok(Self::Null),
         }
     }
@@ -446,6 +470,24 @@ impl From<crate::services::rdbms::postgres::types::DbValuePrimitive> for DbValue
                     )))
                 }
             },
+            crate::services::rdbms::postgres::types::DbValuePrimitive::Tsrange(v) => {
+                Self::Tsrange(utils::bounds_to_tsrange(v))
+            }
+            crate::services::rdbms::postgres::types::DbValuePrimitive::Tstzrange(v) => {
+                Self::Tstzrange(utils::bounds_to_tstzrange(v))
+            }
+            crate::services::rdbms::postgres::types::DbValuePrimitive::Daterange(v) => {
+                Self::Daterange(utils::bounds_to_daterange(v))
+            }
+            crate::services::rdbms::postgres::types::DbValuePrimitive::Int4range(v) => {
+                Self::Int4range(utils::bounds_to_int4range(v))
+            }
+            crate::services::rdbms::postgres::types::DbValuePrimitive::Int8range(v) => {
+                Self::Int8range(utils::bounds_to_int8range(v))
+            }
+            crate::services::rdbms::postgres::types::DbValuePrimitive::Numrange(v) => {
+                Self::Numrange(utils::bounds_to_numrange(v))
+            }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Null => Self::Null,
         }
     }
@@ -539,6 +581,24 @@ impl From<crate::services::rdbms::postgres::types::DbColumnTypePrimitive>
             crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Varbit => Self::Varbit,
             crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Oid => Self::Oid,
             crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Inet => Self::Inet,
+            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Int4range => {
+                Self::Int4range
+            }
+            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Int8range => {
+                Self::Int8range
+            }
+            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Numrange => {
+                Self::Numrange
+            }
+            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Tsrange => {
+                Self::Tsrange
+            }
+            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Tstzrange => {
+                Self::Tstzrange
+            }
+            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Daterange => {
+                Self::Daterange
+            }
             crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Uuid => Self::Uuid,
         }
     }

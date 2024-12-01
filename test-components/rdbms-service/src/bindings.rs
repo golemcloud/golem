@@ -75,6 +75,12 @@ pub mod wasi {
             /// year, month, day, hour, minute, second, nanosecond
             pub type Timestamptz = (i32, u8, u8, u8, u8, u8, u32, i32);
             /// year, month, day, hour, minute, second, nanosecond, timezone offset in seconds
+            pub type Int4range = (Option<(i32, bool)>, Option<(i32, bool)>);
+            pub type Int8range = (Option<(i64, bool)>, Option<(i64, bool)>);
+            pub type Numrange = (Option<(_rt::String, bool)>, Option<(_rt::String, bool)>);
+            pub type Tsrange = (Option<(Timestamp, bool)>, Option<(Timestamp, bool)>);
+            pub type Tstzrange = (Option<(Timestamptz, bool)>, Option<(Timestamptz, bool)>);
+            pub type Daterange = (Option<(Date, bool)>, Option<(Date, bool)>);
             pub type BitVec = _rt::Vec<bool>;
             #[derive(Clone, Copy)]
             pub enum DbColumnTypePrimitive {
@@ -103,6 +109,12 @@ pub mod wasi {
                 Inet,
                 Bit,
                 Varbit,
+                Int4range,
+                Int8range,
+                Numrange,
+                Tsrange,
+                Tstzrange,
+                Daterange,
                 Oid,
             }
             impl ::core::fmt::Debug for DbColumnTypePrimitive {
@@ -183,6 +195,24 @@ pub mod wasi {
                         DbColumnTypePrimitive::Varbit => {
                             f.debug_tuple("DbColumnTypePrimitive::Varbit").finish()
                         }
+                        DbColumnTypePrimitive::Int4range => {
+                            f.debug_tuple("DbColumnTypePrimitive::Int4range").finish()
+                        }
+                        DbColumnTypePrimitive::Int8range => {
+                            f.debug_tuple("DbColumnTypePrimitive::Int8range").finish()
+                        }
+                        DbColumnTypePrimitive::Numrange => {
+                            f.debug_tuple("DbColumnTypePrimitive::Numrange").finish()
+                        }
+                        DbColumnTypePrimitive::Tsrange => {
+                            f.debug_tuple("DbColumnTypePrimitive::Tsrange").finish()
+                        }
+                        DbColumnTypePrimitive::Tstzrange => {
+                            f.debug_tuple("DbColumnTypePrimitive::Tstzrange").finish()
+                        }
+                        DbColumnTypePrimitive::Daterange => {
+                            f.debug_tuple("DbColumnTypePrimitive::Daterange").finish()
+                        }
                         DbColumnTypePrimitive::Oid => {
                             f.debug_tuple("DbColumnTypePrimitive::Oid").finish()
                         }
@@ -216,6 +246,12 @@ pub mod wasi {
                 Inet(IpAddress),
                 Bit(BitVec),
                 Varbit(BitVec),
+                Int4range(Int4range),
+                Int8range(Int8range),
+                Numrange(Numrange),
+                Tsrange(Tsrange),
+                Tstzrange(Tstzrange),
+                Daterange(Daterange),
                 Oid(u32),
                 Null,
             }
@@ -301,6 +337,29 @@ pub mod wasi {
                         DbValuePrimitive::Varbit(e) => {
                             f.debug_tuple("DbValuePrimitive::Varbit").field(e).finish()
                         }
+                        DbValuePrimitive::Int4range(e) => f
+                            .debug_tuple("DbValuePrimitive::Int4range")
+                            .field(e)
+                            .finish(),
+                        DbValuePrimitive::Int8range(e) => f
+                            .debug_tuple("DbValuePrimitive::Int8range")
+                            .field(e)
+                            .finish(),
+                        DbValuePrimitive::Numrange(e) => f
+                            .debug_tuple("DbValuePrimitive::Numrange")
+                            .field(e)
+                            .finish(),
+                        DbValuePrimitive::Tsrange(e) => {
+                            f.debug_tuple("DbValuePrimitive::Tsrange").field(e).finish()
+                        }
+                        DbValuePrimitive::Tstzrange(e) => f
+                            .debug_tuple("DbValuePrimitive::Tstzrange")
+                            .field(e)
+                            .finish(),
+                        DbValuePrimitive::Daterange(e) => f
+                            .debug_tuple("DbValuePrimitive::Daterange")
+                            .field(e)
+                            .finish(),
                         DbValuePrimitive::Oid(e) => {
                             f.debug_tuple("DbValuePrimitive::Oid").field(e).finish()
                         }
@@ -523,9 +582,15 @@ pub mod wasi {
                                                 22 => DbColumnTypePrimitive::Inet,
                                                 23 => DbColumnTypePrimitive::Bit,
                                                 24 => DbColumnTypePrimitive::Varbit,
+                                                25 => DbColumnTypePrimitive::Int4range,
+                                                26 => DbColumnTypePrimitive::Int8range,
+                                                27 => DbColumnTypePrimitive::Numrange,
+                                                28 => DbColumnTypePrimitive::Tsrange,
+                                                29 => DbColumnTypePrimitive::Tstzrange,
+                                                30 => DbColumnTypePrimitive::Daterange,
                                                 n => {
                                                     debug_assert_eq!(
-                                                        n, 25,
+                                                        n, 31,
                                                         "invalid enum discriminant"
                                                     );
                                                     DbColumnTypePrimitive::Oid
@@ -566,9 +631,15 @@ pub mod wasi {
                                                 22 => DbColumnTypePrimitive::Inet,
                                                 23 => DbColumnTypePrimitive::Bit,
                                                 24 => DbColumnTypePrimitive::Varbit,
+                                                25 => DbColumnTypePrimitive::Int4range,
+                                                26 => DbColumnTypePrimitive::Int8range,
+                                                27 => DbColumnTypePrimitive::Numrange,
+                                                28 => DbColumnTypePrimitive::Tsrange,
+                                                29 => DbColumnTypePrimitive::Tstzrange,
+                                                30 => DbColumnTypePrimitive::Daterange,
                                                 n => {
                                                     debug_assert_eq!(
-                                                        n, 25,
+                                                        n, 31,
                                                         "invalid enum discriminant"
                                                     );
                                                     DbColumnTypePrimitive::Oid
@@ -626,30 +697,30 @@ pub mod wasi {
                                 let e = {
                                     let l2 = *ptr0.add(4).cast::<*mut u8>();
                                     let l3 = *ptr0.add(8).cast::<usize>();
-                                    let base184 = l2;
-                                    let len184 = l3;
-                                    let mut result184 = _rt::Vec::with_capacity(len184);
-                                    for i in 0..len184 {
-                                        let base = base184.add(i * 8);
-                                        let e184 = {
+                                    let base324 = l2;
+                                    let len324 = l3;
+                                    let mut result324 = _rt::Vec::with_capacity(len324);
+                                    for i in 0..len324 {
+                                        let base = base324.add(i * 8);
+                                        let e324 = {
                                             let l4 = *base.add(0).cast::<*mut u8>();
                                             let l5 = *base.add(4).cast::<usize>();
-                                            let base183 = l4;
-                                            let len183 = l5;
-                                            let mut result183 = _rt::Vec::with_capacity(len183);
-                                            for i in 0..len183 {
-                                                let base = base183.add(i * 40);
-                                                let e183 = {
+                                            let base323 = l4;
+                                            let len323 = l5;
+                                            let mut result323 = _rt::Vec::with_capacity(len323);
+                                            for i in 0..len323 {
+                                                let base = base323.add(i * 72);
+                                                let e323 = {
                                                     let l6 = i32::from(*base.add(0).cast::<u8>());
-                                                    let v182 = match l6 {
+                                                    let v322 = match l6 {
                                                         0 => {
-                                                            let e182 = {
+                                                            let e322 = {
                                                                 let l7 = i32::from(
                                                                     *base.add(8).cast::<u8>(),
                                                                 );
-                                                                let v92 = match l7 {
+                                                                let v162 = match l7 {
                                                                     0 => {
-                                                                        let e92 = {
+                                                                        let e162 = {
                                                                             let l8 = i32::from(
                                                                                 *base
                                                                                     .add(16)
@@ -659,11 +730,11 @@ pub mod wasi {
                                                                             l8 as i8
                                                                         };
                                                                         DbValuePrimitive::Character(
-                                                                            e92,
+                                                                            e162,
                                                                         )
                                                                     }
                                                                     1 => {
-                                                                        let e92 = {
+                                                                        let e162 = {
                                                                             let l9 = i32::from(
                                                                                 *base
                                                                                     .add(16)
@@ -672,30 +743,30 @@ pub mod wasi {
 
                                                                             l9 as i16
                                                                         };
-                                                                        DbValuePrimitive::Int2(e92)
+                                                                        DbValuePrimitive::Int2(e162)
                                                                     }
                                                                     2 => {
-                                                                        let e92 = {
+                                                                        let e162 = {
                                                                             let l10 = *base
                                                                                 .add(16)
                                                                                 .cast::<i32>();
 
                                                                             l10
                                                                         };
-                                                                        DbValuePrimitive::Int4(e92)
+                                                                        DbValuePrimitive::Int4(e162)
                                                                     }
                                                                     3 => {
-                                                                        let e92 = {
+                                                                        let e162 = {
                                                                             let l11 = *base
                                                                                 .add(16)
                                                                                 .cast::<i64>();
 
                                                                             l11
                                                                         };
-                                                                        DbValuePrimitive::Int8(e92)
+                                                                        DbValuePrimitive::Int8(e162)
                                                                     }
                                                                     4 => {
-                                                                        let e92 = {
+                                                                        let e162 = {
                                                                             let l12 = *base
                                                                                 .add(16)
                                                                                 .cast::<f32>();
@@ -703,11 +774,11 @@ pub mod wasi {
                                                                             l12
                                                                         };
                                                                         DbValuePrimitive::Float4(
-                                                                            e92,
+                                                                            e162,
                                                                         )
                                                                     }
                                                                     5 => {
-                                                                        let e92 = {
+                                                                        let e162 = {
                                                                             let l13 = *base
                                                                                 .add(16)
                                                                                 .cast::<f64>();
@@ -715,11 +786,11 @@ pub mod wasi {
                                                                             l13
                                                                         };
                                                                         DbValuePrimitive::Float8(
-                                                                            e92,
+                                                                            e162,
                                                                         )
                                                                     }
                                                                     6 => {
-                                                                        let e92 = {
+                                                                        let e162 = {
                                                                             let l14 = *base
                                                                                 .add(16)
                                                                                 .cast::<*mut u8>();
@@ -734,11 +805,11 @@ pub mod wasi {
                                                                             )
                                                                         };
                                                                         DbValuePrimitive::Numeric(
-                                                                            e92,
+                                                                            e162,
                                                                         )
                                                                     }
                                                                     7 => {
-                                                                        let e92 = {
+                                                                        let e162 = {
                                                                             let l17 = i32::from(
                                                                                 *base
                                                                                     .add(16)
@@ -750,11 +821,11 @@ pub mod wasi {
                                                                             )
                                                                         };
                                                                         DbValuePrimitive::Boolean(
-                                                                            e92,
+                                                                            e162,
                                                                         )
                                                                     }
                                                                     8 => {
-                                                                        let e92 = {
+                                                                        let e162 = {
                                                                             let l18 = *base
                                                                                 .add(16)
                                                                                 .cast::<*mut u8>();
@@ -768,10 +839,10 @@ pub mod wasi {
                                                                                 bytes20,
                                                                             )
                                                                         };
-                                                                        DbValuePrimitive::Text(e92)
+                                                                        DbValuePrimitive::Text(e162)
                                                                     }
                                                                     9 => {
-                                                                        let e92 = {
+                                                                        let e162 = {
                                                                             let l21 = *base
                                                                                 .add(16)
                                                                                 .cast::<*mut u8>();
@@ -786,11 +857,11 @@ pub mod wasi {
                                                                             )
                                                                         };
                                                                         DbValuePrimitive::Varchar(
-                                                                            e92,
+                                                                            e162,
                                                                         )
                                                                     }
                                                                     10 => {
-                                                                        let e92 = {
+                                                                        let e162 = {
                                                                             let l24 = *base
                                                                                 .add(16)
                                                                                 .cast::<*mut u8>();
@@ -805,11 +876,11 @@ pub mod wasi {
                                                                             )
                                                                         };
                                                                         DbValuePrimitive::Bpchar(
-                                                                            e92,
+                                                                            e162,
                                                                         )
                                                                     }
                                                                     11 => {
-                                                                        let e92 = {
+                                                                        let e162 = {
                                                                             let l27 = *base
                                                                                 .add(16)
                                                                                 .cast::<i32>();
@@ -852,11 +923,11 @@ pub mod wasi {
                                                                             )
                                                                         };
                                                                         DbValuePrimitive::Timestamp(
-                                                                            e92,
+                                                                            e162,
                                                                         )
                                                                     }
                                                                     12 => {
-                                                                        let e92 = {
+                                                                        let e162 = {
                                                                             let l34 = *base
                                                                                 .add(16)
                                                                                 .cast::<i32>();
@@ -901,10 +972,10 @@ pub mod wasi {
                                                                                 l40 as u32, l41,
                                                                             )
                                                                         };
-                                                                        DbValuePrimitive::Timestamptz(e92)
+                                                                        DbValuePrimitive::Timestamptz(e162)
                                                                     }
                                                                     13 => {
-                                                                        let e92 = {
+                                                                        let e162 = {
                                                                             let l42 = *base
                                                                                 .add(16)
                                                                                 .cast::<i32>();
@@ -924,10 +995,10 @@ pub mod wasi {
                                                                                 l44 as u8,
                                                                             )
                                                                         };
-                                                                        DbValuePrimitive::Date(e92)
+                                                                        DbValuePrimitive::Date(e162)
                                                                     }
                                                                     14 => {
-                                                                        let e92 = {
+                                                                        let e162 = {
                                                                             let l45 = i32::from(
                                                                                 *base
                                                                                     .add(16)
@@ -954,10 +1025,10 @@ pub mod wasi {
                                                                                 l48 as u32,
                                                                             )
                                                                         };
-                                                                        DbValuePrimitive::Time(e92)
+                                                                        DbValuePrimitive::Time(e162)
                                                                     }
                                                                     15 => {
-                                                                        let e92 = {
+                                                                        let e162 = {
                                                                             let l49 = i32::from(
                                                                                 *base
                                                                                     .add(16)
@@ -988,11 +1059,11 @@ pub mod wasi {
                                                                             )
                                                                         };
                                                                         DbValuePrimitive::Timetz(
-                                                                            e92,
+                                                                            e162,
                                                                         )
                                                                     }
                                                                     16 => {
-                                                                        let e92 = {
+                                                                        let e162 = {
                                                                             let l54 = *base
                                                                                 .add(16)
                                                                                 .cast::<i64>();
@@ -1000,11 +1071,11 @@ pub mod wasi {
                                                                             l54
                                                                         };
                                                                         DbValuePrimitive::Interval(
-                                                                            e92,
+                                                                            e162,
                                                                         )
                                                                     }
                                                                     17 => {
-                                                                        let e92 = {
+                                                                        let e162 = {
                                                                             let l55 = *base
                                                                                 .add(16)
                                                                                 .cast::<*mut u8>();
@@ -1019,10 +1090,12 @@ pub mod wasi {
                                                                                 len57,
                                                                             )
                                                                         };
-                                                                        DbValuePrimitive::Bytea(e92)
+                                                                        DbValuePrimitive::Bytea(
+                                                                            e162,
+                                                                        )
                                                                     }
                                                                     18 => {
-                                                                        let e92 = {
+                                                                        let e162 = {
                                                                             let l58 = *base
                                                                                 .add(16)
                                                                                 .cast::<*mut u8>();
@@ -1036,10 +1109,10 @@ pub mod wasi {
                                                                                 bytes60,
                                                                             )
                                                                         };
-                                                                        DbValuePrimitive::Json(e92)
+                                                                        DbValuePrimitive::Json(e162)
                                                                     }
                                                                     19 => {
-                                                                        let e92 = {
+                                                                        let e162 = {
                                                                             let l61 = *base
                                                                                 .add(16)
                                                                                 .cast::<*mut u8>();
@@ -1053,10 +1126,12 @@ pub mod wasi {
                                                                                 bytes63,
                                                                             )
                                                                         };
-                                                                        DbValuePrimitive::Jsonb(e92)
+                                                                        DbValuePrimitive::Jsonb(
+                                                                            e162,
+                                                                        )
                                                                     }
                                                                     20 => {
-                                                                        let e92 = {
+                                                                        let e162 = {
                                                                             let l64 = *base
                                                                                 .add(16)
                                                                                 .cast::<*mut u8>();
@@ -1070,10 +1145,10 @@ pub mod wasi {
                                                                                 bytes66,
                                                                             )
                                                                         };
-                                                                        DbValuePrimitive::Xml(e92)
+                                                                        DbValuePrimitive::Xml(e162)
                                                                     }
                                                                     21 => {
-                                                                        let e92 = {
+                                                                        let e162 = {
                                                                             let l67 = *base
                                                                                 .add(16)
                                                                                 .cast::<i64>();
@@ -1083,10 +1158,10 @@ pub mod wasi {
 
                                                                             (l67 as u64, l68 as u64)
                                                                         };
-                                                                        DbValuePrimitive::Uuid(e92)
+                                                                        DbValuePrimitive::Uuid(e162)
                                                                     }
                                                                     22 => {
-                                                                        let e92 = {
+                                                                        let e162 = {
                                                                             let l69 = i32::from(
                                                                                 *base
                                                                                     .add(16)
@@ -1128,10 +1203,10 @@ pub mod wasi {
 
                                                                             v82
                                                                         };
-                                                                        DbValuePrimitive::Inet(e92)
+                                                                        DbValuePrimitive::Inet(e162)
                                                                     }
                                                                     23 => {
-                                                                        let e92 = {
+                                                                        let e162 = {
                                                                             let l83 = *base
                                                                                 .add(16)
                                                                                 .cast::<*mut u8>();
@@ -1161,10 +1236,10 @@ pub mod wasi {
 
                                                                             result86
                                                                         };
-                                                                        DbValuePrimitive::Bit(e92)
+                                                                        DbValuePrimitive::Bit(e162)
                                                                     }
                                                                     24 => {
-                                                                        let e92 = {
+                                                                        let e162 = {
                                                                             let l87 = *base
                                                                                 .add(16)
                                                                                 .cast::<*mut u8>();
@@ -1195,472 +1270,1000 @@ pub mod wasi {
                                                                             result90
                                                                         };
                                                                         DbValuePrimitive::Varbit(
-                                                                            e92,
+                                                                            e162,
                                                                         )
                                                                     }
                                                                     25 => {
-                                                                        let e92 = {
-                                                                            let l91 = *base
+                                                                        let e162 = {
+                                                                            let l91 = i32::from(
+                                                                                *base
+                                                                                    .add(16)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l94 = i32::from(
+                                                                                *base
+                                                                                    .add(28)
+                                                                                    .cast::<u8>(),
+                                                                            );
+
+                                                                            (match l91 {
+                                        0 => None,
+                                        1 => {
+                                          let e = {
+                                            let l92 = *base.add(20).cast::<i32>();
+                                            let l93 = i32::from(*base.add(24).cast::<u8>());
+
+                                            (l92, _rt::bool_lift(l93 as u8))
+                                          };
+                                          Some(e)
+                                        }
+                                        _ => _rt::invalid_enum_discriminant(),
+                                      }, match l94 {
+                                        0 => None,
+                                        1 => {
+                                          let e = {
+                                            let l95 = *base.add(32).cast::<i32>();
+                                            let l96 = i32::from(*base.add(36).cast::<u8>());
+
+                                            (l95, _rt::bool_lift(l96 as u8))
+                                          };
+                                          Some(e)
+                                        }
+                                        _ => _rt::invalid_enum_discriminant(),
+                                      })
+                                                                        };
+                                                                        DbValuePrimitive::Int4range(
+                                                                            e162,
+                                                                        )
+                                                                    }
+                                                                    26 => {
+                                                                        let e162 = {
+                                                                            let l97 = i32::from(
+                                                                                *base
+                                                                                    .add(16)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l100 = i32::from(
+                                                                                *base
+                                                                                    .add(40)
+                                                                                    .cast::<u8>(),
+                                                                            );
+
+                                                                            (match l97 {
+                                        0 => None,
+                                        1 => {
+                                          let e = {
+                                            let l98 = *base.add(24).cast::<i64>();
+                                            let l99 = i32::from(*base.add(32).cast::<u8>());
+
+                                            (l98, _rt::bool_lift(l99 as u8))
+                                          };
+                                          Some(e)
+                                        }
+                                        _ => _rt::invalid_enum_discriminant(),
+                                      }, match l100 {
+                                        0 => None,
+                                        1 => {
+                                          let e = {
+                                            let l101 = *base.add(48).cast::<i64>();
+                                            let l102 = i32::from(*base.add(56).cast::<u8>());
+
+                                            (l101, _rt::bool_lift(l102 as u8))
+                                          };
+                                          Some(e)
+                                        }
+                                        _ => _rt::invalid_enum_discriminant(),
+                                      })
+                                                                        };
+                                                                        DbValuePrimitive::Int8range(
+                                                                            e162,
+                                                                        )
+                                                                    }
+                                                                    27 => {
+                                                                        let e162 = {
+                                                                            let l103 = i32::from(
+                                                                                *base
+                                                                                    .add(16)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l108 = i32::from(
+                                                                                *base
+                                                                                    .add(32)
+                                                                                    .cast::<u8>(),
+                                                                            );
+
+                                                                            (match l103 {
+                                        0 => None,
+                                        1 => {
+                                          let e = {
+                                            let l104 = *base.add(20).cast::<*mut u8>();
+                                            let l105 = *base.add(24).cast::<usize>();
+                                            let len106 = l105;
+                                            let bytes106 = _rt::Vec::from_raw_parts(l104.cast(), len106, len106);
+                                            let l107 = i32::from(*base.add(28).cast::<u8>());
+
+                                            (_rt::string_lift(bytes106), _rt::bool_lift(l107 as u8))
+                                          };
+                                          Some(e)
+                                        }
+                                        _ => _rt::invalid_enum_discriminant(),
+                                      }, match l108 {
+                                        0 => None,
+                                        1 => {
+                                          let e = {
+                                            let l109 = *base.add(36).cast::<*mut u8>();
+                                            let l110 = *base.add(40).cast::<usize>();
+                                            let len111 = l110;
+                                            let bytes111 = _rt::Vec::from_raw_parts(l109.cast(), len111, len111);
+                                            let l112 = i32::from(*base.add(44).cast::<u8>());
+
+                                            (_rt::string_lift(bytes111), _rt::bool_lift(l112 as u8))
+                                          };
+                                          Some(e)
+                                        }
+                                        _ => _rt::invalid_enum_discriminant(),
+                                      })
+                                                                        };
+                                                                        DbValuePrimitive::Numrange(
+                                                                            e162,
+                                                                        )
+                                                                    }
+                                                                    28 => {
+                                                                        let e162 = {
+                                                                            let l113 = i32::from(
+                                                                                *base
+                                                                                    .add(16)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l122 = i32::from(
+                                                                                *base
+                                                                                    .add(40)
+                                                                                    .cast::<u8>(),
+                                                                            );
+
+                                                                            (match l113 {
+                                        0 => None,
+                                        1 => {
+                                          let e = {
+                                            let l114 = *base.add(20).cast::<i32>();
+                                            let l115 = i32::from(*base.add(24).cast::<u8>());
+                                            let l116 = i32::from(*base.add(25).cast::<u8>());
+                                            let l117 = i32::from(*base.add(26).cast::<u8>());
+                                            let l118 = i32::from(*base.add(27).cast::<u8>());
+                                            let l119 = i32::from(*base.add(28).cast::<u8>());
+                                            let l120 = *base.add(32).cast::<i32>();
+                                            let l121 = i32::from(*base.add(36).cast::<u8>());
+
+                                            ((l114, l115 as u8, l116 as u8, l117 as u8, l118 as u8, l119 as u8, l120 as u32), _rt::bool_lift(l121 as u8))
+                                          };
+                                          Some(e)
+                                        }
+                                        _ => _rt::invalid_enum_discriminant(),
+                                      }, match l122 {
+                                        0 => None,
+                                        1 => {
+                                          let e = {
+                                            let l123 = *base.add(44).cast::<i32>();
+                                            let l124 = i32::from(*base.add(48).cast::<u8>());
+                                            let l125 = i32::from(*base.add(49).cast::<u8>());
+                                            let l126 = i32::from(*base.add(50).cast::<u8>());
+                                            let l127 = i32::from(*base.add(51).cast::<u8>());
+                                            let l128 = i32::from(*base.add(52).cast::<u8>());
+                                            let l129 = *base.add(56).cast::<i32>();
+                                            let l130 = i32::from(*base.add(60).cast::<u8>());
+
+                                            ((l123, l124 as u8, l125 as u8, l126 as u8, l127 as u8, l128 as u8, l129 as u32), _rt::bool_lift(l130 as u8))
+                                          };
+                                          Some(e)
+                                        }
+                                        _ => _rt::invalid_enum_discriminant(),
+                                      })
+                                                                        };
+                                                                        DbValuePrimitive::Tsrange(
+                                                                            e162,
+                                                                        )
+                                                                    }
+                                                                    29 => {
+                                                                        let e162 = {
+                                                                            let l131 = i32::from(
+                                                                                *base
+                                                                                    .add(16)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l141 = i32::from(
+                                                                                *base
+                                                                                    .add(44)
+                                                                                    .cast::<u8>(),
+                                                                            );
+
+                                                                            (match l131 {
+                                        0 => None,
+                                        1 => {
+                                          let e = {
+                                            let l132 = *base.add(20).cast::<i32>();
+                                            let l133 = i32::from(*base.add(24).cast::<u8>());
+                                            let l134 = i32::from(*base.add(25).cast::<u8>());
+                                            let l135 = i32::from(*base.add(26).cast::<u8>());
+                                            let l136 = i32::from(*base.add(27).cast::<u8>());
+                                            let l137 = i32::from(*base.add(28).cast::<u8>());
+                                            let l138 = *base.add(32).cast::<i32>();
+                                            let l139 = *base.add(36).cast::<i32>();
+                                            let l140 = i32::from(*base.add(40).cast::<u8>());
+
+                                            ((l132, l133 as u8, l134 as u8, l135 as u8, l136 as u8, l137 as u8, l138 as u32, l139), _rt::bool_lift(l140 as u8))
+                                          };
+                                          Some(e)
+                                        }
+                                        _ => _rt::invalid_enum_discriminant(),
+                                      }, match l141 {
+                                        0 => None,
+                                        1 => {
+                                          let e = {
+                                            let l142 = *base.add(48).cast::<i32>();
+                                            let l143 = i32::from(*base.add(52).cast::<u8>());
+                                            let l144 = i32::from(*base.add(53).cast::<u8>());
+                                            let l145 = i32::from(*base.add(54).cast::<u8>());
+                                            let l146 = i32::from(*base.add(55).cast::<u8>());
+                                            let l147 = i32::from(*base.add(56).cast::<u8>());
+                                            let l148 = *base.add(60).cast::<i32>();
+                                            let l149 = *base.add(64).cast::<i32>();
+                                            let l150 = i32::from(*base.add(68).cast::<u8>());
+
+                                            ((l142, l143 as u8, l144 as u8, l145 as u8, l146 as u8, l147 as u8, l148 as u32, l149), _rt::bool_lift(l150 as u8))
+                                          };
+                                          Some(e)
+                                        }
+                                        _ => _rt::invalid_enum_discriminant(),
+                                      })
+                                                                        };
+                                                                        DbValuePrimitive::Tstzrange(
+                                                                            e162,
+                                                                        )
+                                                                    }
+                                                                    30 => {
+                                                                        let e162 = {
+                                                                            let l151 = i32::from(
+                                                                                *base
+                                                                                    .add(16)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l156 = i32::from(
+                                                                                *base
+                                                                                    .add(32)
+                                                                                    .cast::<u8>(),
+                                                                            );
+
+                                                                            (match l151 {
+                                        0 => None,
+                                        1 => {
+                                          let e = {
+                                            let l152 = *base.add(20).cast::<i32>();
+                                            let l153 = i32::from(*base.add(24).cast::<u8>());
+                                            let l154 = i32::from(*base.add(25).cast::<u8>());
+                                            let l155 = i32::from(*base.add(28).cast::<u8>());
+
+                                            ((l152, l153 as u8, l154 as u8), _rt::bool_lift(l155 as u8))
+                                          };
+                                          Some(e)
+                                        }
+                                        _ => _rt::invalid_enum_discriminant(),
+                                      }, match l156 {
+                                        0 => None,
+                                        1 => {
+                                          let e = {
+                                            let l157 = *base.add(36).cast::<i32>();
+                                            let l158 = i32::from(*base.add(40).cast::<u8>());
+                                            let l159 = i32::from(*base.add(41).cast::<u8>());
+                                            let l160 = i32::from(*base.add(44).cast::<u8>());
+
+                                            ((l157, l158 as u8, l159 as u8), _rt::bool_lift(l160 as u8))
+                                          };
+                                          Some(e)
+                                        }
+                                        _ => _rt::invalid_enum_discriminant(),
+                                      })
+                                                                        };
+                                                                        DbValuePrimitive::Daterange(
+                                                                            e162,
+                                                                        )
+                                                                    }
+                                                                    31 => {
+                                                                        let e162 = {
+                                                                            let l161 = *base
                                                                                 .add(16)
                                                                                 .cast::<i32>();
 
-                                                                            l91 as u32
+                                                                            l161 as u32
                                                                         };
-                                                                        DbValuePrimitive::Oid(e92)
+                                                                        DbValuePrimitive::Oid(e162)
                                                                     }
                                                                     n => {
-                                                                        debug_assert_eq!(n, 26, "invalid enum discriminant");
+                                                                        debug_assert_eq!(n, 32, "invalid enum discriminant");
                                                                         DbValuePrimitive::Null
                                                                     }
                                                                 };
 
-                                                                v92
+                                                                v162
                                                             };
-                                                            DbValue::Primitive(e182)
+                                                            DbValue::Primitive(e322)
                                                         }
                                                         n => {
                                                             debug_assert_eq!(
                                                                 n, 1,
                                                                 "invalid enum discriminant"
                                                             );
-                                                            let e182 = {
-                                                                let l93 =
+                                                            let e322 = {
+                                                                let l163 =
                                                                     *base.add(8).cast::<*mut u8>();
-                                                                let l94 =
+                                                                let l164 =
                                                                     *base.add(12).cast::<usize>();
-                                                                let base181 = l93;
-                                                                let len181 = l94;
-                                                                let mut result181 =
-                                                                    _rt::Vec::with_capacity(len181);
-                                                                for i in 0..len181 {
-                                                                    let base = base181.add(i * 32);
-                                                                    let e181 = {
-                                                                        let l95 = i32::from(
+                                                                let base321 = l163;
+                                                                let len321 = l164;
+                                                                let mut result321 =
+                                                                    _rt::Vec::with_capacity(len321);
+                                                                for i in 0..len321 {
+                                                                    let base = base321.add(i * 64);
+                                                                    let e321 = {
+                                                                        let l165 = i32::from(
                                                                             *base
                                                                                 .add(0)
                                                                                 .cast::<u8>(),
                                                                         );
-                                                                        let v180 = match l95 {
+                                                                        let v320 = match l165 {
                                                                             0 => {
-                                                                                let e180 = {
-                                                                                    let l96 = i32::from(*base.add(8).cast::<i8>());
+                                                                                let e320 = {
+                                                                                    let l166 = i32::from(*base.add(8).cast::<i8>());
 
-                                                                                    l96 as i8
+                                                                                    l166 as i8
                                                                                 };
-                                                                                DbValuePrimitive::Character(e180)
+                                                                                DbValuePrimitive::Character(e320)
                                                                             }
                                                                             1 => {
-                                                                                let e180 = {
-                                                                                    let l97 = i32::from(*base.add(8).cast::<i16>());
+                                                                                let e320 = {
+                                                                                    let l167 = i32::from(*base.add(8).cast::<i16>());
 
-                                                                                    l97 as i16
+                                                                                    l167 as i16
                                                                                 };
-                                                                                DbValuePrimitive::Int2(e180)
+                                                                                DbValuePrimitive::Int2(e320)
                                                                             }
                                                                             2 => {
-                                                                                let e180 = {
-                                                                                    let l98 = *base.add(8).cast::<i32>();
+                                                                                let e320 = {
+                                                                                    let l168 = *base.add(8).cast::<i32>();
 
-                                                                                    l98
+                                                                                    l168
                                                                                 };
-                                                                                DbValuePrimitive::Int4(e180)
+                                                                                DbValuePrimitive::Int4(e320)
                                                                             }
                                                                             3 => {
-                                                                                let e180 = {
-                                                                                    let l99 = *base.add(8).cast::<i64>();
+                                                                                let e320 = {
+                                                                                    let l169 = *base.add(8).cast::<i64>();
 
-                                                                                    l99
+                                                                                    l169
                                                                                 };
-                                                                                DbValuePrimitive::Int8(e180)
+                                                                                DbValuePrimitive::Int8(e320)
                                                                             }
                                                                             4 => {
-                                                                                let e180 = {
-                                                                                    let l100 = *base.add(8).cast::<f32>();
+                                                                                let e320 = {
+                                                                                    let l170 = *base.add(8).cast::<f32>();
 
-                                                                                    l100
+                                                                                    l170
                                                                                 };
-                                                                                DbValuePrimitive::Float4(e180)
+                                                                                DbValuePrimitive::Float4(e320)
                                                                             }
                                                                             5 => {
-                                                                                let e180 = {
-                                                                                    let l101 = *base.add(8).cast::<f64>();
+                                                                                let e320 = {
+                                                                                    let l171 = *base.add(8).cast::<f64>();
 
-                                                                                    l101
+                                                                                    l171
                                                                                 };
-                                                                                DbValuePrimitive::Float8(e180)
+                                                                                DbValuePrimitive::Float8(e320)
                                                                             }
                                                                             6 => {
-                                                                                let e180 = {
-                                                                                    let l102 = *base.add(8).cast::<*mut u8>();
-                                                                                    let l103 = *base.add(12).cast::<usize>();
-                                                                                    let len104 =
-                                                                                        l103;
-                                                                                    let bytes104 = _rt::Vec::from_raw_parts(l102.cast(), len104, len104);
+                                                                                let e320 = {
+                                                                                    let l172 = *base.add(8).cast::<*mut u8>();
+                                                                                    let l173 = *base.add(12).cast::<usize>();
+                                                                                    let len174 =
+                                                                                        l173;
+                                                                                    let bytes174 = _rt::Vec::from_raw_parts(l172.cast(), len174, len174);
 
                                                                                     _rt::string_lift(
-                                                                                        bytes104,
+                                                                                        bytes174,
                                                                                     )
                                                                                 };
-                                                                                DbValuePrimitive::Numeric(e180)
+                                                                                DbValuePrimitive::Numeric(e320)
                                                                             }
                                                                             7 => {
-                                                                                let e180 = {
-                                                                                    let l105 = i32::from(*base.add(8).cast::<u8>());
+                                                                                let e320 = {
+                                                                                    let l175 = i32::from(*base.add(8).cast::<u8>());
 
                                                                                     _rt::bool_lift(
-                                                                                        l105 as u8,
+                                                                                        l175 as u8,
                                                                                     )
                                                                                 };
-                                                                                DbValuePrimitive::Boolean(e180)
+                                                                                DbValuePrimitive::Boolean(e320)
                                                                             }
                                                                             8 => {
-                                                                                let e180 = {
-                                                                                    let l106 = *base.add(8).cast::<*mut u8>();
-                                                                                    let l107 = *base.add(12).cast::<usize>();
-                                                                                    let len108 =
-                                                                                        l107;
-                                                                                    let bytes108 = _rt::Vec::from_raw_parts(l106.cast(), len108, len108);
+                                                                                let e320 = {
+                                                                                    let l176 = *base.add(8).cast::<*mut u8>();
+                                                                                    let l177 = *base.add(12).cast::<usize>();
+                                                                                    let len178 =
+                                                                                        l177;
+                                                                                    let bytes178 = _rt::Vec::from_raw_parts(l176.cast(), len178, len178);
 
                                                                                     _rt::string_lift(
-                                                                                        bytes108,
+                                                                                        bytes178,
                                                                                     )
                                                                                 };
-                                                                                DbValuePrimitive::Text(e180)
+                                                                                DbValuePrimitive::Text(e320)
                                                                             }
                                                                             9 => {
-                                                                                let e180 = {
-                                                                                    let l109 = *base.add(8).cast::<*mut u8>();
-                                                                                    let l110 = *base.add(12).cast::<usize>();
-                                                                                    let len111 =
-                                                                                        l110;
-                                                                                    let bytes111 = _rt::Vec::from_raw_parts(l109.cast(), len111, len111);
+                                                                                let e320 = {
+                                                                                    let l179 = *base.add(8).cast::<*mut u8>();
+                                                                                    let l180 = *base.add(12).cast::<usize>();
+                                                                                    let len181 =
+                                                                                        l180;
+                                                                                    let bytes181 = _rt::Vec::from_raw_parts(l179.cast(), len181, len181);
 
                                                                                     _rt::string_lift(
-                                                                                        bytes111,
+                                                                                        bytes181,
                                                                                     )
                                                                                 };
-                                                                                DbValuePrimitive::Varchar(e180)
+                                                                                DbValuePrimitive::Varchar(e320)
                                                                             }
                                                                             10 => {
-                                                                                let e180 = {
-                                                                                    let l112 = *base.add(8).cast::<*mut u8>();
-                                                                                    let l113 = *base.add(12).cast::<usize>();
-                                                                                    let len114 =
-                                                                                        l113;
-                                                                                    let bytes114 = _rt::Vec::from_raw_parts(l112.cast(), len114, len114);
+                                                                                let e320 = {
+                                                                                    let l182 = *base.add(8).cast::<*mut u8>();
+                                                                                    let l183 = *base.add(12).cast::<usize>();
+                                                                                    let len184 =
+                                                                                        l183;
+                                                                                    let bytes184 = _rt::Vec::from_raw_parts(l182.cast(), len184, len184);
 
                                                                                     _rt::string_lift(
-                                                                                        bytes114,
+                                                                                        bytes184,
                                                                                     )
                                                                                 };
-                                                                                DbValuePrimitive::Bpchar(e180)
+                                                                                DbValuePrimitive::Bpchar(e320)
                                                                             }
                                                                             11 => {
-                                                                                let e180 = {
-                                                                                    let l115 = *base.add(8).cast::<i32>();
-                                                                                    let l116 = i32::from(*base.add(12).cast::<u8>());
-                                                                                    let l117 = i32::from(*base.add(13).cast::<u8>());
-                                                                                    let l118 = i32::from(*base.add(14).cast::<u8>());
-                                                                                    let l119 = i32::from(*base.add(15).cast::<u8>());
-                                                                                    let l120 = i32::from(*base.add(16).cast::<u8>());
-                                                                                    let l121 = *base.add(20).cast::<i32>();
+                                                                                let e320 = {
+                                                                                    let l185 = *base.add(8).cast::<i32>();
+                                                                                    let l186 = i32::from(*base.add(12).cast::<u8>());
+                                                                                    let l187 = i32::from(*base.add(13).cast::<u8>());
+                                                                                    let l188 = i32::from(*base.add(14).cast::<u8>());
+                                                                                    let l189 = i32::from(*base.add(15).cast::<u8>());
+                                                                                    let l190 = i32::from(*base.add(16).cast::<u8>());
+                                                                                    let l191 = *base.add(20).cast::<i32>();
 
                                                                                     (
-                                                                                        l115,
-                                                                                        l116 as u8,
-                                                                                        l117 as u8,
-                                                                                        l118 as u8,
-                                                                                        l119 as u8,
-                                                                                        l120 as u8,
-                                                                                        l121 as u32,
+                                                                                        l185,
+                                                                                        l186 as u8,
+                                                                                        l187 as u8,
+                                                                                        l188 as u8,
+                                                                                        l189 as u8,
+                                                                                        l190 as u8,
+                                                                                        l191 as u32,
                                                                                     )
                                                                                 };
-                                                                                DbValuePrimitive::Timestamp(e180)
+                                                                                DbValuePrimitive::Timestamp(e320)
                                                                             }
                                                                             12 => {
-                                                                                let e180 = {
-                                                                                    let l122 = *base.add(8).cast::<i32>();
-                                                                                    let l123 = i32::from(*base.add(12).cast::<u8>());
-                                                                                    let l124 = i32::from(*base.add(13).cast::<u8>());
-                                                                                    let l125 = i32::from(*base.add(14).cast::<u8>());
-                                                                                    let l126 = i32::from(*base.add(15).cast::<u8>());
-                                                                                    let l127 = i32::from(*base.add(16).cast::<u8>());
-                                                                                    let l128 = *base.add(20).cast::<i32>();
-                                                                                    let l129 = *base.add(24).cast::<i32>();
+                                                                                let e320 = {
+                                                                                    let l192 = *base.add(8).cast::<i32>();
+                                                                                    let l193 = i32::from(*base.add(12).cast::<u8>());
+                                                                                    let l194 = i32::from(*base.add(13).cast::<u8>());
+                                                                                    let l195 = i32::from(*base.add(14).cast::<u8>());
+                                                                                    let l196 = i32::from(*base.add(15).cast::<u8>());
+                                                                                    let l197 = i32::from(*base.add(16).cast::<u8>());
+                                                                                    let l198 = *base.add(20).cast::<i32>();
+                                                                                    let l199 = *base.add(24).cast::<i32>();
 
                                                                                     (
-                                                                                        l122,
-                                                                                        l123 as u8,
-                                                                                        l124 as u8,
-                                                                                        l125 as u8,
-                                                                                        l126 as u8,
-                                                                                        l127 as u8,
-                                                                                        l128 as u32,
-                                                                                        l129,
+                                                                                        l192,
+                                                                                        l193 as u8,
+                                                                                        l194 as u8,
+                                                                                        l195 as u8,
+                                                                                        l196 as u8,
+                                                                                        l197 as u8,
+                                                                                        l198 as u32,
+                                                                                        l199,
                                                                                     )
                                                                                 };
-                                                                                DbValuePrimitive::Timestamptz(e180)
+                                                                                DbValuePrimitive::Timestamptz(e320)
                                                                             }
                                                                             13 => {
-                                                                                let e180 = {
-                                                                                    let l130 = *base.add(8).cast::<i32>();
-                                                                                    let l131 = i32::from(*base.add(12).cast::<u8>());
-                                                                                    let l132 = i32::from(*base.add(13).cast::<u8>());
+                                                                                let e320 = {
+                                                                                    let l200 = *base.add(8).cast::<i32>();
+                                                                                    let l201 = i32::from(*base.add(12).cast::<u8>());
+                                                                                    let l202 = i32::from(*base.add(13).cast::<u8>());
 
                                                                                     (
-                                                                                        l130,
-                                                                                        l131 as u8,
-                                                                                        l132 as u8,
+                                                                                        l200,
+                                                                                        l201 as u8,
+                                                                                        l202 as u8,
                                                                                     )
                                                                                 };
-                                                                                DbValuePrimitive::Date(e180)
+                                                                                DbValuePrimitive::Date(e320)
                                                                             }
                                                                             14 => {
-                                                                                let e180 = {
-                                                                                    let l133 = i32::from(*base.add(8).cast::<u8>());
-                                                                                    let l134 = i32::from(*base.add(9).cast::<u8>());
-                                                                                    let l135 = i32::from(*base.add(10).cast::<u8>());
-                                                                                    let l136 = *base.add(12).cast::<i32>();
+                                                                                let e320 = {
+                                                                                    let l203 = i32::from(*base.add(8).cast::<u8>());
+                                                                                    let l204 = i32::from(*base.add(9).cast::<u8>());
+                                                                                    let l205 = i32::from(*base.add(10).cast::<u8>());
+                                                                                    let l206 = *base.add(12).cast::<i32>();
 
                                                                                     (
-                                                                                        l133 as u8,
-                                                                                        l134 as u8,
-                                                                                        l135 as u8,
-                                                                                        l136 as u32,
+                                                                                        l203 as u8,
+                                                                                        l204 as u8,
+                                                                                        l205 as u8,
+                                                                                        l206 as u32,
                                                                                     )
                                                                                 };
-                                                                                DbValuePrimitive::Time(e180)
+                                                                                DbValuePrimitive::Time(e320)
                                                                             }
                                                                             15 => {
-                                                                                let e180 = {
-                                                                                    let l137 = i32::from(*base.add(8).cast::<u8>());
-                                                                                    let l138 = i32::from(*base.add(9).cast::<u8>());
-                                                                                    let l139 = i32::from(*base.add(10).cast::<u8>());
-                                                                                    let l140 = *base.add(12).cast::<i32>();
-                                                                                    let l141 = *base.add(16).cast::<i32>();
+                                                                                let e320 = {
+                                                                                    let l207 = i32::from(*base.add(8).cast::<u8>());
+                                                                                    let l208 = i32::from(*base.add(9).cast::<u8>());
+                                                                                    let l209 = i32::from(*base.add(10).cast::<u8>());
+                                                                                    let l210 = *base.add(12).cast::<i32>();
+                                                                                    let l211 = *base.add(16).cast::<i32>();
 
                                                                                     (
-                                                                                        l137 as u8,
-                                                                                        l138 as u8,
-                                                                                        l139 as u8,
-                                                                                        l140 as u32,
-                                                                                        l141,
+                                                                                        l207 as u8,
+                                                                                        l208 as u8,
+                                                                                        l209 as u8,
+                                                                                        l210 as u32,
+                                                                                        l211,
                                                                                     )
                                                                                 };
-                                                                                DbValuePrimitive::Timetz(e180)
+                                                                                DbValuePrimitive::Timetz(e320)
                                                                             }
                                                                             16 => {
-                                                                                let e180 = {
-                                                                                    let l142 = *base.add(8).cast::<i64>();
+                                                                                let e320 = {
+                                                                                    let l212 = *base.add(8).cast::<i64>();
 
-                                                                                    l142
+                                                                                    l212
                                                                                 };
-                                                                                DbValuePrimitive::Interval(e180)
+                                                                                DbValuePrimitive::Interval(e320)
                                                                             }
                                                                             17 => {
-                                                                                let e180 = {
-                                                                                    let l143 = *base.add(8).cast::<*mut u8>();
-                                                                                    let l144 = *base.add(12).cast::<usize>();
-                                                                                    let len145 =
-                                                                                        l144;
+                                                                                let e320 = {
+                                                                                    let l213 = *base.add(8).cast::<*mut u8>();
+                                                                                    let l214 = *base.add(12).cast::<usize>();
+                                                                                    let len215 =
+                                                                                        l214;
 
-                                                                                    _rt::Vec::from_raw_parts(l143.cast(), len145, len145)
+                                                                                    _rt::Vec::from_raw_parts(l213.cast(), len215, len215)
                                                                                 };
-                                                                                DbValuePrimitive::Bytea(e180)
+                                                                                DbValuePrimitive::Bytea(e320)
                                                                             }
                                                                             18 => {
-                                                                                let e180 = {
-                                                                                    let l146 = *base.add(8).cast::<*mut u8>();
-                                                                                    let l147 = *base.add(12).cast::<usize>();
-                                                                                    let len148 =
-                                                                                        l147;
-                                                                                    let bytes148 = _rt::Vec::from_raw_parts(l146.cast(), len148, len148);
+                                                                                let e320 = {
+                                                                                    let l216 = *base.add(8).cast::<*mut u8>();
+                                                                                    let l217 = *base.add(12).cast::<usize>();
+                                                                                    let len218 =
+                                                                                        l217;
+                                                                                    let bytes218 = _rt::Vec::from_raw_parts(l216.cast(), len218, len218);
 
                                                                                     _rt::string_lift(
-                                                                                        bytes148,
+                                                                                        bytes218,
                                                                                     )
                                                                                 };
-                                                                                DbValuePrimitive::Json(e180)
+                                                                                DbValuePrimitive::Json(e320)
                                                                             }
                                                                             19 => {
-                                                                                let e180 = {
-                                                                                    let l149 = *base.add(8).cast::<*mut u8>();
-                                                                                    let l150 = *base.add(12).cast::<usize>();
-                                                                                    let len151 =
-                                                                                        l150;
-                                                                                    let bytes151 = _rt::Vec::from_raw_parts(l149.cast(), len151, len151);
+                                                                                let e320 = {
+                                                                                    let l219 = *base.add(8).cast::<*mut u8>();
+                                                                                    let l220 = *base.add(12).cast::<usize>();
+                                                                                    let len221 =
+                                                                                        l220;
+                                                                                    let bytes221 = _rt::Vec::from_raw_parts(l219.cast(), len221, len221);
 
                                                                                     _rt::string_lift(
-                                                                                        bytes151,
+                                                                                        bytes221,
                                                                                     )
                                                                                 };
-                                                                                DbValuePrimitive::Jsonb(e180)
+                                                                                DbValuePrimitive::Jsonb(e320)
                                                                             }
                                                                             20 => {
-                                                                                let e180 = {
-                                                                                    let l152 = *base.add(8).cast::<*mut u8>();
-                                                                                    let l153 = *base.add(12).cast::<usize>();
-                                                                                    let len154 =
-                                                                                        l153;
-                                                                                    let bytes154 = _rt::Vec::from_raw_parts(l152.cast(), len154, len154);
+                                                                                let e320 = {
+                                                                                    let l222 = *base.add(8).cast::<*mut u8>();
+                                                                                    let l223 = *base.add(12).cast::<usize>();
+                                                                                    let len224 =
+                                                                                        l223;
+                                                                                    let bytes224 = _rt::Vec::from_raw_parts(l222.cast(), len224, len224);
 
                                                                                     _rt::string_lift(
-                                                                                        bytes154,
+                                                                                        bytes224,
                                                                                     )
                                                                                 };
-                                                                                DbValuePrimitive::Xml(e180)
+                                                                                DbValuePrimitive::Xml(e320)
                                                                             }
                                                                             21 => {
-                                                                                let e180 = {
-                                                                                    let l155 = *base.add(8).cast::<i64>();
-                                                                                    let l156 = *base.add(16).cast::<i64>();
+                                                                                let e320 = {
+                                                                                    let l225 = *base.add(8).cast::<i64>();
+                                                                                    let l226 = *base.add(16).cast::<i64>();
 
                                                                                     (
-                                                                                        l155 as u64,
-                                                                                        l156 as u64,
+                                                                                        l225 as u64,
+                                                                                        l226 as u64,
                                                                                     )
                                                                                 };
-                                                                                DbValuePrimitive::Uuid(e180)
+                                                                                DbValuePrimitive::Uuid(e320)
                                                                             }
                                                                             22 => {
-                                                                                let e180 = {
-                                                                                    let l157 = i32::from(*base.add(8).cast::<u8>());
-                                                                                    let v170 =
-                                                                                        match l157 {
+                                                                                let e320 = {
+                                                                                    let l227 = i32::from(*base.add(8).cast::<u8>());
+                                                                                    let v240 =
+                                                                                        match l227 {
                                                                                             0 => {
-                                                                                                let e170 = {
-                                                let l158 = i32::from(*base.add(10).cast::<u8>());
-                                                let l159 = i32::from(*base.add(11).cast::<u8>());
-                                                let l160 = i32::from(*base.add(12).cast::<u8>());
-                                                let l161 = i32::from(*base.add(13).cast::<u8>());
+                                                                                                let e240 = {
+                                                let l228 = i32::from(*base.add(10).cast::<u8>());
+                                                let l229 = i32::from(*base.add(11).cast::<u8>());
+                                                let l230 = i32::from(*base.add(12).cast::<u8>());
+                                                let l231 = i32::from(*base.add(13).cast::<u8>());
 
-                                                (l158 as u8, l159 as u8, l160 as u8, l161 as u8)
+                                                (l228 as u8, l229 as u8, l230 as u8, l231 as u8)
                                               };
-                                                                                                IpAddress::Ipv4(e170)
+                                                                                                IpAddress::Ipv4(e240)
                                                                                             }
                                                                                             n => {
                                                                                                 debug_assert_eq!(n, 1, "invalid enum discriminant");
-                                                                                                let e170 = {
-                                                let l162 = i32::from(*base.add(10).cast::<u16>());
-                                                let l163 = i32::from(*base.add(12).cast::<u16>());
-                                                let l164 = i32::from(*base.add(14).cast::<u16>());
-                                                let l165 = i32::from(*base.add(16).cast::<u16>());
-                                                let l166 = i32::from(*base.add(18).cast::<u16>());
-                                                let l167 = i32::from(*base.add(20).cast::<u16>());
-                                                let l168 = i32::from(*base.add(22).cast::<u16>());
-                                                let l169 = i32::from(*base.add(24).cast::<u16>());
+                                                                                                let e240 = {
+                                                let l232 = i32::from(*base.add(10).cast::<u16>());
+                                                let l233 = i32::from(*base.add(12).cast::<u16>());
+                                                let l234 = i32::from(*base.add(14).cast::<u16>());
+                                                let l235 = i32::from(*base.add(16).cast::<u16>());
+                                                let l236 = i32::from(*base.add(18).cast::<u16>());
+                                                let l237 = i32::from(*base.add(20).cast::<u16>());
+                                                let l238 = i32::from(*base.add(22).cast::<u16>());
+                                                let l239 = i32::from(*base.add(24).cast::<u16>());
 
-                                                (l162 as u16, l163 as u16, l164 as u16, l165 as u16, l166 as u16, l167 as u16, l168 as u16, l169 as u16)
+                                                (l232 as u16, l233 as u16, l234 as u16, l235 as u16, l236 as u16, l237 as u16, l238 as u16, l239 as u16)
                                               };
-                                                                                                IpAddress::Ipv6(e170)
+                                                                                                IpAddress::Ipv6(e240)
                                                                                             }
                                                                                         };
 
-                                                                                    v170
+                                                                                    v240
                                                                                 };
-                                                                                DbValuePrimitive::Inet(e180)
+                                                                                DbValuePrimitive::Inet(e320)
                                                                             }
                                                                             23 => {
-                                                                                let e180 = {
-                                                                                    let l171 = *base.add(8).cast::<*mut u8>();
-                                                                                    let l172 = *base.add(12).cast::<usize>();
-                                                                                    let base174 =
-                                                                                        l171;
-                                                                                    let len174 =
-                                                                                        l172;
-                                                                                    let mut result174 = _rt::Vec::with_capacity(len174);
+                                                                                let e320 = {
+                                                                                    let l241 = *base.add(8).cast::<*mut u8>();
+                                                                                    let l242 = *base.add(12).cast::<usize>();
+                                                                                    let base244 =
+                                                                                        l241;
+                                                                                    let len244 =
+                                                                                        l242;
+                                                                                    let mut result244 = _rt::Vec::with_capacity(len244);
                                                                                     for i in
-                                                                                        0..len174
+                                                                                        0..len244
                                                                                     {
-                                                                                        let base = base174.add(i * 1);
-                                                                                        let e174 = {
-                                                                                            let l173 = i32::from(*base.add(0).cast::<u8>());
+                                                                                        let base = base244.add(i * 1);
+                                                                                        let e244 = {
+                                                                                            let l243 = i32::from(*base.add(0).cast::<u8>());
 
-                                                                                            _rt::bool_lift(l173 as u8)
+                                                                                            _rt::bool_lift(l243 as u8)
                                                                                         };
-                                                                                        result174
+                                                                                        result244
                                                                                             .push(
-                                                                                            e174,
+                                                                                            e244,
                                                                                         );
                                                                                     }
-                                                                                    _rt::cabi_dealloc(base174, len174 * 1, 1);
+                                                                                    _rt::cabi_dealloc(base244, len244 * 1, 1);
 
-                                                                                    result174
+                                                                                    result244
                                                                                 };
-                                                                                DbValuePrimitive::Bit(e180)
+                                                                                DbValuePrimitive::Bit(e320)
                                                                             }
                                                                             24 => {
-                                                                                let e180 = {
-                                                                                    let l175 = *base.add(8).cast::<*mut u8>();
-                                                                                    let l176 = *base.add(12).cast::<usize>();
-                                                                                    let base178 =
-                                                                                        l175;
-                                                                                    let len178 =
-                                                                                        l176;
-                                                                                    let mut result178 = _rt::Vec::with_capacity(len178);
+                                                                                let e320 = {
+                                                                                    let l245 = *base.add(8).cast::<*mut u8>();
+                                                                                    let l246 = *base.add(12).cast::<usize>();
+                                                                                    let base248 =
+                                                                                        l245;
+                                                                                    let len248 =
+                                                                                        l246;
+                                                                                    let mut result248 = _rt::Vec::with_capacity(len248);
                                                                                     for i in
-                                                                                        0..len178
+                                                                                        0..len248
                                                                                     {
-                                                                                        let base = base178.add(i * 1);
-                                                                                        let e178 = {
-                                                                                            let l177 = i32::from(*base.add(0).cast::<u8>());
+                                                                                        let base = base248.add(i * 1);
+                                                                                        let e248 = {
+                                                                                            let l247 = i32::from(*base.add(0).cast::<u8>());
 
-                                                                                            _rt::bool_lift(l177 as u8)
+                                                                                            _rt::bool_lift(l247 as u8)
                                                                                         };
-                                                                                        result178
+                                                                                        result248
                                                                                             .push(
-                                                                                            e178,
+                                                                                            e248,
                                                                                         );
                                                                                     }
-                                                                                    _rt::cabi_dealloc(base178, len178 * 1, 1);
+                                                                                    _rt::cabi_dealloc(base248, len248 * 1, 1);
 
-                                                                                    result178
+                                                                                    result248
                                                                                 };
-                                                                                DbValuePrimitive::Varbit(e180)
+                                                                                DbValuePrimitive::Varbit(e320)
                                                                             }
                                                                             25 => {
-                                                                                let e180 = {
-                                                                                    let l179 = *base.add(8).cast::<i32>();
+                                                                                let e320 = {
+                                                                                    let l249 = i32::from(*base.add(8).cast::<u8>());
+                                                                                    let l252 = i32::from(*base.add(20).cast::<u8>());
 
-                                                                                    l179 as u32
+                                                                                    (match l249 {
+                                            0 => None,
+                                            1 => {
+                                              let e = {
+                                                let l250 = *base.add(12).cast::<i32>();
+                                                let l251 = i32::from(*base.add(16).cast::<u8>());
+
+                                                (l250, _rt::bool_lift(l251 as u8))
+                                              };
+                                              Some(e)
+                                            }
+                                            _ => _rt::invalid_enum_discriminant(),
+                                          }, match l252 {
+                                            0 => None,
+                                            1 => {
+                                              let e = {
+                                                let l253 = *base.add(24).cast::<i32>();
+                                                let l254 = i32::from(*base.add(28).cast::<u8>());
+
+                                                (l253, _rt::bool_lift(l254 as u8))
+                                              };
+                                              Some(e)
+                                            }
+                                            _ => _rt::invalid_enum_discriminant(),
+                                          })
                                                                                 };
-                                                                                DbValuePrimitive::Oid(e180)
+                                                                                DbValuePrimitive::Int4range(e320)
+                                                                            }
+                                                                            26 => {
+                                                                                let e320 = {
+                                                                                    let l255 = i32::from(*base.add(8).cast::<u8>());
+                                                                                    let l258 = i32::from(*base.add(32).cast::<u8>());
+
+                                                                                    (match l255 {
+                                            0 => None,
+                                            1 => {
+                                              let e = {
+                                                let l256 = *base.add(16).cast::<i64>();
+                                                let l257 = i32::from(*base.add(24).cast::<u8>());
+
+                                                (l256, _rt::bool_lift(l257 as u8))
+                                              };
+                                              Some(e)
+                                            }
+                                            _ => _rt::invalid_enum_discriminant(),
+                                          }, match l258 {
+                                            0 => None,
+                                            1 => {
+                                              let e = {
+                                                let l259 = *base.add(40).cast::<i64>();
+                                                let l260 = i32::from(*base.add(48).cast::<u8>());
+
+                                                (l259, _rt::bool_lift(l260 as u8))
+                                              };
+                                              Some(e)
+                                            }
+                                            _ => _rt::invalid_enum_discriminant(),
+                                          })
+                                                                                };
+                                                                                DbValuePrimitive::Int8range(e320)
+                                                                            }
+                                                                            27 => {
+                                                                                let e320 = {
+                                                                                    let l261 = i32::from(*base.add(8).cast::<u8>());
+                                                                                    let l266 = i32::from(*base.add(24).cast::<u8>());
+
+                                                                                    (match l261 {
+                                            0 => None,
+                                            1 => {
+                                              let e = {
+                                                let l262 = *base.add(12).cast::<*mut u8>();
+                                                let l263 = *base.add(16).cast::<usize>();
+                                                let len264 = l263;
+                                                let bytes264 = _rt::Vec::from_raw_parts(l262.cast(), len264, len264);
+                                                let l265 = i32::from(*base.add(20).cast::<u8>());
+
+                                                (_rt::string_lift(bytes264), _rt::bool_lift(l265 as u8))
+                                              };
+                                              Some(e)
+                                            }
+                                            _ => _rt::invalid_enum_discriminant(),
+                                          }, match l266 {
+                                            0 => None,
+                                            1 => {
+                                              let e = {
+                                                let l267 = *base.add(28).cast::<*mut u8>();
+                                                let l268 = *base.add(32).cast::<usize>();
+                                                let len269 = l268;
+                                                let bytes269 = _rt::Vec::from_raw_parts(l267.cast(), len269, len269);
+                                                let l270 = i32::from(*base.add(36).cast::<u8>());
+
+                                                (_rt::string_lift(bytes269), _rt::bool_lift(l270 as u8))
+                                              };
+                                              Some(e)
+                                            }
+                                            _ => _rt::invalid_enum_discriminant(),
+                                          })
+                                                                                };
+                                                                                DbValuePrimitive::Numrange(e320)
+                                                                            }
+                                                                            28 => {
+                                                                                let e320 = {
+                                                                                    let l271 = i32::from(*base.add(8).cast::<u8>());
+                                                                                    let l280 = i32::from(*base.add(32).cast::<u8>());
+
+                                                                                    (match l271 {
+                                            0 => None,
+                                            1 => {
+                                              let e = {
+                                                let l272 = *base.add(12).cast::<i32>();
+                                                let l273 = i32::from(*base.add(16).cast::<u8>());
+                                                let l274 = i32::from(*base.add(17).cast::<u8>());
+                                                let l275 = i32::from(*base.add(18).cast::<u8>());
+                                                let l276 = i32::from(*base.add(19).cast::<u8>());
+                                                let l277 = i32::from(*base.add(20).cast::<u8>());
+                                                let l278 = *base.add(24).cast::<i32>();
+                                                let l279 = i32::from(*base.add(28).cast::<u8>());
+
+                                                ((l272, l273 as u8, l274 as u8, l275 as u8, l276 as u8, l277 as u8, l278 as u32), _rt::bool_lift(l279 as u8))
+                                              };
+                                              Some(e)
+                                            }
+                                            _ => _rt::invalid_enum_discriminant(),
+                                          }, match l280 {
+                                            0 => None,
+                                            1 => {
+                                              let e = {
+                                                let l281 = *base.add(36).cast::<i32>();
+                                                let l282 = i32::from(*base.add(40).cast::<u8>());
+                                                let l283 = i32::from(*base.add(41).cast::<u8>());
+                                                let l284 = i32::from(*base.add(42).cast::<u8>());
+                                                let l285 = i32::from(*base.add(43).cast::<u8>());
+                                                let l286 = i32::from(*base.add(44).cast::<u8>());
+                                                let l287 = *base.add(48).cast::<i32>();
+                                                let l288 = i32::from(*base.add(52).cast::<u8>());
+
+                                                ((l281, l282 as u8, l283 as u8, l284 as u8, l285 as u8, l286 as u8, l287 as u32), _rt::bool_lift(l288 as u8))
+                                              };
+                                              Some(e)
+                                            }
+                                            _ => _rt::invalid_enum_discriminant(),
+                                          })
+                                                                                };
+                                                                                DbValuePrimitive::Tsrange(e320)
+                                                                            }
+                                                                            29 => {
+                                                                                let e320 = {
+                                                                                    let l289 = i32::from(*base.add(8).cast::<u8>());
+                                                                                    let l299 = i32::from(*base.add(36).cast::<u8>());
+
+                                                                                    (match l289 {
+                                            0 => None,
+                                            1 => {
+                                              let e = {
+                                                let l290 = *base.add(12).cast::<i32>();
+                                                let l291 = i32::from(*base.add(16).cast::<u8>());
+                                                let l292 = i32::from(*base.add(17).cast::<u8>());
+                                                let l293 = i32::from(*base.add(18).cast::<u8>());
+                                                let l294 = i32::from(*base.add(19).cast::<u8>());
+                                                let l295 = i32::from(*base.add(20).cast::<u8>());
+                                                let l296 = *base.add(24).cast::<i32>();
+                                                let l297 = *base.add(28).cast::<i32>();
+                                                let l298 = i32::from(*base.add(32).cast::<u8>());
+
+                                                ((l290, l291 as u8, l292 as u8, l293 as u8, l294 as u8, l295 as u8, l296 as u32, l297), _rt::bool_lift(l298 as u8))
+                                              };
+                                              Some(e)
+                                            }
+                                            _ => _rt::invalid_enum_discriminant(),
+                                          }, match l299 {
+                                            0 => None,
+                                            1 => {
+                                              let e = {
+                                                let l300 = *base.add(40).cast::<i32>();
+                                                let l301 = i32::from(*base.add(44).cast::<u8>());
+                                                let l302 = i32::from(*base.add(45).cast::<u8>());
+                                                let l303 = i32::from(*base.add(46).cast::<u8>());
+                                                let l304 = i32::from(*base.add(47).cast::<u8>());
+                                                let l305 = i32::from(*base.add(48).cast::<u8>());
+                                                let l306 = *base.add(52).cast::<i32>();
+                                                let l307 = *base.add(56).cast::<i32>();
+                                                let l308 = i32::from(*base.add(60).cast::<u8>());
+
+                                                ((l300, l301 as u8, l302 as u8, l303 as u8, l304 as u8, l305 as u8, l306 as u32, l307), _rt::bool_lift(l308 as u8))
+                                              };
+                                              Some(e)
+                                            }
+                                            _ => _rt::invalid_enum_discriminant(),
+                                          })
+                                                                                };
+                                                                                DbValuePrimitive::Tstzrange(e320)
+                                                                            }
+                                                                            30 => {
+                                                                                let e320 = {
+                                                                                    let l309 = i32::from(*base.add(8).cast::<u8>());
+                                                                                    let l314 = i32::from(*base.add(24).cast::<u8>());
+
+                                                                                    (match l309 {
+                                            0 => None,
+                                            1 => {
+                                              let e = {
+                                                let l310 = *base.add(12).cast::<i32>();
+                                                let l311 = i32::from(*base.add(16).cast::<u8>());
+                                                let l312 = i32::from(*base.add(17).cast::<u8>());
+                                                let l313 = i32::from(*base.add(20).cast::<u8>());
+
+                                                ((l310, l311 as u8, l312 as u8), _rt::bool_lift(l313 as u8))
+                                              };
+                                              Some(e)
+                                            }
+                                            _ => _rt::invalid_enum_discriminant(),
+                                          }, match l314 {
+                                            0 => None,
+                                            1 => {
+                                              let e = {
+                                                let l315 = *base.add(28).cast::<i32>();
+                                                let l316 = i32::from(*base.add(32).cast::<u8>());
+                                                let l317 = i32::from(*base.add(33).cast::<u8>());
+                                                let l318 = i32::from(*base.add(36).cast::<u8>());
+
+                                                ((l315, l316 as u8, l317 as u8), _rt::bool_lift(l318 as u8))
+                                              };
+                                              Some(e)
+                                            }
+                                            _ => _rt::invalid_enum_discriminant(),
+                                          })
+                                                                                };
+                                                                                DbValuePrimitive::Daterange(e320)
+                                                                            }
+                                                                            31 => {
+                                                                                let e320 = {
+                                                                                    let l319 = *base.add(8).cast::<i32>();
+
+                                                                                    l319 as u32
+                                                                                };
+                                                                                DbValuePrimitive::Oid(e320)
                                                                             }
                                                                             n => {
-                                                                                debug_assert_eq!(n, 26, "invalid enum discriminant");
+                                                                                debug_assert_eq!(n, 32, "invalid enum discriminant");
                                                                                 DbValuePrimitive::Null
                                                                             }
                                                                         };
 
-                                                                        v180
+                                                                        v320
                                                                     };
-                                                                    result181.push(e181);
+                                                                    result321.push(e321);
                                                                 }
                                                                 _rt::cabi_dealloc(
-                                                                    base181,
-                                                                    len181 * 32,
+                                                                    base321,
+                                                                    len321 * 64,
                                                                     8,
                                                                 );
 
-                                                                result181
+                                                                result321
                                                             };
-                                                            DbValue::Array(e182)
+                                                            DbValue::Array(e322)
                                                         }
                                                     };
 
-                                                    v182
+                                                    v322
                                                 };
-                                                result183.push(e183);
+                                                result323.push(e323);
                                             }
-                                            _rt::cabi_dealloc(base183, len183 * 40, 8);
+                                            _rt::cabi_dealloc(base323, len323 * 72, 8);
 
-                                            DbRow { values: result183 }
+                                            DbRow { values: result323 }
                                         };
-                                        result184.push(e184);
+                                        result324.push(e324);
                                     }
-                                    _rt::cabi_dealloc(base184, len184 * 8, 4);
+                                    _rt::cabi_dealloc(base324, len324 * 8, 4);
 
-                                    result184
+                                    result324
                                 };
                                 Some(e)
                             }
@@ -1805,14 +2408,14 @@ pub mod wasi {
                         let vec0 = statement;
                         let ptr0 = vec0.as_ptr().cast::<u8>();
                         let len0 = vec0.len();
-                        let vec38 = params;
-                        let len38 = vec38.len();
-                        let layout38 =
-                            _rt::alloc::Layout::from_size_align_unchecked(vec38.len() * 40, 8);
-                        let result38 = if layout38.size() != 0 {
-                            let ptr = _rt::alloc::alloc(layout38).cast::<u8>();
+                        let vec90 = params;
+                        let len90 = vec90.len();
+                        let layout90 =
+                            _rt::alloc::Layout::from_size_align_unchecked(vec90.len() * 72, 8);
+                        let result90 = if layout90.size() != 0 {
+                            let ptr = _rt::alloc::alloc(layout90).cast::<u8>();
                             if ptr.is_null() {
-                                _rt::alloc::handle_alloc_error(layout38);
+                                _rt::alloc::handle_alloc_error(layout90);
                             }
                             ptr
                         } else {
@@ -1820,8 +2423,8 @@ pub mod wasi {
                                 ::core::ptr::null_mut()
                             }
                         };
-                        for (i, e) in vec38.into_iter().enumerate() {
-                            let base = result38.add(i * 40);
+                        for (i, e) in vec90.into_iter().enumerate() {
+                            let base = result90.add(i * 72);
                             {
                                 match e {
                                     DbValue::Primitive(e) => {
@@ -2126,28 +2729,352 @@ pub mod wasi {
                                                 cleanup_list
                                                     .extend_from_slice(&[(result18, layout18)]);
                                             }
-                                            DbValuePrimitive::Oid(e) => {
+                                            DbValuePrimitive::Int4range(e) => {
                                                 *base.add(8).cast::<u8>() = (25i32) as u8;
+                                                let (t19_0, t19_1) = e;
+                                                match t19_0 {
+                                                    Some(e) => {
+                                                        *base.add(16).cast::<u8>() = (1i32) as u8;
+                                                        let (t20_0, t20_1) = e;
+                                                        *base.add(20).cast::<i32>() =
+                                                            _rt::as_i32(t20_0);
+                                                        *base.add(24).cast::<u8>() = (match t20_1 {
+                                                            true => 1,
+                                                            false => 0,
+                                                        })
+                                                            as u8;
+                                                    }
+                                                    None => {
+                                                        *base.add(16).cast::<u8>() = (0i32) as u8;
+                                                    }
+                                                };
+                                                match t19_1 {
+                                                    Some(e) => {
+                                                        *base.add(28).cast::<u8>() = (1i32) as u8;
+                                                        let (t21_0, t21_1) = e;
+                                                        *base.add(32).cast::<i32>() =
+                                                            _rt::as_i32(t21_0);
+                                                        *base.add(36).cast::<u8>() = (match t21_1 {
+                                                            true => 1,
+                                                            false => 0,
+                                                        })
+                                                            as u8;
+                                                    }
+                                                    None => {
+                                                        *base.add(28).cast::<u8>() = (0i32) as u8;
+                                                    }
+                                                };
+                                            }
+                                            DbValuePrimitive::Int8range(e) => {
+                                                *base.add(8).cast::<u8>() = (26i32) as u8;
+                                                let (t22_0, t22_1) = e;
+                                                match t22_0 {
+                                                    Some(e) => {
+                                                        *base.add(16).cast::<u8>() = (1i32) as u8;
+                                                        let (t23_0, t23_1) = e;
+                                                        *base.add(24).cast::<i64>() =
+                                                            _rt::as_i64(t23_0);
+                                                        *base.add(32).cast::<u8>() = (match t23_1 {
+                                                            true => 1,
+                                                            false => 0,
+                                                        })
+                                                            as u8;
+                                                    }
+                                                    None => {
+                                                        *base.add(16).cast::<u8>() = (0i32) as u8;
+                                                    }
+                                                };
+                                                match t22_1 {
+                                                    Some(e) => {
+                                                        *base.add(40).cast::<u8>() = (1i32) as u8;
+                                                        let (t24_0, t24_1) = e;
+                                                        *base.add(48).cast::<i64>() =
+                                                            _rt::as_i64(t24_0);
+                                                        *base.add(56).cast::<u8>() = (match t24_1 {
+                                                            true => 1,
+                                                            false => 0,
+                                                        })
+                                                            as u8;
+                                                    }
+                                                    None => {
+                                                        *base.add(40).cast::<u8>() = (0i32) as u8;
+                                                    }
+                                                };
+                                            }
+                                            DbValuePrimitive::Numrange(e) => {
+                                                *base.add(8).cast::<u8>() = (27i32) as u8;
+                                                let (t25_0, t25_1) = e;
+                                                match t25_0 {
+                                                    Some(e) => {
+                                                        *base.add(16).cast::<u8>() = (1i32) as u8;
+                                                        let (t26_0, t26_1) = e;
+                                                        let vec27 = t26_0;
+                                                        let ptr27 = vec27.as_ptr().cast::<u8>();
+                                                        let len27 = vec27.len();
+                                                        *base.add(24).cast::<usize>() = len27;
+                                                        *base.add(20).cast::<*mut u8>() =
+                                                            ptr27.cast_mut();
+                                                        *base.add(28).cast::<u8>() = (match t26_1 {
+                                                            true => 1,
+                                                            false => 0,
+                                                        })
+                                                            as u8;
+                                                    }
+                                                    None => {
+                                                        *base.add(16).cast::<u8>() = (0i32) as u8;
+                                                    }
+                                                };
+                                                match t25_1 {
+                                                    Some(e) => {
+                                                        *base.add(32).cast::<u8>() = (1i32) as u8;
+                                                        let (t28_0, t28_1) = e;
+                                                        let vec29 = t28_0;
+                                                        let ptr29 = vec29.as_ptr().cast::<u8>();
+                                                        let len29 = vec29.len();
+                                                        *base.add(40).cast::<usize>() = len29;
+                                                        *base.add(36).cast::<*mut u8>() =
+                                                            ptr29.cast_mut();
+                                                        *base.add(44).cast::<u8>() = (match t28_1 {
+                                                            true => 1,
+                                                            false => 0,
+                                                        })
+                                                            as u8;
+                                                    }
+                                                    None => {
+                                                        *base.add(32).cast::<u8>() = (0i32) as u8;
+                                                    }
+                                                };
+                                            }
+                                            DbValuePrimitive::Tsrange(e) => {
+                                                *base.add(8).cast::<u8>() = (28i32) as u8;
+                                                let (t30_0, t30_1) = e;
+                                                match t30_0 {
+                                                    Some(e) => {
+                                                        *base.add(16).cast::<u8>() = (1i32) as u8;
+                                                        let (t31_0, t31_1) = e;
+                                                        let (
+                                                            t32_0,
+                                                            t32_1,
+                                                            t32_2,
+                                                            t32_3,
+                                                            t32_4,
+                                                            t32_5,
+                                                            t32_6,
+                                                        ) = t31_0;
+                                                        *base.add(20).cast::<i32>() =
+                                                            _rt::as_i32(t32_0);
+                                                        *base.add(24).cast::<u8>() =
+                                                            (_rt::as_i32(t32_1)) as u8;
+                                                        *base.add(25).cast::<u8>() =
+                                                            (_rt::as_i32(t32_2)) as u8;
+                                                        *base.add(26).cast::<u8>() =
+                                                            (_rt::as_i32(t32_3)) as u8;
+                                                        *base.add(27).cast::<u8>() =
+                                                            (_rt::as_i32(t32_4)) as u8;
+                                                        *base.add(28).cast::<u8>() =
+                                                            (_rt::as_i32(t32_5)) as u8;
+                                                        *base.add(32).cast::<i32>() =
+                                                            _rt::as_i32(t32_6);
+                                                        *base.add(36).cast::<u8>() = (match t31_1 {
+                                                            true => 1,
+                                                            false => 0,
+                                                        })
+                                                            as u8;
+                                                    }
+                                                    None => {
+                                                        *base.add(16).cast::<u8>() = (0i32) as u8;
+                                                    }
+                                                };
+                                                match t30_1 {
+                                                    Some(e) => {
+                                                        *base.add(40).cast::<u8>() = (1i32) as u8;
+                                                        let (t33_0, t33_1) = e;
+                                                        let (
+                                                            t34_0,
+                                                            t34_1,
+                                                            t34_2,
+                                                            t34_3,
+                                                            t34_4,
+                                                            t34_5,
+                                                            t34_6,
+                                                        ) = t33_0;
+                                                        *base.add(44).cast::<i32>() =
+                                                            _rt::as_i32(t34_0);
+                                                        *base.add(48).cast::<u8>() =
+                                                            (_rt::as_i32(t34_1)) as u8;
+                                                        *base.add(49).cast::<u8>() =
+                                                            (_rt::as_i32(t34_2)) as u8;
+                                                        *base.add(50).cast::<u8>() =
+                                                            (_rt::as_i32(t34_3)) as u8;
+                                                        *base.add(51).cast::<u8>() =
+                                                            (_rt::as_i32(t34_4)) as u8;
+                                                        *base.add(52).cast::<u8>() =
+                                                            (_rt::as_i32(t34_5)) as u8;
+                                                        *base.add(56).cast::<i32>() =
+                                                            _rt::as_i32(t34_6);
+                                                        *base.add(60).cast::<u8>() = (match t33_1 {
+                                                            true => 1,
+                                                            false => 0,
+                                                        })
+                                                            as u8;
+                                                    }
+                                                    None => {
+                                                        *base.add(40).cast::<u8>() = (0i32) as u8;
+                                                    }
+                                                };
+                                            }
+                                            DbValuePrimitive::Tstzrange(e) => {
+                                                *base.add(8).cast::<u8>() = (29i32) as u8;
+                                                let (t35_0, t35_1) = e;
+                                                match t35_0 {
+                                                    Some(e) => {
+                                                        *base.add(16).cast::<u8>() = (1i32) as u8;
+                                                        let (t36_0, t36_1) = e;
+                                                        let (
+                                                            t37_0,
+                                                            t37_1,
+                                                            t37_2,
+                                                            t37_3,
+                                                            t37_4,
+                                                            t37_5,
+                                                            t37_6,
+                                                            t37_7,
+                                                        ) = t36_0;
+                                                        *base.add(20).cast::<i32>() =
+                                                            _rt::as_i32(t37_0);
+                                                        *base.add(24).cast::<u8>() =
+                                                            (_rt::as_i32(t37_1)) as u8;
+                                                        *base.add(25).cast::<u8>() =
+                                                            (_rt::as_i32(t37_2)) as u8;
+                                                        *base.add(26).cast::<u8>() =
+                                                            (_rt::as_i32(t37_3)) as u8;
+                                                        *base.add(27).cast::<u8>() =
+                                                            (_rt::as_i32(t37_4)) as u8;
+                                                        *base.add(28).cast::<u8>() =
+                                                            (_rt::as_i32(t37_5)) as u8;
+                                                        *base.add(32).cast::<i32>() =
+                                                            _rt::as_i32(t37_6);
+                                                        *base.add(36).cast::<i32>() =
+                                                            _rt::as_i32(t37_7);
+                                                        *base.add(40).cast::<u8>() = (match t36_1 {
+                                                            true => 1,
+                                                            false => 0,
+                                                        })
+                                                            as u8;
+                                                    }
+                                                    None => {
+                                                        *base.add(16).cast::<u8>() = (0i32) as u8;
+                                                    }
+                                                };
+                                                match t35_1 {
+                                                    Some(e) => {
+                                                        *base.add(44).cast::<u8>() = (1i32) as u8;
+                                                        let (t38_0, t38_1) = e;
+                                                        let (
+                                                            t39_0,
+                                                            t39_1,
+                                                            t39_2,
+                                                            t39_3,
+                                                            t39_4,
+                                                            t39_5,
+                                                            t39_6,
+                                                            t39_7,
+                                                        ) = t38_0;
+                                                        *base.add(48).cast::<i32>() =
+                                                            _rt::as_i32(t39_0);
+                                                        *base.add(52).cast::<u8>() =
+                                                            (_rt::as_i32(t39_1)) as u8;
+                                                        *base.add(53).cast::<u8>() =
+                                                            (_rt::as_i32(t39_2)) as u8;
+                                                        *base.add(54).cast::<u8>() =
+                                                            (_rt::as_i32(t39_3)) as u8;
+                                                        *base.add(55).cast::<u8>() =
+                                                            (_rt::as_i32(t39_4)) as u8;
+                                                        *base.add(56).cast::<u8>() =
+                                                            (_rt::as_i32(t39_5)) as u8;
+                                                        *base.add(60).cast::<i32>() =
+                                                            _rt::as_i32(t39_6);
+                                                        *base.add(64).cast::<i32>() =
+                                                            _rt::as_i32(t39_7);
+                                                        *base.add(68).cast::<u8>() = (match t38_1 {
+                                                            true => 1,
+                                                            false => 0,
+                                                        })
+                                                            as u8;
+                                                    }
+                                                    None => {
+                                                        *base.add(44).cast::<u8>() = (0i32) as u8;
+                                                    }
+                                                };
+                                            }
+                                            DbValuePrimitive::Daterange(e) => {
+                                                *base.add(8).cast::<u8>() = (30i32) as u8;
+                                                let (t40_0, t40_1) = e;
+                                                match t40_0 {
+                                                    Some(e) => {
+                                                        *base.add(16).cast::<u8>() = (1i32) as u8;
+                                                        let (t41_0, t41_1) = e;
+                                                        let (t42_0, t42_1, t42_2) = t41_0;
+                                                        *base.add(20).cast::<i32>() =
+                                                            _rt::as_i32(t42_0);
+                                                        *base.add(24).cast::<u8>() =
+                                                            (_rt::as_i32(t42_1)) as u8;
+                                                        *base.add(25).cast::<u8>() =
+                                                            (_rt::as_i32(t42_2)) as u8;
+                                                        *base.add(28).cast::<u8>() = (match t41_1 {
+                                                            true => 1,
+                                                            false => 0,
+                                                        })
+                                                            as u8;
+                                                    }
+                                                    None => {
+                                                        *base.add(16).cast::<u8>() = (0i32) as u8;
+                                                    }
+                                                };
+                                                match t40_1 {
+                                                    Some(e) => {
+                                                        *base.add(32).cast::<u8>() = (1i32) as u8;
+                                                        let (t43_0, t43_1) = e;
+                                                        let (t44_0, t44_1, t44_2) = t43_0;
+                                                        *base.add(36).cast::<i32>() =
+                                                            _rt::as_i32(t44_0);
+                                                        *base.add(40).cast::<u8>() =
+                                                            (_rt::as_i32(t44_1)) as u8;
+                                                        *base.add(41).cast::<u8>() =
+                                                            (_rt::as_i32(t44_2)) as u8;
+                                                        *base.add(44).cast::<u8>() = (match t43_1 {
+                                                            true => 1,
+                                                            false => 0,
+                                                        })
+                                                            as u8;
+                                                    }
+                                                    None => {
+                                                        *base.add(32).cast::<u8>() = (0i32) as u8;
+                                                    }
+                                                };
+                                            }
+                                            DbValuePrimitive::Oid(e) => {
+                                                *base.add(8).cast::<u8>() = (31i32) as u8;
                                                 *base.add(16).cast::<i32>() = _rt::as_i32(e);
                                             }
                                             DbValuePrimitive::Null => {
-                                                *base.add(8).cast::<u8>() = (26i32) as u8;
+                                                *base.add(8).cast::<u8>() = (32i32) as u8;
                                             }
                                         }
                                     }
                                     DbValue::Array(e) => {
                                         *base.add(0).cast::<u8>() = (1i32) as u8;
-                                        let vec37 = e;
-                                        let len37 = vec37.len();
-                                        let layout37 =
+                                        let vec89 = e;
+                                        let len89 = vec89.len();
+                                        let layout89 =
                                             _rt::alloc::Layout::from_size_align_unchecked(
-                                                vec37.len() * 32,
+                                                vec89.len() * 64,
                                                 8,
                                             );
-                                        let result37 = if layout37.size() != 0 {
-                                            let ptr = _rt::alloc::alloc(layout37).cast::<u8>();
+                                        let result89 = if layout89.size() != 0 {
+                                            let ptr = _rt::alloc::alloc(layout89).cast::<u8>();
                                             if ptr.is_null() {
-                                                _rt::alloc::handle_alloc_error(layout37);
+                                                _rt::alloc::handle_alloc_error(layout89);
                                             }
                                             ptr
                                         } else {
@@ -2155,8 +3082,8 @@ pub mod wasi {
                                                 ::core::ptr::null_mut()
                                             }
                                         };
-                                        for (i, e) in vec37.into_iter().enumerate() {
-                                            let base = result37.add(i * 32);
+                                        for (i, e) in vec89.into_iter().enumerate() {
+                                            let base = result89.add(i * 64);
                                             {
                                                 match e {
                                                     DbValuePrimitive::Character(e) => {
@@ -2187,12 +3114,12 @@ pub mod wasi {
                                                     }
                                                     DbValuePrimitive::Numeric(e) => {
                                                         *base.add(0).cast::<u8>() = (6i32) as u8;
-                                                        let vec19 = e;
-                                                        let ptr19 = vec19.as_ptr().cast::<u8>();
-                                                        let len19 = vec19.len();
-                                                        *base.add(12).cast::<usize>() = len19;
+                                                        let vec45 = e;
+                                                        let ptr45 = vec45.as_ptr().cast::<u8>();
+                                                        let len45 = vec45.len();
+                                                        *base.add(12).cast::<usize>() = len45;
                                                         *base.add(8).cast::<*mut u8>() =
-                                                            ptr19.cast_mut();
+                                                            ptr45.cast_mut();
                                                     }
                                                     DbValuePrimitive::Boolean(e) => {
                                                         *base.add(0).cast::<u8>() = (7i32) as u8;
@@ -2204,121 +3131,121 @@ pub mod wasi {
                                                     }
                                                     DbValuePrimitive::Text(e) => {
                                                         *base.add(0).cast::<u8>() = (8i32) as u8;
-                                                        let vec20 = e;
-                                                        let ptr20 = vec20.as_ptr().cast::<u8>();
-                                                        let len20 = vec20.len();
-                                                        *base.add(12).cast::<usize>() = len20;
+                                                        let vec46 = e;
+                                                        let ptr46 = vec46.as_ptr().cast::<u8>();
+                                                        let len46 = vec46.len();
+                                                        *base.add(12).cast::<usize>() = len46;
                                                         *base.add(8).cast::<*mut u8>() =
-                                                            ptr20.cast_mut();
+                                                            ptr46.cast_mut();
                                                     }
                                                     DbValuePrimitive::Varchar(e) => {
                                                         *base.add(0).cast::<u8>() = (9i32) as u8;
-                                                        let vec21 = e;
-                                                        let ptr21 = vec21.as_ptr().cast::<u8>();
-                                                        let len21 = vec21.len();
-                                                        *base.add(12).cast::<usize>() = len21;
+                                                        let vec47 = e;
+                                                        let ptr47 = vec47.as_ptr().cast::<u8>();
+                                                        let len47 = vec47.len();
+                                                        *base.add(12).cast::<usize>() = len47;
                                                         *base.add(8).cast::<*mut u8>() =
-                                                            ptr21.cast_mut();
+                                                            ptr47.cast_mut();
                                                     }
                                                     DbValuePrimitive::Bpchar(e) => {
                                                         *base.add(0).cast::<u8>() = (10i32) as u8;
-                                                        let vec22 = e;
-                                                        let ptr22 = vec22.as_ptr().cast::<u8>();
-                                                        let len22 = vec22.len();
-                                                        *base.add(12).cast::<usize>() = len22;
+                                                        let vec48 = e;
+                                                        let ptr48 = vec48.as_ptr().cast::<u8>();
+                                                        let len48 = vec48.len();
+                                                        *base.add(12).cast::<usize>() = len48;
                                                         *base.add(8).cast::<*mut u8>() =
-                                                            ptr22.cast_mut();
+                                                            ptr48.cast_mut();
                                                     }
                                                     DbValuePrimitive::Timestamp(e) => {
                                                         *base.add(0).cast::<u8>() = (11i32) as u8;
                                                         let (
-                                                            t23_0,
-                                                            t23_1,
-                                                            t23_2,
-                                                            t23_3,
-                                                            t23_4,
-                                                            t23_5,
-                                                            t23_6,
+                                                            t49_0,
+                                                            t49_1,
+                                                            t49_2,
+                                                            t49_3,
+                                                            t49_4,
+                                                            t49_5,
+                                                            t49_6,
                                                         ) = e;
                                                         *base.add(8).cast::<i32>() =
-                                                            _rt::as_i32(t23_0);
+                                                            _rt::as_i32(t49_0);
                                                         *base.add(12).cast::<u8>() =
-                                                            (_rt::as_i32(t23_1)) as u8;
+                                                            (_rt::as_i32(t49_1)) as u8;
                                                         *base.add(13).cast::<u8>() =
-                                                            (_rt::as_i32(t23_2)) as u8;
+                                                            (_rt::as_i32(t49_2)) as u8;
                                                         *base.add(14).cast::<u8>() =
-                                                            (_rt::as_i32(t23_3)) as u8;
+                                                            (_rt::as_i32(t49_3)) as u8;
                                                         *base.add(15).cast::<u8>() =
-                                                            (_rt::as_i32(t23_4)) as u8;
+                                                            (_rt::as_i32(t49_4)) as u8;
                                                         *base.add(16).cast::<u8>() =
-                                                            (_rt::as_i32(t23_5)) as u8;
+                                                            (_rt::as_i32(t49_5)) as u8;
                                                         *base.add(20).cast::<i32>() =
-                                                            _rt::as_i32(t23_6);
+                                                            _rt::as_i32(t49_6);
                                                     }
                                                     DbValuePrimitive::Timestamptz(e) => {
                                                         *base.add(0).cast::<u8>() = (12i32) as u8;
                                                         let (
-                                                            t24_0,
-                                                            t24_1,
-                                                            t24_2,
-                                                            t24_3,
-                                                            t24_4,
-                                                            t24_5,
-                                                            t24_6,
-                                                            t24_7,
+                                                            t50_0,
+                                                            t50_1,
+                                                            t50_2,
+                                                            t50_3,
+                                                            t50_4,
+                                                            t50_5,
+                                                            t50_6,
+                                                            t50_7,
                                                         ) = e;
                                                         *base.add(8).cast::<i32>() =
-                                                            _rt::as_i32(t24_0);
+                                                            _rt::as_i32(t50_0);
                                                         *base.add(12).cast::<u8>() =
-                                                            (_rt::as_i32(t24_1)) as u8;
+                                                            (_rt::as_i32(t50_1)) as u8;
                                                         *base.add(13).cast::<u8>() =
-                                                            (_rt::as_i32(t24_2)) as u8;
+                                                            (_rt::as_i32(t50_2)) as u8;
                                                         *base.add(14).cast::<u8>() =
-                                                            (_rt::as_i32(t24_3)) as u8;
+                                                            (_rt::as_i32(t50_3)) as u8;
                                                         *base.add(15).cast::<u8>() =
-                                                            (_rt::as_i32(t24_4)) as u8;
+                                                            (_rt::as_i32(t50_4)) as u8;
                                                         *base.add(16).cast::<u8>() =
-                                                            (_rt::as_i32(t24_5)) as u8;
+                                                            (_rt::as_i32(t50_5)) as u8;
                                                         *base.add(20).cast::<i32>() =
-                                                            _rt::as_i32(t24_6);
+                                                            _rt::as_i32(t50_6);
                                                         *base.add(24).cast::<i32>() =
-                                                            _rt::as_i32(t24_7);
+                                                            _rt::as_i32(t50_7);
                                                     }
                                                     DbValuePrimitive::Date(e) => {
                                                         *base.add(0).cast::<u8>() = (13i32) as u8;
-                                                        let (t25_0, t25_1, t25_2) = e;
+                                                        let (t51_0, t51_1, t51_2) = e;
                                                         *base.add(8).cast::<i32>() =
-                                                            _rt::as_i32(t25_0);
+                                                            _rt::as_i32(t51_0);
                                                         *base.add(12).cast::<u8>() =
-                                                            (_rt::as_i32(t25_1)) as u8;
+                                                            (_rt::as_i32(t51_1)) as u8;
                                                         *base.add(13).cast::<u8>() =
-                                                            (_rt::as_i32(t25_2)) as u8;
+                                                            (_rt::as_i32(t51_2)) as u8;
                                                     }
                                                     DbValuePrimitive::Time(e) => {
                                                         *base.add(0).cast::<u8>() = (14i32) as u8;
-                                                        let (t26_0, t26_1, t26_2, t26_3) = e;
+                                                        let (t52_0, t52_1, t52_2, t52_3) = e;
                                                         *base.add(8).cast::<u8>() =
-                                                            (_rt::as_i32(t26_0)) as u8;
+                                                            (_rt::as_i32(t52_0)) as u8;
                                                         *base.add(9).cast::<u8>() =
-                                                            (_rt::as_i32(t26_1)) as u8;
+                                                            (_rt::as_i32(t52_1)) as u8;
                                                         *base.add(10).cast::<u8>() =
-                                                            (_rt::as_i32(t26_2)) as u8;
+                                                            (_rt::as_i32(t52_2)) as u8;
                                                         *base.add(12).cast::<i32>() =
-                                                            _rt::as_i32(t26_3);
+                                                            _rt::as_i32(t52_3);
                                                     }
                                                     DbValuePrimitive::Timetz(e) => {
                                                         *base.add(0).cast::<u8>() = (15i32) as u8;
-                                                        let (t27_0, t27_1, t27_2, t27_3, t27_4) = e;
+                                                        let (t53_0, t53_1, t53_2, t53_3, t53_4) = e;
                                                         *base.add(8).cast::<u8>() =
-                                                            (_rt::as_i32(t27_0)) as u8;
+                                                            (_rt::as_i32(t53_0)) as u8;
                                                         *base.add(9).cast::<u8>() =
-                                                            (_rt::as_i32(t27_1)) as u8;
+                                                            (_rt::as_i32(t53_1)) as u8;
                                                         *base.add(10).cast::<u8>() =
-                                                            (_rt::as_i32(t27_2)) as u8;
+                                                            (_rt::as_i32(t53_2)) as u8;
                                                         *base.add(12).cast::<i32>() =
-                                                            _rt::as_i32(t27_3);
+                                                            _rt::as_i32(t53_3);
                                                         *base.add(16).cast::<i32>() =
-                                                            _rt::as_i32(t27_4);
+                                                            _rt::as_i32(t53_4);
                                                     }
                                                     DbValuePrimitive::Interval(e) => {
                                                         *base.add(0).cast::<u8>() = (16i32) as u8;
@@ -2326,47 +3253,47 @@ pub mod wasi {
                                                     }
                                                     DbValuePrimitive::Bytea(e) => {
                                                         *base.add(0).cast::<u8>() = (17i32) as u8;
-                                                        let vec28 = e;
-                                                        let ptr28 = vec28.as_ptr().cast::<u8>();
-                                                        let len28 = vec28.len();
-                                                        *base.add(12).cast::<usize>() = len28;
+                                                        let vec54 = e;
+                                                        let ptr54 = vec54.as_ptr().cast::<u8>();
+                                                        let len54 = vec54.len();
+                                                        *base.add(12).cast::<usize>() = len54;
                                                         *base.add(8).cast::<*mut u8>() =
-                                                            ptr28.cast_mut();
+                                                            ptr54.cast_mut();
                                                     }
                                                     DbValuePrimitive::Json(e) => {
                                                         *base.add(0).cast::<u8>() = (18i32) as u8;
-                                                        let vec29 = e;
-                                                        let ptr29 = vec29.as_ptr().cast::<u8>();
-                                                        let len29 = vec29.len();
-                                                        *base.add(12).cast::<usize>() = len29;
+                                                        let vec55 = e;
+                                                        let ptr55 = vec55.as_ptr().cast::<u8>();
+                                                        let len55 = vec55.len();
+                                                        *base.add(12).cast::<usize>() = len55;
                                                         *base.add(8).cast::<*mut u8>() =
-                                                            ptr29.cast_mut();
+                                                            ptr55.cast_mut();
                                                     }
                                                     DbValuePrimitive::Jsonb(e) => {
                                                         *base.add(0).cast::<u8>() = (19i32) as u8;
-                                                        let vec30 = e;
-                                                        let ptr30 = vec30.as_ptr().cast::<u8>();
-                                                        let len30 = vec30.len();
-                                                        *base.add(12).cast::<usize>() = len30;
+                                                        let vec56 = e;
+                                                        let ptr56 = vec56.as_ptr().cast::<u8>();
+                                                        let len56 = vec56.len();
+                                                        *base.add(12).cast::<usize>() = len56;
                                                         *base.add(8).cast::<*mut u8>() =
-                                                            ptr30.cast_mut();
+                                                            ptr56.cast_mut();
                                                     }
                                                     DbValuePrimitive::Xml(e) => {
                                                         *base.add(0).cast::<u8>() = (20i32) as u8;
-                                                        let vec31 = e;
-                                                        let ptr31 = vec31.as_ptr().cast::<u8>();
-                                                        let len31 = vec31.len();
-                                                        *base.add(12).cast::<usize>() = len31;
+                                                        let vec57 = e;
+                                                        let ptr57 = vec57.as_ptr().cast::<u8>();
+                                                        let len57 = vec57.len();
+                                                        *base.add(12).cast::<usize>() = len57;
                                                         *base.add(8).cast::<*mut u8>() =
-                                                            ptr31.cast_mut();
+                                                            ptr57.cast_mut();
                                                     }
                                                     DbValuePrimitive::Uuid(e) => {
                                                         *base.add(0).cast::<u8>() = (21i32) as u8;
-                                                        let (t32_0, t32_1) = e;
+                                                        let (t58_0, t58_1) = e;
                                                         *base.add(8).cast::<i64>() =
-                                                            _rt::as_i64(t32_0);
+                                                            _rt::as_i64(t58_0);
                                                         *base.add(16).cast::<i64>() =
-                                                            _rt::as_i64(t32_1);
+                                                            _rt::as_i64(t58_1);
                                                     }
                                                     DbValuePrimitive::Inet(e) => {
                                                         *base.add(0).cast::<u8>() = (22i32) as u8;
@@ -2374,60 +3301,60 @@ pub mod wasi {
                                                             IpAddress::Ipv4(e) => {
                                                                 *base.add(8).cast::<u8>() =
                                                                     (0i32) as u8;
-                                                                let (t33_0, t33_1, t33_2, t33_3) =
+                                                                let (t59_0, t59_1, t59_2, t59_3) =
                                                                     e;
                                                                 *base.add(10).cast::<u8>() =
-                                                                    (_rt::as_i32(t33_0)) as u8;
+                                                                    (_rt::as_i32(t59_0)) as u8;
                                                                 *base.add(11).cast::<u8>() =
-                                                                    (_rt::as_i32(t33_1)) as u8;
+                                                                    (_rt::as_i32(t59_1)) as u8;
                                                                 *base.add(12).cast::<u8>() =
-                                                                    (_rt::as_i32(t33_2)) as u8;
+                                                                    (_rt::as_i32(t59_2)) as u8;
                                                                 *base.add(13).cast::<u8>() =
-                                                                    (_rt::as_i32(t33_3)) as u8;
+                                                                    (_rt::as_i32(t59_3)) as u8;
                                                             }
                                                             IpAddress::Ipv6(e) => {
                                                                 *base.add(8).cast::<u8>() =
                                                                     (1i32) as u8;
                                                                 let (
-                                                                    t34_0,
-                                                                    t34_1,
-                                                                    t34_2,
-                                                                    t34_3,
-                                                                    t34_4,
-                                                                    t34_5,
-                                                                    t34_6,
-                                                                    t34_7,
+                                                                    t60_0,
+                                                                    t60_1,
+                                                                    t60_2,
+                                                                    t60_3,
+                                                                    t60_4,
+                                                                    t60_5,
+                                                                    t60_6,
+                                                                    t60_7,
                                                                 ) = e;
                                                                 *base.add(10).cast::<u16>() =
-                                                                    (_rt::as_i32(t34_0)) as u16;
+                                                                    (_rt::as_i32(t60_0)) as u16;
                                                                 *base.add(12).cast::<u16>() =
-                                                                    (_rt::as_i32(t34_1)) as u16;
+                                                                    (_rt::as_i32(t60_1)) as u16;
                                                                 *base.add(14).cast::<u16>() =
-                                                                    (_rt::as_i32(t34_2)) as u16;
+                                                                    (_rt::as_i32(t60_2)) as u16;
                                                                 *base.add(16).cast::<u16>() =
-                                                                    (_rt::as_i32(t34_3)) as u16;
+                                                                    (_rt::as_i32(t60_3)) as u16;
                                                                 *base.add(18).cast::<u16>() =
-                                                                    (_rt::as_i32(t34_4)) as u16;
+                                                                    (_rt::as_i32(t60_4)) as u16;
                                                                 *base.add(20).cast::<u16>() =
-                                                                    (_rt::as_i32(t34_5)) as u16;
+                                                                    (_rt::as_i32(t60_5)) as u16;
                                                                 *base.add(22).cast::<u16>() =
-                                                                    (_rt::as_i32(t34_6)) as u16;
+                                                                    (_rt::as_i32(t60_6)) as u16;
                                                                 *base.add(24).cast::<u16>() =
-                                                                    (_rt::as_i32(t34_7)) as u16;
+                                                                    (_rt::as_i32(t60_7)) as u16;
                                                             }
                                                         }
                                                     }
                                                     DbValuePrimitive::Bit(e) => {
                                                         *base.add(0).cast::<u8>() = (23i32) as u8;
-                                                        let vec35 = e;
-                                                        let len35 = vec35.len();
-                                                        let layout35 = _rt::alloc::Layout::from_size_align_unchecked(vec35.len() * 1, 1);
-                                                        let result35 = if layout35.size() != 0 {
-                                                            let ptr = _rt::alloc::alloc(layout35)
+                                                        let vec61 = e;
+                                                        let len61 = vec61.len();
+                                                        let layout61 = _rt::alloc::Layout::from_size_align_unchecked(vec61.len() * 1, 1);
+                                                        let result61 = if layout61.size() != 0 {
+                                                            let ptr = _rt::alloc::alloc(layout61)
                                                                 .cast::<u8>();
                                                             if ptr.is_null() {
                                                                 _rt::alloc::handle_alloc_error(
-                                                                    layout35,
+                                                                    layout61,
                                                                 );
                                                             }
                                                             ptr
@@ -2436,9 +3363,9 @@ pub mod wasi {
                                                                 ::core::ptr::null_mut()
                                                             }
                                                         };
-                                                        for (i, e) in vec35.into_iter().enumerate()
+                                                        for (i, e) in vec61.into_iter().enumerate()
                                                         {
-                                                            let base = result35.add(i * 1);
+                                                            let base = result61.add(i * 1);
                                                             {
                                                                 *base.add(0).cast::<u8>() = (match e
                                                                 {
@@ -2448,23 +3375,23 @@ pub mod wasi {
                                                                     as u8;
                                                             }
                                                         }
-                                                        *base.add(12).cast::<usize>() = len35;
-                                                        *base.add(8).cast::<*mut u8>() = result35;
+                                                        *base.add(12).cast::<usize>() = len61;
+                                                        *base.add(8).cast::<*mut u8>() = result61;
                                                         cleanup_list.extend_from_slice(&[(
-                                                            result35, layout35,
+                                                            result61, layout61,
                                                         )]);
                                                     }
                                                     DbValuePrimitive::Varbit(e) => {
                                                         *base.add(0).cast::<u8>() = (24i32) as u8;
-                                                        let vec36 = e;
-                                                        let len36 = vec36.len();
-                                                        let layout36 = _rt::alloc::Layout::from_size_align_unchecked(vec36.len() * 1, 1);
-                                                        let result36 = if layout36.size() != 0 {
-                                                            let ptr = _rt::alloc::alloc(layout36)
+                                                        let vec62 = e;
+                                                        let len62 = vec62.len();
+                                                        let layout62 = _rt::alloc::Layout::from_size_align_unchecked(vec62.len() * 1, 1);
+                                                        let result62 = if layout62.size() != 0 {
+                                                            let ptr = _rt::alloc::alloc(layout62)
                                                                 .cast::<u8>();
                                                             if ptr.is_null() {
                                                                 _rt::alloc::handle_alloc_error(
-                                                                    layout36,
+                                                                    layout62,
                                                                 );
                                                             }
                                                             ptr
@@ -2473,9 +3400,9 @@ pub mod wasi {
                                                                 ::core::ptr::null_mut()
                                                             }
                                                         };
-                                                        for (i, e) in vec36.into_iter().enumerate()
+                                                        for (i, e) in vec62.into_iter().enumerate()
                                                         {
-                                                            let base = result36.add(i * 1);
+                                                            let base = result62.add(i * 1);
                                                             {
                                                                 *base.add(0).cast::<u8>() = (match e
                                                                 {
@@ -2485,30 +3412,394 @@ pub mod wasi {
                                                                     as u8;
                                                             }
                                                         }
-                                                        *base.add(12).cast::<usize>() = len36;
-                                                        *base.add(8).cast::<*mut u8>() = result36;
+                                                        *base.add(12).cast::<usize>() = len62;
+                                                        *base.add(8).cast::<*mut u8>() = result62;
                                                         cleanup_list.extend_from_slice(&[(
-                                                            result36, layout36,
+                                                            result62, layout62,
                                                         )]);
                                                     }
-                                                    DbValuePrimitive::Oid(e) => {
+                                                    DbValuePrimitive::Int4range(e) => {
                                                         *base.add(0).cast::<u8>() = (25i32) as u8;
+                                                        let (t63_0, t63_1) = e;
+                                                        match t63_0 {
+                                                            Some(e) => {
+                                                                *base.add(8).cast::<u8>() =
+                                                                    (1i32) as u8;
+                                                                let (t64_0, t64_1) = e;
+                                                                *base.add(12).cast::<i32>() =
+                                                                    _rt::as_i32(t64_0);
+                                                                *base.add(16).cast::<u8>() =
+                                                                    (match t64_1 {
+                                                                        true => 1,
+                                                                        false => 0,
+                                                                    })
+                                                                        as u8;
+                                                            }
+                                                            None => {
+                                                                *base.add(8).cast::<u8>() =
+                                                                    (0i32) as u8;
+                                                            }
+                                                        };
+                                                        match t63_1 {
+                                                            Some(e) => {
+                                                                *base.add(20).cast::<u8>() =
+                                                                    (1i32) as u8;
+                                                                let (t65_0, t65_1) = e;
+                                                                *base.add(24).cast::<i32>() =
+                                                                    _rt::as_i32(t65_0);
+                                                                *base.add(28).cast::<u8>() =
+                                                                    (match t65_1 {
+                                                                        true => 1,
+                                                                        false => 0,
+                                                                    })
+                                                                        as u8;
+                                                            }
+                                                            None => {
+                                                                *base.add(20).cast::<u8>() =
+                                                                    (0i32) as u8;
+                                                            }
+                                                        };
+                                                    }
+                                                    DbValuePrimitive::Int8range(e) => {
+                                                        *base.add(0).cast::<u8>() = (26i32) as u8;
+                                                        let (t66_0, t66_1) = e;
+                                                        match t66_0 {
+                                                            Some(e) => {
+                                                                *base.add(8).cast::<u8>() =
+                                                                    (1i32) as u8;
+                                                                let (t67_0, t67_1) = e;
+                                                                *base.add(16).cast::<i64>() =
+                                                                    _rt::as_i64(t67_0);
+                                                                *base.add(24).cast::<u8>() =
+                                                                    (match t67_1 {
+                                                                        true => 1,
+                                                                        false => 0,
+                                                                    })
+                                                                        as u8;
+                                                            }
+                                                            None => {
+                                                                *base.add(8).cast::<u8>() =
+                                                                    (0i32) as u8;
+                                                            }
+                                                        };
+                                                        match t66_1 {
+                                                            Some(e) => {
+                                                                *base.add(32).cast::<u8>() =
+                                                                    (1i32) as u8;
+                                                                let (t68_0, t68_1) = e;
+                                                                *base.add(40).cast::<i64>() =
+                                                                    _rt::as_i64(t68_0);
+                                                                *base.add(48).cast::<u8>() =
+                                                                    (match t68_1 {
+                                                                        true => 1,
+                                                                        false => 0,
+                                                                    })
+                                                                        as u8;
+                                                            }
+                                                            None => {
+                                                                *base.add(32).cast::<u8>() =
+                                                                    (0i32) as u8;
+                                                            }
+                                                        };
+                                                    }
+                                                    DbValuePrimitive::Numrange(e) => {
+                                                        *base.add(0).cast::<u8>() = (27i32) as u8;
+                                                        let (t69_0, t69_1) = e;
+                                                        match t69_0 {
+                                                            Some(e) => {
+                                                                *base.add(8).cast::<u8>() =
+                                                                    (1i32) as u8;
+                                                                let (t70_0, t70_1) = e;
+                                                                let vec71 = t70_0;
+                                                                let ptr71 =
+                                                                    vec71.as_ptr().cast::<u8>();
+                                                                let len71 = vec71.len();
+                                                                *base.add(16).cast::<usize>() =
+                                                                    len71;
+                                                                *base.add(12).cast::<*mut u8>() =
+                                                                    ptr71.cast_mut();
+                                                                *base.add(20).cast::<u8>() =
+                                                                    (match t70_1 {
+                                                                        true => 1,
+                                                                        false => 0,
+                                                                    })
+                                                                        as u8;
+                                                            }
+                                                            None => {
+                                                                *base.add(8).cast::<u8>() =
+                                                                    (0i32) as u8;
+                                                            }
+                                                        };
+                                                        match t69_1 {
+                                                            Some(e) => {
+                                                                *base.add(24).cast::<u8>() =
+                                                                    (1i32) as u8;
+                                                                let (t72_0, t72_1) = e;
+                                                                let vec73 = t72_0;
+                                                                let ptr73 =
+                                                                    vec73.as_ptr().cast::<u8>();
+                                                                let len73 = vec73.len();
+                                                                *base.add(32).cast::<usize>() =
+                                                                    len73;
+                                                                *base.add(28).cast::<*mut u8>() =
+                                                                    ptr73.cast_mut();
+                                                                *base.add(36).cast::<u8>() =
+                                                                    (match t72_1 {
+                                                                        true => 1,
+                                                                        false => 0,
+                                                                    })
+                                                                        as u8;
+                                                            }
+                                                            None => {
+                                                                *base.add(24).cast::<u8>() =
+                                                                    (0i32) as u8;
+                                                            }
+                                                        };
+                                                    }
+                                                    DbValuePrimitive::Tsrange(e) => {
+                                                        *base.add(0).cast::<u8>() = (28i32) as u8;
+                                                        let (t74_0, t74_1) = e;
+                                                        match t74_0 {
+                                                            Some(e) => {
+                                                                *base.add(8).cast::<u8>() =
+                                                                    (1i32) as u8;
+                                                                let (t75_0, t75_1) = e;
+                                                                let (
+                                                                    t76_0,
+                                                                    t76_1,
+                                                                    t76_2,
+                                                                    t76_3,
+                                                                    t76_4,
+                                                                    t76_5,
+                                                                    t76_6,
+                                                                ) = t75_0;
+                                                                *base.add(12).cast::<i32>() =
+                                                                    _rt::as_i32(t76_0);
+                                                                *base.add(16).cast::<u8>() =
+                                                                    (_rt::as_i32(t76_1)) as u8;
+                                                                *base.add(17).cast::<u8>() =
+                                                                    (_rt::as_i32(t76_2)) as u8;
+                                                                *base.add(18).cast::<u8>() =
+                                                                    (_rt::as_i32(t76_3)) as u8;
+                                                                *base.add(19).cast::<u8>() =
+                                                                    (_rt::as_i32(t76_4)) as u8;
+                                                                *base.add(20).cast::<u8>() =
+                                                                    (_rt::as_i32(t76_5)) as u8;
+                                                                *base.add(24).cast::<i32>() =
+                                                                    _rt::as_i32(t76_6);
+                                                                *base.add(28).cast::<u8>() =
+                                                                    (match t75_1 {
+                                                                        true => 1,
+                                                                        false => 0,
+                                                                    })
+                                                                        as u8;
+                                                            }
+                                                            None => {
+                                                                *base.add(8).cast::<u8>() =
+                                                                    (0i32) as u8;
+                                                            }
+                                                        };
+                                                        match t74_1 {
+                                                            Some(e) => {
+                                                                *base.add(32).cast::<u8>() =
+                                                                    (1i32) as u8;
+                                                                let (t77_0, t77_1) = e;
+                                                                let (
+                                                                    t78_0,
+                                                                    t78_1,
+                                                                    t78_2,
+                                                                    t78_3,
+                                                                    t78_4,
+                                                                    t78_5,
+                                                                    t78_6,
+                                                                ) = t77_0;
+                                                                *base.add(36).cast::<i32>() =
+                                                                    _rt::as_i32(t78_0);
+                                                                *base.add(40).cast::<u8>() =
+                                                                    (_rt::as_i32(t78_1)) as u8;
+                                                                *base.add(41).cast::<u8>() =
+                                                                    (_rt::as_i32(t78_2)) as u8;
+                                                                *base.add(42).cast::<u8>() =
+                                                                    (_rt::as_i32(t78_3)) as u8;
+                                                                *base.add(43).cast::<u8>() =
+                                                                    (_rt::as_i32(t78_4)) as u8;
+                                                                *base.add(44).cast::<u8>() =
+                                                                    (_rt::as_i32(t78_5)) as u8;
+                                                                *base.add(48).cast::<i32>() =
+                                                                    _rt::as_i32(t78_6);
+                                                                *base.add(52).cast::<u8>() =
+                                                                    (match t77_1 {
+                                                                        true => 1,
+                                                                        false => 0,
+                                                                    })
+                                                                        as u8;
+                                                            }
+                                                            None => {
+                                                                *base.add(32).cast::<u8>() =
+                                                                    (0i32) as u8;
+                                                            }
+                                                        };
+                                                    }
+                                                    DbValuePrimitive::Tstzrange(e) => {
+                                                        *base.add(0).cast::<u8>() = (29i32) as u8;
+                                                        let (t79_0, t79_1) = e;
+                                                        match t79_0 {
+                                                            Some(e) => {
+                                                                *base.add(8).cast::<u8>() =
+                                                                    (1i32) as u8;
+                                                                let (t80_0, t80_1) = e;
+                                                                let (
+                                                                    t81_0,
+                                                                    t81_1,
+                                                                    t81_2,
+                                                                    t81_3,
+                                                                    t81_4,
+                                                                    t81_5,
+                                                                    t81_6,
+                                                                    t81_7,
+                                                                ) = t80_0;
+                                                                *base.add(12).cast::<i32>() =
+                                                                    _rt::as_i32(t81_0);
+                                                                *base.add(16).cast::<u8>() =
+                                                                    (_rt::as_i32(t81_1)) as u8;
+                                                                *base.add(17).cast::<u8>() =
+                                                                    (_rt::as_i32(t81_2)) as u8;
+                                                                *base.add(18).cast::<u8>() =
+                                                                    (_rt::as_i32(t81_3)) as u8;
+                                                                *base.add(19).cast::<u8>() =
+                                                                    (_rt::as_i32(t81_4)) as u8;
+                                                                *base.add(20).cast::<u8>() =
+                                                                    (_rt::as_i32(t81_5)) as u8;
+                                                                *base.add(24).cast::<i32>() =
+                                                                    _rt::as_i32(t81_6);
+                                                                *base.add(28).cast::<i32>() =
+                                                                    _rt::as_i32(t81_7);
+                                                                *base.add(32).cast::<u8>() =
+                                                                    (match t80_1 {
+                                                                        true => 1,
+                                                                        false => 0,
+                                                                    })
+                                                                        as u8;
+                                                            }
+                                                            None => {
+                                                                *base.add(8).cast::<u8>() =
+                                                                    (0i32) as u8;
+                                                            }
+                                                        };
+                                                        match t79_1 {
+                                                            Some(e) => {
+                                                                *base.add(36).cast::<u8>() =
+                                                                    (1i32) as u8;
+                                                                let (t82_0, t82_1) = e;
+                                                                let (
+                                                                    t83_0,
+                                                                    t83_1,
+                                                                    t83_2,
+                                                                    t83_3,
+                                                                    t83_4,
+                                                                    t83_5,
+                                                                    t83_6,
+                                                                    t83_7,
+                                                                ) = t82_0;
+                                                                *base.add(40).cast::<i32>() =
+                                                                    _rt::as_i32(t83_0);
+                                                                *base.add(44).cast::<u8>() =
+                                                                    (_rt::as_i32(t83_1)) as u8;
+                                                                *base.add(45).cast::<u8>() =
+                                                                    (_rt::as_i32(t83_2)) as u8;
+                                                                *base.add(46).cast::<u8>() =
+                                                                    (_rt::as_i32(t83_3)) as u8;
+                                                                *base.add(47).cast::<u8>() =
+                                                                    (_rt::as_i32(t83_4)) as u8;
+                                                                *base.add(48).cast::<u8>() =
+                                                                    (_rt::as_i32(t83_5)) as u8;
+                                                                *base.add(52).cast::<i32>() =
+                                                                    _rt::as_i32(t83_6);
+                                                                *base.add(56).cast::<i32>() =
+                                                                    _rt::as_i32(t83_7);
+                                                                *base.add(60).cast::<u8>() =
+                                                                    (match t82_1 {
+                                                                        true => 1,
+                                                                        false => 0,
+                                                                    })
+                                                                        as u8;
+                                                            }
+                                                            None => {
+                                                                *base.add(36).cast::<u8>() =
+                                                                    (0i32) as u8;
+                                                            }
+                                                        };
+                                                    }
+                                                    DbValuePrimitive::Daterange(e) => {
+                                                        *base.add(0).cast::<u8>() = (30i32) as u8;
+                                                        let (t84_0, t84_1) = e;
+                                                        match t84_0 {
+                                                            Some(e) => {
+                                                                *base.add(8).cast::<u8>() =
+                                                                    (1i32) as u8;
+                                                                let (t85_0, t85_1) = e;
+                                                                let (t86_0, t86_1, t86_2) = t85_0;
+                                                                *base.add(12).cast::<i32>() =
+                                                                    _rt::as_i32(t86_0);
+                                                                *base.add(16).cast::<u8>() =
+                                                                    (_rt::as_i32(t86_1)) as u8;
+                                                                *base.add(17).cast::<u8>() =
+                                                                    (_rt::as_i32(t86_2)) as u8;
+                                                                *base.add(20).cast::<u8>() =
+                                                                    (match t85_1 {
+                                                                        true => 1,
+                                                                        false => 0,
+                                                                    })
+                                                                        as u8;
+                                                            }
+                                                            None => {
+                                                                *base.add(8).cast::<u8>() =
+                                                                    (0i32) as u8;
+                                                            }
+                                                        };
+                                                        match t84_1 {
+                                                            Some(e) => {
+                                                                *base.add(24).cast::<u8>() =
+                                                                    (1i32) as u8;
+                                                                let (t87_0, t87_1) = e;
+                                                                let (t88_0, t88_1, t88_2) = t87_0;
+                                                                *base.add(28).cast::<i32>() =
+                                                                    _rt::as_i32(t88_0);
+                                                                *base.add(32).cast::<u8>() =
+                                                                    (_rt::as_i32(t88_1)) as u8;
+                                                                *base.add(33).cast::<u8>() =
+                                                                    (_rt::as_i32(t88_2)) as u8;
+                                                                *base.add(36).cast::<u8>() =
+                                                                    (match t87_1 {
+                                                                        true => 1,
+                                                                        false => 0,
+                                                                    })
+                                                                        as u8;
+                                                            }
+                                                            None => {
+                                                                *base.add(24).cast::<u8>() =
+                                                                    (0i32) as u8;
+                                                            }
+                                                        };
+                                                    }
+                                                    DbValuePrimitive::Oid(e) => {
+                                                        *base.add(0).cast::<u8>() = (31i32) as u8;
                                                         *base.add(8).cast::<i32>() = _rt::as_i32(e);
                                                     }
                                                     DbValuePrimitive::Null => {
-                                                        *base.add(0).cast::<u8>() = (26i32) as u8;
+                                                        *base.add(0).cast::<u8>() = (32i32) as u8;
                                                     }
                                                 }
                                             }
                                         }
-                                        *base.add(12).cast::<usize>() = len37;
-                                        *base.add(8).cast::<*mut u8>() = result37;
-                                        cleanup_list.extend_from_slice(&[(result37, layout37)]);
+                                        *base.add(12).cast::<usize>() = len89;
+                                        *base.add(8).cast::<*mut u8>() = result89;
+                                        cleanup_list.extend_from_slice(&[(result89, layout89)]);
                                     }
                                 }
                             }
                         }
-                        let ptr39 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        let ptr91 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
                         #[link(wasm_import_module = "wasi:rdbms/postgres@0.0.1")]
                         extern "C" {
@@ -2538,111 +3829,111 @@ pub mod wasi {
                             (self).handle() as i32,
                             ptr0.cast_mut(),
                             len0,
-                            result38,
-                            len38,
-                            ptr39,
+                            result90,
+                            len90,
+                            ptr91,
                         );
-                        let l40 = i32::from(*ptr39.add(0).cast::<u8>());
-                        if layout38.size() != 0 {
-                            _rt::alloc::dealloc(result38.cast(), layout38);
+                        let l92 = i32::from(*ptr91.add(0).cast::<u8>());
+                        if layout90.size() != 0 {
+                            _rt::alloc::dealloc(result90.cast(), layout90);
                         }
                         for (ptr, layout) in cleanup_list {
                             if layout.size() != 0 {
                                 _rt::alloc::dealloc(ptr.cast(), layout);
                             }
                         }
-                        match l40 {
+                        match l92 {
                             0 => {
                                 let e = {
-                                    let l41 = *ptr39.add(4).cast::<i32>();
+                                    let l93 = *ptr91.add(4).cast::<i32>();
 
-                                    DbResultSet::from_handle(l41 as u32)
+                                    DbResultSet::from_handle(l93 as u32)
                                 };
                                 Ok(e)
                             }
                             1 => {
                                 let e = {
-                                    let l42 = i32::from(*ptr39.add(4).cast::<u8>());
-                                    let v58 = match l42 {
+                                    let l94 = i32::from(*ptr91.add(4).cast::<u8>());
+                                    let v110 = match l94 {
                                         0 => {
-                                            let e58 = {
-                                                let l43 = *ptr39.add(8).cast::<*mut u8>();
-                                                let l44 = *ptr39.add(12).cast::<usize>();
-                                                let len45 = l44;
-                                                let bytes45 = _rt::Vec::from_raw_parts(
-                                                    l43.cast(),
-                                                    len45,
-                                                    len45,
+                                            let e110 = {
+                                                let l95 = *ptr91.add(8).cast::<*mut u8>();
+                                                let l96 = *ptr91.add(12).cast::<usize>();
+                                                let len97 = l96;
+                                                let bytes97 = _rt::Vec::from_raw_parts(
+                                                    l95.cast(),
+                                                    len97,
+                                                    len97,
                                                 );
 
-                                                _rt::string_lift(bytes45)
+                                                _rt::string_lift(bytes97)
                                             };
-                                            Error::ConnectionFailure(e58)
+                                            Error::ConnectionFailure(e110)
                                         }
                                         1 => {
-                                            let e58 = {
-                                                let l46 = *ptr39.add(8).cast::<*mut u8>();
-                                                let l47 = *ptr39.add(12).cast::<usize>();
-                                                let len48 = l47;
-                                                let bytes48 = _rt::Vec::from_raw_parts(
-                                                    l46.cast(),
-                                                    len48,
-                                                    len48,
+                                            let e110 = {
+                                                let l98 = *ptr91.add(8).cast::<*mut u8>();
+                                                let l99 = *ptr91.add(12).cast::<usize>();
+                                                let len100 = l99;
+                                                let bytes100 = _rt::Vec::from_raw_parts(
+                                                    l98.cast(),
+                                                    len100,
+                                                    len100,
                                                 );
 
-                                                _rt::string_lift(bytes48)
+                                                _rt::string_lift(bytes100)
                                             };
-                                            Error::QueryParameterFailure(e58)
+                                            Error::QueryParameterFailure(e110)
                                         }
                                         2 => {
-                                            let e58 = {
-                                                let l49 = *ptr39.add(8).cast::<*mut u8>();
-                                                let l50 = *ptr39.add(12).cast::<usize>();
-                                                let len51 = l50;
-                                                let bytes51 = _rt::Vec::from_raw_parts(
-                                                    l49.cast(),
-                                                    len51,
-                                                    len51,
+                                            let e110 = {
+                                                let l101 = *ptr91.add(8).cast::<*mut u8>();
+                                                let l102 = *ptr91.add(12).cast::<usize>();
+                                                let len103 = l102;
+                                                let bytes103 = _rt::Vec::from_raw_parts(
+                                                    l101.cast(),
+                                                    len103,
+                                                    len103,
                                                 );
 
-                                                _rt::string_lift(bytes51)
+                                                _rt::string_lift(bytes103)
                                             };
-                                            Error::QueryExecutionFailure(e58)
+                                            Error::QueryExecutionFailure(e110)
                                         }
                                         3 => {
-                                            let e58 = {
-                                                let l52 = *ptr39.add(8).cast::<*mut u8>();
-                                                let l53 = *ptr39.add(12).cast::<usize>();
-                                                let len54 = l53;
-                                                let bytes54 = _rt::Vec::from_raw_parts(
-                                                    l52.cast(),
-                                                    len54,
-                                                    len54,
+                                            let e110 = {
+                                                let l104 = *ptr91.add(8).cast::<*mut u8>();
+                                                let l105 = *ptr91.add(12).cast::<usize>();
+                                                let len106 = l105;
+                                                let bytes106 = _rt::Vec::from_raw_parts(
+                                                    l104.cast(),
+                                                    len106,
+                                                    len106,
                                                 );
 
-                                                _rt::string_lift(bytes54)
+                                                _rt::string_lift(bytes106)
                                             };
-                                            Error::QueryResponseFailure(e58)
+                                            Error::QueryResponseFailure(e110)
                                         }
                                         n => {
                                             debug_assert_eq!(n, 4, "invalid enum discriminant");
-                                            let e58 = {
-                                                let l55 = *ptr39.add(8).cast::<*mut u8>();
-                                                let l56 = *ptr39.add(12).cast::<usize>();
-                                                let len57 = l56;
-                                                let bytes57 = _rt::Vec::from_raw_parts(
-                                                    l55.cast(),
-                                                    len57,
-                                                    len57,
+                                            let e110 = {
+                                                let l107 = *ptr91.add(8).cast::<*mut u8>();
+                                                let l108 = *ptr91.add(12).cast::<usize>();
+                                                let len109 = l108;
+                                                let bytes109 = _rt::Vec::from_raw_parts(
+                                                    l107.cast(),
+                                                    len109,
+                                                    len109,
                                                 );
 
-                                                _rt::string_lift(bytes57)
+                                                _rt::string_lift(bytes109)
                                             };
-                                            Error::Other(e58)
+                                            Error::Other(e110)
                                         }
                                     };
 
-                                    v58
+                                    v110
                                 };
                                 Err(e)
                             }
@@ -2662,14 +3953,14 @@ pub mod wasi {
                         let vec0 = statement;
                         let ptr0 = vec0.as_ptr().cast::<u8>();
                         let len0 = vec0.len();
-                        let vec38 = params;
-                        let len38 = vec38.len();
-                        let layout38 =
-                            _rt::alloc::Layout::from_size_align_unchecked(vec38.len() * 40, 8);
-                        let result38 = if layout38.size() != 0 {
-                            let ptr = _rt::alloc::alloc(layout38).cast::<u8>();
+                        let vec90 = params;
+                        let len90 = vec90.len();
+                        let layout90 =
+                            _rt::alloc::Layout::from_size_align_unchecked(vec90.len() * 72, 8);
+                        let result90 = if layout90.size() != 0 {
+                            let ptr = _rt::alloc::alloc(layout90).cast::<u8>();
                             if ptr.is_null() {
-                                _rt::alloc::handle_alloc_error(layout38);
+                                _rt::alloc::handle_alloc_error(layout90);
                             }
                             ptr
                         } else {
@@ -2677,8 +3968,8 @@ pub mod wasi {
                                 ::core::ptr::null_mut()
                             }
                         };
-                        for (i, e) in vec38.into_iter().enumerate() {
-                            let base = result38.add(i * 40);
+                        for (i, e) in vec90.into_iter().enumerate() {
+                            let base = result90.add(i * 72);
                             {
                                 match e {
                                     DbValue::Primitive(e) => {
@@ -2983,28 +4274,352 @@ pub mod wasi {
                                                 cleanup_list
                                                     .extend_from_slice(&[(result18, layout18)]);
                                             }
-                                            DbValuePrimitive::Oid(e) => {
+                                            DbValuePrimitive::Int4range(e) => {
                                                 *base.add(8).cast::<u8>() = (25i32) as u8;
+                                                let (t19_0, t19_1) = e;
+                                                match t19_0 {
+                                                    Some(e) => {
+                                                        *base.add(16).cast::<u8>() = (1i32) as u8;
+                                                        let (t20_0, t20_1) = e;
+                                                        *base.add(20).cast::<i32>() =
+                                                            _rt::as_i32(t20_0);
+                                                        *base.add(24).cast::<u8>() = (match t20_1 {
+                                                            true => 1,
+                                                            false => 0,
+                                                        })
+                                                            as u8;
+                                                    }
+                                                    None => {
+                                                        *base.add(16).cast::<u8>() = (0i32) as u8;
+                                                    }
+                                                };
+                                                match t19_1 {
+                                                    Some(e) => {
+                                                        *base.add(28).cast::<u8>() = (1i32) as u8;
+                                                        let (t21_0, t21_1) = e;
+                                                        *base.add(32).cast::<i32>() =
+                                                            _rt::as_i32(t21_0);
+                                                        *base.add(36).cast::<u8>() = (match t21_1 {
+                                                            true => 1,
+                                                            false => 0,
+                                                        })
+                                                            as u8;
+                                                    }
+                                                    None => {
+                                                        *base.add(28).cast::<u8>() = (0i32) as u8;
+                                                    }
+                                                };
+                                            }
+                                            DbValuePrimitive::Int8range(e) => {
+                                                *base.add(8).cast::<u8>() = (26i32) as u8;
+                                                let (t22_0, t22_1) = e;
+                                                match t22_0 {
+                                                    Some(e) => {
+                                                        *base.add(16).cast::<u8>() = (1i32) as u8;
+                                                        let (t23_0, t23_1) = e;
+                                                        *base.add(24).cast::<i64>() =
+                                                            _rt::as_i64(t23_0);
+                                                        *base.add(32).cast::<u8>() = (match t23_1 {
+                                                            true => 1,
+                                                            false => 0,
+                                                        })
+                                                            as u8;
+                                                    }
+                                                    None => {
+                                                        *base.add(16).cast::<u8>() = (0i32) as u8;
+                                                    }
+                                                };
+                                                match t22_1 {
+                                                    Some(e) => {
+                                                        *base.add(40).cast::<u8>() = (1i32) as u8;
+                                                        let (t24_0, t24_1) = e;
+                                                        *base.add(48).cast::<i64>() =
+                                                            _rt::as_i64(t24_0);
+                                                        *base.add(56).cast::<u8>() = (match t24_1 {
+                                                            true => 1,
+                                                            false => 0,
+                                                        })
+                                                            as u8;
+                                                    }
+                                                    None => {
+                                                        *base.add(40).cast::<u8>() = (0i32) as u8;
+                                                    }
+                                                };
+                                            }
+                                            DbValuePrimitive::Numrange(e) => {
+                                                *base.add(8).cast::<u8>() = (27i32) as u8;
+                                                let (t25_0, t25_1) = e;
+                                                match t25_0 {
+                                                    Some(e) => {
+                                                        *base.add(16).cast::<u8>() = (1i32) as u8;
+                                                        let (t26_0, t26_1) = e;
+                                                        let vec27 = t26_0;
+                                                        let ptr27 = vec27.as_ptr().cast::<u8>();
+                                                        let len27 = vec27.len();
+                                                        *base.add(24).cast::<usize>() = len27;
+                                                        *base.add(20).cast::<*mut u8>() =
+                                                            ptr27.cast_mut();
+                                                        *base.add(28).cast::<u8>() = (match t26_1 {
+                                                            true => 1,
+                                                            false => 0,
+                                                        })
+                                                            as u8;
+                                                    }
+                                                    None => {
+                                                        *base.add(16).cast::<u8>() = (0i32) as u8;
+                                                    }
+                                                };
+                                                match t25_1 {
+                                                    Some(e) => {
+                                                        *base.add(32).cast::<u8>() = (1i32) as u8;
+                                                        let (t28_0, t28_1) = e;
+                                                        let vec29 = t28_0;
+                                                        let ptr29 = vec29.as_ptr().cast::<u8>();
+                                                        let len29 = vec29.len();
+                                                        *base.add(40).cast::<usize>() = len29;
+                                                        *base.add(36).cast::<*mut u8>() =
+                                                            ptr29.cast_mut();
+                                                        *base.add(44).cast::<u8>() = (match t28_1 {
+                                                            true => 1,
+                                                            false => 0,
+                                                        })
+                                                            as u8;
+                                                    }
+                                                    None => {
+                                                        *base.add(32).cast::<u8>() = (0i32) as u8;
+                                                    }
+                                                };
+                                            }
+                                            DbValuePrimitive::Tsrange(e) => {
+                                                *base.add(8).cast::<u8>() = (28i32) as u8;
+                                                let (t30_0, t30_1) = e;
+                                                match t30_0 {
+                                                    Some(e) => {
+                                                        *base.add(16).cast::<u8>() = (1i32) as u8;
+                                                        let (t31_0, t31_1) = e;
+                                                        let (
+                                                            t32_0,
+                                                            t32_1,
+                                                            t32_2,
+                                                            t32_3,
+                                                            t32_4,
+                                                            t32_5,
+                                                            t32_6,
+                                                        ) = t31_0;
+                                                        *base.add(20).cast::<i32>() =
+                                                            _rt::as_i32(t32_0);
+                                                        *base.add(24).cast::<u8>() =
+                                                            (_rt::as_i32(t32_1)) as u8;
+                                                        *base.add(25).cast::<u8>() =
+                                                            (_rt::as_i32(t32_2)) as u8;
+                                                        *base.add(26).cast::<u8>() =
+                                                            (_rt::as_i32(t32_3)) as u8;
+                                                        *base.add(27).cast::<u8>() =
+                                                            (_rt::as_i32(t32_4)) as u8;
+                                                        *base.add(28).cast::<u8>() =
+                                                            (_rt::as_i32(t32_5)) as u8;
+                                                        *base.add(32).cast::<i32>() =
+                                                            _rt::as_i32(t32_6);
+                                                        *base.add(36).cast::<u8>() = (match t31_1 {
+                                                            true => 1,
+                                                            false => 0,
+                                                        })
+                                                            as u8;
+                                                    }
+                                                    None => {
+                                                        *base.add(16).cast::<u8>() = (0i32) as u8;
+                                                    }
+                                                };
+                                                match t30_1 {
+                                                    Some(e) => {
+                                                        *base.add(40).cast::<u8>() = (1i32) as u8;
+                                                        let (t33_0, t33_1) = e;
+                                                        let (
+                                                            t34_0,
+                                                            t34_1,
+                                                            t34_2,
+                                                            t34_3,
+                                                            t34_4,
+                                                            t34_5,
+                                                            t34_6,
+                                                        ) = t33_0;
+                                                        *base.add(44).cast::<i32>() =
+                                                            _rt::as_i32(t34_0);
+                                                        *base.add(48).cast::<u8>() =
+                                                            (_rt::as_i32(t34_1)) as u8;
+                                                        *base.add(49).cast::<u8>() =
+                                                            (_rt::as_i32(t34_2)) as u8;
+                                                        *base.add(50).cast::<u8>() =
+                                                            (_rt::as_i32(t34_3)) as u8;
+                                                        *base.add(51).cast::<u8>() =
+                                                            (_rt::as_i32(t34_4)) as u8;
+                                                        *base.add(52).cast::<u8>() =
+                                                            (_rt::as_i32(t34_5)) as u8;
+                                                        *base.add(56).cast::<i32>() =
+                                                            _rt::as_i32(t34_6);
+                                                        *base.add(60).cast::<u8>() = (match t33_1 {
+                                                            true => 1,
+                                                            false => 0,
+                                                        })
+                                                            as u8;
+                                                    }
+                                                    None => {
+                                                        *base.add(40).cast::<u8>() = (0i32) as u8;
+                                                    }
+                                                };
+                                            }
+                                            DbValuePrimitive::Tstzrange(e) => {
+                                                *base.add(8).cast::<u8>() = (29i32) as u8;
+                                                let (t35_0, t35_1) = e;
+                                                match t35_0 {
+                                                    Some(e) => {
+                                                        *base.add(16).cast::<u8>() = (1i32) as u8;
+                                                        let (t36_0, t36_1) = e;
+                                                        let (
+                                                            t37_0,
+                                                            t37_1,
+                                                            t37_2,
+                                                            t37_3,
+                                                            t37_4,
+                                                            t37_5,
+                                                            t37_6,
+                                                            t37_7,
+                                                        ) = t36_0;
+                                                        *base.add(20).cast::<i32>() =
+                                                            _rt::as_i32(t37_0);
+                                                        *base.add(24).cast::<u8>() =
+                                                            (_rt::as_i32(t37_1)) as u8;
+                                                        *base.add(25).cast::<u8>() =
+                                                            (_rt::as_i32(t37_2)) as u8;
+                                                        *base.add(26).cast::<u8>() =
+                                                            (_rt::as_i32(t37_3)) as u8;
+                                                        *base.add(27).cast::<u8>() =
+                                                            (_rt::as_i32(t37_4)) as u8;
+                                                        *base.add(28).cast::<u8>() =
+                                                            (_rt::as_i32(t37_5)) as u8;
+                                                        *base.add(32).cast::<i32>() =
+                                                            _rt::as_i32(t37_6);
+                                                        *base.add(36).cast::<i32>() =
+                                                            _rt::as_i32(t37_7);
+                                                        *base.add(40).cast::<u8>() = (match t36_1 {
+                                                            true => 1,
+                                                            false => 0,
+                                                        })
+                                                            as u8;
+                                                    }
+                                                    None => {
+                                                        *base.add(16).cast::<u8>() = (0i32) as u8;
+                                                    }
+                                                };
+                                                match t35_1 {
+                                                    Some(e) => {
+                                                        *base.add(44).cast::<u8>() = (1i32) as u8;
+                                                        let (t38_0, t38_1) = e;
+                                                        let (
+                                                            t39_0,
+                                                            t39_1,
+                                                            t39_2,
+                                                            t39_3,
+                                                            t39_4,
+                                                            t39_5,
+                                                            t39_6,
+                                                            t39_7,
+                                                        ) = t38_0;
+                                                        *base.add(48).cast::<i32>() =
+                                                            _rt::as_i32(t39_0);
+                                                        *base.add(52).cast::<u8>() =
+                                                            (_rt::as_i32(t39_1)) as u8;
+                                                        *base.add(53).cast::<u8>() =
+                                                            (_rt::as_i32(t39_2)) as u8;
+                                                        *base.add(54).cast::<u8>() =
+                                                            (_rt::as_i32(t39_3)) as u8;
+                                                        *base.add(55).cast::<u8>() =
+                                                            (_rt::as_i32(t39_4)) as u8;
+                                                        *base.add(56).cast::<u8>() =
+                                                            (_rt::as_i32(t39_5)) as u8;
+                                                        *base.add(60).cast::<i32>() =
+                                                            _rt::as_i32(t39_6);
+                                                        *base.add(64).cast::<i32>() =
+                                                            _rt::as_i32(t39_7);
+                                                        *base.add(68).cast::<u8>() = (match t38_1 {
+                                                            true => 1,
+                                                            false => 0,
+                                                        })
+                                                            as u8;
+                                                    }
+                                                    None => {
+                                                        *base.add(44).cast::<u8>() = (0i32) as u8;
+                                                    }
+                                                };
+                                            }
+                                            DbValuePrimitive::Daterange(e) => {
+                                                *base.add(8).cast::<u8>() = (30i32) as u8;
+                                                let (t40_0, t40_1) = e;
+                                                match t40_0 {
+                                                    Some(e) => {
+                                                        *base.add(16).cast::<u8>() = (1i32) as u8;
+                                                        let (t41_0, t41_1) = e;
+                                                        let (t42_0, t42_1, t42_2) = t41_0;
+                                                        *base.add(20).cast::<i32>() =
+                                                            _rt::as_i32(t42_0);
+                                                        *base.add(24).cast::<u8>() =
+                                                            (_rt::as_i32(t42_1)) as u8;
+                                                        *base.add(25).cast::<u8>() =
+                                                            (_rt::as_i32(t42_2)) as u8;
+                                                        *base.add(28).cast::<u8>() = (match t41_1 {
+                                                            true => 1,
+                                                            false => 0,
+                                                        })
+                                                            as u8;
+                                                    }
+                                                    None => {
+                                                        *base.add(16).cast::<u8>() = (0i32) as u8;
+                                                    }
+                                                };
+                                                match t40_1 {
+                                                    Some(e) => {
+                                                        *base.add(32).cast::<u8>() = (1i32) as u8;
+                                                        let (t43_0, t43_1) = e;
+                                                        let (t44_0, t44_1, t44_2) = t43_0;
+                                                        *base.add(36).cast::<i32>() =
+                                                            _rt::as_i32(t44_0);
+                                                        *base.add(40).cast::<u8>() =
+                                                            (_rt::as_i32(t44_1)) as u8;
+                                                        *base.add(41).cast::<u8>() =
+                                                            (_rt::as_i32(t44_2)) as u8;
+                                                        *base.add(44).cast::<u8>() = (match t43_1 {
+                                                            true => 1,
+                                                            false => 0,
+                                                        })
+                                                            as u8;
+                                                    }
+                                                    None => {
+                                                        *base.add(32).cast::<u8>() = (0i32) as u8;
+                                                    }
+                                                };
+                                            }
+                                            DbValuePrimitive::Oid(e) => {
+                                                *base.add(8).cast::<u8>() = (31i32) as u8;
                                                 *base.add(16).cast::<i32>() = _rt::as_i32(e);
                                             }
                                             DbValuePrimitive::Null => {
-                                                *base.add(8).cast::<u8>() = (26i32) as u8;
+                                                *base.add(8).cast::<u8>() = (32i32) as u8;
                                             }
                                         }
                                     }
                                     DbValue::Array(e) => {
                                         *base.add(0).cast::<u8>() = (1i32) as u8;
-                                        let vec37 = e;
-                                        let len37 = vec37.len();
-                                        let layout37 =
+                                        let vec89 = e;
+                                        let len89 = vec89.len();
+                                        let layout89 =
                                             _rt::alloc::Layout::from_size_align_unchecked(
-                                                vec37.len() * 32,
+                                                vec89.len() * 64,
                                                 8,
                                             );
-                                        let result37 = if layout37.size() != 0 {
-                                            let ptr = _rt::alloc::alloc(layout37).cast::<u8>();
+                                        let result89 = if layout89.size() != 0 {
+                                            let ptr = _rt::alloc::alloc(layout89).cast::<u8>();
                                             if ptr.is_null() {
-                                                _rt::alloc::handle_alloc_error(layout37);
+                                                _rt::alloc::handle_alloc_error(layout89);
                                             }
                                             ptr
                                         } else {
@@ -3012,8 +4627,8 @@ pub mod wasi {
                                                 ::core::ptr::null_mut()
                                             }
                                         };
-                                        for (i, e) in vec37.into_iter().enumerate() {
-                                            let base = result37.add(i * 32);
+                                        for (i, e) in vec89.into_iter().enumerate() {
+                                            let base = result89.add(i * 64);
                                             {
                                                 match e {
                                                     DbValuePrimitive::Character(e) => {
@@ -3044,12 +4659,12 @@ pub mod wasi {
                                                     }
                                                     DbValuePrimitive::Numeric(e) => {
                                                         *base.add(0).cast::<u8>() = (6i32) as u8;
-                                                        let vec19 = e;
-                                                        let ptr19 = vec19.as_ptr().cast::<u8>();
-                                                        let len19 = vec19.len();
-                                                        *base.add(12).cast::<usize>() = len19;
+                                                        let vec45 = e;
+                                                        let ptr45 = vec45.as_ptr().cast::<u8>();
+                                                        let len45 = vec45.len();
+                                                        *base.add(12).cast::<usize>() = len45;
                                                         *base.add(8).cast::<*mut u8>() =
-                                                            ptr19.cast_mut();
+                                                            ptr45.cast_mut();
                                                     }
                                                     DbValuePrimitive::Boolean(e) => {
                                                         *base.add(0).cast::<u8>() = (7i32) as u8;
@@ -3061,121 +4676,121 @@ pub mod wasi {
                                                     }
                                                     DbValuePrimitive::Text(e) => {
                                                         *base.add(0).cast::<u8>() = (8i32) as u8;
-                                                        let vec20 = e;
-                                                        let ptr20 = vec20.as_ptr().cast::<u8>();
-                                                        let len20 = vec20.len();
-                                                        *base.add(12).cast::<usize>() = len20;
+                                                        let vec46 = e;
+                                                        let ptr46 = vec46.as_ptr().cast::<u8>();
+                                                        let len46 = vec46.len();
+                                                        *base.add(12).cast::<usize>() = len46;
                                                         *base.add(8).cast::<*mut u8>() =
-                                                            ptr20.cast_mut();
+                                                            ptr46.cast_mut();
                                                     }
                                                     DbValuePrimitive::Varchar(e) => {
                                                         *base.add(0).cast::<u8>() = (9i32) as u8;
-                                                        let vec21 = e;
-                                                        let ptr21 = vec21.as_ptr().cast::<u8>();
-                                                        let len21 = vec21.len();
-                                                        *base.add(12).cast::<usize>() = len21;
+                                                        let vec47 = e;
+                                                        let ptr47 = vec47.as_ptr().cast::<u8>();
+                                                        let len47 = vec47.len();
+                                                        *base.add(12).cast::<usize>() = len47;
                                                         *base.add(8).cast::<*mut u8>() =
-                                                            ptr21.cast_mut();
+                                                            ptr47.cast_mut();
                                                     }
                                                     DbValuePrimitive::Bpchar(e) => {
                                                         *base.add(0).cast::<u8>() = (10i32) as u8;
-                                                        let vec22 = e;
-                                                        let ptr22 = vec22.as_ptr().cast::<u8>();
-                                                        let len22 = vec22.len();
-                                                        *base.add(12).cast::<usize>() = len22;
+                                                        let vec48 = e;
+                                                        let ptr48 = vec48.as_ptr().cast::<u8>();
+                                                        let len48 = vec48.len();
+                                                        *base.add(12).cast::<usize>() = len48;
                                                         *base.add(8).cast::<*mut u8>() =
-                                                            ptr22.cast_mut();
+                                                            ptr48.cast_mut();
                                                     }
                                                     DbValuePrimitive::Timestamp(e) => {
                                                         *base.add(0).cast::<u8>() = (11i32) as u8;
                                                         let (
-                                                            t23_0,
-                                                            t23_1,
-                                                            t23_2,
-                                                            t23_3,
-                                                            t23_4,
-                                                            t23_5,
-                                                            t23_6,
+                                                            t49_0,
+                                                            t49_1,
+                                                            t49_2,
+                                                            t49_3,
+                                                            t49_4,
+                                                            t49_5,
+                                                            t49_6,
                                                         ) = e;
                                                         *base.add(8).cast::<i32>() =
-                                                            _rt::as_i32(t23_0);
+                                                            _rt::as_i32(t49_0);
                                                         *base.add(12).cast::<u8>() =
-                                                            (_rt::as_i32(t23_1)) as u8;
+                                                            (_rt::as_i32(t49_1)) as u8;
                                                         *base.add(13).cast::<u8>() =
-                                                            (_rt::as_i32(t23_2)) as u8;
+                                                            (_rt::as_i32(t49_2)) as u8;
                                                         *base.add(14).cast::<u8>() =
-                                                            (_rt::as_i32(t23_3)) as u8;
+                                                            (_rt::as_i32(t49_3)) as u8;
                                                         *base.add(15).cast::<u8>() =
-                                                            (_rt::as_i32(t23_4)) as u8;
+                                                            (_rt::as_i32(t49_4)) as u8;
                                                         *base.add(16).cast::<u8>() =
-                                                            (_rt::as_i32(t23_5)) as u8;
+                                                            (_rt::as_i32(t49_5)) as u8;
                                                         *base.add(20).cast::<i32>() =
-                                                            _rt::as_i32(t23_6);
+                                                            _rt::as_i32(t49_6);
                                                     }
                                                     DbValuePrimitive::Timestamptz(e) => {
                                                         *base.add(0).cast::<u8>() = (12i32) as u8;
                                                         let (
-                                                            t24_0,
-                                                            t24_1,
-                                                            t24_2,
-                                                            t24_3,
-                                                            t24_4,
-                                                            t24_5,
-                                                            t24_6,
-                                                            t24_7,
+                                                            t50_0,
+                                                            t50_1,
+                                                            t50_2,
+                                                            t50_3,
+                                                            t50_4,
+                                                            t50_5,
+                                                            t50_6,
+                                                            t50_7,
                                                         ) = e;
                                                         *base.add(8).cast::<i32>() =
-                                                            _rt::as_i32(t24_0);
+                                                            _rt::as_i32(t50_0);
                                                         *base.add(12).cast::<u8>() =
-                                                            (_rt::as_i32(t24_1)) as u8;
+                                                            (_rt::as_i32(t50_1)) as u8;
                                                         *base.add(13).cast::<u8>() =
-                                                            (_rt::as_i32(t24_2)) as u8;
+                                                            (_rt::as_i32(t50_2)) as u8;
                                                         *base.add(14).cast::<u8>() =
-                                                            (_rt::as_i32(t24_3)) as u8;
+                                                            (_rt::as_i32(t50_3)) as u8;
                                                         *base.add(15).cast::<u8>() =
-                                                            (_rt::as_i32(t24_4)) as u8;
+                                                            (_rt::as_i32(t50_4)) as u8;
                                                         *base.add(16).cast::<u8>() =
-                                                            (_rt::as_i32(t24_5)) as u8;
+                                                            (_rt::as_i32(t50_5)) as u8;
                                                         *base.add(20).cast::<i32>() =
-                                                            _rt::as_i32(t24_6);
+                                                            _rt::as_i32(t50_6);
                                                         *base.add(24).cast::<i32>() =
-                                                            _rt::as_i32(t24_7);
+                                                            _rt::as_i32(t50_7);
                                                     }
                                                     DbValuePrimitive::Date(e) => {
                                                         *base.add(0).cast::<u8>() = (13i32) as u8;
-                                                        let (t25_0, t25_1, t25_2) = e;
+                                                        let (t51_0, t51_1, t51_2) = e;
                                                         *base.add(8).cast::<i32>() =
-                                                            _rt::as_i32(t25_0);
+                                                            _rt::as_i32(t51_0);
                                                         *base.add(12).cast::<u8>() =
-                                                            (_rt::as_i32(t25_1)) as u8;
+                                                            (_rt::as_i32(t51_1)) as u8;
                                                         *base.add(13).cast::<u8>() =
-                                                            (_rt::as_i32(t25_2)) as u8;
+                                                            (_rt::as_i32(t51_2)) as u8;
                                                     }
                                                     DbValuePrimitive::Time(e) => {
                                                         *base.add(0).cast::<u8>() = (14i32) as u8;
-                                                        let (t26_0, t26_1, t26_2, t26_3) = e;
+                                                        let (t52_0, t52_1, t52_2, t52_3) = e;
                                                         *base.add(8).cast::<u8>() =
-                                                            (_rt::as_i32(t26_0)) as u8;
+                                                            (_rt::as_i32(t52_0)) as u8;
                                                         *base.add(9).cast::<u8>() =
-                                                            (_rt::as_i32(t26_1)) as u8;
+                                                            (_rt::as_i32(t52_1)) as u8;
                                                         *base.add(10).cast::<u8>() =
-                                                            (_rt::as_i32(t26_2)) as u8;
+                                                            (_rt::as_i32(t52_2)) as u8;
                                                         *base.add(12).cast::<i32>() =
-                                                            _rt::as_i32(t26_3);
+                                                            _rt::as_i32(t52_3);
                                                     }
                                                     DbValuePrimitive::Timetz(e) => {
                                                         *base.add(0).cast::<u8>() = (15i32) as u8;
-                                                        let (t27_0, t27_1, t27_2, t27_3, t27_4) = e;
+                                                        let (t53_0, t53_1, t53_2, t53_3, t53_4) = e;
                                                         *base.add(8).cast::<u8>() =
-                                                            (_rt::as_i32(t27_0)) as u8;
+                                                            (_rt::as_i32(t53_0)) as u8;
                                                         *base.add(9).cast::<u8>() =
-                                                            (_rt::as_i32(t27_1)) as u8;
+                                                            (_rt::as_i32(t53_1)) as u8;
                                                         *base.add(10).cast::<u8>() =
-                                                            (_rt::as_i32(t27_2)) as u8;
+                                                            (_rt::as_i32(t53_2)) as u8;
                                                         *base.add(12).cast::<i32>() =
-                                                            _rt::as_i32(t27_3);
+                                                            _rt::as_i32(t53_3);
                                                         *base.add(16).cast::<i32>() =
-                                                            _rt::as_i32(t27_4);
+                                                            _rt::as_i32(t53_4);
                                                     }
                                                     DbValuePrimitive::Interval(e) => {
                                                         *base.add(0).cast::<u8>() = (16i32) as u8;
@@ -3183,47 +4798,47 @@ pub mod wasi {
                                                     }
                                                     DbValuePrimitive::Bytea(e) => {
                                                         *base.add(0).cast::<u8>() = (17i32) as u8;
-                                                        let vec28 = e;
-                                                        let ptr28 = vec28.as_ptr().cast::<u8>();
-                                                        let len28 = vec28.len();
-                                                        *base.add(12).cast::<usize>() = len28;
+                                                        let vec54 = e;
+                                                        let ptr54 = vec54.as_ptr().cast::<u8>();
+                                                        let len54 = vec54.len();
+                                                        *base.add(12).cast::<usize>() = len54;
                                                         *base.add(8).cast::<*mut u8>() =
-                                                            ptr28.cast_mut();
+                                                            ptr54.cast_mut();
                                                     }
                                                     DbValuePrimitive::Json(e) => {
                                                         *base.add(0).cast::<u8>() = (18i32) as u8;
-                                                        let vec29 = e;
-                                                        let ptr29 = vec29.as_ptr().cast::<u8>();
-                                                        let len29 = vec29.len();
-                                                        *base.add(12).cast::<usize>() = len29;
+                                                        let vec55 = e;
+                                                        let ptr55 = vec55.as_ptr().cast::<u8>();
+                                                        let len55 = vec55.len();
+                                                        *base.add(12).cast::<usize>() = len55;
                                                         *base.add(8).cast::<*mut u8>() =
-                                                            ptr29.cast_mut();
+                                                            ptr55.cast_mut();
                                                     }
                                                     DbValuePrimitive::Jsonb(e) => {
                                                         *base.add(0).cast::<u8>() = (19i32) as u8;
-                                                        let vec30 = e;
-                                                        let ptr30 = vec30.as_ptr().cast::<u8>();
-                                                        let len30 = vec30.len();
-                                                        *base.add(12).cast::<usize>() = len30;
+                                                        let vec56 = e;
+                                                        let ptr56 = vec56.as_ptr().cast::<u8>();
+                                                        let len56 = vec56.len();
+                                                        *base.add(12).cast::<usize>() = len56;
                                                         *base.add(8).cast::<*mut u8>() =
-                                                            ptr30.cast_mut();
+                                                            ptr56.cast_mut();
                                                     }
                                                     DbValuePrimitive::Xml(e) => {
                                                         *base.add(0).cast::<u8>() = (20i32) as u8;
-                                                        let vec31 = e;
-                                                        let ptr31 = vec31.as_ptr().cast::<u8>();
-                                                        let len31 = vec31.len();
-                                                        *base.add(12).cast::<usize>() = len31;
+                                                        let vec57 = e;
+                                                        let ptr57 = vec57.as_ptr().cast::<u8>();
+                                                        let len57 = vec57.len();
+                                                        *base.add(12).cast::<usize>() = len57;
                                                         *base.add(8).cast::<*mut u8>() =
-                                                            ptr31.cast_mut();
+                                                            ptr57.cast_mut();
                                                     }
                                                     DbValuePrimitive::Uuid(e) => {
                                                         *base.add(0).cast::<u8>() = (21i32) as u8;
-                                                        let (t32_0, t32_1) = e;
+                                                        let (t58_0, t58_1) = e;
                                                         *base.add(8).cast::<i64>() =
-                                                            _rt::as_i64(t32_0);
+                                                            _rt::as_i64(t58_0);
                                                         *base.add(16).cast::<i64>() =
-                                                            _rt::as_i64(t32_1);
+                                                            _rt::as_i64(t58_1);
                                                     }
                                                     DbValuePrimitive::Inet(e) => {
                                                         *base.add(0).cast::<u8>() = (22i32) as u8;
@@ -3231,60 +4846,60 @@ pub mod wasi {
                                                             IpAddress::Ipv4(e) => {
                                                                 *base.add(8).cast::<u8>() =
                                                                     (0i32) as u8;
-                                                                let (t33_0, t33_1, t33_2, t33_3) =
+                                                                let (t59_0, t59_1, t59_2, t59_3) =
                                                                     e;
                                                                 *base.add(10).cast::<u8>() =
-                                                                    (_rt::as_i32(t33_0)) as u8;
+                                                                    (_rt::as_i32(t59_0)) as u8;
                                                                 *base.add(11).cast::<u8>() =
-                                                                    (_rt::as_i32(t33_1)) as u8;
+                                                                    (_rt::as_i32(t59_1)) as u8;
                                                                 *base.add(12).cast::<u8>() =
-                                                                    (_rt::as_i32(t33_2)) as u8;
+                                                                    (_rt::as_i32(t59_2)) as u8;
                                                                 *base.add(13).cast::<u8>() =
-                                                                    (_rt::as_i32(t33_3)) as u8;
+                                                                    (_rt::as_i32(t59_3)) as u8;
                                                             }
                                                             IpAddress::Ipv6(e) => {
                                                                 *base.add(8).cast::<u8>() =
                                                                     (1i32) as u8;
                                                                 let (
-                                                                    t34_0,
-                                                                    t34_1,
-                                                                    t34_2,
-                                                                    t34_3,
-                                                                    t34_4,
-                                                                    t34_5,
-                                                                    t34_6,
-                                                                    t34_7,
+                                                                    t60_0,
+                                                                    t60_1,
+                                                                    t60_2,
+                                                                    t60_3,
+                                                                    t60_4,
+                                                                    t60_5,
+                                                                    t60_6,
+                                                                    t60_7,
                                                                 ) = e;
                                                                 *base.add(10).cast::<u16>() =
-                                                                    (_rt::as_i32(t34_0)) as u16;
+                                                                    (_rt::as_i32(t60_0)) as u16;
                                                                 *base.add(12).cast::<u16>() =
-                                                                    (_rt::as_i32(t34_1)) as u16;
+                                                                    (_rt::as_i32(t60_1)) as u16;
                                                                 *base.add(14).cast::<u16>() =
-                                                                    (_rt::as_i32(t34_2)) as u16;
+                                                                    (_rt::as_i32(t60_2)) as u16;
                                                                 *base.add(16).cast::<u16>() =
-                                                                    (_rt::as_i32(t34_3)) as u16;
+                                                                    (_rt::as_i32(t60_3)) as u16;
                                                                 *base.add(18).cast::<u16>() =
-                                                                    (_rt::as_i32(t34_4)) as u16;
+                                                                    (_rt::as_i32(t60_4)) as u16;
                                                                 *base.add(20).cast::<u16>() =
-                                                                    (_rt::as_i32(t34_5)) as u16;
+                                                                    (_rt::as_i32(t60_5)) as u16;
                                                                 *base.add(22).cast::<u16>() =
-                                                                    (_rt::as_i32(t34_6)) as u16;
+                                                                    (_rt::as_i32(t60_6)) as u16;
                                                                 *base.add(24).cast::<u16>() =
-                                                                    (_rt::as_i32(t34_7)) as u16;
+                                                                    (_rt::as_i32(t60_7)) as u16;
                                                             }
                                                         }
                                                     }
                                                     DbValuePrimitive::Bit(e) => {
                                                         *base.add(0).cast::<u8>() = (23i32) as u8;
-                                                        let vec35 = e;
-                                                        let len35 = vec35.len();
-                                                        let layout35 = _rt::alloc::Layout::from_size_align_unchecked(vec35.len() * 1, 1);
-                                                        let result35 = if layout35.size() != 0 {
-                                                            let ptr = _rt::alloc::alloc(layout35)
+                                                        let vec61 = e;
+                                                        let len61 = vec61.len();
+                                                        let layout61 = _rt::alloc::Layout::from_size_align_unchecked(vec61.len() * 1, 1);
+                                                        let result61 = if layout61.size() != 0 {
+                                                            let ptr = _rt::alloc::alloc(layout61)
                                                                 .cast::<u8>();
                                                             if ptr.is_null() {
                                                                 _rt::alloc::handle_alloc_error(
-                                                                    layout35,
+                                                                    layout61,
                                                                 );
                                                             }
                                                             ptr
@@ -3293,9 +4908,9 @@ pub mod wasi {
                                                                 ::core::ptr::null_mut()
                                                             }
                                                         };
-                                                        for (i, e) in vec35.into_iter().enumerate()
+                                                        for (i, e) in vec61.into_iter().enumerate()
                                                         {
-                                                            let base = result35.add(i * 1);
+                                                            let base = result61.add(i * 1);
                                                             {
                                                                 *base.add(0).cast::<u8>() = (match e
                                                                 {
@@ -3305,23 +4920,23 @@ pub mod wasi {
                                                                     as u8;
                                                             }
                                                         }
-                                                        *base.add(12).cast::<usize>() = len35;
-                                                        *base.add(8).cast::<*mut u8>() = result35;
+                                                        *base.add(12).cast::<usize>() = len61;
+                                                        *base.add(8).cast::<*mut u8>() = result61;
                                                         cleanup_list.extend_from_slice(&[(
-                                                            result35, layout35,
+                                                            result61, layout61,
                                                         )]);
                                                     }
                                                     DbValuePrimitive::Varbit(e) => {
                                                         *base.add(0).cast::<u8>() = (24i32) as u8;
-                                                        let vec36 = e;
-                                                        let len36 = vec36.len();
-                                                        let layout36 = _rt::alloc::Layout::from_size_align_unchecked(vec36.len() * 1, 1);
-                                                        let result36 = if layout36.size() != 0 {
-                                                            let ptr = _rt::alloc::alloc(layout36)
+                                                        let vec62 = e;
+                                                        let len62 = vec62.len();
+                                                        let layout62 = _rt::alloc::Layout::from_size_align_unchecked(vec62.len() * 1, 1);
+                                                        let result62 = if layout62.size() != 0 {
+                                                            let ptr = _rt::alloc::alloc(layout62)
                                                                 .cast::<u8>();
                                                             if ptr.is_null() {
                                                                 _rt::alloc::handle_alloc_error(
-                                                                    layout36,
+                                                                    layout62,
                                                                 );
                                                             }
                                                             ptr
@@ -3330,9 +4945,9 @@ pub mod wasi {
                                                                 ::core::ptr::null_mut()
                                                             }
                                                         };
-                                                        for (i, e) in vec36.into_iter().enumerate()
+                                                        for (i, e) in vec62.into_iter().enumerate()
                                                         {
-                                                            let base = result36.add(i * 1);
+                                                            let base = result62.add(i * 1);
                                                             {
                                                                 *base.add(0).cast::<u8>() = (match e
                                                                 {
@@ -3342,30 +4957,394 @@ pub mod wasi {
                                                                     as u8;
                                                             }
                                                         }
-                                                        *base.add(12).cast::<usize>() = len36;
-                                                        *base.add(8).cast::<*mut u8>() = result36;
+                                                        *base.add(12).cast::<usize>() = len62;
+                                                        *base.add(8).cast::<*mut u8>() = result62;
                                                         cleanup_list.extend_from_slice(&[(
-                                                            result36, layout36,
+                                                            result62, layout62,
                                                         )]);
                                                     }
-                                                    DbValuePrimitive::Oid(e) => {
+                                                    DbValuePrimitive::Int4range(e) => {
                                                         *base.add(0).cast::<u8>() = (25i32) as u8;
+                                                        let (t63_0, t63_1) = e;
+                                                        match t63_0 {
+                                                            Some(e) => {
+                                                                *base.add(8).cast::<u8>() =
+                                                                    (1i32) as u8;
+                                                                let (t64_0, t64_1) = e;
+                                                                *base.add(12).cast::<i32>() =
+                                                                    _rt::as_i32(t64_0);
+                                                                *base.add(16).cast::<u8>() =
+                                                                    (match t64_1 {
+                                                                        true => 1,
+                                                                        false => 0,
+                                                                    })
+                                                                        as u8;
+                                                            }
+                                                            None => {
+                                                                *base.add(8).cast::<u8>() =
+                                                                    (0i32) as u8;
+                                                            }
+                                                        };
+                                                        match t63_1 {
+                                                            Some(e) => {
+                                                                *base.add(20).cast::<u8>() =
+                                                                    (1i32) as u8;
+                                                                let (t65_0, t65_1) = e;
+                                                                *base.add(24).cast::<i32>() =
+                                                                    _rt::as_i32(t65_0);
+                                                                *base.add(28).cast::<u8>() =
+                                                                    (match t65_1 {
+                                                                        true => 1,
+                                                                        false => 0,
+                                                                    })
+                                                                        as u8;
+                                                            }
+                                                            None => {
+                                                                *base.add(20).cast::<u8>() =
+                                                                    (0i32) as u8;
+                                                            }
+                                                        };
+                                                    }
+                                                    DbValuePrimitive::Int8range(e) => {
+                                                        *base.add(0).cast::<u8>() = (26i32) as u8;
+                                                        let (t66_0, t66_1) = e;
+                                                        match t66_0 {
+                                                            Some(e) => {
+                                                                *base.add(8).cast::<u8>() =
+                                                                    (1i32) as u8;
+                                                                let (t67_0, t67_1) = e;
+                                                                *base.add(16).cast::<i64>() =
+                                                                    _rt::as_i64(t67_0);
+                                                                *base.add(24).cast::<u8>() =
+                                                                    (match t67_1 {
+                                                                        true => 1,
+                                                                        false => 0,
+                                                                    })
+                                                                        as u8;
+                                                            }
+                                                            None => {
+                                                                *base.add(8).cast::<u8>() =
+                                                                    (0i32) as u8;
+                                                            }
+                                                        };
+                                                        match t66_1 {
+                                                            Some(e) => {
+                                                                *base.add(32).cast::<u8>() =
+                                                                    (1i32) as u8;
+                                                                let (t68_0, t68_1) = e;
+                                                                *base.add(40).cast::<i64>() =
+                                                                    _rt::as_i64(t68_0);
+                                                                *base.add(48).cast::<u8>() =
+                                                                    (match t68_1 {
+                                                                        true => 1,
+                                                                        false => 0,
+                                                                    })
+                                                                        as u8;
+                                                            }
+                                                            None => {
+                                                                *base.add(32).cast::<u8>() =
+                                                                    (0i32) as u8;
+                                                            }
+                                                        };
+                                                    }
+                                                    DbValuePrimitive::Numrange(e) => {
+                                                        *base.add(0).cast::<u8>() = (27i32) as u8;
+                                                        let (t69_0, t69_1) = e;
+                                                        match t69_0 {
+                                                            Some(e) => {
+                                                                *base.add(8).cast::<u8>() =
+                                                                    (1i32) as u8;
+                                                                let (t70_0, t70_1) = e;
+                                                                let vec71 = t70_0;
+                                                                let ptr71 =
+                                                                    vec71.as_ptr().cast::<u8>();
+                                                                let len71 = vec71.len();
+                                                                *base.add(16).cast::<usize>() =
+                                                                    len71;
+                                                                *base.add(12).cast::<*mut u8>() =
+                                                                    ptr71.cast_mut();
+                                                                *base.add(20).cast::<u8>() =
+                                                                    (match t70_1 {
+                                                                        true => 1,
+                                                                        false => 0,
+                                                                    })
+                                                                        as u8;
+                                                            }
+                                                            None => {
+                                                                *base.add(8).cast::<u8>() =
+                                                                    (0i32) as u8;
+                                                            }
+                                                        };
+                                                        match t69_1 {
+                                                            Some(e) => {
+                                                                *base.add(24).cast::<u8>() =
+                                                                    (1i32) as u8;
+                                                                let (t72_0, t72_1) = e;
+                                                                let vec73 = t72_0;
+                                                                let ptr73 =
+                                                                    vec73.as_ptr().cast::<u8>();
+                                                                let len73 = vec73.len();
+                                                                *base.add(32).cast::<usize>() =
+                                                                    len73;
+                                                                *base.add(28).cast::<*mut u8>() =
+                                                                    ptr73.cast_mut();
+                                                                *base.add(36).cast::<u8>() =
+                                                                    (match t72_1 {
+                                                                        true => 1,
+                                                                        false => 0,
+                                                                    })
+                                                                        as u8;
+                                                            }
+                                                            None => {
+                                                                *base.add(24).cast::<u8>() =
+                                                                    (0i32) as u8;
+                                                            }
+                                                        };
+                                                    }
+                                                    DbValuePrimitive::Tsrange(e) => {
+                                                        *base.add(0).cast::<u8>() = (28i32) as u8;
+                                                        let (t74_0, t74_1) = e;
+                                                        match t74_0 {
+                                                            Some(e) => {
+                                                                *base.add(8).cast::<u8>() =
+                                                                    (1i32) as u8;
+                                                                let (t75_0, t75_1) = e;
+                                                                let (
+                                                                    t76_0,
+                                                                    t76_1,
+                                                                    t76_2,
+                                                                    t76_3,
+                                                                    t76_4,
+                                                                    t76_5,
+                                                                    t76_6,
+                                                                ) = t75_0;
+                                                                *base.add(12).cast::<i32>() =
+                                                                    _rt::as_i32(t76_0);
+                                                                *base.add(16).cast::<u8>() =
+                                                                    (_rt::as_i32(t76_1)) as u8;
+                                                                *base.add(17).cast::<u8>() =
+                                                                    (_rt::as_i32(t76_2)) as u8;
+                                                                *base.add(18).cast::<u8>() =
+                                                                    (_rt::as_i32(t76_3)) as u8;
+                                                                *base.add(19).cast::<u8>() =
+                                                                    (_rt::as_i32(t76_4)) as u8;
+                                                                *base.add(20).cast::<u8>() =
+                                                                    (_rt::as_i32(t76_5)) as u8;
+                                                                *base.add(24).cast::<i32>() =
+                                                                    _rt::as_i32(t76_6);
+                                                                *base.add(28).cast::<u8>() =
+                                                                    (match t75_1 {
+                                                                        true => 1,
+                                                                        false => 0,
+                                                                    })
+                                                                        as u8;
+                                                            }
+                                                            None => {
+                                                                *base.add(8).cast::<u8>() =
+                                                                    (0i32) as u8;
+                                                            }
+                                                        };
+                                                        match t74_1 {
+                                                            Some(e) => {
+                                                                *base.add(32).cast::<u8>() =
+                                                                    (1i32) as u8;
+                                                                let (t77_0, t77_1) = e;
+                                                                let (
+                                                                    t78_0,
+                                                                    t78_1,
+                                                                    t78_2,
+                                                                    t78_3,
+                                                                    t78_4,
+                                                                    t78_5,
+                                                                    t78_6,
+                                                                ) = t77_0;
+                                                                *base.add(36).cast::<i32>() =
+                                                                    _rt::as_i32(t78_0);
+                                                                *base.add(40).cast::<u8>() =
+                                                                    (_rt::as_i32(t78_1)) as u8;
+                                                                *base.add(41).cast::<u8>() =
+                                                                    (_rt::as_i32(t78_2)) as u8;
+                                                                *base.add(42).cast::<u8>() =
+                                                                    (_rt::as_i32(t78_3)) as u8;
+                                                                *base.add(43).cast::<u8>() =
+                                                                    (_rt::as_i32(t78_4)) as u8;
+                                                                *base.add(44).cast::<u8>() =
+                                                                    (_rt::as_i32(t78_5)) as u8;
+                                                                *base.add(48).cast::<i32>() =
+                                                                    _rt::as_i32(t78_6);
+                                                                *base.add(52).cast::<u8>() =
+                                                                    (match t77_1 {
+                                                                        true => 1,
+                                                                        false => 0,
+                                                                    })
+                                                                        as u8;
+                                                            }
+                                                            None => {
+                                                                *base.add(32).cast::<u8>() =
+                                                                    (0i32) as u8;
+                                                            }
+                                                        };
+                                                    }
+                                                    DbValuePrimitive::Tstzrange(e) => {
+                                                        *base.add(0).cast::<u8>() = (29i32) as u8;
+                                                        let (t79_0, t79_1) = e;
+                                                        match t79_0 {
+                                                            Some(e) => {
+                                                                *base.add(8).cast::<u8>() =
+                                                                    (1i32) as u8;
+                                                                let (t80_0, t80_1) = e;
+                                                                let (
+                                                                    t81_0,
+                                                                    t81_1,
+                                                                    t81_2,
+                                                                    t81_3,
+                                                                    t81_4,
+                                                                    t81_5,
+                                                                    t81_6,
+                                                                    t81_7,
+                                                                ) = t80_0;
+                                                                *base.add(12).cast::<i32>() =
+                                                                    _rt::as_i32(t81_0);
+                                                                *base.add(16).cast::<u8>() =
+                                                                    (_rt::as_i32(t81_1)) as u8;
+                                                                *base.add(17).cast::<u8>() =
+                                                                    (_rt::as_i32(t81_2)) as u8;
+                                                                *base.add(18).cast::<u8>() =
+                                                                    (_rt::as_i32(t81_3)) as u8;
+                                                                *base.add(19).cast::<u8>() =
+                                                                    (_rt::as_i32(t81_4)) as u8;
+                                                                *base.add(20).cast::<u8>() =
+                                                                    (_rt::as_i32(t81_5)) as u8;
+                                                                *base.add(24).cast::<i32>() =
+                                                                    _rt::as_i32(t81_6);
+                                                                *base.add(28).cast::<i32>() =
+                                                                    _rt::as_i32(t81_7);
+                                                                *base.add(32).cast::<u8>() =
+                                                                    (match t80_1 {
+                                                                        true => 1,
+                                                                        false => 0,
+                                                                    })
+                                                                        as u8;
+                                                            }
+                                                            None => {
+                                                                *base.add(8).cast::<u8>() =
+                                                                    (0i32) as u8;
+                                                            }
+                                                        };
+                                                        match t79_1 {
+                                                            Some(e) => {
+                                                                *base.add(36).cast::<u8>() =
+                                                                    (1i32) as u8;
+                                                                let (t82_0, t82_1) = e;
+                                                                let (
+                                                                    t83_0,
+                                                                    t83_1,
+                                                                    t83_2,
+                                                                    t83_3,
+                                                                    t83_4,
+                                                                    t83_5,
+                                                                    t83_6,
+                                                                    t83_7,
+                                                                ) = t82_0;
+                                                                *base.add(40).cast::<i32>() =
+                                                                    _rt::as_i32(t83_0);
+                                                                *base.add(44).cast::<u8>() =
+                                                                    (_rt::as_i32(t83_1)) as u8;
+                                                                *base.add(45).cast::<u8>() =
+                                                                    (_rt::as_i32(t83_2)) as u8;
+                                                                *base.add(46).cast::<u8>() =
+                                                                    (_rt::as_i32(t83_3)) as u8;
+                                                                *base.add(47).cast::<u8>() =
+                                                                    (_rt::as_i32(t83_4)) as u8;
+                                                                *base.add(48).cast::<u8>() =
+                                                                    (_rt::as_i32(t83_5)) as u8;
+                                                                *base.add(52).cast::<i32>() =
+                                                                    _rt::as_i32(t83_6);
+                                                                *base.add(56).cast::<i32>() =
+                                                                    _rt::as_i32(t83_7);
+                                                                *base.add(60).cast::<u8>() =
+                                                                    (match t82_1 {
+                                                                        true => 1,
+                                                                        false => 0,
+                                                                    })
+                                                                        as u8;
+                                                            }
+                                                            None => {
+                                                                *base.add(36).cast::<u8>() =
+                                                                    (0i32) as u8;
+                                                            }
+                                                        };
+                                                    }
+                                                    DbValuePrimitive::Daterange(e) => {
+                                                        *base.add(0).cast::<u8>() = (30i32) as u8;
+                                                        let (t84_0, t84_1) = e;
+                                                        match t84_0 {
+                                                            Some(e) => {
+                                                                *base.add(8).cast::<u8>() =
+                                                                    (1i32) as u8;
+                                                                let (t85_0, t85_1) = e;
+                                                                let (t86_0, t86_1, t86_2) = t85_0;
+                                                                *base.add(12).cast::<i32>() =
+                                                                    _rt::as_i32(t86_0);
+                                                                *base.add(16).cast::<u8>() =
+                                                                    (_rt::as_i32(t86_1)) as u8;
+                                                                *base.add(17).cast::<u8>() =
+                                                                    (_rt::as_i32(t86_2)) as u8;
+                                                                *base.add(20).cast::<u8>() =
+                                                                    (match t85_1 {
+                                                                        true => 1,
+                                                                        false => 0,
+                                                                    })
+                                                                        as u8;
+                                                            }
+                                                            None => {
+                                                                *base.add(8).cast::<u8>() =
+                                                                    (0i32) as u8;
+                                                            }
+                                                        };
+                                                        match t84_1 {
+                                                            Some(e) => {
+                                                                *base.add(24).cast::<u8>() =
+                                                                    (1i32) as u8;
+                                                                let (t87_0, t87_1) = e;
+                                                                let (t88_0, t88_1, t88_2) = t87_0;
+                                                                *base.add(28).cast::<i32>() =
+                                                                    _rt::as_i32(t88_0);
+                                                                *base.add(32).cast::<u8>() =
+                                                                    (_rt::as_i32(t88_1)) as u8;
+                                                                *base.add(33).cast::<u8>() =
+                                                                    (_rt::as_i32(t88_2)) as u8;
+                                                                *base.add(36).cast::<u8>() =
+                                                                    (match t87_1 {
+                                                                        true => 1,
+                                                                        false => 0,
+                                                                    })
+                                                                        as u8;
+                                                            }
+                                                            None => {
+                                                                *base.add(24).cast::<u8>() =
+                                                                    (0i32) as u8;
+                                                            }
+                                                        };
+                                                    }
+                                                    DbValuePrimitive::Oid(e) => {
+                                                        *base.add(0).cast::<u8>() = (31i32) as u8;
                                                         *base.add(8).cast::<i32>() = _rt::as_i32(e);
                                                     }
                                                     DbValuePrimitive::Null => {
-                                                        *base.add(0).cast::<u8>() = (26i32) as u8;
+                                                        *base.add(0).cast::<u8>() = (32i32) as u8;
                                                     }
                                                 }
                                             }
                                         }
-                                        *base.add(12).cast::<usize>() = len37;
-                                        *base.add(8).cast::<*mut u8>() = result37;
-                                        cleanup_list.extend_from_slice(&[(result37, layout37)]);
+                                        *base.add(12).cast::<usize>() = len89;
+                                        *base.add(8).cast::<*mut u8>() = result89;
+                                        cleanup_list.extend_from_slice(&[(result89, layout89)]);
                                     }
                                 }
                             }
                         }
-                        let ptr39 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        let ptr91 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
                         #[link(wasm_import_module = "wasi:rdbms/postgres@0.0.1")]
                         extern "C" {
@@ -3395,111 +5374,111 @@ pub mod wasi {
                             (self).handle() as i32,
                             ptr0.cast_mut(),
                             len0,
-                            result38,
-                            len38,
-                            ptr39,
+                            result90,
+                            len90,
+                            ptr91,
                         );
-                        let l40 = i32::from(*ptr39.add(0).cast::<u8>());
-                        if layout38.size() != 0 {
-                            _rt::alloc::dealloc(result38.cast(), layout38);
+                        let l92 = i32::from(*ptr91.add(0).cast::<u8>());
+                        if layout90.size() != 0 {
+                            _rt::alloc::dealloc(result90.cast(), layout90);
                         }
                         for (ptr, layout) in cleanup_list {
                             if layout.size() != 0 {
                                 _rt::alloc::dealloc(ptr.cast(), layout);
                             }
                         }
-                        match l40 {
+                        match l92 {
                             0 => {
                                 let e = {
-                                    let l41 = *ptr39.add(8).cast::<i64>();
+                                    let l93 = *ptr91.add(8).cast::<i64>();
 
-                                    l41 as u64
+                                    l93 as u64
                                 };
                                 Ok(e)
                             }
                             1 => {
                                 let e = {
-                                    let l42 = i32::from(*ptr39.add(8).cast::<u8>());
-                                    let v58 = match l42 {
+                                    let l94 = i32::from(*ptr91.add(8).cast::<u8>());
+                                    let v110 = match l94 {
                                         0 => {
-                                            let e58 = {
-                                                let l43 = *ptr39.add(12).cast::<*mut u8>();
-                                                let l44 = *ptr39.add(16).cast::<usize>();
-                                                let len45 = l44;
-                                                let bytes45 = _rt::Vec::from_raw_parts(
-                                                    l43.cast(),
-                                                    len45,
-                                                    len45,
+                                            let e110 = {
+                                                let l95 = *ptr91.add(12).cast::<*mut u8>();
+                                                let l96 = *ptr91.add(16).cast::<usize>();
+                                                let len97 = l96;
+                                                let bytes97 = _rt::Vec::from_raw_parts(
+                                                    l95.cast(),
+                                                    len97,
+                                                    len97,
                                                 );
 
-                                                _rt::string_lift(bytes45)
+                                                _rt::string_lift(bytes97)
                                             };
-                                            Error::ConnectionFailure(e58)
+                                            Error::ConnectionFailure(e110)
                                         }
                                         1 => {
-                                            let e58 = {
-                                                let l46 = *ptr39.add(12).cast::<*mut u8>();
-                                                let l47 = *ptr39.add(16).cast::<usize>();
-                                                let len48 = l47;
-                                                let bytes48 = _rt::Vec::from_raw_parts(
-                                                    l46.cast(),
-                                                    len48,
-                                                    len48,
+                                            let e110 = {
+                                                let l98 = *ptr91.add(12).cast::<*mut u8>();
+                                                let l99 = *ptr91.add(16).cast::<usize>();
+                                                let len100 = l99;
+                                                let bytes100 = _rt::Vec::from_raw_parts(
+                                                    l98.cast(),
+                                                    len100,
+                                                    len100,
                                                 );
 
-                                                _rt::string_lift(bytes48)
+                                                _rt::string_lift(bytes100)
                                             };
-                                            Error::QueryParameterFailure(e58)
+                                            Error::QueryParameterFailure(e110)
                                         }
                                         2 => {
-                                            let e58 = {
-                                                let l49 = *ptr39.add(12).cast::<*mut u8>();
-                                                let l50 = *ptr39.add(16).cast::<usize>();
-                                                let len51 = l50;
-                                                let bytes51 = _rt::Vec::from_raw_parts(
-                                                    l49.cast(),
-                                                    len51,
-                                                    len51,
+                                            let e110 = {
+                                                let l101 = *ptr91.add(12).cast::<*mut u8>();
+                                                let l102 = *ptr91.add(16).cast::<usize>();
+                                                let len103 = l102;
+                                                let bytes103 = _rt::Vec::from_raw_parts(
+                                                    l101.cast(),
+                                                    len103,
+                                                    len103,
                                                 );
 
-                                                _rt::string_lift(bytes51)
+                                                _rt::string_lift(bytes103)
                                             };
-                                            Error::QueryExecutionFailure(e58)
+                                            Error::QueryExecutionFailure(e110)
                                         }
                                         3 => {
-                                            let e58 = {
-                                                let l52 = *ptr39.add(12).cast::<*mut u8>();
-                                                let l53 = *ptr39.add(16).cast::<usize>();
-                                                let len54 = l53;
-                                                let bytes54 = _rt::Vec::from_raw_parts(
-                                                    l52.cast(),
-                                                    len54,
-                                                    len54,
+                                            let e110 = {
+                                                let l104 = *ptr91.add(12).cast::<*mut u8>();
+                                                let l105 = *ptr91.add(16).cast::<usize>();
+                                                let len106 = l105;
+                                                let bytes106 = _rt::Vec::from_raw_parts(
+                                                    l104.cast(),
+                                                    len106,
+                                                    len106,
                                                 );
 
-                                                _rt::string_lift(bytes54)
+                                                _rt::string_lift(bytes106)
                                             };
-                                            Error::QueryResponseFailure(e58)
+                                            Error::QueryResponseFailure(e110)
                                         }
                                         n => {
                                             debug_assert_eq!(n, 4, "invalid enum discriminant");
-                                            let e58 = {
-                                                let l55 = *ptr39.add(12).cast::<*mut u8>();
-                                                let l56 = *ptr39.add(16).cast::<usize>();
-                                                let len57 = l56;
-                                                let bytes57 = _rt::Vec::from_raw_parts(
-                                                    l55.cast(),
-                                                    len57,
-                                                    len57,
+                                            let e110 = {
+                                                let l107 = *ptr91.add(12).cast::<*mut u8>();
+                                                let l108 = *ptr91.add(16).cast::<usize>();
+                                                let len109 = l108;
+                                                let bytes109 = _rt::Vec::from_raw_parts(
+                                                    l107.cast(),
+                                                    len109,
+                                                    len109,
                                                 );
 
-                                                _rt::string_lift(bytes57)
+                                                _rt::string_lift(bytes109)
                                             };
-                                            Error::Other(e58)
+                                            Error::Other(e110)
                                         }
                                     };
 
-                                    v58
+                                    v110
                                 };
                                 Err(e)
                             }
@@ -6689,8 +8668,26 @@ pub mod exports {
                                                 V10::Varbit => {
                                                     *base.add(17).cast::<u8>() = (24i32) as u8;
                                                 }
-                                                V10::Oid => {
+                                                V10::Int4range => {
                                                     *base.add(17).cast::<u8>() = (25i32) as u8;
+                                                }
+                                                V10::Int8range => {
+                                                    *base.add(17).cast::<u8>() = (26i32) as u8;
+                                                }
+                                                V10::Numrange => {
+                                                    *base.add(17).cast::<u8>() = (27i32) as u8;
+                                                }
+                                                V10::Tsrange => {
+                                                    *base.add(17).cast::<u8>() = (28i32) as u8;
+                                                }
+                                                V10::Tstzrange => {
+                                                    *base.add(17).cast::<u8>() = (29i32) as u8;
+                                                }
+                                                V10::Daterange => {
+                                                    *base.add(17).cast::<u8>() = (30i32) as u8;
+                                                }
+                                                V10::Oid => {
+                                                    *base.add(17).cast::<u8>() = (31i32) as u8;
                                                 }
                                             }
                                         }
@@ -6773,8 +8770,26 @@ pub mod exports {
                                                 V11::Varbit => {
                                                     *base.add(17).cast::<u8>() = (24i32) as u8;
                                                 }
-                                                V11::Oid => {
+                                                V11::Int4range => {
                                                     *base.add(17).cast::<u8>() = (25i32) as u8;
+                                                }
+                                                V11::Int8range => {
+                                                    *base.add(17).cast::<u8>() = (26i32) as u8;
+                                                }
+                                                V11::Numrange => {
+                                                    *base.add(17).cast::<u8>() = (27i32) as u8;
+                                                }
+                                                V11::Tsrange => {
+                                                    *base.add(17).cast::<u8>() = (28i32) as u8;
+                                                }
+                                                V11::Tstzrange => {
+                                                    *base.add(17).cast::<u8>() = (29i32) as u8;
+                                                }
+                                                V11::Daterange => {
+                                                    *base.add(17).cast::<u8>() = (30i32) as u8;
+                                                }
+                                                V11::Oid => {
+                                                    *base.add(17).cast::<u8>() = (31i32) as u8;
                                                 }
                                             }
                                         }
@@ -6789,14 +8804,14 @@ pub mod exports {
                             }
                             *ptr6.add(8).cast::<usize>() = len14;
                             *ptr6.add(4).cast::<*mut u8>() = result14;
-                            let vec59 = rows7;
-                            let len59 = vec59.len();
-                            let layout59 =
-                                _rt::alloc::Layout::from_size_align_unchecked(vec59.len() * 8, 4);
-                            let result59 = if layout59.size() != 0 {
-                                let ptr = _rt::alloc::alloc(layout59).cast::<u8>();
+                            let vec111 = rows7;
+                            let len111 = vec111.len();
+                            let layout111 =
+                                _rt::alloc::Layout::from_size_align_unchecked(vec111.len() * 8, 4);
+                            let result111 = if layout111.size() != 0 {
+                                let ptr = _rt::alloc::alloc(layout111).cast::<u8>();
                                 if ptr.is_null() {
-                                    _rt::alloc::handle_alloc_error(layout59);
+                                    _rt::alloc::handle_alloc_error(layout111);
                                 }
                                 ptr
                             } else {
@@ -6804,22 +8819,22 @@ pub mod exports {
                                     ::core::ptr::null_mut()
                                 }
                             };
-                            for (i, e) in vec59.into_iter().enumerate() {
-                                let base = result59.add(i * 8);
+                            for (i, e) in vec111.into_iter().enumerate() {
+                                let base = result111.add(i * 8);
                                 {
                                     let super::super::super::super::wasi::rdbms::postgres::DbRow {
                                         values: values15,
                                     } = e;
-                                    let vec58 = values15;
-                                    let len58 = vec58.len();
-                                    let layout58 = _rt::alloc::Layout::from_size_align_unchecked(
-                                        vec58.len() * 40,
+                                    let vec110 = values15;
+                                    let len110 = vec110.len();
+                                    let layout110 = _rt::alloc::Layout::from_size_align_unchecked(
+                                        vec110.len() * 72,
                                         8,
                                     );
-                                    let result58 = if layout58.size() != 0 {
-                                        let ptr = _rt::alloc::alloc(layout58).cast::<u8>();
+                                    let result110 = if layout110.size() != 0 {
+                                        let ptr = _rt::alloc::alloc(layout110).cast::<u8>();
                                         if ptr.is_null() {
-                                            _rt::alloc::handle_alloc_error(layout58);
+                                            _rt::alloc::handle_alloc_error(layout110);
                                         }
                                         ptr
                                     } else {
@@ -6827,52 +8842,52 @@ pub mod exports {
                                             ::core::ptr::null_mut()
                                         }
                                     };
-                                    for (i, e) in vec58.into_iter().enumerate() {
-                                        let base = result58.add(i * 40);
+                                    for (i, e) in vec110.into_iter().enumerate() {
+                                        let base = result110.add(i * 72);
                                         {
-                                            use super::super::super::super::wasi::rdbms::postgres::DbValue as V57;
+                                            use super::super::super::super::wasi::rdbms::postgres::DbValue as V109;
                                             match e {
-                                                V57::Primitive(e) => {
+                                                V109::Primitive(e) => {
                                                     *base.add(0).cast::<u8>() = (0i32) as u8;
-                                                    use super::super::super::super::wasi::rdbms::postgres::DbValuePrimitive as V35;
+                                                    use super::super::super::super::wasi::rdbms::postgres::DbValuePrimitive as V61;
                                                     match e {
-                                                        V35::Character(e) => {
+                                                        V61::Character(e) => {
                                                             *base.add(8).cast::<u8>() =
                                                                 (0i32) as u8;
                                                             *base.add(16).cast::<u8>() =
                                                                 (_rt::as_i32(e)) as u8;
                                                         }
-                                                        V35::Int2(e) => {
+                                                        V61::Int2(e) => {
                                                             *base.add(8).cast::<u8>() =
                                                                 (1i32) as u8;
                                                             *base.add(16).cast::<u16>() =
                                                                 (_rt::as_i32(e)) as u16;
                                                         }
-                                                        V35::Int4(e) => {
+                                                        V61::Int4(e) => {
                                                             *base.add(8).cast::<u8>() =
                                                                 (2i32) as u8;
                                                             *base.add(16).cast::<i32>() =
                                                                 _rt::as_i32(e);
                                                         }
-                                                        V35::Int8(e) => {
+                                                        V61::Int8(e) => {
                                                             *base.add(8).cast::<u8>() =
                                                                 (3i32) as u8;
                                                             *base.add(16).cast::<i64>() =
                                                                 _rt::as_i64(e);
                                                         }
-                                                        V35::Float4(e) => {
+                                                        V61::Float4(e) => {
                                                             *base.add(8).cast::<u8>() =
                                                                 (4i32) as u8;
                                                             *base.add(16).cast::<f32>() =
                                                                 _rt::as_f32(e);
                                                         }
-                                                        V35::Float8(e) => {
+                                                        V61::Float8(e) => {
                                                             *base.add(8).cast::<u8>() =
                                                                 (5i32) as u8;
                                                             *base.add(16).cast::<f64>() =
                                                                 _rt::as_f64(e);
                                                         }
-                                                        V35::Numeric(e) => {
+                                                        V61::Numeric(e) => {
                                                             *base.add(8).cast::<u8>() =
                                                                 (6i32) as u8;
                                                             let vec16 =
@@ -6884,7 +8899,7 @@ pub mod exports {
                                                             *base.add(16).cast::<*mut u8>() =
                                                                 ptr16.cast_mut();
                                                         }
-                                                        V35::Boolean(e) => {
+                                                        V61::Boolean(e) => {
                                                             *base.add(8).cast::<u8>() =
                                                                 (7i32) as u8;
                                                             *base.add(16).cast::<u8>() = (match e {
@@ -6893,7 +8908,7 @@ pub mod exports {
                                                             })
                                                                 as u8;
                                                         }
-                                                        V35::Text(e) => {
+                                                        V61::Text(e) => {
                                                             *base.add(8).cast::<u8>() =
                                                                 (8i32) as u8;
                                                             let vec17 =
@@ -6905,7 +8920,7 @@ pub mod exports {
                                                             *base.add(16).cast::<*mut u8>() =
                                                                 ptr17.cast_mut();
                                                         }
-                                                        V35::Varchar(e) => {
+                                                        V61::Varchar(e) => {
                                                             *base.add(8).cast::<u8>() =
                                                                 (9i32) as u8;
                                                             let vec18 =
@@ -6917,7 +8932,7 @@ pub mod exports {
                                                             *base.add(16).cast::<*mut u8>() =
                                                                 ptr18.cast_mut();
                                                         }
-                                                        V35::Bpchar(e) => {
+                                                        V61::Bpchar(e) => {
                                                             *base.add(8).cast::<u8>() =
                                                                 (10i32) as u8;
                                                             let vec19 =
@@ -6929,7 +8944,7 @@ pub mod exports {
                                                             *base.add(16).cast::<*mut u8>() =
                                                                 ptr19.cast_mut();
                                                         }
-                                                        V35::Timestamp(e) => {
+                                                        V61::Timestamp(e) => {
                                                             *base.add(8).cast::<u8>() =
                                                                 (11i32) as u8;
                                                             let (
@@ -6956,7 +8971,7 @@ pub mod exports {
                                                             *base.add(28).cast::<i32>() =
                                                                 _rt::as_i32(t20_6);
                                                         }
-                                                        V35::Timestamptz(e) => {
+                                                        V61::Timestamptz(e) => {
                                                             *base.add(8).cast::<u8>() =
                                                                 (12i32) as u8;
                                                             let (
@@ -6986,7 +9001,7 @@ pub mod exports {
                                                             *base.add(32).cast::<i32>() =
                                                                 _rt::as_i32(t21_7);
                                                         }
-                                                        V35::Date(e) => {
+                                                        V61::Date(e) => {
                                                             *base.add(8).cast::<u8>() =
                                                                 (13i32) as u8;
                                                             let (t22_0, t22_1, t22_2) = e;
@@ -6997,7 +9012,7 @@ pub mod exports {
                                                             *base.add(21).cast::<u8>() =
                                                                 (_rt::as_i32(t22_2)) as u8;
                                                         }
-                                                        V35::Time(e) => {
+                                                        V61::Time(e) => {
                                                             *base.add(8).cast::<u8>() =
                                                                 (14i32) as u8;
                                                             let (t23_0, t23_1, t23_2, t23_3) = e;
@@ -7010,7 +9025,7 @@ pub mod exports {
                                                             *base.add(20).cast::<i32>() =
                                                                 _rt::as_i32(t23_3);
                                                         }
-                                                        V35::Timetz(e) => {
+                                                        V61::Timetz(e) => {
                                                             *base.add(8).cast::<u8>() =
                                                                 (15i32) as u8;
                                                             let (t24_0, t24_1, t24_2, t24_3, t24_4) =
@@ -7026,13 +9041,13 @@ pub mod exports {
                                                             *base.add(24).cast::<i32>() =
                                                                 _rt::as_i32(t24_4);
                                                         }
-                                                        V35::Interval(e) => {
+                                                        V61::Interval(e) => {
                                                             *base.add(8).cast::<u8>() =
                                                                 (16i32) as u8;
                                                             *base.add(16).cast::<i64>() =
                                                                 _rt::as_i64(e);
                                                         }
-                                                        V35::Bytea(e) => {
+                                                        V61::Bytea(e) => {
                                                             *base.add(8).cast::<u8>() =
                                                                 (17i32) as u8;
                                                             let vec25 = (e).into_boxed_slice();
@@ -7043,7 +9058,7 @@ pub mod exports {
                                                             *base.add(16).cast::<*mut u8>() =
                                                                 ptr25.cast_mut();
                                                         }
-                                                        V35::Json(e) => {
+                                                        V61::Json(e) => {
                                                             *base.add(8).cast::<u8>() =
                                                                 (18i32) as u8;
                                                             let vec26 =
@@ -7055,7 +9070,7 @@ pub mod exports {
                                                             *base.add(16).cast::<*mut u8>() =
                                                                 ptr26.cast_mut();
                                                         }
-                                                        V35::Jsonb(e) => {
+                                                        V61::Jsonb(e) => {
                                                             *base.add(8).cast::<u8>() =
                                                                 (19i32) as u8;
                                                             let vec27 =
@@ -7067,7 +9082,7 @@ pub mod exports {
                                                             *base.add(16).cast::<*mut u8>() =
                                                                 ptr27.cast_mut();
                                                         }
-                                                        V35::Xml(e) => {
+                                                        V61::Xml(e) => {
                                                             *base.add(8).cast::<u8>() =
                                                                 (20i32) as u8;
                                                             let vec28 =
@@ -7079,7 +9094,7 @@ pub mod exports {
                                                             *base.add(16).cast::<*mut u8>() =
                                                                 ptr28.cast_mut();
                                                         }
-                                                        V35::Uuid(e) => {
+                                                        V61::Uuid(e) => {
                                                             *base.add(8).cast::<u8>() =
                                                                 (21i32) as u8;
                                                             let (t29_0, t29_1) = e;
@@ -7088,7 +9103,7 @@ pub mod exports {
                                                             *base.add(24).cast::<i64>() =
                                                                 _rt::as_i64(t29_1);
                                                         }
-                                                        V35::Inet(e) => {
+                                                        V61::Inet(e) => {
                                                             *base.add(8).cast::<u8>() =
                                                                 (22i32) as u8;
                                                             use super::super::super::super::wasi::rdbms::postgres::IpAddress as V32;
@@ -7143,7 +9158,7 @@ pub mod exports {
                                                                 }
                                                             }
                                                         }
-                                                        V35::Bit(e) => {
+                                                        V61::Bit(e) => {
                                                             *base.add(8).cast::<u8>() =
                                                                 (23i32) as u8;
                                                             let vec33 = e;
@@ -7181,7 +9196,7 @@ pub mod exports {
                                                             *base.add(16).cast::<*mut u8>() =
                                                                 result33;
                                                         }
-                                                        V35::Varbit(e) => {
+                                                        V61::Varbit(e) => {
                                                             *base.add(8).cast::<u8>() =
                                                                 (24i32) as u8;
                                                             let vec34 = e;
@@ -7219,29 +9234,411 @@ pub mod exports {
                                                             *base.add(16).cast::<*mut u8>() =
                                                                 result34;
                                                         }
-                                                        V35::Oid(e) => {
+                                                        V61::Int4range(e) => {
                                                             *base.add(8).cast::<u8>() =
                                                                 (25i32) as u8;
+                                                            let (t35_0, t35_1) = e;
+                                                            match t35_0 {
+                                                                Some(e) => {
+                                                                    *base.add(16).cast::<u8>() =
+                                                                        (1i32) as u8;
+                                                                    let (t36_0, t36_1) = e;
+                                                                    *base.add(20).cast::<i32>() =
+                                                                        _rt::as_i32(t36_0);
+                                                                    *base.add(24).cast::<u8>() =
+                                                                        (match t36_1 {
+                                                                            true => 1,
+                                                                            false => 0,
+                                                                        })
+                                                                            as u8;
+                                                                }
+                                                                None => {
+                                                                    *base.add(16).cast::<u8>() =
+                                                                        (0i32) as u8;
+                                                                }
+                                                            };
+                                                            match t35_1 {
+                                                                Some(e) => {
+                                                                    *base.add(28).cast::<u8>() =
+                                                                        (1i32) as u8;
+                                                                    let (t37_0, t37_1) = e;
+                                                                    *base.add(32).cast::<i32>() =
+                                                                        _rt::as_i32(t37_0);
+                                                                    *base.add(36).cast::<u8>() =
+                                                                        (match t37_1 {
+                                                                            true => 1,
+                                                                            false => 0,
+                                                                        })
+                                                                            as u8;
+                                                                }
+                                                                None => {
+                                                                    *base.add(28).cast::<u8>() =
+                                                                        (0i32) as u8;
+                                                                }
+                                                            };
+                                                        }
+                                                        V61::Int8range(e) => {
+                                                            *base.add(8).cast::<u8>() =
+                                                                (26i32) as u8;
+                                                            let (t38_0, t38_1) = e;
+                                                            match t38_0 {
+                                                                Some(e) => {
+                                                                    *base.add(16).cast::<u8>() =
+                                                                        (1i32) as u8;
+                                                                    let (t39_0, t39_1) = e;
+                                                                    *base.add(24).cast::<i64>() =
+                                                                        _rt::as_i64(t39_0);
+                                                                    *base.add(32).cast::<u8>() =
+                                                                        (match t39_1 {
+                                                                            true => 1,
+                                                                            false => 0,
+                                                                        })
+                                                                            as u8;
+                                                                }
+                                                                None => {
+                                                                    *base.add(16).cast::<u8>() =
+                                                                        (0i32) as u8;
+                                                                }
+                                                            };
+                                                            match t38_1 {
+                                                                Some(e) => {
+                                                                    *base.add(40).cast::<u8>() =
+                                                                        (1i32) as u8;
+                                                                    let (t40_0, t40_1) = e;
+                                                                    *base.add(48).cast::<i64>() =
+                                                                        _rt::as_i64(t40_0);
+                                                                    *base.add(56).cast::<u8>() =
+                                                                        (match t40_1 {
+                                                                            true => 1,
+                                                                            false => 0,
+                                                                        })
+                                                                            as u8;
+                                                                }
+                                                                None => {
+                                                                    *base.add(40).cast::<u8>() =
+                                                                        (0i32) as u8;
+                                                                }
+                                                            };
+                                                        }
+                                                        V61::Numrange(e) => {
+                                                            *base.add(8).cast::<u8>() =
+                                                                (27i32) as u8;
+                                                            let (t41_0, t41_1) = e;
+                                                            match t41_0 {
+                                                                Some(e) => {
+                                                                    *base.add(16).cast::<u8>() =
+                                                                        (1i32) as u8;
+                                                                    let (t42_0, t42_1) = e;
+                                                                    let vec43 = (t42_0
+                                                                        .into_bytes())
+                                                                    .into_boxed_slice();
+                                                                    let ptr43 =
+                                                                        vec43.as_ptr().cast::<u8>();
+                                                                    let len43 = vec43.len();
+                                                                    ::core::mem::forget(vec43);
+                                                                    *base.add(24).cast::<usize>() =
+                                                                        len43;
+                                                                    *base
+                                                                        .add(20)
+                                                                        .cast::<*mut u8>() =
+                                                                        ptr43.cast_mut();
+                                                                    *base.add(28).cast::<u8>() =
+                                                                        (match t42_1 {
+                                                                            true => 1,
+                                                                            false => 0,
+                                                                        })
+                                                                            as u8;
+                                                                }
+                                                                None => {
+                                                                    *base.add(16).cast::<u8>() =
+                                                                        (0i32) as u8;
+                                                                }
+                                                            };
+                                                            match t41_1 {
+                                                                Some(e) => {
+                                                                    *base.add(32).cast::<u8>() =
+                                                                        (1i32) as u8;
+                                                                    let (t44_0, t44_1) = e;
+                                                                    let vec45 = (t44_0
+                                                                        .into_bytes())
+                                                                    .into_boxed_slice();
+                                                                    let ptr45 =
+                                                                        vec45.as_ptr().cast::<u8>();
+                                                                    let len45 = vec45.len();
+                                                                    ::core::mem::forget(vec45);
+                                                                    *base.add(40).cast::<usize>() =
+                                                                        len45;
+                                                                    *base
+                                                                        .add(36)
+                                                                        .cast::<*mut u8>() =
+                                                                        ptr45.cast_mut();
+                                                                    *base.add(44).cast::<u8>() =
+                                                                        (match t44_1 {
+                                                                            true => 1,
+                                                                            false => 0,
+                                                                        })
+                                                                            as u8;
+                                                                }
+                                                                None => {
+                                                                    *base.add(32).cast::<u8>() =
+                                                                        (0i32) as u8;
+                                                                }
+                                                            };
+                                                        }
+                                                        V61::Tsrange(e) => {
+                                                            *base.add(8).cast::<u8>() =
+                                                                (28i32) as u8;
+                                                            let (t46_0, t46_1) = e;
+                                                            match t46_0 {
+                                                                Some(e) => {
+                                                                    *base.add(16).cast::<u8>() =
+                                                                        (1i32) as u8;
+                                                                    let (t47_0, t47_1) = e;
+                                                                    let (
+                                                                        t48_0,
+                                                                        t48_1,
+                                                                        t48_2,
+                                                                        t48_3,
+                                                                        t48_4,
+                                                                        t48_5,
+                                                                        t48_6,
+                                                                    ) = t47_0;
+                                                                    *base.add(20).cast::<i32>() =
+                                                                        _rt::as_i32(t48_0);
+                                                                    *base.add(24).cast::<u8>() =
+                                                                        (_rt::as_i32(t48_1)) as u8;
+                                                                    *base.add(25).cast::<u8>() =
+                                                                        (_rt::as_i32(t48_2)) as u8;
+                                                                    *base.add(26).cast::<u8>() =
+                                                                        (_rt::as_i32(t48_3)) as u8;
+                                                                    *base.add(27).cast::<u8>() =
+                                                                        (_rt::as_i32(t48_4)) as u8;
+                                                                    *base.add(28).cast::<u8>() =
+                                                                        (_rt::as_i32(t48_5)) as u8;
+                                                                    *base.add(32).cast::<i32>() =
+                                                                        _rt::as_i32(t48_6);
+                                                                    *base.add(36).cast::<u8>() =
+                                                                        (match t47_1 {
+                                                                            true => 1,
+                                                                            false => 0,
+                                                                        })
+                                                                            as u8;
+                                                                }
+                                                                None => {
+                                                                    *base.add(16).cast::<u8>() =
+                                                                        (0i32) as u8;
+                                                                }
+                                                            };
+                                                            match t46_1 {
+                                                                Some(e) => {
+                                                                    *base.add(40).cast::<u8>() =
+                                                                        (1i32) as u8;
+                                                                    let (t49_0, t49_1) = e;
+                                                                    let (
+                                                                        t50_0,
+                                                                        t50_1,
+                                                                        t50_2,
+                                                                        t50_3,
+                                                                        t50_4,
+                                                                        t50_5,
+                                                                        t50_6,
+                                                                    ) = t49_0;
+                                                                    *base.add(44).cast::<i32>() =
+                                                                        _rt::as_i32(t50_0);
+                                                                    *base.add(48).cast::<u8>() =
+                                                                        (_rt::as_i32(t50_1)) as u8;
+                                                                    *base.add(49).cast::<u8>() =
+                                                                        (_rt::as_i32(t50_2)) as u8;
+                                                                    *base.add(50).cast::<u8>() =
+                                                                        (_rt::as_i32(t50_3)) as u8;
+                                                                    *base.add(51).cast::<u8>() =
+                                                                        (_rt::as_i32(t50_4)) as u8;
+                                                                    *base.add(52).cast::<u8>() =
+                                                                        (_rt::as_i32(t50_5)) as u8;
+                                                                    *base.add(56).cast::<i32>() =
+                                                                        _rt::as_i32(t50_6);
+                                                                    *base.add(60).cast::<u8>() =
+                                                                        (match t49_1 {
+                                                                            true => 1,
+                                                                            false => 0,
+                                                                        })
+                                                                            as u8;
+                                                                }
+                                                                None => {
+                                                                    *base.add(40).cast::<u8>() =
+                                                                        (0i32) as u8;
+                                                                }
+                                                            };
+                                                        }
+                                                        V61::Tstzrange(e) => {
+                                                            *base.add(8).cast::<u8>() =
+                                                                (29i32) as u8;
+                                                            let (t51_0, t51_1) = e;
+                                                            match t51_0 {
+                                                                Some(e) => {
+                                                                    *base.add(16).cast::<u8>() =
+                                                                        (1i32) as u8;
+                                                                    let (t52_0, t52_1) = e;
+                                                                    let (
+                                                                        t53_0,
+                                                                        t53_1,
+                                                                        t53_2,
+                                                                        t53_3,
+                                                                        t53_4,
+                                                                        t53_5,
+                                                                        t53_6,
+                                                                        t53_7,
+                                                                    ) = t52_0;
+                                                                    *base.add(20).cast::<i32>() =
+                                                                        _rt::as_i32(t53_0);
+                                                                    *base.add(24).cast::<u8>() =
+                                                                        (_rt::as_i32(t53_1)) as u8;
+                                                                    *base.add(25).cast::<u8>() =
+                                                                        (_rt::as_i32(t53_2)) as u8;
+                                                                    *base.add(26).cast::<u8>() =
+                                                                        (_rt::as_i32(t53_3)) as u8;
+                                                                    *base.add(27).cast::<u8>() =
+                                                                        (_rt::as_i32(t53_4)) as u8;
+                                                                    *base.add(28).cast::<u8>() =
+                                                                        (_rt::as_i32(t53_5)) as u8;
+                                                                    *base.add(32).cast::<i32>() =
+                                                                        _rt::as_i32(t53_6);
+                                                                    *base.add(36).cast::<i32>() =
+                                                                        _rt::as_i32(t53_7);
+                                                                    *base.add(40).cast::<u8>() =
+                                                                        (match t52_1 {
+                                                                            true => 1,
+                                                                            false => 0,
+                                                                        })
+                                                                            as u8;
+                                                                }
+                                                                None => {
+                                                                    *base.add(16).cast::<u8>() =
+                                                                        (0i32) as u8;
+                                                                }
+                                                            };
+                                                            match t51_1 {
+                                                                Some(e) => {
+                                                                    *base.add(44).cast::<u8>() =
+                                                                        (1i32) as u8;
+                                                                    let (t54_0, t54_1) = e;
+                                                                    let (
+                                                                        t55_0,
+                                                                        t55_1,
+                                                                        t55_2,
+                                                                        t55_3,
+                                                                        t55_4,
+                                                                        t55_5,
+                                                                        t55_6,
+                                                                        t55_7,
+                                                                    ) = t54_0;
+                                                                    *base.add(48).cast::<i32>() =
+                                                                        _rt::as_i32(t55_0);
+                                                                    *base.add(52).cast::<u8>() =
+                                                                        (_rt::as_i32(t55_1)) as u8;
+                                                                    *base.add(53).cast::<u8>() =
+                                                                        (_rt::as_i32(t55_2)) as u8;
+                                                                    *base.add(54).cast::<u8>() =
+                                                                        (_rt::as_i32(t55_3)) as u8;
+                                                                    *base.add(55).cast::<u8>() =
+                                                                        (_rt::as_i32(t55_4)) as u8;
+                                                                    *base.add(56).cast::<u8>() =
+                                                                        (_rt::as_i32(t55_5)) as u8;
+                                                                    *base.add(60).cast::<i32>() =
+                                                                        _rt::as_i32(t55_6);
+                                                                    *base.add(64).cast::<i32>() =
+                                                                        _rt::as_i32(t55_7);
+                                                                    *base.add(68).cast::<u8>() =
+                                                                        (match t54_1 {
+                                                                            true => 1,
+                                                                            false => 0,
+                                                                        })
+                                                                            as u8;
+                                                                }
+                                                                None => {
+                                                                    *base.add(44).cast::<u8>() =
+                                                                        (0i32) as u8;
+                                                                }
+                                                            };
+                                                        }
+                                                        V61::Daterange(e) => {
+                                                            *base.add(8).cast::<u8>() =
+                                                                (30i32) as u8;
+                                                            let (t56_0, t56_1) = e;
+                                                            match t56_0 {
+                                                                Some(e) => {
+                                                                    *base.add(16).cast::<u8>() =
+                                                                        (1i32) as u8;
+                                                                    let (t57_0, t57_1) = e;
+                                                                    let (t58_0, t58_1, t58_2) =
+                                                                        t57_0;
+                                                                    *base.add(20).cast::<i32>() =
+                                                                        _rt::as_i32(t58_0);
+                                                                    *base.add(24).cast::<u8>() =
+                                                                        (_rt::as_i32(t58_1)) as u8;
+                                                                    *base.add(25).cast::<u8>() =
+                                                                        (_rt::as_i32(t58_2)) as u8;
+                                                                    *base.add(28).cast::<u8>() =
+                                                                        (match t57_1 {
+                                                                            true => 1,
+                                                                            false => 0,
+                                                                        })
+                                                                            as u8;
+                                                                }
+                                                                None => {
+                                                                    *base.add(16).cast::<u8>() =
+                                                                        (0i32) as u8;
+                                                                }
+                                                            };
+                                                            match t56_1 {
+                                                                Some(e) => {
+                                                                    *base.add(32).cast::<u8>() =
+                                                                        (1i32) as u8;
+                                                                    let (t59_0, t59_1) = e;
+                                                                    let (t60_0, t60_1, t60_2) =
+                                                                        t59_0;
+                                                                    *base.add(36).cast::<i32>() =
+                                                                        _rt::as_i32(t60_0);
+                                                                    *base.add(40).cast::<u8>() =
+                                                                        (_rt::as_i32(t60_1)) as u8;
+                                                                    *base.add(41).cast::<u8>() =
+                                                                        (_rt::as_i32(t60_2)) as u8;
+                                                                    *base.add(44).cast::<u8>() =
+                                                                        (match t59_1 {
+                                                                            true => 1,
+                                                                            false => 0,
+                                                                        })
+                                                                            as u8;
+                                                                }
+                                                                None => {
+                                                                    *base.add(32).cast::<u8>() =
+                                                                        (0i32) as u8;
+                                                                }
+                                                            };
+                                                        }
+                                                        V61::Oid(e) => {
+                                                            *base.add(8).cast::<u8>() =
+                                                                (31i32) as u8;
                                                             *base.add(16).cast::<i32>() =
                                                                 _rt::as_i32(e);
                                                         }
-                                                        V35::Null => {
+                                                        V61::Null => {
                                                             *base.add(8).cast::<u8>() =
-                                                                (26i32) as u8;
+                                                                (32i32) as u8;
                                                         }
                                                     }
                                                 }
-                                                V57::Array(e) => {
+                                                V109::Array(e) => {
                                                     *base.add(0).cast::<u8>() = (1i32) as u8;
-                                                    let vec56 = e;
-                                                    let len56 = vec56.len();
-                                                    let layout56 = _rt::alloc::Layout::from_size_align_unchecked(vec56.len() * 32, 8);
-                                                    let result56 = if layout56.size() != 0 {
-                                                        let ptr = _rt::alloc::alloc(layout56)
+                                                    let vec108 = e;
+                                                    let len108 = vec108.len();
+                                                    let layout108 = _rt::alloc::Layout::from_size_align_unchecked(vec108.len() * 64, 8);
+                                                    let result108 = if layout108.size() != 0 {
+                                                        let ptr = _rt::alloc::alloc(layout108)
                                                             .cast::<u8>();
                                                         if ptr.is_null() {
                                                             _rt::alloc::handle_alloc_error(
-                                                                layout56,
+                                                                layout108,
                                                             );
                                                         }
                                                         ptr
@@ -7250,64 +9647,64 @@ pub mod exports {
                                                             ::core::ptr::null_mut()
                                                         }
                                                     };
-                                                    for (i, e) in vec56.into_iter().enumerate() {
-                                                        let base = result56.add(i * 32);
+                                                    for (i, e) in vec108.into_iter().enumerate() {
+                                                        let base = result108.add(i * 64);
                                                         {
-                                                            use super::super::super::super::wasi::rdbms::postgres::DbValuePrimitive as V55;
+                                                            use super::super::super::super::wasi::rdbms::postgres::DbValuePrimitive as V107;
                                                             match e {
-                                                                V55::Character(e) => {
+                                                                V107::Character(e) => {
                                                                     *base.add(0).cast::<u8>() =
                                                                         (0i32) as u8;
                                                                     *base.add(8).cast::<u8>() =
                                                                         (_rt::as_i32(e)) as u8;
                                                                 }
-                                                                V55::Int2(e) => {
+                                                                V107::Int2(e) => {
                                                                     *base.add(0).cast::<u8>() =
                                                                         (1i32) as u8;
                                                                     *base.add(8).cast::<u16>() =
                                                                         (_rt::as_i32(e)) as u16;
                                                                 }
-                                                                V55::Int4(e) => {
+                                                                V107::Int4(e) => {
                                                                     *base.add(0).cast::<u8>() =
                                                                         (2i32) as u8;
                                                                     *base.add(8).cast::<i32>() =
                                                                         _rt::as_i32(e);
                                                                 }
-                                                                V55::Int8(e) => {
+                                                                V107::Int8(e) => {
                                                                     *base.add(0).cast::<u8>() =
                                                                         (3i32) as u8;
                                                                     *base.add(8).cast::<i64>() =
                                                                         _rt::as_i64(e);
                                                                 }
-                                                                V55::Float4(e) => {
+                                                                V107::Float4(e) => {
                                                                     *base.add(0).cast::<u8>() =
                                                                         (4i32) as u8;
                                                                     *base.add(8).cast::<f32>() =
                                                                         _rt::as_f32(e);
                                                                 }
-                                                                V55::Float8(e) => {
+                                                                V107::Float8(e) => {
                                                                     *base.add(0).cast::<u8>() =
                                                                         (5i32) as u8;
                                                                     *base.add(8).cast::<f64>() =
                                                                         _rt::as_f64(e);
                                                                 }
-                                                                V55::Numeric(e) => {
+                                                                V107::Numeric(e) => {
                                                                     *base.add(0).cast::<u8>() =
                                                                         (6i32) as u8;
-                                                                    let vec36 = (e.into_bytes())
+                                                                    let vec62 = (e.into_bytes())
                                                                         .into_boxed_slice();
-                                                                    let ptr36 =
-                                                                        vec36.as_ptr().cast::<u8>();
-                                                                    let len36 = vec36.len();
-                                                                    ::core::mem::forget(vec36);
+                                                                    let ptr62 =
+                                                                        vec62.as_ptr().cast::<u8>();
+                                                                    let len62 = vec62.len();
+                                                                    ::core::mem::forget(vec62);
                                                                     *base.add(12).cast::<usize>() =
-                                                                        len36;
+                                                                        len62;
                                                                     *base
                                                                         .add(8)
                                                                         .cast::<*mut u8>() =
-                                                                        ptr36.cast_mut();
+                                                                        ptr62.cast_mut();
                                                                 }
-                                                                V55::Boolean(e) => {
+                                                                V107::Boolean(e) => {
                                                                     *base.add(0).cast::<u8>() =
                                                                         (7i32) as u8;
                                                                     *base.add(8).cast::<u8>() =
@@ -7317,352 +9714,352 @@ pub mod exports {
                                                                         })
                                                                             as u8;
                                                                 }
-                                                                V55::Text(e) => {
+                                                                V107::Text(e) => {
                                                                     *base.add(0).cast::<u8>() =
                                                                         (8i32) as u8;
-                                                                    let vec37 = (e.into_bytes())
+                                                                    let vec63 = (e.into_bytes())
                                                                         .into_boxed_slice();
-                                                                    let ptr37 =
-                                                                        vec37.as_ptr().cast::<u8>();
-                                                                    let len37 = vec37.len();
-                                                                    ::core::mem::forget(vec37);
+                                                                    let ptr63 =
+                                                                        vec63.as_ptr().cast::<u8>();
+                                                                    let len63 = vec63.len();
+                                                                    ::core::mem::forget(vec63);
                                                                     *base.add(12).cast::<usize>() =
-                                                                        len37;
+                                                                        len63;
                                                                     *base
                                                                         .add(8)
                                                                         .cast::<*mut u8>() =
-                                                                        ptr37.cast_mut();
+                                                                        ptr63.cast_mut();
                                                                 }
-                                                                V55::Varchar(e) => {
+                                                                V107::Varchar(e) => {
                                                                     *base.add(0).cast::<u8>() =
                                                                         (9i32) as u8;
-                                                                    let vec38 = (e.into_bytes())
+                                                                    let vec64 = (e.into_bytes())
                                                                         .into_boxed_slice();
-                                                                    let ptr38 =
-                                                                        vec38.as_ptr().cast::<u8>();
-                                                                    let len38 = vec38.len();
-                                                                    ::core::mem::forget(vec38);
+                                                                    let ptr64 =
+                                                                        vec64.as_ptr().cast::<u8>();
+                                                                    let len64 = vec64.len();
+                                                                    ::core::mem::forget(vec64);
                                                                     *base.add(12).cast::<usize>() =
-                                                                        len38;
+                                                                        len64;
                                                                     *base
                                                                         .add(8)
                                                                         .cast::<*mut u8>() =
-                                                                        ptr38.cast_mut();
+                                                                        ptr64.cast_mut();
                                                                 }
-                                                                V55::Bpchar(e) => {
+                                                                V107::Bpchar(e) => {
                                                                     *base.add(0).cast::<u8>() =
                                                                         (10i32) as u8;
-                                                                    let vec39 = (e.into_bytes())
+                                                                    let vec65 = (e.into_bytes())
                                                                         .into_boxed_slice();
-                                                                    let ptr39 =
-                                                                        vec39.as_ptr().cast::<u8>();
-                                                                    let len39 = vec39.len();
-                                                                    ::core::mem::forget(vec39);
+                                                                    let ptr65 =
+                                                                        vec65.as_ptr().cast::<u8>();
+                                                                    let len65 = vec65.len();
+                                                                    ::core::mem::forget(vec65);
                                                                     *base.add(12).cast::<usize>() =
-                                                                        len39;
+                                                                        len65;
                                                                     *base
                                                                         .add(8)
                                                                         .cast::<*mut u8>() =
-                                                                        ptr39.cast_mut();
+                                                                        ptr65.cast_mut();
                                                                 }
-                                                                V55::Timestamp(e) => {
+                                                                V107::Timestamp(e) => {
                                                                     *base.add(0).cast::<u8>() =
                                                                         (11i32) as u8;
                                                                     let (
-                                                                        t40_0,
-                                                                        t40_1,
-                                                                        t40_2,
-                                                                        t40_3,
-                                                                        t40_4,
-                                                                        t40_5,
-                                                                        t40_6,
+                                                                        t66_0,
+                                                                        t66_1,
+                                                                        t66_2,
+                                                                        t66_3,
+                                                                        t66_4,
+                                                                        t66_5,
+                                                                        t66_6,
                                                                     ) = e;
                                                                     *base.add(8).cast::<i32>() =
-                                                                        _rt::as_i32(t40_0);
+                                                                        _rt::as_i32(t66_0);
                                                                     *base.add(12).cast::<u8>() =
-                                                                        (_rt::as_i32(t40_1)) as u8;
+                                                                        (_rt::as_i32(t66_1)) as u8;
                                                                     *base.add(13).cast::<u8>() =
-                                                                        (_rt::as_i32(t40_2)) as u8;
+                                                                        (_rt::as_i32(t66_2)) as u8;
                                                                     *base.add(14).cast::<u8>() =
-                                                                        (_rt::as_i32(t40_3)) as u8;
+                                                                        (_rt::as_i32(t66_3)) as u8;
                                                                     *base.add(15).cast::<u8>() =
-                                                                        (_rt::as_i32(t40_4)) as u8;
+                                                                        (_rt::as_i32(t66_4)) as u8;
                                                                     *base.add(16).cast::<u8>() =
-                                                                        (_rt::as_i32(t40_5)) as u8;
+                                                                        (_rt::as_i32(t66_5)) as u8;
                                                                     *base.add(20).cast::<i32>() =
-                                                                        _rt::as_i32(t40_6);
+                                                                        _rt::as_i32(t66_6);
                                                                 }
-                                                                V55::Timestamptz(e) => {
+                                                                V107::Timestamptz(e) => {
                                                                     *base.add(0).cast::<u8>() =
                                                                         (12i32) as u8;
                                                                     let (
-                                                                        t41_0,
-                                                                        t41_1,
-                                                                        t41_2,
-                                                                        t41_3,
-                                                                        t41_4,
-                                                                        t41_5,
-                                                                        t41_6,
-                                                                        t41_7,
+                                                                        t67_0,
+                                                                        t67_1,
+                                                                        t67_2,
+                                                                        t67_3,
+                                                                        t67_4,
+                                                                        t67_5,
+                                                                        t67_6,
+                                                                        t67_7,
                                                                     ) = e;
                                                                     *base.add(8).cast::<i32>() =
-                                                                        _rt::as_i32(t41_0);
+                                                                        _rt::as_i32(t67_0);
                                                                     *base.add(12).cast::<u8>() =
-                                                                        (_rt::as_i32(t41_1)) as u8;
+                                                                        (_rt::as_i32(t67_1)) as u8;
                                                                     *base.add(13).cast::<u8>() =
-                                                                        (_rt::as_i32(t41_2)) as u8;
+                                                                        (_rt::as_i32(t67_2)) as u8;
                                                                     *base.add(14).cast::<u8>() =
-                                                                        (_rt::as_i32(t41_3)) as u8;
+                                                                        (_rt::as_i32(t67_3)) as u8;
                                                                     *base.add(15).cast::<u8>() =
-                                                                        (_rt::as_i32(t41_4)) as u8;
+                                                                        (_rt::as_i32(t67_4)) as u8;
                                                                     *base.add(16).cast::<u8>() =
-                                                                        (_rt::as_i32(t41_5)) as u8;
+                                                                        (_rt::as_i32(t67_5)) as u8;
                                                                     *base.add(20).cast::<i32>() =
-                                                                        _rt::as_i32(t41_6);
+                                                                        _rt::as_i32(t67_6);
                                                                     *base.add(24).cast::<i32>() =
-                                                                        _rt::as_i32(t41_7);
+                                                                        _rt::as_i32(t67_7);
                                                                 }
-                                                                V55::Date(e) => {
+                                                                V107::Date(e) => {
                                                                     *base.add(0).cast::<u8>() =
                                                                         (13i32) as u8;
-                                                                    let (t42_0, t42_1, t42_2) = e;
+                                                                    let (t68_0, t68_1, t68_2) = e;
                                                                     *base.add(8).cast::<i32>() =
-                                                                        _rt::as_i32(t42_0);
+                                                                        _rt::as_i32(t68_0);
                                                                     *base.add(12).cast::<u8>() =
-                                                                        (_rt::as_i32(t42_1)) as u8;
+                                                                        (_rt::as_i32(t68_1)) as u8;
                                                                     *base.add(13).cast::<u8>() =
-                                                                        (_rt::as_i32(t42_2)) as u8;
+                                                                        (_rt::as_i32(t68_2)) as u8;
                                                                 }
-                                                                V55::Time(e) => {
+                                                                V107::Time(e) => {
                                                                     *base.add(0).cast::<u8>() =
                                                                         (14i32) as u8;
                                                                     let (
-                                                                        t43_0,
-                                                                        t43_1,
-                                                                        t43_2,
-                                                                        t43_3,
+                                                                        t69_0,
+                                                                        t69_1,
+                                                                        t69_2,
+                                                                        t69_3,
                                                                     ) = e;
                                                                     *base.add(8).cast::<u8>() =
-                                                                        (_rt::as_i32(t43_0)) as u8;
+                                                                        (_rt::as_i32(t69_0)) as u8;
                                                                     *base.add(9).cast::<u8>() =
-                                                                        (_rt::as_i32(t43_1)) as u8;
+                                                                        (_rt::as_i32(t69_1)) as u8;
                                                                     *base.add(10).cast::<u8>() =
-                                                                        (_rt::as_i32(t43_2)) as u8;
+                                                                        (_rt::as_i32(t69_2)) as u8;
                                                                     *base.add(12).cast::<i32>() =
-                                                                        _rt::as_i32(t43_3);
+                                                                        _rt::as_i32(t69_3);
                                                                 }
-                                                                V55::Timetz(e) => {
+                                                                V107::Timetz(e) => {
                                                                     *base.add(0).cast::<u8>() =
                                                                         (15i32) as u8;
                                                                     let (
-                                                                        t44_0,
-                                                                        t44_1,
-                                                                        t44_2,
-                                                                        t44_3,
-                                                                        t44_4,
+                                                                        t70_0,
+                                                                        t70_1,
+                                                                        t70_2,
+                                                                        t70_3,
+                                                                        t70_4,
                                                                     ) = e;
                                                                     *base.add(8).cast::<u8>() =
-                                                                        (_rt::as_i32(t44_0)) as u8;
+                                                                        (_rt::as_i32(t70_0)) as u8;
                                                                     *base.add(9).cast::<u8>() =
-                                                                        (_rt::as_i32(t44_1)) as u8;
+                                                                        (_rt::as_i32(t70_1)) as u8;
                                                                     *base.add(10).cast::<u8>() =
-                                                                        (_rt::as_i32(t44_2)) as u8;
+                                                                        (_rt::as_i32(t70_2)) as u8;
                                                                     *base.add(12).cast::<i32>() =
-                                                                        _rt::as_i32(t44_3);
+                                                                        _rt::as_i32(t70_3);
                                                                     *base.add(16).cast::<i32>() =
-                                                                        _rt::as_i32(t44_4);
+                                                                        _rt::as_i32(t70_4);
                                                                 }
-                                                                V55::Interval(e) => {
+                                                                V107::Interval(e) => {
                                                                     *base.add(0).cast::<u8>() =
                                                                         (16i32) as u8;
                                                                     *base.add(8).cast::<i64>() =
                                                                         _rt::as_i64(e);
                                                                 }
-                                                                V55::Bytea(e) => {
+                                                                V107::Bytea(e) => {
                                                                     *base.add(0).cast::<u8>() =
                                                                         (17i32) as u8;
-                                                                    let vec45 =
+                                                                    let vec71 =
                                                                         (e).into_boxed_slice();
-                                                                    let ptr45 =
-                                                                        vec45.as_ptr().cast::<u8>();
-                                                                    let len45 = vec45.len();
-                                                                    ::core::mem::forget(vec45);
+                                                                    let ptr71 =
+                                                                        vec71.as_ptr().cast::<u8>();
+                                                                    let len71 = vec71.len();
+                                                                    ::core::mem::forget(vec71);
                                                                     *base.add(12).cast::<usize>() =
-                                                                        len45;
+                                                                        len71;
                                                                     *base
                                                                         .add(8)
                                                                         .cast::<*mut u8>() =
-                                                                        ptr45.cast_mut();
+                                                                        ptr71.cast_mut();
                                                                 }
-                                                                V55::Json(e) => {
+                                                                V107::Json(e) => {
                                                                     *base.add(0).cast::<u8>() =
                                                                         (18i32) as u8;
-                                                                    let vec46 = (e.into_bytes())
+                                                                    let vec72 = (e.into_bytes())
                                                                         .into_boxed_slice();
-                                                                    let ptr46 =
-                                                                        vec46.as_ptr().cast::<u8>();
-                                                                    let len46 = vec46.len();
-                                                                    ::core::mem::forget(vec46);
+                                                                    let ptr72 =
+                                                                        vec72.as_ptr().cast::<u8>();
+                                                                    let len72 = vec72.len();
+                                                                    ::core::mem::forget(vec72);
                                                                     *base.add(12).cast::<usize>() =
-                                                                        len46;
+                                                                        len72;
                                                                     *base
                                                                         .add(8)
                                                                         .cast::<*mut u8>() =
-                                                                        ptr46.cast_mut();
+                                                                        ptr72.cast_mut();
                                                                 }
-                                                                V55::Jsonb(e) => {
+                                                                V107::Jsonb(e) => {
                                                                     *base.add(0).cast::<u8>() =
                                                                         (19i32) as u8;
-                                                                    let vec47 = (e.into_bytes())
+                                                                    let vec73 = (e.into_bytes())
                                                                         .into_boxed_slice();
-                                                                    let ptr47 =
-                                                                        vec47.as_ptr().cast::<u8>();
-                                                                    let len47 = vec47.len();
-                                                                    ::core::mem::forget(vec47);
+                                                                    let ptr73 =
+                                                                        vec73.as_ptr().cast::<u8>();
+                                                                    let len73 = vec73.len();
+                                                                    ::core::mem::forget(vec73);
                                                                     *base.add(12).cast::<usize>() =
-                                                                        len47;
+                                                                        len73;
                                                                     *base
                                                                         .add(8)
                                                                         .cast::<*mut u8>() =
-                                                                        ptr47.cast_mut();
+                                                                        ptr73.cast_mut();
                                                                 }
-                                                                V55::Xml(e) => {
+                                                                V107::Xml(e) => {
                                                                     *base.add(0).cast::<u8>() =
                                                                         (20i32) as u8;
-                                                                    let vec48 = (e.into_bytes())
+                                                                    let vec74 = (e.into_bytes())
                                                                         .into_boxed_slice();
-                                                                    let ptr48 =
-                                                                        vec48.as_ptr().cast::<u8>();
-                                                                    let len48 = vec48.len();
-                                                                    ::core::mem::forget(vec48);
+                                                                    let ptr74 =
+                                                                        vec74.as_ptr().cast::<u8>();
+                                                                    let len74 = vec74.len();
+                                                                    ::core::mem::forget(vec74);
                                                                     *base.add(12).cast::<usize>() =
-                                                                        len48;
+                                                                        len74;
                                                                     *base
                                                                         .add(8)
                                                                         .cast::<*mut u8>() =
-                                                                        ptr48.cast_mut();
+                                                                        ptr74.cast_mut();
                                                                 }
-                                                                V55::Uuid(e) => {
+                                                                V107::Uuid(e) => {
                                                                     *base.add(0).cast::<u8>() =
                                                                         (21i32) as u8;
-                                                                    let (t49_0, t49_1) = e;
+                                                                    let (t75_0, t75_1) = e;
                                                                     *base.add(8).cast::<i64>() =
-                                                                        _rt::as_i64(t49_0);
+                                                                        _rt::as_i64(t75_0);
                                                                     *base.add(16).cast::<i64>() =
-                                                                        _rt::as_i64(t49_1);
+                                                                        _rt::as_i64(t75_1);
                                                                 }
-                                                                V55::Inet(e) => {
+                                                                V107::Inet(e) => {
                                                                     *base.add(0).cast::<u8>() =
                                                                         (22i32) as u8;
-                                                                    use super::super::super::super::wasi::rdbms::postgres::IpAddress as V52;
+                                                                    use super::super::super::super::wasi::rdbms::postgres::IpAddress as V78;
                                                                     match e {
-                                                                        V52::Ipv4(e) => {
+                                                                        V78::Ipv4(e) => {
                                                                             *base
                                                                                 .add(8)
                                                                                 .cast::<u8>() =
                                                                                 (0i32) as u8;
                                                                             let (
-                                                                                t50_0,
-                                                                                t50_1,
-                                                                                t50_2,
-                                                                                t50_3,
+                                                                                t76_0,
+                                                                                t76_1,
+                                                                                t76_2,
+                                                                                t76_3,
                                                                             ) = e;
                                                                             *base
                                                                                 .add(10)
                                                                                 .cast::<u8>() =
-                                                                                (_rt::as_i32(t50_0))
+                                                                                (_rt::as_i32(t76_0))
                                                                                     as u8;
                                                                             *base
                                                                                 .add(11)
                                                                                 .cast::<u8>() =
-                                                                                (_rt::as_i32(t50_1))
+                                                                                (_rt::as_i32(t76_1))
                                                                                     as u8;
                                                                             *base
                                                                                 .add(12)
                                                                                 .cast::<u8>() =
-                                                                                (_rt::as_i32(t50_2))
+                                                                                (_rt::as_i32(t76_2))
                                                                                     as u8;
                                                                             *base
                                                                                 .add(13)
                                                                                 .cast::<u8>() =
-                                                                                (_rt::as_i32(t50_3))
+                                                                                (_rt::as_i32(t76_3))
                                                                                     as u8;
                                                                         }
-                                                                        V52::Ipv6(e) => {
+                                                                        V78::Ipv6(e) => {
                                                                             *base
                                                                                 .add(8)
                                                                                 .cast::<u8>() =
                                                                                 (1i32) as u8;
                                                                             let (
-                                                                                t51_0,
-                                                                                t51_1,
-                                                                                t51_2,
-                                                                                t51_3,
-                                                                                t51_4,
-                                                                                t51_5,
-                                                                                t51_6,
-                                                                                t51_7,
+                                                                                t77_0,
+                                                                                t77_1,
+                                                                                t77_2,
+                                                                                t77_3,
+                                                                                t77_4,
+                                                                                t77_5,
+                                                                                t77_6,
+                                                                                t77_7,
                                                                             ) = e;
                                                                             *base
                                                                                 .add(10)
                                                                                 .cast::<u16>() =
-                                                                                (_rt::as_i32(t51_0))
+                                                                                (_rt::as_i32(t77_0))
                                                                                     as u16;
                                                                             *base
                                                                                 .add(12)
                                                                                 .cast::<u16>() =
-                                                                                (_rt::as_i32(t51_1))
+                                                                                (_rt::as_i32(t77_1))
                                                                                     as u16;
                                                                             *base
                                                                                 .add(14)
                                                                                 .cast::<u16>() =
-                                                                                (_rt::as_i32(t51_2))
+                                                                                (_rt::as_i32(t77_2))
                                                                                     as u16;
                                                                             *base
                                                                                 .add(16)
                                                                                 .cast::<u16>() =
-                                                                                (_rt::as_i32(t51_3))
+                                                                                (_rt::as_i32(t77_3))
                                                                                     as u16;
                                                                             *base
                                                                                 .add(18)
                                                                                 .cast::<u16>() =
-                                                                                (_rt::as_i32(t51_4))
+                                                                                (_rt::as_i32(t77_4))
                                                                                     as u16;
                                                                             *base
                                                                                 .add(20)
                                                                                 .cast::<u16>() =
-                                                                                (_rt::as_i32(t51_5))
+                                                                                (_rt::as_i32(t77_5))
                                                                                     as u16;
                                                                             *base
                                                                                 .add(22)
                                                                                 .cast::<u16>() =
-                                                                                (_rt::as_i32(t51_6))
+                                                                                (_rt::as_i32(t77_6))
                                                                                     as u16;
                                                                             *base
                                                                                 .add(24)
                                                                                 .cast::<u16>() =
-                                                                                (_rt::as_i32(t51_7))
+                                                                                (_rt::as_i32(t77_7))
                                                                                     as u16;
                                                                         }
                                                                     }
                                                                 }
-                                                                V55::Bit(e) => {
+                                                                V107::Bit(e) => {
                                                                     *base.add(0).cast::<u8>() =
                                                                         (23i32) as u8;
-                                                                    let vec53 = e;
-                                                                    let len53 = vec53.len();
-                                                                    let layout53 = _rt::alloc::Layout::from_size_align_unchecked(vec53.len() * 1, 1);
-                                                                    let result53 = if layout53
+                                                                    let vec79 = e;
+                                                                    let len79 = vec79.len();
+                                                                    let layout79 = _rt::alloc::Layout::from_size_align_unchecked(vec79.len() * 1, 1);
+                                                                    let result79 = if layout79
                                                                         .size()
                                                                         != 0
                                                                     {
                                                                         let ptr =
                                                                             _rt::alloc::alloc(
-                                                                                layout53,
+                                                                                layout79,
                                                                             )
                                                                             .cast::<u8>();
                                                                         if ptr.is_null() {
-                                                                            _rt::alloc::handle_alloc_error(layout53);
+                                                                            _rt::alloc::handle_alloc_error(layout79);
                                                                         }
                                                                         ptr
                                                                     } else {
@@ -7670,12 +10067,12 @@ pub mod exports {
                                                                             ::core::ptr::null_mut()
                                                                         }
                                                                     };
-                                                                    for (i, e) in vec53
+                                                                    for (i, e) in vec79
                                                                         .into_iter()
                                                                         .enumerate()
                                                                     {
                                                                         let base =
-                                                                            result53.add(i * 1);
+                                                                            result79.add(i * 1);
                                                                         {
                                                                             *base
                                                                                 .add(0)
@@ -7688,29 +10085,29 @@ pub mod exports {
                                                                         }
                                                                     }
                                                                     *base.add(12).cast::<usize>() =
-                                                                        len53;
+                                                                        len79;
                                                                     *base
                                                                         .add(8)
                                                                         .cast::<*mut u8>() =
-                                                                        result53;
+                                                                        result79;
                                                                 }
-                                                                V55::Varbit(e) => {
+                                                                V107::Varbit(e) => {
                                                                     *base.add(0).cast::<u8>() =
                                                                         (24i32) as u8;
-                                                                    let vec54 = e;
-                                                                    let len54 = vec54.len();
-                                                                    let layout54 = _rt::alloc::Layout::from_size_align_unchecked(vec54.len() * 1, 1);
-                                                                    let result54 = if layout54
+                                                                    let vec80 = e;
+                                                                    let len80 = vec80.len();
+                                                                    let layout80 = _rt::alloc::Layout::from_size_align_unchecked(vec80.len() * 1, 1);
+                                                                    let result80 = if layout80
                                                                         .size()
                                                                         != 0
                                                                     {
                                                                         let ptr =
                                                                             _rt::alloc::alloc(
-                                                                                layout54,
+                                                                                layout80,
                                                                             )
                                                                             .cast::<u8>();
                                                                         if ptr.is_null() {
-                                                                            _rt::alloc::handle_alloc_error(layout54);
+                                                                            _rt::alloc::handle_alloc_error(layout80);
                                                                         }
                                                                         ptr
                                                                     } else {
@@ -7718,12 +10115,12 @@ pub mod exports {
                                                                             ::core::ptr::null_mut()
                                                                         }
                                                                     };
-                                                                    for (i, e) in vec54
+                                                                    for (i, e) in vec80
                                                                         .into_iter()
                                                                         .enumerate()
                                                                     {
                                                                         let base =
-                                                                            result54.add(i * 1);
+                                                                            result80.add(i * 1);
                                                                         {
                                                                             *base
                                                                                 .add(0)
@@ -7736,46 +10133,643 @@ pub mod exports {
                                                                         }
                                                                     }
                                                                     *base.add(12).cast::<usize>() =
-                                                                        len54;
+                                                                        len80;
                                                                     *base
                                                                         .add(8)
                                                                         .cast::<*mut u8>() =
-                                                                        result54;
+                                                                        result80;
                                                                 }
-                                                                V55::Oid(e) => {
+                                                                V107::Int4range(e) => {
                                                                     *base.add(0).cast::<u8>() =
                                                                         (25i32) as u8;
+                                                                    let (t81_0, t81_1) = e;
+                                                                    match t81_0 {
+                                                                        Some(e) => {
+                                                                            *base
+                                                                                .add(8)
+                                                                                .cast::<u8>() =
+                                                                                (1i32) as u8;
+                                                                            let (t82_0, t82_1) = e;
+                                                                            *base
+                                                                                .add(12)
+                                                                                .cast::<i32>() =
+                                                                                _rt::as_i32(t82_0);
+                                                                            *base
+                                                                                .add(16)
+                                                                                .cast::<u8>() =
+                                                                                (match t82_1 {
+                                                                                    true => 1,
+                                                                                    false => 0,
+                                                                                })
+                                                                                    as u8;
+                                                                        }
+                                                                        None => {
+                                                                            *base
+                                                                                .add(8)
+                                                                                .cast::<u8>() =
+                                                                                (0i32) as u8;
+                                                                        }
+                                                                    };
+                                                                    match t81_1 {
+                                                                        Some(e) => {
+                                                                            *base
+                                                                                .add(20)
+                                                                                .cast::<u8>() =
+                                                                                (1i32) as u8;
+                                                                            let (t83_0, t83_1) = e;
+                                                                            *base
+                                                                                .add(24)
+                                                                                .cast::<i32>() =
+                                                                                _rt::as_i32(t83_0);
+                                                                            *base
+                                                                                .add(28)
+                                                                                .cast::<u8>() =
+                                                                                (match t83_1 {
+                                                                                    true => 1,
+                                                                                    false => 0,
+                                                                                })
+                                                                                    as u8;
+                                                                        }
+                                                                        None => {
+                                                                            *base
+                                                                                .add(20)
+                                                                                .cast::<u8>() =
+                                                                                (0i32) as u8;
+                                                                        }
+                                                                    };
+                                                                }
+                                                                V107::Int8range(e) => {
+                                                                    *base.add(0).cast::<u8>() =
+                                                                        (26i32) as u8;
+                                                                    let (t84_0, t84_1) = e;
+                                                                    match t84_0 {
+                                                                        Some(e) => {
+                                                                            *base
+                                                                                .add(8)
+                                                                                .cast::<u8>() =
+                                                                                (1i32) as u8;
+                                                                            let (t85_0, t85_1) = e;
+                                                                            *base
+                                                                                .add(16)
+                                                                                .cast::<i64>() =
+                                                                                _rt::as_i64(t85_0);
+                                                                            *base
+                                                                                .add(24)
+                                                                                .cast::<u8>() =
+                                                                                (match t85_1 {
+                                                                                    true => 1,
+                                                                                    false => 0,
+                                                                                })
+                                                                                    as u8;
+                                                                        }
+                                                                        None => {
+                                                                            *base
+                                                                                .add(8)
+                                                                                .cast::<u8>() =
+                                                                                (0i32) as u8;
+                                                                        }
+                                                                    };
+                                                                    match t84_1 {
+                                                                        Some(e) => {
+                                                                            *base
+                                                                                .add(32)
+                                                                                .cast::<u8>() =
+                                                                                (1i32) as u8;
+                                                                            let (t86_0, t86_1) = e;
+                                                                            *base
+                                                                                .add(40)
+                                                                                .cast::<i64>() =
+                                                                                _rt::as_i64(t86_0);
+                                                                            *base
+                                                                                .add(48)
+                                                                                .cast::<u8>() =
+                                                                                (match t86_1 {
+                                                                                    true => 1,
+                                                                                    false => 0,
+                                                                                })
+                                                                                    as u8;
+                                                                        }
+                                                                        None => {
+                                                                            *base
+                                                                                .add(32)
+                                                                                .cast::<u8>() =
+                                                                                (0i32) as u8;
+                                                                        }
+                                                                    };
+                                                                }
+                                                                V107::Numrange(e) => {
+                                                                    *base.add(0).cast::<u8>() =
+                                                                        (27i32) as u8;
+                                                                    let (t87_0, t87_1) = e;
+                                                                    match t87_0 {
+                                                                        Some(e) => {
+                                                                            *base
+                                                                                .add(8)
+                                                                                .cast::<u8>() =
+                                                                                (1i32) as u8;
+                                                                            let (t88_0, t88_1) = e;
+                                                                            let vec89 = (t88_0
+                                                                                .into_bytes())
+                                                                            .into_boxed_slice();
+                                                                            let ptr89 = vec89
+                                                                                .as_ptr()
+                                                                                .cast::<u8>();
+                                                                            let len89 = vec89.len();
+                                                                            ::core::mem::forget(
+                                                                                vec89,
+                                                                            );
+                                                                            *base
+                                                                                .add(16)
+                                                                                .cast::<usize>() =
+                                                                                len89;
+                                                                            *base
+                                                                                .add(12)
+                                                                                .cast::<*mut u8>(
+                                                                                ) =
+                                                                                ptr89.cast_mut();
+                                                                            *base
+                                                                                .add(20)
+                                                                                .cast::<u8>() =
+                                                                                (match t88_1 {
+                                                                                    true => 1,
+                                                                                    false => 0,
+                                                                                })
+                                                                                    as u8;
+                                                                        }
+                                                                        None => {
+                                                                            *base
+                                                                                .add(8)
+                                                                                .cast::<u8>() =
+                                                                                (0i32) as u8;
+                                                                        }
+                                                                    };
+                                                                    match t87_1 {
+                                                                        Some(e) => {
+                                                                            *base
+                                                                                .add(24)
+                                                                                .cast::<u8>() =
+                                                                                (1i32) as u8;
+                                                                            let (t90_0, t90_1) = e;
+                                                                            let vec91 = (t90_0
+                                                                                .into_bytes())
+                                                                            .into_boxed_slice();
+                                                                            let ptr91 = vec91
+                                                                                .as_ptr()
+                                                                                .cast::<u8>();
+                                                                            let len91 = vec91.len();
+                                                                            ::core::mem::forget(
+                                                                                vec91,
+                                                                            );
+                                                                            *base
+                                                                                .add(32)
+                                                                                .cast::<usize>() =
+                                                                                len91;
+                                                                            *base
+                                                                                .add(28)
+                                                                                .cast::<*mut u8>(
+                                                                                ) =
+                                                                                ptr91.cast_mut();
+                                                                            *base
+                                                                                .add(36)
+                                                                                .cast::<u8>() =
+                                                                                (match t90_1 {
+                                                                                    true => 1,
+                                                                                    false => 0,
+                                                                                })
+                                                                                    as u8;
+                                                                        }
+                                                                        None => {
+                                                                            *base
+                                                                                .add(24)
+                                                                                .cast::<u8>() =
+                                                                                (0i32) as u8;
+                                                                        }
+                                                                    };
+                                                                }
+                                                                V107::Tsrange(e) => {
+                                                                    *base.add(0).cast::<u8>() =
+                                                                        (28i32) as u8;
+                                                                    let (t92_0, t92_1) = e;
+                                                                    match t92_0 {
+                                                                        Some(e) => {
+                                                                            *base
+                                                                                .add(8)
+                                                                                .cast::<u8>() =
+                                                                                (1i32) as u8;
+                                                                            let (t93_0, t93_1) = e;
+                                                                            let (
+                                                                                t94_0,
+                                                                                t94_1,
+                                                                                t94_2,
+                                                                                t94_3,
+                                                                                t94_4,
+                                                                                t94_5,
+                                                                                t94_6,
+                                                                            ) = t93_0;
+                                                                            *base
+                                                                                .add(12)
+                                                                                .cast::<i32>() =
+                                                                                _rt::as_i32(t94_0);
+                                                                            *base
+                                                                                .add(16)
+                                                                                .cast::<u8>() =
+                                                                                (_rt::as_i32(t94_1))
+                                                                                    as u8;
+                                                                            *base
+                                                                                .add(17)
+                                                                                .cast::<u8>() =
+                                                                                (_rt::as_i32(t94_2))
+                                                                                    as u8;
+                                                                            *base
+                                                                                .add(18)
+                                                                                .cast::<u8>() =
+                                                                                (_rt::as_i32(t94_3))
+                                                                                    as u8;
+                                                                            *base
+                                                                                .add(19)
+                                                                                .cast::<u8>() =
+                                                                                (_rt::as_i32(t94_4))
+                                                                                    as u8;
+                                                                            *base
+                                                                                .add(20)
+                                                                                .cast::<u8>() =
+                                                                                (_rt::as_i32(t94_5))
+                                                                                    as u8;
+                                                                            *base
+                                                                                .add(24)
+                                                                                .cast::<i32>() =
+                                                                                _rt::as_i32(t94_6);
+                                                                            *base
+                                                                                .add(28)
+                                                                                .cast::<u8>() =
+                                                                                (match t93_1 {
+                                                                                    true => 1,
+                                                                                    false => 0,
+                                                                                })
+                                                                                    as u8;
+                                                                        }
+                                                                        None => {
+                                                                            *base
+                                                                                .add(8)
+                                                                                .cast::<u8>() =
+                                                                                (0i32) as u8;
+                                                                        }
+                                                                    };
+                                                                    match t92_1 {
+                                                                        Some(e) => {
+                                                                            *base
+                                                                                .add(32)
+                                                                                .cast::<u8>() =
+                                                                                (1i32) as u8;
+                                                                            let (t95_0, t95_1) = e;
+                                                                            let (
+                                                                                t96_0,
+                                                                                t96_1,
+                                                                                t96_2,
+                                                                                t96_3,
+                                                                                t96_4,
+                                                                                t96_5,
+                                                                                t96_6,
+                                                                            ) = t95_0;
+                                                                            *base
+                                                                                .add(36)
+                                                                                .cast::<i32>() =
+                                                                                _rt::as_i32(t96_0);
+                                                                            *base
+                                                                                .add(40)
+                                                                                .cast::<u8>() =
+                                                                                (_rt::as_i32(t96_1))
+                                                                                    as u8;
+                                                                            *base
+                                                                                .add(41)
+                                                                                .cast::<u8>() =
+                                                                                (_rt::as_i32(t96_2))
+                                                                                    as u8;
+                                                                            *base
+                                                                                .add(42)
+                                                                                .cast::<u8>() =
+                                                                                (_rt::as_i32(t96_3))
+                                                                                    as u8;
+                                                                            *base
+                                                                                .add(43)
+                                                                                .cast::<u8>() =
+                                                                                (_rt::as_i32(t96_4))
+                                                                                    as u8;
+                                                                            *base
+                                                                                .add(44)
+                                                                                .cast::<u8>() =
+                                                                                (_rt::as_i32(t96_5))
+                                                                                    as u8;
+                                                                            *base
+                                                                                .add(48)
+                                                                                .cast::<i32>() =
+                                                                                _rt::as_i32(t96_6);
+                                                                            *base
+                                                                                .add(52)
+                                                                                .cast::<u8>() =
+                                                                                (match t95_1 {
+                                                                                    true => 1,
+                                                                                    false => 0,
+                                                                                })
+                                                                                    as u8;
+                                                                        }
+                                                                        None => {
+                                                                            *base
+                                                                                .add(32)
+                                                                                .cast::<u8>() =
+                                                                                (0i32) as u8;
+                                                                        }
+                                                                    };
+                                                                }
+                                                                V107::Tstzrange(e) => {
+                                                                    *base.add(0).cast::<u8>() =
+                                                                        (29i32) as u8;
+                                                                    let (t97_0, t97_1) = e;
+                                                                    match t97_0 {
+                                                                        Some(e) => {
+                                                                            *base
+                                                                                .add(8)
+                                                                                .cast::<u8>() =
+                                                                                (1i32) as u8;
+                                                                            let (t98_0, t98_1) = e;
+                                                                            let (
+                                                                                t99_0,
+                                                                                t99_1,
+                                                                                t99_2,
+                                                                                t99_3,
+                                                                                t99_4,
+                                                                                t99_5,
+                                                                                t99_6,
+                                                                                t99_7,
+                                                                            ) = t98_0;
+                                                                            *base
+                                                                                .add(12)
+                                                                                .cast::<i32>() =
+                                                                                _rt::as_i32(t99_0);
+                                                                            *base
+                                                                                .add(16)
+                                                                                .cast::<u8>() =
+                                                                                (_rt::as_i32(t99_1))
+                                                                                    as u8;
+                                                                            *base
+                                                                                .add(17)
+                                                                                .cast::<u8>() =
+                                                                                (_rt::as_i32(t99_2))
+                                                                                    as u8;
+                                                                            *base
+                                                                                .add(18)
+                                                                                .cast::<u8>() =
+                                                                                (_rt::as_i32(t99_3))
+                                                                                    as u8;
+                                                                            *base
+                                                                                .add(19)
+                                                                                .cast::<u8>() =
+                                                                                (_rt::as_i32(t99_4))
+                                                                                    as u8;
+                                                                            *base
+                                                                                .add(20)
+                                                                                .cast::<u8>() =
+                                                                                (_rt::as_i32(t99_5))
+                                                                                    as u8;
+                                                                            *base
+                                                                                .add(24)
+                                                                                .cast::<i32>() =
+                                                                                _rt::as_i32(t99_6);
+                                                                            *base
+                                                                                .add(28)
+                                                                                .cast::<i32>() =
+                                                                                _rt::as_i32(t99_7);
+                                                                            *base
+                                                                                .add(32)
+                                                                                .cast::<u8>() =
+                                                                                (match t98_1 {
+                                                                                    true => 1,
+                                                                                    false => 0,
+                                                                                })
+                                                                                    as u8;
+                                                                        }
+                                                                        None => {
+                                                                            *base
+                                                                                .add(8)
+                                                                                .cast::<u8>() =
+                                                                                (0i32) as u8;
+                                                                        }
+                                                                    };
+                                                                    match t97_1 {
+                                                                        Some(e) => {
+                                                                            *base
+                                                                                .add(36)
+                                                                                .cast::<u8>() =
+                                                                                (1i32) as u8;
+                                                                            let (t100_0, t100_1) =
+                                                                                e;
+                                                                            let (
+                                                                                t101_0,
+                                                                                t101_1,
+                                                                                t101_2,
+                                                                                t101_3,
+                                                                                t101_4,
+                                                                                t101_5,
+                                                                                t101_6,
+                                                                                t101_7,
+                                                                            ) = t100_0;
+                                                                            *base
+                                                                                .add(40)
+                                                                                .cast::<i32>() =
+                                                                                _rt::as_i32(t101_0);
+                                                                            *base
+                                                                                .add(44)
+                                                                                .cast::<u8>() =
+                                                                                (_rt::as_i32(
+                                                                                    t101_1,
+                                                                                ))
+                                                                                    as u8;
+                                                                            *base
+                                                                                .add(45)
+                                                                                .cast::<u8>() =
+                                                                                (_rt::as_i32(
+                                                                                    t101_2,
+                                                                                ))
+                                                                                    as u8;
+                                                                            *base
+                                                                                .add(46)
+                                                                                .cast::<u8>() =
+                                                                                (_rt::as_i32(
+                                                                                    t101_3,
+                                                                                ))
+                                                                                    as u8;
+                                                                            *base
+                                                                                .add(47)
+                                                                                .cast::<u8>() =
+                                                                                (_rt::as_i32(
+                                                                                    t101_4,
+                                                                                ))
+                                                                                    as u8;
+                                                                            *base
+                                                                                .add(48)
+                                                                                .cast::<u8>() =
+                                                                                (_rt::as_i32(
+                                                                                    t101_5,
+                                                                                ))
+                                                                                    as u8;
+                                                                            *base
+                                                                                .add(52)
+                                                                                .cast::<i32>() =
+                                                                                _rt::as_i32(t101_6);
+                                                                            *base
+                                                                                .add(56)
+                                                                                .cast::<i32>() =
+                                                                                _rt::as_i32(t101_7);
+                                                                            *base
+                                                                                .add(60)
+                                                                                .cast::<u8>() =
+                                                                                (match t100_1 {
+                                                                                    true => 1,
+                                                                                    false => 0,
+                                                                                })
+                                                                                    as u8;
+                                                                        }
+                                                                        None => {
+                                                                            *base
+                                                                                .add(36)
+                                                                                .cast::<u8>() =
+                                                                                (0i32) as u8;
+                                                                        }
+                                                                    };
+                                                                }
+                                                                V107::Daterange(e) => {
+                                                                    *base.add(0).cast::<u8>() =
+                                                                        (30i32) as u8;
+                                                                    let (t102_0, t102_1) = e;
+                                                                    match t102_0 {
+                                                                        Some(e) => {
+                                                                            *base
+                                                                                .add(8)
+                                                                                .cast::<u8>() =
+                                                                                (1i32) as u8;
+                                                                            let (t103_0, t103_1) =
+                                                                                e;
+                                                                            let (
+                                                                                t104_0,
+                                                                                t104_1,
+                                                                                t104_2,
+                                                                            ) = t103_0;
+                                                                            *base
+                                                                                .add(12)
+                                                                                .cast::<i32>() =
+                                                                                _rt::as_i32(t104_0);
+                                                                            *base
+                                                                                .add(16)
+                                                                                .cast::<u8>() =
+                                                                                (_rt::as_i32(
+                                                                                    t104_1,
+                                                                                ))
+                                                                                    as u8;
+                                                                            *base
+                                                                                .add(17)
+                                                                                .cast::<u8>() =
+                                                                                (_rt::as_i32(
+                                                                                    t104_2,
+                                                                                ))
+                                                                                    as u8;
+                                                                            *base
+                                                                                .add(20)
+                                                                                .cast::<u8>() =
+                                                                                (match t103_1 {
+                                                                                    true => 1,
+                                                                                    false => 0,
+                                                                                })
+                                                                                    as u8;
+                                                                        }
+                                                                        None => {
+                                                                            *base
+                                                                                .add(8)
+                                                                                .cast::<u8>() =
+                                                                                (0i32) as u8;
+                                                                        }
+                                                                    };
+                                                                    match t102_1 {
+                                                                        Some(e) => {
+                                                                            *base
+                                                                                .add(24)
+                                                                                .cast::<u8>() =
+                                                                                (1i32) as u8;
+                                                                            let (t105_0, t105_1) =
+                                                                                e;
+                                                                            let (
+                                                                                t106_0,
+                                                                                t106_1,
+                                                                                t106_2,
+                                                                            ) = t105_0;
+                                                                            *base
+                                                                                .add(28)
+                                                                                .cast::<i32>() =
+                                                                                _rt::as_i32(t106_0);
+                                                                            *base
+                                                                                .add(32)
+                                                                                .cast::<u8>() =
+                                                                                (_rt::as_i32(
+                                                                                    t106_1,
+                                                                                ))
+                                                                                    as u8;
+                                                                            *base
+                                                                                .add(33)
+                                                                                .cast::<u8>() =
+                                                                                (_rt::as_i32(
+                                                                                    t106_2,
+                                                                                ))
+                                                                                    as u8;
+                                                                            *base
+                                                                                .add(36)
+                                                                                .cast::<u8>() =
+                                                                                (match t105_1 {
+                                                                                    true => 1,
+                                                                                    false => 0,
+                                                                                })
+                                                                                    as u8;
+                                                                        }
+                                                                        None => {
+                                                                            *base
+                                                                                .add(24)
+                                                                                .cast::<u8>() =
+                                                                                (0i32) as u8;
+                                                                        }
+                                                                    };
+                                                                }
+                                                                V107::Oid(e) => {
+                                                                    *base.add(0).cast::<u8>() =
+                                                                        (31i32) as u8;
                                                                     *base.add(8).cast::<i32>() =
                                                                         _rt::as_i32(e);
                                                                 }
-                                                                V55::Null => {
+                                                                V107::Null => {
                                                                     *base.add(0).cast::<u8>() =
-                                                                        (26i32) as u8;
+                                                                        (32i32) as u8;
                                                                 }
                                                             }
                                                         }
                                                     }
-                                                    *base.add(12).cast::<usize>() = len56;
-                                                    *base.add(8).cast::<*mut u8>() = result56;
+                                                    *base.add(12).cast::<usize>() = len108;
+                                                    *base.add(8).cast::<*mut u8>() = result108;
                                                 }
                                             }
                                         }
                                     }
-                                    *base.add(4).cast::<usize>() = len58;
-                                    *base.add(0).cast::<*mut u8>() = result58;
+                                    *base.add(4).cast::<usize>() = len110;
+                                    *base.add(0).cast::<*mut u8>() = result110;
                                 }
                             }
-                            *ptr6.add(16).cast::<usize>() = len59;
-                            *ptr6.add(12).cast::<*mut u8>() = result59;
+                            *ptr6.add(16).cast::<usize>() = len111;
+                            *ptr6.add(12).cast::<*mut u8>() = result111;
                         }
                         Err(e) => {
                             *ptr6.add(0).cast::<u8>() = (1i32) as u8;
-                            let vec60 = (e.into_bytes()).into_boxed_slice();
-                            let ptr60 = vec60.as_ptr().cast::<u8>();
-                            let len60 = vec60.len();
-                            ::core::mem::forget(vec60);
-                            *ptr6.add(8).cast::<usize>() = len60;
-                            *ptr6.add(4).cast::<*mut u8>() = ptr60.cast_mut();
+                            let vec112 = (e.into_bytes()).into_boxed_slice();
+                            let ptr112 = vec112.as_ptr().cast::<u8>();
+                            let len112 = vec112.len();
+                            ::core::mem::forget(vec112);
+                            *ptr6.add(8).cast::<usize>() = len112;
+                            *ptr6.add(4).cast::<*mut u8>() = ptr112.cast_mut();
                         }
                     };
                     ptr6
@@ -7802,19 +10796,19 @@ pub mod exports {
                                 }
                             }
                             _rt::cabi_dealloc(base7, len7 * 32, 8);
-                            let l63 = *arg0.add(12).cast::<*mut u8>();
-                            let l64 = *arg0.add(16).cast::<usize>();
-                            let base65 = l63;
-                            let len65 = l64;
-                            for i in 0..len65 {
-                                let base = base65.add(i * 8);
+                            let l75 = *arg0.add(12).cast::<*mut u8>();
+                            let l76 = *arg0.add(16).cast::<usize>();
+                            let base77 = l75;
+                            let len77 = l76;
+                            for i in 0..len77 {
+                                let base = base77.add(i * 8);
                                 {
-                                    let l60 = *base.add(0).cast::<*mut u8>();
-                                    let l61 = *base.add(4).cast::<usize>();
-                                    let base62 = l60;
-                                    let len62 = l61;
-                                    for i in 0..len62 {
-                                        let base = base62.add(i * 40);
+                                    let l72 = *base.add(0).cast::<*mut u8>();
+                                    let l73 = *base.add(4).cast::<usize>();
+                                    let base74 = l72;
+                                    let len74 = l73;
+                                    for i in 0..len74 {
+                                        let base = base74.add(i * 72);
                                         {
                                             let l8 = i32::from(*base.add(0).cast::<u8>());
                                             match l8 {
@@ -7903,21 +10897,58 @@ pub mod exports {
                                                             _rt::cabi_dealloc(base32, len32 * 1, 1);
                                                         }
                                                         25 => (),
+                                                        26 => (),
+                                                        27 => {
+                                                            let l33 = i32::from(
+                                                                *base.add(16).cast::<u8>(),
+                                                            );
+                                                            match l33 {
+                                                                0 => (),
+                                                                _ => {
+                                                                    let l34 = *base
+                                                                        .add(20)
+                                                                        .cast::<*mut u8>();
+                                                                    let l35 = *base
+                                                                        .add(24)
+                                                                        .cast::<usize>();
+                                                                    _rt::cabi_dealloc(l34, l35, 1);
+                                                                }
+                                                            }
+                                                            let l36 = i32::from(
+                                                                *base.add(32).cast::<u8>(),
+                                                            );
+                                                            match l36 {
+                                                                0 => (),
+                                                                _ => {
+                                                                    let l37 = *base
+                                                                        .add(36)
+                                                                        .cast::<*mut u8>();
+                                                                    let l38 = *base
+                                                                        .add(40)
+                                                                        .cast::<usize>();
+                                                                    _rt::cabi_dealloc(l37, l38, 1);
+                                                                }
+                                                            }
+                                                        }
+                                                        28 => (),
+                                                        29 => (),
+                                                        30 => (),
+                                                        31 => (),
                                                         _ => (),
                                                     }
                                                 }
                                                 _ => {
-                                                    let l57 = *base.add(8).cast::<*mut u8>();
-                                                    let l58 = *base.add(12).cast::<usize>();
-                                                    let base59 = l57;
-                                                    let len59 = l58;
-                                                    for i in 0..len59 {
-                                                        let base = base59.add(i * 32);
+                                                    let l69 = *base.add(8).cast::<*mut u8>();
+                                                    let l70 = *base.add(12).cast::<usize>();
+                                                    let base71 = l69;
+                                                    let len71 = l70;
+                                                    for i in 0..len71 {
+                                                        let base = base71.add(i * 64);
                                                         {
-                                                            let l33 = i32::from(
+                                                            let l39 = i32::from(
                                                                 *base.add(0).cast::<u8>(),
                                                             );
-                                                            match l33 {
+                                                            match l39 {
                                                                 0 => (),
                                                                 1 => (),
                                                                 2 => (),
@@ -7925,34 +10956,6 @@ pub mod exports {
                                                                 4 => (),
                                                                 5 => (),
                                                                 6 => {
-                                                                    let l34 = *base
-                                                                        .add(8)
-                                                                        .cast::<*mut u8>();
-                                                                    let l35 = *base
-                                                                        .add(12)
-                                                                        .cast::<usize>();
-                                                                    _rt::cabi_dealloc(l34, l35, 1);
-                                                                }
-                                                                7 => (),
-                                                                8 => {
-                                                                    let l36 = *base
-                                                                        .add(8)
-                                                                        .cast::<*mut u8>();
-                                                                    let l37 = *base
-                                                                        .add(12)
-                                                                        .cast::<usize>();
-                                                                    _rt::cabi_dealloc(l36, l37, 1);
-                                                                }
-                                                                9 => {
-                                                                    let l38 = *base
-                                                                        .add(8)
-                                                                        .cast::<*mut u8>();
-                                                                    let l39 = *base
-                                                                        .add(12)
-                                                                        .cast::<usize>();
-                                                                    _rt::cabi_dealloc(l38, l39, 1);
-                                                                }
-                                                                10 => {
                                                                     let l40 = *base
                                                                         .add(8)
                                                                         .cast::<*mut u8>();
@@ -7961,6 +10964,34 @@ pub mod exports {
                                                                         .cast::<usize>();
                                                                     _rt::cabi_dealloc(l40, l41, 1);
                                                                 }
+                                                                7 => (),
+                                                                8 => {
+                                                                    let l42 = *base
+                                                                        .add(8)
+                                                                        .cast::<*mut u8>();
+                                                                    let l43 = *base
+                                                                        .add(12)
+                                                                        .cast::<usize>();
+                                                                    _rt::cabi_dealloc(l42, l43, 1);
+                                                                }
+                                                                9 => {
+                                                                    let l44 = *base
+                                                                        .add(8)
+                                                                        .cast::<*mut u8>();
+                                                                    let l45 = *base
+                                                                        .add(12)
+                                                                        .cast::<usize>();
+                                                                    _rt::cabi_dealloc(l44, l45, 1);
+                                                                }
+                                                                10 => {
+                                                                    let l46 = *base
+                                                                        .add(8)
+                                                                        .cast::<*mut u8>();
+                                                                    let l47 = *base
+                                                                        .add(12)
+                                                                        .cast::<usize>();
+                                                                    _rt::cabi_dealloc(l46, l47, 1);
+                                                                }
                                                                 11 => (),
                                                                 12 => (),
                                                                 13 => (),
@@ -7968,98 +10999,139 @@ pub mod exports {
                                                                 15 => (),
                                                                 16 => (),
                                                                 17 => {
-                                                                    let l42 = *base
+                                                                    let l48 = *base
                                                                         .add(8)
                                                                         .cast::<*mut u8>();
-                                                                    let l43 = *base
+                                                                    let l49 = *base
                                                                         .add(12)
                                                                         .cast::<usize>();
-                                                                    let base44 = l42;
-                                                                    let len44 = l43;
+                                                                    let base50 = l48;
+                                                                    let len50 = l49;
                                                                     _rt::cabi_dealloc(
-                                                                        base44,
-                                                                        len44 * 1,
+                                                                        base50,
+                                                                        len50 * 1,
                                                                         1,
                                                                     );
                                                                 }
                                                                 18 => {
-                                                                    let l45 = *base
-                                                                        .add(8)
-                                                                        .cast::<*mut u8>();
-                                                                    let l46 = *base
-                                                                        .add(12)
-                                                                        .cast::<usize>();
-                                                                    _rt::cabi_dealloc(l45, l46, 1);
-                                                                }
-                                                                19 => {
-                                                                    let l47 = *base
-                                                                        .add(8)
-                                                                        .cast::<*mut u8>();
-                                                                    let l48 = *base
-                                                                        .add(12)
-                                                                        .cast::<usize>();
-                                                                    _rt::cabi_dealloc(l47, l48, 1);
-                                                                }
-                                                                20 => {
-                                                                    let l49 = *base
-                                                                        .add(8)
-                                                                        .cast::<*mut u8>();
-                                                                    let l50 = *base
-                                                                        .add(12)
-                                                                        .cast::<usize>();
-                                                                    _rt::cabi_dealloc(l49, l50, 1);
-                                                                }
-                                                                21 => (),
-                                                                22 => (),
-                                                                23 => {
                                                                     let l51 = *base
                                                                         .add(8)
                                                                         .cast::<*mut u8>();
                                                                     let l52 = *base
                                                                         .add(12)
                                                                         .cast::<usize>();
-                                                                    let base53 = l51;
-                                                                    let len53 = l52;
+                                                                    _rt::cabi_dealloc(l51, l52, 1);
+                                                                }
+                                                                19 => {
+                                                                    let l53 = *base
+                                                                        .add(8)
+                                                                        .cast::<*mut u8>();
+                                                                    let l54 = *base
+                                                                        .add(12)
+                                                                        .cast::<usize>();
+                                                                    _rt::cabi_dealloc(l53, l54, 1);
+                                                                }
+                                                                20 => {
+                                                                    let l55 = *base
+                                                                        .add(8)
+                                                                        .cast::<*mut u8>();
+                                                                    let l56 = *base
+                                                                        .add(12)
+                                                                        .cast::<usize>();
+                                                                    _rt::cabi_dealloc(l55, l56, 1);
+                                                                }
+                                                                21 => (),
+                                                                22 => (),
+                                                                23 => {
+                                                                    let l57 = *base
+                                                                        .add(8)
+                                                                        .cast::<*mut u8>();
+                                                                    let l58 = *base
+                                                                        .add(12)
+                                                                        .cast::<usize>();
+                                                                    let base59 = l57;
+                                                                    let len59 = l58;
                                                                     _rt::cabi_dealloc(
-                                                                        base53,
-                                                                        len53 * 1,
+                                                                        base59,
+                                                                        len59 * 1,
                                                                         1,
                                                                     );
                                                                 }
                                                                 24 => {
-                                                                    let l54 = *base
+                                                                    let l60 = *base
                                                                         .add(8)
                                                                         .cast::<*mut u8>();
-                                                                    let l55 = *base
+                                                                    let l61 = *base
                                                                         .add(12)
                                                                         .cast::<usize>();
-                                                                    let base56 = l54;
-                                                                    let len56 = l55;
+                                                                    let base62 = l60;
+                                                                    let len62 = l61;
                                                                     _rt::cabi_dealloc(
-                                                                        base56,
-                                                                        len56 * 1,
+                                                                        base62,
+                                                                        len62 * 1,
                                                                         1,
                                                                     );
                                                                 }
                                                                 25 => (),
+                                                                26 => (),
+                                                                27 => {
+                                                                    let l63 = i32::from(
+                                                                        *base.add(8).cast::<u8>(),
+                                                                    );
+                                                                    match l63 {
+                                                                        0 => (),
+                                                                        _ => {
+                                                                            let l64 = *base
+                                                                                .add(12)
+                                                                                .cast::<*mut u8>();
+                                                                            let l65 = *base
+                                                                                .add(16)
+                                                                                .cast::<usize>();
+                                                                            _rt::cabi_dealloc(
+                                                                                l64, l65, 1,
+                                                                            );
+                                                                        }
+                                                                    }
+                                                                    let l66 = i32::from(
+                                                                        *base.add(24).cast::<u8>(),
+                                                                    );
+                                                                    match l66 {
+                                                                        0 => (),
+                                                                        _ => {
+                                                                            let l67 = *base
+                                                                                .add(28)
+                                                                                .cast::<*mut u8>();
+                                                                            let l68 = *base
+                                                                                .add(32)
+                                                                                .cast::<usize>();
+                                                                            _rt::cabi_dealloc(
+                                                                                l67, l68, 1,
+                                                                            );
+                                                                        }
+                                                                    }
+                                                                }
+                                                                28 => (),
+                                                                29 => (),
+                                                                30 => (),
+                                                                31 => (),
                                                                 _ => (),
                                                             }
                                                         }
                                                     }
-                                                    _rt::cabi_dealloc(base59, len59 * 32, 8);
+                                                    _rt::cabi_dealloc(base71, len71 * 64, 8);
                                                 }
                                             }
                                         }
                                     }
-                                    _rt::cabi_dealloc(base62, len62 * 40, 8);
+                                    _rt::cabi_dealloc(base74, len74 * 72, 8);
                                 }
                             }
-                            _rt::cabi_dealloc(base65, len65 * 8, 4);
+                            _rt::cabi_dealloc(base77, len77 * 8, 4);
                         }
                         _ => {
-                            let l66 = *arg0.add(4).cast::<*mut u8>();
-                            let l67 = *arg0.add(8).cast::<usize>();
-                            _rt::cabi_dealloc(l66, l67, 1);
+                            let l78 = *arg0.add(4).cast::<*mut u8>();
+                            let l79 = *arg0.add(8).cast::<usize>();
+                            _rt::cabi_dealloc(l78, l79, 1);
                         }
                     }
                 }
@@ -8085,50 +11157,50 @@ pub mod exports {
                 #[doc(hidden)]
 
                 macro_rules! __export_golem_it_api_cabi{
-  ($ty:ident with_types_in $($path_to_types:tt)*) => (const _: () = {
+                                                                        ($ty:ident with_types_in $($path_to_types:tt)*) => (const _: () = {
 
-    #[export_name = "golem:it/api#check"]
-    unsafe extern "C" fn export_check() -> *mut u8 {
-      $($path_to_types)*::_export_check_cabi::<$ty>()
-    }
-    #[export_name = "cabi_post_golem:it/api#check"]
-    unsafe extern "C" fn _post_return_check(arg0: *mut u8,) {
-      $($path_to_types)*::__post_return_check::<$ty>(arg0)
-    }
-    #[export_name = "golem:it/api#mysql-execute"]
-    unsafe extern "C" fn export_mysql_execute(arg0: *mut u8,arg1: usize,arg2: *mut u8,arg3: usize,) -> *mut u8 {
-      $($path_to_types)*::_export_mysql_execute_cabi::<$ty>(arg0, arg1, arg2, arg3)
-    }
-    #[export_name = "cabi_post_golem:it/api#mysql-execute"]
-    unsafe extern "C" fn _post_return_mysql_execute(arg0: *mut u8,) {
-      $($path_to_types)*::__post_return_mysql_execute::<$ty>(arg0)
-    }
-    #[export_name = "golem:it/api#mysql-query"]
-    unsafe extern "C" fn export_mysql_query(arg0: *mut u8,arg1: usize,arg2: *mut u8,arg3: usize,) -> *mut u8 {
-      $($path_to_types)*::_export_mysql_query_cabi::<$ty>(arg0, arg1, arg2, arg3)
-    }
-    #[export_name = "cabi_post_golem:it/api#mysql-query"]
-    unsafe extern "C" fn _post_return_mysql_query(arg0: *mut u8,) {
-      $($path_to_types)*::__post_return_mysql_query::<$ty>(arg0)
-    }
-    #[export_name = "golem:it/api#postgres-execute"]
-    unsafe extern "C" fn export_postgres_execute(arg0: *mut u8,arg1: usize,arg2: *mut u8,arg3: usize,) -> *mut u8 {
-      $($path_to_types)*::_export_postgres_execute_cabi::<$ty>(arg0, arg1, arg2, arg3)
-    }
-    #[export_name = "cabi_post_golem:it/api#postgres-execute"]
-    unsafe extern "C" fn _post_return_postgres_execute(arg0: *mut u8,) {
-      $($path_to_types)*::__post_return_postgres_execute::<$ty>(arg0)
-    }
-    #[export_name = "golem:it/api#postgres-query"]
-    unsafe extern "C" fn export_postgres_query(arg0: *mut u8,arg1: usize,arg2: *mut u8,arg3: usize,) -> *mut u8 {
-      $($path_to_types)*::_export_postgres_query_cabi::<$ty>(arg0, arg1, arg2, arg3)
-    }
-    #[export_name = "cabi_post_golem:it/api#postgres-query"]
-    unsafe extern "C" fn _post_return_postgres_query(arg0: *mut u8,) {
-      $($path_to_types)*::__post_return_postgres_query::<$ty>(arg0)
-    }
-  };);
-}
+                                                                          #[export_name = "golem:it/api#check"]
+                                                                          unsafe extern "C" fn export_check() -> *mut u8 {
+                                                                            $($path_to_types)*::_export_check_cabi::<$ty>()
+                                                                          }
+                                                                          #[export_name = "cabi_post_golem:it/api#check"]
+                                                                          unsafe extern "C" fn _post_return_check(arg0: *mut u8,) {
+                                                                            $($path_to_types)*::__post_return_check::<$ty>(arg0)
+                                                                          }
+                                                                          #[export_name = "golem:it/api#mysql-execute"]
+                                                                          unsafe extern "C" fn export_mysql_execute(arg0: *mut u8,arg1: usize,arg2: *mut u8,arg3: usize,) -> *mut u8 {
+                                                                            $($path_to_types)*::_export_mysql_execute_cabi::<$ty>(arg0, arg1, arg2, arg3)
+                                                                          }
+                                                                          #[export_name = "cabi_post_golem:it/api#mysql-execute"]
+                                                                          unsafe extern "C" fn _post_return_mysql_execute(arg0: *mut u8,) {
+                                                                            $($path_to_types)*::__post_return_mysql_execute::<$ty>(arg0)
+                                                                          }
+                                                                          #[export_name = "golem:it/api#mysql-query"]
+                                                                          unsafe extern "C" fn export_mysql_query(arg0: *mut u8,arg1: usize,arg2: *mut u8,arg3: usize,) -> *mut u8 {
+                                                                            $($path_to_types)*::_export_mysql_query_cabi::<$ty>(arg0, arg1, arg2, arg3)
+                                                                          }
+                                                                          #[export_name = "cabi_post_golem:it/api#mysql-query"]
+                                                                          unsafe extern "C" fn _post_return_mysql_query(arg0: *mut u8,) {
+                                                                            $($path_to_types)*::__post_return_mysql_query::<$ty>(arg0)
+                                                                          }
+                                                                          #[export_name = "golem:it/api#postgres-execute"]
+                                                                          unsafe extern "C" fn export_postgres_execute(arg0: *mut u8,arg1: usize,arg2: *mut u8,arg3: usize,) -> *mut u8 {
+                                                                            $($path_to_types)*::_export_postgres_execute_cabi::<$ty>(arg0, arg1, arg2, arg3)
+                                                                          }
+                                                                          #[export_name = "cabi_post_golem:it/api#postgres-execute"]
+                                                                          unsafe extern "C" fn _post_return_postgres_execute(arg0: *mut u8,) {
+                                                                            $($path_to_types)*::__post_return_postgres_execute::<$ty>(arg0)
+                                                                          }
+                                                                          #[export_name = "golem:it/api#postgres-query"]
+                                                                          unsafe extern "C" fn export_postgres_query(arg0: *mut u8,arg1: usize,arg2: *mut u8,arg3: usize,) -> *mut u8 {
+                                                                            $($path_to_types)*::_export_postgres_query_cabi::<$ty>(arg0, arg1, arg2, arg3)
+                                                                          }
+                                                                          #[export_name = "cabi_post_golem:it/api#postgres-query"]
+                                                                          unsafe extern "C" fn _post_return_postgres_query(arg0: *mut u8,) {
+                                                                            $($path_to_types)*::__post_return_postgres_query::<$ty>(arg0)
+                                                                          }
+                                                                        };);
+                                                                      }
                 #[doc(hidden)]
                 pub(crate) use __export_golem_it_api_cabi;
                 #[repr(align(8))]
@@ -8437,93 +11509,101 @@ mod _rt {
 #[doc(hidden)]
 
 macro_rules! __export_rdbms_service_impl {
-  ($ty:ident) => (self::export!($ty with_types_in self););
-  ($ty:ident with_types_in $($path_to_types_root:tt)*) => (
-  $($path_to_types_root)*::exports::golem::it::api::__export_golem_it_api_cabi!($ty with_types_in $($path_to_types_root)*::exports::golem::it::api);
-  )
-}
+                                                                ($ty:ident) => (self::export!($ty with_types_in self););
+                                                                ($ty:ident with_types_in $($path_to_types_root:tt)*) => (
+                                                                $($path_to_types_root)*::exports::golem::it::api::__export_golem_it_api_cabi!($ty with_types_in $($path_to_types_root)*::exports::golem::it::api);
+                                                                )
+                                                              }
 #[doc(inline)]
 pub(crate) use __export_rdbms_service_impl as export;
 
 #[cfg(target_arch = "wasm32")]
 #[link_section = "component-type:wit-bindgen:0.25.0:rdbms-service:encoded world"]
 #[doc(hidden)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 3517] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xb9\x1a\x01A\x02\x01\
-A\x0a\x01B;\x01q\x05\x12connection-failure\x01s\0\x17query-parameter-failure\x01\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 3836] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xf8\x1c\x01A\x02\x01\
+A\x0a\x01BS\x01q\x05\x12connection-failure\x01s\0\x17query-parameter-failure\x01\
 s\0\x17query-execution-failure\x01s\0\x16query-response-failure\x01s\0\x05other\x01\
 s\0\x04\0\x05error\x03\0\0\x01o\x02ww\x04\0\x04uuid\x03\0\x02\x01o\x04}}}}\x04\0\
 \x0cipv4-address\x03\0\x04\x01o\x08{{{{{{{{\x04\0\x0cipv6-address\x03\0\x06\x01q\
 \x02\x04ipv4\x01\x05\0\x04ipv6\x01\x07\0\x04\0\x0aip-address\x03\0\x08\x01o\x03z\
 }}\x04\0\x04date\x03\0\x0a\x01o\x04}}}y\x04\0\x04time\x03\0\x0c\x01o\x05}}}yz\x04\
 \0\x06timetz\x03\0\x0e\x01o\x07z}}}}}y\x04\0\x09timestamp\x03\0\x10\x01o\x08z}}}\
-}}yz\x04\0\x0btimestamptz\x03\0\x12\x01p\x7f\x04\0\x07bit-vec\x03\0\x14\x01q\x1a\
-\x09character\0\0\x04int2\0\0\x04int4\0\0\x04int8\0\0\x06float4\0\0\x06float8\0\0\
-\x07numeric\0\0\x07boolean\0\0\x04text\0\0\x07varchar\0\0\x06bpchar\0\0\x09times\
-tamp\0\0\x0btimestamptz\0\0\x04date\0\0\x04time\0\0\x06timetz\0\0\x08interval\0\0\
-\x05bytea\0\0\x04uuid\0\0\x03xml\0\0\x04json\0\0\x05jsonb\0\0\x04inet\0\0\x03bit\
-\0\0\x06varbit\0\0\x03oid\0\0\x04\0\x18db-column-type-primitive\x03\0\x16\x01p}\x01\
-q\x1b\x09character\x01~\0\x04int2\x01|\0\x04int4\x01z\0\x04int8\x01x\0\x06float4\
-\x01v\0\x06float8\x01u\0\x07numeric\x01s\0\x07boolean\x01\x7f\0\x04text\x01s\0\x07\
-varchar\x01s\0\x06bpchar\x01s\0\x09timestamp\x01\x11\0\x0btimestamptz\x01\x13\0\x04\
-date\x01\x0b\0\x04time\x01\x0d\0\x06timetz\x01\x0f\0\x08interval\x01x\0\x05bytea\
-\x01\x18\0\x04json\x01s\0\x05jsonb\x01s\0\x03xml\x01s\0\x04uuid\x01\x03\0\x04ine\
-t\x01\x09\0\x03bit\x01\x15\0\x06varbit\x01\x15\0\x03oid\x01y\0\x04null\0\0\x04\0\
-\x12db-value-primitive\x03\0\x19\x01q\x02\x09primitive\x01\x17\0\x05array\x01\x17\
-\0\x04\0\x0edb-column-type\x03\0\x1b\x01r\x04\x07ordinalw\x04names\x07db-type\x1c\
-\x0cdb-type-names\x04\0\x09db-column\x03\0\x1d\x01p\x1a\x01q\x02\x09primitive\x01\
-\x1a\0\x05array\x01\x1f\0\x04\0\x08db-value\x03\0\x20\x01p!\x01r\x01\x06values\"\
-\x04\0\x06db-row\x03\0#\x04\0\x0ddb-result-set\x03\x01\x04\0\x0ddb-connection\x03\
-\x01\x01h%\x01p\x1e\x01@\x01\x04self'\0(\x04\0![method]db-result-set.get-columns\
-\x01)\x01p$\x01k*\x01@\x01\x04self'\0+\x04\0\x1e[method]db-result-set.get-next\x01\
-,\x01i&\x01j\x01-\x01\x01\x01@\x01\x07addresss\0.\x04\0\x1a[static]db-connection\
-.open\x01/\x01h&\x01i%\x01j\x011\x01\x01\x01@\x03\x04self0\x09statements\x06para\
-ms\"\02\x04\0\x1b[method]db-connection.query\x013\x01j\x01w\x01\x01\x01@\x03\x04\
-self0\x09statements\x06params\"\04\x04\0\x1d[method]db-connection.execute\x015\x03\
-\x01\x19wasi:rdbms/postgres@0.0.1\x05\0\x01B*\x01q\x05\x12connection-failure\x01\
-s\0\x17query-parameter-failure\x01s\0\x17query-execution-failure\x01s\0\x16query\
--response-failure\x01s\0\x05other\x01s\0\x04\0\x05error\x03\0\0\x01o\x03z}}\x04\0\
-\x04date\x03\0\x02\x01o\x04}}}y\x04\0\x04time\x03\0\x04\x01o\x07z}}}}}y\x04\0\x09\
-timestamp\x03\0\x06\x01p\x7f\x04\0\x07bit-vec\x03\0\x08\x01q#\x07boolean\0\0\x07\
-tinyint\0\0\x08smallint\0\0\x09mediumint\0\0\x03int\0\0\x06bigint\0\0\x0dtiny-un\
-signed\0\0\x0esmall-unsigned\0\0\x0fmedium-unsigned\0\0\x08unsigned\0\0\x0cbig-u\
-nsigned\0\0\x05float\0\0\x06double\0\0\x07decimal\0\0\x04date\0\0\x08datetime\0\0\
-\x09timestamp\0\0\x04time\0\0\x04year\0\0\x07fixchar\0\0\x07varchar\0\0\x08tinyt\
-ext\0\0\x04text\0\0\x0amediumtext\0\0\x08longtext\0\0\x06binary\0\0\x09varbinary\
-\0\0\x08tinyblob\0\0\x04blob\0\0\x0amediumblob\0\0\x08longblob\0\0\x0benumeratio\
-n\0\0\x03set\0\0\x03bit\0\0\x04json\0\0\x04\0\x0edb-column-type\x03\0\x0a\x01r\x04\
-\x07ordinalw\x04names\x07db-type\x0b\x0cdb-type-names\x04\0\x09db-column\x03\0\x0c\
-\x01p}\x01q$\x07boolean\x01\x7f\0\x07tinyint\x01~\0\x08smallint\x01|\0\x09medium\
-int\x01z\0\x03int\x01z\0\x06bigint\x01x\0\x0dtiny-unsigned\x01}\0\x0esmall-unsig\
-ned\x01{\0\x0fmedium-unsigned\x01y\0\x08unsigned\x01y\0\x0cbig-unsigned\x01w\0\x05\
-float\x01v\0\x06double\x01u\0\x07decimal\x01s\0\x04date\x01\x03\0\x08datetime\x01\
-\x07\0\x09timestamp\x01\x07\0\x04time\x01\x05\0\x04year\x01~\0\x07fixchar\x01s\0\
-\x07varchar\x01s\0\x08tinytext\x01s\0\x04text\x01s\0\x0amediumtext\x01s\0\x08lon\
-gtext\x01s\0\x06binary\x01\x0e\0\x09varbinary\x01\x0e\0\x08tinyblob\x01\x0e\0\x04\
-blob\x01\x0e\0\x0amediumblob\x01\x0e\0\x08longblob\x01\x0e\0\x0benumeration\x01s\
-\0\x03set\x01s\0\x03bit\x01\x09\0\x04json\x01s\0\x04null\0\0\x04\0\x08db-value\x03\
-\0\x0f\x01p\x10\x01r\x01\x06values\x11\x04\0\x06db-row\x03\0\x12\x04\0\x0ddb-res\
-ult-set\x03\x01\x04\0\x0ddb-connection\x03\x01\x01h\x14\x01p\x0d\x01@\x01\x04sel\
-f\x16\0\x17\x04\0![method]db-result-set.get-columns\x01\x18\x01p\x13\x01k\x19\x01\
-@\x01\x04self\x16\0\x1a\x04\0\x1e[method]db-result-set.get-next\x01\x1b\x01i\x15\
-\x01j\x01\x1c\x01\x01\x01@\x01\x07addresss\0\x1d\x04\0\x1a[static]db-connection.\
-open\x01\x1e\x01h\x15\x01i\x14\x01j\x01\x20\x01\x01\x01@\x03\x04self\x1f\x09stat\
-ements\x06params\x11\0!\x04\0\x1b[method]db-connection.query\x01\"\x01j\x01w\x01\
-\x01\x01@\x03\x04self\x1f\x09statements\x06params\x11\0#\x04\0\x1d[method]db-con\
-nection.execute\x01$\x03\x01\x16wasi:rdbms/mysql@0.0.1\x05\x01\x02\x03\0\0\x06db\
--row\x02\x03\0\0\x09db-column\x02\x03\0\x01\x06db-row\x02\x03\0\x01\x09db-column\
-\x01B\x1d\x02\x03\x02\x01\x02\x04\0\x0fpostgres-db-row\x03\0\0\x02\x03\x02\x01\x03\
-\x04\0\x12postgres-db-column\x03\0\x02\x02\x03\x02\x01\x04\x04\0\x0cmysql-db-row\
-\x03\0\x04\x02\x03\x02\x01\x05\x04\0\x0fmysql-db-column\x03\0\x06\x01p\x03\x01p\x01\
-\x01r\x02\x07columns\x08\x04rows\x09\x04\0\x15postgres-query-result\x03\0\x0a\x01\
-p\x07\x01p\x05\x01r\x02\x07columns\x0c\x04rows\x0d\x04\0\x12mysql-query-result\x03\
-\0\x0e\x01@\0\0s\x04\0\x05check\x01\x10\x01ps\x01j\x01w\x01s\x01@\x02\x09stateme\
-nts\x06params\x11\0\x12\x04\0\x0dmysql-execute\x01\x13\x01j\x01\x0f\x01s\x01@\x02\
-\x09statements\x06params\x11\0\x14\x04\0\x0bmysql-query\x01\x15\x04\0\x10postgre\
-s-execute\x01\x13\x01j\x01\x0b\x01s\x01@\x02\x09statements\x06params\x11\0\x16\x04\
-\0\x0epostgres-query\x01\x17\x04\x01\x0cgolem:it/api\x05\x06\x04\x01\x16golem:it\
-/rdbms-service\x04\0\x0b\x13\x01\0\x0drdbms-service\x03\0\0\0G\x09producers\x01\x0c\
-processed-by\x02\x0dwit-component\x070.208.1\x10wit-bindgen-rust\x060.25.0";
+}}yz\x04\0\x0btimestamptz\x03\0\x12\x01o\x02z\x7f\x01k\x14\x01o\x02\x15\x15\x04\0\
+\x09int4range\x03\0\x16\x01o\x02x\x7f\x01k\x18\x01o\x02\x19\x19\x04\0\x09int8ran\
+ge\x03\0\x1a\x01o\x02s\x7f\x01k\x1c\x01o\x02\x1d\x1d\x04\0\x08numrange\x03\0\x1e\
+\x01o\x02\x11\x7f\x01k\x20\x01o\x02!!\x04\0\x07tsrange\x03\0\"\x01o\x02\x13\x7f\x01\
+k$\x01o\x02%%\x04\0\x09tstzrange\x03\0&\x01o\x02\x0b\x7f\x01k(\x01o\x02))\x04\0\x09\
+daterange\x03\0*\x01p\x7f\x04\0\x07bit-vec\x03\0,\x01q\x20\x09character\0\0\x04i\
+nt2\0\0\x04int4\0\0\x04int8\0\0\x06float4\0\0\x06float8\0\0\x07numeric\0\0\x07bo\
+olean\0\0\x04text\0\0\x07varchar\0\0\x06bpchar\0\0\x09timestamp\0\0\x0btimestamp\
+tz\0\0\x04date\0\0\x04time\0\0\x06timetz\0\0\x08interval\0\0\x05bytea\0\0\x04uui\
+d\0\0\x03xml\0\0\x04json\0\0\x05jsonb\0\0\x04inet\0\0\x03bit\0\0\x06varbit\0\0\x09\
+int4range\0\0\x09int8range\0\0\x08numrange\0\0\x07tsrange\0\0\x09tstzrange\0\0\x09\
+daterange\0\0\x03oid\0\0\x04\0\x18db-column-type-primitive\x03\0.\x01p}\x01q!\x09\
+character\x01~\0\x04int2\x01|\0\x04int4\x01z\0\x04int8\x01x\0\x06float4\x01v\0\x06\
+float8\x01u\0\x07numeric\x01s\0\x07boolean\x01\x7f\0\x04text\x01s\0\x07varchar\x01\
+s\0\x06bpchar\x01s\0\x09timestamp\x01\x11\0\x0btimestamptz\x01\x13\0\x04date\x01\
+\x0b\0\x04time\x01\x0d\0\x06timetz\x01\x0f\0\x08interval\x01x\0\x05bytea\x010\0\x04\
+json\x01s\0\x05jsonb\x01s\0\x03xml\x01s\0\x04uuid\x01\x03\0\x04inet\x01\x09\0\x03\
+bit\x01-\0\x06varbit\x01-\0\x09int4range\x01\x17\0\x09int8range\x01\x1b\0\x08num\
+range\x01\x1f\0\x07tsrange\x01#\0\x09tstzrange\x01'\0\x09daterange\x01+\0\x03oid\
+\x01y\0\x04null\0\0\x04\0\x12db-value-primitive\x03\01\x01q\x02\x09primitive\x01\
+/\0\x05array\x01/\0\x04\0\x0edb-column-type\x03\03\x01r\x04\x07ordinalw\x04names\
+\x07db-type4\x0cdb-type-names\x04\0\x09db-column\x03\05\x01p2\x01q\x02\x09primit\
+ive\x012\0\x05array\x017\0\x04\0\x08db-value\x03\08\x01p9\x01r\x01\x06values:\x04\
+\0\x06db-row\x03\0;\x04\0\x0ddb-result-set\x03\x01\x04\0\x0ddb-connection\x03\x01\
+\x01h=\x01p6\x01@\x01\x04self?\0\xc0\0\x04\0![method]db-result-set.get-columns\x01\
+A\x01p<\x01k\xc2\0\x01@\x01\x04self?\0\xc3\0\x04\0\x1e[method]db-result-set.get-\
+next\x01D\x01i>\x01j\x01\xc5\0\x01\x01\x01@\x01\x07addresss\0\xc6\0\x04\0\x1a[st\
+atic]db-connection.open\x01G\x01h>\x01i=\x01j\x01\xc9\0\x01\x01\x01@\x03\x04self\
+\xc8\0\x09statements\x06params:\0\xca\0\x04\0\x1b[method]db-connection.query\x01\
+K\x01j\x01w\x01\x01\x01@\x03\x04self\xc8\0\x09statements\x06params:\0\xcc\0\x04\0\
+\x1d[method]db-connection.execute\x01M\x03\x01\x19wasi:rdbms/postgres@0.0.1\x05\0\
+\x01B*\x01q\x05\x12connection-failure\x01s\0\x17query-parameter-failure\x01s\0\x17\
+query-execution-failure\x01s\0\x16query-response-failure\x01s\0\x05other\x01s\0\x04\
+\0\x05error\x03\0\0\x01o\x03z}}\x04\0\x04date\x03\0\x02\x01o\x04}}}y\x04\0\x04ti\
+me\x03\0\x04\x01o\x07z}}}}}y\x04\0\x09timestamp\x03\0\x06\x01p\x7f\x04\0\x07bit-\
+vec\x03\0\x08\x01q#\x07boolean\0\0\x07tinyint\0\0\x08smallint\0\0\x09mediumint\0\
+\0\x03int\0\0\x06bigint\0\0\x0dtiny-unsigned\0\0\x0esmall-unsigned\0\0\x0fmedium\
+-unsigned\0\0\x08unsigned\0\0\x0cbig-unsigned\0\0\x05float\0\0\x06double\0\0\x07\
+decimal\0\0\x04date\0\0\x08datetime\0\0\x09timestamp\0\0\x04time\0\0\x04year\0\0\
+\x07fixchar\0\0\x07varchar\0\0\x08tinytext\0\0\x04text\0\0\x0amediumtext\0\0\x08\
+longtext\0\0\x06binary\0\0\x09varbinary\0\0\x08tinyblob\0\0\x04blob\0\0\x0amediu\
+mblob\0\0\x08longblob\0\0\x0benumeration\0\0\x03set\0\0\x03bit\0\0\x04json\0\0\x04\
+\0\x0edb-column-type\x03\0\x0a\x01r\x04\x07ordinalw\x04names\x07db-type\x0b\x0cd\
+b-type-names\x04\0\x09db-column\x03\0\x0c\x01p}\x01q$\x07boolean\x01\x7f\0\x07ti\
+nyint\x01~\0\x08smallint\x01|\0\x09mediumint\x01z\0\x03int\x01z\0\x06bigint\x01x\
+\0\x0dtiny-unsigned\x01}\0\x0esmall-unsigned\x01{\0\x0fmedium-unsigned\x01y\0\x08\
+unsigned\x01y\0\x0cbig-unsigned\x01w\0\x05float\x01v\0\x06double\x01u\0\x07decim\
+al\x01s\0\x04date\x01\x03\0\x08datetime\x01\x07\0\x09timestamp\x01\x07\0\x04time\
+\x01\x05\0\x04year\x01~\0\x07fixchar\x01s\0\x07varchar\x01s\0\x08tinytext\x01s\0\
+\x04text\x01s\0\x0amediumtext\x01s\0\x08longtext\x01s\0\x06binary\x01\x0e\0\x09v\
+arbinary\x01\x0e\0\x08tinyblob\x01\x0e\0\x04blob\x01\x0e\0\x0amediumblob\x01\x0e\
+\0\x08longblob\x01\x0e\0\x0benumeration\x01s\0\x03set\x01s\0\x03bit\x01\x09\0\x04\
+json\x01s\0\x04null\0\0\x04\0\x08db-value\x03\0\x0f\x01p\x10\x01r\x01\x06values\x11\
+\x04\0\x06db-row\x03\0\x12\x04\0\x0ddb-result-set\x03\x01\x04\0\x0ddb-connection\
+\x03\x01\x01h\x14\x01p\x0d\x01@\x01\x04self\x16\0\x17\x04\0![method]db-result-se\
+t.get-columns\x01\x18\x01p\x13\x01k\x19\x01@\x01\x04self\x16\0\x1a\x04\0\x1e[met\
+hod]db-result-set.get-next\x01\x1b\x01i\x15\x01j\x01\x1c\x01\x01\x01@\x01\x07add\
+resss\0\x1d\x04\0\x1a[static]db-connection.open\x01\x1e\x01h\x15\x01i\x14\x01j\x01\
+\x20\x01\x01\x01@\x03\x04self\x1f\x09statements\x06params\x11\0!\x04\0\x1b[metho\
+d]db-connection.query\x01\"\x01j\x01w\x01\x01\x01@\x03\x04self\x1f\x09statements\
+\x06params\x11\0#\x04\0\x1d[method]db-connection.execute\x01$\x03\x01\x16wasi:rd\
+bms/mysql@0.0.1\x05\x01\x02\x03\0\0\x06db-row\x02\x03\0\0\x09db-column\x02\x03\0\
+\x01\x06db-row\x02\x03\0\x01\x09db-column\x01B\x1d\x02\x03\x02\x01\x02\x04\0\x0f\
+postgres-db-row\x03\0\0\x02\x03\x02\x01\x03\x04\0\x12postgres-db-column\x03\0\x02\
+\x02\x03\x02\x01\x04\x04\0\x0cmysql-db-row\x03\0\x04\x02\x03\x02\x01\x05\x04\0\x0f\
+mysql-db-column\x03\0\x06\x01p\x03\x01p\x01\x01r\x02\x07columns\x08\x04rows\x09\x04\
+\0\x15postgres-query-result\x03\0\x0a\x01p\x07\x01p\x05\x01r\x02\x07columns\x0c\x04\
+rows\x0d\x04\0\x12mysql-query-result\x03\0\x0e\x01@\0\0s\x04\0\x05check\x01\x10\x01\
+ps\x01j\x01w\x01s\x01@\x02\x09statements\x06params\x11\0\x12\x04\0\x0dmysql-exec\
+ute\x01\x13\x01j\x01\x0f\x01s\x01@\x02\x09statements\x06params\x11\0\x14\x04\0\x0b\
+mysql-query\x01\x15\x04\0\x10postgres-execute\x01\x13\x01j\x01\x0b\x01s\x01@\x02\
+\x09statements\x06params\x11\0\x16\x04\0\x0epostgres-query\x01\x17\x04\x01\x0cgo\
+lem:it/api\x05\x06\x04\x01\x16golem:it/rdbms-service\x04\0\x0b\x13\x01\0\x0drdbm\
+s-service\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x070.\
+208.1\x10wit-bindgen-rust\x060.25.0";
 
 #[inline(never)]
 #[doc(hidden)]
