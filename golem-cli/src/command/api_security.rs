@@ -89,7 +89,11 @@ impl<ProjectRef: clap::Args + Send + Sync + 'static> ApiSecuritySchemeSubcommand
                     )
                     .await
             }
-            ApiSecuritySchemeSubcommand::Get { id, .. } => service.get(id).await,
+            ApiSecuritySchemeSubcommand::Get { id, project_ref } => {
+                let project_id = projects.resolve_id_or_default(project_ref).await?;
+
+                service.get(id, &project_id).await
+            }
         }
     }
 }

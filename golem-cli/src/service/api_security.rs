@@ -32,7 +32,11 @@ pub trait ApiSecuritySchemeService {
         project: &Self::ProjectContext,
     ) -> Result<GolemResult, GolemError>;
 
-    async fn get(&self, id: String) -> Result<GolemResult, GolemError>;
+    async fn get(
+        &self,
+        id: String,
+        project: &Self::ProjectContext,
+    ) -> Result<GolemResult, GolemError>;
 }
 
 pub struct ApiSecuritySchemeServiceLive<ProjectContext> {
@@ -71,8 +75,12 @@ impl<ProjectContext: Send + Sync> ApiSecuritySchemeService
         Ok(GolemResult::Ok(Box::new(deployment)))
     }
 
-    async fn get(&self, site: String) -> Result<GolemResult, GolemError> {
-        let deployment = self.client.get(&site).await?;
+    async fn get(
+        &self,
+        id: String,
+        project: &Self::ProjectContext,
+    ) -> Result<GolemResult, GolemError> {
+        let deployment = self.client.get(&id, project).await?;
 
         Ok(GolemResult::Ok(Box::new(deployment)))
     }

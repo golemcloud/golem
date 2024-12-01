@@ -31,14 +31,6 @@ impl<C: golem_client::api::ApiSecurityClient + Sync + Send> ApiSecurityClient
 {
     type ProjectContext = OssContext;
 
-    async fn get(&self, id: &str) -> Result<ApiSecurityScheme, GolemError> {
-        info!("Getting api security scheme for {id}");
-
-        let result = self.client.get(id).await.map_err(GolemError::from)?;
-
-        Ok(ApiSecurityScheme::from(result))
-    }
-
     async fn create(
         &self,
         id: String,
@@ -63,6 +55,18 @@ impl<C: golem_client::api::ApiSecurityClient + Sync + Send> ApiSecurityClient
             })
             .await
             .map_err(GolemError::from)?;
+
+        Ok(ApiSecurityScheme::from(result))
+    }
+
+    async fn get(
+        &self,
+        id: &str,
+        _project: &Self::ProjectContext,
+    ) -> Result<ApiSecurityScheme, GolemError> {
+        info!("Getting api security scheme for {id}");
+
+        let result = self.client.get(id).await.map_err(GolemError::from)?;
 
         Ok(ApiSecurityScheme::from(result))
     }

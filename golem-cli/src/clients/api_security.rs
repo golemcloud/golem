@@ -31,5 +31,9 @@ pub trait ApiSecurityClient {
         project: &Self::ProjectContext,
     ) -> Result<ApiSecurityScheme, GolemError>;
 
-    async fn get(&self, id: &str) -> Result<ApiSecurityScheme, GolemError>;
+    async fn get(
+        &self,
+        id: &str,
+        project: &Self::ProjectContext,
+    ) -> Result<ApiSecurityScheme, GolemError>;
 }
