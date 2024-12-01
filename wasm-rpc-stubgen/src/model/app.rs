@@ -104,7 +104,13 @@ pub fn includes_from_yaml_file(source: &Path) -> Vec<String> {
     fs::read_to_string(source)
         .ok()
         .and_then(|source| app_raw::Application::from_yaml_str(source.as_str()).ok())
-        .map(|app| app.include)
+        .map(|app| {
+            if app.includes.is_empty() {
+                vec!["**/golem.yaml".to_string()]
+            } else {
+                app.includes
+            }
+        })
         .unwrap_or_default()
 }
 
@@ -172,14 +178,14 @@ impl Application {
                 }
             }
 
-            if !app.application.include.is_empty() {
+            if !app.application.includes.is_empty() {
                 include_sources.push(app.source.to_path_buf());
                 if include.is_empty() {
-                    include = app.application.include;
+                    include = app.application.includes;
                 }
             }
 
-            if app.application.wit_deps.is_empty() {
+            if !app.application.wit_deps.is_empty() {
                 wit_deps_sources.push(app.source.to_path_buf());
                 if wit_deps.is_empty() {
                     wit_deps = app.application.wit_deps; // TODO: resolve from source?
@@ -253,47 +259,50 @@ impl Application {
                 components.insert(component_name, (app.source.to_path_buf(), component));
             }
 
-            for (component_name, dependency) in app.application.dependencies {
+            for (component_name, component_dependencies) in app.application.dependencies {
                 let component_name = ComponentName::from(component_name);
                 validation.push_context("component", component_name.to_string());
 
-                if dependency.type_ == "wasm-rpc" {
-                    match dependency.target {
-                        Some(target) => {
-                            let target_component_name = ComponentName::from(target);
+                for dependency in component_dependencies {
+                    if dependency.type_ == "wasm-rpc" {
+                        match dependency.target {
+                            Some(target) => {
+                                let target_component_name = ComponentName::from(target);
 
-                            if !dependencies.contains_key(&component_name) {
-                                dependencies.insert(component_name.clone(), BTreeSet::new());
-                            }
-                            dependencies
-                                .get_mut(&component_name)
-                                .unwrap()
-                                .insert(target_component_name.clone());
+                                if !dependencies.contains_key(&component_name) {
+                                    dependencies.insert(component_name.clone(), BTreeSet::new());
+                                }
+                                dependencies
+                                    .get_mut(&component_name)
+                                    .unwrap()
+                                    .insert(target_component_name.clone());
 
-                            if !dependency_sources.contains_key(&component_name) {
-                                dependency_sources.insert(component_name.clone(), HashMap::new());
-                            }
-                            let dependency_sources =
-                                dependency_sources.get_mut(&component_name).unwrap();
-                            if !dependency_sources.contains_key(&target_component_name) {
+                                if !dependency_sources.contains_key(&component_name) {
+                                    dependency_sources
+                                        .insert(component_name.clone(), HashMap::new());
+                                }
+                                let dependency_sources =
+                                    dependency_sources.get_mut(&component_name).unwrap();
+                                if !dependency_sources.contains_key(&target_component_name) {
+                                    dependency_sources
+                                        .insert(target_component_name.clone(), Vec::new());
+                                }
                                 dependency_sources
-                                    .insert(target_component_name.clone(), Vec::new());
+                                    .get_mut(&target_component_name)
+                                    .unwrap()
+                                    .push(app.source.to_path_buf());
                             }
-                            dependency_sources
-                                .get_mut(&target_component_name)
-                                .unwrap()
-                                .push(app.source.to_path_buf());
+                            None => validation.add_error(format!(
+                                "Missing {} field for component wasm-rpc dependency",
+                                "target".log_color_error_highlight()
+                            )),
                         }
-                        None => validation.add_error(format!(
-                            "Missing {} field for component wasm-rpc dependency",
-                            "target".log_color_error_highlight()
-                        )),
+                    } else {
+                        validation.add_error(format!(
+                            "Unknown component dependency type: {}",
+                            dependency.type_.log_color_error_highlight()
+                        ));
                     }
-                } else {
-                    validation.add_error(format!(
-                        "Unknown component dependency type: {}",
-                        dependency.type_.log_color_error_highlight()
-                    ));
                 }
 
                 validation.pop_context();
@@ -307,7 +316,7 @@ impl Application {
             ("tempDir", temp_dir_sources),
             ("witDeps", wit_deps_sources),
         ] {
-            if !sources.is_empty() {
+            if sources.len() > 1 {
                 validation.add_error(format!(
                     "Property {} is defined in multiple sources: {}",
                     property_name.log_color_highlight(),
@@ -321,7 +330,7 @@ impl Application {
 
         let non_unique_templates = template_sources
             .into_iter()
-            .filter(|(_, template)| !template.is_empty());
+            .filter(|(_, sources)| sources.len() > 1);
 
         validation.add_errors(non_unique_templates, |(template_name, sources)| {
             Some((
@@ -339,7 +348,7 @@ impl Application {
 
         let non_unique_components = component_sources
             .into_iter()
-            .filter(|(_, sources)| !sources.is_empty());
+            .filter(|(_, sources)| sources.len() > 1);
 
         validation.add_errors(non_unique_components, |(template_name, sources)| {
             Some((

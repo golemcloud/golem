@@ -191,15 +191,15 @@ pub struct InitializeWorkspaceArgs {
 #[derive(Subcommand, Debug)]
 pub enum App {
     /// Runs the pre-component-build steps (stub generation and adding wit dependencies)
-    PreComponentBuild(DeclarativeBuildArgs),
+    PreComponentBuild(AppBuildArgs),
     /// Runs component build steps
-    ComponentBuild(DeclarativeBuildArgs),
+    ComponentBuild(AppBuildArgs),
     /// Runs the post-component-build steps (composing stubs)
-    PostComponentBuild(DeclarativeBuildArgs),
+    PostComponentBuild(AppBuildArgs),
     /// Runs all build steps (pre-component, component, post-component)
-    Build(DeclarativeBuildArgs),
+    Build(AppBuildArgs),
     /// Clean outputs
-    Clean(DeclarativeBuildArgs),
+    Clean(AppBuildArgs),
     /// Run custom command
     CustomCommand(DeclarativeCustomCommand),
 }
@@ -213,7 +213,7 @@ pub struct DeclarativeInitArgs {
 
 #[derive(clap::Args, Debug)]
 #[command(version, about, long_about = None)]
-pub struct DeclarativeBuildArgs {
+pub struct AppBuildArgs {
     /// List of application manifests, can be defined multiple times
     #[clap(long, short)]
     pub app: Vec<PathBuf>,
@@ -229,7 +229,7 @@ pub struct DeclarativeBuildArgs {
 #[command(version, about, long_about = None)]
 pub struct DeclarativeCustomCommand {
     #[clap(flatten)]
-    args: DeclarativeBuildArgs,
+    args: AppBuildArgs,
     #[arg(value_name = "custom command")]
     command: String,
 }
@@ -297,32 +297,30 @@ pub fn initialize_workspace(
     )
 }
 
-pub async fn run_declarative_command(command: App) -> anyhow::Result<()> {
+pub async fn run_app_command(command: App) -> anyhow::Result<()> {
     match command {
         App::PreComponentBuild(args) => {
-            commands::declarative::pre_component_build(dec_build_args_to_config(args)).await
+            commands::app::pre_component_build(app_args_to_config(args)).await
         }
-        App::ComponentBuild(args) => {
-            commands::declarative::component_build(dec_build_args_to_config(args))
-        }
+        App::ComponentBuild(args) => commands::app::component_build(app_args_to_config(args)),
         App::PostComponentBuild(args) => {
-            commands::declarative::post_component_build(dec_build_args_to_config(args)).await
+            commands::app::post_component_build(app_args_to_config(args)).await
         }
-        App::Build(args) => commands::declarative::build(dec_build_args_to_config(args)).await,
-        App::Clean(args) => commands::declarative::clean(dec_build_args_to_config(args)),
+        App::Build(args) => commands::app::build(app_args_to_config(args)).await,
+        App::Clean(args) => commands::app::clean(app_args_to_config(args)),
         App::CustomCommand(args) => {
-            commands::declarative::custom_command(dec_build_args_to_config(args.args), args.command)
+            commands::app::custom_command(app_args_to_config(args.args), args.command)
         }
     }
 }
 
-fn dec_build_args_to_config(args: DeclarativeBuildArgs) -> commands::declarative::Config {
-    commands::declarative::Config {
+fn app_args_to_config(args: AppBuildArgs) -> commands::app::Config {
+    commands::app::Config {
         app_resolve_mode: {
             if args.app.is_empty() {
-                commands::declarative::ApplicationSourceMode::Automatic
+                commands::app::ApplicationSourceMode::Automatic
             } else {
-                commands::declarative::ApplicationSourceMode::Explicit(args.app)
+                commands::app::ApplicationSourceMode::Explicit(args.app)
             }
         },
         skip_up_to_date_checks: args.force_build,
