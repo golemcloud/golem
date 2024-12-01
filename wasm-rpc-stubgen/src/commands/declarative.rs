@@ -5,10 +5,9 @@ use crate::log::{
     log_action, log_skipping_up_to_date, log_validated_action_result, log_warn_action, LogColorize,
     LogIndent,
 };
-use crate::model::oam;
+use crate::model::wasm_rpc::raw::ExternalCommand;
 use crate::model::wasm_rpc::{
-    include_glob_patter_from_yaml_file, init_oam_app, Application, ComponentName, ExternalCommand,
-    ProfileName, WasmComponent, DEFAULT_CONFIG_FILE_NAME,
+    includes_from_yaml_file, raw, Application, ComponentName, ProfileName, DEFAULT_CONFIG_FILE_NAME,
 };
 use crate::stub::{StubConfig, StubDefinition};
 use crate::validation::ValidatedResult;
@@ -21,6 +20,7 @@ use crate::{commands, naming, WasmRpcOverride};
 use anyhow::{anyhow, bail, Context, Error};
 use colored::Colorize;
 use glob::glob;
+use golem_wasm_rpc::WASM_RPC_VERSION;
 use itertools::Itertools;
 use std::cell::OnceCell;
 use std::cmp::Ordering;
@@ -47,7 +47,7 @@ struct ApplicationContext {
     application: Application,
     wit: ResolvedWitApplication,
     common_wit_deps: OnceCell<anyhow::Result<WitDepsResolver>>,
-    component_base_output_wit_deps: HashMap<ComponentName, WitDepsResolver>,
+    component_generated_base_wit_deps: HashMap<ComponentName, WitDepsResolver>,
 }
 
 impl ApplicationContext {
@@ -61,7 +61,7 @@ impl ApplicationContext {
                         application,
                         wit,
                         common_wit_deps: OnceCell::new(),
-                        component_base_output_wit_deps: HashMap::new(),
+                        component_generated_base_wit_deps: HashMap::new(),
                     }
                 })
             }),
@@ -104,137 +104,133 @@ impl ApplicationContext {
             for component_name in ctx.application.component_names() {
                 let selection = ctx
                     .application
-                    .component_effective_template_and_profile(component_name, ctx.profile());
+                    .component_effective_property_source(component_name, ctx.profile());
 
-                match (
+                let message = match (
                     selection.profile,
                     selection.template_name,
                     ctx.profile().is_some(),
                     selection.is_requested_profile,
                 ) {
                     (None, None, false, _) => {
-                        log_action(
-                            "Selected",
-                            format!(
-                                "default build for {}",
-                                component_name.as_str().log_color_highlight()
-                            ),
-                        );
+                        format!(
+                            "default build for {}",
+                            component_name.as_str().log_color_highlight()
+                        )
                     }
                     (None, None, true, _) => {
-                        log_action(
-                            "Selected",
-                            format!(
-                                "default build for {}, component has no profiles",
-                                component_name.as_str().log_color_highlight()
-                            ),
-                        );
+                        format!(
+                            "default build for {}, component has no profiles",
+                            component_name.as_str().log_color_highlight()
+                        )
                     }
                     (None, Some(template), false, _) => {
-                        log_action(
-                            "Selected",
-                            format!(
-                                "default build for {} using template {}",
-                                component_name.as_str().log_color_highlight(),
-                                template.log_color_highlight()
-                            ),
-                        );
+                        format!(
+                            "default build for {} using template {}{}",
+                            component_name.as_str().log_color_highlight(),
+                            template.as_str().log_color_highlight(),
+                            if selection.any_template_overrides {
+                                " with overrides"
+                            } else {
+                                ""
+                            }
+                        )
                     }
                     (None, Some(template), true, _) => {
-                        log_action(
-                            "Selected",
-                            format!(
-                                "default build for {} using template {}, component has no profiles",
-                                component_name.as_str().log_color_highlight(),
-                                template.log_color_highlight()
-                            ),
-                        );
+                        format!(
+                            "default build for {} using template {}{}, component has no profiles",
+                            component_name.as_str().log_color_highlight(),
+                            template.as_str().log_color_highlight(),
+                            if selection.any_template_overrides {
+                                " with overrides"
+                            } else {
+                                ""
+                            }
+                        )
                     }
                     (Some(profile), None, false, false) => {
-                        log_action(
-                            "Selected",
-                            format!(
-                                "default profile {} for {}",
-                                profile.as_str().log_color_highlight(),
-                                component_name.as_str().log_color_highlight()
-                            ),
-                        );
+                        format!(
+                            "default profile {} for {}",
+                            profile.as_str().log_color_highlight(),
+                            component_name.as_str().log_color_highlight()
+                        )
                     }
                     (Some(profile), None, true, false) => {
-                        log_action(
-                            "Selected",
-                            format!(
-                                "default profile {} for {}, component has no matching requested profile",
-                                profile.as_str().log_color_highlight(),
-                                component_name.as_str().log_color_highlight()
-                            ),
-                        );
+                        format!(
+                            "default profile {} for {}, component has no matching requested profile",
+                            profile.as_str().log_color_highlight(),
+                            component_name.as_str().log_color_highlight()
+                        )
                     }
                     (Some(profile), Some(template), false, false) => {
-                        log_action(
-                            "Selected",
-                            format!(
-                                "default profile {} for {} using template {}",
-                                profile.as_str().log_color_highlight(),
-                                component_name.as_str().log_color_highlight(),
-                                template.log_color_highlight()
-                            ),
-                        );
+                        format!(
+                            "default profile {} for {} using template {}{}",
+                            profile.as_str().log_color_highlight(),
+                            component_name.as_str().log_color_highlight(),
+                            template.as_str().log_color_highlight(),
+                            if selection.any_template_overrides {
+                                " with overrides"
+                            } else {
+                                ""
+                            }
+                        )
                     }
                     (Some(profile), Some(template), true, false) => {
-                        log_action(
-                            "Selected",
-                            format!(
-                                "default profile {} for {} using template {}, component has no matching requested profile",
-                                profile.as_str().log_color_highlight(),
-                                component_name.as_str().log_color_highlight(),
-                                template.log_color_highlight()
-                            ),
-                        );
+                        format!(
+                            "default profile {} for {} using template {}{}, component has no matching requested profile",
+                            profile.as_str().log_color_highlight(),
+                            component_name.as_str().log_color_highlight(),
+                            template.as_str().log_color_highlight(),
+                            if selection.any_template_overrides {
+                                " with overrides"
+                            } else {
+                                ""
+                            }
+                        )
                     }
                     (Some(profile), None, false, true) => {
-                        log_action(
-                            "Selected",
-                            format!(
-                                "profile {} for {}",
-                                profile.as_str().log_color_highlight(),
-                                component_name.as_str().log_color_highlight()
-                            ),
-                        );
+                        format!(
+                            "profile {} for {}",
+                            profile.as_str().log_color_highlight(),
+                            component_name.as_str().log_color_highlight()
+                        )
                     }
                     (Some(profile), None, true, true) => {
-                        log_action(
-                            "Selected",
-                            format!(
-                                "requested profile {} for {}",
-                                profile.as_str().log_color_highlight(),
-                                component_name.as_str().log_color_highlight()
-                            ),
-                        );
+                        format!(
+                            "requested profile {} for {}",
+                            profile.as_str().log_color_highlight(),
+                            component_name.as_str().log_color_highlight()
+                        )
                     }
                     (Some(profile), Some(template), false, true) => {
-                        log_action(
-                            "Selected",
-                            format!(
-                                "profile {} for {} using template {}",
-                                profile.as_str().log_color_highlight(),
-                                component_name.as_str().log_color_highlight(),
-                                template.log_color_highlight()
-                            ),
-                        );
+                        format!(
+                            "profile {} for {} using template {}{}",
+                            profile.as_str().log_color_highlight(),
+                            component_name.as_str().log_color_highlight(),
+                            template.as_str().log_color_highlight(),
+                            if selection.any_template_overrides {
+                                " with overrides"
+                            } else {
+                                ""
+                            }
+                        )
                     }
                     (Some(profile), Some(template), true, true) => {
-                        log_action(
-                            "Selected",
-                            format!(
-                                "requested profile {} for {} using template {}",
-                                profile.as_str().log_color_highlight(),
-                                component_name.as_str().log_color_highlight(),
-                                template.log_color_highlight()
-                            ),
-                        );
+                        format!(
+                            "requested profile {} for {} using template {}{}",
+                            profile.as_str().log_color_highlight(),
+                            component_name.as_str().log_color_highlight(),
+                            template.as_str().log_color_highlight(),
+                            if selection.any_template_overrides {
+                                " with overrides"
+                            } else {
+                                ""
+                            }
+                        )
                     }
-                }
+                };
+
+                log_action("Selected", message);
             }
         }
 
@@ -277,30 +273,22 @@ impl ApplicationContext {
     ) -> anyhow::Result<&WitDepsResolver> {
         // Not using the entry API, so we can skip copying the component name
         if !self
-            .component_base_output_wit_deps
+            .component_generated_base_wit_deps
             .contains_key(component_name)
         {
-            self.component_base_output_wit_deps.insert(
+            self.component_generated_base_wit_deps.insert(
                 component_name.clone(),
                 WitDepsResolver::new(vec![self
                     .application
-                    .component_base_output_wit(component_name)
+                    .component_generated_base_wit(component_name)
                     .join(naming::wit::DEPS_DIR)])?,
             );
         }
         Ok(self
-            .component_base_output_wit_deps
+            .component_generated_base_wit_deps
             .get(component_name)
             .unwrap())
     }
-}
-
-pub fn init(component_name: ComponentName) -> anyhow::Result<()> {
-    fs::write_str(
-        DEFAULT_CONFIG_FILE_NAME,
-        init_oam_app(component_name).to_yaml_string(),
-    )
-    .context("Failed to init component application manifest")
 }
 
 pub async fn pre_component_build(config: Config) -> anyhow::Result<()> {
@@ -314,7 +302,7 @@ async fn pre_component_build_ctx(ctx: &mut ApplicationContext) -> anyhow::Result
 
     {
         for component_name in ctx.wit.component_order_cloned() {
-            create_base_output_wit(ctx, &component_name)?;
+            create_generatde_base_wit(ctx, &component_name)?;
         }
         for component_name in &ctx.application.all_wasm_rpc_dependencies() {
             build_stub(ctx, component_name).await?;
@@ -324,7 +312,7 @@ async fn pre_component_build_ctx(ctx: &mut ApplicationContext) -> anyhow::Result
     {
         let mut any_changed = false;
         for component_name in ctx.application.component_names() {
-            let changed = create_output_wit(ctx, component_name)?;
+            let changed = create_generated_wit(ctx, component_name)?;
             if changed {
                 update_cargo_toml(ctx, component_name)?;
             }
@@ -350,7 +338,7 @@ fn component_build_ctx(ctx: &ApplicationContext) -> anyhow::Result<()> {
     log_action("Building", "components");
     let _indent = LogIndent::new();
 
-    for (component_name, component) in ctx.application.components() {
+    for component_name in ctx.application.component_names() {
         let component_properties = ctx
             .application
             .component_properties(component_name, ctx.profile());
@@ -373,7 +361,7 @@ fn component_build_ctx(ctx: &ApplicationContext) -> anyhow::Result<()> {
         let _indent = LogIndent::new();
 
         for build_step in &component_properties.build {
-            execute_external_command(ctx, component, build_step)?;
+            execute_external_command(ctx, component_name, build_step)?;
         }
     }
 
@@ -389,25 +377,28 @@ async fn post_component_build_ctx(ctx: &ApplicationContext) -> anyhow::Result<()
     log_action("Executing", "post-component-build steps");
     let _indent = LogIndent::new();
 
-    for (component_name, component) in ctx.application.components() {
-        let input_wasm = ctx
+    for component_name in ctx.application.component_names() {
+        let source = ctx.application.component_source_dir(component_name);
+        let dependencies = ctx
             .application
-            .component_input_wasm(component_name, ctx.profile());
-        let output_wasm = ctx
+            .component_wasm_rpc_dependencies(component_name);
+        let component_wasm = ctx
             .application
-            .component_output_wasm(component_name, ctx.profile());
+            .component_wasm(component_name, ctx.profile());
+        let linked_wasm = ctx
+            .application
+            .component_linked_wasm(component_name, ctx.profile());
 
         if is_up_to_date(
             ctx.config.skip_up_to_date_checks,
             // We also include the component specification source,
             // so it triggers build in case deps are changed
-            || [component.source.clone(), input_wasm.clone()],
-            || [output_wasm.clone()],
+            || [source.to_path_buf(), component_wasm.clone()],
+            || [linked_wasm.clone()],
         ) {
             log_skipping_up_to_date(format!(
                 "composing wasm rpc dependencies ({}) into {}",
-                component
-                    .wasm_rpc_dependencies
+                dependencies
                     .iter()
                     .map(|s| s.as_str().log_color_highlight())
                     .join(", "),
@@ -416,23 +407,22 @@ async fn post_component_build_ctx(ctx: &ApplicationContext) -> anyhow::Result<()
             continue;
         }
 
-        if component.wasm_rpc_dependencies.is_empty() {
+        if dependencies.is_empty() {
             log_action(
                 "Copying",
                 format!(
                     "(without composing) {} to {}, no wasm rpc dependencies defined",
-                    input_wasm.log_color_highlight(),
-                    output_wasm.log_color_highlight(),
+                    component_wasm.log_color_highlight(),
+                    linked_wasm.log_color_highlight(),
                 ),
             );
-            fs::copy(&input_wasm, &output_wasm)?;
+            fs::copy(&component_wasm, &linked_wasm)?;
         } else {
             log_action(
                 "Composing",
                 format!(
                     "wasm rpc dependencies ({}) into {}",
-                    component
-                        .wasm_rpc_dependencies
+                    dependencies
                         .iter()
                         .map(|s| s.as_str().log_color_highlight())
                         .join(", "),
@@ -441,19 +431,18 @@ async fn post_component_build_ctx(ctx: &ApplicationContext) -> anyhow::Result<()
             );
             let _indent = LogIndent::new();
 
-            let stub_wasms = component
-                .wasm_rpc_dependencies
+            let stub_wasms = dependencies
                 .iter()
                 .map(|dep| ctx.application.stub_wasm(dep))
                 .collect::<Vec<_>>();
 
             commands::composition::compose(
                 ctx.application
-                    .component_input_wasm(component_name, ctx.profile())
+                    .component_wasm(component_name, ctx.profile())
                     .as_path(),
                 &stub_wasms,
                 ctx.application
-                    .component_output_wasm(component_name, ctx.profile())
+                    .component_linked_wasm(component_name, ctx.profile())
                     .as_path(),
             )
             .await?;
@@ -494,19 +483,19 @@ pub fn clean(config: Config) -> anyhow::Result<()> {
         };
         let paths = {
             let mut paths = BTreeSet::<(&'static str, PathBuf)>::new();
-            for (component_name, component) in app.components() {
+            for component_name in app.component_names() {
                 for profile in &all_profiles {
                     paths.insert((
-                        "output wit",
-                        app.component_output_wit(component_name, profile.as_ref()),
+                        "generated wit",
+                        app.component_generated_wit(component_name, profile.as_ref()),
                     ));
                     paths.insert((
-                        "input wasm",
-                        app.component_input_wasm(component_name, profile.as_ref()),
+                        "component wasm",
+                        app.component_wasm(component_name, profile.as_ref()),
                     ));
                     paths.insert((
-                        "output wasm",
-                        app.component_output_wasm(component_name, profile.as_ref()),
+                        "linked wasm",
+                        app.component_linked_wasm(component_name, profile.as_ref()),
                     ));
 
                     let properties = &app.component_properties(component_name, profile.as_ref());
@@ -515,22 +504,24 @@ pub fn clean(config: Config) -> anyhow::Result<()> {
                         let build_dir = build_step
                             .dir
                             .as_ref()
-                            .map(|dir| component.source_dir().join(dir))
-                            .unwrap_or_else(|| component.source_dir().to_path_buf());
+                            .map(|dir| app.component_source_dir(component_name).join(dir))
+                            .unwrap_or_else(|| {
+                                app.component_source_dir(component_name).to_path_buf()
+                            });
 
                         paths.extend(
-                            compile_and_collect_globs(&build_dir, &build_step.outputs)?
+                            compile_and_collect_globs(&build_dir, &build_step.targets)?
                                 .into_iter()
                                 .map(|path| ("build output", path)),
                         );
                     }
 
-                    paths.extend(
-                        properties
-                            .clean
-                            .iter()
-                            .map(|path| ("clean target", component.source_dir().join(path))),
-                    );
+                    paths.extend(properties.clean.iter().map(|path| {
+                        (
+                            "clean target",
+                            app.component_source_dir(component_name).join(path),
+                        )
+                    }));
                 }
             }
             paths
@@ -564,7 +555,7 @@ pub fn clean(config: Config) -> anyhow::Result<()> {
         log_action("Cleaning", "application build dir");
         let _indent = LogIndent::new();
 
-        delete_path("application build dir", &app.build_dir())?;
+        delete_path("temp dir", app.temp_dir())?;
     }
 
     Ok(())
@@ -598,7 +589,7 @@ pub fn custom_command(config: Config, command: String) -> anyhow::Result<()> {
     );
     let _indent = LogIndent::new();
 
-    for (component_name, component) in ctx.application.components() {
+    for component_name in ctx.application.component_names() {
         let properties = &ctx
             .application
             .component_properties(component_name, ctx.profile());
@@ -614,7 +605,7 @@ pub fn custom_command(config: Config, command: String) -> anyhow::Result<()> {
             let _indent = LogIndent::new();
 
             for step in custom_command {
-                execute_external_command(&ctx, component, step)?;
+                execute_external_command(&ctx, component_name, step)?;
             }
         }
     }
@@ -645,8 +636,7 @@ fn load_app_validated(config: &Config) -> ValidatedResult<Application> {
         sources
             .into_iter()
             .map(|source| {
-                ValidatedResult::from_result(oam::ApplicationWithSource::from_yaml_file(source))
-                    .and_then(oam::ApplicationWithSource::validate)
+                ValidatedResult::from_result(raw::ApplicationWithSource::from_yaml_file(source))
             })
             .collect::<ValidatedResult<Vec<_>>>()
     });
@@ -654,7 +644,7 @@ fn load_app_validated(config: &Config) -> ValidatedResult<Application> {
     log_action("Collecting", "components");
     let _indent = LogIndent::new();
 
-    let app = oam_apps.and_then(Application::from_oam_apps);
+    let app = oam_apps.and_then(Application::from_raw_apps);
 
     log_validated_action_result("Found", &app, |app| {
         if app.component_names().next().is_none() {
@@ -679,36 +669,22 @@ fn collect_sources(mode: &ApplicationSourceMode) -> ValidatedResult<Vec<PathBuf>
     let sources = match mode {
         ApplicationSourceMode::Automatic => match find_main_source() {
             Some(source) => {
+                // TODO: save original current dir and use it as a component filter
                 std::env::set_current_dir(PathExtra::new(&source).parent().unwrap())
                     .expect("Failed to set current dir for config parent");
 
-                match include_glob_patter_from_yaml_file(source.as_path()) {
-                    Some(pattern) => ValidatedResult::from_result(
-                        glob(pattern.as_str())
-                            .map_err(|err| {
-                                format!(
-                                    "Failed to compile glob pattern: {}, source: {}, error: {}",
-                                    pattern,
-                                    source.display(),
-                                    err
-                                )
-                            })
-                            .and_then(|matches| {
-                                matches.collect::<Result<Vec<_>, _>>().map_err(|err| {
-                                    format!(
-                                        "Failed to resolve glob pattern: {}, source: {}, error: {}",
-                                        pattern,
-                                        source.display(),
-                                        err
-                                    )
-                                })
-                            }),
-                    )
+                let includes = includes_from_yaml_file(source.as_path());
+                if includes.is_empty() {
+                    ValidatedResult::Ok(vec![source])
+                } else {
+                    ValidatedResult::from_result(compile_and_collect_globs(
+                        source.as_path(),
+                        &includes,
+                    ))
                     .map(|mut sources| {
                         sources.insert(0, source);
                         sources
-                    }),
-                    None => ValidatedResult::Ok(vec![source]),
+                    })
                 }
             }
             None => ValidatedResult::from_error("No config file found!".to_string()),
@@ -889,25 +865,25 @@ fn compile_and_collect_globs(root_dir: &Path, globs: &[String]) -> Result<Vec<Pa
         })
 }
 
-fn create_base_output_wit(
+fn create_generatde_base_wit(
     ctx: &mut ApplicationContext,
     component_name: &ComponentName,
 ) -> Result<bool, Error> {
-    let component_input_wit = ctx
+    let component_source_wit = ctx
         .application
-        .component_input_wit(component_name, ctx.profile());
-    let component_base_output_wit = ctx.application.component_base_output_wit(component_name);
-    let gen_dir_done_marker = GeneratedDirDoneMarker::new(&component_base_output_wit);
+        .component_source_wit(component_name, ctx.profile());
+    let component_generated_base_wit = ctx.application.component_generated_base_wit(component_name);
+    let gen_dir_done_marker = GeneratedDirDoneMarker::new(&component_generated_base_wit);
 
     if is_up_to_date(
         ctx.config.skip_up_to_date_checks
             || !gen_dir_done_marker.is_done()
             || !ctx.wit.is_dep_graph_up_to_date(component_name)?,
-        || [component_input_wit.clone()],
-        || [component_base_output_wit.clone()],
+        || [component_source_wit.clone()],
+        || [component_generated_base_wit.clone()],
     ) {
         log_skipping_up_to_date(format!(
-            "creating base output wit directory for {}",
+            "creating generated base wit directory for {}",
             component_name.as_str().log_color_highlight()
         ));
         Ok(false)
@@ -915,18 +891,22 @@ fn create_base_output_wit(
         log_action(
             "Creating",
             format!(
-                "base output wit directory for {}",
+                "generated base wit directory for {}",
                 component_name.as_str().log_color_highlight(),
             ),
         );
         let _indent = LogIndent::new();
 
-        delete_path("base output wit directory", &component_base_output_wit)?;
-        copy_wit_sources(&component_input_wit, &component_base_output_wit)?;
+        delete_path(
+            "generated base wit directory",
+            &component_generated_base_wit,
+        )?;
+        copy_wit_sources(&component_source_wit, &component_generated_base_wit)?;
 
         {
-            let missing_package_deps =
-                ctx.wit.missing_generic_input_package_deps(component_name)?;
+            let missing_package_deps = ctx
+                .wit
+                .missing_generic_source_package_deps(component_name)?;
 
             if !missing_package_deps.is_empty() {
                 log_action("Adding", "package deps");
@@ -935,7 +915,7 @@ fn create_base_output_wit(
                 ctx.common_wit_deps()?
                     .add_packages_with_transitive_deps_to_wit_dir(
                         &missing_package_deps,
-                        &component_base_output_wit,
+                        &component_generated_base_wit,
                     )?;
             }
         }
@@ -953,7 +933,7 @@ fn create_base_output_wit(
                     ctx.component_base_output_wit_deps(dep_component_name)?
                         .add_packages_with_transitive_deps_to_wit_dir(
                             &[dep_interface_package_name.clone()],
-                            &component_base_output_wit,
+                            &component_generated_base_wit,
                         )?;
                 }
             }
@@ -964,13 +944,13 @@ fn create_base_output_wit(
                 "Extracting",
                 format!(
                     "main interface package from {} to {}",
-                    component_input_wit.log_color_highlight(),
-                    component_base_output_wit.log_color_highlight()
+                    component_source_wit.log_color_highlight(),
+                    component_generated_base_wit.log_color_highlight()
                 ),
             );
             let _indent = LogIndent::new();
 
-            extract_main_interface_as_wit_dep(&component_base_output_wit)?;
+            extract_main_interface_as_wit_dep(&component_generated_base_wit)?;
         }
 
         gen_dir_done_marker.mark_as_done()?;
@@ -979,25 +959,25 @@ fn create_base_output_wit(
     }
 }
 
-fn create_output_wit(
+fn create_generated_wit(
     ctx: &ApplicationContext,
     component_name: &ComponentName,
 ) -> Result<bool, Error> {
-    let component_base_output_wit = ctx.application.component_base_output_wit(component_name);
-    let component_output_wit = ctx
+    let component_generated_base_wit = ctx.application.component_generated_base_wit(component_name);
+    let component_generated_wit = ctx
         .application
-        .component_output_wit(component_name, ctx.profile());
-    let gen_dir_done_marker = GeneratedDirDoneMarker::new(&component_output_wit);
+        .component_generated_wit(component_name, ctx.profile());
+    let gen_dir_done_marker = GeneratedDirDoneMarker::new(&component_generated_wit);
 
     if is_up_to_date(
         ctx.config.skip_up_to_date_checks
             || !gen_dir_done_marker.is_done()
             || !ctx.wit.is_dep_graph_up_to_date(component_name)?,
-        || [component_base_output_wit.clone()],
-        || [component_output_wit.clone()],
+        || [component_generated_base_wit.clone()],
+        || [component_generated_wit.clone()],
     ) {
         log_skipping_up_to_date(format!(
-            "creating output wit directory for {}",
+            "creating generated wit directory for {}",
             component_name.as_str().log_color_highlight()
         ));
         Ok(false)
@@ -1005,14 +985,14 @@ fn create_output_wit(
         log_action(
             "Creating",
             format!(
-                "output wit directory for {}",
+                "generated wit directory for {}",
                 component_name.as_str().log_color_highlight(),
             ),
         );
         let _indent = LogIndent::new();
 
-        delete_path("output wit directory", &component_output_wit)?;
-        copy_wit_sources(&component_base_output_wit, &component_output_wit)?;
+        delete_path("generated wit directory", &component_generated_wit)?;
+        copy_wit_sources(&component_generated_base_wit, &component_generated_wit)?;
         add_stub_deps(ctx, component_name)?;
 
         gen_dir_done_marker.mark_as_done()?;
@@ -1025,24 +1005,24 @@ fn update_cargo_toml(
     ctx: &ApplicationContext,
     component_name: &ComponentName,
 ) -> anyhow::Result<()> {
-    let component_input_wit = PathExtra::new(
+    let component_source_wit = PathExtra::new(
         ctx.application
-            .component_input_wit(component_name, ctx.profile()),
+            .component_source_wit(component_name, ctx.profile()),
     );
-    let component_input_wit_parent = component_input_wit.parent().with_context(|| {
+    let component_source_wit_parent = component_source_wit.parent().with_context(|| {
         anyhow!(
             "Failed to get parent for component {}",
             component_name.as_str().log_color_highlight()
         )
     })?;
-    let cargo_toml = component_input_wit_parent.join("Cargo.toml");
+    let cargo_toml = component_source_wit_parent.join("Cargo.toml");
 
     if cargo_toml.exists() {
         regenerate_cargo_package_component(
             &cargo_toml,
             &ctx.application
-                .component_output_wit(component_name, ctx.profile()),
-            ctx.application.stub_world(component_name),
+                .component_source_wit(component_name, ctx.profile()),
+            None,
         )?
     }
 
@@ -1056,13 +1036,13 @@ async fn build_stub(
     let target_root = ctx.application.stub_temp_build_dir(component_name);
 
     let stub_def = StubDefinition::new(StubConfig {
-        source_wit_root: ctx.application.component_base_output_wit(component_name),
+        source_wit_root: ctx.application.component_generated_base_wit(component_name),
         target_root: target_root.clone(),
-        selected_world: ctx.application.stub_world(component_name),
-        stub_crate_version: ctx.application.stub_crate_version(component_name),
+        selected_world: None,
+        stub_crate_version: WASM_RPC_VERSION.to_string(),
         wasm_rpc_override: WasmRpcOverride {
-            wasm_rpc_path_override: ctx.application.stub_wasm_rpc_path(component_name),
-            wasm_rpc_version_override: ctx.application.stub_wasm_rpc_version(component_name),
+            wasm_rpc_path_override: None,
+            wasm_rpc_version_override: None,
         },
         extract_source_interface_package: false,
         seal_cargo_workspace: true,
@@ -1070,7 +1050,7 @@ async fn build_stub(
     .context("Failed to gather information for the stub generator")?;
 
     let stub_dep_package_ids = stub_def.stub_dep_package_ids();
-    let stub_inputs: Vec<PathBuf> = stub_def
+    let stub_sources: Vec<PathBuf> = stub_def
         .packages_with_wit_sources()
         .flat_map(|(package_id, _, sources)| {
             (stub_dep_package_ids.contains(&package_id) || package_id == stub_def.source_package_id)
@@ -1085,7 +1065,7 @@ async fn build_stub(
 
     if is_up_to_date(
         ctx.config.skip_up_to_date_checks || !gen_dir_done_marker.is_done(),
-        || stub_inputs,
+        || stub_sources,
         || [stub_wit.clone(), stub_wasm.clone()],
     ) {
         log_skipping_up_to_date(format!(
@@ -1124,8 +1104,10 @@ async fn build_stub(
 }
 
 fn add_stub_deps(ctx: &ApplicationContext, component_name: &ComponentName) -> Result<bool, Error> {
-    let component = ctx.application.component(component_name);
-    if component.wasm_rpc_dependencies.is_empty() {
+    let dependencies = ctx
+        .application
+        .component_wasm_rpc_dependencies(component_name);
+    if dependencies.is_empty() {
         Ok(false)
     } else {
         log_action(
@@ -1138,7 +1120,7 @@ fn add_stub_deps(ctx: &ApplicationContext, component_name: &ComponentName) -> Re
 
         let _indent = LogIndent::new();
 
-        for dep_component_name in &component.wasm_rpc_dependencies {
+        for dep_component_name in dependencies {
             log_action(
                 "Adding",
                 format!(
@@ -1153,7 +1135,7 @@ fn add_stub_deps(ctx: &ApplicationContext, component_name: &ComponentName) -> Re
                 stub_wit_root: ctx.application.stub_wit(dep_component_name),
                 dest_wit_root: ctx
                     .application
-                    .component_output_wit(component_name, ctx.profile()),
+                    .component_generated_wit(component_name, ctx.profile()),
                 update_cargo_toml: UpdateCargoToml::NoUpdate,
             })?
         }
@@ -1175,7 +1157,7 @@ fn copy_wit_sources(source: &Path, target: &Path) -> anyhow::Result<()> {
 
     let dir_content = fs_extra::dir::get_dir_content(source).with_context(|| {
         anyhow!(
-            "Failed to read component input wit directory entries for {}",
+            "Failed to read component source wit directory entries for {}",
             source.log_color_highlight()
         )
     })?;
@@ -1205,20 +1187,28 @@ fn copy_wit_sources(source: &Path, target: &Path) -> anyhow::Result<()> {
 
 fn execute_external_command(
     ctx: &ApplicationContext,
-    component: &WasmComponent,
+    component_name: &ComponentName,
     command: &ExternalCommand,
 ) -> anyhow::Result<()> {
     let build_dir = command
         .dir
         .as_ref()
-        .map(|dir| component.source_dir().join(dir))
-        .unwrap_or_else(|| component.source_dir().to_path_buf());
+        .map(|dir| {
+            ctx.application
+                .component_source_dir(component_name)
+                .join(dir)
+        })
+        .unwrap_or_else(|| {
+            ctx.application
+                .component_source_dir(component_name)
+                .to_path_buf()
+        });
 
-    if !command.inputs.is_empty() && !command.outputs.is_empty() {
-        let inputs = compile_and_collect_globs(&build_dir, &command.inputs)?;
-        let outputs = compile_and_collect_globs(&build_dir, &command.outputs)?;
+    if !command.sources.is_empty() && !command.targets.is_empty() {
+        let sources = compile_and_collect_globs(&build_dir, &command.sources)?;
+        let targets = compile_and_collect_globs(&build_dir, &command.targets)?;
 
-        if is_up_to_date(ctx.config.skip_up_to_date_checks, || inputs, || outputs) {
+        if is_up_to_date(ctx.config.skip_up_to_date_checks, || sources, || targets) {
             log_skipping_up_to_date(format!(
                 "executing external command '{}' in directory {}",
                 command.command.log_color_highlight(),
