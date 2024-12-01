@@ -190,8 +190,6 @@ pub struct InitializeWorkspaceArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum App {
-    /// Creates application manifest for component
-    Init(DeclarativeInitArgs),
     /// Runs the pre-component-build steps (stub generation and adding wit dependencies)
     PreComponentBuild(DeclarativeBuildArgs),
     /// Runs component build steps
@@ -301,7 +299,6 @@ pub fn initialize_workspace(
 
 pub async fn run_declarative_command(command: App) -> anyhow::Result<()> {
     match command {
-        App::Init(args) => commands::declarative::init(args.component_name.into()),
         App::PreComponentBuild(args) => {
             commands::declarative::pre_component_build(dec_build_args_to_config(args)).await
         }

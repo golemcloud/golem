@@ -1,5 +1,5 @@
 {
-  "$schema": "https://json-schema.org/draft-07/schema",
+  "$schema": "https://json-schema.org/draft-07/schema#",
   "$id": "https://golem.cloud/golem-wasm-rpc.schema.json",
   "title": "Golem WASM RPC Application Manifest",
   "description": "Golem WASM RPC Application Manifest.",
@@ -179,9 +179,17 @@
           "additionalProperties": {
             "$ref": "#/definitions/componentProperties"
           }
+        },
+        "defaultProfile": {
+          "type": "string",
+          "description": "Default profile"
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "required": [
+        "profiles",
+        "defaultProfile"
+      ]
     },
     "componentProfilesWithTemplateRef": {
       "type": "object",
@@ -197,9 +205,17 @@
           "additionalProperties": {
             "$ref": "#/definitions/componentProperties"
           }
+        },
+        "defaultProfile": {
+          "type": "string",
+          "description": "Default profile"
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "required": [
+        "profiles",
+        "defaultProfile"
+      ]
     },
     "externalCommand": {
       "type": "object",
@@ -264,7 +280,10 @@
               "description": "Target component name."
             }
           },
-          "required": ["type", "target"],
+          "required": [
+            "type",
+            "target"
+          ],
           "additionalProperties": false
         }
       ]

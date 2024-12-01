@@ -249,25 +249,25 @@ impl ValidationBuilder {
         self.warns.push(warn);
     }
 
-    pub fn add_errors<T, C, F>(&mut self, elems: C, context_and_error: F)
+    pub fn add_errors<T, E, CE>(&mut self, elems: E, context_and_error: CE)
     where
-        C: IntoIterator<Item = T>,
-        F: Fn(T) -> Option<(Vec<(&'static str, String)>, String)>,
+        E: IntoIterator<Item = T>,
+        CE: Fn(T) -> Option<(Vec<(&'static str, String)>, String)>,
     {
         self.add_all(elems, context_and_error, Self::add_error);
     }
 
-    pub fn add_warns<T, C, F>(&mut self, elems: C, context_and_error: F)
+    pub fn add_warns<T, E, CE>(&mut self, elems: E, context_and_error: CE)
     where
-        C: IntoIterator<Item = T>,
-        F: Fn(T) -> Option<(Vec<(&'static str, String)>, String)>,
+        E: IntoIterator<Item = T>,
+        CE: Fn(T) -> Option<(Vec<(&'static str, String)>, String)>,
     {
         self.add_all(elems, context_and_error, Self::add_warn);
     }
 
-    fn add_all<T, C, CE, A>(&mut self, elems: C, context_and_error: CE, add: A)
+    fn add_all<T, E, CE, A>(&mut self, elems: E, context_and_error: CE, add: A)
     where
-        C: IntoIterator<Item = T>,
+        E: IntoIterator<Item = T>,
         CE: Fn(T) -> Option<(Vec<(&'static str, String)>, String)>,
         A: Fn(&mut Self, String),
     {

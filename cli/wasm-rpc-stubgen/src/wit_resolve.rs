@@ -165,12 +165,12 @@ fn collect_package_sources(
 
 pub struct ResolvedWitComponent {
     main_package_name: PackageName,
-    resolved_output_wit_dir: Option<ResolvedWitDir>,
+    resolved_generated_wit_dir: Option<ResolvedWitDir>,
     app_component_deps: HashSet<ComponentName>,
-    input_referenced_package_deps: HashSet<PackageName>,
-    input_contained_package_deps: HashSet<PackageName>,
-    input_component_deps: BTreeSet<ComponentName>, // NOTE: BTree for making dep sorting deterministic
-    output_component_deps: Option<HashSet<ComponentName>>,
+    source_referenced_package_deps: HashSet<PackageName>,
+    source_contained_package_deps: HashSet<PackageName>,
+    source_component_deps: BTreeSet<ComponentName>, // NOTE: BTree for making dep sorting deterministic
+    generated_component_deps: Option<HashSet<ComponentName>>,
 }
 
 pub struct ResolvedWitApplication {
@@ -200,7 +200,7 @@ impl ResolvedWitApplication {
 
         resolved_app.validate_package_names(&mut validation);
         resolved_app.collect_component_deps(app, &mut validation);
-        resolved_app.sort_components_by_input_deps(&mut validation);
+        resolved_app.sort_components_by_source_deps(&mut validation);
 
         validation.build(resolved_app)
     }
@@ -262,42 +262,42 @@ impl ResolvedWitApplication {
         app: &Application,
         profile: Option<&ProfileName>,
     ) {
-        for (component_name, component) in app.components() {
+        for component_name in app.component_names() {
             validation.push_context("component name", component_name.to_string());
 
-            let input_wit_dir = app.component_input_wit(component_name, profile);
-            let output_wit_dir = app.component_output_wit(component_name, profile);
+            let source_wit_dir = app.component_source_wit(component_name, profile);
+            let generated_wit_dir = app.component_generated_wit(component_name, profile);
 
             log_action(
                 "Resolving",
                 format!(
                     "component wit dirs for {} ({}, {})",
                     component_name.as_str().log_color_highlight(),
-                    input_wit_dir.log_color_highlight(),
-                    output_wit_dir.log_color_highlight(),
+                    source_wit_dir.log_color_highlight(),
+                    generated_wit_dir.log_color_highlight(),
                 ),
             );
 
             let resolved_component = (|| -> anyhow::Result<ResolvedWitComponent> {
-                let unresolved_input_package_group =
-                    UnresolvedPackageGroup::parse_dir(&input_wit_dir).with_context(|| {
+                let unresolved_source_package_group =
+                    UnresolvedPackageGroup::parse_dir(&source_wit_dir).with_context(|| {
                         anyhow!(
-                            "Failed to parse component {} main package in input wit dir {}",
+                            "Failed to parse component {} main package in source wit dir {}",
                             component_name.as_str().log_color_error_highlight(),
-                            input_wit_dir.log_color_highlight(),
+                            source_wit_dir.log_color_highlight(),
                         )
                     })?;
 
-                let input_referenced_package_deps = unresolved_input_package_group
+                let source_referenced_package_deps = unresolved_source_package_group
                     .main
                     .foreign_deps
                     .keys()
                     .cloned()
                     .collect();
 
-                let input_contained_package_deps = {
+                let source_contained_package_deps = {
                     let deps_path =
-                        Path::new(&app.component_properties(component_name, profile).input_wit)
+                        Path::new(&app.component_properties(component_name, profile).source_wit)
                             .join("deps");
                     if !deps_path.exists() {
                         HashSet::new()
@@ -309,29 +309,33 @@ impl ResolvedWitApplication {
                     }
                 };
 
-                let main_package_name = unresolved_input_package_group.main.name.clone();
+                let main_package_name = unresolved_source_package_group.main.name.clone();
 
-                let resolved_output_wit_dir = ResolvedWitDir::new(&output_wit_dir).ok();
-                let output_has_same_main_package_name = resolved_output_wit_dir
+                let resolved_generated_wit_dir = ResolvedWitDir::new(&generated_wit_dir).ok();
+                let generated_has_same_main_package_name = resolved_generated_wit_dir
                     .as_ref()
                     .map(|wit| wit.main_package())
                     .transpose()?
-                    .map(|output_main_package| main_package_name == output_main_package.name)
+                    .map(|generated_main_package| main_package_name == generated_main_package.name)
                     .unwrap_or_default();
-                let resolved_output_wit_dir = output_has_same_main_package_name
-                    .then_some(resolved_output_wit_dir)
+                let resolved_generated_wit_dir = generated_has_same_main_package_name
+                    .then_some(resolved_generated_wit_dir)
                     .flatten();
 
-                let app_component_deps = component.wasm_rpc_dependencies.iter().cloned().collect();
+                let app_component_deps = app
+                    .component_wasm_rpc_dependencies(component_name)
+                    .iter()
+                    .cloned()
+                    .collect();
 
                 Ok(ResolvedWitComponent {
                     main_package_name,
-                    resolved_output_wit_dir,
+                    resolved_generated_wit_dir,
                     app_component_deps,
-                    input_referenced_package_deps,
-                    input_contained_package_deps,
-                    input_component_deps: Default::default(),
-                    output_component_deps: Default::default(),
+                    source_referenced_package_deps,
+                    source_contained_package_deps,
+                    source_component_deps: Default::default(),
+                    generated_component_deps: Default::default(),
                 })
             })();
 
@@ -371,41 +375,47 @@ impl ResolvedWitApplication {
                 (
                     component_deps(
                         &self.interface_package_to_component,
-                        &component.input_referenced_package_deps,
+                        &component.source_referenced_package_deps,
                     ),
-                    component.resolved_output_wit_dir.as_ref().map(|wit_dir| {
-                        component_deps(
-                            &self.stub_package_to_component,
-                            wit_dir.resolve.package_names.keys(),
-                        )
-                    }),
+                    component
+                        .resolved_generated_wit_dir
+                        .as_ref()
+                        .map(|wit_dir| {
+                            component_deps(
+                                &self.stub_package_to_component,
+                                wit_dir.resolve.package_names.keys(),
+                            )
+                        }),
                 ),
             );
         }
-        for (component_name, (input_deps, output_deps)) in deps {
+        for (component_name, (source_deps, generated_deps)) in deps {
             let component = self.components.get_mut(&component_name).unwrap();
-            component.input_component_deps = input_deps;
-            component.output_component_deps = output_deps;
+            component.source_component_deps = source_deps;
+            component.generated_component_deps = generated_deps;
         }
 
         for (component_name, component) in &self.components {
             let main_deps: HashSet<ComponentName> = component_deps(
                 &self.package_to_component,
-                &component.input_referenced_package_deps,
+                &component.source_referenced_package_deps,
             );
 
             let stub_deps: HashSet<ComponentName> = component_deps(
                 &self.stub_package_to_component,
-                &component.input_referenced_package_deps,
+                &component.source_referenced_package_deps,
             );
 
             if !main_deps.is_empty() || !stub_deps.is_empty() {
                 validation.push_context("component name", component_name.to_string());
                 validation.push_context("package name", component.main_package_name.to_string());
                 {
-                    let component = app.component(component_name);
-                    validation
-                        .push_context("source", component.source.to_string_lossy().to_string());
+                    validation.push_context(
+                        "source",
+                        app.component_source_dir(component_name)
+                            .to_string_lossy()
+                            .to_string(),
+                    );
                 }
 
                 for dep_component_name in main_deps {
@@ -454,7 +464,7 @@ impl ResolvedWitApplication {
         }
     }
 
-    fn sort_components_by_input_deps(&mut self, validation: &mut ValidationBuilder) {
+    fn sort_components_by_source_deps(&mut self, validation: &mut ValidationBuilder) {
         struct Visit<'a> {
             resolved_app: &'a ResolvedWitApplication,
             component_names_by_id: Vec<&'a ComponentName>,
@@ -514,7 +524,7 @@ impl ResolvedWitApplication {
                     self.path.push(component_id);
                     self.visiting.insert(component_id);
 
-                    for dep_component_name in &component.input_component_deps {
+                    for dep_component_name in &component.source_component_deps {
                         if !self.visit(
                             self.component_names_to_id[dep_component_name],
                             dep_component_name,
@@ -568,17 +578,17 @@ impl ResolvedWitApplication {
 
     // NOTE: Intended to be used for non-component wit package deps, so it does not include
     //       component interface packages, as those are added from stubs
-    pub fn missing_generic_input_package_deps(
+    pub fn missing_generic_source_package_deps(
         &self,
         component_name: &ComponentName,
     ) -> anyhow::Result<Vec<PackageName>> {
         let component = self.component(component_name)?;
         Ok(component
-            .input_referenced_package_deps
+            .source_referenced_package_deps
             .iter()
             .filter(|&package_name| {
                 !component
-                    .input_contained_package_deps
+                    .source_contained_package_deps
                     .contains(package_name)
                     && !self
                         .interface_package_to_component
@@ -594,7 +604,7 @@ impl ResolvedWitApplication {
     ) -> anyhow::Result<Vec<(PackageName, ComponentName)>> {
         let component = self.component(component_name)?;
         Ok(component
-            .input_referenced_package_deps
+            .source_referenced_package_deps
             .iter()
             .filter_map(|package_name| {
                 match self.interface_package_to_component.get(package_name) {
@@ -612,8 +622,8 @@ impl ResolvedWitApplication {
     //       application model vs in wit dependencies
     pub fn is_dep_graph_up_to_date(&self, component_name: &ComponentName) -> anyhow::Result<bool> {
         let component = self.component(component_name)?;
-        Ok(match &component.output_component_deps {
-            Some(output_deps) => &component.app_component_deps == output_deps,
+        Ok(match &component.generated_component_deps {
+            Some(generated_deps) => &component.app_component_deps == generated_deps,
             None => false,
         })
     }
@@ -627,8 +637,8 @@ impl ResolvedWitApplication {
     ) -> anyhow::Result<bool> {
         let component = self.component(component_name)?;
 
-        Ok(match &component.output_component_deps {
-            Some(output_deps) => output_deps.contains(dep_component_name),
+        Ok(match &component.generated_component_deps {
+            Some(generated_deps) => generated_deps.contains(dep_component_name),
             None => false,
         })
     }
