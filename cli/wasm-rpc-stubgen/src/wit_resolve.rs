@@ -1,6 +1,6 @@
 use crate::fs::PathExtra;
 use crate::log::{log_action, LogColorize, LogIndent};
-use crate::model::wasm_rpc::{Application, ComponentName, ProfileName};
+use crate::model::app::{Application, ComponentName, ProfileName};
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use crate::{fs, naming};
 use anyhow::{anyhow, bail, Context, Error};
