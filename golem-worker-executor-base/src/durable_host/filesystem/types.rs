@@ -35,7 +35,7 @@ use golem_common::model::oplog::WrappedFunctionType;
 use crate::durable_host::serialized::{
     SerializableDateTime, SerializableError, SerializableFileTimes,
 };
-use crate::durable_host::{Durability, DurableWorkerCtx};
+use crate::durable_host::{Durability2, DurableWorkerCtx};
 use crate::metrics::wasm::record_host_function_call;
 use crate::workerctx::WorkerCtx;
 
@@ -230,11 +230,14 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     }
 
     async fn stat(&mut self, self_: Resource<Descriptor>) -> Result<DescriptorStat, FsError> {
-        let _permit = self
-            .begin_async_host_function()
-            .await
-            .map_err(FsError::trap)?;
-        record_host_function_call("filesystem::types::descriptor", "stat");
+        let durability = Durability2::<Ctx, SerializableFileTimes, SerializableError>::new(
+            self,
+            "filesystem::types::descriptor",
+            "stat",
+            WrappedFunctionType::ReadLocal,
+        )
+        .await
+        .map_err(FsError::trap)?;
 
         let path = match self.table().get(&self_)? {
             Descriptor::File(f) => f.path.clone(),
@@ -244,43 +247,34 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let mut stat = HostDescriptor::stat(&mut self.as_wasi_view(), self_).await?;
         stat.status_change_timestamp = None; // We cannot guarantee this to be the same during replays, so we rather not support it
 
-        let stat_clone1 = stat;
-        Durability::<Ctx, String, SerializableFileTimes, SerializableError>::custom_wrap(
-            self,
-            WrappedFunctionType::ReadLocal,
-            "filesystem::types::descriptor::stat",
-            path.to_string_lossy().to_string(),
-            |_ctx| {
-                Box::pin(async move { Ok(stat_clone1) as Result<DescriptorStat, anyhow::Error> })
-            },
-            |_ctx, stat| {
-                Ok(SerializableFileTimes {
-                    data_access_timestamp: stat.data_access_timestamp.map(|t| t.into()),
-                    data_modification_timestamp: stat.data_modification_timestamp.map(|t| t.into()),
-                })
-            },
-            move |_ctx, times| {
-                Box::pin(async move {
-                    let accessed = times.data_access_timestamp.as_ref().map(|t| {
-                        SystemTimeSpec::from(<SerializableDateTime as Into<SystemTime>>::into(
-                            t.clone(),
-                        ))
-                    });
-                    let modified = times.data_modification_timestamp.as_ref().map(|t| {
-                        SystemTimeSpec::from(<SerializableDateTime as Into<SystemTime>>::into(
-                            t.clone(),
-                        ))
-                    });
-                    spawn_blocking(|| set_symlink_times(path, accessed, modified)).await?;
-                    stat.data_access_timestamp = times.data_access_timestamp.map(|t| t.into());
-                    stat.data_modification_timestamp =
-                        times.data_modification_timestamp.map(|t| t.into());
-                    Ok(stat)
-                })
-            },
-        )
-        .await
-        .map_err(FsError::trap)
+        let times = if durability.is_live() {
+            durability
+                .persist(
+                    self,
+                    path.to_string_lossy().to_string(),
+                    Ok(SerializableFileTimes {
+                        data_access_timestamp: stat.data_access_timestamp.map(|t| t.into()),
+                        data_modification_timestamp: stat
+                            .data_modification_timestamp
+                            .map(|t| t.into()),
+                    }),
+                )
+                .await
+        } else {
+            durability.replay(self).await
+        }
+        .map_err(FsError::trap)?;
+
+        let accessed = times.data_access_timestamp.as_ref().map(|t| {
+            SystemTimeSpec::from(<SerializableDateTime as Into<SystemTime>>::into(t.clone()))
+        });
+        let modified = times.data_modification_timestamp.as_ref().map(|t| {
+            SystemTimeSpec::from(<SerializableDateTime as Into<SystemTime>>::into(t.clone()))
+        });
+        spawn_blocking(|| set_symlink_times(path, accessed, modified)).await?;
+        stat.data_access_timestamp = times.data_access_timestamp.map(|t| t.into());
+        stat.data_modification_timestamp = times.data_modification_timestamp.map(|t| t.into());
+        Ok(stat)
     }
 
     async fn stat_at(
@@ -289,11 +283,15 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         path_flags: PathFlags,
         path: String,
     ) -> Result<DescriptorStat, FsError> {
-        let _permit = self
-            .begin_async_host_function()
-            .await
-            .map_err(FsError::trap)?;
-        record_host_function_call("filesystem::types::descriptor", "stat_at");
+        let durability = Durability2::<Ctx, SerializableFileTimes, SerializableError>::new(
+            self,
+            "filesystem::types::descriptor",
+            "stat_at",
+            WrappedFunctionType::ReadLocal,
+        )
+        .await
+        .map_err(FsError::trap)?;
+
         let full_path = match self.table().get(&self_)? {
             Descriptor::File(f) => f.path.join(path.clone()),
             Descriptor::Dir(d) => d.path.join(path.clone()),
@@ -303,43 +301,34 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             HostDescriptor::stat_at(&mut self.as_wasi_view(), self_, path_flags, path).await?;
         stat.status_change_timestamp = None; // We cannot guarantee this to be the same during replays, so we rather not support it
 
-        let stat_clone1 = stat;
-        Durability::<Ctx, String, SerializableFileTimes, SerializableError>::custom_wrap(
-            self,
-            WrappedFunctionType::ReadLocal,
-            "filesystem::types::descriptor::stat_at",
-            full_path.to_string_lossy().to_string(),
-            |_ctx| {
-                Box::pin(async move { Ok(stat_clone1) as Result<DescriptorStat, anyhow::Error> })
-            },
-            |_ctx, stat| {
-                Ok(SerializableFileTimes {
-                    data_access_timestamp: stat.data_access_timestamp.map(|t| t.into()),
-                    data_modification_timestamp: stat.data_modification_timestamp.map(|t| t.into()),
-                })
-            },
-            move |_ctx, times| {
-                Box::pin(async move {
-                    let accessed = times.data_access_timestamp.as_ref().map(|t| {
-                        SystemTimeSpec::from(<SerializableDateTime as Into<SystemTime>>::into(
-                            t.clone(),
-                        ))
-                    });
-                    let modified = times.data_modification_timestamp.as_ref().map(|t| {
-                        SystemTimeSpec::from(<SerializableDateTime as Into<SystemTime>>::into(
-                            t.clone(),
-                        ))
-                    });
-                    spawn_blocking(|| set_symlink_times(full_path, accessed, modified)).await?;
-                    stat.data_access_timestamp = times.data_access_timestamp.map(|t| t.into());
-                    stat.data_modification_timestamp =
-                        times.data_modification_timestamp.map(|t| t.into());
-                    Ok(stat)
-                })
-            },
-        )
-        .await
-        .map_err(FsError::trap)
+        let times = if durability.is_live() {
+            durability
+                .persist(
+                    self,
+                    full_path.to_string_lossy().to_string(),
+                    Ok(SerializableFileTimes {
+                        data_access_timestamp: stat.data_access_timestamp.map(|t| t.into()),
+                        data_modification_timestamp: stat
+                            .data_modification_timestamp
+                            .map(|t| t.into()),
+                    }),
+                )
+                .await
+        } else {
+            durability.replay(self).await
+        }
+        .map_err(FsError::trap)?;
+
+        let accessed = times.data_access_timestamp.as_ref().map(|t| {
+            SystemTimeSpec::from(<SerializableDateTime as Into<SystemTime>>::into(t.clone()))
+        });
+        let modified = times.data_modification_timestamp.as_ref().map(|t| {
+            SystemTimeSpec::from(<SerializableDateTime as Into<SystemTime>>::into(t.clone()))
+        });
+        spawn_blocking(|| set_symlink_times(full_path, accessed, modified)).await?;
+        stat.data_access_timestamp = times.data_access_timestamp.map(|t| t.into());
+        stat.data_modification_timestamp = times.data_modification_timestamp.map(|t| t.into());
+        Ok(stat)
     }
 
     async fn set_times_at(

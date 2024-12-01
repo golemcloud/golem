@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::sync_helper::SyncHelperPermit;
 use crate::durable_host::DurableWorkerCtx;
 use crate::error::GolemError;
+use crate::metrics::wasm::record_host_function_call;
 use crate::model::PersistenceLevel;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
 use crate::workerctx::WorkerCtx;
@@ -22,9 +24,122 @@ use bincode::{Decode, Encode};
 use golem_common::model::oplog::{OplogEntry, OplogIndex, WrappedFunctionType};
 use std::fmt::Debug;
 use std::future::Future;
+use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
 use tracing::error;
+
+// TODO: is_live and replay can be merged
+// TODO: is SErr always SerializableError? - sometimes SerializableStreamError
+pub struct Durability2<Ctx, SOk, SErr> {
+    package: &'static str,
+    function: &'static str,
+    function_type: WrappedFunctionType,
+    _permit: SyncHelperPermit,
+    begin_index: OplogIndex,
+    is_live: bool,
+    persistence_level: PersistenceLevel,
+    _ctx: PhantomData<Ctx>,
+    _sok: PhantomData<SOk>,
+    _serr: PhantomData<SErr>,
+}
+
+impl<Ctx: WorkerCtx, SOk, SErr> Durability2<Ctx, SOk, SErr> {
+    pub async fn new(
+        ctx: &mut DurableWorkerCtx<Ctx>,
+        package: &'static str,
+        function: &'static str,
+        function_type: WrappedFunctionType,
+    ) -> Result<Self, GolemError>
+    {
+        let permit = ctx.begin_async_host_function().await?;
+        record_host_function_call(package, function);
+
+        let begin_index = ctx.state.begin_function(&function_type).await?;
+
+        Ok(Self {
+            package,
+            function,
+            function_type,
+            _permit: permit,
+            begin_index,
+            is_live: ctx.state.is_live(),
+            persistence_level: ctx.state.persistence_level.clone(),
+            _ctx: PhantomData,
+            _sok: PhantomData,
+            _serr: PhantomData,
+        })
+    }
+
+    pub fn is_live(&self) -> bool {
+        self.is_live || self.persistence_level == PersistenceLevel::PersistNothing
+    }
+
+    pub async fn persist<SIn, Ok, Err>(
+        &self,
+        ctx: &mut DurableWorkerCtx<Ctx>,
+        input: SIn,
+        result: Result<Ok, Err>,
+    ) -> Result<Ok, Err>
+    where
+        Ok: Clone,
+        Err: From<SErr> + From<GolemError> + Send + Sync,
+        SIn: Debug + Encode + Send + Sync,
+        SErr: Debug + Encode + for<'a> From<&'a Err> + From<GolemError> + Send + Sync,
+        SOk: Debug + Encode + From<Ok> + Encode + Send + Sync,
+    {
+        let serializable_result: Result<SOk, SErr> = result
+            .as_ref()
+            .map(|result| result.clone().into())
+            .map_err(|err| err.into());
+
+        let function_name = self.function_name();
+        ctx.write_to_oplog::<SIn, SOk, Err, SErr>(
+            &self.function_type,
+            &function_name,
+            self.begin_index,
+            &input,
+            &serializable_result,
+        )
+        .await?;
+
+        result
+    }
+
+    pub async fn replay<Ok, Err>(&self, ctx: &mut DurableWorkerCtx<Ctx>) -> Result<Ok, Err>
+    where
+        Ok: From<SOk>,
+        Err: From<SErr> + From<GolemError>,
+        SErr: Debug + Encode + Decode + From<GolemError> + Send + Sync,
+        SOk: Debug + Encode + Decode + Send + Sync,
+    {
+        let (_, oplog_entry) = crate::get_oplog_entry!(
+            ctx.state.replay_state,
+            OplogEntry::ImportedFunctionInvoked,
+            OplogEntry::ImportedFunctionInvokedV1
+        )?;
+
+        let function_name = self.function_name();
+        DurableWorkerCtx::<Ctx>::validate_oplog_entry(&oplog_entry, &function_name)?;
+        let response: Result<SOk, SErr> =
+            DurableWorkerCtx::<Ctx>::default_load(ctx.state.oplog.clone(), &oplog_entry).await;
+
+        ctx.state
+            .end_function(&self.function_type, self.begin_index)
+            .await?;
+
+        response.map(|sok| sok.into()).map_err(|serr| serr.into())
+    }
+
+    fn function_name(&self) -> String {
+        if self.package.is_empty() {
+            // For backward compatibility - some of the recorded function names were not following the pattern
+            self.function.to_string()
+        } else {
+            format!("{}::{}", self.package, self.function)
+        }
+    }
+}
 
 #[async_trait]
 pub trait Durability<Ctx: WorkerCtx, SerializableInput, SerializableSuccess, SerializableErr> {
