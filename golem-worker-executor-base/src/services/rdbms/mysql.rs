@@ -141,11 +141,15 @@ fn bind_value(
         DbValue::Longblob(v) => Ok(query.bind(v)),
         DbValue::Binary(v) => Ok(query.bind(v)),
         DbValue::Varbinary(v) => Ok(query.bind(v)),
-        // DbValue::Uuid(v) => Ok(query.bind(v)),
         DbValue::Json(v) => Ok(query.bind(v)),
-        // DbValue::Xml(v) => Ok(query.bind(v)),
         DbValue::Timestamp(v) => Ok(query.bind(v)),
+        DbValue::Datetime(v) => Ok(query.bind(v)),
+        DbValue::Time(v) => Ok(query.bind(v)),
+        DbValue::Year(v) => Ok(query.bind(v)),
         DbValue::Date(v) => Ok(query.bind(v)),
+        DbValue::Enumeration(v) => Ok(query.bind(v)),
+        DbValue::Set(v) => Ok(query.bind(v)),
+        // DbValue::Bit(v) => Ok(query.bind(v)),
         // DbValue::Interval(v) => Ok(query.bind(chrono::Duration::milliseconds(v))),
         DbValue::Null => Ok(query.bind(None::<String>)),
         _ => Err(format!("Type '{}' is not supported", value)),
@@ -269,28 +273,36 @@ fn get_db_value(index: usize, row: &sqlx::mysql::MySqlRow) -> Result<DbValue, St
             let v: Option<Vec<u8>> = row.try_get(index).map_err(|e| e.to_string())?;
             v.map(DbValue::Longblob).unwrap_or(DbValue::Null)
         }
-        // mysql_type_name::UUID => {
-        //     let v: Option<Uuid> = row.try_get(index).map_err(|e| e.to_string())?;
-        //     match v {
-        //         Some(v) => DbValue::Uuid(v),
-        //         None => DbValue::Null,
-        //     }
-        // }
-        mysql_type_name::TIMESTAMP | mysql_type_name::DATETIME => {
+        mysql_type_name::TIMESTAMP => {
             let v: Option<chrono::DateTime<chrono::Utc>> =
                 row.try_get(index).map_err(|e| e.to_string())?;
-            match v {
-                Some(v) => DbValue::Timestamp(v),
-                None => DbValue::Null,
-            }
+            v.map(DbValue::Timestamp).unwrap_or(DbValue::Null)
+        }
+        mysql_type_name::DATETIME => {
+            let v: Option<chrono::DateTime<chrono::Utc>> =
+                row.try_get(index).map_err(|e| e.to_string())?;
+            v.map(DbValue::Datetime).unwrap_or(DbValue::Null)
         }
         mysql_type_name::DATE => {
             let v: Option<chrono::NaiveDate> = row.try_get(index).map_err(|e| e.to_string())?;
-            match v {
-                Some(v) => DbValue::Date(v),
-                None => DbValue::Null,
-            }
+            v.map(DbValue::Date).unwrap_or(DbValue::Null)
         }
+        mysql_type_name::TIME => {
+            let v: Option<chrono::NaiveTime> = row.try_get(index).map_err(|e| e.to_string())?;
+            v.map(DbValue::Time).unwrap_or(DbValue::Null)
+        }
+        mysql_type_name::YEAR => {
+            let v: Option<i8> = row.try_get(index).map_err(|e| e.to_string())?;
+            v.map(DbValue::Year).unwrap_or(DbValue::Null)
+        }
+        mysql_type_name::SET => {
+            let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
+            v.map(DbValue::Set).unwrap_or(DbValue::Null)
+        }
+        // mysql_type_name::BIT => {
+        //     let v: Option<BitVec> = row.try_get(index).map_err(|e| e.to_string())?;
+        //     v.map(DbValue::Bit).unwrap_or(DbValue::Null)
+        // }
         _ => Err(format!("Type '{}' is not supported", type_name))?,
     };
     Ok(value)
@@ -334,7 +346,6 @@ impl TryFrom<&sqlx::mysql::MySqlTypeInfo> for DbColumnType {
             mysql_type_name::DECIMAL => Ok(DbColumnType::Decimal),
             mysql_type_name::FLOAT => Ok(DbColumnType::Float),
             mysql_type_name::DOUBLE => Ok(DbColumnType::Double),
-            // mysql_type_name::UUID => Ok(DbColumnType::Uuid),
             mysql_type_name::TEXT => Ok(DbColumnType::Text),
             mysql_type_name::TINYTEXT => Ok(DbColumnType::Tinytext),
             mysql_type_name::MEDIUMTEXT => Ok(DbColumnType::Mediumtext),
@@ -342,8 +353,8 @@ impl TryFrom<&sqlx::mysql::MySqlTypeInfo> for DbColumnType {
             mysql_type_name::VARCHAR => Ok(DbColumnType::Varchar),
             mysql_type_name::CHAR => Ok(DbColumnType::Fixchar),
             mysql_type_name::JSON => Ok(DbColumnType::Json),
-            // mysql_type_name::XML => Ok(DbColumnType::Xml),
-            mysql_type_name::TIMESTAMP | mysql_type_name::DATETIME => Ok(DbColumnType::Timestamp),
+            mysql_type_name::TIMESTAMP => Ok(DbColumnType::Timestamp),
+            mysql_type_name::DATETIME => Ok(DbColumnType::Datetime),
             mysql_type_name::DATE => Ok(DbColumnType::Date),
             mysql_type_name::TIME => Ok(DbColumnType::Time),
             mysql_type_name::VARBINARY => Ok(DbColumnType::Varbinary),
@@ -353,6 +364,7 @@ impl TryFrom<&sqlx::mysql::MySqlTypeInfo> for DbColumnType {
             mysql_type_name::MEDIUMBLOB => Ok(DbColumnType::Mediumblob),
             mysql_type_name::LONGBLOB => Ok(DbColumnType::Longblob),
             mysql_type_name::SET => Ok(DbColumnType::Set),
+            mysql_type_name::BIT => Ok(DbColumnType::Bit),
             mysql_type_name::ENUM => Ok(DbColumnType::Text),
             _ => Err(format!("Type '{}' is not supported", type_name))?,
         }
@@ -410,6 +422,7 @@ pub(crate) mod mysql_type_name {
 
 pub mod types {
     use bigdecimal::BigDecimal;
+    use sqlx::types::BitVec;
     use std::fmt::Display;
 
     #[derive(Clone, Debug, Eq, PartialEq)]
@@ -530,7 +543,7 @@ pub mod types {
         Longblob(Vec<u8>),
         Enumeration(String),
         Set(String),
-        Bit(Vec<bool>),
+        Bit(BitVec),
         Json(serde_json::Value),
         Null,
     }

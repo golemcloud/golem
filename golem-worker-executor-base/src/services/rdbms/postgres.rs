@@ -23,8 +23,9 @@ use crate::services::rdbms::{DbResultSet, DbRow, Error, Rdbms, RdbmsPoolKey, Rdb
 use async_trait::async_trait;
 use bigdecimal::BigDecimal;
 use futures_util::stream::BoxStream;
-use sqlx::postgres::types::PgInterval;
+use sqlx::postgres::types::{Oid, PgInterval, PgTimeTz};
 use sqlx::postgres::{PgConnectOptions, PgTypeKind};
+use sqlx::types::BitVec;
 use sqlx::{Column, ConnectOptions, Pool, Row, TypeInfo};
 use std::fmt::Display;
 use std::net::IpAddr;
@@ -287,10 +288,50 @@ fn bind_value(
                     })?;
                     Ok(query.bind(values))
                 }
+                DbValuePrimitive::Timestamptz(_) => {
+                    let values: Vec<_> = get_plain_values(vs, |v| {
+                        if let DbValuePrimitive::Timestamptz(v) = v {
+                            Some(v)
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
                 DbValuePrimitive::Timestamp(_) => {
                     let values: Vec<_> = get_plain_values(vs, |v| {
                         if let DbValuePrimitive::Timestamp(v) = v {
                             Some(v)
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Date(_) => {
+                    let values: Vec<_> = get_plain_values(vs, |v| {
+                        if let DbValuePrimitive::Date(v) = v {
+                            Some(v)
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Time(_) => {
+                    let values: Vec<_> = get_plain_values(vs, |v| {
+                        if let DbValuePrimitive::Time(v) = v {
+                            Some(v)
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Timetz(_) => {
+                    let values: Vec<_> = get_plain_values(vs, |v| {
+                        if let DbValuePrimitive::Timetz((v, o)) = v {
+                            Some(PgTimeTz { time: v, offset: o })
                         } else {
                             None
                         }
@@ -307,6 +348,46 @@ fn bind_value(
                     })?;
                     Ok(query.bind(values))
                 }
+                DbValuePrimitive::Inet(_) => {
+                    let values: Vec<IpAddr> = get_plain_values(vs, |v| {
+                        if let DbValuePrimitive::Inet(v) = v {
+                            Some(v)
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Bit(_) => {
+                    let values: Vec<BitVec> = get_plain_values(vs, |v| {
+                        if let DbValuePrimitive::Bit(v) = v {
+                            Some(v)
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Varbit(_) => {
+                    let values: Vec<BitVec> = get_plain_values(vs, |v| {
+                        if let DbValuePrimitive::Varbit(v) = v {
+                            Some(v)
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Oid(_) => {
+                    let values: Vec<Oid> = get_plain_values(vs, |v| {
+                        if let DbValuePrimitive::Oid(v) = v {
+                            Some(Oid(v))
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
                 DbValuePrimitive::Null => {
                     let values: Vec<Option<String>> = get_plain_values(vs, |v| {
                         if let DbValuePrimitive::Null = v {
@@ -316,11 +397,10 @@ fn bind_value(
                         }
                     })?;
                     Ok(query.bind(values))
-                }
-                _ => Err(format!(
-                    "Array param element '{}' with index 0 is not supported",
-                    first
-                )),
+                } // _ => Err(format!(
+                  //     "Array param element '{}' with index 0 is not supported",
+                  //     first
+                  // )),
             }
         }
         _ => Ok(query),
@@ -350,10 +430,16 @@ fn bind_value_primitive(
         DbValuePrimitive::Xml(v) => Ok(query.bind(v)),
         DbValuePrimitive::Timestamp(v) => Ok(query.bind(v)),
         DbValuePrimitive::Timestamptz(v) => Ok(query.bind(v)),
+        DbValuePrimitive::Time(v) => Ok(query.bind(v)),
+        DbValuePrimitive::Timetz((v, o)) => Ok(query.bind(PgTimeTz { time: v, offset: o })),
         DbValuePrimitive::Date(v) => Ok(query.bind(v)),
         DbValuePrimitive::Interval(v) => Ok(query.bind(v)),
+        DbValuePrimitive::Inet(v) => Ok(query.bind(v)),
+        DbValuePrimitive::Bit(v) => Ok(query.bind(v)),
+        DbValuePrimitive::Varbit(v) => Ok(query.bind(v)),
+        DbValuePrimitive::Oid(v) => Ok(query.bind(Oid(v))),
         DbValuePrimitive::Null => Ok(query.bind(None::<String>)),
-        _ => Err(format!("Type '{}' is not supported", value)),
+        // _ => Err(format!("Type '{}' is not supported", value)),
     }
 }
 
@@ -512,10 +598,46 @@ fn get_db_value(index: usize, row: &sqlx::postgres::PgRow) -> Result<DbValue, St
                 None => DbValue::Primitive(DbValuePrimitive::Null),
             }
         }
+        pg_type_name::TIME => {
+            let v: Option<chrono::NaiveTime> = row.try_get(index).map_err(|e| e.to_string())?;
+            match v {
+                Some(v) => DbValue::Primitive(DbValuePrimitive::Time(v)),
+                None => DbValue::Primitive(DbValuePrimitive::Null),
+            }
+        }
+        pg_type_name::TIMETZ => {
+            let v: Option<PgTimeTz<chrono::NaiveTime, chrono::FixedOffset>> =
+                row.try_get(index).map_err(|e| e.to_string())?;
+            match v {
+                Some(v) => DbValue::Primitive(DbValuePrimitive::Timetz((v.time, v.offset))),
+                None => DbValue::Primitive(DbValuePrimitive::Null),
+            }
+        }
         pg_type_name::INET => {
             let v: Option<IpAddr> = row.try_get(index).map_err(|e| e.to_string())?;
             match v {
                 Some(v) => DbValue::Primitive(DbValuePrimitive::Inet(v)),
+                None => DbValue::Primitive(DbValuePrimitive::Null),
+            }
+        }
+        pg_type_name::BIT => {
+            let v: Option<BitVec> = row.try_get(index).map_err(|e| e.to_string())?;
+            match v {
+                Some(v) => DbValue::Primitive(DbValuePrimitive::Bit(v)),
+                None => DbValue::Primitive(DbValuePrimitive::Null),
+            }
+        }
+        pg_type_name::VARBIT => {
+            let v: Option<BitVec> = row.try_get(index).map_err(|e| e.to_string())?;
+            match v {
+                Some(v) => DbValue::Primitive(DbValuePrimitive::Varbit(v)),
+                None => DbValue::Primitive(DbValuePrimitive::Null),
+            }
+        }
+        pg_type_name::OID => {
+            let v: Option<Oid> = row.try_get(index).map_err(|e| e.to_string())?;
+            match v {
+                Some(v) => DbValue::Primitive(DbValuePrimitive::Oid(v.0)),
                 None => DbValue::Primitive(DbValuePrimitive::Null),
             }
         }
@@ -561,10 +683,24 @@ fn get_db_value(index: usize, row: &sqlx::postgres::PgRow) -> Result<DbValue, St
                 None => DbValue::Array(vec![]),
             }
         }
-        pg_type_name::TEXT_ARRAY | pg_type_name::VARCHAR_ARRAY | pg_type_name::BPCHAR_ARRAY => {
+        pg_type_name::TEXT_ARRAY => {
             let vs: Option<Vec<String>> = row.try_get(index).map_err(|e| e.to_string())?;
             match vs {
                 Some(vs) => DbValue::Array(vs.into_iter().map(DbValuePrimitive::Text).collect()),
+                None => DbValue::Array(vec![]),
+            }
+        }
+        pg_type_name::VARCHAR_ARRAY => {
+            let vs: Option<Vec<String>> = row.try_get(index).map_err(|e| e.to_string())?;
+            match vs {
+                Some(vs) => DbValue::Array(vs.into_iter().map(DbValuePrimitive::Varchar).collect()),
+                None => DbValue::Array(vec![]),
+            }
+        }
+        pg_type_name::BPCHAR_ARRAY => {
+            let vs: Option<Vec<String>> = row.try_get(index).map_err(|e| e.to_string())?;
+            match vs {
+                Some(vs) => DbValue::Array(vs.into_iter().map(DbValuePrimitive::Bpchar).collect()),
                 None => DbValue::Array(vec![]),
             }
         }
@@ -647,11 +783,53 @@ fn get_db_value(index: usize, row: &sqlx::postgres::PgRow) -> Result<DbValue, St
                 None => DbValue::Primitive(DbValuePrimitive::Null),
             }
         }
-        pg_type_name::INET_ARRAY => {
-            let vs: Option<Vec<IpAddr>> =
+        pg_type_name::TIME_ARRAY => {
+            let vs: Option<Vec<chrono::NaiveTime>> =
                 row.try_get(index).map_err(|e| e.to_string())?;
             match vs {
+                Some(vs) => DbValue::Array(vs.into_iter().map(DbValuePrimitive::Time).collect()),
+                None => DbValue::Primitive(DbValuePrimitive::Null),
+            }
+        }
+        pg_type_name::TIMETZ_ARRAY => {
+            let vs: Option<Vec<PgTimeTz<chrono::NaiveTime, chrono::FixedOffset>>> =
+                row.try_get(index).map_err(|e| e.to_string())?;
+            match vs {
+                Some(vs) => DbValue::Array(
+                    vs.into_iter()
+                        .map(|t| DbValuePrimitive::Timetz((t.time, t.offset)))
+                        .collect(),
+                ),
+                None => DbValue::Primitive(DbValuePrimitive::Null),
+            }
+        }
+        pg_type_name::INET_ARRAY => {
+            let vs: Option<Vec<IpAddr>> = row.try_get(index).map_err(|e| e.to_string())?;
+            match vs {
                 Some(vs) => DbValue::Array(vs.into_iter().map(DbValuePrimitive::Inet).collect()),
+                None => DbValue::Primitive(DbValuePrimitive::Null),
+            }
+        }
+        pg_type_name::BIT_ARRAY => {
+            let vs: Option<Vec<BitVec>> = row.try_get(index).map_err(|e| e.to_string())?;
+            match vs {
+                Some(vs) => DbValue::Array(vs.into_iter().map(DbValuePrimitive::Bit).collect()),
+                None => DbValue::Primitive(DbValuePrimitive::Null),
+            }
+        }
+        pg_type_name::VARBIT_ARRAY => {
+            let vs: Option<Vec<BitVec>> = row.try_get(index).map_err(|e| e.to_string())?;
+            match vs {
+                Some(vs) => DbValue::Array(vs.into_iter().map(DbValuePrimitive::Varbit).collect()),
+                None => DbValue::Primitive(DbValuePrimitive::Null),
+            }
+        }
+        pg_type_name::OID_ARRAY => {
+            let vs: Option<Vec<Oid>> = row.try_get(index).map_err(|e| e.to_string())?;
+            match vs {
+                Some(vs) => {
+                    DbValue::Array(vs.into_iter().map(|v| DbValuePrimitive::Oid(v.0)).collect())
+                }
                 None => DbValue::Primitive(DbValuePrimitive::Null),
             }
         }
@@ -733,6 +911,10 @@ impl TryFrom<&sqlx::postgres::PgTypeInfo> for DbColumnType {
             pg_type_name::TIMETZ => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Timetz)),
             pg_type_name::INTERVAL => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Interval)),
             pg_type_name::BYTEA => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Bytea)),
+            pg_type_name::INET => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Inet)),
+            pg_type_name::BIT => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Bit)),
+            pg_type_name::VARBIT => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Varbit)),
+            pg_type_name::OID => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Oid)),
             pg_type_name::CHAR_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Character)),
             pg_type_name::BOOL_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Boolean)),
             pg_type_name::INT2_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Int2)),
@@ -761,6 +943,10 @@ impl TryFrom<&sqlx::postgres::PgTypeInfo> for DbColumnType {
                 Ok(DbColumnType::Array(DbColumnTypePrimitive::Interval))
             }
             pg_type_name::BYTEA_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Bytea)),
+            pg_type_name::INET_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Inet)),
+            pg_type_name::BIT_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Bit)),
+            pg_type_name::VARBIT_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Varbit)),
+            pg_type_name::OID_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Oid)),
             _ => match *type_kind {
                 PgTypeKind::Enum(_) => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Text)),
                 _ => Err(format!("Type '{}' is not supported", type_name))?,
@@ -882,6 +1068,7 @@ pub(crate) mod pg_type_name {
 pub mod types {
     use bigdecimal::BigDecimal;
     use itertools::Itertools;
+    use sqlx::types::BitVec;
     use std::fmt::Display;
     use std::net::IpAddr;
     use uuid::Uuid;
@@ -989,8 +1176,8 @@ pub mod types {
         Xml(String),
         Uuid(Uuid),
         Inet(IpAddr),
-        Bit(Vec<bool>),
-        Varbit(Vec<bool>),
+        Bit(BitVec),
+        Varbit(BitVec),
         Oid(u32),
         Null,
     }

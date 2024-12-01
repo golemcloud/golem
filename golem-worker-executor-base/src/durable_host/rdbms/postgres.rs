@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::rdbms::utils;
 use crate::durable_host::DurableWorkerCtx;
 use crate::metrics::wasm::record_host_function_call;
 use crate::preview2::wasi::rdbms::postgres::{
@@ -22,6 +23,7 @@ use crate::services::rdbms::postgres::PostgresType;
 use crate::services::rdbms::RdbmsPoolKey;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
+use sqlx::types::BitVec;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::ops::Deref;
 use std::str::FromStr;
@@ -29,7 +31,6 @@ use std::sync::Arc;
 use uuid::Uuid;
 use wasmtime::component::Resource;
 use wasmtime_wasi::WasiView;
-use crate::durable_host::rdbms::utils;
 
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
@@ -348,8 +349,8 @@ impl TryFrom<DbValuePrimitive> for crate::services::rdbms::postgres::types::DbVa
             }
             DbValuePrimitive::Xml(s) => Ok(Self::Xml(s)),
             DbValuePrimitive::Uuid((h, l)) => Ok(Self::Uuid(Uuid::from_u64_pair(h, l))),
-            DbValuePrimitive::Bit(v) => Ok(Self::Bit(v)),
-            DbValuePrimitive::Varbit(v) => Ok(Self::Varbit(v)),
+            DbValuePrimitive::Bit(v) => Ok(Self::Bit(BitVec::from_iter(v))),
+            DbValuePrimitive::Varbit(v) => Ok(Self::Varbit(BitVec::from_iter(v))),
             DbValuePrimitive::Oid(v) => Ok(Self::Oid(v)),
             DbValuePrimitive::Inet(v) => match v {
                 IpAddress::Ipv4((a, b, c, d)) => {
@@ -417,8 +418,12 @@ impl From<crate::services::rdbms::postgres::types::DbValuePrimitive> for DbValue
             crate::services::rdbms::postgres::types::DbValuePrimitive::Uuid(uuid) => {
                 Self::Uuid(uuid.as_u64_pair())
             }
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Bit(v) => Self::Bit(v),
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Varbit(v) => Self::Varbit(v),
+            crate::services::rdbms::postgres::types::DbValuePrimitive::Bit(v) => {
+                Self::Bit(v.iter().collect())
+            }
+            crate::services::rdbms::postgres::types::DbValuePrimitive::Varbit(v) => {
+                Self::Varbit(v.iter().collect())
+            }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Oid(v) => Self::Oid(v),
             crate::services::rdbms::postgres::types::DbValuePrimitive::Inet(v) => match v {
                 IpAddr::V4(v) => {

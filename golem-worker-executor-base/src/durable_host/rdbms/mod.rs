@@ -97,7 +97,10 @@ pub(crate) mod utils {
         Ok(datetime.and_utc())
     }
 
-    pub(crate) fn naivetime_and_offset_to_time(v: chrono::NaiveTime, o: chrono::FixedOffset) -> Timetz {
+    pub(crate) fn naivetime_and_offset_to_time(
+        v: chrono::NaiveTime,
+        o: chrono::FixedOffset,
+    ) -> Timetz {
         let hour = v.hour() as u8;
         let minute = v.minute() as u8;
         let second = v.second() as u8;

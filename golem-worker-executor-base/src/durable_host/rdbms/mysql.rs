@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::rdbms::utils;
 use crate::durable_host::DurableWorkerCtx;
 use crate::metrics::wasm::record_host_function_call;
 use crate::preview2::wasi::rdbms::mysql::{
@@ -21,12 +22,12 @@ use crate::services::rdbms::mysql::MysqlType;
 use crate::services::rdbms::RdbmsPoolKey;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
+use sqlx::types::BitVec;
 use std::ops::Deref;
 use std::str::FromStr;
 use std::sync::Arc;
 use wasmtime::component::Resource;
 use wasmtime_wasi::WasiView;
-use crate::durable_host::rdbms::utils;
 
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
@@ -351,7 +352,7 @@ impl TryFrom<DbValue> for crate::services::rdbms::mysql::types::DbValue {
             DbValue::Year(v) => Ok(Self::Year(v)),
             DbValue::Set(v) => Ok(Self::Set(v)),
             DbValue::Enumeration(v) => Ok(Self::Enumeration(v)),
-            DbValue::Bit(v) => Ok(Self::Bit(v)),
+            DbValue::Bit(v) => Ok(Self::Bit(BitVec::from_iter(v))),
             DbValue::Null => Ok(Self::Null),
         }
     }
@@ -408,7 +409,7 @@ impl From<crate::services::rdbms::mysql::types::DbValue> for DbValue {
             crate::services::rdbms::mysql::types::DbValue::Year(v) => Self::Year(v),
             crate::services::rdbms::mysql::types::DbValue::Set(v) => Self::Set(v),
             crate::services::rdbms::mysql::types::DbValue::Enumeration(v) => Self::Enumeration(v),
-            crate::services::rdbms::mysql::types::DbValue::Bit(v) => Self::Bit(v),
+            crate::services::rdbms::mysql::types::DbValue::Bit(v) => Self::Bit(v.iter().collect()),
             crate::services::rdbms::mysql::types::DbValue::Null => Self::Null,
         }
     }
