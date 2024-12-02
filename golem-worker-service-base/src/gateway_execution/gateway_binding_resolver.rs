@@ -13,41 +13,62 @@
 // limitations under the License.
 
 use crate::gateway_api_definition::http::{CompiledHttpApiDefinition, VarInfo};
-use crate::gateway_binding::{GatewayBindingCompiled, StaticBinding};
+use crate::gateway_binding::{GatewayBindingCompiled, RibInputTypeMismatch, StaticBinding};
 use crate::gateway_binding::{GatewayRequestDetails, ResponseMappingCompiled};
 use crate::gateway_execution::router::RouterPattern;
+use crate::gateway_execution::to_response_failure::ToHttpResponseFromSafeDisplay;
 use crate::gateway_request::http_request::{router, InputHttpRequest};
+use crate::gateway_security::OpenIdClient;
 use async_trait::async_trait;
 use golem_common::model::IdempotencyKey;
+use golem_common::SafeDisplay;
 use golem_service_base::model::VersionedComponentId;
+use http::StatusCode;
+use openidconnect::{CsrfToken, Nonce};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::fmt::Display;
-
-use crate::gateway_middleware::Middlewares;
+use std::fmt::Debug;
 
 // Every type of request (example: InputHttpRequest (which corresponds to a Route)) can have an instance of this resolver,
 // which will resolve the gateway binding equired for that request.
 #[async_trait]
 pub trait GatewayBindingResolver<Namespace, ApiDefinition> {
-    async fn resolve_worker_binding(
+    async fn resolve_gateway_binding(
         &self,
         api_definitions: Vec<ApiDefinition>,
     ) -> Result<ResolvedGatewayBinding<Namespace>, GatewayBindingResolverError>;
 }
 
 #[derive(Debug)]
-pub struct GatewayBindingResolverError(pub String);
+pub enum GatewayBindingResolverError {
+    RibInputTypeMismatch(RibInputTypeMismatch),
+    Internal(String),
+    RouteNotFound,
+}
 
-impl<A: AsRef<str>> From<A> for GatewayBindingResolverError {
-    fn from(message: A) -> Self {
-        GatewayBindingResolverError(message.as_ref().to_string())
+impl GatewayBindingResolverError {
+    pub fn internal(err: &str) -> Self {
+        GatewayBindingResolverError::Internal(err.to_string())
+    }
+
+    pub fn to_http_response(&self) -> poem::Response {
+        self.to_response_from_safe_display(|err| match err {
+            GatewayBindingResolverError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            GatewayBindingResolverError::RouteNotFound => StatusCode::NOT_FOUND,
+            GatewayBindingResolverError::RibInputTypeMismatch(_) => StatusCode::BAD_REQUEST,
+        })
     }
 }
 
-impl Display for GatewayBindingResolverError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Worker binding resolution error: {}", self.0)
+impl SafeDisplay for GatewayBindingResolverError {
+    fn to_safe_string(&self) -> String {
+        match self {
+            GatewayBindingResolverError::RibInputTypeMismatch(err) => {
+                format!("Input type mismatch: {}", err)
+            }
+            GatewayBindingResolverError::Internal(err) => format!("Internal: {}", err),
+            GatewayBindingResolverError::RouteNotFound => "RouteNotFound".to_string(),
+        }
     }
 }
 
@@ -62,6 +83,14 @@ pub enum ResolvedBinding<Namespace> {
     Static(StaticBinding),
     Worker(ResolvedWorkerBinding<Namespace>),
     FileServer(ResolvedWorkerBinding<Namespace>),
+}
+
+#[derive(Clone, Debug)]
+pub struct AuthParams {
+    pub client: OpenIdClient,
+    pub csrf_state: CsrfToken,
+    pub nonce: Nonce,
+    pub original_uri: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -102,7 +131,6 @@ pub struct ResolvedWorkerBinding<Namespace> {
     pub worker_detail: WorkerDetail,
     pub compiled_response_mapping: ResponseMappingCompiled,
     pub namespace: Namespace,
-    pub middlewares: Middlewares,
 }
 
 impl<Namespace> ResolvedGatewayBinding<Namespace> {
@@ -139,7 +167,7 @@ impl<Namespace> ResolvedGatewayBinding<Namespace> {
 impl<Namespace: Clone + Send + Sync + 'static>
     GatewayBindingResolver<Namespace, CompiledHttpApiDefinition<Namespace>> for InputHttpRequest
 {
-    async fn resolve_worker_binding(
+    async fn resolve_gateway_binding(
         &self,
         compiled_api_definitions: Vec<CompiledHttpApiDefinition<Namespace>>,
     ) -> Result<ResolvedGatewayBinding<Namespace>, GatewayBindingResolverError> {
@@ -151,8 +179,8 @@ impl<Namespace: Clone + Send + Sync + 'static>
         let api_request = self;
         let router = router::build(compiled_routes);
 
-        let path: Vec<&str> = RouterPattern::split(&api_request.input_path.base_path).collect();
-        let request_query_variables = self.input_path.query_components().unwrap_or_default();
+        let path: Vec<&str> = RouterPattern::split(&api_request.api_input_path.base_path).collect();
+        let request_query_variables = self.api_input_path.query_components().unwrap_or_default();
         let request_body = &self.req_body;
         let headers = &self.headers;
 
@@ -161,9 +189,10 @@ impl<Namespace: Clone + Send + Sync + 'static>
             query_params,
             namespace,
             binding,
+            middlewares,
         } = router
             .check_path(&api_request.req_method, &path)
-            .ok_or("Failed to resolve route")?;
+            .ok_or(GatewayBindingResolverError::RouteNotFound)?;
 
         let zipped_path_params: HashMap<VarInfo, String> = {
             path_params
@@ -181,13 +210,22 @@ impl<Namespace: Clone + Send + Sync + 'static>
         };
 
         let http_request_details = GatewayRequestDetails::from(
+            &self.scheme,
+            &self.host,
+            &self.api_input_path,
             &zipped_path_params,
             &request_query_variables,
             query_params,
             request_body,
-            headers,
+            headers.clone(),
+            middlewares,
         )
-        .map_err(|err| format!("Failed to fetch input request details {}", err.join(", ")))?;
+        .map_err(|err| {
+            GatewayBindingResolverError::Internal(format!(
+                "Failed to fetch input request details {}",
+                err.join(", ")
+            ))
+        })?;
 
         match binding {
             GatewayBindingCompiled::FileServer(worker_binding) => internal::get_resolved_binding(
@@ -229,28 +267,32 @@ mod internal {
 
     pub async fn get_resolved_binding<Namespace: Clone>(
         binding: &WorkerBindingCompiled,
-        http_request_details: &GatewayRequestDetails,
+        gateway_request_details: &GatewayRequestDetails,
         namespace: &Namespace,
         headers: &HeaderMap,
     ) -> Result<ResolvedWorkerBinding<Namespace>, GatewayBindingResolverError> {
+        let GatewayRequestDetails::Http(http_request_details) = gateway_request_details;
+
         let worker_name_opt = if let Some(worker_name_compiled) = &binding.worker_name_compiled {
             let resolve_rib_input = http_request_details
                 .resolve_rib_input_value(&worker_name_compiled.rib_input_type_info)
-                .map_err(|err| {
-                    format!(
-                        "Failed to resolve rib input value from http request details {}",
-                        err
-                    )
-                })?;
+                .map_err(GatewayBindingResolverError::RibInputTypeMismatch)?;
 
             let worker_name = rib::interpret_pure(
                 &worker_name_compiled.compiled_worker_name,
                 &resolve_rib_input,
             )
             .await
-            .map_err(|err| format!("Failed to evaluate worker name rib expression. {}", err))?
+            .map_err(|err| {
+                GatewayBindingResolverError::Internal(format!(
+                    "Failed to evaluate worker name rib expression. {}",
+                    err
+                ))
+            })?
             .get_literal()
-            .ok_or("Worker name is not a Rib expression that resolves to String".to_string())?
+            .ok_or(GatewayBindingResolverError::Internal(
+                "Worker name is not a Rib expression that resolves to String".to_string(),
+            ))?
             .as_string();
 
             Some(worker_name)
@@ -260,37 +302,33 @@ mod internal {
 
         let component_id = &binding.component_id;
 
-        let idempotency_key = if let Some(idempotency_key_compiled) =
-            &binding.idempotency_key_compiled
-        {
-            let resolve_rib_input = http_request_details
-                .resolve_rib_input_value(&idempotency_key_compiled.rib_input)
-                .map_err(|err| {
-                    format!(
-                        "Failed to resolve rib input value from http request details {} for idemptency key",
-                        err
-                    )
-                })?;
+        let idempotency_key =
+            if let Some(idempotency_key_compiled) = &binding.idempotency_key_compiled {
+                let resolve_rib_input = http_request_details
+                    .resolve_rib_input_value(&idempotency_key_compiled.rib_input)
+                    .map_err(GatewayBindingResolverError::RibInputTypeMismatch)?;
 
-            let idempotency_key_value = rib::interpret_pure(
-                &idempotency_key_compiled.compiled_idempotency_key,
-                &resolve_rib_input,
-            )
-            .await
-            .map_err(|err| err.to_string())?;
+                let idempotency_key_value = rib::interpret_pure(
+                    &idempotency_key_compiled.compiled_idempotency_key,
+                    &resolve_rib_input,
+                )
+                .await
+                .map_err(|err| GatewayBindingResolverError::Internal(err.to_string()))?;
 
-            let idempotency_key = idempotency_key_value
-                .get_literal()
-                .ok_or("Idempotency Key is not a string")?
-                .as_string();
+                let idempotency_key = idempotency_key_value
+                    .get_literal()
+                    .ok_or(GatewayBindingResolverError::internal(
+                        "Idempotency Key is not a string",
+                    ))?
+                    .as_string();
 
-            Some(IdempotencyKey::new(idempotency_key))
-        } else {
-            headers
-                .get("idempotency-key")
-                .and_then(|h| h.to_str().ok())
-                .map(|value| IdempotencyKey::new(value.to_string()))
-        };
+                Some(IdempotencyKey::new(idempotency_key))
+            } else {
+                headers
+                    .get("idempotency-key")
+                    .and_then(|h| h.to_str().ok())
+                    .map(|value| IdempotencyKey::new(value.to_string()))
+            };
 
         let worker_detail = WorkerDetail {
             component_id: component_id.clone(),
@@ -302,7 +340,6 @@ mod internal {
             worker_detail,
             compiled_response_mapping: binding.response_compiled.clone(),
             namespace: namespace.clone(),
-            middlewares: binding.middlewares.clone().unwrap_or_default(),
         };
 
         Ok(resolved_binding)

@@ -12,19 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::config::ProfileName;
+use crate::config::{NamedProfile, Profile};
 use crate::init::CliKind;
 use crate::model::text::fmt::format_error;
-use crate::model::{Format, GolemError, GolemResult, HasFormatConfig, HasVerbosity};
 use crate::service::version::{VersionCheckResult, VersionService};
+use clap::CommandFactory;
+use clap::Parser;
 use clap_verbosity_flag::Verbosity;
 use colored::Colorize;
-use completion::PrintCompletion;
+use command::CliCommand;
+use config::{get_config_dir, Config};
 use golem_common::golem_version;
+use indoc::eprintdoc;
 use lenient_bool::LenientBool;
 use log::Level;
-use std::future::Future;
-use std::path::PathBuf;
+use oss::main::GolemOssCli;
 use std::process::ExitCode;
 use tracing::{info, warn};
 use tracing_subscriber::FmtSubscriber;
@@ -48,126 +50,6 @@ pub mod stubgen;
 test_r::enable!();
 
 const VERSION: &str = golem_version!();
-
-pub trait MainArgs {
-    fn format(&self) -> Format;
-    fn verbosity(&self) -> Verbosity;
-    fn profile_name(&self) -> Option<&ProfileName>;
-    fn cli_kind(&self) -> CliKind;
-    fn args_kind(&self) -> &str;
-}
-
-pub struct InitMainArgs<Command>
-where
-    Command: HasFormatConfig + HasVerbosity + PrintCompletion,
-{
-    pub cli_kind: CliKind,
-    pub config_dir: PathBuf,
-    pub command: Command,
-}
-
-impl<Command> MainArgs for InitMainArgs<Command>
-where
-    Command: HasFormatConfig + HasVerbosity + PrintCompletion,
-{
-    fn format(&self) -> Format {
-        self.command.format().unwrap_or_default()
-    }
-
-    fn verbosity(&self) -> Verbosity {
-        self.command.verbosity()
-    }
-
-    fn profile_name(&self) -> Option<&ProfileName> {
-        None
-    }
-
-    fn cli_kind(&self) -> CliKind {
-        self.cli_kind
-    }
-
-    fn args_kind(&self) -> &str {
-        "init"
-    }
-}
-
-pub struct ConfiguredMainArgs<Profile, Command>
-where
-    Profile: HasFormatConfig,
-    Command: HasFormatConfig + HasVerbosity + PrintCompletion,
-{
-    pub cli_kind: CliKind,
-    pub config_dir: PathBuf,
-    pub profile_name: ProfileName,
-    pub profile: Profile,
-    pub command: Command,
-}
-
-impl<Profile, Command> MainArgs for ConfiguredMainArgs<Profile, Command>
-where
-    Profile: HasFormatConfig,
-    Command: HasFormatConfig + HasVerbosity + PrintCompletion,
-{
-    fn format(&self) -> Format {
-        if let Some(format) = self.command.format() {
-            return format;
-        }
-        if let Some(format) = self.profile.format() {
-            return format;
-        }
-        Format::default()
-    }
-
-    fn verbosity(&self) -> Verbosity {
-        self.command.verbosity()
-    }
-
-    fn profile_name(&self) -> Option<&ProfileName> {
-        Some(&self.profile_name)
-    }
-
-    fn cli_kind(&self) -> CliKind {
-        self.cli_kind
-    }
-
-    fn args_kind(&self) -> &str {
-        "configured"
-    }
-}
-
-pub fn run_main<F, A>(main: fn(A) -> F, args: A) -> ExitCode
-where
-    A: MainArgs,
-    F: Future<Output = Result<GolemResult, GolemError>>,
-{
-    let format = args.format();
-    init_tracing(args.verbosity());
-
-    info!(
-        args_king = args.args_kind(),
-        cli_kind = format!("{:?}", args.cli_kind()),
-        profile_name = format!("{:?}", args.profile_name()),
-        format = format!("{:?}", format),
-        "Starting Golem CLI",
-    );
-
-    let result = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .expect("Failed to build tokio runtime for cli main")
-        .block_on(main(args));
-
-    match result {
-        Ok(result) => {
-            result.print(format);
-            ExitCode::SUCCESS
-        }
-        Err(error) => {
-            eprintln!("{}", format_error(&error.0));
-            ExitCode::FAILURE
-        }
-    }
-}
 
 pub fn parse_key_val(
     s: &str,
@@ -225,6 +107,78 @@ pub async fn check_for_newer_server_version(
         }
         Err(error) => {
             warn!("{}", error.0)
+        }
+    }
+}
+
+pub fn run_main<
+    ExtraCommands: CliCommand<oss::main::OssCommandContext> + CliCommand<oss::main::UnintializedOssCommandContext>,
+>() -> ExitCode {
+    let config_dir = get_config_dir();
+
+    let oss_profile = match Config::get_active_profile(CliKind::Oss, &config_dir) {
+        Some(NamedProfile {
+            name,
+            profile: Profile::Golem(p),
+        }) => Some((name, p)),
+        Some(NamedProfile {
+            name: _,
+            profile: Profile::GolemCloud(_),
+        }) => {
+            eprintdoc!(
+                    "Golem Cloud profile is not supported in this CLI version.
+                    To use Golem Cloud please install golem-cloud-cli with feature 'universal' to replace golem-cli
+                    cargo install --features universal golem-cloud-cli
+                    And remove golem-cli:
+                    cargo remove golem-cli
+                    To create another default profile use `golem-cli init`.
+                    To manage profiles use `golem-cli profile` command.
+                    "
+                );
+
+            None
+        }
+        None => None,
+    };
+
+    let command = GolemOssCli::<ExtraCommands>::command();
+    let parsed = GolemOssCli::<ExtraCommands>::parse();
+
+    let format = parsed
+        .format
+        .or_else(|| oss_profile.as_ref().map(|(_, p)| p.config.default_format))
+        .unwrap_or_default();
+    init_tracing(parsed.verbosity.clone());
+
+    info!(
+        profile = format!("{:?}", oss_profile.as_ref().map(|(n, _)| n)),
+        format = format!("{:?}", format),
+        "Starting Golem CLI",
+    );
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("Failed to build tokio runtime for cli main");
+
+    let result = if let Some((_, profile)) = oss_profile {
+        runtime.block_on(oss::main::run_with_profile(
+            format, config_dir, profile, command, parsed,
+        ))
+    } else {
+        runtime.block_on(oss::main::run_without_profile(
+            format, config_dir, command, parsed,
+        ))
+    };
+
+    match result {
+        Ok(result) => {
+            result.print(format);
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("{}", format_error(&error.0));
+            ExitCode::FAILURE
         }
     }
 }

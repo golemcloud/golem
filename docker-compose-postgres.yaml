@@ -53,8 +53,9 @@ services:
       - WASMTIME_BACKTRACE_DETAILS=1
       - RUST_BACKTRACE=1
       - RUST_LOG=info,h2=warn,hyper=warn,tower=warn
-      - GOLEM__REDIS__HOST=redis
-      - GOLEM__REDIS__PORT=${REDIS_PORT}
+      - GOLEM__PERSISTENCE__TYPE="Redis"
+      - GOLEM__PERSISTENCE__CONFIG__HOST=redis
+      - GOLEM__PERSISTENCE__CONFIG__PORT=${REDIS_PORT}
       - GOLEM__HTTP_PORT=${SHARD_MANAGER_HTTP_PORT}
       - GOLEM_SHARD_MANAGER_PORT=${SHARD_MANAGER_GRPC_PORT}
     depends_on:

@@ -1054,6 +1054,7 @@ pub struct WorkerResourceDescription {
 }
 
 /// Contains status information about a worker according to a given oplog index.
+///
 /// This status is just cached information, all fields must be computable by the oplog alone.
 /// By having an associated oplog_idx, the cached information can be used together with the
 /// tail of the oplog to determine the actual status of the worker.
@@ -3026,7 +3027,6 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::FileSystemNode> for Component
         }
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Serialize, Encode, Decode, Enum, Default)]
 #[serde(rename_all = "kebab-case")]
 #[oai(rename_all = "kebab-case")]

@@ -55,6 +55,7 @@ use std::task::{Context, Poll};
 use tokio::sync::broadcast::error::RecvError;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tonic::{Request, Response, Status};
+use tracing::info_span;
 use tracing::{debug, error, info, warn, Instrument};
 use uuid::Uuid;
 use wasmtime::Error;
@@ -831,6 +832,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 request.count,
                 request.precise,
             )
+            .instrument(info_span!("enumerate_workers"))
             .await?;
 
         let mut result = Vec::new();

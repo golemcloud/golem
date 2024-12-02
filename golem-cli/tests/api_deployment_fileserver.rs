@@ -16,7 +16,7 @@ use crate::cli::{Cli, CliLive};
 use crate::Tracing;
 use golem_cli::model::component::ComponentView;
 use golem_cli::model::Format;
-use golem_client::model::{ApiDeployment, HttpApiDefinitionRequest, HttpApiDefinitionWithTypeInfo};
+use golem_client::model::{ApiDeployment, HttpApiDefinitionRequest, HttpApiDefinitionResponseData};
 use golem_common::model::ComponentId;
 use golem_common::uri::oss::urn::WorkerUrn;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
@@ -104,7 +104,7 @@ fn api_deployment_file_server_simple(
         writer.flush()?;
     }
 
-    let definition: HttpApiDefinitionWithTypeInfo =
+    let definition: HttpApiDefinitionResponseData =
         cli.run(&["api-definition", "add", api_path.to_str().unwrap()])?;
 
     let _: ApiDeployment = cli.run(&[
@@ -181,7 +181,7 @@ fn api_deployment_fileserver_complex(
         writer.flush()?;
     }
 
-    let definition: HttpApiDefinitionWithTypeInfo =
+    let definition: HttpApiDefinitionResponseData =
         cli.run(&["api-definition", "add", api_path.to_str().unwrap()])?;
 
     let _: ApiDeployment = cli.run(&[
@@ -273,7 +273,7 @@ fn api_deployment_fileserver_stateful_worker(
         writer.flush()?;
     }
 
-    let definition: HttpApiDefinitionWithTypeInfo =
+    let definition: HttpApiDefinitionResponseData =
         cli.run(&["api-definition", "add", api_path.to_str().unwrap()])?;
 
     let _: ApiDeployment = cli.run(&[
@@ -314,7 +314,7 @@ fn make_file_server_api_definition_simple(
             componentId:
               componentId: '{component_id}'
               version: 0
-            response: 'let file: str = request.path.file; "/files/${{file}}"'
+            response: 'let file: string = request.path.file; "/files/${{file}}"'
     "#,
     ))?)
 }
@@ -335,7 +335,7 @@ fn make_file_server_api_definition_complex(
             componentId:
               componentId: '{component_id}'
               version: 0
-            response: 'let file: str = request.path.file; {{ headers: {{Content-Type: "application/json"}}, status: 201u64, file-path: "/files/${{file}}" }}'
+            response: 'let file: string = request.path.file; {{ headers: {{Content-Type: "application/json"}}, status: 201u64, file-path: "/files/${{file}}" }}'
     "#,
     ))?)
 }
@@ -357,8 +357,8 @@ fn make_file_server_api_definition_with_worker_name(
             componentId:
               componentId: '{component_id}'
               version: 0
-            workerName: 'let name: str = "{worker_name}"; name'
-            response: 'let file: str = request.path.file; "/files/${{file}}"'
+            workerName: 'let name: string = "{worker_name}"; name'
+            response: 'let file: string = request.path.file; "/files/${{file}}"'
     "#,
     ))?)
 }

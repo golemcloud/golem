@@ -1,0 +1,65 @@
+[package]
+name = "golem"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+homepage = "https://golem.cloud/"
+repository = "https://github.com/golemcloud/golem"
+readme = "README.md"
+description = "Single Golem executable for testing"
+
+[lib]
+harness = false
+
+[[bin]]
+name = "golem"
+path = "src/main.rs"
+test = false
+
+[dependencies]
+golem-cli = { path = "../golem-cli", version = "0.0.0" }
+golem-common = { path = "../golem-common", version = "0.0.0" }
+golem-component-compilation-service = { path = "../golem-component-compilation-service", version = "0.0.0" }
+golem-component-service = { path = "../golem-component-service", version = "0.0.0" }
+golem-component-service-base = { path = "../golem-component-service-base", version = "0.0.0" }
+golem-service-base = { path = "../golem-service-base", version = "0.0.0" }
+golem-shard-manager = { path = "../golem-shard-manager", version = "0.0.0" }
+golem-worker-executor = { path = "../golem-worker-executor", version = "0.0.0" }
+golem-worker-executor-base = { path = "../golem-worker-executor-base", version = "0.0.0" }
+golem-worker-service = { path = "../golem-worker-service", version = "0.0.0" }
+golem-worker-service-base = { path = "../golem-worker-service-base", version = "0.0.0" }
+
+anyhow = { workspace = true }
+bytes = { workspace = true }
+clap = { workspace = true }
+http-body-util = "0.1.2"
+hyper = { workspace = true }
+futures = { workspace = true }
+include_dir = "0.7.4"
+opentelemetry = { workspace = true }
+opentelemetry-prometheus = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+poem = { workspace = true }
+prometheus = { workspace = true }
+regex = { workspace = true }
+reqwest = { workspace = true }
+rustls = { workspace = true }
+serde = { workspace = true }
+sqlx = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+xdg = { workspace = true }
+
+# Sozu builds with simd support by default, but it only works on x86_64
+
+[target.'cfg(target_arch = "x86_64")'.dependencies]
+sozu-command-lib = { workspace = true }
+sozu-lib = { workspace = true }
+
+[target.'cfg(not(target_arch = "x86_64"))'.dependencies]
+sozu-command-lib = { workspace = true, default-features = false }
+sozu-lib = { workspace = true, default-features = false }
+
+[dev-dependencies]
+test-r = { workspace = true }

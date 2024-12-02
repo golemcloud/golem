@@ -11,11 +11,15 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 pub mod api_tags;
 pub mod auth;
 pub mod config;
 pub mod db;
+pub mod metrics;
+pub mod migration;
 pub mod model;
+pub mod observability;
 pub mod poem;
 pub mod repo;
 pub mod service;

@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use golem_worker_executor_base::services::compiled_component::CompiledComponentService;
 use tokio::sync::mpsc;
+use tracing::Instrument;
 
 use crate::model::*;
 
@@ -34,13 +35,16 @@ impl UploadWorker {
             compiled_component_service,
         };
 
-        tokio::spawn(async move {
-            loop {
-                while let Some(request) = recv.recv().await {
-                    worker.upload_component(request).await
+        tokio::spawn(
+            async move {
+                loop {
+                    while let Some(request) = recv.recv().await {
+                        worker.upload_component(request).await
+                    }
                 }
             }
-        });
+            .in_current_span(),
+        );
     }
 
     // Don't need retries because they're baked into CompiledComponentService.

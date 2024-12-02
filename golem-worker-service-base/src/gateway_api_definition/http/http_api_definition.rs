@@ -12,33 +12,32 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
-use std::fmt::{Debug, Display};
-use std::str::FromStr;
-use std::time::SystemTime;
-use Iterator;
-
 use crate::gateway_api_definition::http::path_pattern_parser::parse_path_pattern;
+use crate::gateway_api_definition::http::{HttpApiDefinitionRequest, RouteRequest};
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion, HasGolemBindings};
+use crate::gateway_api_definition_transformer::transform_http_api_definition;
 use crate::gateway_binding::WorkerBindingCompiled;
 use crate::gateway_binding::{GatewayBinding, GatewayBindingCompiled};
-use crate::gateway_middleware::Cors;
+use crate::gateway_middleware::{HttpCors, HttpMiddleware, HttpMiddlewares};
+use crate::gateway_security::SecuritySchemeReference;
+use crate::service::gateway::api_definition::ApiDefinitionError;
+use crate::service::gateway::api_definition_validator::ValidationErrors;
+use crate::service::gateway::security_scheme::SecuritySchemeService;
 use bincode::{Decode, Encode};
 use derive_more::Display;
 use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
+use golem_api_grpc::proto::golem::apidefinition::HttpRoute;
 use golem_service_base::model::{Component, VersionedComponentId};
 use golem_wasm_ast::analysis::AnalysedExport;
 use poem_openapi::Enum;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct HttpApiDefinitionRequest {
-    pub id: ApiDefinitionId,
-    pub version: ApiVersion,
-    pub routes: Vec<Route>,
-    pub draft: bool,
-}
+use std::collections::HashMap;
+use std::fmt::{Debug, Display};
+use std::str::FromStr;
+use std::sync::Arc;
+use std::time::SystemTime;
+use Iterator;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct HttpApiDefinition {
@@ -50,26 +49,114 @@ pub struct HttpApiDefinition {
 }
 
 impl HttpApiDefinition {
-    pub fn new(
+    pub fn id(&self) -> ApiDefinitionId {
+        self.id.clone()
+    }
+
+    pub fn version(&self) -> ApiVersion {
+        self.version.clone()
+    }
+    pub fn security_schemes(&self) -> Vec<SecuritySchemeReference> {
+        self.routes
+            .iter()
+            .filter_map(|route| {
+                route
+                    .middlewares
+                    .clone()
+                    .and_then(|x| x.get_http_authentication_middleware())
+            })
+            .map(|x| SecuritySchemeReference::from(x.security_scheme))
+            .collect()
+    }
+
+    pub async fn from_http_api_definition_request<Namespace>(
+        namespace: &Namespace,
         request: HttpApiDefinitionRequest,
         created_at: chrono::DateTime<chrono::Utc>,
-    ) -> Self {
-        HttpApiDefinition {
+        security_scheme_service: &Arc<dyn SecuritySchemeService<Namespace> + Send + Sync>,
+    ) -> Result<Self, ApiDefinitionError> {
+        let mut registry = HashMap::new();
+
+        if let Some(security_schemes) = request.security {
+            for security_scheme_reference in security_schemes {
+                let security_scheme = security_scheme_service
+                    .get(
+                        &security_scheme_reference.security_scheme_identifier,
+                        namespace,
+                    )
+                    .await
+                    .map_err(ApiDefinitionError::SecuritySchemeError)?;
+
+                registry.insert(
+                    security_scheme_reference.security_scheme_identifier.clone(),
+                    security_scheme.clone(),
+                );
+            }
+        }
+
+        let mut routes = vec![];
+
+        for route in request.routes {
+            let mut http_middlewares = vec![];
+
+            if let Some(security) = route.security {
+                let security_scheme = security_scheme_service
+                    .get(&security.security_scheme_identifier, namespace)
+                    .await
+                    .map_err(ApiDefinitionError::SecuritySchemeError)?;
+
+                http_middlewares.push(HttpMiddleware::authenticate_request(security_scheme));
+            }
+
+            if let Some(cors) = route.cors {
+                http_middlewares.push(HttpMiddleware::cors(cors));
+            }
+
+            routes.push(Route {
+                method: route.method,
+                path: route.path,
+                middlewares: if http_middlewares.is_empty() {
+                    None
+                } else {
+                    Some(HttpMiddlewares(http_middlewares))
+                },
+
+                binding: route.binding,
+            })
+        }
+
+        let mut http_api_definition = HttpApiDefinition {
             id: request.id,
             version: request.version,
-            routes: request.routes,
+            routes,
             draft: request.draft,
             created_at,
-        }
+        };
+
+        transform_http_api_definition(&mut http_api_definition).map_err(|error| {
+            ApiDefinitionError::ValidationError(ValidationErrors {
+                errors: vec![error.to_string()],
+            })
+        })?;
+
+        Ok(http_api_definition)
     }
 }
 
 impl From<HttpApiDefinition> for HttpApiDefinitionRequest {
     fn from(value: HttpApiDefinition) -> Self {
+        let global_security = value.security_schemes();
+        let security = if global_security.is_empty() {
+            None
+        } else {
+            Some(global_security)
+        };
+
         Self {
-            id: value.id,
-            version: value.version,
-            routes: value.routes,
+            id: value.id(),
+            version: value.version(),
+            security,
+            routes: value.routes.into_iter().map(RouteRequest::from).collect(),
             draft: value.draft,
         }
     }
@@ -409,11 +496,31 @@ impl Display for PathPattern {
 pub struct Route {
     pub method: MethodPattern,
     pub path: AllPathPatterns,
+    pub middlewares: Option<HttpMiddlewares>,
     pub binding: GatewayBinding,
 }
 
+impl TryFrom<HttpRoute> for Route {
+    type Error = String;
+
+    fn try_from(http_route: HttpRoute) -> Result<Self, Self::Error> {
+        let binding = http_route.binding.ok_or("Missing binding")?;
+        let middlewares = http_route
+            .middleware
+            .map(HttpMiddlewares::try_from)
+            .transpose()?;
+
+        Ok(Route {
+            method: MethodPattern::try_from(http_route.method)?,
+            path: AllPathPatterns::from_str(http_route.path.as_str())?,
+            binding: GatewayBinding::try_from(binding)?,
+            middlewares,
+        })
+    }
+}
+
 impl Route {
-    pub fn cors_preflight_binding(&self) -> Option<Cors> {
+    pub fn cors_preflight_binding(&self) -> Option<HttpCors> {
         match &self.binding {
             GatewayBinding::Static(static_binding) => static_binding.get_cors_preflight(),
             _ => None,
@@ -426,6 +533,7 @@ pub struct CompiledRoute {
     pub method: MethodPattern,
     pub path: AllPathPatterns,
     pub binding: GatewayBindingCompiled,
+    pub middlewares: Option<HttpMiddlewares>,
 }
 
 #[derive(Debug)]
@@ -475,6 +583,7 @@ impl CompiledRoute {
                     method: route.method.clone(),
                     path: route.path.clone(),
                     binding: GatewayBindingCompiled::Worker(binding),
+                    middlewares: route.middlewares.clone(),
                 })
             }
 
@@ -494,6 +603,7 @@ impl CompiledRoute {
                     method: route.method.clone(),
                     path: route.path.clone(),
                     binding: GatewayBindingCompiled::FileServer(binding),
+                    middlewares: route.middlewares.clone(),
                 })
             }
 
@@ -501,6 +611,7 @@ impl CompiledRoute {
                 method: route.method.clone(),
                 path: route.path.clone(),
                 binding: GatewayBindingCompiled::Static(static_binding.clone()),
+                middlewares: route.middlewares.clone(),
             }),
         }
     }
@@ -511,7 +622,8 @@ impl From<CompiledRoute> for Route {
         Route {
             method: compiled_route.method,
             path: compiled_route.path,
-            binding: compiled_route.binding.into(),
+            binding: GatewayBinding::from(compiled_route.binding),
+            middlewares: compiled_route.middlewares,
         }
     }
 }
@@ -520,7 +632,14 @@ impl From<CompiledRoute> for Route {
 mod tests {
     use super::*;
     use crate::api;
+    use async_trait::async_trait;
+
+    use crate::gateway_security::{
+        SecurityScheme, SecuritySchemeIdentifier, SecuritySchemeWithProviderMetadata,
+    };
+    use crate::service::gateway::security_scheme::SecuritySchemeServiceError;
     use chrono::{DateTime, Utc};
+    use golem_service_base::auth::DefaultNamespace;
     use test_r::test;
 
     #[test]
@@ -730,17 +849,52 @@ mod tests {
         serde_yaml::Value::deserialize(de).unwrap()
     }
 
+    struct TestSecuritySchemeService;
+
+    #[async_trait]
+    impl<Namespace> SecuritySchemeService<Namespace> for TestSecuritySchemeService {
+        async fn get(
+            &self,
+            _security_scheme_name: &SecuritySchemeIdentifier,
+            _namespace: &Namespace,
+        ) -> Result<SecuritySchemeWithProviderMetadata, SecuritySchemeServiceError> {
+            Err(SecuritySchemeServiceError::InternalError(
+                "Not implemented".to_string(),
+            ))
+        }
+
+        async fn create(
+            &self,
+            _namespace: &Namespace,
+            _security_scheme: &SecurityScheme,
+        ) -> Result<SecuritySchemeWithProviderMetadata, SecuritySchemeServiceError> {
+            Err(SecuritySchemeServiceError::InternalError(
+                "Not implemented".to_string(),
+            ))
+        }
+    }
+
     #[test]
-    fn test_api_spec_proto_conversion() {
-        fn test_encode_decode(path_pattern: &str, worker_id: &str, response_mapping: &str) {
+    async fn test_api_spec_proto_conversion() {
+        async fn test_encode_decode(path_pattern: &str, worker_id: &str, response_mapping: &str) {
+            let security_scheme_service: Arc<
+                dyn SecuritySchemeService<DefaultNamespace> + Send + Sync,
+            > = Arc::new(TestSecuritySchemeService);
+
             let yaml = get_api_spec(path_pattern, worker_id, response_mapping);
             let api_http_definition_request: api::HttpApiDefinitionRequest =
                 serde_yaml::from_value(yaml.clone()).unwrap();
             let core_http_definition_request: HttpApiDefinitionRequest =
                 api_http_definition_request.try_into().unwrap();
             let timestamp: DateTime<Utc> = "2024-08-21T07:42:15.696Z".parse().unwrap();
-            let core_http_definition =
-                HttpApiDefinition::new(core_http_definition_request, timestamp);
+            let core_http_definition = HttpApiDefinition::from_http_api_definition_request(
+                &DefaultNamespace(),
+                core_http_definition_request,
+                timestamp,
+                &security_scheme_service,
+            )
+            .await
+            .unwrap();
             let proto: grpc_apidefinition::ApiDefinition =
                 core_http_definition.clone().try_into().unwrap();
             let decoded: HttpApiDefinition = proto.try_into().unwrap();
@@ -748,23 +902,23 @@ mod tests {
         }
         test_encode_decode(
             "/foo/{user-id}",
-            "let x: str = request.path.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
+            "let x: string = request.path.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
             "${ let result = golem:it/api.{do-something}(request.body); {status: if result.user == \"admin\" then 401 else 200 } }",
-        );
+        ).await;
         test_encode_decode(
             "/foo/{user-id}",
-            "let x: str = request.path.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
+            "let x: string = request.path.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
             "${ let result = golem:it/api.{do-something}(request.body.foo); {status: if result.user == \"admin\" then 401 else 200 } }",
-        );
+        ).await;
         test_encode_decode(
             "/foo/{user-id}",
-            "let x: str = request.path.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
+            "let x: string = request.path.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
             "${ let result = golem:it/api.{do-something}(request.path.user-id); {status: if result.user == \"admin\" then 401 else 200 } }",
-        );
+        ).await;
         test_encode_decode(
             "/foo",
-            "let x: str = request.body.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
+            "let x: string = request.body.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
             "${ let result = golem:it/api.{do-something}(\"foo\"); {status: if result.user == \"admin\" then 401 else 200 } }",
-        );
+        ).await;
     }
 }

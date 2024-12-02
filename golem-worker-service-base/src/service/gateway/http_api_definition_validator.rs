@@ -20,9 +20,7 @@ use golem_service_base::model::{Component, VersionedComponentId};
 use serde::{Deserialize, Serialize};
 
 use crate::gateway_api_definition::http::{HttpApiDefinition, MethodPattern, Route};
-
 use crate::gateway_execution::router::{Router, RouterPattern};
-use crate::service::gateway::api_definition_transformer::ApiDefTransformationError;
 use crate::service::gateway::api_definition_validator::{
     ApiDefinitionValidatorService, ValidationErrors,
 };
@@ -34,17 +32,6 @@ pub struct RouteValidationError {
     pub path: String,
     pub component: Option<VersionedComponentId>,
     pub detail: String,
-}
-
-impl From<ApiDefTransformationError> for RouteValidationError {
-    fn from(value: ApiDefTransformationError) -> Self {
-        RouteValidationError {
-            method: value.method,
-            path: value.path,
-            component: None,
-            detail: value.detail,
-        }
-    }
 }
 
 impl Display for RouteValidationError {
@@ -72,20 +59,21 @@ impl SafeDisplay for RouteValidationError {
 #[derive(Clone)]
 pub struct HttpApiDefinitionValidator {}
 
-impl ApiDefinitionValidatorService<HttpApiDefinition, RouteValidationError>
-    for HttpApiDefinitionValidator
-{
+impl ApiDefinitionValidatorService<HttpApiDefinition> for HttpApiDefinitionValidator {
     fn validate(
         &self,
         api: &HttpApiDefinition,
         _components: &[Component],
-    ) -> Result<(), ValidationErrors<RouteValidationError>> {
+    ) -> Result<(), ValidationErrors> {
         let errors = unique_routes(api.routes.as_slice());
+        let errors_string = errors.iter().map(|x| x.to_string()).collect::<Vec<_>>();
 
-        if errors.is_empty() {
+        if errors_string.is_empty() {
             Ok(())
         } else {
-            Err(ValidationErrors { errors })
+            Err(ValidationErrors {
+                errors: errors_string,
+            })
         }
     }
 }
@@ -147,8 +135,8 @@ mod tests {
                     worker_name: Some(Expr::identifier("request")),
                     idempotency_key: None,
                     response_mapping: ResponseMapping(Expr::literal("sample")),
-                    middleware: None,
                 }),
+                middlewares: None,
             }
         }
 

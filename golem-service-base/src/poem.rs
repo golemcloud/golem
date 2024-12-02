@@ -26,6 +26,7 @@ use poem_openapi::{
 };
 
 /// A uploaded file for multipart.
+///
 /// Similiar to https://github.com/poem-web/poem/blob/f7bb838253fdf0bf67d3592fce45b92d68242c97/poem-openapi/src/types/multipart/upload.rs#L25,
 /// but also gives you access to the underlying file.
 /// This is useful if you need multiple independent reads from the file.

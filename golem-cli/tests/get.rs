@@ -24,7 +24,7 @@ use crate::worker::add_environment_service_component;
 use crate::Tracing;
 use golem_cli::model::component::ComponentView;
 use golem_cli::model::WorkerMetadataView;
-use golem_client::model::{ApiDeployment, HttpApiDefinitionWithTypeInfo};
+use golem_client::model::{ApiDeployment, HttpApiDefinitionResponseData, RibOutputTypeInfo};
 use golem_common::uri::oss::url::{
     ApiDefinitionUrl, ApiDeploymentUrl, ComponentUrl, WorkerFunctionUrl, WorkerUrl,
 };
@@ -32,6 +32,8 @@ use golem_common::uri::oss::urn::{
     ApiDefinitionUrn, ApiDeploymentUrn, WorkerFunctionUrn, WorkerUrn,
 };
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
+use golem_wasm_ast::analysis::analysed_type::{record, str, u64};
+use golem_wasm_ast::analysis::NameTypePair;
 use std::sync::Arc;
 
 inherit_test_dep!(EnvBasedTestDependencies);
@@ -56,7 +58,7 @@ fn top_level_get_api_definition(
     let def = native_api_definition_request(component_name, &component_id);
     let path = make_json_file(&def.id, &def)?;
 
-    let _: HttpApiDefinitionWithTypeInfo =
+    let _: HttpApiDefinitionResponseData =
         cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
 
     let url = ApiDefinitionUrl {
@@ -64,9 +66,36 @@ fn top_level_get_api_definition(
         version: "0.1.0".to_string(),
     };
 
-    let res: HttpApiDefinitionWithTypeInfo = cli.run(&["get", &url.to_string()])?;
+    let res: HttpApiDefinitionResponseData = cli.run(&["get", &url.to_string()])?;
 
-    let expected = to_api_definition_with_type_info(def.clone(), res.created_at);
+    let rib_output_type_info = RibOutputTypeInfo {
+        analysed_type: record(vec![
+            NameTypePair {
+                name: "body".to_string(),
+                typ: str(),
+            },
+            NameTypePair {
+                name: "headers".to_string(),
+                typ: record(vec![
+                    NameTypePair {
+                        name: "ContentType".to_string(),
+                        typ: str(),
+                    },
+                    NameTypePair {
+                        name: "userid".to_string(),
+                        typ: str(),
+                    },
+                ]),
+            },
+            NameTypePair {
+                name: "status".to_string(),
+                typ: u64(),
+            },
+        ]),
+    };
+
+    let expected =
+        to_api_definition_with_type_info(def.clone(), res.created_at, rib_output_type_info.clone());
     assert_eq!(res, expected);
 
     let urn = ApiDefinitionUrn {
@@ -74,8 +103,9 @@ fn top_level_get_api_definition(
         version: "0.1.0".to_string(),
     };
 
-    let res: HttpApiDefinitionWithTypeInfo = cli.run(&["get", &urn.to_string()])?;
-    let expected = to_api_definition_with_type_info(def.clone(), res.created_at);
+    let res: HttpApiDefinitionResponseData = cli.run(&["get", &urn.to_string()])?;
+    let expected =
+        to_api_definition_with_type_info(def.clone(), res.created_at, rib_output_type_info);
     assert_eq!(res, expected);
 
     Ok(())

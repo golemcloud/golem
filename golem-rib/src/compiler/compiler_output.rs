@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::compiler::worker_functions_in_rib::WorkerFunctionsInRib;
-use crate::{RibByteCode, RibInputTypeInfo};
+use crate::{RibByteCode, RibInputTypeInfo, RibOutputTypeInfo};
 use golem_api_grpc::proto::golem::rib::CompilerOutput as ProtoCompilerOutput;
 use std::convert::TryFrom;
 
@@ -21,7 +21,13 @@ use std::convert::TryFrom;
 pub struct CompilerOutput {
     pub worker_invoke_calls: Option<WorkerFunctionsInRib>,
     pub byte_code: RibByteCode,
-    pub global_input_type_info: RibInputTypeInfo,
+    pub rib_input_type_info: RibInputTypeInfo,
+    // Optional to keep backward compatible as compiler output information
+    // for some existing Rib in persistence store doesn't have this info.
+    // This is optional mainly to support the proto conversions.
+    // At the API level, if we have access to expr, whenever this field is optional
+    // we can compile the expression again and get the output type info
+    pub rib_output_type_info: Option<RibOutputTypeInfo>,
 }
 
 impl TryFrom<ProtoCompilerOutput> for CompilerOutput {
@@ -32,16 +38,22 @@ impl TryFrom<ProtoCompilerOutput> for CompilerOutput {
         let proto_byte_code = value.byte_code.ok_or("Missing byte_code")?;
         let rib_input = RibInputTypeInfo::try_from(proto_rib_input)?;
         let byte_code = RibByteCode::try_from(proto_byte_code)?;
-        let worker_invoke_callsxxxxxxxxx = if let Some(value) = value.worker_invoke_calls {
+        let worker_invoke_calls = if let Some(value) = value.worker_invoke_calls {
             Some(WorkerFunctionsInRib::try_from(value)?)
         } else {
             None
         };
 
+        let rib_output_type_info = value
+            .rib_output
+            .map(RibOutputTypeInfo::try_from)
+            .transpose()?;
+
         Ok(CompilerOutput {
-            worker_invoke_calls: worker_invoke_callsxxxxxxxxx,
+            worker_invoke_calls,
             byte_code,
-            global_input_type_info: rib_input,
+            rib_input_type_info: rib_input,
+            rib_output_type_info,
         })
     }
 }
@@ -53,11 +65,15 @@ impl From<CompilerOutput> for ProtoCompilerOutput {
                 value.byte_code,
             )),
             rib_input: Some(golem_api_grpc::proto::golem::rib::RibInputType::from(
-                value.global_input_type_info,
+                value.rib_input_type_info,
             )),
             worker_invoke_calls: value
                 .worker_invoke_calls
                 .map(golem_api_grpc::proto::golem::rib::WorkerFunctionsInRib::from),
+
+            rib_output: value
+                .rib_output_type_info
+                .map(golem_api_grpc::proto::golem::rib::RibOutputType::from),
         }
     }
 }

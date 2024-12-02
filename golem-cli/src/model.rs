@@ -29,7 +29,7 @@ use clap::error::{ContextKind, ContextValue, ErrorKind};
 use clap::{Arg, ArgMatches, Error, FromArgMatches, ValueEnum};
 use clap_verbosity_flag::Verbosity;
 use derive_more::{Display, FromStr};
-use golem_client::model::{ApiDefinitionInfo, ApiSite, ScanCursor};
+use golem_client::model::{ApiDefinitionInfo, ApiSite, Provider, ScanCursor};
 use golem_common::model::plugin::{ComponentPluginScope, DefaultPluginScope};
 use golem_common::model::trim_date::TrimDateTime;
 use golem_common::model::{ComponentId, Empty};
@@ -350,6 +350,53 @@ pub struct IdempotencyKey(pub String); // TODO: Validate
 impl IdempotencyKey {
     pub fn fresh() -> Self {
         IdempotencyKey(Uuid::new_v4().to_string())
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum IdentityProviderType {
+    Google,
+    Facebook,
+    Gitlab,
+    Microsoft,
+}
+
+impl Display for IdentityProviderType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::Google => "google",
+            Self::Facebook => "facebook",
+            Self::Gitlab => "gitlab",
+            Self::Microsoft => "microsoft",
+        };
+        Display::fmt(&s, f)
+    }
+}
+
+impl FromStr for IdentityProviderType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "google" => Ok(IdentityProviderType::Google),
+            "facebook" => Ok(IdentityProviderType::Facebook),
+            "gitlab" => Ok(IdentityProviderType::Gitlab),
+            "microsoft" => Ok(IdentityProviderType::Microsoft),
+            _ => Err(format!(
+                "Unknown identity provider type: {s}. Expected one of \"google\", \"facebook\", \"gitlab\", \"microsoft\""
+            )),
+        }
+    }
+}
+
+impl From<IdentityProviderType> for Provider {
+    fn from(value: IdentityProviderType) -> Self {
+        match value {
+            IdentityProviderType::Google => Provider::Google,
+            IdentityProviderType::Facebook => Provider::Facebook,
+            IdentityProviderType::Gitlab => Provider::Gitlab,
+            IdentityProviderType::Microsoft => Provider::Microsoft,
+        }
     }
 }
 
@@ -694,6 +741,31 @@ impl From<golem_client::model::ApiDeployment> for ApiDeployment {
             project_id: None,
             site: value.site,
             created_at: value.created_at,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ApiSecurityScheme {
+    #[serde(rename = "schemeIdentifier")]
+    pub scheme_identifier: String,
+    #[serde(rename = "clientId")]
+    pub client_id: String,
+    #[serde(rename = "clientSecret")]
+    pub client_secret: String,
+    #[serde(rename = "redirectUrl")]
+    pub redirect_url: String,
+    pub scopes: Vec<String>,
+}
+
+impl From<golem_client::model::SecuritySchemeData> for ApiSecurityScheme {
+    fn from(value: golem_client::model::SecuritySchemeData) -> Self {
+        ApiSecurityScheme {
+            scheme_identifier: value.scheme_identifier,
+            client_id: value.client_id,
+            client_secret: value.client_secret,
+            redirect_url: value.redirect_url,
+            scopes: value.scopes,
         }
     }
 }

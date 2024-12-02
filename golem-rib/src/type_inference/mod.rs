@@ -20,6 +20,7 @@ pub use identifier_inference::*;
 pub use inference_fix_point::*;
 pub use inferred_expr::*;
 pub use rib_input_type::*;
+pub use rib_output_type::*;
 pub(crate) use type_binding::*;
 pub use type_pull_up::*;
 pub use type_push_down::*;
@@ -48,6 +49,7 @@ mod global_input_inference;
 mod inference_fix_point;
 mod inferred_expr;
 pub(crate) mod kind;
+mod rib_output_type;
 mod type_binding;
 mod variable_binding_list_comprehension;
 mod variable_binding_list_reduce;
@@ -384,7 +386,7 @@ mod type_inference_tests {
             );
 
             let expr = r#"
-              let user: str = request.body.user-id;
+              let user: string = request.body.user-id;
               let query1 = foo;
               let query2 = bar;
               let query3 = foo-bar;
@@ -926,7 +928,7 @@ mod type_inference_tests {
         #[test]
         fn test_tuple_type_inference() {
             let rib_expr = r#"
-          let x: tuple<u64, str> = (1, "2");
+          let x: tuple<u64, string> = (1, "2");
           x
 
           "#;
@@ -1903,7 +1905,7 @@ mod type_inference_tests {
                 InferredType::U64,
             );
 
-            assert_eq!(Expr::from(inferred_expr), expected);
+            assert_eq!(inferred_expr.get_expr(), &expected);
         }
     }
 
@@ -1957,7 +1959,7 @@ mod type_inference_tests {
                 InferredType::List(Box::new(InferredType::Str)),
             );
 
-            assert_eq!(Expr::from(inferred_expr), expected);
+            assert_eq!(inferred_expr.get_expr(), &expected);
         }
     }
 

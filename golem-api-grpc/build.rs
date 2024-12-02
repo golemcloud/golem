@@ -19,6 +19,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "proto/golem/rib/type_name.proto",
                 "proto/golem/rib/expr.proto",
                 "proto/golem/rib/rib_input.proto",
+                "proto/golem/rib/rib_output.proto",
                 "proto/golem/rib/ir.proto",
                 "proto/golem/rib/rib_byte_code.proto",
                 "proto/golem/rib/worker_functions_in_rib.proto",

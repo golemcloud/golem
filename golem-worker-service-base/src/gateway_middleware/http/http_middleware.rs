@@ -12,31 +12,50 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::gateway_middleware::http::cors::Cors;
+use crate::gateway_middleware::http::authentication::HttpAuthenticationMiddleware;
+use std::ops::Deref;
+
+use crate::gateway_middleware::http::cors::HttpCors;
+use crate::gateway_security::SecuritySchemeWithProviderMetadata;
 use http::header::{
     ACCESS_CONTROL_ALLOW_CREDENTIALS, ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_EXPOSE_HEADERS,
 };
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum HttpMiddleware {
-    Cors(Cors),
+    AddCorsHeaders(HttpCors),
+    AuthenticateRequest(Box<HttpAuthenticationMiddleware>), // Middleware to authenticate before feeding the input to the binding executor
 }
 
 impl HttpMiddleware {
-    pub fn cors(cors: Cors) -> Self {
-        HttpMiddleware::Cors(cors)
-    }
-
-    pub fn transform_response(&self, response: &mut poem::Response) {
+    pub fn get_cors(&self) -> Option<HttpCors> {
         match self {
-            // if CORS is applied as a middleware, we need to return a response with specific CORS headers
-            HttpMiddleware::Cors(cors) => {
-                Self::apply_cors(response, cors);
-            }
+            HttpMiddleware::AddCorsHeaders(cors) => Some(cors.clone()),
+            HttpMiddleware::AuthenticateRequest(_) => None,
         }
     }
 
-    fn apply_cors(response: &mut poem::Response, cors: &Cors) {
+    pub fn get_http_authentication(&self) -> Option<HttpAuthenticationMiddleware> {
+        match self {
+            HttpMiddleware::AuthenticateRequest(authentication) => {
+                Some(authentication.deref().clone())
+            }
+            HttpMiddleware::AddCorsHeaders(_) => None,
+        }
+    }
+
+    pub fn authenticate_request(
+        security_scheme: SecuritySchemeWithProviderMetadata,
+    ) -> HttpMiddleware {
+        HttpMiddleware::AuthenticateRequest(Box::new(HttpAuthenticationMiddleware {
+            security_scheme,
+        }))
+    }
+    pub fn cors(cors: HttpCors) -> Self {
+        HttpMiddleware::AddCorsHeaders(cors)
+    }
+
+    pub fn apply_cors(response: &mut poem::Response, cors: &HttpCors) {
         response.headers_mut().insert(
             ACCESS_CONTROL_ALLOW_ORIGIN,
             // hot path, and this unwrap will not fail unless we bypassed it during configuration

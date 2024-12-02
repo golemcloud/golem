@@ -34,6 +34,7 @@ pub struct FileUseToken {
 }
 
 /// Interface for loading files and making them available to workers.
+///
 /// This will hardlink to a temporary directory to avoid copying files between workers. Beware
 /// that hardlinking is only possible within the same filesystem.
 pub struct FileLoader {

@@ -14,3 +14,4 @@
 
 pub mod api_definition;
 pub mod api_deployment;
+pub mod security_scheme;

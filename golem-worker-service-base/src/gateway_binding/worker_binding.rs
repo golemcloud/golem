@@ -16,7 +16,6 @@ use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
 use crate::gateway_binding::WorkerBindingCompiled;
-use crate::gateway_middleware::{Cors, Middleware, Middlewares};
 use golem_service_base::model::VersionedComponentId;
 use rib::Expr;
 
@@ -26,21 +25,6 @@ pub struct WorkerBinding {
     pub worker_name: Option<Expr>,
     pub idempotency_key: Option<Expr>,
     pub response_mapping: ResponseMapping,
-    pub middleware: Option<Middlewares>,
-}
-
-impl WorkerBinding {
-    pub fn add_middleware(&mut self, middleware: Middleware) {
-        if let Some(middlewares) = &mut self.middleware {
-            middlewares.add(middleware);
-        } else {
-            self.middleware = Some(Middlewares(vec![middleware]));
-        }
-    }
-
-    pub fn get_cors_middleware(&self) -> Option<Cors> {
-        self.middleware.as_ref().and_then(|m| m.get_cors())
-    }
 }
 
 // ResponseMapping will consist of actual logic such as invoking worker functions
@@ -62,7 +46,6 @@ impl From<WorkerBindingCompiled> for WorkerBinding {
             response_mapping: ResponseMapping(
                 worker_binding.response_compiled.response_mapping_expr,
             ),
-            middleware: value.middlewares,
         }
     }
 }

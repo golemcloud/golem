@@ -238,6 +238,12 @@ async fn get_oplog_with_api_changing_updates(
 
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
 
+    // there might be a pending invocation entry before the update entry. Filter it out to make the test more robust
+    let oplog = oplog
+        .into_iter()
+        .filter(|entry| !matches!(entry, PublicOplogEntry::PendingWorkerInvocation(_)))
+        .collect::<Vec<_>>();
+
     check!(result[0] == Value::U64(11));
     assert_eq!(oplog.len(), 13);
 }

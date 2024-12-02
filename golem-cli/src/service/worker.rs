@@ -39,7 +39,7 @@ use itertools::Itertools;
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::task::JoinHandle;
-use tracing::{error, info};
+use tracing::{error, info, Instrument};
 use uuid::Uuid;
 
 #[async_trait]
@@ -498,14 +498,17 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
             let worker_client = self.client.clone();
             let component_service = self.components.clone();
             let worker_urn = worker_urn.clone();
-            AsyncComponentRequest::Async(tokio::spawn(async move {
-                resolve_worker_component_version(
-                    worker_client.as_ref(),
-                    component_service.as_ref(),
-                    worker_urn,
-                )
-                .await
-            }))
+            AsyncComponentRequest::Async(tokio::spawn(
+                async move {
+                    resolve_worker_component_version(
+                        worker_client.as_ref(),
+                        component_service.as_ref(),
+                        worker_urn,
+                    )
+                    .await
+                }
+                .in_current_span(),
+            ))
         } else {
             AsyncComponentRequest::Empty
         };

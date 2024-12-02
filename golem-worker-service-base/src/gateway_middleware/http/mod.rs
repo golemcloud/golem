@@ -12,8 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub use authentication::*;
 pub use cors::*;
 pub use http_middleware::*;
+pub use middleware_error::*;
 
+mod authentication;
 mod cors;
 mod http_middleware;
+mod middleware_error;

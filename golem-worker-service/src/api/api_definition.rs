@@ -4,13 +4,12 @@ use golem_service_base::api_tags::ApiTags;
 use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
 use golem_worker_service_base::api::ApiEndpointError;
 use golem_worker_service_base::api::HttpApiDefinitionRequest;
-use golem_worker_service_base::api::HttpApiDefinitionWithTypeInfo;
+use golem_worker_service_base::api::HttpApiDefinitionResponseData;
 use golem_worker_service_base::gateway_api_definition::http::CompiledHttpApiDefinition;
 use golem_worker_service_base::gateway_api_definition::http::HttpApiDefinitionRequest as CoreHttpApiDefinitionRequest;
-use golem_worker_service_base::gateway_api_definition::http::OpenApiDefinitionRequest;
+use golem_worker_service_base::gateway_api_definition::http::OpenApiHttpApiDefinitionRequest;
 use golem_worker_service_base::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use golem_worker_service_base::service::gateway::api_definition::ApiDefinitionService;
-use golem_worker_service_base::service::gateway::http_api_definition_validator::RouteValidationError;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
@@ -19,20 +18,14 @@ use std::sync::Arc;
 use tracing::{error, Instrument};
 
 pub struct RegisterApiDefinitionApi {
-    definition_service: Arc<
-        dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace, RouteValidationError>
-            + Sync
-            + Send,
-    >,
+    definition_service: Arc<dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace> + Sync + Send>,
 }
 
 #[OpenApi(prefix_path = "/v1/api/definitions", tag = ApiTags::ApiDefinition)]
 impl RegisterApiDefinitionApi {
     pub fn new(
         definition_service: Arc<
-            dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace, RouteValidationError>
-                + Sync
-                + Send,
+            dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace> + Sync + Send,
         >,
     ) -> Self {
         Self { definition_service }
@@ -45,12 +38,12 @@ impl RegisterApiDefinitionApi {
     #[oai(path = "/import", method = "put", operation_id = "import_open_api")]
     async fn create_or_update_open_api(
         &self,
-        payload: JsonOrYaml<OpenApiDefinitionRequest>,
-    ) -> Result<Json<HttpApiDefinitionWithTypeInfo>, ApiEndpointError> {
+        payload: JsonOrYaml<OpenApiHttpApiDefinitionRequest>,
+    ) -> Result<Json<HttpApiDefinitionResponseData>, ApiEndpointError> {
         let record = recorded_http_api_request!("import_open_api",);
 
         let response = {
-            let definition = payload.0.to_http_api_definition().map_err(|e| {
+            let definition = payload.0.to_http_api_definition_request().map_err(|e| {
                 error!("Invalid Spec {}", e);
                 ApiEndpointError::bad_request(safe(e))
             })?;
@@ -60,7 +53,7 @@ impl RegisterApiDefinitionApi {
                 .instrument(record.span.clone())
                 .await?;
 
-            Ok(Json(HttpApiDefinitionWithTypeInfo::from(result)))
+            Ok(Json(HttpApiDefinitionResponseData::from(result)))
         };
 
         record.result(response)
@@ -74,7 +67,7 @@ impl RegisterApiDefinitionApi {
     async fn create(
         &self,
         payload: JsonOrYaml<HttpApiDefinitionRequest>,
-    ) -> Result<Json<HttpApiDefinitionWithTypeInfo>, ApiEndpointError> {
+    ) -> Result<Json<HttpApiDefinitionResponseData>, ApiEndpointError> {
         let record = recorded_http_api_request!(
             "create_definition",
             api_definition_id = payload.0.id.to_string(),
@@ -93,7 +86,7 @@ impl RegisterApiDefinitionApi {
                 .instrument(record.span.clone())
                 .await?;
 
-            Ok(Json(HttpApiDefinitionWithTypeInfo::from(result)))
+            Ok(Json(HttpApiDefinitionResponseData::from(result)))
         };
 
         record.result(response)
@@ -112,7 +105,7 @@ impl RegisterApiDefinitionApi {
         id: Path<ApiDefinitionId>,
         version: Path<ApiVersion>,
         payload: JsonOrYaml<HttpApiDefinitionRequest>,
-    ) -> Result<Json<HttpApiDefinitionWithTypeInfo>, ApiEndpointError> {
+    ) -> Result<Json<HttpApiDefinitionResponseData>, ApiEndpointError> {
         let record = recorded_http_api_request!(
             "update_definition",
             api_definition_id = id.0.to_string(),
@@ -145,7 +138,7 @@ impl RegisterApiDefinitionApi {
                     .instrument(record.span.clone())
                     .await?;
 
-                Ok(Json(HttpApiDefinitionWithTypeInfo::from(result)))
+                Ok(Json(HttpApiDefinitionResponseData::from(result)))
             }
         };
 
@@ -164,7 +157,7 @@ impl RegisterApiDefinitionApi {
         &self,
         id: Path<ApiDefinitionId>,
         version: Path<ApiVersion>,
-    ) -> Result<Json<HttpApiDefinitionWithTypeInfo>, ApiEndpointError> {
+    ) -> Result<Json<HttpApiDefinitionResponseData>, ApiEndpointError> {
         let record = recorded_http_api_request!(
             "get_definition",
             api_definition_id = id.0.to_string(),
@@ -191,7 +184,7 @@ impl RegisterApiDefinitionApi {
                 "Can't find api definition with id {api_definition_id}, and version {api_version}"
             ))))?;
 
-            let result = HttpApiDefinitionWithTypeInfo::from(definition);
+            let result = HttpApiDefinitionResponseData::from(definition);
             Ok(Json(result))
         };
 
@@ -244,7 +237,7 @@ impl RegisterApiDefinitionApi {
     async fn list(
         &self,
         #[oai(name = "api-definition-id")] api_definition_id_query: Query<Option<ApiDefinitionId>>,
-    ) -> Result<Json<Vec<HttpApiDefinitionWithTypeInfo>>, ApiEndpointError> {
+    ) -> Result<Json<Vec<HttpApiDefinitionResponseData>>, ApiEndpointError> {
         let record = recorded_http_api_request!(
             "list_definitions",
             api_definition_id = api_definition_id_query.0.as_ref().map(|id| id.to_string()),
@@ -265,8 +258,8 @@ impl RegisterApiDefinitionApi {
 
             let values = data
                 .into_iter()
-                .map(HttpApiDefinitionWithTypeInfo::from)
-                .collect::<Vec<HttpApiDefinitionWithTypeInfo>>();
+                .map(HttpApiDefinitionResponseData::from)
+                .collect::<Vec<HttpApiDefinitionResponseData>>();
 
             Ok(Json(values))
         };
@@ -301,6 +294,7 @@ impl RegisterApiDefinitionApi {
 
 #[cfg(test)]
 mod test {
+    use golem_service_base::migration::{Migrations, MigrationsDir};
     use test_r::test;
 
     use super::*;
@@ -311,13 +305,18 @@ mod test {
     use golem_common::model::ComponentId;
     use golem_service_base::db;
     use golem_service_base::model::Component;
+    use golem_worker_service_base::gateway_security::DefaultIdentityProvider;
     use golem_worker_service_base::repo::api_definition::{
         ApiDefinitionRepo, DbApiDefinitionRepo, LoggedApiDefinitionRepo,
     };
     use golem_worker_service_base::repo::api_deployment;
+    use golem_worker_service_base::repo::security_scheme::{
+        DbSecuritySchemeRepo, LoggedSecuritySchemeRepo, SecuritySchemeRepo,
+    };
     use golem_worker_service_base::service::component::ComponentResult;
     use golem_worker_service_base::service::gateway::api_definition::ApiDefinitionServiceDefault;
     use golem_worker_service_base::service::gateway::http_api_definition_validator::HttpApiDefinitionValidator;
+    use golem_worker_service_base::service::gateway::security_scheme::DefaultSecuritySchemeService;
     use http::StatusCode;
     use poem::test::TestClient;
     use std::marker::PhantomData;
@@ -382,9 +381,12 @@ mod test {
             max_connections: 10,
         };
 
-        db::sqlite_migrate(&db_config, "db/migration/sqlite")
-            .await
-            .unwrap();
+        db::sqlite_migrate(
+            &db_config,
+            MigrationsDir::new("./db/migration".into()).sqlite_migrations(),
+        )
+        .await
+        .unwrap();
 
         let db_pool = db::create_sqlite_pool(&db_config).await.unwrap();
 
@@ -396,11 +398,23 @@ mod test {
                 api_deployment::DbApiDeploymentRepo::new(db_pool.clone().into()),
             ));
 
+        let security_scheme_repo: Arc<dyn SecuritySchemeRepo + Sync + Send> = Arc::new(
+            LoggedSecuritySchemeRepo::new(DbSecuritySchemeRepo::new(db_pool.clone().into())),
+        );
+
+        let identity_provider = Arc::new(DefaultIdentityProvider);
+
+        let security_scheme_service = Arc::new(DefaultSecuritySchemeService::new(
+            security_scheme_repo,
+            identity_provider,
+        ));
+
         let component_service: ComponentService = Arc::new(TestComponentService);
         let definition_service = ApiDefinitionServiceDefault::new(
             component_service,
             api_definition_repo,
             api_deployment_repo,
+            security_scheme_service,
             Arc::new(HttpApiDefinitionValidator {}),
         );
 
@@ -422,6 +436,7 @@ mod test {
             version: ApiVersion("1.0".to_string()),
             routes: vec![],
             draft: false,
+            security: None,
         };
 
         let response = client
@@ -451,6 +466,7 @@ mod test {
             version: ApiVersion("42.0".to_string()),
             routes: vec![],
             draft: false,
+            security: None,
         };
 
         let response = client
@@ -472,6 +488,7 @@ mod test {
             version: ApiVersion("42.0".to_string()),
             routes: vec![],
             draft: false,
+            security: None,
         };
 
         let response = client
@@ -493,6 +510,7 @@ mod test {
             version: ApiVersion("42.0".to_string()),
             routes: vec![],
             draft: false,
+            security: None,
         };
 
         let response = client
@@ -517,6 +535,7 @@ mod test {
             version: ApiVersion("1.0".to_string()),
             routes: vec![],
             draft: false,
+            security: None,
         };
         let response = client
             .post("/v1/api/definitions")
@@ -530,6 +549,7 @@ mod test {
             version: ApiVersion("2.0".to_string()),
             routes: vec![],
             draft: false,
+            security: None,
         };
         let response = client
             .post("/v1/api/definitions")
