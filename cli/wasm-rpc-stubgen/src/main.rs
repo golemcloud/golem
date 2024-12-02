@@ -31,7 +31,6 @@ async fn main() -> ExitCode {
         Command::InitializeWorkspace(init_workspace_args) => {
             initialize_workspace(init_workspace_args, "wasm-rpc-stubgen", &[])
         }
-        #[cfg(feature = "unstable-dec-dep")]
         Command::App { subcommand } => run_app_command(subcommand).await,
     };
 

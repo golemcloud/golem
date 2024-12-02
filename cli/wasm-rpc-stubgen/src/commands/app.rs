@@ -25,7 +25,7 @@ use golem_wasm_rpc::WASM_RPC_VERSION;
 use itertools::Itertools;
 use std::cell::OnceCell;
 use std::cmp::Ordering;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::SystemTime;
@@ -35,6 +35,7 @@ pub struct Config {
     pub app_resolve_mode: ApplicationSourceMode,
     pub skip_up_to_date_checks: bool,
     pub profile: Option<ProfileName>,
+    pub offline: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -235,6 +236,10 @@ impl ApplicationContext {
             }
         }
 
+        if ctx.config.offline {
+            log_action("Selected", "offline mode");
+        }
+
         Ok(ctx)
     }
 
@@ -315,6 +320,7 @@ async fn pre_component_build_ctx(ctx: &mut ApplicationContext) -> anyhow::Result
         for component_name in ctx.application.component_names() {
             let changed = create_generated_wit(ctx, component_name)?;
             if changed {
+                // TODO: if this fails, it won't be retried, add done file for this
                 update_cargo_toml(ctx, component_name)?;
             }
             any_changed |= changed;
@@ -473,15 +479,7 @@ pub fn clean(config: Config) -> anyhow::Result<()> {
         log_action("Cleaning", "components");
         let _indent = LogIndent::new();
 
-        let all_profiles = {
-            let mut profiles = app
-                .all_profiles()
-                .into_iter()
-                .map(Some)
-                .collect::<HashSet<_>>();
-            profiles.insert(None);
-            profiles
-        };
+        let all_profiles = app.all_option_profiles();
         let paths = {
             let mut paths = BTreeSet::<(&'static str, PathBuf)>::new();
             for component_name in app.component_names() {
@@ -560,6 +558,22 @@ pub fn clean(config: Config) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+pub fn available_custom_commands(config: Config) -> anyhow::Result<BTreeSet<String>> {
+    let app = to_anyhow(
+        "Failed to load application manifest(s), see problems above",
+        load_app_validated(&config),
+    )?;
+
+    let all_profiles = app.all_option_profiles();
+
+    let mut commands = BTreeSet::<String>::new();
+    for profile in &all_profiles {
+        commands.extend(app.all_custom_commands(profile.as_ref()))
+    }
+
+    Ok(commands)
 }
 
 pub fn custom_command(config: Config, command: String) -> anyhow::Result<()> {
@@ -1100,7 +1114,7 @@ async fn build_stub(
         );
         fs::create_dir_all(&target_root)?;
 
-        commands::generate::build(&stub_def, &stub_wasm, &stub_wit).await?;
+        commands::generate::build(&stub_def, &stub_wasm, &stub_wit, ctx.config.offline).await?;
 
         gen_dir_done_marker.mark_as_done()?;
 
