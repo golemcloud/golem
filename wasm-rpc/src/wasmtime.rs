@@ -56,7 +56,7 @@ pub async fn decode_param(
     param_type: &Type,
     resource_store: &mut (impl ResourceStore + Send),
 ) -> Result<DecodeParamResult, EncodingError> {
-    decode_param_impl(param, param_type, resource_store, "$")
+    decode_param_impl(param, param_type, resource_store, "$").await
 }
 
 #[async_recursion]
