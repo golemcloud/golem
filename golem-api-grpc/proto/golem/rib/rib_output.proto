@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+package golem.rib;
+
+import "wasm/ast/type.proto";
+
+message RibOutputType {
+    wasm.ast.Type type = 1;
+}

@@ -20,7 +20,7 @@ pub use type_with_unit::*;
 pub use worker_functions_in_rib::*;
 
 use crate::type_registry::FunctionTypeRegistry;
-use crate::{Expr, InferredExpr, RibInputTypeInfo};
+use crate::{Expr, InferredExpr, RibInputTypeInfo, RibOutputTypeInfo};
 
 mod byte_code;
 mod compiler_output;
@@ -52,6 +52,8 @@ pub fn compile_with_limited_globals(
     let global_input_type_info =
         RibInputTypeInfo::from_expr(&inferred_expr).map_err(|e| format!("Error: {}", e))?;
 
+    let output_type_info = RibOutputTypeInfo::from_expr(&inferred_expr)?;
+
     if let Some(allowed_global_variables) = &allowed_global_variables {
         let mut un_allowed_variables = vec![];
 
@@ -75,6 +77,7 @@ pub fn compile_with_limited_globals(
     Ok(CompilerOutput {
         worker_invoke_calls: function_calls_identified,
         byte_code,
-        global_input_type_info,
+        rib_input_type_info: global_input_type_info,
+        rib_output_type_info: Some(output_type_info),
     })
 }

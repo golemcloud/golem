@@ -23,10 +23,12 @@ use golem_cli::model::component::ComponentView;
 use golem_cli::model::ApiDefinitionFileFormat;
 use golem_client::model::{
     GatewayBindingData, GatewayBindingType, GatewayBindingWithTypeInfo, HttpApiDefinitionRequest,
-    HttpApiDefinitionResponseData, MethodPattern, RibInputTypeInfo, RouteRequestData,
-    RouteWithTypeInfo, VersionedComponentId,
+    HttpApiDefinitionResponseData, MethodPattern, RibInputTypeInfo, RibOutputTypeInfo,
+    RouteRequestData, RouteWithTypeInfo, VersionedComponentId,
 };
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
+use golem_wasm_ast::analysis::analysed_type::{record, str, u64};
+use golem_wasm_ast::analysis::NameTypePair;
 use serde::Serialize;
 use serde_json::json;
 use std::collections::HashMap;
@@ -361,6 +363,7 @@ pub fn make_open_api_json_file(
 pub fn to_api_definition_with_type_info(
     request: HttpApiDefinitionRequest,
     created_at: Option<DateTime<Utc>>,
+    expected_out: RibOutputTypeInfo,
 ) -> HttpApiDefinitionResponseData {
     HttpApiDefinitionResponseData {
         id: request.id,
@@ -389,6 +392,7 @@ pub fn to_api_definition_with_type_info(
                         idempotency_key_input: None,
                         binding_type: Some(GatewayBindingType::Default),
                         cors_preflight: None,
+                        response_mapping_output: Some(expected_out.clone()),
                     },
                 }
             })
@@ -427,9 +431,36 @@ fn api_definition_import(
         }
     };
 
+    let rib_output_type_info = RibOutputTypeInfo {
+        analysed_type: record(vec![
+            NameTypePair {
+                name: "body".to_string(),
+                typ: str(),
+            },
+            NameTypePair {
+                name: "headers".to_string(),
+                typ: record(vec![
+                    NameTypePair {
+                        name: "ContentType".to_string(),
+                        typ: str(),
+                    },
+                    NameTypePair {
+                        name: "userid".to_string(),
+                        typ: str(),
+                    },
+                ]),
+            },
+            NameTypePair {
+                name: "status".to_string(),
+                typ: u64(),
+            },
+        ]),
+    };
+
     let expected = to_api_definition_with_type_info(
         native_api_definition_request(&component_name, &component_id),
         res.created_at,
+        rib_output_type_info,
     );
 
     assert_eq!(res, expected);
@@ -467,7 +498,33 @@ fn api_definition_add(
         }
     };
 
-    let expected = to_api_definition_with_type_info(def, res.created_at);
+    let rib_output_type_info = RibOutputTypeInfo {
+        analysed_type: record(vec![
+            NameTypePair {
+                name: "body".to_string(),
+                typ: str(),
+            },
+            NameTypePair {
+                name: "headers".to_string(),
+                typ: record(vec![
+                    NameTypePair {
+                        name: "ContentType".to_string(),
+                        typ: str(),
+                    },
+                    NameTypePair {
+                        name: "userid".to_string(),
+                        typ: str(),
+                    },
+                ]),
+            },
+            NameTypePair {
+                name: "status".to_string(),
+                typ: u64(),
+            },
+        ]),
+    };
+
+    let expected = to_api_definition_with_type_info(def, res.created_at, rib_output_type_info);
 
     assert_eq!(res, expected);
 
@@ -515,7 +572,33 @@ fn api_definition_update(
         }
     };
 
-    let expected = to_api_definition_with_type_info(updated, res.created_at);
+    let rib_output_type_info = RibOutputTypeInfo {
+        analysed_type: record(vec![
+            NameTypePair {
+                name: "body".to_string(),
+                typ: str(),
+            },
+            NameTypePair {
+                name: "headers".to_string(),
+                typ: record(vec![
+                    NameTypePair {
+                        name: "ContentType".to_string(),
+                        typ: str(),
+                    },
+                    NameTypePair {
+                        name: "userid".to_string(),
+                        typ: str(),
+                    },
+                ]),
+            },
+            NameTypePair {
+                name: "status".to_string(),
+                typ: u64(),
+            },
+        ]),
+    };
+
+    let expected = to_api_definition_with_type_info(updated, res.created_at, rib_output_type_info);
 
     assert_eq!(res, expected);
 
@@ -566,8 +649,38 @@ fn api_definition_list(
 
     let res: Vec<HttpApiDefinitionResponseData> = cli.run(&["api-definition", "list"])?;
 
+    let rib_output_type_info = RibOutputTypeInfo {
+        analysed_type: record(vec![
+            NameTypePair {
+                name: "body".to_string(),
+                typ: str(),
+            },
+            NameTypePair {
+                name: "headers".to_string(),
+                typ: record(vec![
+                    NameTypePair {
+                        name: "ContentType".to_string(),
+                        typ: str(),
+                    },
+                    NameTypePair {
+                        name: "userid".to_string(),
+                        typ: str(),
+                    },
+                ]),
+            },
+            NameTypePair {
+                name: "status".to_string(),
+                typ: u64(),
+            },
+        ]),
+    };
+
     let found = res.into_iter().find(|d| {
-        let e = to_api_definition_with_type_info(def.clone(), d.created_at);
+        let e = to_api_definition_with_type_info(
+            def.clone(),
+            d.created_at,
+            rib_output_type_info.clone(),
+        );
         d == &e
     });
 
@@ -602,8 +715,34 @@ fn api_definition_list_versions(
 
     assert_eq!(res.len(), 1);
 
+    let rib_output_type_info = RibOutputTypeInfo {
+        analysed_type: record(vec![
+            NameTypePair {
+                name: "body".to_string(),
+                typ: str(),
+            },
+            NameTypePair {
+                name: "headers".to_string(),
+                typ: record(vec![
+                    NameTypePair {
+                        name: "ContentType".to_string(),
+                        typ: str(),
+                    },
+                    NameTypePair {
+                        name: "userid".to_string(),
+                        typ: str(),
+                    },
+                ]),
+            },
+            NameTypePair {
+                name: "status".to_string(),
+                typ: u64(),
+            },
+        ]),
+    };
+
     let res: HttpApiDefinitionResponseData = res.first().unwrap().clone();
-    let expected = to_api_definition_with_type_info(def, res.created_at);
+    let expected = to_api_definition_with_type_info(def, res.created_at, rib_output_type_info);
 
     assert_eq!(res, expected);
 
@@ -637,7 +776,33 @@ fn api_definition_get(
         "0.1.0",
     ])?;
 
-    let expected = to_api_definition_with_type_info(def, res.created_at);
+    let rib_output_type_info = RibOutputTypeInfo {
+        analysed_type: record(vec![
+            NameTypePair {
+                name: "body".to_string(),
+                typ: str(),
+            },
+            NameTypePair {
+                name: "headers".to_string(),
+                typ: record(vec![
+                    NameTypePair {
+                        name: "ContentType".to_string(),
+                        typ: str(),
+                    },
+                    NameTypePair {
+                        name: "userid".to_string(),
+                        typ: str(),
+                    },
+                ]),
+            },
+            NameTypePair {
+                name: "status".to_string(),
+                typ: u64(),
+            },
+        ]),
+    };
+
+    let expected = to_api_definition_with_type_info(def, res.created_at, rib_output_type_info);
 
     assert_eq!(res, expected);
 
@@ -671,7 +836,33 @@ fn api_definition_delete(
         "0.1.0",
     ])?;
 
-    let expected = to_api_definition_with_type_info(def, res.created_at);
+    let rib_output_type_info = RibOutputTypeInfo {
+        analysed_type: record(vec![
+            NameTypePair {
+                name: "body".to_string(),
+                typ: str(),
+            },
+            NameTypePair {
+                name: "headers".to_string(),
+                typ: record(vec![
+                    NameTypePair {
+                        name: "ContentType".to_string(),
+                        typ: str(),
+                    },
+                    NameTypePair {
+                        name: "userid".to_string(),
+                        typ: str(),
+                    },
+                ]),
+            },
+            NameTypePair {
+                name: "status".to_string(),
+                typ: u64(),
+            },
+        ]),
+    };
+
+    let expected = to_api_definition_with_type_info(def, res.created_at, rib_output_type_info);
 
     assert_eq!(res, expected);
 

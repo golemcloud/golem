@@ -20,6 +20,10 @@ use std::collections::{HashSet, VecDeque};
 pub struct InferredExpr(Expr);
 
 impl InferredExpr {
+    pub fn get_expr(&self) -> &Expr {
+        &self.0
+    }
+
     pub fn from_expr(
         expr: &Expr,
         function_type_registry: &FunctionTypeRegistry,
@@ -60,11 +64,5 @@ impl InferredExpr {
         }
 
         registry_keys
-    }
-}
-
-impl From<InferredExpr> for Expr {
-    fn from(value: InferredExpr) -> Self {
-        value.0
     }
 }

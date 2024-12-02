@@ -34,12 +34,12 @@ impl RibInputTypeInfo {
     }
 
     pub fn from_expr(inferred_expr: &InferredExpr) -> Result<RibInputTypeInfo, String> {
-        let expr: Expr = Expr::from(inferred_expr.clone());
+        let expr: &Expr = inferred_expr.get_expr();
         let mut queue = VecDeque::new();
 
         let mut global_variables = HashMap::new();
 
-        queue.push_back(&expr);
+        queue.push_back(expr);
 
         while let Some(expr) = queue.pop_back() {
             match expr {

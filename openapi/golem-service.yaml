@@ -4057,6 +4057,8 @@ components:
           $ref: '#/components/schemas/RibInputTypeInfo'
         corsPreflight:
           $ref: '#/components/schemas/HttpCors'
+        responseMappingOutput:
+          $ref: '#/components/schemas/RibOutputTypeInfo'
     GetFilesResponse:
       type: object
       properties:
@@ -5421,6 +5423,13 @@ components:
             $ref: '#/components/schemas/AnalysedType'
       required:
       - types
+    RibOutputTypeInfo:
+      type: object
+      properties:
+        analysed_type:
+          $ref: '#/components/schemas/AnalysedType'
+      required:
+      - analysed_type
     RouteRequestData:
       type: object
       properties:
