@@ -1069,6 +1069,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             .iter()
                             .map(|m| m.initial)
                             .sum(),
+                        extensions: WorkerStatusRecordExtensions::Extension1 {
+                            active_plugins: component_metadata
+                                .plugin_installations
+                                .iter()
+                                .map(|i| i.id.clone())
+                                .collect(),
+                        },
                         ..initial_status
                     },
                 };

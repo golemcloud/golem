@@ -661,68 +661,67 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::DynamicParsedFunctionReference>
                                                         function
                                                     }) => {
                 Ok(Self::Function { function })
-            },
+            }
             ProtoDynamicFunctionReference::RawResourceConstructor(golem_api_grpc::proto::golem::rib::RawResourceConstructorFunctionReference {
-                                                                    resource
-                                                                }) => {
+                                                                      resource
+                                                                  }) => {
                 Ok(Self::RawResourceConstructor { resource })
-            },
+            }
             ProtoDynamicFunctionReference::RawResourceMethod(golem_api_grpc::proto::golem::rib::RawResourceMethodFunctionReference {
-                                                               resource,
-                                                               method
-                                                           }) => {
+                                                                 resource,
+                                                                 method
+                                                             }) => {
                 Ok(Self::RawResourceMethod { resource, method })
-            },
+            }
             ProtoDynamicFunctionReference::RawResourceStaticMethod(golem_api_grpc::proto::golem::rib::RawResourceStaticMethodFunctionReference {
-                                                                     resource,
-                                                                     method
-                                                                 }) => {
+                                                                       resource,
+                                                                       method
+                                                                   }) => {
                 Ok(Self::RawResourceStaticMethod { resource, method })
-            },
+            }
             ProtoDynamicFunctionReference::RawResourceDrop(golem_api_grpc::proto::golem::rib::RawResourceDropFunctionReference {
-                                                              resource
-                                                          }) => {
+                                                               resource
+                                                           }) => {
                 Ok(Self::RawResourceDrop { resource })
-            },
+            }
             ProtoDynamicFunctionReference::IndexedResourceConstructor(golem_api_grpc::proto::golem::rib::DynamicIndexedResourceConstructorFunctionReference {
-                                                                         resource,
-                                                                         resource_params
-                                                                     }) => {
-
-                let resource_params: Vec<Expr> =
-                    resource_params.into_iter().map(Expr::try_from).collect::<Result<Vec<Expr>, String>>()?;
-
-                Ok(Self::IndexedResourceConstructor { resource, resource_params })
-            },
-            ProtoDynamicFunctionReference::IndexedResourceMethod(golem_api_grpc::proto::golem::rib::DynamicIndexedResourceMethodFunctionReference {
-                                                                    resource,
-                                                                    resource_params,
-                                                                    method
-                                                                }) => {
-                let resource_params: Vec<Expr> =
-                    resource_params.into_iter().map(Expr::try_from).collect::<Result<Vec<Expr>, String>>()?;
-
-                Ok(Self::IndexedResourceMethod { resource, resource_params, method })
-            },
-            ProtoDynamicFunctionReference::IndexedResourceStaticMethod(golem_api_grpc::proto::golem::rib::DynamicIndexedResourceStaticMethodFunctionReference {
                                                                           resource,
-                                                                          resource_params,
-                                                                          method
+                                                                          resource_params
                                                                       }) => {
                 let resource_params: Vec<Expr> =
                     resource_params.into_iter().map(Expr::try_from).collect::<Result<Vec<Expr>, String>>()?;
 
+                Ok(Self::IndexedResourceConstructor { resource, resource_params })
+            }
+            ProtoDynamicFunctionReference::IndexedResourceMethod(golem_api_grpc::proto::golem::rib::DynamicIndexedResourceMethodFunctionReference {
+                                                                     resource,
+                                                                     resource_params,
+                                                                     method
+                                                                 }) => {
+                let resource_params: Vec<Expr> =
+                    resource_params.into_iter().map(Expr::try_from).collect::<Result<Vec<Expr>, String>>()?;
+
+                Ok(Self::IndexedResourceMethod { resource, resource_params, method })
+            }
+            ProtoDynamicFunctionReference::IndexedResourceStaticMethod(golem_api_grpc::proto::golem::rib::DynamicIndexedResourceStaticMethodFunctionReference {
+                                                                           resource,
+                                                                           resource_params,
+                                                                           method
+                                                                       }) => {
+                let resource_params: Vec<Expr> =
+                    resource_params.into_iter().map(Expr::try_from).collect::<Result<Vec<Expr>, String>>()?;
+
                 Ok(Self::IndexedResourceStaticMethod { resource, resource_params, method })
-            },
+            }
             ProtoDynamicFunctionReference::IndexedResourceDrop(golem_api_grpc::proto::golem::rib::DynamicIndexedResourceDropFunctionReference {
-                                                                  resource,
-                                                                  resource_params
-                                                              }) => {
+                                                                   resource,
+                                                                   resource_params
+                                                               }) => {
                 let resource_params: Vec<Expr> =
                     resource_params.into_iter().map(Expr::try_from).collect::<Result<Vec<Expr>, String>>()?;
 
                 Ok(Self::IndexedResourceDrop { resource, resource_params })
-            },
+            }
         }
     }
 }
@@ -1104,6 +1103,8 @@ impl From<ParsedFunctionName> for golem_api_grpc::proto::golem::rib::ParsedFunct
 
 #[cfg(test)]
 mod function_name_tests {
+    use golem_wasm_ast::analysis::analysed_type::{field, record, u64};
+    use golem_wasm_rpc::Value;
     use test_r::test;
 
     use super::{ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, SemVer};
@@ -1703,7 +1704,33 @@ mod function_name_tests {
     #[test]
     fn test_parsed_function_name_complex_resource_args() {
         round_trip_function_name_parse(
-            r#"golem:api/oplog-processor@1.1.0-rc1.{processor({ account-id: { value: "-1" } }, { high-bits: 11637111831105389641, low-bits: 11277240687824975272 }, []).process}"#
+            r#"golem:api/oplog-processor@1.1.0-rc1.{processor({ account-id: { value: "-1" } }, { high-bits: 11637111831105389641, low-bits: 11277240687824975272 }, []).process}"#,
+        )
+    }
+
+    #[test]
+    fn test_parsed_function_name_complex_resource_args_large_nums() {
+        let parsed = ParsedFunctionName::parse(r#"golem:api/oplog-processor@1.1.0-rc1.{processor({ high-bits: 18389549593665948372, low-bits: 12287617583649128209 }).process}"#).expect("Input Parsing failed");
+        let args = parsed
+            .function
+            .resource_params(&[record(vec![
+                field("high-bits", u64()),
+                field("low-bits", u64()),
+            ])])
+            .expect("Resource params parsing failed")
+            .expect("Resource params not found");
+        let nums = if let Value::Record(nums) = &args[0] {
+            nums.clone()
+        } else {
+            panic!("Expected record")
+        };
+
+        assert_eq!(
+            nums,
+            vec![
+                Value::U64(18389549593665948372u64),
+                Value::U64(12287617583649128209u64),
+            ]
         )
     }
 }

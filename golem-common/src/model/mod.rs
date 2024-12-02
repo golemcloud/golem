@@ -1031,7 +1031,7 @@ impl IntoValue for WorkerMetadata {
             self.env.into_value(),
             self.last_known_status.status.into_value(),
             self.last_known_status.component_version.into_value(),
-            0.into_value(), // retry count could be computed from the worker status record here but we don't support it yet
+            0u64.into_value(), // retry count could be computed from the worker status record here but we don't support it yet
         ])
     }
 

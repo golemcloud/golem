@@ -76,7 +76,7 @@ impl GuestProcessor for OplogProcessor {
 
                     STATE.with_borrow_mut(|state| {
                         state.invocations.push(format!(
-                            "{}/{:?}{}/{}",
+                            "{}/{:?}/{}/{}",
                             self.account_id.value,
                             component_id,
                             worker_id.worker_name,

@@ -135,7 +135,7 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
                 match workers.get(&key) {
                     Some(worker_id) => Ok(worker_id.clone()),
                     None => {
-                        let plugin_component_id =
+                        let (plugin_component_id, plugin_component_version) =
                             Self::get_oplog_processor_component_id(&definition)?;
                         let worker_id = self.generate_worker_id_for(&plugin_component_id).await?;
                         let owned_worker_id = OwnedWorkerId {
@@ -145,7 +145,7 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
                         let running_plugin = RunningPlugin {
                             owned_worker_id: owned_worker_id.clone(),
                             configuration: installation.parameters.clone(),
-                            component_version,
+                            component_version: plugin_component_version,
                         };
                         workers.insert(key, running_plugin.clone());
                         Ok(running_plugin)
@@ -178,12 +178,12 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
             <Ctx::ComponentOwner as ComponentOwner>::PluginOwner,
             Ctx::PluginScope,
         >,
-    ) -> Result<ComponentId, GolemError> {
+    ) -> Result<(ComponentId, ComponentVersion), GolemError> {
         match &definition.specs {
             PluginTypeSpecificDefinition::OplogProcessor(OplogProcessorDefinition {
                 component_id,
-                ..
-            }) => Ok(component_id.clone()),
+                component_version,
+            }) => Ok((component_id.clone(), *component_version)),
             _ => Err(GolemError::runtime("Plugin is not an oplog processor")),
         }
     }
@@ -222,10 +222,12 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
 
         let (component_id_hi, component_id_lo) =
             worker_metadata.worker_id.component_id.0.as_u64_pair();
-        let wave_account_info =
-            format!("{{ account-id: \"{}\" }}", worker_metadata.account_id.value);
+        let wave_account_info = format!(
+            "{{ account-id: {{ value: \"{}\" }} }}",
+            worker_metadata.account_id.value
+        );
         let wave_component_id = format!(
-            "{{ high-bits: {}, low-bits: {} }}",
+            "{{ uuid: {{ high-bits: {}, low-bits: {} }} }}",
             component_id_hi, component_id_lo
         );
         let mut wave_config = "[".to_string();

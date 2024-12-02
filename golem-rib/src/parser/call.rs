@@ -71,19 +71,10 @@ where
                     if nesting > 0 {
                         current_param.push(next_char);
                     }
-                } else if next_char == '(' {
+                } else if next_char == '(' || next_char == '{' || next_char == '[' {
                     nesting += 1;
                     current_param.push(next_char);
-                } else if next_char == '{' {
-                    nesting += 1;
-                    current_param.push(next_char);
-                } else if next_char == '}' {
-                    nesting -= 1;
-                    current_param.push(next_char);
-                } else if next_char == '[' {
-                    nesting += 1;
-                    current_param.push(next_char);
-                } else if next_char == ']' {
+                } else if next_char == '}' || next_char == ']' {
                     nesting -= 1;
                     current_param.push(next_char);
                 } else if next_char == ',' && nesting == 1 {
