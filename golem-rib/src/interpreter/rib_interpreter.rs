@@ -1515,7 +1515,7 @@ mod interpreter_tests {
             let mut interpreter = Interpreter::default();
 
             let rib_expr = r#"
-          let x: list<str> = [];
+          let x: list<string> = [];
 
           for i in x {
             yield i;
@@ -1579,7 +1579,7 @@ mod interpreter_tests {
             let mut interpreter = Interpreter::default();
 
             let expr = r#"
-           let x: tuple<u64, str, str> = (1, "foo", "bar");
+           let x: tuple<u64, string, string> = (1, "foo", "bar");
 
            match x {
               (x, y, z) => "${x} ${y} ${z}"
@@ -1602,7 +1602,7 @@ mod interpreter_tests {
             let mut interpreter = Interpreter::default();
 
             let expr = r#"
-           let x: tuple<u64, option<str>, str> = (1, some("foo"), "bar");
+           let x: tuple<u64, option<string>, string> = (1, some("foo"), "bar");
 
            match x {
               (x, none, z) => "${x} ${z}",
@@ -1627,7 +1627,7 @@ mod interpreter_tests {
             let mut interpreter = Interpreter::default();
 
             let expr = r#"
-           let x: tuple<u64, option<str>, str> = (1, none, "bar");
+           let x: tuple<u64, option<string>, string> = (1, none, "bar");
 
            match x {
               (x, none, z) => "${x} ${z}",

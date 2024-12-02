@@ -314,7 +314,7 @@ fn make_file_server_api_definition_simple(
             componentId:
               componentId: '{component_id}'
               version: 0
-            response: 'let file: str = request.path.file; "/files/${{file}}"'
+            response: 'let file: string = request.path.file; "/files/${{file}}"'
     "#,
     ))?)
 }
@@ -335,7 +335,7 @@ fn make_file_server_api_definition_complex(
             componentId:
               componentId: '{component_id}'
               version: 0
-            response: 'let file: str = request.path.file; {{ headers: {{Content-Type: "application/json"}}, status: 201u64, file-path: "/files/${{file}}" }}'
+            response: 'let file: string = request.path.file; {{ headers: {{Content-Type: "application/json"}}, status: 201u64, file-path: "/files/${{file}}" }}'
     "#,
     ))?)
 }
@@ -357,8 +357,8 @@ fn make_file_server_api_definition_with_worker_name(
             componentId:
               componentId: '{component_id}'
               version: 0
-            workerName: 'let name: str = "{worker_name}"; name'
-            response: 'let file: str = request.path.file; "/files/${{file}}"'
+            workerName: 'let name: string = "{worker_name}"; name'
+            response: 'let file: string = request.path.file; "/files/${{file}}"'
     "#,
     ))?)
 }

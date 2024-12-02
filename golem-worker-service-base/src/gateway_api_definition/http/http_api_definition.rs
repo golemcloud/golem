@@ -902,22 +902,22 @@ mod tests {
         }
         test_encode_decode(
             "/foo/{user-id}",
-            "let x: str = request.path.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
+            "let x: string = request.path.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
             "${ let result = golem:it/api.{do-something}(request.body); {status: if result.user == \"admin\" then 401 else 200 } }",
         ).await;
         test_encode_decode(
             "/foo/{user-id}",
-            "let x: str = request.path.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
+            "let x: string = request.path.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
             "${ let result = golem:it/api.{do-something}(request.body.foo); {status: if result.user == \"admin\" then 401 else 200 } }",
         ).await;
         test_encode_decode(
             "/foo/{user-id}",
-            "let x: str = request.path.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
+            "let x: string = request.path.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
             "${ let result = golem:it/api.{do-something}(request.path.user-id); {status: if result.user == \"admin\" then 401 else 200 } }",
         ).await;
         test_encode_decode(
             "/foo",
-            "let x: str = request.body.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
+            "let x: string = request.body.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
             "${ let result = golem:it/api.{do-something}(\"foo\"); {status: if result.user == \"admin\" then 401 else 200 } }",
         ).await;
     }

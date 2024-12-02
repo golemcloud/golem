@@ -384,7 +384,7 @@ mod type_inference_tests {
             );
 
             let expr = r#"
-              let user: str = request.body.user-id;
+              let user: string = request.body.user-id;
               let query1 = foo;
               let query2 = bar;
               let query3 = foo-bar;
@@ -926,7 +926,7 @@ mod type_inference_tests {
         #[test]
         fn test_tuple_type_inference() {
             let rib_expr = r#"
-          let x: tuple<u64, str> = (1, "2");
+          let x: tuple<u64, string> = (1, "2");
           x
 
           "#;
