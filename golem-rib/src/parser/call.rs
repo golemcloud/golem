@@ -215,6 +215,7 @@ where
 }
 #[cfg(test)]
 mod function_call_tests {
+    use bigdecimal::BigDecimal;
     use test_r::test;
 
     use crate::{DynamicParsedFunctionName, DynamicParsedFunctionReference};

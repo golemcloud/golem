@@ -933,6 +933,7 @@ mod internal {
 
 #[cfg(test)]
 mod type_pull_up_tests {
+    use bigdecimal::BigDecimal;
     use test_r::test;
 
     use crate::call_type::CallType;
@@ -978,8 +979,20 @@ mod type_pull_up_tests {
     #[test]
     pub fn test_pull_up_for_sequence() {
         let elems = vec![
-            Expr::Number(Number { value: 1f64 }, None, InferredType::U64),
-            Expr::Number(Number { value: 2f64 }, None, InferredType::U64),
+            Expr::Number(
+                Number {
+                    value: BigDecimal::from(1),
+                },
+                None,
+                InferredType::U64,
+            ),
+            Expr::Number(
+                Number {
+                    value: BigDecimal::from(2),
+                },
+                None,
+                InferredType::U64,
+            ),
         ];
 
         let expr = Expr::Sequence(elems.clone(), InferredType::Unknown);
@@ -995,7 +1008,13 @@ mod type_pull_up_tests {
     pub fn test_pull_up_for_tuple() {
         let expr = Expr::tuple(vec![
             Expr::literal("foo"),
-            Expr::Number(Number { value: 1f64 }, None, InferredType::U64),
+            Expr::Number(
+                Number {
+                    value: BigDecimal::from(1),
+                },
+                None,
+                InferredType::U64,
+            ),
         ]);
         let new_expr = expr.pull_types_up().unwrap();
         assert_eq!(
@@ -1010,7 +1029,9 @@ mod type_pull_up_tests {
             (
                 "foo".to_string(),
                 Box::new(Expr::Number(
-                    Number { value: 1f64 },
+                    Number {
+                        value: BigDecimal::from(1),
+                    },
                     None,
                     InferredType::U64,
                 )),
@@ -1018,7 +1039,9 @@ mod type_pull_up_tests {
             (
                 "bar".to_string(),
                 Box::new(Expr::Number(
-                    Number { value: 2f64 },
+                    Number {
+                        value: BigDecimal::from(2),
+                    },
                     None,
                     InferredType::U32,
                 )),

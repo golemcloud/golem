@@ -72,6 +72,7 @@ mod interpolation_tests {
 
 #[cfg(test)]
 mod record_tests {
+    use bigdecimal::BigDecimal;
     use test_r::test;
 
     use crate::expr::*;
@@ -457,6 +458,7 @@ mod record_tests {
 
 #[cfg(test)]
 mod sequence_tests {
+    use bigdecimal::BigDecimal;
     use test_r::test;
 
     use crate::expr::Expr;
@@ -734,6 +736,7 @@ mod sequence_tests {
 
 #[cfg(test)]
 mod tuple_tests {
+    use bigdecimal::BigDecimal;
     use test_r::test;
 
     use crate::expr::Expr;
@@ -903,6 +906,8 @@ mod tuple_tests {
 
 #[cfg(test)]
 mod simple_values_test {
+    use bigdecimal::BigDecimal;
+    use std::str::FromStr;
     use test_r::test;
 
     use crate::expr::Expr;
@@ -928,7 +933,7 @@ mod simple_values_test {
 
     #[test]
     fn test_round_trip_read_write_number_float() {
-        let input_expr = Expr::untyped_number(1.1);
+        let input_expr = Expr::untyped_number(BigDecimal::from_str("1.1").unwrap());
         let expr_str = to_string(&input_expr).unwrap();
         let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!(input_expr, output_expr);
@@ -945,7 +950,7 @@ mod simple_values_test {
 
     #[test]
     fn test_round_trip_read_write_number_i64() {
-        let input_expr = Expr::untyped_number(-1f64);
+        let input_expr = Expr::untyped_number(BigDecimal::from(-1));
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "-1".to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
@@ -982,6 +987,7 @@ mod simple_values_test {
 
 #[cfg(test)]
 mod let_tests {
+    use bigdecimal::BigDecimal;
     use test_r::test;
 
     use crate::expr::Expr;
@@ -1263,6 +1269,8 @@ mod flag_tests {
 
 #[cfg(test)]
 mod match_tests {
+    use bigdecimal::BigDecimal;
+    use std::str::FromStr;
     use test_r::test;
 
     use crate::expr::ArmPattern;
@@ -1436,14 +1444,20 @@ mod match_tests {
                         "ok",
                         vec![ArmPattern::literal(Expr::identifier("foo"))],
                     ),
-                    Expr::greater_than(Expr::untyped_number(1.0), Expr::untyped_number(2.0)),
+                    Expr::greater_than(
+                        Expr::untyped_number(BigDecimal::from_str("1.1").unwrap()),
+                        Expr::untyped_number(BigDecimal::from(2)),
+                    ),
                 ),
                 MatchArm::new(
                     ArmPattern::constructor(
                         "err",
                         vec![ArmPattern::literal(Expr::identifier("msg"))],
                     ),
-                    Expr::less_than(Expr::untyped_number(1.0), Expr::untyped_number(2.0)),
+                    Expr::less_than(
+                        Expr::untyped_number(BigDecimal::from(1)),
+                        Expr::untyped_number(BigDecimal::from(2)),
+                    ),
                 ),
             ],
         );
@@ -1688,6 +1702,7 @@ mod match_tests {
 
 #[cfg(test)]
 mod if_cond_tests {
+    use bigdecimal::BigDecimal;
     use test_r::test;
 
     use crate::expr::Expr;
