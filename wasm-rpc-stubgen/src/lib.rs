@@ -27,10 +27,14 @@ pub mod wit_encode;
 pub mod wit_generate;
 pub mod wit_resolve;
 
+use crate::commands::app::ApplicationSourceMode;
+use crate::log::LogColorize;
 use crate::stub::{StubConfig, StubDefinition};
 use crate::wit_generate::UpdateCargoToml;
 use anyhow::Context;
 use clap::{Parser, Subcommand};
+use colored::Colorize;
+use itertools::Itertools;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
@@ -51,8 +55,8 @@ pub enum Command {
     /// Initializes a Golem-specific cargo-make configuration in a Cargo workspace for automatically
     /// generating stubs and composing results.
     InitializeWorkspace(InitializeWorkspaceArgs),
-    /// Build components and stubs with application manifests
-    #[cfg(feature = "unstable-dec-dep")]
+    /// Build components with application manifests
+    #[clap(about = app_about(), long_about = None)]
     App {
         #[command(subcommand)]
         subcommand: App,
@@ -190,25 +194,13 @@ pub struct InitializeWorkspaceArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum App {
-    /// Runs the pre-component-build steps (stub generation and adding wit dependencies)
-    PreComponentBuild(AppBuildArgs),
     /// Runs component build steps
-    ComponentBuild(AppBuildArgs),
-    /// Runs the post-component-build steps (composing stubs)
-    PostComponentBuild(AppBuildArgs),
-    /// Runs all build steps (pre-component, component, post-component)
     Build(AppBuildArgs),
     /// Clean outputs
-    Clean(AppBuildArgs),
+    Clean(AppCleanArgs),
     /// Run custom command
-    CustomCommand(DeclarativeCustomCommand),
-}
-
-#[derive(clap::Args, Debug)]
-#[command(version, about, long_about = None)]
-pub struct DeclarativeInitArgs {
-    #[clap(long, short, required = true)]
-    pub component_name: String,
+    #[clap(external_subcommand)]
+    CustomCommand(Vec<String>),
 }
 
 #[derive(clap::Args, Debug)]
@@ -223,11 +215,22 @@ pub struct AppBuildArgs {
     /// Selects a build profile
     #[clap(long, short)]
     pub profile: Option<String>,
+    /// When set to true will use offline mode where applicable (e.g. stub cargo builds), defaults to false
+    #[clap(long, short, default_value = "false")]
+    pub offline: bool,
 }
 
 #[derive(clap::Args, Debug)]
 #[command(version, about, long_about = None)]
-pub struct DeclarativeCustomCommand {
+pub struct AppCleanArgs {
+    /// List of application manifests, can be defined multiple times
+    #[clap(long, short)]
+    pub app: Vec<PathBuf>,
+}
+
+#[derive(clap::Args, Debug)]
+#[command(version, about, long_about = None)]
+pub struct AppCustomCommand {
     #[clap(flatten)]
     args: AppBuildArgs,
     #[arg(value_name = "custom command")]
@@ -264,7 +267,7 @@ pub async fn build(args: BuildArgs) -> anyhow::Result<()> {
     })
     .context("Failed to gather information for the stub generator")?;
 
-    commands::generate::build(&stub_def, &args.dest_wasm, &args.dest_wit_root).await
+    commands::generate::build(&stub_def, &args.dest_wasm, &args.dest_wit_root, false).await
 }
 
 pub fn add_stub_dependency(args: AddStubDependencyArgs) -> anyhow::Result<()> {
@@ -299,31 +302,59 @@ pub fn initialize_workspace(
 
 pub async fn run_app_command(command: App) -> anyhow::Result<()> {
     match command {
-        App::PreComponentBuild(args) => {
-            commands::app::pre_component_build(app_args_to_config(args)).await
+        App::Build(args) => {
+            commands::app::build(commands::app::Config {
+                app_resolve_mode: app_manifest_sources_to_resolve_mode(args.app),
+                skip_up_to_date_checks: args.force_build,
+                profile: args.profile.map(|profile| profile.into()),
+                offline: args.offline,
+            })
+            .await
         }
-        App::ComponentBuild(args) => commands::app::component_build(app_args_to_config(args)),
-        App::PostComponentBuild(args) => {
-            commands::app::post_component_build(app_args_to_config(args)).await
-        }
-        App::Build(args) => commands::app::build(app_args_to_config(args)).await,
-        App::Clean(args) => commands::app::clean(app_args_to_config(args)),
-        App::CustomCommand(args) => {
-            commands::app::custom_command(app_args_to_config(args.args), args.command)
+        App::Clean(args) => commands::app::clean(commands::app::Config {
+            app_resolve_mode: app_manifest_sources_to_resolve_mode(args.app),
+            skip_up_to_date_checks: false,
+            profile: None,
+            offline: false,
+        }),
+        App::CustomCommand(_args) => {
+            // TODO: parse app manifest / profile args
+            // commands::app::custom_command(app_args_to_config(args.args), args.command)
+            Ok(())
         }
     }
 }
 
-fn app_args_to_config(args: AppBuildArgs) -> commands::app::Config {
-    commands::app::Config {
-        app_resolve_mode: {
-            if args.app.is_empty() {
-                commands::app::ApplicationSourceMode::Automatic
-            } else {
-                commands::app::ApplicationSourceMode::Explicit(args.app)
-            }
-        },
-        skip_up_to_date_checks: args.force_build,
-        profile: args.profile.map(|profile| profile.into()),
+// TODO: currently this is added on top of the derived help, also, it should by grouped by profiles (also handling overlaps)
+fn app_about() -> String {
+    let commands = commands::app::available_custom_commands(commands::app::Config {
+        app_resolve_mode: ApplicationSourceMode::Automatic,
+        skip_up_to_date_checks: false,
+        profile: None,
+        offline: false,
+    });
+
+    match commands {
+        Ok(commands) if !commands.is_empty() => {
+            format!(
+                "\n\n{}\n{}",
+                "Custom commands:".bold().underline(),
+                commands
+                    .into_iter()
+                    .map(|cmd| format!("  {}", cmd.log_color_highlight()))
+                    .join("\n")
+            )
+        }
+        _ => "".to_string(),
+    }
+}
+
+fn app_manifest_sources_to_resolve_mode(
+    sources: Vec<PathBuf>,
+) -> commands::app::ApplicationSourceMode {
+    if sources.is_empty() {
+        commands::app::ApplicationSourceMode::Automatic
+    } else {
+        commands::app::ApplicationSourceMode::Explicit(sources)
     }
 }

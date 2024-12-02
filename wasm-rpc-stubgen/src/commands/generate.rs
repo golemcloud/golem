@@ -37,8 +37,9 @@ pub async fn build(
     stub_def: &StubDefinition,
     dest_wasm: &Path,
     dest_wit_root: &Path,
+    offline: bool,
 ) -> anyhow::Result<()> {
-    let wasm_path = generate_and_build_stub(stub_def).await?;
+    let wasm_path = generate_and_build_stub(stub_def, offline).await?;
 
     fs::copy(wasm_path, dest_wasm).context("Failed to copy the WASM file to the destination")?;
     fs::create_dir_all(dest_wit_root).context("Failed to create the target WIT root directory")?;
@@ -53,7 +54,7 @@ pub async fn build(
     Ok(())
 }
 
-pub async fn generate_and_build_stub(stub_def: &StubDefinition) -> anyhow::Result<PathBuf> {
+pub async fn generate_and_build_stub(stub_def: &StubDefinition, offline: bool) -> anyhow::Result<PathBuf> {
     let _ = generate_stub_wit_dir(stub_def)?;
     generate_cargo_toml(stub_def).context("Failed to generate the Cargo.toml file")?;
     generate_stub_source(stub_def).context("Failed to generate the stub Rust source")?;
@@ -69,6 +70,7 @@ pub async fn generate_and_build_stub(stub_def: &StubDefinition) -> anyhow::Resul
                     stub_def.config.target_root.log_color_error_highlight()
                 )
             })?,
+        offline,
     )
     .await
     .context("Failed to compile the generated stub")?;

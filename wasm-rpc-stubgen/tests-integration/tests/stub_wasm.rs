@@ -59,7 +59,7 @@ async fn all_wit_types() {
     })
     .unwrap();
 
-    let wasm_path = generate_and_build_stub(&def).await.unwrap();
+    let wasm_path = generate_and_build_stub(&def, false).await.unwrap();
 
     let stub_bytes = std::fs::read(wasm_path).unwrap();
     let stub_component = Component::<IgnoreAllButMetadata>::from_bytes(&stub_bytes).unwrap();

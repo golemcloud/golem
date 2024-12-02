@@ -426,9 +426,7 @@ pub fn add_stub_as_dependency_to_wit_dir(config: AddStubAsDepConfig) -> anyhow::
     if let Some(target_parent) = config.dest_wit_root.parent() {
         let target_cargo_toml = target_parent.join("Cargo.toml");
         if target_cargo_toml.exists() && target_cargo_toml.is_file() {
-            if config.update_cargo_toml == UpdateCargoToml::NoUpdate {
-                eprintln!("Warning: the newly copied dependencies have to be added to {}. Use the --update-cargo-toml flag to update it automatically.", target_cargo_toml.display());
-            } else {
+                if config.update_cargo_toml != UpdateCargoToml::NoUpdate {
                 cargo::is_cargo_component_toml(&target_cargo_toml).context(format!(
                     "The file {target_cargo_toml:?} is not a valid cargo-component project"
                 ))?;

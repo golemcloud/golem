@@ -658,6 +658,16 @@ impl Application {
             .collect()
     }
 
+    pub fn all_option_profiles(&self) -> BTreeSet<Option<ProfileName>> {
+        let mut profiles = self
+            .component_names()
+            .flat_map(|component_name| self.component_profiles(component_name))
+            .map(Some)
+            .collect::<BTreeSet<_>>();
+        profiles.insert(None);
+        profiles
+    }
+
     pub fn all_custom_commands(&self, profile: Option<&ProfileName>) -> BTreeSet<String> {
         self.component_names()
             .flat_map(|component_name| {
