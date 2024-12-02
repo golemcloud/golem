@@ -1463,7 +1463,7 @@ mod match_tests {
         );
 
         let expr_str = to_string(&input_expr).unwrap();
-        let expected_str = "match request {  ok(foo) => 1 > 2, err(msg) => 1 < 2 } ".to_string();
+        let expected_str = "match request {  ok(foo) => 1.1 > 2, err(msg) => 1 < 2 } ".to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }

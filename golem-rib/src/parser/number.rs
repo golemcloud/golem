@@ -94,7 +94,7 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::untyped_number(BigDecimal::from_str("123.456f64").unwrap()),
+                Expr::untyped_number(BigDecimal::from_str("123.456").unwrap()),
                 ""
             ))
         );

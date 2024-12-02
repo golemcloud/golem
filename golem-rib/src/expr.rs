@@ -1175,12 +1175,10 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                 let type_name = number.type_name.map(TypeName::try_from).transpose()?;
                 let big_decimal = if let Some(number) = number.number {
                     BigDecimal::from_str(&number).map_err(|e| e.to_string())?
+                } else if let Some(float) = number.float {
+                    BigDecimal::from_f64(float).ok_or("Invalid float")?
                 } else {
-                    if let Some(float) = number.float {
-                        BigDecimal::from_f64(float).ok_or("Invalid float")?
-                    } else {
-                        return Err("Missing number".to_string());
-                    }
+                    return Err("Missing number".to_string());
                 };
 
                 if let Some(type_name) = type_name {
