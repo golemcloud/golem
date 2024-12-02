@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::gateway_api_definition::http::{CompiledHttpApiDefinition, VarInfo};
-use crate::gateway_binding::{GatewayBindingCompiled, StaticBinding};
+use crate::gateway_binding::{GatewayBindingCompiled, RibInputTypeMismatch, StaticBinding};
 use crate::gateway_binding::{GatewayRequestDetails, ResponseMappingCompiled};
 use crate::gateway_execution::router::RouterPattern;
 use crate::gateway_execution::to_response_failure::ToHttpResponseFromSafeDisplay;
@@ -41,7 +41,7 @@ pub trait GatewayBindingResolver<Namespace, ApiDefinition> {
 
 #[derive(Debug)]
 pub enum GatewayBindingResolverError {
-    RibInputTypeMismatch(String),
+    RibInputTypeMismatch(RibInputTypeMismatch),
     Internal(String),
     RouteNotFound,
 }
@@ -64,7 +64,7 @@ impl SafeDisplay for GatewayBindingResolverError {
     fn to_safe_string(&self) -> String {
         match self {
             GatewayBindingResolverError::RibInputTypeMismatch(err) => {
-                format!("RibInputTypeMismatch: {}", err)
+                format!("Input type mismatch: {}", err)
             }
             GatewayBindingResolverError::Internal(err) => format!("Internal: {}", err),
             GatewayBindingResolverError::RouteNotFound => "RouteNotFound".to_string(),
@@ -277,10 +277,7 @@ mod internal {
             let resolve_rib_input = http_request_details
                 .resolve_rib_input_value(&worker_name_compiled.rib_input_type_info)
                 .map_err(|err| {
-                    GatewayBindingResolverError::RibInputTypeMismatch(format!(
-                        "Failed to resolve rib input value from http request details {}",
-                        err
-                    ))
+                    GatewayBindingResolverError::RibInputTypeMismatch(err)
                 })?;
 
             let worker_name = rib::interpret_pure(
@@ -313,10 +310,7 @@ mod internal {
             let resolve_rib_input = http_request_details
                 .resolve_rib_input_value(&idempotency_key_compiled.rib_input)
                 .map_err(|err| {
-                   GatewayBindingResolverError::RibInputTypeMismatch(format!(
-                        "Failed to resolve rib input value from http request details {} for idemptency key",
-                        err
-                    ))
+                   GatewayBindingResolverError::RibInputTypeMismatch(err)
                 })?;
 
             let idempotency_key_value = rib::interpret_pure(
