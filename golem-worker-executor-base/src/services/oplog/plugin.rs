@@ -18,13 +18,10 @@ use crate::model::ExecutionStatus;
 use crate::services::component::ComponentService;
 use crate::services::oplog::{CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService};
 use crate::services::plugins::Plugins;
-use crate::services::rpc::Rpc;
 use crate::services::shard::ShardService;
 use crate::services::worker_activator::WorkerActivator;
-use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{
-    HasComponentService, HasOplogProcessorPlugin, HasOplogService, HasPlugins, HasShardService,
-    HasWasmtimeEngine, HasWorkerActivator,
+    HasComponentService, HasOplogProcessorPlugin, HasPlugins, HasShardService, HasWorkerActivator,
 };
 use crate::workerctx::WorkerCtx;
 use async_lock::{RwLock, RwLockUpgradableReadGuard};
