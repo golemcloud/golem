@@ -123,8 +123,8 @@ pub trait HasOplog {
     fn oplog(&self) -> Arc<dyn oplog::Oplog + Send + Sync>;
 }
 
-pub trait HasWorkerActivator {
-    fn worker_activator(&self) -> Arc<dyn WorkerActivator + Send + Sync>;
+pub trait HasWorkerActivator<Ctx: WorkerCtx> {
+    fn worker_activator(&self) -> Arc<dyn WorkerActivator<Ctx> + Send + Sync>;
 }
 
 pub trait HasWorkerProxy {
@@ -162,7 +162,7 @@ pub trait HasAll<Ctx: WorkerCtx>:
     + HasOplogService
     + HasRpc
     + HasSchedulerService
-    + HasWorkerActivator
+    + HasWorkerActivator<Ctx>
     + HasWorkerProxy
     + HasEvents
     + HasShardManagerService
@@ -190,7 +190,7 @@ impl<
             + HasOplogService
             + HasRpc
             + HasSchedulerService
-            + HasWorkerActivator
+            + HasWorkerActivator<Ctx>
             + HasWorkerProxy
             + HasEvents
             + HasShardManagerService
@@ -225,7 +225,7 @@ pub struct All<Ctx: WorkerCtx> {
     oplog_service: Arc<dyn oplog::OplogService + Send + Sync>,
     rpc: Arc<dyn rpc::Rpc + Send + Sync>,
     scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
-    worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
+    worker_activator: Arc<dyn WorkerActivator<Ctx> + Send + Sync>,
     worker_proxy: Arc<dyn worker_proxy::WorkerProxy + Send + Sync>,
     events: Arc<Events>,
     file_loader: Arc<FileLoader>,
@@ -293,7 +293,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         oplog_service: Arc<dyn oplog::OplogService + Send + Sync>,
         rpc: Arc<dyn rpc::Rpc + Send + Sync>,
         scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
-        worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
+        worker_activator: Arc<dyn WorkerActivator<Ctx> + Send + Sync>,
         worker_proxy: Arc<dyn worker_proxy::WorkerProxy + Send + Sync>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
@@ -479,8 +479,8 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasSchedulerService for T {
     }
 }
 
-impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasWorkerActivator for T {
-    fn worker_activator(&self) -> Arc<dyn WorkerActivator + Send + Sync> {
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasWorkerActivator<Ctx> for T {
+    fn worker_activator(&self) -> Arc<dyn WorkerActivator<Ctx> + Send + Sync> {
         self.all().worker_activator.clone()
     }
 }

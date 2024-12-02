@@ -15,26 +15,17 @@
 use crate::error::GolemError;
 use crate::model::public_oplog::PublicOplogEntryOps;
 use crate::model::ExecutionStatus;
-use crate::preview2::golem;
 use crate::services::component::ComponentService;
-use crate::services::events::Events;
-use crate::services::file_loader::FileLoader;
-use crate::services::oplog::{CommitLevel, Oplog, OplogService};
+use crate::services::oplog::{CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService};
 use crate::services::plugins::Plugins;
 use crate::services::rpc::Rpc;
 use crate::services::shard::ShardService;
 use crate::services::worker_activator::WorkerActivator;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{
-    active_workers, blob_store, component, golem_config, key_value, oplog, promise, rpc, scheduler,
-    shard, shard_manager, worker, worker_activator, worker_enumeration, worker_proxy, All,
-    HasActiveWorkers, HasBlobStoreService, HasComponentService, HasConfig, HasEvents, HasExtraDeps,
-    HasFileLoader, HasKeyValueService, HasOplogProcessorPlugin, HasOplogService, HasPlugins,
-    HasPromiseService, HasRpc, HasRunningWorkerEnumerationService, HasSchedulerService,
-    HasShardManagerService, HasShardService, HasWasmtimeEngine, HasWorkerActivator,
-    HasWorkerEnumerationService, HasWorkerProxy, HasWorkerService,
+    HasComponentService, HasOplogProcessorPlugin, HasOplogService, HasPlugins, HasShardService,
+    HasWasmtimeEngine, HasWorkerActivator,
 };
-use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_lock::{RwLock, RwLockUpgradableReadGuard};
 use async_mutex::Mutex;
@@ -49,18 +40,16 @@ use golem_common::model::plugin::{
 use golem_common::model::public_oplog::PublicOplogEntry;
 use golem_common::model::{
     AccountId, ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId, PluginInstallationId,
-    ShardId, TargetWorkerId, WorkerId, WorkerMetadata,
+    ScanCursor, ShardId, TargetWorkerId, WorkerId, WorkerMetadata,
 };
 use golem_wasm_rpc::{IntoValue, Value};
 use std::collections::hash_map::Entry;
-use std::collections::{HashMap, VecDeque};
-use std::fmt::Debug;
+use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
-use wasmtime::component::Lower;
 
 #[async_trait]
 pub trait OplogProcessorPlugin {
@@ -80,34 +69,14 @@ pub trait OplogProcessorPlugin {
 pub struct PerExecutorOplogProcessorPlugin<Ctx: WorkerCtx> {
     workers: Arc<RwLock<HashMap<WorkerKey, RunningPlugin>>>,
 
-    active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
-    engine: Arc<wasmtime::Engine>,
-    linker: Arc<wasmtime::component::Linker<Ctx>>,
-    runtime: Handle,
     component_service: Arc<dyn ComponentService + Send + Sync>,
-    shard_manager_service: Arc<dyn shard_manager::ShardManagerService + Send + Sync>,
-    worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
-    worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService + Send + Sync>,
-    running_worker_enumeration_service:
-        Arc<dyn worker_enumeration::RunningWorkerEnumerationService + Send + Sync>,
-    promise_service: Arc<dyn promise::PromiseService + Send + Sync>,
-    golem_config: Arc<golem_config::GolemConfig>,
     shard_service: Arc<dyn ShardService + Send + Sync>,
-    key_value_service: Arc<dyn key_value::KeyValueService + Send + Sync>,
-    blob_store_service: Arc<dyn blob_store::BlobStoreService + Send + Sync>,
-    oplog_service: Arc<dyn OplogService + Send + Sync>,
-    pub rpc: Arc<dyn Rpc + Send + Sync>,
-    scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
-    worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
-    worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
-    events: Arc<Events>,
-    file_loader: Arc<FileLoader>,
+    worker_activator: Arc<dyn WorkerActivator<Ctx> + Send + Sync>,
     plugins: Arc<
         dyn Plugins<<Ctx::ComponentOwner as ComponentOwner>::PluginOwner, Ctx::PluginScope>
             + Send
             + Sync,
     >,
-    extra_deps: Ctx::ExtraDeps,
 }
 
 type WorkerKey = (AccountId, String, String);
@@ -121,62 +90,21 @@ struct RunningPlugin {
 
 impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
     pub fn new(
-        active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
-        engine: Arc<wasmtime::Engine>,
-        linker: Arc<wasmtime::component::Linker<Ctx>>,
-        runtime: Handle,
         component_service: Arc<dyn ComponentService + Send + Sync>,
-        shard_manager_service: Arc<dyn shard_manager::ShardManagerService + Send + Sync>,
-        worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
-        worker_enumeration_service: Arc<
-            dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
-        >,
-        running_worker_enumeration_service: Arc<
-            dyn worker_enumeration::RunningWorkerEnumerationService + Send + Sync,
-        >,
-        promise_service: Arc<dyn promise::PromiseService + Send + Sync>,
-        golem_config: Arc<golem_config::GolemConfig>,
         shard_service: Arc<dyn ShardService + Send + Sync>,
-        key_value_service: Arc<dyn key_value::KeyValueService + Send + Sync>,
-        blob_store_service: Arc<dyn blob_store::BlobStoreService + Send + Sync>,
-        oplog_service: Arc<dyn OplogService + Send + Sync>,
-        scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
-        worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
-        worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
-        events: Arc<Events>,
-        file_loader: Arc<FileLoader>,
+        worker_activator: Arc<dyn WorkerActivator<Ctx> + Send + Sync>,
         plugins: Arc<
             dyn Plugins<<Ctx::ComponentOwner as ComponentOwner>::PluginOwner, Ctx::PluginScope>
                 + Send
                 + Sync,
         >,
-        extra_deps: Ctx::ExtraDeps,
     ) -> Self {
         Self {
             workers: Arc::new(RwLock::new(HashMap::new())),
-            active_workers,
-            engine,
-            linker,
-            runtime,
             component_service,
-            shard_manager_service,
-            worker_service,
-            worker_enumeration_service,
-            running_worker_enumeration_service,
-            promise_service,
-            golem_config,
             shard_service,
-            key_value_service,
-            blob_store_service,
-            oplog_service,
-            rpc,
-            scheduler_service,
             worker_activator,
-            worker_proxy,
-            events,
-            file_loader,
             plugins,
-            extra_deps,
         }
     }
 
@@ -220,7 +148,7 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
                         let running_plugin = RunningPlugin {
                             owned_worker_id: owned_worker_id.clone(),
                             configuration: installation.parameters.clone(),
-                            component_version: component_version.clone(),
+                            component_version,
                         };
                         workers.insert(key, running_plugin.clone());
                         Ok(running_plugin)
@@ -282,15 +210,16 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
             )
             .await?;
 
-        let worker = Worker::get_or_create_running(
-            self,
-            &running_plugin.owned_worker_id,
-            None,
-            None,
-            Some(running_plugin.component_version),
-            None,
-        )
-        .await?;
+        let worker = self
+            .worker_activator
+            .get_or_create_running(
+                &running_plugin.owned_worker_id,
+                None,
+                None,
+                Some(running_plugin.component_version),
+                None,
+            )
+            .await?;
 
         let idempotency_key = IdempotencyKey::fresh();
 
@@ -309,7 +238,7 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
                 wave_config.push_str(", ");
             }
         }
-        wave_config.push_str("]");
+        wave_config.push(']');
         let function_name = format!("golem:api/oplog-processor@1.1.0-rc1.{{processor({wave_account_info}, {wave_component_id}, {wave_config}).process}}");
 
         let val_worker_id = worker_metadata.worker_id.clone().into_value();
@@ -370,42 +299,11 @@ impl<Ctx: WorkerCtx> Clone for PerExecutorOplogProcessorPlugin<Ctx> {
     fn clone(&self) -> Self {
         Self {
             workers: self.workers.clone(),
-            active_workers: self.active_workers.clone(),
-            engine: self.engine.clone(),
-            linker: self.linker.clone(),
-            runtime: self.runtime.clone(),
             component_service: self.component_service.clone(),
-            shard_manager_service: self.shard_manager_service.clone(),
-            worker_service: self.worker_service.clone(),
-            worker_enumeration_service: self.worker_enumeration_service.clone(),
-            running_worker_enumeration_service: self.running_worker_enumeration_service.clone(),
-            promise_service: self.promise_service.clone(),
-            golem_config: self.golem_config.clone(),
             shard_service: self.shard_service.clone(),
-            key_value_service: self.key_value_service.clone(),
-            blob_store_service: self.blob_store_service.clone(),
-            oplog_service: self.oplog_service.clone(),
-            rpc: self.rpc.clone(),
-            scheduler_service: self.scheduler_service.clone(),
             worker_activator: self.worker_activator.clone(),
-            worker_proxy: self.worker_proxy.clone(),
-            events: self.events.clone(),
-            file_loader: self.file_loader.clone(),
             plugins: self.plugins.clone(),
-            extra_deps: self.extra_deps.clone(),
         }
-    }
-}
-
-impl<Ctx: WorkerCtx> HasEvents for PerExecutorOplogProcessorPlugin<Ctx> {
-    fn events(&self) -> Arc<Events> {
-        self.events.clone()
-    }
-}
-
-impl<Ctx: WorkerCtx> HasActiveWorkers<Ctx> for PerExecutorOplogProcessorPlugin<Ctx> {
-    fn active_workers(&self) -> Arc<active_workers::ActiveWorkers<Ctx>> {
-        self.active_workers.clone()
     }
 }
 
@@ -415,117 +313,15 @@ impl<Ctx: WorkerCtx> HasComponentService for PerExecutorOplogProcessorPlugin<Ctx
     }
 }
 
-impl<Ctx: WorkerCtx> HasConfig for PerExecutorOplogProcessorPlugin<Ctx> {
-    fn config(&self) -> Arc<golem_config::GolemConfig> {
-        self.golem_config.clone()
-    }
-}
-
-impl<Ctx: WorkerCtx> HasWorkerService for PerExecutorOplogProcessorPlugin<Ctx> {
-    fn worker_service(&self) -> Arc<dyn worker::WorkerService + Send + Sync> {
-        self.worker_service.clone()
-    }
-}
-
-impl<Ctx: WorkerCtx> HasWorkerEnumerationService for PerExecutorOplogProcessorPlugin<Ctx> {
-    fn worker_enumeration_service(
-        &self,
-    ) -> Arc<dyn worker_enumeration::WorkerEnumerationService + Send + Sync> {
-        self.worker_enumeration_service.clone()
-    }
-}
-
-impl<Ctx: WorkerCtx> HasRunningWorkerEnumerationService for PerExecutorOplogProcessorPlugin<Ctx> {
-    fn running_worker_enumeration_service(
-        &self,
-    ) -> Arc<dyn worker_enumeration::RunningWorkerEnumerationService + Send + Sync> {
-        self.running_worker_enumeration_service.clone()
-    }
-}
-
-impl<Ctx: WorkerCtx> HasPromiseService for PerExecutorOplogProcessorPlugin<Ctx> {
-    fn promise_service(&self) -> Arc<dyn promise::PromiseService + Send + Sync> {
-        self.promise_service.clone()
-    }
-}
-
-impl<Ctx: WorkerCtx> HasWasmtimeEngine<Ctx> for PerExecutorOplogProcessorPlugin<Ctx> {
-    fn engine(&self) -> Arc<wasmtime::Engine> {
-        self.engine.clone()
-    }
-
-    fn linker(&self) -> Arc<wasmtime::component::Linker<Ctx>> {
-        self.linker.clone()
-    }
-
-    fn runtime(&self) -> Handle {
-        self.runtime.clone()
-    }
-}
-
-impl<Ctx: WorkerCtx> HasKeyValueService for PerExecutorOplogProcessorPlugin<Ctx> {
-    fn key_value_service(&self) -> Arc<dyn key_value::KeyValueService + Send + Sync> {
-        self.key_value_service.clone()
-    }
-}
-
-impl<Ctx: WorkerCtx> HasBlobStoreService for PerExecutorOplogProcessorPlugin<Ctx> {
-    fn blob_store_service(&self) -> Arc<dyn blob_store::BlobStoreService + Send + Sync> {
-        self.blob_store_service.clone()
-    }
-}
-
-impl<Ctx: WorkerCtx> HasSchedulerService for PerExecutorOplogProcessorPlugin<Ctx> {
-    fn scheduler_service(&self) -> Arc<dyn scheduler::SchedulerService + Send + Sync> {
-        self.scheduler_service.clone()
-    }
-}
-
-impl<Ctx: WorkerCtx> HasOplogService for PerExecutorOplogProcessorPlugin<Ctx> {
-    fn oplog_service(&self) -> Arc<dyn OplogService + Send + Sync> {
-        self.oplog_service.clone()
-    }
-}
-
-impl<Ctx: WorkerCtx> HasRpc for PerExecutorOplogProcessorPlugin<Ctx> {
-    fn rpc(&self) -> Arc<dyn Rpc + Send + Sync> {
-        self.rpc.clone()
-    }
-}
-
-impl<Ctx: WorkerCtx> HasExtraDeps<Ctx> for PerExecutorOplogProcessorPlugin<Ctx> {
-    fn extra_deps(&self) -> Ctx::ExtraDeps {
-        self.extra_deps.clone()
-    }
-}
-
 impl<Ctx: WorkerCtx> HasShardService for PerExecutorOplogProcessorPlugin<Ctx> {
     fn shard_service(&self) -> Arc<dyn ShardService + Send + Sync> {
         self.shard_service.clone()
     }
 }
 
-impl<Ctx: WorkerCtx> HasShardManagerService for PerExecutorOplogProcessorPlugin<Ctx> {
-    fn shard_manager_service(&self) -> Arc<dyn shard_manager::ShardManagerService + Send + Sync> {
-        self.shard_manager_service.clone()
-    }
-}
-
-impl<Ctx: WorkerCtx> HasWorkerActivator for PerExecutorOplogProcessorPlugin<Ctx> {
-    fn worker_activator(&self) -> Arc<dyn WorkerActivator + Send + Sync> {
+impl<Ctx: WorkerCtx> HasWorkerActivator<Ctx> for PerExecutorOplogProcessorPlugin<Ctx> {
+    fn worker_activator(&self) -> Arc<dyn WorkerActivator<Ctx> + Send + Sync> {
         self.worker_activator.clone()
-    }
-}
-
-impl<Ctx: WorkerCtx> HasWorkerProxy for PerExecutorOplogProcessorPlugin<Ctx> {
-    fn worker_proxy(&self) -> Arc<dyn WorkerProxy + Send + Sync> {
-        self.worker_proxy.clone()
-    }
-}
-
-impl<Ctx: WorkerCtx> HasFileLoader for PerExecutorOplogProcessorPlugin<Ctx> {
-    fn file_loader(&self) -> Arc<FileLoader> {
-        self.file_loader.clone()
     }
 }
 
@@ -550,25 +346,234 @@ impl<Ctx: WorkerCtx> HasOplogProcessorPlugin for PerExecutorOplogProcessorPlugin
     }
 }
 
-/// A wrapper for `Oplog` that periodically sends buffered oplog entries to oplog processor plugins
-#[derive(Debug)]
-pub struct ForwardingOplog<
-    Inner: Oplog + Send + Sync + 'static,
-    Owner: PluginOwner,
-    Scope: PluginScope,
-> {
-    inner: Inner,
-    state: Arc<Mutex<ForwardingOplogState<Owner, Scope>>>,
-    timer: Option<JoinHandle<()>>,
+#[derive(Clone)]
+struct CreateOplogConstructor<Owner: PluginOwner, Scope: PluginScope> {
+    owned_worker_id: OwnedWorkerId,
+    initial_entry: Option<OplogEntry>,
+    inner: Arc<dyn OplogService + Send + Sync>,
+    last_oplog_index: OplogIndex,
+    oplog_plugins: Arc<dyn OplogProcessorPlugin + Send + Sync>,
+    components: Arc<dyn ComponentService + Send + Sync>,
+    plugins: Arc<dyn Plugins<Owner, Scope> + Send + Sync>,
+    execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
+    initial_worker_metadata: WorkerMetadata,
 }
 
-impl<Inner: Oplog + Send + Sync + 'static, Owner: PluginOwner, Scope: PluginScope>
-    ForwardingOplog<Inner, Owner, Scope>
+impl<Owner: PluginOwner, Scope: PluginScope> CreateOplogConstructor<Owner, Scope> {
+    pub fn new(
+        owned_worker_id: OwnedWorkerId,
+        initial_entry: Option<OplogEntry>,
+        inner: Arc<dyn OplogService + Send + Sync>,
+        last_oplog_index: OplogIndex,
+        oplog_plugins: Arc<dyn OplogProcessorPlugin + Send + Sync>,
+        components: Arc<dyn ComponentService + Send + Sync>,
+        plugins: Arc<dyn Plugins<Owner, Scope> + Send + Sync>,
+        execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
+        initial_worker_metadata: WorkerMetadata,
+    ) -> Self {
+        Self {
+            owned_worker_id,
+            initial_entry,
+            inner,
+            last_oplog_index,
+            oplog_plugins,
+            components,
+            plugins,
+            execution_status,
+            initial_worker_metadata,
+        }
+    }
+}
+
+#[async_trait]
+impl<Owner: PluginOwner, Scope: PluginScope> OplogConstructor
+    for CreateOplogConstructor<Owner, Scope>
 {
+    async fn create_oplog(
+        self,
+        close: Box<dyn FnOnce() + Send + Sync>,
+    ) -> Arc<dyn Oplog + Send + Sync> {
+        let inner = if let Some(initial_entry) = self.initial_entry {
+            self.inner
+                .create(
+                    &self.owned_worker_id,
+                    initial_entry,
+                    self.initial_worker_metadata.clone(),
+                    self.execution_status.clone(),
+                )
+                .await
+        } else {
+            self.inner
+                .open(
+                    &self.owned_worker_id,
+                    self.last_oplog_index,
+                    self.initial_worker_metadata.clone(),
+                    self.execution_status.clone(),
+                )
+                .await
+        };
+
+        Arc::new(ForwardingOplog::new(
+            inner,
+            self.oplog_plugins,
+            self.inner,
+            self.components,
+            self.plugins,
+            self.execution_status,
+            self.initial_worker_metadata,
+            self.last_oplog_index,
+            close,
+        ))
+    }
+}
+
+pub struct ForwardingOplogService<Owner: PluginOwner, Scope: PluginScope> {
+    pub inner: Arc<dyn OplogService + Send + Sync>,
+    oplogs: OpenOplogs,
+
+    oplog_plugins: Arc<dyn OplogProcessorPlugin + Send + Sync>,
+    components: Arc<dyn ComponentService + Send + Sync>,
+    plugins: Arc<dyn Plugins<Owner, Scope> + Send + Sync>,
+}
+
+impl<Owner: PluginOwner, Scope: PluginScope> ForwardingOplogService<Owner, Scope> {
+    pub fn new(
+        inner: Arc<dyn OplogService + Send + Sync>,
+        oplog_plugins: Arc<dyn OplogProcessorPlugin + Send + Sync>,
+        components: Arc<dyn ComponentService + Send + Sync>,
+        plugins: Arc<dyn Plugins<Owner, Scope> + Send + Sync>,
+    ) -> Self {
+        Self {
+            inner,
+            oplogs: OpenOplogs::new("forwarding_oplog_service"),
+            oplog_plugins,
+            components,
+            plugins,
+        }
+    }
+}
+
+impl<Owner: PluginOwner, Scope: PluginScope> Debug for ForwardingOplogService<Owner, Scope> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ForwardingOplogService").finish()
+    }
+}
+
+#[async_trait]
+impl<Owner: PluginOwner, Scope: PluginScope> OplogService for ForwardingOplogService<Owner, Scope> {
+    async fn create(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        initial_entry: OplogEntry,
+        initial_worker_metadata: WorkerMetadata,
+        execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
+    ) -> Arc<dyn Oplog + Send + Sync + 'static> {
+        self.oplogs
+            .get_or_open(
+                &owned_worker_id.worker_id,
+                CreateOplogConstructor::new(
+                    owned_worker_id.clone(),
+                    Some(initial_entry),
+                    self.inner.clone(),
+                    OplogIndex::INITIAL,
+                    self.oplog_plugins.clone(),
+                    self.components.clone(),
+                    self.plugins.clone(),
+                    execution_status,
+                    initial_worker_metadata,
+                ),
+            )
+            .await
+    }
+
+    async fn open(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        last_oplog_index: OplogIndex,
+        initial_worker_metadata: WorkerMetadata,
+        execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
+    ) -> Arc<dyn Oplog + Send + Sync + 'static> {
+        self.oplogs
+            .get_or_open(
+                &owned_worker_id.worker_id,
+                CreateOplogConstructor::new(
+                    owned_worker_id.clone(),
+                    None,
+                    self.inner.clone(),
+                    last_oplog_index,
+                    self.oplog_plugins.clone(),
+                    self.components.clone(),
+                    self.plugins.clone(),
+                    execution_status,
+                    initial_worker_metadata,
+                ),
+            )
+            .await
+    }
+
+    async fn get_last_index(&self, owned_worker_id: &OwnedWorkerId) -> OplogIndex {
+        self.inner.get_last_index(owned_worker_id).await
+    }
+
+    async fn delete(&self, owned_worker_id: &OwnedWorkerId) {
+        self.inner.delete(owned_worker_id).await
+    }
+
+    async fn read(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        idx: OplogIndex,
+        n: u64,
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
+        self.inner.read(owned_worker_id, idx, n).await
+    }
+
+    async fn exists(&self, owned_worker_id: &OwnedWorkerId) -> bool {
+        self.inner.exists(owned_worker_id).await
+    }
+
+    async fn scan_for_component(
+        &self,
+        account_id: &AccountId,
+        component_id: &ComponentId,
+        cursor: ScanCursor,
+        count: u64,
+    ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), GolemError> {
+        self.inner
+            .scan_for_component(account_id, component_id, cursor, count)
+            .await
+    }
+
+    async fn upload_payload(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        data: &[u8],
+    ) -> Result<OplogPayload, String> {
+        self.inner.upload_payload(owned_worker_id, data).await
+    }
+
+    async fn download_payload(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        payload: &OplogPayload,
+    ) -> Result<Bytes, String> {
+        self.inner.download_payload(owned_worker_id, payload).await
+    }
+}
+
+/// A wrapper for `Oplog` that periodically sends buffered oplog entries to oplog processor plugins
+pub struct ForwardingOplog<Owner: PluginOwner, Scope: PluginScope> {
+    inner: Arc<dyn Oplog + Send + Sync>,
+    state: Arc<Mutex<ForwardingOplogState<Owner, Scope>>>,
+    timer: Option<JoinHandle<()>>,
+    close_fn: Option<Box<dyn FnOnce() + Send + Sync>>,
+}
+
+impl<Owner: PluginOwner, Scope: PluginScope> ForwardingOplog<Owner, Scope> {
     const MAX_COMMIT_COUNT: usize = 3;
 
     pub fn new(
-        inner: Inner,
+        inner: Arc<dyn Oplog + Send + Sync>,
         oplog_plugins: Arc<dyn OplogProcessorPlugin + Send + Sync>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         components: Arc<dyn ComponentService + Send + Sync>,
@@ -576,6 +581,7 @@ impl<Inner: Oplog + Send + Sync + 'static, Owner: PluginOwner, Scope: PluginScop
         execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
         initial_worker_metadata: WorkerMetadata,
         last_oplog_idx: OplogIndex,
+        close_fn: Box<dyn FnOnce() + Send + Sync>,
     ) -> Self {
         let state = Arc::new(Mutex::new(ForwardingOplogState {
             buffer: VecDeque::new(),
@@ -597,7 +603,7 @@ impl<Inner: Oplog + Send + Sync + 'static, Owner: PluginOwner, Scope: PluginScop
                 loop {
                     tokio::time::sleep(MAX_ELAPSED_TIME).await;
                     let mut state = state.lock().await;
-                    if state.buffer.len() > 0 && state.last_send.elapsed() > MAX_ELAPSED_TIME {
+                    if !state.buffer.is_empty() && state.last_send.elapsed() > MAX_ELAPSED_TIME {
                         state.send_buffer().await;
                     }
                 }
@@ -607,14 +613,22 @@ impl<Inner: Oplog + Send + Sync + 'static, Owner: PluginOwner, Scope: PluginScop
             inner,
             state,
             timer: Some(timer),
+            close_fn: Some(close_fn),
         }
     }
 }
 
-impl<Inner: Oplog + Send + Sync + 'static, Owner: PluginOwner, Scope: PluginScope> Drop
-    for ForwardingOplog<Inner, Owner, Scope>
-{
+impl<Owner: PluginOwner, Scope: PluginScope> Debug for ForwardingOplog<Owner, Scope> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ForwardingOplog").finish()
+    }
+}
+
+impl<Owner: PluginOwner, Scope: PluginScope> Drop for ForwardingOplog<Owner, Scope> {
     fn drop(&mut self) {
+        if let Some(close_fn) = self.close_fn.take() {
+            close_fn();
+        }
         if let Some(timer) = self.timer.take() {
             timer.abort();
         }
@@ -622,9 +636,7 @@ impl<Inner: Oplog + Send + Sync + 'static, Owner: PluginOwner, Scope: PluginScop
 }
 
 #[async_trait]
-impl<Inner: Oplog + Send + Sync + 'static, Owner: PluginOwner, Scope: PluginScope> Oplog
-    for ForwardingOplog<Inner, Owner, Scope>
-{
+impl<Owner: PluginOwner, Scope: PluginScope> Oplog for ForwardingOplog<Owner, Scope> {
     async fn add(&self, entry: OplogEntry) {
         let mut state = self.state.lock().await;
         state.buffer.push_back(entry.clone());
@@ -681,12 +693,6 @@ struct ForwardingOplogState<Owner: PluginOwner, Scope: PluginScope> {
     oplog_service: Arc<dyn OplogService + Send + Sync>,
     components: Arc<dyn ComponentService + Send + Sync>,
     plugins: Arc<dyn Plugins<Owner, Scope> + Send + Sync>,
-}
-
-impl<Owner: PluginOwner, Scope: PluginScope> Debug for ForwardingOplogState<Owner, Scope> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ForwardingOplogState").finish()
-    }
 }
 
 impl<Owner: PluginOwner, Scope: PluginScope> ForwardingOplogState<Owner, Scope> {
@@ -759,7 +765,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> ForwardingOplogState<Owner, Scope> 
             self.oplog_plugins
                 .send(
                     metadata.clone(),
-                    &installation_id,
+                    installation_id,
                     initial_oplog_index,
                     public_entries.clone(),
                 )

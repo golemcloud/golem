@@ -82,6 +82,7 @@ use golem_test_framework::dsl::to_worker_metadata;
 use golem_worker_executor_base::preview2::golem;
 use golem_worker_executor_base::preview2::golem::api1_1_0_rc1;
 use golem_worker_executor_base::services::events::Events;
+use golem_worker_executor_base::services::oplog::plugin::OplogProcessorPlugin;
 use golem_worker_executor_base::services::plugins::{Plugins, PluginsObservations};
 use golem_worker_executor_base::services::rpc::{
     DirectWorkerInvocationRpc, RemoteInvocationRpc, Rpc,
@@ -202,6 +203,10 @@ impl TestDependencies for TestWorkerExecutor {
         self.deps.redis()
     }
 
+    fn blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync + 'static> {
+        self.deps.blob_storage()
+    }
+
     fn redis_monitor(&self) -> Arc<dyn RedisMonitor + Send + Sync + 'static> {
         self.deps.redis_monitor()
     }
@@ -241,10 +246,6 @@ impl TestDependencies for TestWorkerExecutor {
 
     fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster + Send + Sync + 'static> {
         self.deps.worker_executor_cluster()
-    }
-
-    fn blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync + 'static> {
-        self.deps.blob_storage()
     }
 
     fn initial_component_files_service(&self) -> Arc<InitialComponentFilesService> {
@@ -817,13 +818,14 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         shard_service: Arc<dyn ShardService + Send + Sync>,
         key_value_service: Arc<dyn KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
-        worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
+        worker_activator: Arc<dyn WorkerActivator<TestWorkerCtx> + Send + Sync>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn Plugins<DefaultPluginOwner, DefaultPluginScope> + Send + Sync>,
+        oplog_processor_plugin: Arc<dyn OplogProcessorPlugin + Send + Sync>,
     ) -> anyhow::Result<All<TestWorkerCtx>> {
         let rpc = Arc::new(DirectWorkerInvocationRpc::new(
             Arc::new(RemoteInvocationRpc::new(
@@ -850,6 +852,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             events.clone(),
             file_loader.clone(),
             plugins.clone(),
+            oplog_processor_plugin.clone(),
             (),
         ));
         Ok(All::new(
@@ -875,6 +878,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             events,
             file_loader,
             plugins,
+            oplog_processor_plugin,
             (),
         ))
     }

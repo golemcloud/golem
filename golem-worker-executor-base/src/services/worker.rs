@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
@@ -24,7 +24,7 @@ use tracing::{debug, warn};
 
 use crate::error::GolemError;
 use crate::metrics::workers::record_worker_call;
-
+use crate::model::ExecutionStatus;
 use crate::services::oplog::OplogService;
 use crate::services::shard::ShardService;
 use crate::storage::keyvalue::{
@@ -38,7 +38,7 @@ pub trait WorkerService {
         &self,
         worker_metadata: &WorkerMetadata,
         component_type: ComponentType,
-    ) -> Result<(), GolemError>;
+    ) -> Result<Arc<RwLock<ExecutionStatus>>, GolemError>;
 
     async fn get(&self, owned_worker_id: &OwnedWorkerId) -> Option<WorkerMetadata>;
 
@@ -114,7 +114,7 @@ impl WorkerService for DefaultWorkerService {
         &self,
         worker_metadata: &WorkerMetadata,
         component_type: ComponentType,
-    ) -> Result<(), GolemError> {
+    ) -> Result<Arc<RwLock<ExecutionStatus>>, GolemError> {
         record_worker_call("add");
 
         let worker_id = &worker_metadata.worker_id;
@@ -131,8 +131,20 @@ impl WorkerService for DefaultWorkerService {
             worker_metadata.last_known_status.total_linear_memory_size,
             worker_metadata.last_known_status.active_plugins().clone(),
         );
+
+        let execution_status = Arc::new(RwLock::new(ExecutionStatus::Suspended {
+            last_known_status: worker_metadata.last_known_status.clone(),
+            component_type,
+            timestamp: Timestamp::now_utc(),
+        }));
+
         self.oplog_service
-            .create(&owned_worker_id, initial_oplog_entry, component_type)
+            .create(
+                &owned_worker_id,
+                initial_oplog_entry,
+                worker_metadata.clone(),
+                execution_status.clone(),
+            )
             .await;
 
         if component_type != ComponentType::Ephemeral {
@@ -168,7 +180,7 @@ impl WorkerService for DefaultWorkerService {
             }
         }
 
-        Ok(())
+        Ok(execution_status)
     }
 
     async fn get(&self, owned_worker_id: &OwnedWorkerId) -> Option<WorkerMetadata> {

@@ -39,6 +39,9 @@ use crate::services::component::ComponentService;
 use crate::services::events::Events;
 use crate::services::golem_config::{GolemConfig, IndexedStorageConfig, KeyValueStorageConfig};
 use crate::services::key_value::{DefaultKeyValueService, KeyValueService};
+use crate::services::oplog::plugin::{
+    ForwardingOplogService, OplogProcessorPlugin, PerExecutorOplogProcessorPlugin,
+};
 use crate::services::oplog::{
     BlobOplogArchiveService, CompressedOplogArchiveService, MultiLayerOplogService,
     OplogArchiveService, OplogService, PrimaryOplogService,
@@ -133,7 +136,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         shard_service: Arc<dyn ShardService + Send + Sync>,
         key_value_service: Arc<dyn KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
-        worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
+        worker_activator: Arc<dyn WorkerActivator<Ctx> + Send + Sync>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
@@ -144,6 +147,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
                 + Send
                 + Sync,
         >,
+        oplog_processor_plugin: Arc<dyn OplogProcessorPlugin + Send + Sync>,
     ) -> anyhow::Result<All<Ctx>>;
 
     /// Can be overridden to customize the wasmtime configuration
@@ -350,7 +354,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         }
         let oplog_archives = NEVec::from_vec(oplog_archives);
 
-        let oplog_service: Arc<dyn OplogService + Send + Sync> = match oplog_archives {
+        let base_oplog_service: Arc<dyn OplogService + Send + Sync> = match oplog_archives {
             None => Arc::new(
                 PrimaryOplogService::new(
                     indexed_storage.clone(),
@@ -380,17 +384,6 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             }
         };
 
-        let worker_service = Arc::new(DefaultWorkerService::new(
-            key_value_storage.clone(),
-            shard_service.clone(),
-            oplog_service.clone(),
-        ));
-        let worker_enumeration_service = Arc::new(DefaultWorkerEnumerationService::new(
-            worker_service.clone(),
-            oplog_service.clone(),
-            golem_config.clone(),
-        ));
-
         let active_workers = self.create_active_workers(&golem_config);
 
         let running_worker_enumeration_service = Arc::new(
@@ -418,16 +411,6 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
 
         let blob_store_service = Arc::new(DefaultBlobStoreService::new(blob_storage.clone()));
 
-        let scheduler_service = SchedulerServiceDefault::new(
-            key_value_storage.clone(),
-            shard_service.clone(),
-            promise_service.clone(),
-            lazy_worker_activator.clone(),
-            oplog_service.clone(),
-            worker_service.clone(),
-            golem_config.scheduler.refresh_interval,
-        );
-
         let worker_proxy: Arc<dyn WorkerProxy + Send + Sync> = Arc::new(RemoteWorkerProxy::new(
             golem_config.public_worker_api.uri(),
             golem_config
@@ -440,6 +423,42 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         let events = Arc::new(Events::new(
             golem_config.limits.invocation_result_broadcast_capacity,
         ));
+
+        let oplog_processor_plugin = Arc::new(PerExecutorOplogProcessorPlugin::new(
+            component_service.clone(),
+            shard_service.clone(),
+            lazy_worker_activator.clone(),
+            plugins.clone(),
+        ));
+
+        let oplog_service: Arc<dyn OplogService + Send + Sync> =
+            Arc::new(ForwardingOplogService::new(
+                base_oplog_service,
+                oplog_processor_plugin.clone(),
+                component_service.clone(),
+                plugins.clone(),
+            ));
+
+        let worker_service = Arc::new(DefaultWorkerService::new(
+            key_value_storage.clone(),
+            shard_service.clone(),
+            oplog_service.clone(),
+        ));
+        let worker_enumeration_service = Arc::new(DefaultWorkerEnumerationService::new(
+            worker_service.clone(),
+            oplog_service.clone(),
+            golem_config.clone(),
+        ));
+
+        let scheduler_service = SchedulerServiceDefault::new(
+            key_value_storage.clone(),
+            shard_service.clone(),
+            promise_service.clone(),
+            Arc::new(lazy_worker_activator.clone() as Arc<dyn WorkerActivator<Ctx> + Send + Sync>),
+            oplog_service.clone(),
+            worker_service.clone(),
+            golem_config.scheduler.refresh_interval,
+        );
 
         let services = self
             .create_services(
@@ -464,6 +483,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
                 events,
                 file_loader,
                 plugins,
+                oplog_processor_plugin,
             )
             .await?;
 

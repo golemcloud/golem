@@ -137,16 +137,23 @@ macro_rules! newtype_uuid {
         impl golem_wasm_rpc::IntoValue for $name {
             fn into_value(self) -> golem_wasm_rpc::Value {
                 let (hi, lo) = self.0.as_u64_pair();
-                golem_wasm_rpc::Value::Record(vec![golem_wasm_rpc::Value::U64(hi), golem_wasm_rpc::Value::U64(lo)])
+                golem_wasm_rpc::Value::Record(vec![
+                    golem_wasm_rpc::Value::U64(hi),
+                    golem_wasm_rpc::Value::U64(lo),
+                ])
             }
 
             fn get_type() -> golem_wasm_ast::analysis::AnalysedType {
-                golem_wasm_ast::analysis::analysed_type::record(
-                    vec![
-                        golem_wasm_ast::analysis::analysed_type::field("high-bits", golem_wasm_ast::analysis::analysed_type::u64()),
-                        golem_wasm_ast::analysis::analysed_type::field("low-bits", golem_wasm_ast::analysis::analysed_type::u64()),
-                    ]
-                )
+                golem_wasm_ast::analysis::analysed_type::record(vec![
+                    golem_wasm_ast::analysis::analysed_type::field(
+                        "high-bits",
+                        golem_wasm_ast::analysis::analysed_type::u64(),
+                    ),
+                    golem_wasm_ast::analysis::analysed_type::field(
+                        "low-bits",
+                        golem_wasm_ast::analysis::analysed_type::u64(),
+                    ),
+                ])
             }
         }
     };

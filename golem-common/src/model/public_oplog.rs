@@ -15,7 +15,6 @@
 use crate::config::RetryConfig;
 use crate::model::lucene::{LeafQuery, Query};
 use crate::model::oplog::{LogLevel, OplogIndex, WorkerResourceId, WrappedFunctionType};
-use crate::model::plugin::DefaultPluginScope::Component;
 use crate::model::plugin::PluginInstallation;
 use crate::model::regions::OplogRegion;
 use crate::model::{
