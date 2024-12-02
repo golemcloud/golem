@@ -13,18 +13,21 @@
 // limitations under the License.
 
 use crate::gateway_api_definition::http::{CompiledHttpApiDefinition, VarInfo};
-use crate::gateway_binding::{GatewayBindingCompiled, StaticBinding};
+use crate::gateway_binding::{GatewayBindingCompiled, RibInputTypeMismatch, StaticBinding};
 use crate::gateway_binding::{GatewayRequestDetails, ResponseMappingCompiled};
 use crate::gateway_execution::router::RouterPattern;
+use crate::gateway_execution::to_response_failure::ToHttpResponseFromSafeDisplay;
 use crate::gateway_request::http_request::{router, InputHttpRequest};
 use crate::gateway_security::OpenIdClient;
 use async_trait::async_trait;
 use golem_common::model::IdempotencyKey;
+use golem_common::SafeDisplay;
 use golem_service_base::model::VersionedComponentId;
+use http::StatusCode;
 use openidconnect::{CsrfToken, Nonce};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::fmt::{Debug, Display};
+use std::fmt::Debug;
 
 // Every type of request (example: InputHttpRequest (which corresponds to a Route)) can have an instance of this resolver,
 // which will resolve the gateway binding equired for that request.
@@ -37,17 +40,35 @@ pub trait GatewayBindingResolver<Namespace, ApiDefinition> {
 }
 
 #[derive(Debug)]
-pub struct GatewayBindingResolverError(pub String);
+pub enum GatewayBindingResolverError {
+    RibInputTypeMismatch(RibInputTypeMismatch),
+    Internal(String),
+    RouteNotFound,
+}
 
-impl<A: AsRef<str>> From<A> for GatewayBindingResolverError {
-    fn from(message: A) -> Self {
-        GatewayBindingResolverError(message.as_ref().to_string())
+impl GatewayBindingResolverError {
+    pub fn internal(err: &str) -> Self {
+        GatewayBindingResolverError::Internal(err.to_string())
+    }
+
+    pub fn to_http_response(&self) -> poem::Response {
+        self.to_response_from_safe_display(|err| match err {
+            GatewayBindingResolverError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            GatewayBindingResolverError::RouteNotFound => StatusCode::NOT_FOUND,
+            GatewayBindingResolverError::RibInputTypeMismatch(_) => StatusCode::BAD_REQUEST,
+        })
     }
 }
 
-impl Display for GatewayBindingResolverError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Worker binding resolution error: {}", self.0)
+impl SafeDisplay for GatewayBindingResolverError {
+    fn to_safe_string(&self) -> String {
+        match self {
+            GatewayBindingResolverError::RibInputTypeMismatch(err) => {
+                format!("Input type mismatch: {}", err)
+            }
+            GatewayBindingResolverError::Internal(err) => format!("Internal: {}", err),
+            GatewayBindingResolverError::RouteNotFound => "RouteNotFound".to_string(),
+        }
     }
 }
 
@@ -171,7 +192,7 @@ impl<Namespace: Clone + Send + Sync + 'static>
             middlewares,
         } = router
             .check_path(&api_request.req_method, &path)
-            .ok_or("Failed to resolve route")?;
+            .ok_or(GatewayBindingResolverError::RouteNotFound)?;
 
         let zipped_path_params: HashMap<VarInfo, String> = {
             path_params
@@ -199,7 +220,12 @@ impl<Namespace: Clone + Send + Sync + 'static>
             headers.clone(),
             middlewares,
         )
-        .map_err(|err| format!("Failed to fetch input request details {}", err.join(", ")))?;
+        .map_err(|err| {
+            GatewayBindingResolverError::Internal(format!(
+                "Failed to fetch input request details {}",
+                err.join(", ")
+            ))
+        })?;
 
         match binding {
             GatewayBindingCompiled::FileServer(worker_binding) => internal::get_resolved_binding(
@@ -250,21 +276,23 @@ mod internal {
         let worker_name_opt = if let Some(worker_name_compiled) = &binding.worker_name_compiled {
             let resolve_rib_input = http_request_details
                 .resolve_rib_input_value(&worker_name_compiled.rib_input_type_info)
-                .map_err(|err| {
-                    format!(
-                        "Failed to resolve rib input value from http request details {}",
-                        err
-                    )
-                })?;
+                .map_err(GatewayBindingResolverError::RibInputTypeMismatch)?;
 
             let worker_name = rib::interpret_pure(
                 &worker_name_compiled.compiled_worker_name,
                 &resolve_rib_input,
             )
             .await
-            .map_err(|err| format!("Failed to evaluate worker name rib expression. {}", err))?
+            .map_err(|err| {
+                GatewayBindingResolverError::Internal(format!(
+                    "Failed to evaluate worker name rib expression. {}",
+                    err
+                ))
+            })?
             .get_literal()
-            .ok_or("Worker name is not a Rib expression that resolves to String".to_string())?
+            .ok_or(GatewayBindingResolverError::Internal(
+                "Worker name is not a Rib expression that resolves to String".to_string(),
+            ))?
             .as_string();
 
             Some(worker_name)
@@ -274,37 +302,33 @@ mod internal {
 
         let component_id = &binding.component_id;
 
-        let idempotency_key = if let Some(idempotency_key_compiled) =
-            &binding.idempotency_key_compiled
-        {
-            let resolve_rib_input = http_request_details
-                .resolve_rib_input_value(&idempotency_key_compiled.rib_input)
-                .map_err(|err| {
-                    format!(
-                        "Failed to resolve rib input value from http request details {} for idemptency key",
-                        err
-                    )
-                })?;
+        let idempotency_key =
+            if let Some(idempotency_key_compiled) = &binding.idempotency_key_compiled {
+                let resolve_rib_input = http_request_details
+                    .resolve_rib_input_value(&idempotency_key_compiled.rib_input)
+                    .map_err(GatewayBindingResolverError::RibInputTypeMismatch)?;
 
-            let idempotency_key_value = rib::interpret_pure(
-                &idempotency_key_compiled.compiled_idempotency_key,
-                &resolve_rib_input,
-            )
-            .await
-            .map_err(|err| err.to_string())?;
+                let idempotency_key_value = rib::interpret_pure(
+                    &idempotency_key_compiled.compiled_idempotency_key,
+                    &resolve_rib_input,
+                )
+                .await
+                .map_err(|err| GatewayBindingResolverError::Internal(err.to_string()))?;
 
-            let idempotency_key = idempotency_key_value
-                .get_literal()
-                .ok_or("Idempotency Key is not a string")?
-                .as_string();
+                let idempotency_key = idempotency_key_value
+                    .get_literal()
+                    .ok_or(GatewayBindingResolverError::internal(
+                        "Idempotency Key is not a string",
+                    ))?
+                    .as_string();
 
-            Some(IdempotencyKey::new(idempotency_key))
-        } else {
-            headers
-                .get("idempotency-key")
-                .and_then(|h| h.to_str().ok())
-                .map(|value| IdempotencyKey::new(value.to_string()))
-        };
+                Some(IdempotencyKey::new(idempotency_key))
+            } else {
+                headers
+                    .get("idempotency-key")
+                    .and_then(|h| h.to_str().ok())
+                    .map(|value| IdempotencyKey::new(value.to_string()))
+            };
 
         let worker_detail = WorkerDetail {
             component_id: component_id.clone(),

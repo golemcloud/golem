@@ -120,16 +120,19 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
             }
         }
 
-        let request_rib_input = request_details
+        let rib_input_from_request_details = request_details
             .resolve_rib_input_value(&resolved_worker_binding.compiled_response_mapping.rib_input)
             .map_err(|err| err.to_response_from_safe_display(|_| StatusCode::BAD_REQUEST))?;
 
-        let worker_rib_input = resolved_worker_binding
+        let rib_input_from_worker_details = resolved_worker_binding
             .worker_detail
             .resolve_rib_input_value(&resolved_worker_binding.compiled_response_mapping.rib_input)
             .map_err(|err| err.to_response_from_safe_display(|_| StatusCode::BAD_REQUEST))?;
 
-        Ok((request_rib_input, worker_rib_input))
+        Ok((
+            rib_input_from_request_details,
+            rib_input_from_worker_details,
+        ))
     }
 
     async fn get_rib_result(
@@ -172,9 +175,13 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
             .resolve_rib_inputs(session_id, session_store, request_details, resolved_binding)
             .await
         {
-            Ok((request_rib_input, worker_rib_input)) => {
+            Ok((rib_input_from_request_details, rib_input_from_worker_details)) => {
                 match self
-                    .get_rib_result(request_rib_input, worker_rib_input, resolved_binding)
+                    .get_rib_result(
+                        rib_input_from_request_details,
+                        rib_input_from_worker_details,
+                        resolved_binding,
+                    )
                     .await
                 {
                     Ok(result) => result.to_response(request_details, session_store).await,
