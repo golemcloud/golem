@@ -20,6 +20,7 @@ pub mod plugin;
 pub mod profile;
 pub mod worker;
 
+use crate::command::api_security::ApiSecuritySchemeSubcommand;
 use crate::diagnose::{self, diagnose};
 use crate::examples;
 use crate::model::{ComponentUriArg, GolemError, GolemResult};
@@ -34,7 +35,6 @@ use plugin::PluginSubcommand;
 use profile::ProfileSubCommand;
 use std::future::Future;
 use worker::WorkerSubcommand;
-use crate::command::api_security::ApiSecuritySchemeSubcommand;
 
 pub trait ComponentRefSplit<ProjectRef> {
     fn split(self) -> (ComponentUri, Option<ProjectRef>);
