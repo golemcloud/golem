@@ -389,6 +389,7 @@ pub fn to_api_definition_with_type_info(
                         idempotency_key_input: None,
                         binding_type: Some(GatewayBindingType::Default),
                         cors_preflight: None,
+                        response_mapping_output: None,
                     },
                 }
             })
