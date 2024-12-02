@@ -404,7 +404,7 @@ impl From<crate::services::rdbms::mysql::types::DbValue> for DbValue {
                 Self::Time(utils::naivetime_to_time(v))
             }
             crate::services::rdbms::mysql::types::DbValue::Datetime(v) => {
-                Self::Timestamp(utils::datetime_to_timestamp(v))
+                Self::Datetime(utils::datetime_to_timestamp(v))
             }
             crate::services::rdbms::mysql::types::DbValue::Year(v) => Self::Year(v),
             crate::services::rdbms::mysql::types::DbValue::Set(v) => Self::Set(v),

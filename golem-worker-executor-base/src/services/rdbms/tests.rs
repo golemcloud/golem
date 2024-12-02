@@ -79,6 +79,19 @@ async fn postgres_execute_test_create_insert_select(
     let db_address = postgres.rdbs[1].host_connection_string();
     let rdbms = rdbms_service.postgres();
 
+    let create_enum_statement = r#"
+            CREATE TYPE component_type AS ENUM ('regular', 'special');
+        "#;
+
+    rdbms_execute_test(
+        rdbms.clone(),
+        &db_address,
+        create_enum_statement,
+        vec![],
+        None,
+    )
+    .await;
+
     let create_table_statement = r#"
             CREATE TABLE IF NOT EXISTS components
             (
@@ -86,15 +99,16 @@ async fn postgres_execute_test_create_insert_select(
                 namespace           text    NOT NULL,
                 name                text    NOT NULL,
                 created_on          timestamp DEFAULT NOW(),
+                type                component_type,
                 tags                text[]
             );
         "#;
 
     let insert_statement = r#"
             INSERT INTO components
-            (component_id, namespace, name, tags)
+            (component_id, namespace, name, tags, type)
             VALUES
-            ($1, $2, $3, $4)
+            ($1, $2, $3, $4, $5::component_type);
         "#;
 
     rdbms_execute_test(
@@ -127,6 +141,9 @@ async fn postgres_execute_test_create_insert_select(
                 postgres_types::DbValuePrimitive::Text("tag2".to_string()),
                 postgres_types::DbValuePrimitive::Text("tag3".to_string()),
             ]),
+            postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::CustomEnum(
+                "regular".to_string(),
+            )),
         ];
 
         rdbms_execute_test(
@@ -174,12 +191,20 @@ async fn postgres_execute_test_create_insert_select(
             ),
             db_type_name: "TEXT[]".to_string(),
         },
+        postgres_types::DbColumn {
+            name: "type".to_string(),
+            ordinal: 4,
+            db_type: postgres_types::DbColumnType::Primitive(
+                postgres_types::DbColumnTypePrimitive::CustomEnum("component_type".to_string()),
+            ),
+            db_type_name: "component_type".to_string(),
+        },
     ];
 
     rdbms_query_test(
         rdbms.clone(),
         &db_address,
-        "SELECT component_id, namespace, name, tags FROM components ORDER BY created_on ASC",
+        "SELECT component_id, namespace, name, tags, type FROM components ORDER BY created_on ASC",
         vec![],
         Some(expected_columns),
         Some(rows),

@@ -363,11 +363,11 @@ impl TryFrom<DbValuePrimitive> for crate::services::rdbms::postgres::types::DbVa
                 }
             },
             DbValuePrimitive::Int4range(v) => {
-                let v = utils::int4range_to_bounds(v)?;
+                let v = utils::int4range_to_bounds(v);
                 Ok(Self::Int4range(v))
             }
             DbValuePrimitive::Int8range(v) => {
-                let v = utils::int8range_to_bounds(v)?;
+                let v = utils::int8range_to_bounds(v);
                 Ok(Self::Int8range(v))
             }
             DbValuePrimitive::Numrange(v) => {
@@ -386,6 +386,7 @@ impl TryFrom<DbValuePrimitive> for crate::services::rdbms::postgres::types::DbVa
                 let v = utils::daterange_to_bounds(v)?;
                 Ok(Self::Daterange(v))
             }
+            DbValuePrimitive::CustomEnum(v) => Ok(Self::CustomEnum(v)),
             DbValuePrimitive::Null => Ok(Self::Null),
         }
     }
@@ -450,25 +451,8 @@ impl From<crate::services::rdbms::postgres::types::DbValuePrimitive> for DbValue
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Oid(v) => Self::Oid(v),
             crate::services::rdbms::postgres::types::DbValuePrimitive::Inet(v) => match v {
-                IpAddr::V4(v) => {
-                    let octets = v.octets();
-                    Self::Inet(IpAddress::Ipv4((
-                        octets[0], octets[1], octets[2], octets[3],
-                    )))
-                }
-                IpAddr::V6(v) => {
-                    let segments = v.segments();
-                    Self::Inet(IpAddress::Ipv6((
-                        segments[0],
-                        segments[1],
-                        segments[2],
-                        segments[3],
-                        segments[4],
-                        segments[5],
-                        segments[6],
-                        segments[7],
-                    )))
-                }
+                IpAddr::V4(v) => Self::Inet(IpAddress::Ipv4(v.octets().into())),
+                IpAddr::V6(v) => Self::Inet(IpAddress::Ipv6(v.segments().into())),
             },
             crate::services::rdbms::postgres::types::DbValuePrimitive::Tsrange(v) => {
                 Self::Tsrange(utils::bounds_to_tsrange(v))
@@ -487,6 +471,9 @@ impl From<crate::services::rdbms::postgres::types::DbValuePrimitive> for DbValue
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Numrange(v) => {
                 Self::Numrange(utils::bounds_to_numrange(v))
+            }
+            crate::services::rdbms::postgres::types::DbValuePrimitive::CustomEnum(v) => {
+                Self::CustomEnum(v)
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Null => Self::Null,
         }
@@ -600,6 +587,9 @@ impl From<crate::services::rdbms::postgres::types::DbColumnTypePrimitive>
                 Self::Daterange
             }
             crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Uuid => Self::Uuid,
+            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::CustomEnum(v) => {
+                Self::CustomEnum(v)
+            }
         }
     }
 }
@@ -643,32 +633,3 @@ impl From<crate::services::rdbms::Error> for Error {
         }
     }
 }
-
-// impl From<rdbms_types::DbColumnTypeMeta> for DbColumnTypeMeta {
-//     fn from(value: rdbms_types::DbColumnTypeMeta) -> Self {
-//         Self {
-//             name: value.name,
-//             db_type: value.db_type.into(),
-//             db_type_flags: value
-//                 .db_type_flags
-//                 .iter()
-//                 .fold(DbColumnTypeFlags::empty(), |a, b| a | b.clone().into()),
-//             foreign_key: value.foreign_key,
-//         }
-//     }
-// }
-//
-// impl From<rdbms_types::DbColumnTypeFlag> for DbColumnTypeFlags {
-//     fn from(value: rdbms_types::DbColumnTypeFlag) -> Self {
-//         match value {
-//             rdbms_types::DbColumnTypeFlag::PrimaryKey => DbColumnTypeFlags::PRIMARY_KEY,
-//             rdbms_types::DbColumnTypeFlag::ForeignKey => DbColumnTypeFlags::FOREIGN_KEY,
-//             rdbms_types::DbColumnTypeFlag::Unique => DbColumnTypeFlags::UNIQUE,
-//             rdbms_types::DbColumnTypeFlag::Nullable => DbColumnTypeFlags::NULLABLE,
-//             rdbms_types::DbColumnTypeFlag::Generated => DbColumnTypeFlags::GENERATED,
-//             rdbms_types::DbColumnTypeFlag::AutoIncrement => DbColumnTypeFlags::AUTO_INCREMENT,
-//             rdbms_types::DbColumnTypeFlag::DefaultValue => DbColumnTypeFlags::DEFAULT_VALUE,
-//             rdbms_types::DbColumnTypeFlag::Indexed => DbColumnTypeFlags::INDEXED,
-//         }
-//     }
-// }

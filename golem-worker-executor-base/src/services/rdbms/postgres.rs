@@ -379,16 +379,6 @@ fn bind_value(
                     })?;
                     Ok(query.bind(values))
                 }
-                DbValuePrimitive::Oid(_) => {
-                    let values: Vec<Oid> = get_plain_values(vs, |v| {
-                        if let DbValuePrimitive::Oid(v) = v {
-                            Some(Oid(v))
-                        } else {
-                            None
-                        }
-                    })?;
-                    Ok(query.bind(values))
-                }
                 DbValuePrimitive::Int4range(_) => {
                     let values: Vec<_> = get_plain_values(vs, |v| {
                         if let DbValuePrimitive::Int4range(v) = v {
@@ -439,10 +429,20 @@ fn bind_value(
                     })?;
                     Ok(query.bind(values))
                 }
-                DbValuePrimitive::Daterange(_) => {
+                DbValuePrimitive::Oid(_) => {
                     let values: Vec<_> = get_plain_values(vs, |v| {
-                        if let DbValuePrimitive::Daterange(v) = v {
-                            Some(get_range(v))
+                        if let DbValuePrimitive::Oid(v) = v {
+                            Some(Oid(v))
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::CustomEnum(_) => {
+                    let values: Vec<_> = get_plain_values(vs, |v| {
+                        if let DbValuePrimitive::CustomEnum(v) = v {
+                            Some(v)
                         } else {
                             None
                         }
@@ -458,10 +458,11 @@ fn bind_value(
                         }
                     })?;
                     Ok(query.bind(values))
-                } // _ => Err(format!(
-                  //     "Array param element '{}' with index 0 is not supported",
-                  //     first
-                  // )),
+                }
+                _ => Err(format!(
+                    "Array param element '{}' with index 0 is not supported",
+                    first
+                )),
             }
         }
         _ => Ok(query),
@@ -505,6 +506,7 @@ fn bind_value_primitive(
         DbValuePrimitive::Tstzrange(v) => Ok(query.bind(get_range(v))),
         DbValuePrimitive::Daterange(v) => Ok(query.bind(get_range(v))),
         DbValuePrimitive::Oid(v) => Ok(query.bind(Oid(v))),
+        DbValuePrimitive::CustomEnum(v) => Ok(query.bind(v)),
         DbValuePrimitive::Null => Ok(query.bind(None::<String>)),
         // _ => Err(format!("Type '{}' is not supported", value)),
     }
@@ -1018,24 +1020,38 @@ fn get_db_value(index: usize, row: &sqlx::postgres::PgRow) -> Result<DbValue, St
         _ => match column.type_info().kind() {
             // enum in postgres is custom type
             PgTypeKind::Enum(_) => {
-                let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
+                // let v = row.try_get_raw(index).map_err(|e| e.to_string())?;
+                // let v = <Option<String> as Decode<sqlx::Postgres>>::decode(v).map_err(|e| e.to_string())?;
+                // match v {
+                //     Some(v) => DbValue::Primitive(DbValuePrimitive::Custom(v)),
+                //     None => DbValue::Primitive(DbValuePrimitive::Null),
+                // }
+                let v: Option<PgEnum> = row.try_get(index).map_err(|e| e.to_string())?;
                 match v {
-                    Some(v) => DbValue::Primitive(DbValuePrimitive::Text(v)),
+                    Some(v) => DbValue::Primitive(DbValuePrimitive::CustomEnum(v.0)),
                     None => DbValue::Primitive(DbValuePrimitive::Null),
                 }
             }
-            //     PgTypeKind::Array(element) => match element.kind() {
-            //         PgTypeKind::Enum(_) => {
-            //             let vs: Option<Vec<String>> = row.try_get(index).map_err(|e| e.to_string())?;
-            //             match vs {
-            //                 Some(vs) => {
-            //                     DbValue::Array(vs.into_iter().map(DbValuePrimitive::Text).collect())
-            //                 }
-            //                 None => DbValue::Array(vec![]),
-            //             }
-            //         }
-            //         _ => Err(format!("Type '{}' is not supported", type_name))?,
-            //     },
+            PgTypeKind::Array(element) if matches!(element.kind(), PgTypeKind::Enum(_)) => {
+                // // let vs: Option<Vec<String>> = row.try_get(index).map_err(|e| e.to_string())?;
+                // let v = row.try_get_raw(index).map_err(|e| e.to_string())?;
+                // let vs = <Option<Vec<String>> as Decode<sqlx::Postgres>>::decode(v).map_err(|e| e.to_string())?;
+                // match vs {
+                //     Some(vs) => {
+                //         DbValue::Array(vs.into_iter().map(DbValuePrimitive::Custom).collect())
+                //     }
+                //     None => DbValue::Array(vec![]),
+                // }
+                let vs: Option<Vec<PgEnum>> = row.try_get(index).map_err(|e| e.to_string())?;
+                match vs {
+                    Some(vs) => DbValue::Array(
+                        vs.into_iter()
+                            .map(|v| DbValuePrimitive::CustomEnum(v.0))
+                            .collect(),
+                    ),
+                    None => DbValue::Primitive(DbValuePrimitive::Null),
+                }
+            }
             _ => Err(format!("Type '{}' is not supported", type_name))?,
         },
         // _ => Err(format!("Type '{}' is not supported", type_name))?,
@@ -1130,8 +1146,13 @@ impl TryFrom<&sqlx::postgres::PgTypeInfo> for DbColumnType {
             pg_type_name::BIT_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Bit)),
             pg_type_name::VARBIT_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Varbit)),
             pg_type_name::OID_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Oid)),
-            _ => match *type_kind {
-                PgTypeKind::Enum(_) => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Text)),
+            _ => match type_kind {
+                PgTypeKind::Enum(_) => Ok(DbColumnType::Primitive(
+                    DbColumnTypePrimitive::CustomEnum(type_name.to_string()),
+                )),
+                PgTypeKind::Array(element) if matches!(element.kind(), PgTypeKind::Enum(_)) => Ok(
+                    DbColumnType::Array(DbColumnTypePrimitive::CustomEnum(type_name.to_string())),
+                ),
                 _ => Err(format!("Type '{}' is not supported", type_name))?,
             },
         }
@@ -1156,6 +1177,47 @@ fn get_range<T>(bounds: (Bound<T>, Bound<T>)) -> PgRange<T> {
     PgRange {
         start: bounds.0,
         end: bounds.1,
+    }
+}
+
+struct PgEnum(String);
+
+impl From<PgEnum> for String {
+    fn from(value: PgEnum) -> Self {
+        value.0
+    }
+}
+
+impl sqlx::types::Type<sqlx::Postgres> for PgEnum {
+    fn type_info() -> sqlx::postgres::PgTypeInfo {
+        <&str as sqlx::types::Type<sqlx::Postgres>>::type_info()
+    }
+
+    fn compatible(ty: &sqlx::postgres::PgTypeInfo) -> bool {
+        matches!(ty.kind(), PgTypeKind::Enum(_))
+    }
+}
+
+impl sqlx::postgres::PgHasArrayType for PgEnum {
+    fn array_type_info() -> sqlx::postgres::PgTypeInfo {
+        <&str as sqlx::postgres::PgHasArrayType>::array_type_info()
+    }
+
+    fn array_compatible(ty: &sqlx::postgres::PgTypeInfo) -> bool {
+        match ty.kind() {
+            PgTypeKind::Array(ty) if matches!(ty.kind(), PgTypeKind::Enum(_)) => true,
+            _ => false,
+        }
+    }
+}
+
+impl<'r> sqlx::Decode<'r, sqlx::Postgres> for PgEnum {
+    fn decode(
+        value: sqlx::postgres::PgValueRef<'r>,
+    ) -> Result<Self, Box<dyn std::error::Error + 'static + Send + Sync>> {
+        Ok(Self(<String as sqlx::Decode<sqlx::Postgres>>::decode(
+            value,
+        )?))
     }
 }
 
@@ -1301,6 +1363,7 @@ pub mod types {
         Tsrange,
         Tstzrange,
         Daterange,
+        CustomEnum(String),
         Oid,
     }
 
@@ -1339,6 +1402,7 @@ pub mod types {
                 DbColumnTypePrimitive::Tstzrange => write!(f, "tstzrange"),
                 DbColumnTypePrimitive::Daterange => write!(f, "daterange"),
                 DbColumnTypePrimitive::Oid => write!(f, "oid"),
+                DbColumnTypePrimitive::CustomEnum(v) => write!(f, "custom {}", v),
             }
         }
     }
@@ -1401,6 +1465,7 @@ pub mod types {
             ),
         ),
         Daterange((Bound<chrono::NaiveDate>, Bound<chrono::NaiveDate>)),
+        CustomEnum(String),
         Oid(u32),
         Null,
     }
@@ -1440,6 +1505,7 @@ pub mod types {
                 DbValuePrimitive::Tstzrange(v) => write!(f, "{:?}, {:?}", v.0, v.1),
                 DbValuePrimitive::Daterange(v) => write!(f, "{:?}, {:?}", v.0, v.1),
                 DbValuePrimitive::Oid(v) => write!(f, "{}", v),
+                DbValuePrimitive::CustomEnum(v) => write!(f, "{}", v),
                 DbValuePrimitive::Null => write!(f, "NULL"),
             }
         }

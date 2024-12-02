@@ -156,22 +156,18 @@ pub(crate) mod utils {
         (year, month, day, hour, minute, second, nanosecond, offset)
     }
 
-    pub(crate) fn int4range_to_bounds(
-        value: Int4range,
-    ) -> Result<(Bound<i32>, Bound<i32>), String> {
+    pub(crate) fn int4range_to_bounds(value: Int4range) -> (Bound<i32>, Bound<i32>) {
         let (lower, upper) = value;
         let lower = to_bounds(lower);
         let upper = to_bounds(upper);
-        Ok((lower, upper))
+        (lower, upper)
     }
 
-    pub(crate) fn int8range_to_bounds(
-        value: Int8range,
-    ) -> Result<(Bound<i64>, Bound<i64>), String> {
+    pub(crate) fn int8range_to_bounds(value: Int8range) -> (Bound<i64>, Bound<i64>) {
         let (lower, upper) = value;
         let lower = to_bounds(lower);
         let upper = to_bounds(upper);
-        Ok((lower, upper))
+        (lower, upper)
     }
 
     pub(crate) fn numrange_to_bounds(

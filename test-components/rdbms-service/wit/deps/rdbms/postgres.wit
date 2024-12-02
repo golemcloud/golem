@@ -66,7 +66,8 @@ interface postgres {
     tsrange,
     tstzrange,
     daterange,
-    oid
+    oid,
+    custom-enum(string)
     //     macaddr,
     //     cidr,
     //     point,
@@ -125,6 +126,7 @@ interface postgres {
     tstzrange(tstzrange),
     daterange(daterange),
     oid(u32),
+    custom-enum(string),
     null
   }
 
