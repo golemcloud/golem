@@ -13,6 +13,7 @@ use golem_wasm_ast::analysis::analysed_type::{
 use golem_wasm_ast::analysis::protobuf::Type;
 use golem_wasm_ast::analysis::AnalysedType;
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -507,6 +508,26 @@ impl IntoValue for Uri {
 
     fn get_type() -> AnalysedType {
         record(vec![field("value", str())])
+    }
+}
+
+impl IntoValue for Instant {
+    fn into_value(self) -> Value {
+        Value::U64(self.elapsed().as_nanos() as u64)
+    }
+
+    fn get_type() -> AnalysedType {
+        u64()
+    }
+}
+
+impl IntoValue for Duration {
+    fn into_value(self) -> Value {
+        Value::U64(self.as_nanos() as u64)
+    }
+
+    fn get_type() -> AnalysedType {
+        u64()
     }
 }
 
