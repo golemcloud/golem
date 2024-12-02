@@ -4505,6 +4505,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "bigdecimal",
  "bincode",
  "bytes 1.8.0",
  "chrono",

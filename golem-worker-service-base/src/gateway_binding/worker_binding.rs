@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
 use crate::gateway_binding::WorkerBindingCompiled;
@@ -28,7 +27,7 @@ pub struct WorkerBinding {
 }
 
 // ResponseMapping will consist of actual logic such as invoking worker functions
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResponseMapping(pub Expr);
 
 impl From<WorkerBindingCompiled> for WorkerBinding {
