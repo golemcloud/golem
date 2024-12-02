@@ -1028,7 +1028,7 @@ fn update_cargo_toml(
         regenerate_cargo_package_component(
             &cargo_toml,
             &ctx.application
-                .component_source_wit(component_name, ctx.profile()),
+                .component_generated_wit(component_name, ctx.profile()),
             None,
         )?
     }
