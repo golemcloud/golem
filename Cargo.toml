@@ -43,6 +43,7 @@ exclude = [
     "test-components/key-value-service",
     "test-components/logging",
     "test-components/networking",
+    "test-components/oplog-processor",
     "test-components/option-service",
     "test-components/promise",
     "test-components/read-stdin",

@@ -1,0 +1,10 @@
+package golem:component;
+
+interface api {
+  get-invoked-functions: func() -> list<string>;
+}
+
+world oplog-processor {
+  export api;
+  export golem:api/oplog-processor@1.1.0-rc1;
+}
