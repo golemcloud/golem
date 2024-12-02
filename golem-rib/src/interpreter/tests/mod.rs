@@ -27,9 +27,9 @@ mod comprehensive_test {
     async fn test_interpreter_complex_rib() {
         let expr = r#"
 
-              let str1: str = request.body.name;
-              let str2: str = request.headers.name;
-              let str3: str = request.path.name;
+              let str1: string = request.body.name;
+              let str2: string = request.headers.name;
+              let str3: string = request.path.name;
 
               let unused = function-unit-response(str1);
 

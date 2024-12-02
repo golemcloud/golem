@@ -76,8 +76,8 @@ impl Display for TypeName {
             TypeName::U64 => write!(f, "u64"),
             TypeName::F32 => write!(f, "f32"),
             TypeName::F64 => write!(f, "f64"),
-            TypeName::Chr => write!(f, "chr"),
-            TypeName::Str => write!(f, "str"),
+            TypeName::Chr => write!(f, "char"),
+            TypeName::Str => write!(f, "string"),
             TypeName::List(inner_type) => write!(f, "list<{}>", inner_type),
             TypeName::Tuple(inner_types) => {
                 write!(f, "tuple<")?;
@@ -457,8 +457,8 @@ where
         attempt(string("u64").map(|_| TypeName::U64)),
         attempt(string("f32").map(|_| TypeName::F32)),
         attempt(string("f64").map(|_| TypeName::F64)),
-        attempt(string("chr").map(|_| TypeName::Chr)),
-        attempt(string("str").map(|_| TypeName::Str)),
+        attempt(string("char").map(|_| TypeName::Chr)),
+        attempt(string("string").map(|_| TypeName::Str)),
     ))
     .skip(spaces())
 }
@@ -590,8 +590,8 @@ mod type_name_tests {
         parse_and_compare("u64", TypeName::U64);
         parse_and_compare("f32", TypeName::F32);
         parse_and_compare("f64", TypeName::F64);
-        parse_and_compare("chr", TypeName::Chr);
-        parse_and_compare("str", TypeName::Str);
+        parse_and_compare("char", TypeName::Chr);
+        parse_and_compare("string", TypeName::Str);
     }
 
     #[test]

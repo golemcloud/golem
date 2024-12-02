@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::gateway_middleware::Cors;
+use crate::gateway_middleware::{HttpAuthenticationMiddleware, HttpCors};
 
 // Static bindings must NOT contain Rib, in either pre-compiled or raw form,
 // as it may introduce unnecessary latency
@@ -22,17 +22,23 @@ use crate::gateway_middleware::Cors;
 // don't need to pass through to the backend.
 #[derive(Debug, Clone, PartialEq)]
 pub enum StaticBinding {
-    HttpCorsPreflight(Cors),
+    HttpCorsPreflight(Box<HttpCors>),
+    HttpAuthCallBack(Box<HttpAuthenticationMiddleware>),
 }
 
 impl StaticBinding {
-    pub fn from_http_cors(cors: Cors) -> Self {
-        StaticBinding::HttpCorsPreflight(cors)
+    pub fn http_auth_call_back(value: HttpAuthenticationMiddleware) -> StaticBinding {
+        StaticBinding::HttpAuthCallBack(Box::new(value))
     }
 
-    pub fn get_cors_preflight(&self) -> Option<Cors> {
+    pub fn from_http_cors(cors: HttpCors) -> Self {
+        StaticBinding::HttpCorsPreflight(Box::new(cors))
+    }
+
+    pub fn get_cors_preflight(&self) -> Option<HttpCors> {
         match self {
-            StaticBinding::HttpCorsPreflight(preflight) => Some(preflight.clone()),
+            StaticBinding::HttpCorsPreflight(preflight) => Some(*preflight.clone()),
+            _ => None,
         }
     }
 }
@@ -44,7 +50,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::StaticBinding> for Sta
     ) -> Result<Self, String> {
         match value.static_binding {
             Some(golem_api_grpc::proto::golem::apidefinition::static_binding::StaticBinding::HttpCorsPreflight(cors_preflight)) => {
-                Ok(StaticBinding::HttpCorsPreflight(cors_preflight.try_into()?))
+                Ok(StaticBinding::HttpCorsPreflight(Box::new(cors_preflight.try_into()?)))
 
             }
             _ => Err("Unknown static binding type".to_string()),
@@ -58,7 +64,14 @@ impl From<StaticBinding> for golem_api_grpc::proto::golem::apidefinition::Static
             StaticBinding::HttpCorsPreflight(cors) => {
                 golem_api_grpc::proto::golem::apidefinition::StaticBinding {
                     static_binding: Some(golem_api_grpc::proto::golem::apidefinition::static_binding::StaticBinding::HttpCorsPreflight(
-                        golem_api_grpc::proto::golem::apidefinition::CorsPreflight::from(cors)
+                        golem_api_grpc::proto::golem::apidefinition::CorsPreflight::from(*cors)
+                    )),
+                }
+            }
+            StaticBinding::HttpAuthCallBack(_) => {
+                golem_api_grpc::proto::golem::apidefinition::StaticBinding {
+                    static_binding: Some(golem_api_grpc::proto::golem::apidefinition::static_binding::StaticBinding::AuthCallback(
+                        golem_api_grpc::proto::golem::apidefinition::AuthCallBack{}
                     )),
                 }
             }

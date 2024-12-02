@@ -22,14 +22,17 @@ use async_trait::async_trait;
 use golem_common::model::HasAccountId;
 use tracing::error;
 
-// TODO; We could optimise this further
-// to pick the exact API Definition (instead of a vector),
-// by doing route resolution at this stage rather than
-// delegating that task to worker-binding resolver.
-// However, requires lot more work.
+// To lookup the set of API Definitions based on an incoming input.
+// The input can be HttpRequest or GrpcRequest and so forth, and ApiDefinition
+// depends on what is the input. There cannot be multiple types of ApiDefinition
+// for a given input type.
 #[async_trait]
-pub trait ApiDefinitionsLookup<Input, ApiDefinition> {
-    async fn get(&self, input: Input) -> Result<Vec<ApiDefinition>, ApiDefinitionLookupError>;
+pub trait ApiDefinitionsLookup<Input> {
+    type ApiDefinition;
+    async fn get(
+        &self,
+        input: &Input,
+    ) -> Result<Vec<Self::ApiDefinition>, ApiDefinitionLookupError>;
 }
 
 pub struct ApiDefinitionLookupError(pub String);
@@ -53,24 +56,21 @@ impl<AuthCtx, Namespace> HttpApiDefinitionLookup<AuthCtx, Namespace> {
 }
 
 #[async_trait]
-impl<AuthCtx, Namespace: HasAccountId + Send + Sync>
-    ApiDefinitionsLookup<InputHttpRequest, CompiledHttpApiDefinition<Namespace>>
+impl<AuthCtx, Namespace: HasAccountId + Send + Sync> ApiDefinitionsLookup<InputHttpRequest>
     for HttpApiDefinitionLookup<AuthCtx, Namespace>
 {
+    type ApiDefinition = CompiledHttpApiDefinition<Namespace>;
+
     async fn get(
         &self,
-        input_http_request: InputHttpRequest,
-    ) -> Result<Vec<CompiledHttpApiDefinition<Namespace>>, ApiDefinitionLookupError> {
+        input_http_request: &InputHttpRequest,
+    ) -> Result<Vec<Self::ApiDefinition>, ApiDefinitionLookupError> {
         // HOST should exist in Http Request
-        let host = input_http_request
-            .get_host()
-            .ok_or(ApiDefinitionLookupError(
-                "Host header not found".to_string(),
-            ))?;
+        let host = &input_http_request.host;
 
         let http_api_defs = self
             .deployment_service
-            .get_definitions_by_site(&host)
+            .get_definitions_by_site(host)
             .await
             .map_err(|err| {
                 error!("Error getting API definitions from the repo: {}", err);

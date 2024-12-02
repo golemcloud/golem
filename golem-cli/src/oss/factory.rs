@@ -14,6 +14,7 @@
 
 use crate::clients::api_definition::ApiDefinitionClient;
 use crate::clients::api_deployment::ApiDeploymentClient;
+use crate::clients::api_security::ApiSecurityClient;
 use crate::clients::component::ComponentClient;
 use crate::clients::file_download;
 use crate::clients::health_check::HealthCheckClient;
@@ -24,6 +25,7 @@ use crate::factory::ServiceFactory;
 use crate::model::GolemError;
 use crate::oss::clients::api_definition::ApiDefinitionClientLive;
 use crate::oss::clients::api_deployment::ApiDeploymentClientLive;
+use crate::oss::clients::api_security::ApiSecurityClientLive;
 use crate::oss::clients::component::ComponentClientLive;
 use crate::oss::clients::health_check::HealthCheckClientLive;
 use crate::oss::clients::plugin::PluginClientLive;
@@ -177,6 +179,16 @@ impl ServiceFactory for OssServiceFactory {
     ) -> Box<dyn ApiDeploymentClient<ProjectContext = Self::ProjectContext> + Send + Sync> {
         Box::new(ApiDeploymentClientLive {
             client: golem_client::api::ApiDeploymentClientLive {
+                context: self.worker_context(),
+            },
+        })
+    }
+
+    fn api_security_scheme_client(
+        &self,
+    ) -> Box<dyn ApiSecurityClient<ProjectContext = Self::ProjectContext> + Send + Sync> {
+        Box::new(ApiSecurityClientLive {
+            client: golem_client::api::ApiSecurityClientLive {
                 context: self.worker_context(),
             },
         })

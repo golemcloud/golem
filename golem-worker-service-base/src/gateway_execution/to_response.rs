@@ -13,29 +13,38 @@
 // limitations under the License.
 
 use crate::api::WorkerApiBaseError;
-use crate::gateway_binding::{GatewayRequestDetails, RibInputTypeMismatch};
+use crate::gateway_binding::HttpRequestDetails;
+use crate::gateway_execution::auth_call_back_binding_handler::AuthCallBackResult;
 use crate::gateway_execution::file_server_binding_handler::{
     FileServerBindingError, FileServerBindingResult,
 };
-use crate::gateway_middleware::{Cors as CorsPreflight, Middlewares};
-use crate::gateway_rib_interpreter::EvaluationError;
+use crate::gateway_execution::gateway_session::GatewaySessionStore;
+use crate::gateway_execution::to_response_failure::ToHttpResponseFromSafeDisplay;
+use crate::gateway_middleware::HttpCors as CorsPreflight;
+use async_trait::async_trait;
 use http::header::*;
 use http::StatusCode;
 use poem::Body;
 use poem::IntoResponse;
 use rib::RibResult;
 
-pub trait ToResponse<A> {
-    fn to_response(self, request_details: &GatewayRequestDetails, middlewares: &Middlewares) -> A;
+#[async_trait]
+pub trait ToHttpResponse {
+    async fn to_response(
+        self,
+        request_details: &HttpRequestDetails,
+        session_store: &GatewaySessionStore,
+    ) -> poem::Response;
 }
 
-impl ToResponse<poem::Response> for FileServerBindingResult {
-    fn to_response(
+#[async_trait]
+impl ToHttpResponse for FileServerBindingResult {
+    async fn to_response(
         self,
-        _request_details: &GatewayRequestDetails,
-        middlewares: &Middlewares,
+        _request_details: &HttpRequestDetails,
+        _session_store: &GatewaySessionStore,
     ) -> poem::Response {
-        let mut response = match self {
+        match self {
             Ok(data) => Body::from_bytes_stream(data.data)
                 .with_content_type(data.binding_details.content_type.to_string())
                 .with_status(data.binding_details.status_code)
@@ -54,19 +63,17 @@ impl ToResponse<poem::Response> for FileServerBindingResult {
                 .body(Body::from_string(
                     format!("Error while processing rib result: {}", e).to_string(),
                 )),
-        };
-
-        middlewares.transform_http_response(&mut response);
-        response
+        }
     }
 }
 
 // Preflight (OPTIONS) response that will consist of all configured CORS headers
-impl ToResponse<poem::Response> for CorsPreflight {
-    fn to_response(
+#[async_trait]
+impl ToHttpResponse for CorsPreflight {
+    async fn to_response(
         self,
-        _request_details: &GatewayRequestDetails,
-        _middlewares: &Middlewares,
+        _request_details: &HttpRequestDetails,
+        _session_store: &GatewaySessionStore,
     ) -> poem::Response {
         let mut response = poem::Response::builder().status(StatusCode::OK).finish();
 
@@ -107,74 +114,75 @@ impl ToResponse<poem::Response> for CorsPreflight {
     }
 }
 
-impl ToResponse<poem::Response> for RibResult {
-    fn to_response(
+#[async_trait]
+impl ToHttpResponse for RibResult {
+    async fn to_response(
         self,
-        request_details: &GatewayRequestDetails,
-        middlewares: &Middlewares,
+        request_details: &HttpRequestDetails,
+        _session_store: &GatewaySessionStore,
     ) -> poem::Response {
         match internal::IntermediateHttpResponse::from(&self) {
-            Ok(intermediate_response) => {
-                intermediate_response.to_http_response(request_details, middlewares)
-            }
-            Err(e) => poem::Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body(Body::from_string(format!(
-                    "Error when  converting worker response to http response. Error: {}",
-                    e
-                ))),
+            Ok(intermediate_response) => intermediate_response.to_http_response(request_details),
+            Err(e) => e.to_response_from_safe_display(|_| StatusCode::INTERNAL_SERVER_ERROR),
         }
     }
 }
 
-impl ToResponse<poem::Response> for RibInputTypeMismatch {
-    fn to_response(
+#[async_trait]
+impl ToHttpResponse for AuthCallBackResult {
+    async fn to_response(
         self,
-        _request_details: &GatewayRequestDetails,
-        middlewares: &Middlewares,
+        _request_details: &HttpRequestDetails,
+        _session_store: &GatewaySessionStore,
     ) -> poem::Response {
-        let mut response = poem::Response::builder()
-            .status(StatusCode::BAD_REQUEST)
-            .body(Body::from_string(format!("Error {}", self.0).to_string()));
+        match self {
+            Ok(success) => {
+                let access_token = success.access_token;
+                let id_token = success.id_token;
+                let session_id = success.session;
 
-        middlewares.transform_http_response(&mut response);
-        response
-    }
-}
+                let mut response = poem::Response::builder()
+                    .status(StatusCode::FOUND)
+                    .header("Location", success.target_path)
+                    .header(
+                        "Set-Cookie",
+                        format!(
+                            "access_token={}; HttpOnly; Secure; Path=/; SameSite=None",
+                            access_token
+                        )
+                        .as_str(),
+                    );
 
-impl ToResponse<poem::Response> for EvaluationError {
-    fn to_response(
-        self,
-        _request_details: &GatewayRequestDetails,
-        middlewares: &Middlewares,
-    ) -> poem::Response {
-        let mut response = poem::Response::builder()
-            .status(StatusCode::INTERNAL_SERVER_ERROR)
-            .body(Body::from_string(format!("Error {}", self).to_string()));
+                if let Some(id_token) = id_token {
+                    response = response.header(
+                        "Set-Cookie",
+                        format!(
+                            "id_token={}; HttpOnly; Secure; Path=/; SameSite=None",
+                            id_token
+                        )
+                        .as_str(),
+                    )
+                }
 
-        middlewares.transform_http_response(&mut response);
+                response = response.header(
+                    "Set-Cookie",
+                    format!(
+                        "session_id={}; HttpOnly; Secure; Path=/; SameSite=Strict",
+                        session_id
+                    )
+                    .as_str(),
+                );
 
-        response
-    }
-}
+                response.body(())
+            }
 
-impl ToResponse<poem::Response> for String {
-    fn to_response(
-        self,
-        _request_details: &GatewayRequestDetails,
-        middlewares: &Middlewares,
-    ) -> poem::Response {
-        let mut response = poem::Response::builder()
-            .status(StatusCode::INTERNAL_SERVER_ERROR)
-            .body(Body::from_string(self.to_string()));
-
-        middlewares.transform_http_response(&mut response);
-        response
+            Err(err) => err.to_response_from_safe_display(|_| StatusCode::UNAUTHORIZED),
+        }
     }
 }
 
 mod internal {
-    use crate::gateway_binding::GatewayRequestDetails;
+    use crate::gateway_binding::HttpRequestDetails;
     use crate::gateway_execution::http_content_type_mapper::{
         ContentTypeHeaders, HttpContentTypeResponseMapper,
     };
@@ -184,10 +192,8 @@ mod internal {
     use crate::getter::{get_response_headers_or_default, get_status_code_or_ok, GetterExt};
     use crate::path::Path;
 
-    use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-
-    use crate::gateway_middleware::Middlewares;
     use crate::headers::ResolvedResponseHeaders;
+    use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use poem::{Body, IntoResponse, ResponseParts};
     use rib::RibResult;
 
@@ -229,8 +235,7 @@ mod internal {
 
         pub(crate) fn to_http_response(
             &self,
-            request_details: &GatewayRequestDetails,
-            middleware: &Middlewares,
+            request_details: &HttpRequestDetails,
         ) -> poem::Response {
             let response_content_type = self.headers.get_content_type();
             let response_headers = self.headers.headers.clone();
@@ -238,14 +243,12 @@ mod internal {
             let status = &self.status;
             let evaluation_result = &self.body;
 
-            let accepted_content_types = match request_details {
-                GatewayRequestDetails::Http(http) => http.get_accept_content_type_header(),
-            };
+            let accepted_content_types = request_details.get_accept_content_type_header();
 
             let content_type =
                 ContentTypeHeaders::from(response_content_type, accepted_content_types);
 
-            let mut response = match evaluation_result {
+            let response = match evaluation_result {
                 Some(type_annotated_value) => {
                     match type_annotated_value.to_http_resp_with_content_type(content_type) {
                         Ok(body_with_header) => {
@@ -271,7 +274,6 @@ mod internal {
                 }
             };
 
-            middleware.transform_http_response(&mut response);
             response
         }
     }
@@ -279,14 +281,18 @@ mod internal {
 
 #[cfg(test)]
 mod test {
+    use async_trait::async_trait;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::protobuf::Type;
     use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, TypedRecord};
+    use std::sync::Arc;
     use test_r::test;
 
-    use crate::gateway_binding::{GatewayRequestDetails, HttpRequestDetails};
-    use crate::gateway_execution::to_response::ToResponse;
-    use crate::gateway_middleware::Middlewares;
+    use crate::gateway_binding::HttpRequestDetails;
+    use crate::gateway_execution::gateway_session::{
+        DataKey, DataValue, GatewaySession, GatewaySessionError, SessionId,
+    };
+    use crate::gateway_execution::to_response::ToHttpResponse;
     use http::header::CONTENT_TYPE;
     use http::StatusCode;
     use rib::RibResult;
@@ -335,10 +341,11 @@ mod test {
 
         let evaluation_result: RibResult = RibResult::Val(record);
 
-        let http_response: poem::Response = evaluation_result.to_response(
-            &GatewayRequestDetails::Http(HttpRequestDetails::empty()),
-            &Middlewares::default(),
-        );
+        let session_store: Arc<dyn GatewaySession + Send + Sync> = Arc::new(TestSessionStore);
+
+        let http_response: poem::Response = evaluation_result
+            .to_response(&HttpRequestDetails::empty(), &session_store)
+            .await;
 
         let (response_parts, body) = http_response.into_parts();
         let body = body.into_string().await.unwrap();
@@ -363,10 +370,11 @@ mod test {
         let evaluation_result: RibResult =
             RibResult::Val(TypeAnnotatedValue::Str("Healthy".to_string()));
 
-        let http_response: poem::Response = evaluation_result.to_response(
-            &GatewayRequestDetails::Http(HttpRequestDetails::empty()),
-            &Middlewares::default(),
-        );
+        let session_store: Arc<dyn GatewaySession + Send + Sync> = Arc::new(TestSessionStore);
+
+        let http_response: poem::Response = evaluation_result
+            .to_response(&HttpRequestDetails::empty(), &session_store)
+            .await;
 
         let (response_parts, body) = http_response.into_parts();
         let body = body.into_string().await.unwrap();
@@ -385,5 +393,31 @@ mod test {
         assert_eq!(body, expected_body);
         assert_eq!(headers.clone(), expected_headers);
         assert_eq!(status, expected_status);
+    }
+
+    struct TestSessionStore;
+
+    #[async_trait]
+    impl GatewaySession for TestSessionStore {
+        async fn insert(
+            &self,
+            _session_id: SessionId,
+            _data_key: DataKey,
+            _data_value: DataValue,
+        ) -> Result<(), GatewaySessionError> {
+            Err(GatewaySessionError::InternalError(
+                "unimplemented".to_string(),
+            ))
+        }
+
+        async fn get(
+            &self,
+            _session_id: &SessionId,
+            _data_key: &DataKey,
+        ) -> Result<DataValue, GatewaySessionError> {
+            Err(GatewaySessionError::InternalError(
+                "unimplemented".to_string(),
+            ))
+        }
     }
 }

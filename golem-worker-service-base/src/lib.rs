@@ -18,8 +18,8 @@ use service::worker::WorkerRequestMetadata;
 
 pub mod api;
 pub mod app_config;
-
 pub mod gateway_api_definition;
+pub mod gateway_api_definition_transformer;
 pub mod gateway_api_deployment;
 pub mod gateway_binding;
 pub mod gateway_execution;
@@ -27,6 +27,7 @@ pub mod gateway_middleware;
 pub mod gateway_request;
 mod gateway_rib_compiler;
 pub mod gateway_rib_interpreter;
+pub mod gateway_security;
 pub mod getter;
 pub mod grpcapi;
 mod headers;

@@ -19,7 +19,7 @@ message ApiDefinitionError {
 }
 
 message RouteValidationErrorsBody {
-    repeated RouteValidationError errors = 1;
+    repeated string errors = 1;
 }
 
 message RouteValidationError {

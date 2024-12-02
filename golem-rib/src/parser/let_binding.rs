@@ -345,7 +345,7 @@ mod tests {
 
     #[test]
     fn test_let_binding_with_type_name_chr() {
-        let input = "let foo: chr = bar";
+        let input = "let foo: char = bar";
         let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
@@ -362,7 +362,7 @@ mod tests {
 
     #[test]
     fn test_let_binding_with_type_name_str() {
-        let input = "let foo: str = bar";
+        let input = "let foo: string = bar";
         let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,

@@ -17,7 +17,6 @@ use crate::gateway_binding::{
     GatewayBinding, IdempotencyKeyCompiled, ResponseMappingCompiled, WorkerBinding,
     WorkerBindingCompiled, WorkerNameCompiled,
 };
-use crate::gateway_middleware::Middlewares;
 use golem_common::model::GatewayBindingType;
 
 // A compiled binding is a binding with all existence of Rib Expr
@@ -25,7 +24,7 @@ use golem_common::model::GatewayBindingType;
 #[derive(Debug, Clone, PartialEq)]
 pub enum GatewayBindingCompiled {
     Worker(WorkerBindingCompiled),
-    Static(StaticBinding),
+    Static(Box<StaticBinding>),
     FileServer(WorkerBindingCompiled),
 }
 
@@ -86,8 +85,11 @@ impl From<GatewayBindingCompiled>
                     response_rib_input: None,
                     worker_functions_in_response: None,
                     binding_type: Some(1),
-                    static_binding: Some(static_binding.into()),
-                    middleware: None,
+                    static_binding: Some(
+                        golem_api_grpc::proto::golem::apidefinition::StaticBinding::from(
+                            *static_binding,
+                        ),
+                    ),
                 }
             }
         }
@@ -164,8 +166,6 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
                         .transpose()?,
                 };
 
-                let middleware = value.middleware.map(Middlewares::try_from).transpose()?;
-
                 let binding_type = value.binding_type.ok_or("Missing binding_type")?;
 
                 if binding_type == 0 {
@@ -174,7 +174,6 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
                         worker_name_compiled,
                         idempotency_key_compiled,
                         response_compiled,
-                        middlewares: middleware,
                     }))
                 } else {
                     Ok(GatewayBindingCompiled::FileServer(WorkerBindingCompiled {
@@ -182,7 +181,6 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
                         worker_name_compiled,
                         idempotency_key_compiled,
                         response_compiled,
-                        middlewares: middleware,
                     }))
                 }
             }
@@ -191,7 +189,9 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
                     .static_binding
                     .ok_or("Missing static_binding for Static")?;
 
-                Ok(GatewayBindingCompiled::Static(static_binding.try_into()?))
+                Ok(GatewayBindingCompiled::Static(Box::new(
+                    static_binding.try_into()?,
+                )))
             }
             _ => Err("Unknown binding type".to_string()),
         }
@@ -200,6 +200,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
 
 mod internal {
     use crate::gateway_binding::WorkerBindingCompiled;
+
     use golem_common::model::GatewayBindingType;
 
     pub(crate) fn to_gateway_binding_compiled_proto(
@@ -246,16 +247,6 @@ mod internal {
             .worker_calls
             .map(|x| x.into());
 
-        let middleware = worker_binding
-            .middlewares
-            .iter()
-            .map(
-                |m| golem_api_grpc::proto::golem::apidefinition::Middleware {
-                    cors: m.get_cors().map(|x| x.into()),
-                },
-            )
-            .next();
-
         let binding_type = match binding_type {
             GatewayBindingType::Default => 0,
             GatewayBindingType::FileServer => 1,
@@ -276,7 +267,6 @@ mod internal {
             worker_functions_in_response,
             binding_type: Some(binding_type),
             static_binding: None,
-            middleware,
         }
     }
 }

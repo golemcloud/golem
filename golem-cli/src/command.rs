@@ -14,6 +14,7 @@
 
 pub mod api_definition;
 pub mod api_deployment;
+pub mod api_security;
 pub mod component;
 pub mod plugin;
 pub mod profile;
@@ -33,6 +34,7 @@ use plugin::PluginSubcommand;
 use profile::ProfileSubCommand;
 use std::future::Future;
 use worker::WorkerSubcommand;
+use crate::command::api_security::ApiSecuritySchemeSubcommand;
 
 pub trait ComponentRefSplit<ProjectRef> {
     fn split(self) -> (ComponentUri, Option<ProjectRef>);
@@ -162,6 +164,13 @@ pub enum SharedCommand<
     ApiDeployment {
         #[command(subcommand)]
         subcommand: ApiDeploymentSubcommand<ProjectRef>,
+    },
+
+    /// Manage Api Security Schemes
+    #[command()]
+    ApiSecurityScheme {
+        #[command(subcommand)]
+        subcommand: ApiSecuritySchemeSubcommand<ProjectRef>,
     },
 
     /// Manage plugins

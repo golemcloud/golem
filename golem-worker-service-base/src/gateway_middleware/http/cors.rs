@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
-pub struct Cors {
+pub struct HttpCors {
     allow_origin: String,
     allow_methods: String,
     allow_headers: String,
@@ -29,9 +29,9 @@ pub struct Cors {
     max_age: Option<u64>,
 }
 
-impl Default for Cors {
-    fn default() -> Cors {
-        Cors {
+impl Default for HttpCors {
+    fn default() -> HttpCors {
+        HttpCors {
             allow_origin: "*".to_string(),
             allow_methods: "GET, POST, PUT, DELETE, OPTIONS".to_string(),
             allow_headers: "Content-Type, Authorization".to_string(),
@@ -42,7 +42,25 @@ impl Default for Cors {
     }
 }
 
-impl Cors {
+impl HttpCors {
+    pub fn new(
+        allow_origin: &str,
+        allow_methods: &str,
+        allow_headers: &str,
+        expose_headers: Option<&str>,
+        allow_credentials: Option<bool>,
+        max_age: Option<u64>,
+    ) -> HttpCors {
+        HttpCors {
+            allow_origin: allow_origin.to_string(),
+            allow_methods: allow_methods.to_string(),
+            allow_headers: allow_headers.to_string(),
+            expose_headers: expose_headers.map(|x| x.to_string()),
+            allow_credentials,
+            max_age,
+        }
+    }
+
     pub fn get_allow_origin(&self) -> String {
         self.allow_origin.clone()
     }
@@ -74,8 +92,8 @@ impl Cors {
         expose_headers: Option<String>,
         allow_credentials: Option<bool>,
         max_age: Option<u64>,
-    ) -> Result<Cors, String> {
-        let mut cors_preflight = Cors::default();
+    ) -> Result<HttpCors, String> {
+        let mut cors_preflight = HttpCors::default();
 
         if let Some(allow_origin) = allow_origin {
             cors_preflight.set_allow_origin(allow_origin.as_str())?;
@@ -103,7 +121,7 @@ impl Cors {
         Ok(cors_preflight)
     }
 
-    pub fn from_cors_preflight_expr(expr: &CorsPreflightExpr) -> Result<Cors, String> {
+    pub fn from_cors_preflight_expr(expr: &CorsPreflightExpr) -> Result<HttpCors, String> {
         let compiled_expr = rib::compile(&expr.0, &vec![])
             .map_err(|err| format!("Rib compilation for cors-preflight response. {}", err))?;
 
@@ -121,7 +139,7 @@ impl Cors {
             .get_record()
             .ok_or("Invalid pre-flight CORS response mapping")?;
 
-        let mut cors = Cors::default();
+        let mut cors = HttpCors::default();
 
         for name_value in record {
             let key = &name_value.name;
@@ -201,13 +219,13 @@ impl Cors {
     }
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CorsPreflight> for Cors {
+impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CorsPreflight> for HttpCors {
     type Error = String;
 
     fn try_from(
         value: golem_api_grpc::proto::golem::apidefinition::CorsPreflight,
     ) -> Result<Self, Self::Error> {
-        Ok(Cors {
+        Ok(HttpCors {
             allow_origin: value.allow_origin.ok_or("Missing allow origin")?,
             allow_methods: value.allow_methods.ok_or("Missing allow methods")?,
             allow_headers: value.allow_headers.ok_or("Missing allow headers")?,
@@ -218,8 +236,8 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CorsPreflight> for Cor
     }
 }
 
-impl From<Cors> for golem_api_grpc::proto::golem::apidefinition::CorsPreflight {
-    fn from(value: Cors) -> Self {
+impl From<HttpCors> for golem_api_grpc::proto::golem::apidefinition::CorsPreflight {
+    fn from(value: HttpCors) -> Self {
         golem_api_grpc::proto::golem::apidefinition::CorsPreflight {
             allow_origin: Some(value.allow_origin),
             allow_methods: Some(value.allow_methods),
@@ -234,7 +252,7 @@ impl From<Cors> for golem_api_grpc::proto::golem::apidefinition::CorsPreflight {
 pub struct CorsPreflightExpr(pub Expr);
 
 impl CorsPreflightExpr {
-    pub fn from_cors(cors: &Cors) -> CorsPreflightExpr {
+    pub fn from_cors(cors: &HttpCors) -> CorsPreflightExpr {
         let mut cors_parameters = vec![
             (
                 ACCESS_CONTROL_ALLOW_ORIGIN.to_string(),
@@ -278,9 +296,13 @@ impl CorsPreflightExpr {
 }
 
 mod internal {
-    use crate::gateway_middleware::Cors;
+    use crate::gateway_middleware::HttpCors;
 
-    pub(crate) fn set_cors_field(cors: &mut Cors, key: &str, value: &str) -> Result<(), String> {
+    pub(crate) fn set_cors_field(
+        cors: &mut HttpCors,
+        key: &str,
+        value: &str,
+    ) -> Result<(), String> {
         match key.to_lowercase().as_str() {
             "access-control-allow-origin" => {
                 cors.set_allow_origin(value)

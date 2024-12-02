@@ -177,6 +177,16 @@ impl CliCommand<OssCommandContext> for SpecializedSharedCommand {
                     )
                     .await
             }
+            SharedCommand::ApiSecurityScheme { subcommand } => {
+                let factory = ctx.factory;
+
+                subcommand
+                    .handle(
+                        factory.api_security_scheme_service().as_ref(),
+                        factory.project_resolver().as_ref(),
+                    )
+                    .await
+            }
             SharedCommand::Profile { subcommand } => {
                 subcommand
                     .handle(CliKind::Oss, &ctx.config_dir, &DummyProfileAuth)
