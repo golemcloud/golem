@@ -91,9 +91,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use bigdecimal::BigDecimal;
     use crate::VariableId;
     use crate::{Expr, TypeName};
+    use bigdecimal::BigDecimal;
     use test_r::test;
 
     #[test]
@@ -105,7 +105,10 @@ mod tests {
             Expr::list_reduce(
                 VariableId::list_reduce_identifier("z"),
                 VariableId::list_comprehension_identifier("p"),
-                Expr::sequence(vec![Expr::untyped_number(BigDecimal::from(1)), Expr::untyped_number(BigDecimal::from(2))]),
+                Expr::sequence(vec![
+                    Expr::untyped_number(BigDecimal::from(1)),
+                    Expr::untyped_number(BigDecimal::from(2))
+                ]),
                 Expr::untyped_number(BigDecimal::from(0)),
                 Expr::expr_block(vec![Expr::plus(
                     Expr::identifier("z"),

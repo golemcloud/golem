@@ -258,8 +258,8 @@ mod pattern_match_bindings {
     }
 
     mod expectations {
-        use bigdecimal::BigDecimal;
         use crate::{ArmPattern, Expr, InferredType, MatchArm, MatchIdentifier, VariableId};
+        use bigdecimal::BigDecimal;
 
         pub(crate) fn expected_match(index: usize) -> Expr {
             Expr::PatternMatch(
@@ -389,7 +389,9 @@ mod pattern_match_bindings {
                                 },
                                 MatchArm {
                                     arm_pattern: ArmPattern::constructor("none", vec![]),
-                                    arm_resolution_expr: Box::new(Expr::untyped_number(BigDecimal::from(0))),
+                                    arm_resolution_expr: Box::new(Expr::untyped_number(
+                                        BigDecimal::from(0),
+                                    )),
                                 },
                             ],
                             InferredType::Unknown,

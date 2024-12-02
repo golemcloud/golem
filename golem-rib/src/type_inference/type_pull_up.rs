@@ -1213,14 +1213,20 @@ mod type_pull_up_tests {
 
     #[test]
     pub fn test_pull_up_for_equal_to() {
-        let expr = Expr::equal_to(Expr::untyped_number(BigDecimal::from(1)), Expr::untyped_number(BigDecimal::from(2)));
+        let expr = Expr::equal_to(
+            Expr::untyped_number(BigDecimal::from(1)),
+            Expr::untyped_number(BigDecimal::from(2)),
+        );
         let new_expr = expr.pull_types_up().unwrap();
         assert_eq!(new_expr.inferred_type(), InferredType::Bool);
     }
 
     #[test]
     pub fn test_pull_up_for_less_than() {
-        let expr = Expr::less_than(Expr::untyped_number(BigDecimal::from(1)), Expr::untyped_number(BigDecimal::from(2)));
+        let expr = Expr::less_than(
+            Expr::untyped_number(BigDecimal::from(1)),
+            Expr::untyped_number(BigDecimal::from(2)),
+        );
         let new_expr = expr.pull_types_up().unwrap();
         assert_eq!(new_expr.inferred_type(), InferredType::Bool);
     }

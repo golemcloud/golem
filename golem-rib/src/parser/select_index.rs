@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use bigdecimal::ToPrimitive;
 use combine::parser::char::{char as char_, spaces};
 use combine::{attempt, choice, many1, optional, ParseError, Parser};
 
@@ -94,7 +95,7 @@ mod internal {
                 if number.value < BigDecimal::from(0) {
                     panic!("Cannot use a negative number to index",)
                 } else {
-                    number.value
+                    number.value.to_usize().unwrap()
                 }
             }
             _ => panic!("Cannot use a float number to index",),

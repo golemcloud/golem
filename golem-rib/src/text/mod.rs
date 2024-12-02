@@ -114,8 +114,14 @@ mod record_tests {
     #[test]
     fn test_round_trip_read_write_record_of_number() {
         let input_expr = Expr::record(vec![
-            ("field".to_string(), Expr::untyped_number(BigDecimal::from(1))),
-            ("field".to_string(), Expr::untyped_number(BigDecimal::from(2))),
+            (
+                "field".to_string(),
+                Expr::untyped_number(BigDecimal::from(1)),
+            ),
+            (
+                "field".to_string(),
+                Expr::untyped_number(BigDecimal::from(2)),
+            ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "{field: 1, field: 2}".to_string();
@@ -293,11 +299,17 @@ mod record_tests {
         let input_expr = Expr::record(vec![
             (
                 "a".to_string(),
-                Expr::greater_than(Expr::untyped_number(BigDecimal::from(1)), Expr::untyped_number(BigDecimal::from(2))),
+                Expr::greater_than(
+                    Expr::untyped_number(BigDecimal::from(1)),
+                    Expr::untyped_number(BigDecimal::from(2)),
+                ),
             ),
             (
                 "b".to_string(),
-                Expr::less_than(Expr::untyped_number(BigDecimal::from(1)), Expr::untyped_number(BigDecimal::from(2))),
+                Expr::less_than(
+                    Expr::untyped_number(BigDecimal::from(1)),
+                    Expr::untyped_number(BigDecimal::from(2)),
+                ),
             ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
@@ -599,8 +611,14 @@ mod sequence_tests {
     #[test]
     fn test_round_trip_read_write_sequence_of_math_op() {
         let input_expr = Expr::sequence(vec![
-            Expr::greater_than(Expr::untyped_number(BigDecimal::from(1)), Expr::untyped_number(BigDecimal::from(2))),
-            Expr::less_than(Expr::untyped_number(BigDecimal::from(1)), Expr::untyped_number(BigDecimal::from(2))),
+            Expr::greater_than(
+                Expr::untyped_number(BigDecimal::from(1)),
+                Expr::untyped_number(BigDecimal::from(2)),
+            ),
+            Expr::less_than(
+                Expr::untyped_number(BigDecimal::from(1)),
+                Expr::untyped_number(BigDecimal::from(2)),
+            ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "[1 > 2, 1 < 2]".to_string();
@@ -855,8 +873,14 @@ mod tuple_tests {
     #[test]
     fn test_round_trip_read_write_tuple_of_math_op() {
         let input_expr = Expr::tuple(vec![
-            Expr::greater_than(Expr::untyped_number(BigDecimal::from(1)), Expr::untyped_number(BigDecimal::from(2))),
-            Expr::less_than(Expr::untyped_number(BigDecimal::from(1)), Expr::untyped_number(BigDecimal::from(2))),
+            Expr::greater_than(
+                Expr::untyped_number(BigDecimal::from(1)),
+                Expr::untyped_number(BigDecimal::from(2)),
+            ),
+            Expr::less_than(
+                Expr::untyped_number(BigDecimal::from(1)),
+                Expr::untyped_number(BigDecimal::from(2)),
+            ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "(1 > 2, 1 < 2)".to_string();

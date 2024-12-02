@@ -20,6 +20,7 @@ use crate::{
     from_string, text, type_checker, type_inference, DynamicParsedFunctionName, InferredType,
     ParsedFunctionName, VariableId,
 };
+use bigdecimal::{BigDecimal, FromPrimitive, ToPrimitive};
 use combine::parser::char::spaces;
 use combine::stream::position;
 use combine::Parser;
@@ -33,7 +34,6 @@ use std::collections::VecDeque;
 use std::fmt::Display;
 use std::ops::Deref;
 use std::str::FromStr;
-use bigdecimal::{BigDecimal, FromPrimitive, ToPrimitive};
 
 // https://github.com/golemcloud/golem/issues/1035
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -770,7 +770,11 @@ impl Expr {
         type_name: TypeName,
         inferred_type: InferredType,
     ) -> Expr {
-        Expr::Number(Number { value: big_decimal }, Some(type_name), inferred_type)
+        Expr::Number(
+            Number { value: big_decimal },
+            Some(type_name),
+            inferred_type,
+        )
     }
 
     pub fn untyped_number(big_decimal: BigDecimal) -> Expr {
@@ -785,7 +789,7 @@ impl Expr {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Number {
-    pub value: BigDecimal
+    pub value: BigDecimal,
 }
 
 impl Eq for Number {}
@@ -814,7 +818,7 @@ impl Display for Number {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MatchArm {
     pub arm_pattern: ArmPattern,
     pub arm_resolution_expr: Box<Expr>,

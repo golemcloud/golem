@@ -192,7 +192,10 @@ mod tests {
         let expr = Expr::from_text(rib_expr).unwrap();
 
         let expected = Expr::expr_block(vec![
-            Expr::let_binding("foo", Expr::option(Some(Expr::untyped_number(BigDecimal::from(1))))),
+            Expr::let_binding(
+                "foo",
+                Expr::option(Some(Expr::untyped_number(BigDecimal::from(1)))),
+            ),
             Expr::pattern_match(
                 Expr::identifier("foo"),
                 vec![MatchArm::new(
