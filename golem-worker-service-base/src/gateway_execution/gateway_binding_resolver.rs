@@ -276,9 +276,7 @@ mod internal {
         let worker_name_opt = if let Some(worker_name_compiled) = &binding.worker_name_compiled {
             let resolve_rib_input = http_request_details
                 .resolve_rib_input_value(&worker_name_compiled.rib_input_type_info)
-                .map_err(|err| {
-                    GatewayBindingResolverError::RibInputTypeMismatch(err)
-                })?;
+                .map_err(|err| GatewayBindingResolverError::RibInputTypeMismatch(err))?;
 
             let worker_name = rib::interpret_pure(
                 &worker_name_compiled.compiled_worker_name,
@@ -304,36 +302,33 @@ mod internal {
 
         let component_id = &binding.component_id;
 
-        let idempotency_key = if let Some(idempotency_key_compiled) =
-            &binding.idempotency_key_compiled
-        {
-            let resolve_rib_input = http_request_details
-                .resolve_rib_input_value(&idempotency_key_compiled.rib_input)
-                .map_err(|err| {
-                   GatewayBindingResolverError::RibInputTypeMismatch(err)
-                })?;
+        let idempotency_key =
+            if let Some(idempotency_key_compiled) = &binding.idempotency_key_compiled {
+                let resolve_rib_input = http_request_details
+                    .resolve_rib_input_value(&idempotency_key_compiled.rib_input)
+                    .map_err(|err| GatewayBindingResolverError::RibInputTypeMismatch(err))?;
 
-            let idempotency_key_value = rib::interpret_pure(
-                &idempotency_key_compiled.compiled_idempotency_key,
-                &resolve_rib_input,
-            )
-            .await
-            .map_err(|err| GatewayBindingResolverError::Internal(err.to_string()))?;
+                let idempotency_key_value = rib::interpret_pure(
+                    &idempotency_key_compiled.compiled_idempotency_key,
+                    &resolve_rib_input,
+                )
+                .await
+                .map_err(|err| GatewayBindingResolverError::Internal(err.to_string()))?;
 
-            let idempotency_key = idempotency_key_value
-                .get_literal()
-                .ok_or(GatewayBindingResolverError::internal(
-                    "Idempotency Key is not a string",
-                ))?
-                .as_string();
+                let idempotency_key = idempotency_key_value
+                    .get_literal()
+                    .ok_or(GatewayBindingResolverError::internal(
+                        "Idempotency Key is not a string",
+                    ))?
+                    .as_string();
 
-            Some(IdempotencyKey::new(idempotency_key))
-        } else {
-            headers
-                .get("idempotency-key")
-                .and_then(|h| h.to_str().ok())
-                .map(|value| IdempotencyKey::new(value.to_string()))
-        };
+                Some(IdempotencyKey::new(idempotency_key))
+            } else {
+                headers
+                    .get("idempotency-key")
+                    .and_then(|h| h.to_str().ok())
+                    .map(|value| IdempotencyKey::new(value.to_string()))
+            };
 
         let worker_detail = WorkerDetail {
             component_id: component_id.clone(),
