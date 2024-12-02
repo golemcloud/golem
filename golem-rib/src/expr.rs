@@ -33,6 +33,8 @@ use serde_json::Value;
 use std::collections::VecDeque;
 use std::fmt::Display;
 use std::ops::Deref;
+use std::str::FromStr;
+use bigdecimal::{BigDecimal, FromPrimitive, ToPrimitive};
 
 // https://github.com/golemcloud/golem/issues/1035
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
@@ -760,31 +762,31 @@ impl Expr {
         type_inference::visit_children_bottom_up_mut(self, queue);
     }
 
-    pub fn number(f64: f64, inferred_type: InferredType) -> Expr {
-        Expr::Number(Number { value: f64 }, None, inferred_type)
+    pub fn number(big_decimal: BigDecimal, inferred_type: InferredType) -> Expr {
+        Expr::Number(Number { value: big_decimal }, None, inferred_type)
     }
 
     pub fn number_with_type_name(
-        f64: f64,
+        big_decimal: BigDecimal,
         type_name: TypeName,
         inferred_type: InferredType,
     ) -> Expr {
-        Expr::Number(Number { value: f64 }, Some(type_name), inferred_type)
+        Expr::Number(Number { value: big_decimal }, Some(type_name), inferred_type)
     }
 
-    pub fn untyped_number(f64: f64) -> Expr {
-        Expr::number(f64, InferredType::number())
+    pub fn untyped_number(big_decimal: BigDecimal) -> Expr {
+        Expr::number(big_decimal, InferredType::number())
     }
 
     // TODO; introduced to minimise the number of changes in tests.
-    pub fn untyped_number_with_type_name(f64: f64, type_name: TypeName) -> Expr {
-        Expr::number_with_type_name(f64, type_name, InferredType::number())
+    pub fn untyped_number_with_type_name(big_decimal: BigDecimal, type_name: TypeName) -> Expr {
+        Expr::number_with_type_name(big_decimal, type_name, InferredType::number())
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub struct Number {
-    pub value: f64, // Change to bigdecimal
+    pub value: BigDecimal
 }
 
 impl Eq for Number {}
@@ -792,16 +794,16 @@ impl Eq for Number {}
 impl Number {
     pub fn to_val(&self, analysed_type: &AnalysedType) -> Option<TypeAnnotatedValue> {
         match analysed_type {
-            AnalysedType::F64(_) => Some(TypeAnnotatedValue::F64(self.value)),
-            AnalysedType::U64(_) => Some(TypeAnnotatedValue::U64(self.value as u64)),
-            AnalysedType::F32(_) => Some(TypeAnnotatedValue::F32(self.value as f32)),
-            AnalysedType::U32(_) => Some(TypeAnnotatedValue::U32(self.value as u32)),
-            AnalysedType::S32(_) => Some(TypeAnnotatedValue::S32(self.value as i32)),
-            AnalysedType::S64(_) => Some(TypeAnnotatedValue::S64(self.value as i64)),
-            AnalysedType::U8(_) => Some(TypeAnnotatedValue::U8(self.value as u32)),
-            AnalysedType::S8(_) => Some(TypeAnnotatedValue::S8(self.value as i32)),
-            AnalysedType::U16(_) => Some(TypeAnnotatedValue::U16(self.value as u32)),
-            AnalysedType::S16(_) => Some(TypeAnnotatedValue::S16(self.value as i32)),
+            AnalysedType::F64(_) => self.value.to_f64().map(TypeAnnotatedValue::F64), // This will result in precision loss again
+            AnalysedType::U64(_) => self.value.to_u64().map(TypeAnnotatedValue::U64),
+            AnalysedType::F32(_) => self.value.to_f32().map(TypeAnnotatedValue::F32),
+            AnalysedType::U32(_) => self.value.to_u32().map(TypeAnnotatedValue::U32),
+            AnalysedType::S32(_) => self.value.to_i32().map(TypeAnnotatedValue::S32),
+            AnalysedType::S64(_) => self.value.to_i64().map(TypeAnnotatedValue::S64),
+            AnalysedType::U8(_) => self.value.to_u32().map(TypeAnnotatedValue::U8),
+            AnalysedType::S8(_) => self.value.to_i32().map(TypeAnnotatedValue::S8),
+            AnalysedType::U16(_) => self.value.to_u32().map(TypeAnnotatedValue::U16),
+            AnalysedType::S16(_) => self.value.to_i32().map(TypeAnnotatedValue::S16),
             _ => None,
         }
     }
@@ -1166,11 +1168,22 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
             }
 
             golem_api_grpc::proto::golem::rib::expr::Expr::Number(number) => {
+                // Backward compatibility
                 let type_name = number.type_name.map(TypeName::try_from).transpose()?;
-                if let Some(type_name) = type_name {
-                    Expr::untyped_number_with_type_name(number.float, type_name.clone())
+                let big_decimal = if let Some(number) = number.number {
+                    BigDecimal::from_str(&number).map_err(|e| e.to_string())?
                 } else {
-                    Expr::untyped_number(number.float)
+                    if let Some(float) = number.float {
+                        BigDecimal::from_f64(float).ok_or("Invalid float")?
+                    } else {
+                        return Err("Missing number".to_string());
+                    }
+                };
+
+                if let Some(type_name) = type_name {
+                    Expr::untyped_number_with_type_name(big_decimal, type_name.clone())
+                } else {
+                    Expr::untyped_number(big_decimal)
                 }
             }
             golem_api_grpc::proto::golem::rib::expr::Expr::SelectField(expr) => {
@@ -1353,7 +1366,8 @@ impl From<Expr> for golem_api_grpc::proto::golem::rib::Expr {
             Expr::Number(number, type_name, _) => {
                 Some(golem_api_grpc::proto::golem::rib::expr::Expr::Number(
                     golem_api_grpc::proto::golem::rib::NumberExpr {
-                        float: number.value,
+                        number: Some(number.value.to_string()),
+                        float: None,
                         type_name: type_name.map(|t| t.into()),
                     },
                 ))
@@ -1831,8 +1845,8 @@ mod tests {
 
     fn expected() -> Expr {
         Expr::expr_block(vec![
-            Expr::let_binding("x", Expr::untyped_number(1f64)),
-            Expr::let_binding("y", Expr::untyped_number(2f64)),
+            Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1))),
+            Expr::let_binding("y", Expr::untyped_number(BigDecimal::from(2))),
             Expr::let_binding(
                 "result",
                 Expr::greater_than(Expr::identifier("x"), Expr::identifier("y")),

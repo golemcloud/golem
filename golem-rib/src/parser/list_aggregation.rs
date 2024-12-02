@@ -91,6 +91,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use bigdecimal::BigDecimal;
     use crate::VariableId;
     use crate::{Expr, TypeName};
     use test_r::test;
@@ -104,8 +105,8 @@ mod tests {
             Expr::list_reduce(
                 VariableId::list_reduce_identifier("z"),
                 VariableId::list_comprehension_identifier("p"),
-                Expr::sequence(vec![Expr::untyped_number(1f64), Expr::untyped_number(2f64)]),
-                Expr::untyped_number(0f64),
+                Expr::sequence(vec![Expr::untyped_number(BigDecimal::from(1)), Expr::untyped_number(BigDecimal::from(2))]),
+                Expr::untyped_number(BigDecimal::from(0)),
                 Expr::expr_block(vec![Expr::plus(
                     Expr::identifier("z"),
                     Expr::identifier("p")
@@ -130,16 +131,16 @@ mod tests {
                     "ages",
                     TypeName::List(Box::new(TypeName::U16)),
                     Expr::sequence(vec![
-                        Expr::untyped_number(1f64),
-                        Expr::untyped_number(2f64),
-                        Expr::untyped_number(3f64)
+                        Expr::untyped_number(BigDecimal::from(1)),
+                        Expr::untyped_number(BigDecimal::from(2)),
+                        Expr::untyped_number(BigDecimal::from(3))
                     ])
                 ),
                 Expr::list_reduce(
                     VariableId::list_reduce_identifier("z"),
                     VariableId::list_comprehension_identifier("a"),
                     Expr::identifier("ages"),
-                    Expr::untyped_number(0f64),
+                    Expr::untyped_number(BigDecimal::from(0)),
                     Expr::expr_block(vec![Expr::plus(
                         Expr::identifier("z"),
                         Expr::identifier("a")

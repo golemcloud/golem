@@ -114,8 +114,8 @@ mod record_tests {
     #[test]
     fn test_round_trip_read_write_record_of_number() {
         let input_expr = Expr::record(vec![
-            ("field".to_string(), Expr::untyped_number(1f64)),
-            ("field".to_string(), Expr::untyped_number(2f64)),
+            ("field".to_string(), Expr::untyped_number(BigDecimal::from(1))),
+            ("field".to_string(), Expr::untyped_number(BigDecimal::from(2))),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "{field: 1, field: 2}".to_string();
@@ -293,11 +293,11 @@ mod record_tests {
         let input_expr = Expr::record(vec![
             (
                 "a".to_string(),
-                Expr::greater_than(Expr::untyped_number(1f64), Expr::untyped_number(2f64)),
+                Expr::greater_than(Expr::untyped_number(BigDecimal::from(1)), Expr::untyped_number(BigDecimal::from(2))),
             ),
             (
                 "b".to_string(),
-                Expr::less_than(Expr::untyped_number(1f64), Expr::untyped_number(2f64)),
+                Expr::less_than(Expr::untyped_number(BigDecimal::from(1)), Expr::untyped_number(BigDecimal::from(2))),
             ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
@@ -599,8 +599,8 @@ mod sequence_tests {
     #[test]
     fn test_round_trip_read_write_sequence_of_math_op() {
         let input_expr = Expr::sequence(vec![
-            Expr::greater_than(Expr::untyped_number(1f64), Expr::untyped_number(2f64)),
-            Expr::less_than(Expr::untyped_number(1f64), Expr::untyped_number(2f64)),
+            Expr::greater_than(Expr::untyped_number(BigDecimal::from(1)), Expr::untyped_number(BigDecimal::from(2))),
+            Expr::less_than(Expr::untyped_number(BigDecimal::from(1)), Expr::untyped_number(BigDecimal::from(2))),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "[1 > 2, 1 < 2]".to_string();
@@ -855,8 +855,8 @@ mod tuple_tests {
     #[test]
     fn test_round_trip_read_write_tuple_of_math_op() {
         let input_expr = Expr::tuple(vec![
-            Expr::greater_than(Expr::untyped_number(1f64), Expr::untyped_number(2f64)),
-            Expr::less_than(Expr::untyped_number(1f64), Expr::untyped_number(2f64)),
+            Expr::greater_than(Expr::untyped_number(BigDecimal::from(1)), Expr::untyped_number(BigDecimal::from(2))),
+            Expr::less_than(Expr::untyped_number(BigDecimal::from(1)), Expr::untyped_number(BigDecimal::from(2))),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "(1 > 2, 1 < 2)".to_string();
@@ -912,7 +912,7 @@ mod simple_values_test {
 
     #[test]
     fn test_round_trip_read_write_number_u64() {
-        let input_expr = Expr::untyped_number(1f64);
+        let input_expr = Expr::untyped_number(BigDecimal::from(1));
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "1".to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
@@ -1005,13 +1005,13 @@ mod let_tests {
             Expr::Let(
                 VariableId::global("x".to_string()),
                 Some(TypeName::U8),
-                Box::new(Expr::untyped_number(1f64)),
+                Box::new(Expr::untyped_number(BigDecimal::from(1))),
                 InferredType::Unknown,
             ),
             Expr::Let(
                 VariableId::global("y".to_string()),
                 Some(TypeName::U8),
-                Box::new(Expr::untyped_number(2f64)),
+                Box::new(Expr::untyped_number(BigDecimal::from(2))),
                 InferredType::Unknown,
             ),
         ]);
@@ -1027,13 +1027,13 @@ mod let_tests {
             Expr::Let(
                 VariableId::global("x".to_string()),
                 Some(TypeName::U16),
-                Box::new(Expr::untyped_number(1f64)),
+                Box::new(Expr::untyped_number(BigDecimal::from(1))),
                 InferredType::Unknown,
             ),
             Expr::Let(
                 VariableId::global("y".to_string()),
                 Some(TypeName::U16),
-                Box::new(Expr::untyped_number(2f64)),
+                Box::new(Expr::untyped_number(BigDecimal::from(2))),
                 InferredType::Unknown,
             ),
         ]);
@@ -1049,13 +1049,13 @@ mod let_tests {
             Expr::Let(
                 VariableId::global("x".to_string()),
                 Some(TypeName::U32),
-                Box::new(Expr::untyped_number(1f64)),
+                Box::new(Expr::untyped_number(BigDecimal::from(1))),
                 InferredType::Unknown,
             ),
             Expr::Let(
                 VariableId::global("y".to_string()),
                 Some(TypeName::U32),
-                Box::new(Expr::untyped_number(2f64)),
+                Box::new(Expr::untyped_number(BigDecimal::from(2))),
                 InferredType::Unknown,
             ),
         ]);
@@ -1777,7 +1777,7 @@ mod if_cond_tests {
         let input_expr = Expr::cond(
             Expr::equal_to(
                 Expr::select_field(Expr::identifier("worker"), "response"),
-                Expr::untyped_number(1f64),
+                Expr::untyped_number(BigDecimal::from(1)),
             ),
             Expr::flags(vec!["flag1".to_string(), "flag2".to_string()]),
             Expr::literal("failed"),

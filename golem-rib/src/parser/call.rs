@@ -760,7 +760,7 @@ mod function_call_tests {
                         resource: "resource1".to_string(),
                         resource_params: vec![
                             Expr::literal("hello"),
-                            Expr::untyped_number(1f64),
+                            Expr::untyped_number(BigDecimal::from(1)),
                             Expr::boolean(true),
                         ],
                     },
@@ -792,7 +792,7 @@ mod function_call_tests {
                             Expr::literal("hello"),
                             Expr::record(vec![(
                                 "field-a".to_string(),
-                                Expr::option(Some(Expr::untyped_number(1f64))),
+                                Expr::option(Some(Expr::untyped_number(BigDecimal::from(1)))),
                             )]),
                         ],
                     },
@@ -968,7 +968,7 @@ mod function_call_tests {
                         resource: "resource1".to_string(),
                         resource_params: vec![
                             Expr::literal("hello"),
-                            Expr::untyped_number(1f64),
+                            Expr::untyped_number(BigDecimal::from(1)),
                             Expr::boolean(true),
                         ],
                     },
@@ -1000,7 +1000,7 @@ mod function_call_tests {
                             Expr::literal("hello"),
                             Expr::record(vec![(
                                 "field-a".to_string(),
-                                Expr::option(Some(Expr::untyped_number(1f64))),
+                                Expr::option(Some(Expr::untyped_number(BigDecimal::from(1)))),
                             )]),
                         ],
                     },

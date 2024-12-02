@@ -66,6 +66,7 @@ mod internal {
 }
 #[cfg(test)]
 mod tests {
+    use bigdecimal::BigDecimal;
     use test_r::test;
 
     use crate::expr::Expr;
@@ -86,8 +87,8 @@ mod tests {
         let expr = Expr::from_text(rib_expr).unwrap();
 
         let expected = Expr::expr_block(vec![
-            Expr::let_binding("x", Expr::untyped_number(1f64)),
-            Expr::let_binding("y", Expr::untyped_number(2f64)),
+            Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1))),
+            Expr::let_binding("y", Expr::untyped_number(BigDecimal::from(2))),
             Expr::call(
                 DynamicParsedFunctionName::parse("foo").unwrap(),
                 vec![Expr::identifier("x")],
@@ -117,8 +118,8 @@ mod tests {
         let expected = Expr::cond(
             Expr::boolean(true),
             Expr::expr_block(vec![
-                Expr::let_binding("x", Expr::untyped_number(1f64)),
-                Expr::let_binding("y", Expr::untyped_number(2f64)),
+                Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1))),
+                Expr::let_binding("y", Expr::untyped_number(BigDecimal::from(2))),
                 Expr::call(
                     DynamicParsedFunctionName::parse("foo").unwrap(),
                     vec![Expr::identifier("x")],
@@ -128,7 +129,7 @@ mod tests {
                     vec![Expr::identifier("y")],
                 ),
             ]),
-            Expr::untyped_number(1f64),
+            Expr::untyped_number(BigDecimal::from(1)),
         );
 
         assert_eq!(expr, expected);
@@ -157,8 +158,8 @@ mod tests {
                     vec![ArmPattern::Literal(Box::new(Expr::identifier("x")))],
                 ),
                 Expr::expr_block(vec![
-                    Expr::let_binding("x", Expr::untyped_number(1f64)),
-                    Expr::let_binding("y", Expr::untyped_number(2f64)),
+                    Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1))),
+                    Expr::let_binding("y", Expr::untyped_number(BigDecimal::from(2))),
                     Expr::call(
                         DynamicParsedFunctionName::parse("foo").unwrap(),
                         vec![Expr::identifier("x")],
@@ -191,7 +192,7 @@ mod tests {
         let expr = Expr::from_text(rib_expr).unwrap();
 
         let expected = Expr::expr_block(vec![
-            Expr::let_binding("foo", Expr::option(Some(Expr::untyped_number(1f64)))),
+            Expr::let_binding("foo", Expr::option(Some(Expr::untyped_number(BigDecimal::from(1))))),
             Expr::pattern_match(
                 Expr::identifier("foo"),
                 vec![MatchArm::new(
@@ -200,8 +201,8 @@ mod tests {
                         vec![ArmPattern::Literal(Box::new(Expr::identifier("x")))],
                     ),
                     Expr::expr_block(vec![
-                        Expr::let_binding("x", Expr::untyped_number(1f64)),
-                        Expr::let_binding("y", Expr::untyped_number(2f64)),
+                        Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1))),
+                        Expr::let_binding("y", Expr::untyped_number(BigDecimal::from(2))),
                         Expr::call(
                             DynamicParsedFunctionName::parse("foo").unwrap(),
                             vec![Expr::identifier("x")],

@@ -1213,14 +1213,14 @@ mod type_pull_up_tests {
 
     #[test]
     pub fn test_pull_up_for_equal_to() {
-        let expr = Expr::equal_to(Expr::untyped_number(1f64), Expr::untyped_number(2f64));
+        let expr = Expr::equal_to(Expr::untyped_number(BigDecimal::from(1)), Expr::untyped_number(BigDecimal::from(2)));
         let new_expr = expr.pull_types_up().unwrap();
         assert_eq!(new_expr.inferred_type(), InferredType::Bool);
     }
 
     #[test]
     pub fn test_pull_up_for_less_than() {
-        let expr = Expr::less_than(Expr::untyped_number(1f64), Expr::untyped_number(2f64));
+        let expr = Expr::less_than(Expr::untyped_number(BigDecimal::from(1)), Expr::untyped_number(BigDecimal::from(2)));
         let new_expr = expr.pull_types_up().unwrap();
         assert_eq!(new_expr.inferred_type(), InferredType::Bool);
     }
@@ -1229,7 +1229,7 @@ mod type_pull_up_tests {
     pub fn test_pull_up_for_call() {
         let expr = Expr::call(
             DynamicParsedFunctionName::parse("global_fn").unwrap(),
-            vec![Expr::untyped_number(1f64)],
+            vec![Expr::untyped_number(BigDecimal::from(1))],
         );
         expr.pull_types_up().unwrap();
         assert_eq!(expr.inferred_type(), InferredType::Unknown);
@@ -1307,7 +1307,7 @@ mod type_pull_up_tests {
 
     #[test]
     pub fn test_pull_up_for_unwrap() {
-        let mut number = Expr::untyped_number(1f64);
+        let mut number = Expr::untyped_number(BigDecimal::from(1));
         number.override_type_type_mut(InferredType::F64);
         let expr = Expr::option(Some(number)).unwrap();
         let expr = expr.pull_types_up().unwrap();
@@ -1319,7 +1319,7 @@ mod type_pull_up_tests {
 
     #[test]
     pub fn test_pull_up_for_tag() {
-        let mut number = Expr::untyped_number(1f64);
+        let mut number = Expr::untyped_number(BigDecimal::from(1));
         number.override_type_type_mut(InferredType::F64);
         let expr = Expr::get_tag(Expr::option(Some(number)));
         let expr = expr.pull_types_up().unwrap();
