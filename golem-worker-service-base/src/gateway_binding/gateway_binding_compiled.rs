@@ -18,6 +18,7 @@ use crate::gateway_binding::{
     WorkerBindingCompiled, WorkerNameCompiled,
 };
 use golem_common::model::GatewayBindingType;
+use rib::RibOutputTypeInfo;
 
 // A compiled binding is a binding with all existence of Rib Expr
 // get replaced with their compiled form - RibByteCode.
@@ -90,6 +91,7 @@ impl From<GatewayBindingCompiled>
                             *static_binding,
                         ),
                     ),
+                    response_rib_output: None,
                 }
             }
         }
@@ -163,6 +165,10 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
                     worker_calls: value
                         .worker_functions_in_response
                         .map(rib::WorkerFunctionsInRib::try_from)
+                        .transpose()?,
+                    rib_output: value
+                        .response_rib_output
+                        .map(RibOutputTypeInfo::try_from)
                         .transpose()?,
                 };
 
@@ -242,6 +248,11 @@ mod internal {
                 .into(),
         );
         let response_rib_input = Some(worker_binding.response_compiled.rib_input.into());
+        let response_rib_output = worker_binding
+            .response_compiled
+            .rib_output
+            .map(golem_api_grpc::proto::golem::rib::RibOutputType::from);
+
         let worker_functions_in_response = worker_binding
             .response_compiled
             .worker_calls
@@ -267,6 +278,7 @@ mod internal {
             worker_functions_in_response,
             binding_type: Some(binding_type),
             static_binding: None,
+            response_rib_output,
         }
     }
 }

@@ -54,7 +54,7 @@ impl TryFrom<&InferredType> for AnalysedType {
 
     fn try_from(value: &InferredType) -> Result<Self, Self::Error> {
         let with_unit = AnalysedTypeWithUnit::try_from(value)?;
-        with_unit.try_into()
+        AnalysedType::try_from(with_unit)
     }
 }
 

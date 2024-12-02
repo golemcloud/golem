@@ -13,11 +13,11 @@
 // limitations under the License.
 
 use crate::gateway_binding::{ResponseMapping, WorkerBinding};
-use crate::gateway_rib_compiler::{DefaultRibCompiler, WorkerServiceRibCompiler};
+use crate::gateway_rib_compiler::{DefaultWorkerServiceRibCompiler, WorkerServiceRibCompiler};
 use bincode::{Decode, Encode};
 use golem_service_base::model::VersionedComponentId;
 use golem_wasm_ast::analysis::AnalysedExport;
-use rib::{Expr, RibByteCode, RibInputTypeInfo, WorkerFunctionsInRib};
+use rib::{Expr, RibByteCode, RibInputTypeInfo, RibOutputTypeInfo, WorkerFunctionsInRib};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct WorkerBindingCompiled {
@@ -73,12 +73,12 @@ impl WorkerNameCompiled {
         worker_name: &Expr,
         exports: &[AnalysedExport],
     ) -> Result<Self, String> {
-        let compiled_worker_name = DefaultRibCompiler::compile(worker_name, exports)?;
+        let compiled_worker_name = DefaultWorkerServiceRibCompiler::compile(worker_name, exports)?;
 
         Ok(WorkerNameCompiled {
             worker_name: worker_name.clone(),
             compiled_worker_name: compiled_worker_name.byte_code,
-            rib_input_type_info: compiled_worker_name.global_input_type_info,
+            rib_input_type_info: compiled_worker_name.rib_input_type_info,
         })
     }
 }
@@ -95,12 +95,13 @@ impl IdempotencyKeyCompiled {
         idempotency_key: &Expr,
         exports: &[AnalysedExport],
     ) -> Result<Self, String> {
-        let idempotency_key_compiled = DefaultRibCompiler::compile(idempotency_key, exports)?;
+        let idempotency_key_compiled =
+            DefaultWorkerServiceRibCompiler::compile(idempotency_key, exports)?;
 
         Ok(IdempotencyKeyCompiled {
             idempotency_key: idempotency_key.clone(),
             compiled_idempotency_key: idempotency_key_compiled.byte_code,
-            rib_input: idempotency_key_compiled.global_input_type_info,
+            rib_input: idempotency_key_compiled.rib_input_type_info,
         })
     }
 }
@@ -111,6 +112,8 @@ pub struct ResponseMappingCompiled {
     pub response_mapping_compiled: RibByteCode,
     pub rib_input: RibInputTypeInfo,
     pub worker_calls: Option<WorkerFunctionsInRib>,
+    // Optional to keep backward compatibility
+    pub rib_output: Option<RibOutputTypeInfo>,
 }
 
 impl ResponseMappingCompiled {
@@ -118,13 +121,15 @@ impl ResponseMappingCompiled {
         response_mapping: &ResponseMapping,
         exports: &[AnalysedExport],
     ) -> Result<Self, String> {
-        let response_compiled = DefaultRibCompiler::compile(&response_mapping.0, exports)?;
+        let response_compiled =
+            DefaultWorkerServiceRibCompiler::compile(&response_mapping.0, exports)?;
 
         Ok(ResponseMappingCompiled {
             response_mapping_expr: response_mapping.0.clone(),
             response_mapping_compiled: response_compiled.byte_code,
-            rib_input: response_compiled.global_input_type_info,
+            rib_input: response_compiled.rib_input_type_info,
             worker_calls: response_compiled.worker_invoke_calls,
+            rib_output: response_compiled.rib_output_type_info,
         })
     }
 }
