@@ -48,6 +48,7 @@ where
 }
 
 mod internal {
+    use bigdecimal::BigDecimal;
     use combine::parser::char::char as char_;
 
     use crate::parser::number::number;
@@ -90,10 +91,10 @@ mod internal {
     {
         number().map(|s: Expr| match s {
             Expr::Number(number, _, _) => {
-                if number.value < 0.0 {
+                if number.value < BigDecimal::from(0) {
                     panic!("Cannot use a negative number to index",)
                 } else {
-                    number.value as usize
+                    number.value
                 }
             }
             _ => panic!("Cannot use a float number to index",),

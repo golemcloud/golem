@@ -20,7 +20,6 @@ use crate::{
     from_string, text, type_checker, type_inference, DynamicParsedFunctionName, InferredType,
     ParsedFunctionName, VariableId,
 };
-use bincode::{Decode, Encode};
 use combine::parser::char::spaces;
 use combine::stream::position;
 use combine::Parser;
@@ -37,7 +36,7 @@ use std::str::FromStr;
 use bigdecimal::{BigDecimal, FromPrimitive, ToPrimitive};
 
 // https://github.com/golemcloud/golem/issues/1035
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     Let(VariableId, Option<TypeName>, Box<Expr>, InferredType),
     SelectField(Box<Expr>, String, InferredType),
@@ -784,7 +783,7 @@ impl Expr {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Number {
     pub value: BigDecimal
 }
@@ -829,7 +828,7 @@ impl MatchArm {
         }
     }
 }
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArmPattern {
     WildCard,
     As(String, Box<ArmPattern>),
@@ -1812,6 +1811,7 @@ impl Serialize for Expr {
 
 #[cfg(test)]
 mod tests {
+    use bigdecimal::BigDecimal;
     use test_r::test;
 
     use crate::ParsedFunctionSite::PackagedInterface;
