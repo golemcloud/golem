@@ -1699,4 +1699,11 @@ mod function_name_tests {
         );
         round_trip_function_name_parse("ns:name/interface.{[drop]resource1}");
     }
+
+    #[test]
+    fn test_parsed_function_name_complex_resource_args() {
+        round_trip_function_name_parse(
+            r#"golem:api/oplog-processor@1.1.0-rc1.{processor({ account-id: { value: "-1" } }, { high-bits: 11637111831105389641, low-bits: 11277240687824975272 }, []).process}"#
+        )
+    }
 }
