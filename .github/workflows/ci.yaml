@@ -208,7 +208,7 @@ jobs:
           labels: ${{ steps.meta-golem-router.outputs.labels }}
 
   build-and-test:
-    runs-on: ubuntu-latest-large
+    runs-on: ubuntu-latest-xlarge
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -247,7 +247,7 @@ jobs:
           detailed_summary: true
           include_passed: true
   worker-tests-group1:
-    runs-on: ubuntu-latest-large
+    runs-on: ubuntu-latest-xlarge
     name: worker-tests-group1
     steps:
       - name: Checkout
@@ -285,7 +285,7 @@ jobs:
           include_passed: true
   worker-tests:
     needs: [ worker-tests-group1 ]
-    runs-on: ubuntu-latest-large
+    runs-on: ubuntu-latest-xlarge
     strategy:
       fail-fast: true
       matrix:
@@ -334,7 +334,7 @@ jobs:
           detailed_summary: true
           include_passed: true
   integration-tests:
-    runs-on: ubuntu-latest-large
+    runs-on: ubuntu-latest-xlarge
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -373,7 +373,7 @@ jobs:
           detailed_summary: true
           include_passed: true
   cli-tests:
-    runs-on: ubuntu-latest-large
+    runs-on: ubuntu-latest-xlarge
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -412,7 +412,7 @@ jobs:
           detailed_summary: true
           include_passed: true
   sharding-tests:
-    runs-on: ubuntu-latest-large
+    runs-on: ubuntu-latest-xlarge
     steps:
       - name: Checkout
         uses: actions/checkout@v4
