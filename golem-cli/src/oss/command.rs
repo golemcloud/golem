@@ -14,6 +14,7 @@
 
 use crate::command::api_definition::ApiDefinitionSubcommand;
 use crate::command::api_deployment::ApiDeploymentSubcommand;
+use crate::command::api_security::ApiSecuritySchemeSubcommand;
 use crate::command::component::ComponentSubCommand;
 use crate::command::plugin::PluginSubcommand;
 use crate::command::profile::ProfileSubCommand;
@@ -77,6 +78,13 @@ pub enum OssCommand<ProfileAdd: clap::Args> {
     ApiDeployment {
         #[command(subcommand)]
         subcommand: ApiDeploymentSubcommand<OssContext>,
+    },
+
+    // Manage Api Security Schemes
+    #[command()]
+    ApiSecurityScheme {
+        #[command(subcommand)]
+        subcommand: ApiSecuritySchemeSubcommand<OssContext>,
     },
 
     /// Manage plugins

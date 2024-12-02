@@ -29,7 +29,7 @@ use std::fmt::{Display, Formatter};
 // has parameters, then the RegistryValue is considered a function type itself with parameter types,
 // and a return type that the member variant represents. If the variant has no parameters,
 // then the RegistryValue is simply an AnalysedType representing the variant type itself.
-// RegistryKey is more alligned to the component metdata, and possess all the complexities that the component metadata
+// RegistryKey is more aligned to the component metadata, and possess all the complexities that the component metadata
 // may have.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FunctionTypeRegistry {

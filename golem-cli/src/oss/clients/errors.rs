@@ -14,8 +14,8 @@
 
 use crate::model::ResponseContentErrorMapper;
 use golem_client::api::{
-    ApiDefinitionError, ApiDeploymentError, ComponentError, HealthCheckError, PluginError,
-    WorkerError,
+    ApiDefinitionError, ApiDeploymentError, ApiSecurityError, ComponentError, HealthCheckError,
+    PluginError, WorkerError,
 };
 use golem_client::model::{
     GolemError, GolemErrorComponentDownloadFailed, GolemErrorComponentParseFailed,
@@ -83,6 +83,19 @@ impl ResponseContentErrorMapper for ApiDefinitionError {
             ApiDefinitionError::Error404(error) => error.error,
             ApiDefinitionError::Error409(error) => error.to_string(),
             ApiDefinitionError::Error500(error) => error.error,
+        }
+    }
+}
+
+impl ResponseContentErrorMapper for ApiSecurityError {
+    fn map(self) -> String {
+        match self {
+            ApiSecurityError::Error400(error) => display_worker_service_errors_body(error),
+            ApiSecurityError::Error401(error) => error.error,
+            ApiSecurityError::Error403(error) => error.error,
+            ApiSecurityError::Error404(error) => error.error,
+            ApiSecurityError::Error409(error) => error.to_string(),
+            ApiSecurityError::Error500(error) => error.error,
         }
     }
 }
@@ -234,21 +247,7 @@ pub fn display_promise_id(promise_id: PromiseId) -> String {
 pub fn display_worker_service_errors_body(error: WorkerServiceErrorsBody) -> String {
     match error {
         WorkerServiceErrorsBody::Messages(messages) => messages.errors.iter().join(", "),
-        WorkerServiceErrorsBody::Validation(validation) => validation
-            .errors
-            .iter()
-            .map(|e| match &e.component {
-                Some(component) => {
-                    format!(
-                        "{}/{}/{}/{}",
-                        e.method, e.path, component.component_id, e.detail
-                    )
-                }
-                None => {
-                    format!("{}/{}/{}", e.method, e.path, e.detail)
-                }
-            })
-            .join("\n"),
+        WorkerServiceErrorsBody::Validation(validation) => validation.errors.iter().join("\n"),
     }
 }
 
@@ -257,15 +256,10 @@ mod tests {
     use test_r::test;
 
     use crate::oss::clients::errors::ResponseContentErrorMapper;
-    use golem_client::model::VersionedComponentId;
     use golem_client::{
         api::ApiDefinitionError,
-        model::{
-            ErrorBody, MessagesErrorsBody, MethodPattern, RouteValidationError,
-            ValidationErrorsBody, WorkerServiceErrorsBody,
-        },
+        model::{ErrorBody, MessagesErrorsBody, ValidationErrorsBody, WorkerServiceErrorsBody},
     };
-    use uuid::Uuid;
 
     #[test]
     fn api_definition_error_409() {
@@ -319,26 +313,8 @@ mod tests {
         let error = ApiDefinitionError::Error400(WorkerServiceErrorsBody::Validation(
             ValidationErrorsBody {
                 errors: vec![
-                    RouteValidationError {
-                        method: MethodPattern::Get,
-                        path: "path".to_string(),
-                        component: Some(VersionedComponentId {
-                            component_id: Uuid::parse_str("02f09a3f-1624-3b1d-8409-44eff7708208")
-                                .unwrap(),
-                            version: 0,
-                        }),
-                        detail: "Duplicate route".to_string(),
-                    },
-                    RouteValidationError {
-                        method: MethodPattern::Post,
-                        path: "path2".to_string(),
-                        component: Some(VersionedComponentId {
-                            component_id: Uuid::parse_str("02f09a3f-1624-3b1d-8409-44eff7708209")
-                                .unwrap(),
-                            version: 0,
-                        }),
-                        detail: "Other route".to_string(),
-                    },
+                    "Get/path/02f09a3f-1624-3b1d-8409-44eff7708208/Duplicate route".to_string(),
+                    "Post/path2/02f09a3f-1624-3b1d-8409-44eff7708209/Other route".to_string(),
                 ],
             },
         ));

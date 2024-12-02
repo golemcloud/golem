@@ -23,8 +23,8 @@ use golem_cli::model::component::ComponentView;
 use golem_cli::model::ApiDefinitionFileFormat;
 use golem_client::model::{
     GatewayBindingData, GatewayBindingType, GatewayBindingWithTypeInfo, HttpApiDefinitionRequest,
-    HttpApiDefinitionWithTypeInfo, MethodPattern, RibInputTypeInfo, RouteData, RouteWithTypeInfo,
-    VersionedComponentId,
+    HttpApiDefinitionResponseData, MethodPattern, RibInputTypeInfo, RouteRequestData,
+    RouteWithTypeInfo, VersionedComponentId,
 };
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use serde::Serialize;
@@ -196,9 +196,12 @@ fn golem_def_with_response(
         id: id.to_string(),
         version: "0.1.0".to_string(),
         draft: true,
-        routes: vec![RouteData {
+        security: None,
+        routes: vec![RouteRequestData {
             method: MethodPattern::Get,
             path: "/{user-id}/get-cart-contents".to_string(),
+            cors: None,
+            security: None,
             binding: GatewayBindingData {
                 component_id: Some(VersionedComponentId {
                     component_id: Uuid::parse_str(component_id).unwrap(),
@@ -207,7 +210,6 @@ fn golem_def_with_response(
                 worker_name: Some("\"foo\"".to_string()),
                 idempotency_key: None,
                 response: Some(response),
-                middleware: None,
                 allow_origin: None,
                 allow_methods: None,
                 allow_headers: None,
@@ -359,8 +361,8 @@ pub fn make_open_api_json_file(
 pub fn to_api_definition_with_type_info(
     request: HttpApiDefinitionRequest,
     created_at: Option<DateTime<Utc>>,
-) -> HttpApiDefinitionWithTypeInfo {
-    HttpApiDefinitionWithTypeInfo {
+) -> HttpApiDefinitionResponseData {
+    HttpApiDefinitionResponseData {
         id: request.id,
         version: request.version,
         draft: request.draft,
@@ -408,7 +410,7 @@ fn api_definition_import(
     let component_id = component.component_urn.id.0.to_string();
     let component_version = component.component_version;
 
-    let res: HttpApiDefinitionWithTypeInfo = match api_definition_format {
+    let res: HttpApiDefinitionResponseData = match api_definition_format {
         ApiDefinitionFileFormat::Json => {
             let path = make_open_api_json_file(&component_name, &component_id, component_version)?;
             cli.run(&["api-definition", "import", path.to_str().unwrap()])?
@@ -448,7 +450,7 @@ fn api_definition_add(
     let component_id = component.component_urn.id.0.to_string();
     let def = native_api_definition_request(&component_name, &component_id);
 
-    let res: HttpApiDefinitionWithTypeInfo = match api_definition_format {
+    let res: HttpApiDefinitionResponseData = match api_definition_format {
         ApiDefinitionFileFormat::Json => {
             let path = make_json_file(&def.id, &def)?;
             cli.run(&["api-definition", "add", path.to_str().unwrap()])?
@@ -486,7 +488,7 @@ fn api_definition_update(
 
     let def = native_api_definition_request(&component_name, &component_id);
     let path = make_json_file(&def.id, &def)?;
-    let _: HttpApiDefinitionWithTypeInfo =
+    let _: HttpApiDefinitionResponseData =
         cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
 
     let updated = golem_def_with_response(
@@ -496,7 +498,7 @@ fn api_definition_update(
             .to_string(),
     );
 
-    let res: HttpApiDefinitionWithTypeInfo = match api_definition_format {
+    let res: HttpApiDefinitionResponseData = match api_definition_format {
         ApiDefinitionFileFormat::Json => {
             let path = make_json_file(&updated.id, &updated)?;
             cli.run(&["api-definition", "update", path.to_str().unwrap()])?
@@ -534,7 +536,7 @@ fn api_definition_update_immutable(
     let mut def = native_api_definition_request(&component_name, &component_id);
     def.draft = false;
     let path = make_json_file(&def.id, &def)?;
-    let _: HttpApiDefinitionWithTypeInfo =
+    let _: HttpApiDefinitionResponseData =
         cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
 
     let updated = golem_def_with_response(&component_name, &component_id, "${let status: u64 = 200; {headers: {ContentType: \"json\", userid: \"bar\"}, body: worker.response, status: status}}".to_string());
@@ -559,10 +561,10 @@ fn api_definition_list(
     let def = native_api_definition_request(&component_name, &component_id);
     let path = make_json_file(&def.id, &def)?;
 
-    let _: HttpApiDefinitionWithTypeInfo =
+    let _: HttpApiDefinitionResponseData =
         cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
 
-    let res: Vec<HttpApiDefinitionWithTypeInfo> = cli.run(&["api-definition", "list"])?;
+    let res: Vec<HttpApiDefinitionResponseData> = cli.run(&["api-definition", "list"])?;
 
     let found = res.into_iter().find(|d| {
         let e = to_api_definition_with_type_info(def.clone(), d.created_at);
@@ -588,10 +590,10 @@ fn api_definition_list_versions(
     let path = make_json_file(&def.id, &def)?;
     let cfg = &cli.config;
 
-    let _: HttpApiDefinitionWithTypeInfo =
+    let _: HttpApiDefinitionResponseData =
         cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
 
-    let res: Vec<HttpApiDefinitionWithTypeInfo> = cli.run(&[
+    let res: Vec<HttpApiDefinitionResponseData> = cli.run(&[
         "api-definition",
         "list",
         &cfg.arg('i', "id"),
@@ -600,7 +602,7 @@ fn api_definition_list_versions(
 
     assert_eq!(res.len(), 1);
 
-    let res: HttpApiDefinitionWithTypeInfo = res.first().unwrap().clone();
+    let res: HttpApiDefinitionResponseData = res.first().unwrap().clone();
     let expected = to_api_definition_with_type_info(def, res.created_at);
 
     assert_eq!(res, expected);
@@ -621,12 +623,12 @@ fn api_definition_get(
     let def = native_api_definition_request(&component_name, &component_id);
     let path = make_json_file(&def.id, &def)?;
 
-    let _: HttpApiDefinitionWithTypeInfo =
+    let _: HttpApiDefinitionResponseData =
         cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
 
     let cfg = &cli.config;
 
-    let res: HttpApiDefinitionWithTypeInfo = cli.run(&[
+    let res: HttpApiDefinitionResponseData = cli.run(&[
         "api-definition",
         "get",
         &cfg.arg('i', "id"),
@@ -655,12 +657,12 @@ fn api_definition_delete(
     let def = native_api_definition_request(&component_name, &component_id);
     let path = make_json_file(&def.id, &def)?;
 
-    let _: HttpApiDefinitionWithTypeInfo =
+    let _: HttpApiDefinitionResponseData =
         cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
 
     let cfg = &cli.config;
 
-    let res: HttpApiDefinitionWithTypeInfo = cli.run(&[
+    let res: HttpApiDefinitionResponseData = cli.run(&[
         "api-definition",
         "get",
         &cfg.arg('i', "id"),
@@ -682,7 +684,7 @@ fn api_definition_delete(
         "0.1.0",
     ])?;
 
-    let res_list: Vec<HttpApiDefinitionWithTypeInfo> = cli.run(&[
+    let res_list: Vec<HttpApiDefinitionResponseData> = cli.run(&[
         "api-definition",
         "list",
         &cfg.arg('i', "id"),

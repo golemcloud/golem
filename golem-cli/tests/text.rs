@@ -24,7 +24,7 @@ use crate::Tracing;
 use assert2::assert;
 use golem_cli::model::component::ComponentView;
 use golem_cli::model::Format;
-use golem_client::model::{ApiDeployment, HttpApiDefinitionWithTypeInfo};
+use golem_client::model::{ApiDeployment, HttpApiDefinitionResponseData};
 use golem_common::model::TargetWorkerId;
 use golem_common::uri::oss::urn::{ComponentUrn, WorkerUrn};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
@@ -599,7 +599,7 @@ fn text_api_definition_update(
     let def = native_api_definition_request(&component_name, &component_id);
     let path = make_json_file(&def.id, &def)?;
 
-    let _: HttpApiDefinitionWithTypeInfo =
+    let _: HttpApiDefinitionResponseData =
         cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
     let res = cli.with_format(Format::Text).run_string(&[
         "api-definition",
@@ -629,7 +629,7 @@ fn text_api_definition_list(
     let path = make_json_file(&def.id, &def)?;
     let cfg = &cli.config;
 
-    let _: HttpApiDefinitionWithTypeInfo =
+    let _: HttpApiDefinitionResponseData =
         cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
 
     let res = cli.with_format(Format::Text).run_string(&[
@@ -660,7 +660,7 @@ fn text_api_definition_get(
     let def = native_api_definition_request(&component_name, &component_id);
     let path = make_json_file(&def.id, &def)?;
 
-    let _: HttpApiDefinitionWithTypeInfo =
+    let _: HttpApiDefinitionResponseData =
         cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
 
     let cfg = &cli.config;

@@ -19,7 +19,7 @@ use crate::cli::{Cli, CliLive};
 use crate::Tracing;
 use assert2::assert;
 use golem_cli::model::component::ComponentView;
-use golem_client::model::{ApiDeployment, HttpApiDefinitionWithTypeInfo};
+use golem_client::model::{ApiDeployment, HttpApiDefinitionResponseData};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use std::sync::Arc;
 use test_r::core::{DynamicTestRegistration, TestType};
@@ -78,7 +78,7 @@ pub fn make_definition(
     deps: &EnvBasedTestDependencies,
     cli: &CliLive,
     component_name: &str,
-) -> Result<HttpApiDefinitionWithTypeInfo, anyhow::Error> {
+) -> Result<HttpApiDefinitionResponseData, anyhow::Error> {
     let component = make_shopping_cart_component(deps, component_name, cli)?;
     let component_id = component.component_urn.id.0.to_string();
     let def = native_api_definition_request(component_name, &component_id);
@@ -112,7 +112,7 @@ fn api_deployment_deploy(
     assert_eq!(api_definition_info.id, definition.id);
     assert_eq!(api_definition_info.version, definition.version);
 
-    let updated_def: HttpApiDefinitionWithTypeInfo = cli.run(&[
+    let updated_def: HttpApiDefinitionResponseData = cli.run(&[
         "api-definition",
         "get",
         &cfg.arg('i', "id"),

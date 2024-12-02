@@ -29,7 +29,7 @@ use golem_worker_service_base::gateway_api_definition::http::{
 };
 
 use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
-use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
+use golem_worker_service_base::app_config::{KeyValueStorageConfig, WorkerServiceBaseConfig};
 
 use golem_worker_service_base::gateway_execution::api_definition_lookup::{
     ApiDefinitionsLookup, HttpApiDefinitionLookup,
@@ -42,9 +42,7 @@ use golem_worker_service_base::service::gateway::api_definition::{
     ApiDefinitionService, ApiDefinitionServiceDefault,
 };
 use golem_worker_service_base::service::gateway::api_definition_validator::ApiDefinitionValidatorService;
-use golem_worker_service_base::service::gateway::http_api_definition_validator::{
-    HttpApiDefinitionValidator, RouteValidationError,
-};
+use golem_worker_service_base::service::gateway::http_api_definition_validator::HttpApiDefinitionValidator;
 use golem_worker_service_base::service::worker::WorkerServiceDefault;
 
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
@@ -52,10 +50,19 @@ use golem_common::client::{GrpcClientConfig, MultiTargetGrpcClient};
 use golem_common::config::RetryConfig;
 
 use golem_common::config::DbConfig;
+use golem_common::redis::RedisPool;
 use golem_service_base::db;
+use golem_worker_service_base::gateway_execution::gateway_session::{
+    GatewaySession, GatewaySessionWithInMemoryCache, RedisGatewaySession,
+};
 use golem_worker_service_base::gateway_request::http_request::InputHttpRequest;
+use golem_worker_service_base::gateway_security::DefaultIdentityProvider;
+use golem_worker_service_base::repo::security_scheme::{DbSecuritySchemeRepo, SecuritySchemeRepo};
 use golem_worker_service_base::service::gateway::api_deployment::{
     ApiDeploymentService, ApiDeploymentServiceDefault,
+};
+use golem_worker_service_base::service::gateway::security_scheme::{
+    DefaultSecuritySchemeService, SecuritySchemeService,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -65,23 +72,23 @@ use tonic::codec::CompressionEncoding;
 pub struct Services {
     pub worker_service: worker::WorkerService,
     pub component_service: component::ComponentService,
-    pub definition_service: Arc<
-        dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace, RouteValidationError>
-            + Sync
-            + Send,
-    >,
+    pub security_scheme_service: Arc<dyn SecuritySchemeService<DefaultNamespace> + Sync + Send>,
+    pub definition_service:
+        Arc<dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace> + Sync + Send>,
     pub deployment_service:
         Arc<dyn ApiDeploymentService<EmptyAuthCtx, DefaultNamespace> + Sync + Send>,
     pub http_definition_lookup_service: Arc<
-        dyn ApiDefinitionsLookup<InputHttpRequest, CompiledHttpApiDefinition<DefaultNamespace>>
-            + Sync
+        dyn ApiDefinitionsLookup<
+                InputHttpRequest,
+                ApiDefinition = CompiledHttpApiDefinition<DefaultNamespace>,
+            > + Sync
             + Send,
     >,
     pub worker_to_http_service:
         Arc<dyn GatewayWorkerRequestExecutor<DefaultNamespace> + Sync + Send>,
-    pub api_definition_validator_service: Arc<
-        dyn ApiDefinitionValidatorService<HttpApiDefinition, RouteValidationError> + Sync + Send,
-    >,
+    pub gateway_session_store: Arc<dyn GatewaySession + Sync + Send>,
+    pub api_definition_validator_service:
+        Arc<dyn ApiDefinitionValidatorService<HttpApiDefinition> + Sync + Send>,
     pub fileserver_binding_handler:
         Arc<dyn FileServerBindingHandler<DefaultNamespace> + Sync + Send>,
 }
@@ -135,7 +142,25 @@ impl Services {
             worker_service.clone(),
         ));
 
-        let (api_definition_repo, api_deployment_repo) = match config.db.clone() {
+        let gateway_session_store = match &config.gateway_session_storage {
+            KeyValueStorageConfig::Redis(redis_config) => {
+                let redis = RedisPool::configured(redis_config)
+                    .await
+                    .map_err(|e| e.to_string())?;
+
+                let gateway_session_with_redis = RedisGatewaySession::new(redis, 60 * 60);
+
+                let with_in_memory_cache =
+                    GatewaySessionWithInMemoryCache::new(gateway_session_with_redis, 60 * 60, 60);
+
+                Arc::new(with_in_memory_cache)
+            }
+        };
+
+        let (api_definition_repo, api_deployment_repo, security_scheme_repo) = match config
+            .db
+            .clone()
+        {
             DbConfig::Postgres(c) => {
                 let db_pool = db::create_postgres_pool(&c)
                     .await
@@ -148,7 +173,15 @@ impl Services {
                     Arc::new(api_deployment::LoggedDeploymentRepo::new(
                         api_deployment::DbApiDeploymentRepo::new(db_pool.clone().into()),
                     ));
-                (api_definition_repo, api_deployment_repo)
+
+                let security_scheme_repo: Arc<dyn SecuritySchemeRepo + Sync + Send> =
+                    Arc::new(DbSecuritySchemeRepo::new(db_pool.clone().into()));
+
+                (
+                    api_definition_repo,
+                    api_deployment_repo,
+                    security_scheme_repo,
+                )
             }
             DbConfig::Sqlite(c) => {
                 let db_pool = db::create_sqlite_pool(&c)
@@ -162,7 +195,15 @@ impl Services {
                     Arc::new(api_deployment::LoggedDeploymentRepo::new(
                         api_deployment::DbApiDeploymentRepo::new(db_pool.clone().into()),
                     ));
-                (api_definition_repo, api_deployment_repo)
+
+                let security_scheme_repo: Arc<dyn SecuritySchemeRepo + Sync + Send> =
+                    Arc::new(DbSecuritySchemeRepo::new(db_pool.clone().into()));
+
+                (
+                    api_definition_repo,
+                    api_deployment_repo,
+                    security_scheme_repo,
+                )
             }
         };
 
@@ -204,14 +245,20 @@ impl Services {
 
         let api_definition_validator_service = Arc::new(HttpApiDefinitionValidator {});
 
+        let identity_provider = Arc::new(DefaultIdentityProvider);
+
+        let security_scheme_service = Arc::new(DefaultSecuritySchemeService::new(
+            security_scheme_repo,
+            identity_provider,
+        ));
+
         let definition_service: Arc<
-            dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace, RouteValidationError>
-                + Sync
-                + Send,
+            dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace> + Sync + Send,
         > = Arc::new(ApiDefinitionServiceDefault::new(
             component_service.clone(),
             api_definition_repo.clone(),
             api_deployment_repo.clone(),
+            security_scheme_service.clone(),
             api_definition_validator_service.clone(),
         ));
 
@@ -229,12 +276,14 @@ impl Services {
         Ok(Services {
             worker_service,
             definition_service,
+            security_scheme_service,
             deployment_service,
             http_definition_lookup_service,
             worker_to_http_service,
             component_service,
             api_definition_validator_service,
             fileserver_binding_handler,
+            gateway_session_store,
         })
     }
 }

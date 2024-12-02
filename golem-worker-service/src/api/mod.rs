@@ -1,5 +1,6 @@
 pub mod api_definition;
 pub mod api_deployment;
+mod security_scheme;
 pub mod worker;
 pub mod worker_connect;
 
@@ -18,6 +19,7 @@ type ApiServices = (
     WorkerApi,
     api_definition::RegisterApiDefinitionApi,
     api_deployment::ApiDeploymentApi,
+    security_scheme::SecuritySchemeApi,
     HealthcheckApi,
 );
 
@@ -46,6 +48,7 @@ pub fn custom_request_route(services: Services) -> Route {
         services.worker_to_http_service,
         services.http_definition_lookup_service,
         services.fileserver_binding_handler,
+        services.gateway_session_store,
     );
 
     Route::new().nest("/", custom_request_executor)
@@ -60,6 +63,7 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<ApiServices,
             },
             api_definition::RegisterApiDefinitionApi::new(services.definition_service.clone()),
             api_deployment::ApiDeploymentApi::new(services.deployment_service.clone()),
+            security_scheme::SecuritySchemeApi::new(services.security_scheme_service.clone()),
             HealthcheckApi,
         ),
         "Golem API",

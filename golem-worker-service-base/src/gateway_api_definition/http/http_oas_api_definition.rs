@@ -21,18 +21,22 @@ use poem_openapi::types::{ParseError, ParseFromJSON, ParseFromYAML, ParseResult}
 use serde_json::Value;
 use std::borrow::Cow;
 
-pub struct OpenApiDefinitionRequest(pub OpenAPI);
+pub struct OpenApiHttpApiDefinitionRequest(pub OpenAPI);
 
-impl OpenApiDefinitionRequest {
-    pub fn to_http_api_definition(&self) -> Result<HttpApiDefinitionRequest, String> {
+impl OpenApiHttpApiDefinitionRequest {
+    pub fn to_http_api_definition_request(&self) -> Result<HttpApiDefinitionRequest, String> {
         let open_api = &self.0;
-        let api_definition_id = ApiDefinitionId(get_root_extension(
+        let api_definition_id = ApiDefinitionId(get_root_extension_str(
             open_api,
             GOLEM_API_DEFINITION_ID_EXTENSION,
         )?);
 
-        let api_definition_version =
-            ApiVersion(get_root_extension(open_api, GOLEM_API_DEFINITION_VERSION)?);
+        let api_definition_version = ApiVersion(get_root_extension_str(
+            open_api,
+            GOLEM_API_DEFINITION_VERSION,
+        )?);
+
+        let security = get_global_security(open_api);
 
         let routes = get_routes(&open_api.paths)?;
 
@@ -41,15 +45,16 @@ impl OpenApiDefinitionRequest {
             version: api_definition_version,
             routes,
             draft: true,
+            security,
         })
     }
 }
 
-impl ParseFromJSON for OpenApiDefinitionRequest {
+impl ParseFromJSON for OpenApiHttpApiDefinitionRequest {
     fn parse_from_json(value: Option<serde_json::Value>) -> ParseResult<Self> {
         match value {
             Some(value) => match serde_json::from_value::<openapiv3::OpenAPI>(value) {
-                Ok(openapi) => Ok(OpenApiDefinitionRequest(openapi)),
+                Ok(openapi) => Ok(OpenApiHttpApiDefinitionRequest(openapi)),
                 Err(e) => Err(ParseError::<Self>::custom(format!(
                     "Failed to parse OpenAPI: {}",
                     e
@@ -63,11 +68,11 @@ impl ParseFromJSON for OpenApiDefinitionRequest {
     }
 }
 
-impl ParseFromYAML for OpenApiDefinitionRequest {
+impl ParseFromYAML for OpenApiHttpApiDefinitionRequest {
     fn parse_from_yaml(value: Option<Value>) -> ParseResult<Self> {
         match value {
             Some(value) => match serde_json::from_value::<openapiv3::OpenAPI>(value) {
-                Ok(openapi) => Ok(OpenApiDefinitionRequest(openapi)),
+                Ok(openapi) => Ok(OpenApiHttpApiDefinitionRequest(openapi)),
                 Err(e) => Err(ParseError::<Self>::custom(format!(
                     "Failed to parse OpenAPI: {}",
                     e
@@ -81,7 +86,7 @@ impl ParseFromYAML for OpenApiDefinitionRequest {
     }
 }
 
-impl poem_openapi::types::Type for OpenApiDefinitionRequest {
+impl poem_openapi::types::Type for OpenApiHttpApiDefinitionRequest {
     const IS_REQUIRED: bool = true;
 
     type RawValueType = Self;
@@ -112,16 +117,15 @@ impl poem_openapi::types::Type for OpenApiDefinitionRequest {
 }
 
 mod internal {
-    use crate::gateway_api_definition::http::{AllPathPatterns, MethodPattern, Route};
+    use crate::gateway_api_definition::http::{AllPathPatterns, MethodPattern, RouteRequest};
     use golem_common::model::{ComponentId, GatewayBindingType};
     use openapiv3::{OpenAPI, Operation, Paths, ReferenceOr};
     use rib::Expr;
     use serde_json::Value;
 
     use crate::gateway_binding::{GatewayBinding, ResponseMapping, StaticBinding, WorkerBinding};
-    use crate::gateway_middleware::{
-        Cors, CorsPreflightExpr, HttpMiddleware, Middleware, Middlewares,
-    };
+    use crate::gateway_middleware::{CorsPreflightExpr, HttpCors};
+    use crate::gateway_security::{SecuritySchemeIdentifier, SecuritySchemeReference};
     use golem_service_base::model::VersionedComponentId;
     use uuid::Uuid;
 
@@ -133,20 +137,45 @@ mod internal {
 
     pub(crate) const GOLEM_API_GATEWAY_BINDING: &str = "x-golem-api-gateway-binding";
 
-    pub(crate) fn get_root_extension(open_api: &OpenAPI, key_name: &str) -> Result<String, String> {
-        open_api
-            .extensions
-            .iter()
-            .find(|(key, _)| key.to_lowercase() == key_name)
-            .map(|(_, value)| value)
+    pub(crate) fn get_global_security(open_api: &OpenAPI) -> Option<Vec<SecuritySchemeReference>> {
+        open_api.security.as_ref().and_then(|requirements| {
+            let global_security: Vec<_> = requirements
+                .iter()
+                .flat_map(|x| {
+                    x.keys().map(|key| SecuritySchemeReference {
+                        security_scheme_identifier: SecuritySchemeIdentifier::new(key.clone()),
+                    })
+                })
+                .collect();
+
+            if global_security.is_empty() {
+                Some(global_security)
+            } else {
+                None
+            }
+        })
+    }
+    pub(crate) fn get_root_extension_str(
+        open_api: &OpenAPI,
+        key_name: &str,
+    ) -> Result<String, String> {
+        get_root_extension_value(open_api, key_name)
             .ok_or(format!("{} not found in the open API spec", key_name))?
             .as_str()
             .ok_or(format!("Invalid value for {}", key_name))
             .map(|x| x.to_string())
     }
 
-    pub(crate) fn get_routes(paths: &Paths) -> Result<Vec<Route>, String> {
-        let mut routes: Vec<Route> = vec![];
+    pub(crate) fn get_root_extension_value(open_api: &OpenAPI, key_name: &str) -> Option<Value> {
+        open_api
+            .extensions
+            .iter()
+            .find(|(key, __)| key.to_lowercase() == key_name)
+            .map(|(_, v)| v.clone())
+    }
+
+    pub(crate) fn get_routes(paths: &Paths) -> Result<Vec<RouteRequest>, String> {
+        let mut routes: Vec<RouteRequest> = vec![];
 
         for (path, path_item) in paths.iter() {
             match path_item {
@@ -175,7 +204,7 @@ mod internal {
         method: &str,
         method_operation: &Operation,
         path_pattern: &AllPathPatterns,
-    ) -> Result<Route, String> {
+    ) -> Result<RouteRequest, String> {
         let method_res = match method {
             "get" => Ok(MethodPattern::Get),
             "post" => Ok(MethodPattern::Post),
@@ -190,6 +219,19 @@ mod internal {
 
         let method = method_res?;
 
+        let security = method_operation
+            .security
+            .clone()
+            .and_then(|x| x.clone().first().cloned());
+
+        // Custom scopes to be supported later
+        // Multiple security schemes to be supported later
+        let security_name = security.and_then(|x| x.first().map(|x| x.0.clone()));
+
+        let security = security_name.map(|x| SecuritySchemeReference {
+            security_scheme_identifier: SecuritySchemeIdentifier::new(x),
+        });
+
         let worker_gateway_info_optional = method_operation
             .extensions
             // TO keep backward compatibility with the old extension
@@ -202,32 +244,40 @@ mod internal {
 
                 match (&binding_type, &method) {
                     (GatewayBindingType::CorsPreflight, MethodPattern::Options) => {
-                        let binding = get_cors_binding(worker_gateway_info)?;
+                        let binding = get_cors_static_binding(worker_gateway_info)?;
 
-                        Ok(Route {
+                        Ok(RouteRequest {
                             method,
                             path: path_pattern.clone(),
-                            binding: GatewayBinding::Static(binding),
+                            binding: GatewayBinding::static_binding(binding),
+                            security,
+                            cors: None
                         })
                     }
-                    (GatewayBindingType::Default, _) => {
-                        let binding = get_worker_binding(worker_gateway_info)?;
 
-                        Ok(Route {
+                    (GatewayBindingType::Default, _) => {
+                        let binding = get_gateway_binding(worker_gateway_info)?;
+
+                        Ok(RouteRequest {
                             path: path_pattern.clone(),
                             method,
                             binding: GatewayBinding::Default(binding),
+                            security,
+                            cors: None
                         })
                     }
                     (GatewayBindingType::FileServer, _) => {
-                        let binding = get_worker_binding(worker_gateway_info)?;
+                        let binding = get_gateway_binding(worker_gateway_info)?;
 
-                        Ok(Route {
+                        Ok(RouteRequest {
                             path: path_pattern.clone(),
                             method,
                             binding: GatewayBinding::Default(binding),
+                            security,
+                            cors: None
                         })
                     }
+
 
                     (GatewayBindingType::CorsPreflight, method) => {
                         Err(format!("cors-preflight binding type is supported only for 'options' method, but found method '{}'", method))
@@ -237,12 +287,14 @@ mod internal {
 
             None => {
                 if method == MethodPattern::Options {
-                    let binding = StaticBinding::from_http_cors(Cors::default());
+                    let binding = StaticBinding::from_http_cors(HttpCors::default());
 
-                    Ok(Route {
+                    Ok(RouteRequest {
                         path: path_pattern.clone(),
                         method,
-                        binding: GatewayBinding::Static(binding),
+                        binding: GatewayBinding::static_binding(binding),
+                        security,
+                        cors: None,
                     })
                 } else {
                     Err(format!(
@@ -254,31 +306,22 @@ mod internal {
         }
     }
 
-    pub(crate) fn get_worker_binding(worker_gateway_info: &Value) -> Result<WorkerBinding, String> {
-        let http_middlewares = get_middleware(worker_gateway_info)?;
-        let middlewares = http_middlewares
-            .into_iter()
-            .map(Middleware::http)
-            .collect::<Vec<_>>();
-
-        let binding_middleware = if middlewares.is_empty() {
-            None
-        } else {
-            Some(Middlewares(middlewares))
-        };
-
+    pub(crate) fn get_gateway_binding(
+        gateway_binding_value: &Value,
+    ) -> Result<WorkerBinding, String> {
         let binding = WorkerBinding {
-            worker_name: get_worker_id_expr(worker_gateway_info)?,
-            component_id: get_component_id(worker_gateway_info)?,
-            idempotency_key: get_idempotency_key(worker_gateway_info)?,
-            response_mapping: get_response_mapping(worker_gateway_info)?,
-            middleware: binding_middleware,
+            worker_name: get_worker_id_expr(gateway_binding_value)?,
+            component_id: get_component_id(gateway_binding_value)?,
+            idempotency_key: get_idempotency_key(gateway_binding_value)?,
+            response_mapping: get_response_mapping(gateway_binding_value)?,
         };
 
         Ok(binding)
     }
 
-    pub(crate) fn get_cors_binding(worker_gateway_info: &Value) -> Result<StaticBinding, String> {
+    pub(crate) fn get_cors_static_binding(
+        worker_gateway_info: &Value,
+    ) -> Result<StaticBinding, String> {
         match worker_gateway_info {
             Value::Object(map) => match map.get("response") {
                 Some(value) => {
@@ -288,27 +331,28 @@ mod internal {
 
                     let rib = rib::from_string(rib_expr_text).map_err(|err| err.to_string())?;
 
-                    let cors_preflight = Cors::from_cors_preflight_expr(&CorsPreflightExpr(rib))?;
+                    let cors_preflight =
+                        HttpCors::from_cors_preflight_expr(&CorsPreflightExpr(rib))?;
 
                     Ok(StaticBinding::from_http_cors(cors_preflight))
                 }
 
-                None => Ok(StaticBinding::from_http_cors(Cors::default())),
+                None => Ok(StaticBinding::from_http_cors(HttpCors::default())),
             },
             _ => Err("Invalid schema for cors binding".to_string()),
         }
     }
 
     pub(crate) fn get_component_id(
-        worker_gateway_info: &Value,
+        gateway_binding_value: &Value,
     ) -> Result<VersionedComponentId, String> {
-        let component_id_str = worker_gateway_info
+        let component_id_str = gateway_binding_value
             .get("component-id")
             .ok_or("No component-id found")?
             .as_str()
             .ok_or("component-id is not a string")?;
 
-        let version = worker_gateway_info
+        let version = gateway_binding_value
             .get("component-version")
             .ok_or("No component-version found")?
             .as_u64()
@@ -335,38 +379,11 @@ mod internal {
         Ok(binding_type_optional.unwrap_or(GatewayBindingType::Default))
     }
 
-    pub(crate) fn get_middleware(
-        worker_gateway_info: &Value,
-    ) -> Result<Vec<HttpMiddleware>, String> {
-        let mut middlewares = vec![];
-        if let Some(middleware_value) = worker_gateway_info.get("middlewares") {
-            match middleware_value {
-                Value::Object(map) => {
-                    let cors_preflight: Option<Cors> = map
-                        .get("cors")
-                        .map(|json_value| serde_json::from_value(json_value.clone()))
-                        .transpose()
-                        .map_err(|err| format!("Invalid schema for Cors {}", err))?;
-
-                    if let Some(cors_preflight) = cors_preflight {
-                        middlewares.push(HttpMiddleware::cors(cors_preflight));
-                    }
-                }
-                _ => return Err(
-                    "Invalid response mapping type. It should be a string representing expression"
-                        .to_string(),
-                ),
-            }
-        }
-
-        Ok(middlewares)
-    }
-
     pub(crate) fn get_response_mapping(
-        worker_gateway_info: &Value,
+        gateway_binding_value: &Value,
     ) -> Result<ResponseMapping, String> {
         let response = {
-            let response_mapping_optional = worker_gateway_info.get("response").ok_or(
+            let response_mapping_optional = gateway_binding_value.get("response").ok_or(
                 "No response mapping found. It should be a string representing expression"
                     .to_string(),
             )?;
@@ -383,8 +400,10 @@ mod internal {
         Ok(ResponseMapping(response.clone()))
     }
 
-    pub(crate) fn get_worker_id_expr(worker_gateway_info: &Value) -> Result<Option<Expr>, String> {
-        let worker_id_str_opt = worker_gateway_info
+    pub(crate) fn get_worker_id_expr(
+        gateway_binding_value: &Value,
+    ) -> Result<Option<Expr>, String> {
+        let worker_id_str_opt = gateway_binding_value
             .get("worker-name")
             .map(|json_value| json_value.as_str().ok_or("worker-name is not a string"))
             .transpose()?;
@@ -396,8 +415,10 @@ mod internal {
         Ok(worker_id_expr_opt)
     }
 
-    pub(crate) fn get_idempotency_key(worker_gateway_info: &Value) -> Result<Option<Expr>, String> {
-        if let Some(key) = worker_gateway_info.get("idempotency-key") {
+    pub(crate) fn get_idempotency_key(
+        gateway_binding_value: &Value,
+    ) -> Result<Option<Expr>, String> {
+        if let Some(key) = gateway_binding_value.get("idempotency-key") {
             let key_expr = key.as_str().ok_or("idempotency-key is not a string")?;
             Ok(Some(
                 rib::from_string(key_expr).map_err(|err| err.to_string())?,
@@ -417,45 +438,13 @@ mod tests {
     use test_r::test;
 
     use super::*;
-    use crate::gateway_api_definition::http::{AllPathPatterns, MethodPattern, Route};
-    use crate::gateway_binding::{GatewayBinding, ResponseMapping, StaticBinding, WorkerBinding};
-    use crate::gateway_middleware::{Cors, HttpMiddleware, Middleware, Middlewares};
-    use golem_common::model::ComponentId;
+    use crate::gateway_api_definition::http::{AllPathPatterns, MethodPattern, RouteRequest};
+    use crate::gateway_binding::{GatewayBinding, StaticBinding};
+    use crate::gateway_middleware::HttpCors;
+
     use openapiv3::Operation;
-    use rib::Expr;
+
     use serde_json::json;
-    use uuid::Uuid;
-
-    #[test]
-    fn test_get_route_from_path_with_worker_binding_with_middleware() {
-        let path_item = Operation {
-            extensions: vec![("x-golem-api-gateway-binding".to_string(), json!({
-                "worker-name": "let x: str = request.body.user; \"worker-${x}\"",
-                "component-id": "00000000-0000-0000-0000-000000000000",
-                "component-version": 0,
-                "idempotency-key": "\"test-key\"",
-                "response": "${{headers : {ContentType: \"json\", user-id: \"foo\"}, body: worker.response, status: 200}}",
-                "middlewares": {
-                    "cors" : {
-                        "allowHeaders": "Content-Type, Authorization",
-                        "allowMethods": "GET, POST, PUT, DELETE, OPTIONS",
-                        "allowOrigin": "*",
-                        "allowCredentials": true
-                    }
-                }
-            }))]
-                .into_iter()
-                .collect(),
-            ..Default::default()
-        };
-
-        let path_pattern = AllPathPatterns::parse("/test").unwrap();
-
-        let result = get_route_from_path_item("get", &path_item, &path_pattern);
-
-        let expected = expected_route_with_middleware(&path_pattern);
-        assert_eq!(result, Ok(expected));
-    }
 
     #[test]
     fn test_get_route_with_cors_preflight_binding() {
@@ -514,75 +503,29 @@ mod tests {
         assert_eq!(result, Ok(expected));
     }
 
-    fn expected_route_with_cors_preflight_binding_default(path_pattern: &AllPathPatterns) -> Route {
-        Route {
+    fn expected_route_with_cors_preflight_binding_default(
+        path_pattern: &AllPathPatterns,
+    ) -> RouteRequest {
+        RouteRequest {
             path: path_pattern.clone(),
             method: MethodPattern::Options,
-            binding: GatewayBinding::Static(StaticBinding::from_http_cors(Cors::default())),
+            binding: GatewayBinding::static_binding(StaticBinding::from_http_cors(
+                HttpCors::default(),
+            )),
+            security: None,
+            cors: None,
         }
     }
 
-    fn expected_route_with_cors_preflight_binding(path_pattern: &AllPathPatterns) -> Route {
-        let mut cors_preflight = Cors::default();
+    fn expected_route_with_cors_preflight_binding(path_pattern: &AllPathPatterns) -> RouteRequest {
+        let mut cors_preflight = HttpCors::default();
         cors_preflight.set_allow_origin("apple.com").unwrap();
-        Route {
+        RouteRequest {
             path: path_pattern.clone(),
             method: MethodPattern::Options,
-            binding: GatewayBinding::Static(StaticBinding::from_http_cors(cors_preflight)),
-        }
-    }
-
-    fn expected_route_with_middleware(path_pattern: &AllPathPatterns) -> Route {
-        Route {
-            path: path_pattern.clone(),
-            method: MethodPattern::Get,
-            binding: GatewayBinding::Default(WorkerBinding {
-                worker_name: Some(Expr::expr_block(vec![
-                    Expr::let_binding_with_type(
-                        "x",
-                        rib::TypeName::Str,
-                        Expr::select_field(
-                            Expr::select_field(Expr::identifier("request"), "body"),
-                            "user",
-                        ),
-                    ),
-                    Expr::concat(vec![Expr::literal("worker-"), Expr::identifier("x")]),
-                ])),
-                component_id: golem_service_base::model::VersionedComponentId {
-                    component_id: ComponentId(Uuid::nil()),
-                    version: 0,
-                },
-                idempotency_key: Some(Expr::literal("test-key")),
-                response_mapping: ResponseMapping(Expr::record(
-                    vec![
-                        (
-                            "headers".to_string(),
-                            Expr::record(vec![
-                                ("ContentType".to_string(), Expr::literal("json")),
-                                ("user-id".to_string(), Expr::literal("foo")),
-                            ]),
-                        ),
-                        (
-                            "body".to_string(),
-                            Expr::select_field(Expr::identifier("worker"), "response"),
-                        ),
-                        ("status".to_string(), Expr::untyped_number(200f64)),
-                    ]
-                    .into_iter()
-                    .collect(),
-                )),
-                middleware: Some(Middlewares(vec![Middleware::Http(HttpMiddleware::cors(
-                    Cors::from_parameters(
-                        Some("*".to_string()),
-                        Some("GET, POST, PUT, DELETE, OPTIONS".to_string()),
-                        Some("Content-Type, Authorization".to_string()),
-                        None,
-                        Some(true),
-                        None,
-                    )
-                    .unwrap(),
-                ))])),
-            }),
+            binding: GatewayBinding::static_binding(StaticBinding::from_http_cors(cors_preflight)),
+            security: None,
+            cors: None,
         }
     }
 }

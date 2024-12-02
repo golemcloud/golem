@@ -20,7 +20,7 @@ use std::sync::Arc;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
 use golem_common::model::{ComponentId, IdempotencyKey};
-
+use golem_common::SafeDisplay;
 use rib::{RibByteCode, RibFunctionInvoke, RibInput, RibResult};
 
 use crate::gateway_execution::{GatewayResolvedWorkerRequest, GatewayWorkerRequestExecutor};
@@ -48,6 +48,12 @@ pub struct EvaluationError(pub String);
 impl Display for EvaluationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
+    }
+}
+
+impl SafeDisplay for EvaluationError {
+    fn to_safe_string(&self) -> String {
+        self.0.clone()
     }
 }
 
@@ -114,7 +120,7 @@ impl<Namespace: Clone + Send + Sync + 'static> WorkerServiceRibInterpreter<Names
                         .map(|v| v.result)
                         .map_err(|e| e.to_string())
                 }
-                .boxed() // This ensures the future is boxed with the correct type
+                .boxed()
             }
         });
         let result = rib::interpret(expr, rib_input, worker_invoke_function)

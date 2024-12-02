@@ -2948,7 +2948,6 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::FileSystemNode> for Component
         }
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Serialize, Encode, Decode, Enum, Default)]
 #[serde(rename_all = "kebab-case")]
 #[oai(rename_all = "kebab-case")]
