@@ -77,7 +77,7 @@ pub trait OplogProcessorPlugin {
 
 /// An implementation of the `OplogProcessorPlugin` trait that runs a single instance of each
 /// used plugin on each worker executor node.
-struct PerExecutorOplogProcessorPlugin<Ctx: WorkerCtx> {
+pub struct PerExecutorOplogProcessorPlugin<Ctx: WorkerCtx> {
     workers: Arc<RwLock<HashMap<WorkerKey, RunningPlugin>>>,
 
     active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
@@ -96,7 +96,7 @@ struct PerExecutorOplogProcessorPlugin<Ctx: WorkerCtx> {
     key_value_service: Arc<dyn key_value::KeyValueService + Send + Sync>,
     blob_store_service: Arc<dyn blob_store::BlobStoreService + Send + Sync>,
     oplog_service: Arc<dyn OplogService + Send + Sync>,
-    rpc: Arc<dyn Rpc + Send + Sync>,
+    pub rpc: Arc<dyn Rpc + Send + Sync>,
     scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
     worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
     worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
@@ -140,7 +140,6 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
         key_value_service: Arc<dyn key_value::KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn blob_store::BlobStoreService + Send + Sync>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
-        rpc: Arc<dyn Rpc + Send + Sync>,
         scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
         worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,

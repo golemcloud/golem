@@ -1421,6 +1421,10 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
     async fn on_shard_assignment_changed<T: HasAll<Ctx> + Send + Sync + 'static>(
         this: &T,
     ) -> Result<(), anyhow::Error> {
+        this.oplog_processor_plugin()
+            .on_shard_assignment_changed()
+            .await?;
+
         info!("Recovering workers");
 
         let workers = this.worker_service().get_running_workers_in_shards().await;

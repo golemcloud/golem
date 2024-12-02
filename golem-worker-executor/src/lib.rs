@@ -53,6 +53,7 @@ use tokio::runtime::Handle;
 use tracing::info;
 use wasmtime::component::Linker;
 use wasmtime::Engine;
+use golem_worker_executor_base::services::oplog::plugin::PerExecutorOplogProcessorPlugin;
 
 #[cfg(test)]
 test_r::enable!();
@@ -107,6 +108,31 @@ impl Bootstrap<Context> for ServerBootstrap {
     ) -> anyhow::Result<All<Context>> {
         let additional_deps = AdditionalDeps {};
 
+        let oplog_processor_plugin = Arc::new(PerExecutorOplogProcessorPlugin::new(
+            active_workers.clone(),
+            engine.clone(),
+            linker.clone(),
+            runtime.clone(),
+            component_service.clone(),
+            worker_service.clone(),
+            worker_enumeration_service.clone(),
+            running_worker_enumeration_service.clone(),
+            promise_service.clone(),
+            golem_config.clone(),
+            shard_service.clone(),
+            shard_manager_service.clone(),
+            key_value_service.clone(),
+            blob_store_service.clone(),
+            oplog_service.clone(),
+            scheduler_service.clone(),
+            worker_activator.clone(),
+            worker_proxy.clone(),
+            events.clone(),
+            file_loader.clone(),
+            plugins.clone(),
+            additional_deps.clone(),
+        ));
+
         let rpc = Arc::new(DirectWorkerInvocationRpc::new(
             Arc::new(RemoteInvocationRpc::new(
                 worker_proxy.clone(),
@@ -132,8 +158,11 @@ impl Bootstrap<Context> for ServerBootstrap {
             events.clone(),
             file_loader.clone(),
             plugins.clone(),
+            oplog_processor_plugin.clone(),
             additional_deps.clone(),
         ));
+
+        Arc::get_mut(&mut oplog_processor_plugin
 
         Ok(All::new(
             active_workers,
@@ -158,6 +187,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             events.clone(),
             file_loader.clone(),
             plugins.clone(),
+            oplog_processor_plugin,
             additional_deps,
         ))
     }

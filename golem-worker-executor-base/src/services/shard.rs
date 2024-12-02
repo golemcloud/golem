@@ -40,14 +40,18 @@ pub trait ShardService {
 
 pub struct ShardServiceDefault {
     shard_assignment: Arc<RwLock<Option<ShardAssignment>>>,
-    oplog_plugins: Arc<dyn OplogProcessorPlugin + Send + Sync>,
+}
+
+impl Default for ShardServiceDefault {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ShardServiceDefault {
-    pub fn new(oplog_plugins: Arc<dyn OplogProcessorPlugin + Send + Sync>) -> Self {
+    pub fn new() -> Self {
         Self {
             shard_assignment: Arc::new(RwLock::new(None)),
-            oplog_plugins,
         }
     }
 
@@ -96,7 +100,6 @@ impl ShardService for ShardServiceDefault {
             }
             None => Err(sharding_not_ready_error()),
         });
-        self.oplog_plugins.on_shard_assignment_changed().await?;
         result
     }
 
@@ -130,7 +133,6 @@ impl ShardService for ShardServiceDefault {
             let assigned_shard_count = shard_assignment.shard_ids.len();
             record_assigned_shard_count(assigned_shard_count);
         });
-        self.oplog_plugins.on_shard_assignment_changed().await?;
         Ok(())
     }
 
@@ -149,7 +151,6 @@ impl ShardService for ShardServiceDefault {
             }
             None => Err(sharding_not_ready_error()),
         });
-        self.oplog_plugins.on_shard_assignment_changed().await?;
         result
     }
 
