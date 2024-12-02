@@ -93,10 +93,10 @@ impl IsRetriableError for RoutingTableError {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RoutingTableConfig {
-    host: String,
-    port: u16,
+    pub host: String,
+    pub port: u16,
     #[serde(with = "humantime_serde")]
-    invalidation_min_delay: Duration,
+    pub invalidation_min_delay: Duration,
 }
 
 impl RoutingTableConfig {

@@ -12,30 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::command::api_definition::ApiDefinitionSubcommand;
-use crate::command::api_deployment::ApiDeploymentSubcommand;
-use crate::command::api_security::ApiSecuritySchemeSubcommand;
-use crate::command::component::ComponentSubCommand;
-use crate::command::plugin::PluginSubcommand;
-use crate::command::profile::{ProfileSubCommand, UniversalProfileAdd};
-use crate::command::worker::{OssWorkerUriArg, WorkerSubcommand};
-use crate::completion::PrintCompletion;
 use crate::config::{CloudProfile, Config, OssProfile, Profile, ProfileConfig, ProfileName};
-use crate::diagnose::diagnose;
-use crate::model::{
-    ComponentUriArg, Format, GolemError, GolemResult, HasFormatConfig, HasVerbosity,
-    OssPluginScopeArgs,
-};
-use crate::oss::command::GolemOssCommand;
-use crate::oss::model::OssContext;
-use crate::stubgen::handle_stubgen;
-use crate::{diagnose, examples, InitMainArgs};
+use crate::model::{Format, GolemError};
 use async_trait::async_trait;
-use clap::{Parser, Subcommand};
-use clap_complete::Shell;
-use clap_verbosity_flag::Verbosity;
 use colored::Colorize;
-use golem_common::uri::oss::uri::ResourceUri;
 use indoc::formatdoc;
 use inquire::{Confirm, CustomType, Select};
 use serde::{Deserialize, Serialize};
@@ -45,129 +25,6 @@ use std::str::FromStr;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use url::{ParseError, Url};
-
-#[derive(Subcommand, Debug)]
-#[command()]
-pub enum InitCommand<ProfileAdd: clap::Args> {
-    /// Create a new default profile and switch to it
-    #[command()]
-    Init {},
-
-    /// Manage profiles
-    #[command()]
-    Profile {
-        #[command(subcommand)]
-        subcommand: ProfileSubCommand<ProfileAdd>,
-    },
-
-    /// Create a new Golem component from built-in examples
-    #[command(flatten)]
-    Examples(golem_examples::cli::Command),
-
-    /// WASM RPC stub generator
-    #[cfg(feature = "stubgen")]
-    Stubgen {
-        #[command(subcommand)]
-        subcommand: golem_wasm_rpc_stubgen::Command,
-    },
-
-    /// Upload and manage Golem components
-    #[command()]
-    Component {
-        #[command(subcommand)]
-        subcommand: ComponentSubCommand<OssContext, ComponentUriArg>,
-    },
-
-    /// Manage Golem workers
-    #[command()]
-    Worker {
-        #[command(subcommand)]
-        subcommand: WorkerSubcommand<ComponentUriArg, OssWorkerUriArg>,
-    },
-
-    /// Get resource by URI
-    ///
-    /// Use resource URN or URL to get resource metadata.
-    #[command()]
-    Get {
-        #[arg(value_name = "URI")]
-        uri: ResourceUri,
-    },
-
-    /// Manage Golem api definitions
-    #[command()]
-    ApiDefinition {
-        #[command(subcommand)]
-        subcommand: ApiDefinitionSubcommand<OssContext>,
-    },
-
-    /// Manage Golem api deployments
-    #[command()]
-    ApiDeployment {
-        #[command(subcommand)]
-        subcommand: ApiDeploymentSubcommand<OssContext>,
-    },
-
-    // Manage Api Security Schemes
-    #[command()]
-    ApiSecurityScheme {
-        #[command(subcommand)]
-        subcommand: ApiSecuritySchemeSubcommand<OssContext>,
-    },
-
-    /// Manage plugins
-    #[command()]
-    Plugin {
-        #[command(subcommand)]
-        subcommand: PluginSubcommand<OssPluginScopeArgs>,
-    },
-
-    /// Generate shell completions
-    #[command()]
-    Completion {
-        #[arg(long = "generate", value_enum)]
-        generator: clap_complete::Shell,
-    },
-
-    /// Diagnose required tooling
-    #[command()]
-    Diagnose {
-        #[command(flatten)]
-        command: diagnose::cli::Command,
-    },
-}
-
-#[derive(Parser, Debug)]
-#[command(author, version = crate::VERSION, about = "Your Golem is not configured. Please run `golem-cli init`", long_about = None, rename_all = "kebab-case")]
-/// Your Golem is not configured. Please run `golem-cli init`
-pub struct GolemInitCommand<ProfileAdd: clap::Args> {
-    #[command(flatten)]
-    pub verbosity: Verbosity,
-
-    #[arg(short = 'F', long, global = true, default_value = "text")]
-    pub format: Format,
-
-    #[command(subcommand)]
-    pub command: InitCommand<ProfileAdd>,
-}
-
-impl<ProfileAdd: clap::Args> HasFormatConfig for GolemInitCommand<ProfileAdd> {
-    fn format(&self) -> Option<Format> {
-        Some(self.format)
-    }
-}
-
-impl<ProfileAdd: clap::Args> HasVerbosity for GolemInitCommand<ProfileAdd> {
-    fn verbosity(&self) -> Verbosity {
-        self.verbosity.clone()
-    }
-}
-
-impl<ProfileAdd: clap::Args> PrintCompletion for GolemInitCommand<ProfileAdd> {
-    fn print_completion(shell: Shell) {
-        GolemOssCommand::<ProfileAdd>::print_completion(shell);
-    }
-}
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub enum CliKind {
@@ -196,61 +53,6 @@ impl ProfileAuth for DummyProfileAuth {
         _config_dir: &Path,
     ) -> Result<(), GolemError> {
         Ok(())
-    }
-}
-
-pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
-    args: InitMainArgs<GolemInitCommand<ProfileAdd>>,
-) -> Result<GolemResult, GolemError> {
-    let InitMainArgs {
-        cli_kind,
-        config_dir,
-        command,
-    } = args;
-
-    let profile_auth = &DummyProfileAuth;
-
-    match command.command {
-        InitCommand::Init {} => {
-            let profile_name = ProfileName::default(cli_kind);
-
-            let res = init_profile(cli_kind, profile_name, &config_dir, profile_auth).await?;
-
-            if res.auth_required {
-                profile_auth.auth(&res.profile_name, &config_dir).await?
-            }
-
-            Ok(GolemResult::Str("Profile created".to_string()))
-        }
-        InitCommand::Profile { subcommand } => {
-            subcommand.handle(cli_kind, &config_dir, profile_auth).await
-        }
-        InitCommand::Examples(golem_examples::cli::Command::New {
-            name_or_language,
-            package_name,
-            component_name,
-        }) => examples::process_new(
-            name_or_language.example_name(),
-            component_name,
-            package_name,
-        ),
-        InitCommand::Examples(golem_examples::cli::Command::ListExamples {
-            min_tier,
-            language,
-        }) => examples::process_list_examples(min_tier, language),
-        InitCommand::Completion { generator } => {
-            GolemInitCommand::<ProfileAdd>::print_completion(generator);
-            Ok(GolemResult::Str("".to_string()))
-        }
-        InitCommand::Diagnose { command } => {
-            diagnose(command);
-            Ok(GolemResult::Str("".to_string()))
-        }
-        #[cfg(feature = "stubgen")]
-        InitCommand::Stubgen { subcommand } => handle_stubgen(subcommand).await,
-        _ => Err(GolemError(
-            "Your Golem CLI is not configured. Please run `golem-cli init`".to_owned(),
-        )),
     }
 }
 

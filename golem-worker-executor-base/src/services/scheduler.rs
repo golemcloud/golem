@@ -75,19 +75,22 @@ impl SchedulerServiceDefault {
         let svc = Arc::new(svc);
         let background_handle = {
             let svc = svc.clone();
-            tokio::spawn(async move {
-                loop {
-                    tokio::time::sleep(process_interval).await;
-                    if svc.shard_service.is_ready() {
-                        let r = svc.process(Utc::now()).await;
-                        if let Err(err) = r {
-                            error!(err, "Error in scheduler background task");
+            tokio::spawn(
+                async move {
+                    loop {
+                        tokio::time::sleep(process_interval).await;
+                        if svc.shard_service.is_ready() {
+                            let r = svc.process(Utc::now()).await;
+                            if let Err(err) = r {
+                                error!(err, "Error in scheduler background task");
+                            }
+                        } else {
+                            warn!("Skipping schedule, shard service is not ready")
                         }
-                    } else {
-                        warn!("Skipping schedule, shard service is not ready")
                     }
                 }
-            })
+                .in_current_span(),
+            )
         };
         *svc.background_handle.lock().unwrap() = Some(background_handle);
 

@@ -158,6 +158,10 @@ async fn jump(
         .await
         .unwrap();
 
+    while (rx.len() as u64) < 19 {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
     drop(executor);
     http_server.abort();
 

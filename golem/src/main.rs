@@ -12,9 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_cli::run_main;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    crate::run_main::<golem_cli::command::EmptyCommand>()
+    golem_cli::run_main::<golem::command::SingleExecutableCommand>()
 }

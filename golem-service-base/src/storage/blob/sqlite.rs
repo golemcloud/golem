@@ -89,6 +89,7 @@ impl SqliteBlobStorage {
     }
 
     fn name_string(path: &Path) -> String {
+        tracing::info!("Path: {:?}", path);
         path.file_name()
             .expect("Path must have a file name")
             .to_string_lossy()

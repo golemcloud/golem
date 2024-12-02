@@ -18,6 +18,7 @@ members = [
     "golem-worker-service-base",
     "golem-worker-service",
     "integration-tests",
+    "golem"
 ]
 
 exclude = [
@@ -156,6 +157,8 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["raw_value"] }
 serde_yaml = { version = "0.9.33 " }
 sha2 = "0.10.8"
+sozu-command-lib = { version = "1.0.5", default-features = false }
+sozu-lib = { version = "1.0.5", default-features = false }
 sqlx = { version = "0.7", features = [
     "runtime-tokio",
     "sqlite",
@@ -212,8 +215,10 @@ wasmtime = { version = "=21.0.1", features = ["component-model"] }
 wasmtime-wasi = { version = "=21.0.1" }
 wasmtime-wasi-http = { version = "=21.0.1" }
 webpki-roots = { version = "0.26.0" }
+xdg = "2.5.2"
 
 [patch.crates-io]
+redis-protocol = { git = "https://github.com/golemcloud/redis-protocol.rs.git", branch = "unpin-cookie-factory" }
 wasmtime = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v21.0.1" }
 wasmtime-wasi = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v21.0.1" }
 wasmtime-wasi-http = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v21.0.1" }

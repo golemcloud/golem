@@ -58,7 +58,7 @@ use golem_worker_executor_base::Bootstrap;
 
 use tokio::runtime::Handle;
 
-use tokio::task::JoinHandle;
+use tokio::task::JoinSet;
 
 use golem::api0_2_0;
 use golem_common::config::RedisConfig;
@@ -92,12 +92,12 @@ use golem_worker_executor_base::services::worker_enumeration::{
 use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
 use golem_worker_executor_base::worker::{RetryDecision, Worker};
 use tonic::transport::Channel;
-use tracing::{debug, error, info};
+use tracing::{debug, info};
 use wasmtime::component::{Instance, Linker, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 
 pub struct TestWorkerExecutor {
-    handle: Option<JoinHandle<Result<(), String>>>,
+    _join_set: Option<JoinSet<anyhow::Result<()>>>,
     deps: WorkerExecutorPerTestDependencies,
 }
 
@@ -186,7 +186,7 @@ impl TestWorkerExecutor {
 impl Clone for TestWorkerExecutor {
     fn clone(&self) -> Self {
         Self {
-            handle: None,
+            _join_set: None,
             deps: self.deps.clone(),
         }
     }
@@ -249,14 +249,6 @@ impl TestDependencies for TestWorkerExecutor {
 
     fn initial_component_files_service(&self) -> Arc<InitialComponentFilesService> {
         self.deps.initial_component_files_service()
-    }
-}
-
-impl Drop for TestWorkerExecutor {
-    fn drop(&mut self) {
-        if let Some(handle) = &self.handle {
-            handle.abort()
-        }
     }
 }
 
@@ -341,16 +333,9 @@ pub async fn start_limited(
 
     let grpc_port = config.port;
 
-    let server_handle = tokio::spawn(async move {
-        let r = run(config, prometheus, handle)
-            .await
-            .map_err(|e| format!("{e}"));
-        match &r {
-            Ok(_) => info!("Server finished successfully"),
-            Err(e) => error!("Server finished with error: {e}"),
-        }
-        r
-    });
+    let mut join_set = JoinSet::new();
+
+    run(config, prometheus, handle, &mut join_set).await?;
 
     let start = std::time::Instant::now();
     loop {
@@ -362,7 +347,7 @@ pub async fn start_limited(
                 context.grpc_port(),
             );
             break Ok(TestWorkerExecutor {
-                handle: Some(server_handle),
+                _join_set: Some(join_set),
                 deps,
             });
         } else if start.elapsed().as_secs() > 10 {
@@ -375,11 +360,15 @@ async fn run(
     golem_config: GolemConfig,
     prometheus_registry: Registry,
     runtime: Handle,
-) -> Result<(), Box<dyn std::error::Error>> {
+    join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+) -> Result<(), anyhow::Error> {
     info!("Golem Worker Executor starting up...");
-    Ok(ServerBootstrap {}
-        .run(golem_config, prometheus_registry, runtime)
-        .await?)
+
+    ServerBootstrap {}
+        .run(golem_config, prometheus_registry, runtime, join_set)
+        .await?;
+
+    Ok(())
 }
 
 struct TestWorkerCtx {

@@ -18,9 +18,10 @@ use std::sync::Arc;
 use golem_common::tracing::init_tracing_with_default_env_filter;
 use golem_worker_executor::run;
 use golem_worker_executor_base::metrics;
-use golem_worker_executor_base::services::golem_config::make_config_loader;
+use golem_worker_executor_base::services::golem_config::{make_config_loader, GolemConfig};
+use tokio::task::JoinSet;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), anyhow::Error> {
     match make_config_loader().load_or_dump_config() {
         Some(mut config) => {
             config.add_port_to_tracing_file_name_if_enabled();
@@ -34,8 +35,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .build()
                     .unwrap(),
             );
-            runtime.block_on(run(config, prometheus, runtime.handle().clone()))
+
+            runtime.block_on(async_main(config, prometheus, runtime.clone()))
         }
         None => Ok(()),
     }
+}
+
+async fn async_main(
+    config: GolemConfig,
+    prometheus: prometheus::Registry,
+    runtime: Arc<tokio::runtime::Runtime>,
+) -> Result<(), anyhow::Error> {
+    let mut join_set = JoinSet::new();
+    run(config, prometheus, runtime.handle().clone(), &mut join_set).await?;
+
+    while let Some(res) = join_set.join_next().await {
+        res??
+    }
+    Ok(())
 }

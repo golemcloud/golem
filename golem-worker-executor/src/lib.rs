@@ -47,9 +47,10 @@ use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
 use golem_worker_executor_base::services::{plugins, All};
 use golem_worker_executor_base::wasi_host::create_linker;
 use golem_worker_executor_base::workerctx::WorkerCtx;
-use golem_worker_executor_base::Bootstrap;
+use golem_worker_executor_base::{Bootstrap, RunDetails};
 use prometheus::Registry;
 use tokio::runtime::Handle;
+use tokio::task::JoinSet;
 use tracing::info;
 use wasmtime::component::Linker;
 use wasmtime::Engine;
@@ -57,7 +58,7 @@ use wasmtime::Engine;
 #[cfg(test)]
 test_r::enable!();
 
-struct ServerBootstrap {}
+struct ServerBootstrap;
 
 #[async_trait]
 impl Bootstrap<Context> for ServerBootstrap {
@@ -179,9 +180,10 @@ pub async fn run(
     golem_config: GolemConfig,
     prometheus_registry: Registry,
     runtime: Handle,
-) -> Result<(), Box<dyn std::error::Error>> {
+    join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+) -> Result<RunDetails, anyhow::Error> {
     info!("Golem Worker Executor starting up...");
-    Ok(ServerBootstrap {}
-        .run(golem_config, prometheus_registry, runtime)
-        .await?)
+    ServerBootstrap
+        .run(golem_config, prometheus_registry, runtime, join_set)
+        .await
 }

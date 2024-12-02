@@ -294,6 +294,7 @@ impl RegisterApiDefinitionApi {
 
 #[cfg(test)]
 mod test {
+    use golem_service_base::migration::{Migrations, MigrationsDir};
     use test_r::test;
 
     use super::*;
@@ -380,9 +381,12 @@ mod test {
             max_connections: 10,
         };
 
-        db::sqlite_migrate(&db_config, "db/migration/sqlite")
-            .await
-            .unwrap();
+        db::sqlite_migrate(
+            &db_config,
+            MigrationsDir::new("./db/migration".into()).sqlite_migrations(),
+        )
+        .await
+        .unwrap();
 
         let db_pool = db::create_sqlite_pool(&db_config).await.unwrap();
 
