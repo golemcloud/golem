@@ -276,7 +276,7 @@ mod internal {
         let worker_name_opt = if let Some(worker_name_compiled) = &binding.worker_name_compiled {
             let resolve_rib_input = http_request_details
                 .resolve_rib_input_value(&worker_name_compiled.rib_input_type_info)
-                .map_err(|err| GatewayBindingResolverError::RibInputTypeMismatch(err))?;
+                .map_err(GatewayBindingResolverError::RibInputTypeMismatch)?;
 
             let worker_name = rib::interpret_pure(
                 &worker_name_compiled.compiled_worker_name,
@@ -306,7 +306,7 @@ mod internal {
             if let Some(idempotency_key_compiled) = &binding.idempotency_key_compiled {
                 let resolve_rib_input = http_request_details
                     .resolve_rib_input_value(&idempotency_key_compiled.rib_input)
-                    .map_err(|err| GatewayBindingResolverError::RibInputTypeMismatch(err))?;
+                    .map_err(GatewayBindingResolverError::RibInputTypeMismatch)?;
 
                 let idempotency_key_value = rib::interpret_pure(
                     &idempotency_key_compiled.compiled_idempotency_key,
