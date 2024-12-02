@@ -54,11 +54,14 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install mold
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mold
       - name: Install gcc-aarch64-linux-gnu
         if: matrix.platform.platform == 'linux/arm64'
         run: |
-          sudo apt-get update
-          sudo apt-get install gcc-aarch64-linux-gnu mold
+          sudo apt-get install gcc-aarch64-linux-gnu
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: release-gcc-aarch64-linux-gnu
@@ -230,6 +233,10 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install mold
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mold
       - name: Build all targets
         run: cargo make --profile ci build
       - name: Check that OpenAPI specs are up-to-date
@@ -269,6 +276,10 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install mold
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mold
       - name: Setup Redis
         uses: shogo82148/actions-setup-redis@v1.35.1
         with:
@@ -319,6 +330,10 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install mold
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mold
       - name: Setup Redis
         uses: shogo82148/actions-setup-redis@v1.35.1
         with:
@@ -356,6 +371,10 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install mold
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mold
       - name: Setup Redis
         uses: shogo82148/actions-setup-redis@v1.35.1
         with:
@@ -395,6 +414,10 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install mold
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mold
       - name: Setup Redis
         uses: shogo82148/actions-setup-redis@v1.35.1
         with:
@@ -434,6 +457,10 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install mold
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mold
       - name: Setup Redis
         uses: shogo82148/actions-setup-redis@v1.35.1
         with:
@@ -481,6 +508,10 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install mold
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mold
       - id: get_version
         uses: battila7/get-version-action@v2
       - name: Publish all packages
