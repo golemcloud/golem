@@ -248,7 +248,7 @@ impl HttpRequestDetails {
             .and_then(|field| field.value.as_str().map(|x| x.to_string()))
     }
 
-    fn from_input_http_request(
+    pub fn from_input_http_request(
         scheme: &Option<Scheme>,
         host: &ApiSiteString,
         api_input_path: &ApiInputPath,

@@ -63,6 +63,13 @@ async fn execute(
     session_store: &GatewaySessionStore,
     test_identity_provider: &TestIdentityProvider,
 ) -> Response {
+    let test_executor = DefaultGatewayInputExecutor::new(
+        internal::get_test_rib_interpreter(),
+        internal::get_test_file_server_binding_handler(),
+        Arc::new(DefaultAuthCallBack),
+    );
+
+    // Compile the API definition
     let compiled = CompiledHttpApiDefinition::from_http_api_definition(
         api_specification,
         &internal::get_component_metadata(),
@@ -70,33 +77,32 @@ async fn execute(
     )
     .expect("Failed to compile API definition");
 
-    let resolved_gateway_binding = api_request
-        .resolve_gateway_binding(vec![compiled])
-        .await
-        .expect("Failed to resolve gateway binding");
+    // Resolve the API definition binding from input
+    let resolved_gateway_binding = api_request.resolve_gateway_binding(vec![compiled]).await;
 
-    let test_executor = DefaultGatewayInputExecutor::new(
-        internal::get_test_rib_interpreter(),
-        internal::get_test_file_server_binding_handler(),
-        Arc::new(DefaultAuthCallBack),
-    );
+    match resolved_gateway_binding {
+        Ok(resolved_binding) => {
+            let GatewayRequestDetails::Http(http) = resolved_binding.request_details;
 
-    let GatewayRequestDetails::Http(http) = resolved_gateway_binding.request_details;
+            // Create the input for the executor
+            let input = GatewayHttpInput::new(
+                &http,
+                resolved_binding.resolved_binding,
+                Arc::clone(session_store),
+                Arc::new(test_identity_provider.clone()),
+            );
 
-    let input = GatewayHttpInput::new(
-        &http,
-        resolved_gateway_binding.resolved_binding,
-        Arc::clone(session_store),
-        Arc::new(test_identity_provider.clone()),
-    );
+            test_executor.execute_binding(&input).await
+        }
 
-    test_executor.execute_binding(&input).await
+        Err(binding_resolver_error) => binding_resolver_error.to_http_response(),
+    }
 }
 
 #[test]
-async fn test_end_to_end_api_gateway_simple_worker() {
-    let empty_headers = HeaderMap::new();
-    let api_request = get_api_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
+async fn test_api_def_for_valid_input() {
+    let api_request =
+        get_gateway_request("/foo/1", None, &HeaderMap::new(), serde_json::Value::Null);
 
     let worker_name = r#"
       let id: u64 = request.path.user-id;
@@ -109,7 +115,7 @@ async fn test_end_to_end_api_gateway_simple_worker() {
     "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_spec_worker_binding("/foo/{user-id}", worker_name, response_mapping).await;
+        get_api_def_with_worker_binding("/foo/{user-id}", worker_name, response_mapping).await;
 
     let session_store: Arc<dyn GatewaySession + Sync + Send> = internal::get_session_store();
 
@@ -137,9 +143,75 @@ async fn test_end_to_end_api_gateway_simple_worker() {
 }
 
 #[test]
-async fn test_end_to_end_api_gateway_with_security_invalid_signatures() {
+async fn test_api_def_for_invalid_input_with_type_mismatch_for_worker_name_rib_input() {
+    // RibInput (request.path.user-id) to form worker name is expected to be a u64
+    let worker_name = r#"
+      let id: u64 = request.path.user-id;
+      "shopping-cart-${id}"
+    "#;
+
+    let response_mapping = r#"
+      let response = golem:it/api.{get-cart-contents}("a", "b");
+      response
+    "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_worker_binding("/foo/{user-id}", worker_name, response_mapping).await;
+
+    let session_store: Arc<dyn GatewaySession + Sync + Send> = internal::get_session_store();
+
+    // user-id is a string, but the worker-name rib expressions expects it to be a u64
+    let api_request =
+        get_gateway_request("/foo/bar", None, &HeaderMap::new(), serde_json::Value::Null);
+
+    let response = execute(
+        &api_request,
+        &api_specification,
+        &session_store,
+        &TestIdentityProvider::default(),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[test]
+async fn test_api_def_for_invalid_input_with_type_mismatch_for_response_mapping_rib_input() {
+    let worker_name = r#"
+      "shopping-cart"
+    "#;
+
+    // RibInput (request.path.user-id) to form response is expected to be a u64
+    let response_mapping = r#"
+      let user: u64 = request.path.user-id;
+      let response = golem:it/api.{get-cart-contents}("a", "user-${user}");
+      response
+    "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_worker_binding("/foo/{user-id}", worker_name, response_mapping).await;
+
+    let session_store: Arc<dyn GatewaySession + Sync + Send> = internal::get_session_store();
+
+    // user-id is a string, but the rib expressions expects it to be a u64
+    let api_request =
+        get_gateway_request("/foo/bar", None, &HeaderMap::new(), serde_json::Value::Null);
+
+    let response = execute(
+        &api_request,
+        &api_specification,
+        &session_store,
+        &TestIdentityProvider::default(),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[test]
+async fn test_api_def_with_security_for_input_with_invalid_signatures() {
     let empty_headers = HeaderMap::new();
-    let api_request = get_api_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
+    let api_request = get_gateway_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
 
     let worker_name = r#"
       let id: u64 = request.path.user-id;
@@ -157,7 +229,7 @@ async fn test_end_to_end_api_gateway_with_security_invalid_signatures() {
     let invalid_identity_provider_resolver =
         TestIdentityProvider::get_provider_with_invalid_signatures();
 
-    let api_specification: HttpApiDefinition = get_api_spec_with_security_configuration(
+    let api_specification: HttpApiDefinition = get_api_def_with_security(
         "/foo/{user-id}",
         worker_name,
         response_mapping,
@@ -241,9 +313,9 @@ async fn test_end_to_end_api_gateway_with_security_invalid_signatures() {
 }
 
 #[test]
-async fn test_end_to_end_api_gateway_with_expired_session() {
+async fn test_api_def_with_security_for_input_when_session_expired() {
     let empty_headers = HeaderMap::new();
-    let api_request = get_api_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
+    let api_request = get_gateway_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
 
     let worker_name = r#"
       let id: u64 = request.path.user-id;
@@ -260,7 +332,7 @@ async fn test_end_to_end_api_gateway_with_expired_session() {
 
     let invalid_identity_provider = TestIdentityProvider::get_provider_with_valid_id_token();
 
-    let api_specification: HttpApiDefinition = get_api_spec_with_security_configuration(
+    let api_specification: HttpApiDefinition = get_api_def_with_security(
         "/foo/{user-id}",
         worker_name,
         response_mapping,
@@ -351,9 +423,9 @@ async fn test_end_to_end_api_gateway_with_expired_session() {
 }
 
 #[test]
-async fn test_end_to_end_api_gateway_with_security_expired_token() {
+async fn test_api_def_with_security_for_input_with_expired_token() {
     let empty_headers = HeaderMap::new();
-    let api_request = get_api_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
+    let api_request = get_gateway_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
 
     let worker_name = r#"
       let id: u64 = request.path.user-id;
@@ -371,7 +443,7 @@ async fn test_end_to_end_api_gateway_with_security_expired_token() {
     let invalid_identity_provider_resolver =
         TestIdentityProvider::get_provider_with_expired_id_token();
 
-    let api_specification: HttpApiDefinition = get_api_spec_with_security_configuration(
+    let api_specification: HttpApiDefinition = get_api_def_with_security(
         "/foo/{user-id}",
         worker_name,
         response_mapping,
@@ -456,9 +528,9 @@ async fn test_end_to_end_api_gateway_with_security_expired_token() {
 }
 
 #[test]
-async fn test_end_to_end_api_gateway_with_security_successful_authentication() {
+async fn test_api_def_with_security_for_valid_input() {
     let empty_headers = HeaderMap::new();
-    let api_request = get_api_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
+    let api_request = get_gateway_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
 
     let worker_name = r#"
       let id: u64 = request.path.user-id;
@@ -476,7 +548,7 @@ async fn test_end_to_end_api_gateway_with_security_successful_authentication() {
     let auth_call_back_url =
         RedirectUrl::new("http://localhost/auth/callback".to_string()).unwrap();
 
-    let api_specification: HttpApiDefinition = get_api_spec_with_security_configuration(
+    let api_specification: HttpApiDefinition = get_api_def_with_security(
         "/foo/{user-id}",
         worker_name,
         response_mapping,
@@ -583,10 +655,10 @@ async fn test_end_to_end_api_gateway_with_security_successful_authentication() {
 }
 
 #[test]
-async fn test_end_to_end_api_gateway_cors_preflight() {
+async fn test_api_def_with_cors_preflight_for_valid_input() {
     let empty_headers = HeaderMap::new();
     let api_request =
-        get_preflight_api_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
+        get_preflight_gateway_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
 
     let cors = HttpCors::from_parameters(
         Some("http://example.com".to_string()),
@@ -599,7 +671,7 @@ async fn test_end_to_end_api_gateway_cors_preflight() {
     .unwrap();
 
     let api_specification: HttpApiDefinition =
-        get_api_spec_with_cors_preflight_configuration("/foo/{user-id}", &cors).await;
+        get_api_def_with_cors_preflight("/foo/{user-id}", &cors).await;
 
     let session_store = internal::get_session_store();
 
@@ -617,13 +689,13 @@ async fn test_end_to_end_api_gateway_cors_preflight() {
 }
 
 #[test]
-async fn test_end_to_end_api_gateway_cors_preflight_default() {
+async fn test_api_def_with_default_cors_preflight_for_valid_input() {
     let empty_headers = HeaderMap::new();
     let api_request =
-        get_preflight_api_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
+        get_preflight_gateway_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
 
     let api_specification: HttpApiDefinition =
-        get_api_spec_with_default_cors_preflight_configuration("/foo/{user-id}").await;
+        get_api_def_with_default_cors_preflight("/foo/{user-id}").await;
 
     let session_store = internal::get_session_store();
 
@@ -643,12 +715,12 @@ async fn test_end_to_end_api_gateway_cors_preflight_default() {
 }
 
 #[test]
-async fn test_end_to_end_api_gateway_cors_with_preflight_default_and_actual_request() {
+async fn test_api_def_with_cors_preflight_default_for_preflight_input_and_simple_input() {
     let empty_headers = HeaderMap::new();
     let preflight_request =
-        get_preflight_api_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
+        get_preflight_gateway_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
 
-    let api_request = get_api_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
+    let api_request = get_gateway_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
 
     let worker_name = r#"
       let id: u64 = request.path.user-id;
@@ -661,7 +733,7 @@ async fn test_end_to_end_api_gateway_cors_with_preflight_default_and_actual_requ
     "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_spec_for_cors_preflight_default_and_actual_endpoint(
+        get_api_def_with_with_default_cors_preflight_for_get_endpoint_resource(
             "/foo/{user-id}",
             worker_name,
             response_mapping,
@@ -703,12 +775,12 @@ async fn test_end_to_end_api_gateway_cors_with_preflight_default_and_actual_requ
 }
 
 #[test]
-async fn test_end_to_end_api_gateway_cors_with_preflight_and_actual_request() {
+async fn test_api_def_with_cors_preflight_for_preflight_input_and_simple_input() {
     let empty_headers = HeaderMap::new();
     let preflight_request =
-        get_preflight_api_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
+        get_preflight_gateway_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
 
-    let api_request = get_api_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
+    let api_request = get_gateway_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
 
     let cors = HttpCors::from_parameters(
         Some("http://example.com".to_string()),
@@ -731,7 +803,7 @@ async fn test_end_to_end_api_gateway_cors_with_preflight_and_actual_request() {
     "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_spec_with_cors_preflight_configuration_and_extra_endpoint(
+        get_api_def_with_cors_preflight_for_get_endpoint_resource(
             "/foo/{user-id}",
             worker_name,
             response_mapping,
@@ -790,9 +862,10 @@ async fn test_end_to_end_api_gateway_cors_with_preflight_and_actual_request() {
 }
 
 #[test]
-async fn test_end_to_end_api_gateway_with_request_path_and_query_lookup() {
+async fn test_api_def_with_path_and_query_params_lookup_for_valid_input() {
     let empty_headers = HeaderMap::new();
-    let api_request = get_api_request("/foo/1", Some("token-id=jon"), &empty_headers, Value::Null);
+    let api_request =
+        get_gateway_request("/foo/1", Some("token-id=jon"), &empty_headers, Value::Null);
 
     let worker_name = r#"
         let x: u64 = request.path.user-id;
@@ -805,7 +878,7 @@ async fn test_end_to_end_api_gateway_with_request_path_and_query_lookup() {
     "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_spec_worker_binding("/foo/{user-id}?{token-id}", worker_name, response_mapping)
+        get_api_def_with_worker_binding("/foo/{user-id}?{token-id}", worker_name, response_mapping)
             .await;
 
     let session_store = internal::get_session_store();
@@ -839,9 +912,9 @@ async fn test_end_to_end_api_gateway_with_request_path_and_query_lookup() {
 }
 
 #[test]
-async fn test_end_to_end_api_gateway_with_request_path_and_query_lookup_complex() {
+async fn test_api_def_with_path_and_query_params_lookup_complex_for_valid_input() {
     let empty_headers = HeaderMap::new();
-    let api_request = get_api_request(
+    let api_request = get_gateway_request(
         "/foo/1",
         None,
         &empty_headers,
@@ -865,7 +938,7 @@ async fn test_end_to_end_api_gateway_with_request_path_and_query_lookup_complex(
     "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_spec_worker_binding("/foo/{user-id}", worker_name, response_mapping).await;
+        get_api_def_with_worker_binding("/foo/{user-id}", worker_name, response_mapping).await;
 
     let session_store = internal::get_session_store();
 
@@ -898,10 +971,10 @@ async fn test_end_to_end_api_gateway_with_request_path_and_query_lookup_complex(
 }
 
 #[test]
-async fn test_end_to_end_api_gateway_with_with_request_body_lookup1() {
+async fn test_api_def_with_request_body_params_lookup_for_valid_input1() {
     let empty_headers = HeaderMap::new();
 
-    let api_request = get_api_request(
+    let api_request = get_gateway_request(
         "/foo/2",
         None,
         &empty_headers,
@@ -923,7 +996,7 @@ async fn test_end_to_end_api_gateway_with_with_request_body_lookup1() {
     "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_spec_worker_binding("/foo/{user-id}", worker_name, response_mapping).await;
+        get_api_def_with_worker_binding("/foo/{user-id}", worker_name, response_mapping).await;
 
     let session_store = internal::get_session_store();
 
@@ -956,7 +1029,7 @@ async fn test_end_to_end_api_gateway_with_with_request_body_lookup1() {
 }
 
 #[test]
-async fn test_end_to_end_api_gateway_with_with_request_body_lookup2() {
+async fn test_api_def_with_request_body_params_lookup_for_valid_input2() {
     let empty_headers = HeaderMap::new();
 
     let mut request_body: serde_json::Map<String, Value> = serde_json::Map::new();
@@ -971,7 +1044,7 @@ async fn test_end_to_end_api_gateway_with_with_request_body_lookup2() {
         Value::Array(vec![Value::String("bar_value".to_string())]),
     );
 
-    let api_request = get_api_request(
+    let api_request = get_gateway_request(
         "/foo/bar",
         None,
         &empty_headers,
@@ -995,7 +1068,7 @@ async fn test_end_to_end_api_gateway_with_with_request_body_lookup2() {
         "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_spec_worker_binding("/foo/{user-id}", worker_name, response_mapping).await;
+        get_api_def_with_worker_binding("/foo/{user-id}", worker_name, response_mapping).await;
 
     let session_store = internal::get_session_store();
 
@@ -1028,7 +1101,7 @@ async fn test_end_to_end_api_gateway_with_with_request_body_lookup2() {
 }
 
 #[test]
-async fn test_end_to_end_api_gateway_with_with_request_body_lookup3() {
+async fn test_api_def_with_request_body_params_lookup_for_valid_input3() {
     let empty_headers = HeaderMap::new();
 
     let mut request_body: serde_json::Map<String, Value> = serde_json::Map::new();
@@ -1043,7 +1116,7 @@ async fn test_end_to_end_api_gateway_with_with_request_body_lookup3() {
         Value::Array(vec![Value::String("bar_value".to_string())]),
     );
 
-    let api_request = get_api_request(
+    let api_request = get_gateway_request(
         "/foo/2",
         None,
         &empty_headers,
@@ -1065,7 +1138,7 @@ async fn test_end_to_end_api_gateway_with_with_request_body_lookup3() {
         "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_spec_worker_binding("/foo/{user-id}", worker_name, response_mapping).await;
+        get_api_def_with_worker_binding("/foo/{user-id}", worker_name, response_mapping).await;
 
     let session_store = internal::get_session_store();
 
@@ -1098,57 +1171,16 @@ async fn test_end_to_end_api_gateway_with_with_request_body_lookup3() {
 }
 
 #[test]
-async fn test_api_gateway_rib_input_from_request_details() {
-    async fn test_paths(definition_path: &str, request_path: &str, ok: bool) {
-        let empty_headers = HeaderMap::new();
-        let api_request =
-            get_api_request(request_path, None, &empty_headers, serde_json::Value::Null);
-
-        let worker_name = r#"
-            let x: u64 = request.path.cart-id;
-            "shopping-cart-${x}"
-        "#;
-
-        let response_mapping = r#"
-            let response = golem:it/api.{get-cart-contents}("foo", "bar");
-            response
-            "#;
-
-        let api_specification: HttpApiDefinition =
-            get_api_spec_worker_binding(definition_path, worker_name, response_mapping).await;
-
-        let compiled_api_spec = CompiledHttpApiDefinition::from_http_api_definition(
-            &api_specification,
-            &internal::get_component_metadata(),
-            &DefaultNamespace::default(),
-        )
-        .unwrap();
-
-        let resolved_route = api_request
-            .resolve_gateway_binding(vec![compiled_api_spec])
-            .await;
-
-        let result =
-            resolved_route.map(|x| x.get_worker_detail().expect("Tests expect worker detail"));
-
-        assert_eq!(result.is_ok(), ok);
-    }
-
-    test_paths("/getcartcontent/{cart-id}", "/noexist", false).await;
-    test_paths("/getcartcontent/{cart-id}", "/getcartcontent/1", true).await;
-}
-
-#[test]
-async fn test_api_gateway_idempotency_key_resolution() {
+async fn test_api_def_for_valid_input_with_idempotency_key_in_header() {
     async fn test_key(header_map: &HeaderMap, idempotency_key: Option<IdempotencyKey>) {
-        let api_request = get_api_request("/getcartcontent/1", None, header_map, Value::Null);
+        let api_request = get_gateway_request("/getcartcontent/1", None, header_map, Value::Null);
 
         let expression = r#"
             let response = golem:it/api.{get-cart-contents}("foo", "bar");
             response
             "#;
 
-        let api_specification: HttpApiDefinition = get_api_spec_worker_binding(
+        let api_specification: HttpApiDefinition = get_api_def_with_worker_binding(
             "/getcartcontent/{cart-id}",
             "${let x: u64 = request.path.cart-id; \"shopping-cart-${x}\"}",
             expression,
@@ -1182,7 +1214,7 @@ async fn test_api_gateway_idempotency_key_resolution() {
     test_key(&headers, Some(IdempotencyKey::new("bar".to_string()))).await;
 }
 
-fn get_api_request(
+fn get_gateway_request(
     base_path: &str,
     query_path: Option<&str>,
     headers: &HeaderMap,
@@ -1201,7 +1233,7 @@ fn get_api_request(
     }
 }
 
-fn get_preflight_api_request(
+fn get_preflight_gateway_request(
     base_path: &str,
     query_path: Option<&str>,
     headers: &HeaderMap,
@@ -1220,7 +1252,7 @@ fn get_preflight_api_request(
     }
 }
 
-async fn get_api_spec_worker_binding(
+async fn get_api_def_with_worker_binding(
     path_pattern: &str,
     worker_name: &str,
     rib_expression: &str,
@@ -1265,7 +1297,7 @@ async fn get_api_spec_worker_binding(
 }
 
 // https://swagger.io/docs/specification/v3_0/authentication/openid-connect-discovery/
-async fn get_api_spec_with_security_configuration(
+async fn get_api_def_with_security(
     path_pattern: &str,
     worker_name: &str,
     rib_expression: &str,
@@ -1340,9 +1372,7 @@ async fn get_api_spec_with_security_configuration(
     .expect("Conversion of an HttpApiDefinitionRequest to HttpApiDefinition failed")
 }
 
-async fn get_api_spec_with_default_cors_preflight_configuration(
-    path_pattern: &str,
-) -> HttpApiDefinition {
+async fn get_api_def_with_default_cors_preflight(path_pattern: &str) -> HttpApiDefinition {
     let yaml_string = format!(
         r#"
           id: users-api
@@ -1375,10 +1405,7 @@ async fn get_api_spec_with_default_cors_preflight_configuration(
     .unwrap()
 }
 
-async fn get_api_spec_with_cors_preflight_configuration(
-    path_pattern: &str,
-    cors: &HttpCors,
-) -> HttpApiDefinition {
+async fn get_api_def_with_cors_preflight(path_pattern: &str, cors: &HttpCors) -> HttpApiDefinition {
     let yaml_string = format!(
         r#"
           id: users-api
@@ -1426,7 +1453,7 @@ async fn get_api_spec_with_cors_preflight_configuration(
     .unwrap()
 }
 
-async fn get_api_spec_with_cors_preflight_configuration_and_extra_endpoint(
+async fn get_api_def_with_cors_preflight_for_get_endpoint_resource(
     path_pattern: &str,
     worker_name: &str,
     rib_expression: &str,
@@ -1492,7 +1519,7 @@ async fn get_api_spec_with_cors_preflight_configuration_and_extra_endpoint(
     .unwrap()
 }
 
-async fn get_api_spec_for_cors_preflight_default_and_actual_endpoint(
+async fn get_api_def_with_with_default_cors_preflight_for_get_endpoint_resource(
     path_pattern: &str,
     worker_name: &str,
     rib_expression: &str,

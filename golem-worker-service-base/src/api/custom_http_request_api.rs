@@ -16,14 +16,14 @@ use std::future::Future;
 use std::sync::Arc;
 
 use crate::gateway_api_definition::http::CompiledHttpApiDefinition;
+use crate::gateway_execution::api_definition_lookup::ApiDefinitionsLookup;
 use crate::gateway_execution::file_server_binding_handler::FileServerBindingHandler;
 use crate::gateway_rib_interpreter::DefaultRibInterpreter;
 use futures_util::FutureExt;
+use golem_common::SafeDisplay;
 use poem::http::StatusCode;
 use poem::{Body, Endpoint, Request, Response};
 use tracing::error;
-
-use crate::gateway_execution::api_definition_lookup::ApiDefinitionsLookup;
 
 use crate::gateway_binding::{GatewayBindingResolver, GatewayRequestDetails};
 use crate::gateway_execution::auth_call_back_binding_handler::DefaultAuthCallBack;
@@ -127,12 +127,13 @@ impl<Namespace: Clone + Send + Sync + 'static> CustomHttpRequestApi<Namespace> {
                         response
                     }
 
-                    Err(msg) => {
-                        error!("Failed to resolve the API definition; error: {}", msg);
+                    Err(resolution_error) => {
+                        error!(
+                            "Failed to resolve the API definition; error: {}",
+                            resolution_error.to_safe_string()
+                        );
 
-                        Response::builder()
-                            .status(StatusCode::METHOD_NOT_ALLOWED)
-                            .finish()
+                        resolution_error.to_http_response()
                     }
                 }
             }
