@@ -16,7 +16,7 @@ use crate::cli::{Cli, CliLive};
 use crate::Tracing;
 use golem_cli::model::component::ComponentView;
 use golem_cli::model::Format;
-use golem_client::model::{ApiDeployment, HttpApiDefinitionRequest, HttpApiDefinitionWithTypeInfo};
+use golem_client::model::{ApiDeployment, HttpApiDefinitionRequest, HttpApiDefinitionResponseData};
 use golem_common::model::ComponentId;
 use golem_common::uri::oss::urn::WorkerUrn;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
@@ -104,7 +104,7 @@ fn api_deployment_file_server_simple(
         writer.flush()?;
     }
 
-    let definition: HttpApiDefinitionWithTypeInfo =
+    let definition: HttpApiDefinitionResponseData =
         cli.run(&["api-definition", "add", api_path.to_str().unwrap()])?;
 
     let _: ApiDeployment = cli.run(&[
@@ -181,7 +181,7 @@ fn api_deployment_fileserver_complex(
         writer.flush()?;
     }
 
-    let definition: HttpApiDefinitionWithTypeInfo =
+    let definition: HttpApiDefinitionResponseData =
         cli.run(&["api-definition", "add", api_path.to_str().unwrap()])?;
 
     let _: ApiDeployment = cli.run(&[
@@ -273,7 +273,7 @@ fn api_deployment_fileserver_stateful_worker(
         writer.flush()?;
     }
 
-    let definition: HttpApiDefinitionWithTypeInfo =
+    let definition: HttpApiDefinitionResponseData =
         cli.run(&["api-definition", "add", api_path.to_str().unwrap()])?;
 
     let _: ApiDeployment = cli.run(&[
