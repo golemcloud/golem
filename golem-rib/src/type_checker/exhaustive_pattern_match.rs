@@ -614,7 +614,7 @@ mod pattern_match_exhaustive_tests {
     #[test]
     fn test_result_pattern_match1() {
         let expr = r#"
-        let x: result<str, str> = ok("foo");
+        let x: result<string, string> = ok("foo");
         match x {
             ok(a) => a,
             err(msg) =>  msg
@@ -630,7 +630,7 @@ mod pattern_match_exhaustive_tests {
     #[test]
     fn test_result_pattern_match2() {
         let expr = r#"
-        let x: result<str, str> = ok("foo");
+        let x: result<string, string> = ok("foo");
         match x {
             err(a) => a,
             ok(a) => a
@@ -660,7 +660,7 @@ mod pattern_match_exhaustive_tests {
     #[test]
     fn test_result_pattern_match_wild_card2() {
         let expr = r#"
-        let x: result<str, str> = ok("foo");
+        let x: result<string, string> = ok("foo");
         match x {
             err(msg) => msg,
             ok(_) => a
@@ -799,7 +799,7 @@ mod pattern_match_exhaustive_tests {
     fn test_result_ok_absent() {
         // Explicit type annotation is required here otherwise `str` in `err` cannot be inferred
         let expr = r#"
-        let x: result<str, str> = ok("foo");
+        let x: result<string, string> = ok("foo");
         match x {
            err(str) => str
         }

@@ -994,7 +994,7 @@ mod let_tests {
             ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
-        let expected_str = "let x: str = \"hello\";\nlet y: str = \"bar\"".to_string();
+        let expected_str = "let x: string = \"hello\";\nlet y: string = \"bar\"".to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
@@ -1089,7 +1089,8 @@ mod let_tests {
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str =
-            "let x: option<str> = some(\"foo\");\nlet y: option<str> = some(\"bar\")".to_string();
+            "let x: option<string> = some(\"foo\");\nlet y: option<string> = some(\"bar\")"
+                .to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
@@ -1118,7 +1119,7 @@ mod let_tests {
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str =
-            "let x: list<str> = [\"foo\"];\nlet y: list<str> = [\"bar\"]".to_string();
+            "let x: list<string> = [\"foo\"];\nlet y: list<string> = [\"bar\"]".to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
@@ -1147,7 +1148,7 @@ mod let_tests {
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str =
-            "let x: tuple<str> = (\"foo\");\nlet y: tuple<str> = (\"bar\")".to_string();
+            "let x: tuple<string> = (\"foo\");\nlet y: tuple<string> = (\"bar\")".to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }

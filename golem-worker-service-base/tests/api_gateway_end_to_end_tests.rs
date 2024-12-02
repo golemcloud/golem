@@ -539,7 +539,7 @@ async fn test_api_def_with_security_for_valid_input() {
 
     let response_mapping = r#"
       let response = golem:it/api.{get-cart-contents}("a", "b");
-      let email: str = request.auth.email;
+      let email: string = request.auth.email;
       { body: response, headers: {email: email} }
     "#;
 
@@ -1052,7 +1052,7 @@ async fn test_api_def_with_request_body_params_lookup_for_valid_input2() {
     );
 
     let worker_name = r#"
-        let userid: str = request.path.user-id;
+        let userid: string = request.path.user-id;
         let max: u64 = 100;
         let zero: u64 = 0;
         let one: u64 = 1;
