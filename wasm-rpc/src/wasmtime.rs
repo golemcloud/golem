@@ -51,97 +51,115 @@ impl DecodeParamResult {
 }
 
 /// Converts a Value to a wasmtime Val based on the available type information.
-#[async_recursion]
 pub async fn decode_param(
     param: &Value,
     param_type: &Type,
     resource_store: &mut (impl ResourceStore + Send),
 ) -> Result<DecodeParamResult, EncodingError> {
+    decode_param_impl(param, param_type, resource_store, "$")
+}
+
+#[async_recursion]
+async fn decode_param_impl(
+    param: &Value,
+    param_type: &Type,
+    resource_store: &mut (impl ResourceStore + Send),
+    context: &str,
+) -> Result<DecodeParamResult, EncodingError> {
     match param_type {
         Type::Bool => match param {
             Value::Bool(bool) => Ok(DecodeParamResult::simple(Val::Bool(*bool))),
             _ => Err(EncodingError::ParamTypeMismatch {
-                details: format!("expected bool, got {}", param.type_case_name()),
+                details: format!("in {context} expected bool, got {}", param.type_case_name()),
             }),
         },
         Type::S8 => match param {
             Value::S8(s8) => Ok(DecodeParamResult::simple(Val::S8(*s8))),
             _ => Err(EncodingError::ParamTypeMismatch {
-                details: format!("expected s8, got {}", param.type_case_name()),
+                details: format!("in {context} expected s8, got {}", param.type_case_name()),
             }),
         },
         Type::U8 => match param {
             Value::U8(u8) => Ok(DecodeParamResult::simple(Val::U8(*u8))),
             _ => Err(EncodingError::ParamTypeMismatch {
-                details: format!("expected u8, got {}", param.type_case_name()),
+                details: format!("in {context} expected u8, got {}", param.type_case_name()),
             }),
         },
         Type::S16 => match param {
             Value::S16(s16) => Ok(DecodeParamResult::simple(Val::S16(*s16))),
             _ => Err(EncodingError::ParamTypeMismatch {
-                details: format!("expected s16, got {}", param.type_case_name()),
+                details: format!("in {context} expected s16, got {}", param.type_case_name()),
             }),
         },
         Type::U16 => match param {
             Value::U16(u16) => Ok(DecodeParamResult::simple(Val::U16(*u16))),
             _ => Err(EncodingError::ParamTypeMismatch {
-                details: format!("expected u16, got {}", param.type_case_name()),
+                details: format!("in {context} expected u16, got {}", param.type_case_name()),
             }),
         },
         Type::S32 => match param {
             Value::S32(s32) => Ok(DecodeParamResult::simple(Val::S32(*s32))),
             _ => Err(EncodingError::ParamTypeMismatch {
-                details: format!("expected s32, got {}", param.type_case_name()),
+                details: format!("in {context} expected s32, got {}", param.type_case_name()),
             }),
         },
         Type::U32 => match param {
             Value::U32(u32) => Ok(DecodeParamResult::simple(Val::U32(*u32))),
             _ => Err(EncodingError::ParamTypeMismatch {
-                details: format!("expected u32, got {}", param.type_case_name()),
+                details: format!("in {context} expected u32, got {}", param.type_case_name()),
             }),
         },
         Type::S64 => match param {
             Value::S64(s64) => Ok(DecodeParamResult::simple(Val::S64(*s64))),
             _ => Err(EncodingError::ParamTypeMismatch {
-                details: format!("expected s64, got {}", param.type_case_name()),
+                details: format!("in {context} expected s64, got {}", param.type_case_name()),
             }),
         },
         Type::U64 => match param {
             Value::U64(u64) => Ok(DecodeParamResult::simple(Val::U64(*u64))),
             _ => Err(EncodingError::ParamTypeMismatch {
-                details: format!("expected u64, got {}", param.type_case_name()),
+                details: format!("in {context} expected u64, got {}", param.type_case_name()),
             }),
         },
         Type::Float32 => match param {
             Value::F32(f32) => Ok(DecodeParamResult::simple(Val::Float32(*f32))),
             _ => Err(EncodingError::ParamTypeMismatch {
-                details: format!("expected f32, got {}", param.type_case_name()),
+                details: format!("in {context} expected f32, got {}", param.type_case_name()),
             }),
         },
         Type::Float64 => match param {
             Value::F64(f64) => Ok(DecodeParamResult::simple(Val::Float64(*f64))),
             _ => Err(EncodingError::ParamTypeMismatch {
-                details: format!("expected f64, got {}", param.type_case_name()),
+                details: format!("in {context} expected f64, got {}", param.type_case_name()),
             }),
         },
         Type::Char => match param {
             Value::Char(char) => Ok(DecodeParamResult::simple(Val::Char(*char))),
             _ => Err(EncodingError::ParamTypeMismatch {
-                details: format!("expected char, got {}", param.type_case_name()),
+                details: format!("in {context} expected char, got {}", param.type_case_name()),
             }),
         },
         Type::String => match param {
             Value::String(string) => Ok(DecodeParamResult::simple(Val::String(string.clone()))),
             _ => Err(EncodingError::ParamTypeMismatch {
-                details: format!("expected string, got {}", param.type_case_name()),
+                details: format!(
+                    "in {context} expected string, got {}",
+                    param.type_case_name()
+                ),
             }),
         },
         Type::List(ty) => match param {
             Value::List(values) => {
                 let mut decoded_values = Vec::new();
                 let mut resource_ids_to_drop = Vec::new();
-                for value in values {
-                    let decoded_param = decode_param(value, &ty.ty(), resource_store).await?;
+                for (idx, value) in values.iter().enumerate() {
+                    let decoded_param = decode_param_impl(
+                        value,
+                        &ty.ty(),
+                        resource_store,
+                        &format!("{context}.[{idx}]"),
+                    )
+                    .await?;
                     decoded_values.push(decoded_param.val);
                     resource_ids_to_drop.extend(decoded_param.resources_to_drop);
                 }
@@ -151,7 +169,7 @@ pub async fn decode_param(
                 })
             }
             _ => Err(EncodingError::ParamTypeMismatch {
-                details: format!("expected list, got {}", param.type_case_name()),
+                details: format!("in {context} expected list, got {}", param.type_case_name()),
             }),
         },
         Type::Record(ty) => match param {
@@ -160,7 +178,13 @@ pub async fn decode_param(
                 let mut resource_ids_to_drop = Vec::new();
 
                 for (value, field) in values.iter().zip(ty.fields()) {
-                    let decoded_param = decode_param(value, &field.ty, resource_store).await?;
+                    let decoded_param = decode_param_impl(
+                        value,
+                        &field.ty,
+                        resource_store,
+                        &format!("{context}.{}", field.name),
+                    )
+                    .await?;
                     record_values.push((field.name.to_string(), decoded_param.val));
                     resource_ids_to_drop.extend(decoded_param.resources_to_drop);
                 }
@@ -171,7 +195,10 @@ pub async fn decode_param(
                 })
             }
             _ => Err(EncodingError::ParamTypeMismatch {
-                details: format!("expected record, got {}", param.type_case_name()),
+                details: format!(
+                    "in {context} expected record, got {}",
+                    param.type_case_name()
+                ),
             }),
         },
         Type::Tuple(ty) => match param {
@@ -179,8 +206,10 @@ pub async fn decode_param(
                 let mut tuple_values = Vec::new();
                 let mut resource_ids_to_drop = Vec::new();
 
-                for (value, ty) in values.iter().zip(ty.types()) {
-                    let decoded_param = decode_param(value, &ty, resource_store).await?;
+                for (idx, (value, ty)) in values.iter().zip(ty.types()).enumerate() {
+                    let decoded_param =
+                        decode_param_impl(value, &ty, resource_store, &format!("{context}.{idx}"))
+                            .await?;
                     tuple_values.push(decoded_param.val);
                     resource_ids_to_drop.extend(decoded_param.resources_to_drop);
                 }
@@ -191,7 +220,10 @@ pub async fn decode_param(
                 })
             }
             _ => Err(EncodingError::ParamTypeMismatch {
-                details: format!("expected tuple, got {}", param.type_case_name()),
+                details: format!(
+                    "in {context} expected tuple, got {}",
+                    param.type_case_name()
+                ),
             }),
         },
         Type::Variant(ty) => match param {
@@ -203,13 +235,24 @@ pub async fn decode_param(
                 let case = cases
                     .get(*case_idx as usize)
                     .ok_or(EncodingError::ValueMismatch {
-                        details: format!("could not get case for discriminant {}", case_idx),
+                        details: format!(
+                            "in {context} could not get case for discriminant {}",
+                            case_idx
+                        ),
                     })?;
                 let name = case.name;
                 match case.ty {
                     Some(ref case_ty) => {
                         let decoded_value = match case_value {
-                            Some(v) => Some(decode_param(v, case_ty, resource_store).await?),
+                            Some(v) => Some(
+                                decode_param_impl(
+                                    v,
+                                    case_ty,
+                                    resource_store,
+                                    &format!("{context}.{name}"),
+                                )
+                                .await?,
+                            ),
                             None => None,
                         };
                         match decoded_value {
@@ -228,7 +271,7 @@ pub async fn decode_param(
                     }
                     None => match case_value {
                         Some(_) => Err(EncodingError::ValueMismatch {
-                            details: "expected no value for unit variant".to_string(),
+                            details: format!("in {context} expected no value for unit variant"),
                         }),
                         None => Ok(DecodeParamResult::simple(Val::Variant(
                             name.to_string(),
@@ -238,7 +281,10 @@ pub async fn decode_param(
                 }
             }
             _ => Err(EncodingError::ParamTypeMismatch {
-                details: format!("expected variant, got {}", param.type_case_name()),
+                details: format!(
+                    "in {context} expected variant, got {}",
+                    param.type_case_name()
+                ),
             }),
         },
         Type::Enum(ty) => match param {
@@ -249,7 +295,7 @@ pub async fn decode_param(
                         .get(*discriminant as usize)
                         .ok_or(EncodingError::ValueMismatch {
                             details: format!(
-                                "could not get name for discriminant {}",
+                                "in {context} could not get name for discriminant {}",
                                 discriminant
                             ),
                         })?;
@@ -257,13 +303,19 @@ pub async fn decode_param(
                 Ok(DecodeParamResult::simple(Val::Enum(name.to_string())))
             }
             _ => Err(EncodingError::ParamTypeMismatch {
-                details: format!("expected enum, got {}", param.type_case_name()),
+                details: format!("in {context} expected enum, got {}", param.type_case_name()),
             }),
         },
         Type::Option(ty) => match param {
             Value::Option(value) => match value {
                 Some(value) => {
-                    let decoded_value = decode_param(value, &ty.ty(), resource_store).await?;
+                    let decoded_value = decode_param_impl(
+                        value,
+                        &ty.ty(),
+                        resource_store,
+                        &format!("{context}.some"),
+                    )
+                    .await?;
                     Ok(DecodeParamResult {
                         val: Val::Option(Some(Box::new(decoded_value.val))),
                         resources_to_drop: decoded_value.resources_to_drop,
@@ -272,17 +324,23 @@ pub async fn decode_param(
                 None => Ok(DecodeParamResult::simple(Val::Option(None))),
             },
             _ => Err(EncodingError::ParamTypeMismatch {
-                details: format!("expected option, got {}", param.type_case_name()),
+                details: format!(
+                    "in {context} expected option, got {}",
+                    param.type_case_name()
+                ),
             }),
         },
         Type::Result(ty) => match param {
             Value::Result(result) => match result {
                 Ok(value) => {
                     let ok_ty = ty.ok().ok_or(EncodingError::ValueMismatch {
-                        details: "could not get ok type".to_string(),
+                        details: format!("in {context} could not get ok type"),
                     })?;
                     let decoded_value = match value {
-                        Some(v) => Some(decode_param(v, &ok_ty, resource_store).await?),
+                        Some(v) => Some(
+                            decode_param_impl(v, &ok_ty, resource_store, &format!("{context}.ok"))
+                                .await?,
+                        ),
                         None => None,
                     };
                     match decoded_value {
@@ -295,10 +353,18 @@ pub async fn decode_param(
                 }
                 Err(value) => {
                     let err_ty = ty.err().ok_or(EncodingError::ValueMismatch {
-                        details: "could not get err type".to_string(),
+                        details: format!("in {context} could not get err type"),
                     })?;
                     let decoded_value = match value {
-                        Some(v) => Some(decode_param(v, &err_ty, resource_store).await?),
+                        Some(v) => Some(
+                            decode_param_impl(
+                                v,
+                                &err_ty,
+                                resource_store,
+                                &format!("{context}.err"),
+                            )
+                            .await?,
+                        ),
                         None => None,
                     };
 
@@ -312,7 +378,10 @@ pub async fn decode_param(
                 }
             },
             _ => Err(EncodingError::ParamTypeMismatch {
-                details: format!("expected result, got {}", param.type_case_name()),
+                details: format!(
+                    "in {context} expected result, got {}",
+                    param.type_case_name()
+                ),
             }),
         },
         Type::Flags(ty) => match param {
@@ -333,50 +402,61 @@ pub async fn decode_param(
                 Ok(DecodeParamResult::simple(Val::Flags(active_flags)))
             }
             _ => Err(EncodingError::ParamTypeMismatch {
-                details: format!("expected flags, got {}", param.type_case_name()),
+                details: format!(
+                    "in {context} expected flags, got {}",
+                    param.type_case_name()
+                ),
             }),
         },
-        Type::Own(_) => match param {
-            Value::Handle { uri, resource_id } => {
-                if resource_store.self_uri() == *uri {
-                    match resource_store.get(*resource_id).await {
-                        Some(resource) => Ok(DecodeParamResult {
-                            val: Val::Resource(resource),
-                            resources_to_drop: vec![resource],
-                        }),
-                        None => Err(EncodingError::ValueMismatch {
-                            details: "resource not found".to_string(),
-                        }),
-                    }
-                } else {
-                    Err(EncodingError::ValueMismatch {
-                        details: "cannot resolve handle belonging to a different worker"
-                            .to_string(),
+        Type::Own(_) => {
+            match param {
+                Value::Handle { uri, resource_id } => {
+                    if resource_store.self_uri() == *uri {
+                        match resource_store.get(*resource_id).await {
+                            Some(resource) => Ok(DecodeParamResult {
+                                val: Val::Resource(resource),
+                                resources_to_drop: vec![resource],
+                            }),
+                            None => Err(EncodingError::ValueMismatch {
+                                details: format!("in {context} resource not found"),
+                            }),
+                        }
+                    } else {
+                        Err(EncodingError::ValueMismatch {
+                        details: format!("in {context} cannot resolve handle belonging to a different worker"),
                     })
+                    }
                 }
+                _ => Err(EncodingError::ParamTypeMismatch {
+                    details: format!(
+                        "in {context} expected handle, got {}",
+                        param.type_case_name()
+                    ),
+                }),
             }
-            _ => Err(EncodingError::ParamTypeMismatch {
-                details: format!("expected handle, got {}", param.type_case_name()),
-            }),
-        },
+        }
         Type::Borrow(_) => match param {
             Value::Handle { uri, resource_id } => {
                 if resource_store.self_uri() == *uri {
                     match resource_store.borrow(*resource_id).await {
                         Some(resource) => Ok(DecodeParamResult::simple(Val::Resource(resource))),
                         None => Err(EncodingError::ValueMismatch {
-                            details: "resource not found".to_string(),
+                            details: format!("in {context} resource not found"),
                         }),
                     }
                 } else {
                     Err(EncodingError::ValueMismatch {
-                        details: "cannot resolve handle belonging to a different worker"
-                            .to_string(),
+                        details: format!(
+                            "in {context} cannot resolve handle belonging to a different worker"
+                        ),
                     })
                 }
             }
             _ => Err(EncodingError::ParamTypeMismatch {
-                details: format!("expected handle, got {}", param.type_case_name()),
+                details: format!(
+                    "in {context} expected handle, got {}",
+                    param.type_case_name()
+                ),
             }),
         },
     }
