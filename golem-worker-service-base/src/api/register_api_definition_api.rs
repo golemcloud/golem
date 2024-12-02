@@ -30,7 +30,7 @@ use golem_common::model::GatewayBindingType;
 use golem_service_base::model::VersionedComponentId;
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use poem_openapi::*;
-use rib::RibInputTypeInfo;
+use rib::{RibInputTypeInfo, RibOutputTypeInfo};
 use serde::{Deserialize, Serialize};
 use std::ops::Deref;
 use std::result::Result;
@@ -432,6 +432,7 @@ pub struct GatewayBindingWithTypeInfo {
     pub worker_name_input: Option<RibInputTypeInfo>,      // If bindingType is Default or FileServer
     pub idempotency_key_input: Option<RibInputTypeInfo>, // If bindingType is Default or FilerServer
     pub cors_preflight: Option<HttpCors>, // If bindingType is CorsPreflight (internally, a static binding)
+    pub response_mapping_output: Option<RibOutputTypeInfo>, // If bindingType is Default or FileServer
 }
 
 impl GatewayBindingWithTypeInfo {
@@ -463,6 +464,7 @@ impl GatewayBindingWithTypeInfo {
                 .idempotency_key_compiled
                 .map(|idempotency_key_compiled| idempotency_key_compiled.rib_input),
             cors_preflight: None,
+            response_mapping_output: worker_binding.response_compiled.rib_output,
         }
     }
 }
@@ -494,6 +496,7 @@ impl From<GatewayBindingCompiled> for GatewayBindingWithTypeInfo {
                 worker_name_input: None,
                 idempotency_key_input: None,
                 cors_preflight: static_binding.get_cors_preflight(),
+                response_mapping_output: None,
             },
         }
     }

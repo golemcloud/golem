@@ -26,11 +26,11 @@ pub struct RibByteCode {
 impl RibByteCode {
     // Convert expression to bytecode instructions
     pub fn from_expr(inferred_expr: &InferredExpr) -> Result<RibByteCode, String> {
-        let expr = Expr::from(inferred_expr.clone());
+        let expr: &Expr = inferred_expr.get_expr();
         let mut instructions = Vec::new();
         let mut stack: Vec<ExprState> = Vec::new();
         let mut instruction_id = InstructionId::init();
-        stack.push(ExprState::from_expr(&expr));
+        stack.push(ExprState::from_expr(expr));
 
         while let Some(remaining) = stack.pop() {
             match remaining {
@@ -1449,7 +1449,7 @@ mod compiler_tests {
             let expected_type_info =
                 internal::rib_input_type_info(vec![("request", request_value_type)]);
 
-            assert_eq!(compiled.global_input_type_info, expected_type_info);
+            assert_eq!(compiled.rib_input_type_info, expected_type_info);
         }
 
         #[test]
@@ -1478,7 +1478,7 @@ mod compiler_tests {
             let expected_type_info =
                 internal::rib_input_type_info(vec![("request", request_value_type)]);
 
-            assert_eq!(compiled.global_input_type_info, expected_type_info);
+            assert_eq!(compiled.rib_input_type_info, expected_type_info);
         }
 
         #[test]
@@ -1527,7 +1527,7 @@ mod compiler_tests {
             let expected_type_info =
                 internal::rib_input_type_info(vec![("request", request_value_type)]);
 
-            assert_eq!(compiled.global_input_type_info, expected_type_info);
+            assert_eq!(compiled.rib_input_type_info, expected_type_info);
         }
 
         #[test]
@@ -1564,7 +1564,7 @@ mod compiler_tests {
             let expected_type_info =
                 internal::rib_input_type_info(vec![("request", request_value_type)]);
 
-            assert_eq!(compiled.global_input_type_info, expected_type_info);
+            assert_eq!(compiled.rib_input_type_info, expected_type_info);
         }
 
         #[test]
@@ -1600,7 +1600,7 @@ mod compiler_tests {
             let expected_type_info =
                 internal::rib_input_type_info(vec![("request", request_value_type)]);
 
-            assert_eq!(compiled.global_input_type_info, expected_type_info);
+            assert_eq!(compiled.rib_input_type_info, expected_type_info);
         }
 
         #[test]
@@ -1637,7 +1637,7 @@ mod compiler_tests {
             let expected_type_info =
                 internal::rib_input_type_info(vec![("request", request_value_type)]);
 
-            assert_eq!(compiled.global_input_type_info, expected_type_info);
+            assert_eq!(compiled.rib_input_type_info, expected_type_info);
         }
 
         #[test]
@@ -1685,7 +1685,7 @@ mod compiler_tests {
             let expected_type_info =
                 internal::rib_input_type_info(vec![("request", request_value_type)]);
 
-            assert_eq!(compiled.global_input_type_info, expected_type_info);
+            assert_eq!(compiled.rib_input_type_info, expected_type_info);
         }
 
         #[test]
@@ -1729,7 +1729,7 @@ mod compiler_tests {
             let expected_type_info =
                 internal::rib_input_type_info(vec![("request", request_value_type)]);
 
-            assert_eq!(compiled.global_input_type_info, expected_type_info);
+            assert_eq!(compiled.rib_input_type_info, expected_type_info);
         }
 
         #[test]
@@ -1764,7 +1764,7 @@ mod compiler_tests {
             let expected_type_info =
                 internal::rib_input_type_info(vec![("request", request_value_type)]);
 
-            assert_eq!(compiled.global_input_type_info, expected_type_info);
+            assert_eq!(compiled.rib_input_type_info, expected_type_info);
         }
     }
 

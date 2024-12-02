@@ -21,9 +21,9 @@ pub trait WorkerServiceRibCompiler {
     fn compile(rib: &Expr, export_metadata: &[AnalysedExport]) -> Result<CompilerOutput, String>;
 }
 
-pub struct DefaultRibCompiler;
+pub struct DefaultWorkerServiceRibCompiler;
 
-impl WorkerServiceRibCompiler for DefaultRibCompiler {
+impl WorkerServiceRibCompiler for DefaultWorkerServiceRibCompiler {
     fn compile(rib: &Expr, export_metadata: &[AnalysedExport]) -> Result<CompilerOutput, String> {
         rib::compile_with_limited_globals(
             rib,
