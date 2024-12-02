@@ -12,262 +12,269 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::command::profile::UniversalProfileAdd;
-use crate::completion::PrintCompletion;
+use std::path::PathBuf;
+
+use crate::command;
+use crate::command::profile::OssProfileAdd;
+use crate::command::worker::OssWorkerUriArg;
+use crate::command::{CliCommand, SharedCommand, StaticSharedCommand};
+use crate::completion;
 use crate::config::{OssProfile, ProfileName};
-use crate::diagnose::diagnose;
 use crate::factory::ServiceFactory;
-use crate::init::{init_profile, DummyProfileAuth, ProfileAuth};
-use crate::model::{ApiDefinitionId, ApiDefinitionVersion, GolemError, GolemResult};
-use crate::oss::command::{GolemOssCommand, OssCommand};
+use crate::init::{init_profile, CliKind, DummyProfileAuth};
+use crate::model::Format;
+use crate::model::{ComponentUriArg, GolemError, GolemResult, OssPluginScopeArgs};
 use crate::oss::factory::OssServiceFactory;
-use crate::oss::model::OssContext;
-use crate::stubgen::handle_stubgen;
-use crate::{check_for_newer_server_version, examples, ConfiguredMainArgs, MainArgs, VERSION};
+use crate::oss::resource;
+use crate::{check_for_newer_server_version, VERSION};
+use clap::Parser;
+use clap::{Command, Subcommand};
+use clap_verbosity_flag::Verbosity;
 use golem_client::model::{
     PluginDefinitionDefaultPluginOwnerDefaultPluginScope,
     PluginDefinitionWithoutOwnerDefaultPluginScope,
 };
 use golem_client::DefaultComponentOwner;
 use golem_common::model::plugin::DefaultPluginScope;
-use golem_common::uri::oss::uri::{ComponentUri, ResourceUri, WorkerUri};
-use golem_common::uri::oss::url::{ComponentUrl, ResourceUrl, WorkerUrl};
-use golem_common::uri::oss::urn::{ComponentUrn, ResourceUrn, WorkerUrn};
+use golem_common::uri::oss::uri::ResourceUri;
 
-pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
-    args: ConfiguredMainArgs<OssProfile, GolemOssCommand<ProfileAdd>>,
+use super::model::OssContext;
+
+pub async fn run_with_profile<ExtraCommands: CliCommand<OssCommandContext>>(
+    format: Format,
+    config_dir: PathBuf,
+    profile: OssProfile,
+    command: Command,
+    parsed: GolemOssCli<ExtraCommands>,
 ) -> Result<GolemResult, GolemError> {
-    let format = args.format();
-    let ConfiguredMainArgs {
-        profile,
-        profile_name: _,
-        command,
-        cli_kind,
+    let factory = OssServiceFactory::from_profile(&profile)?;
+
+    check_for_newer_server_version(factory.version_service().as_ref(), VERSION).await;
+
+    let ctx = OssCommandContext {
+        format,
+        factory,
         config_dir,
-    } = args;
-
-    let profile_auth = &DummyProfileAuth;
-
-    let factory = || async {
-        let factory = OssServiceFactory::from_profile(&profile)?;
-        check_for_newer_server_version(factory.version_service().as_ref(), VERSION).await;
-        Ok::<OssServiceFactory, GolemError>(factory)
+        command,
     };
 
-    match command.command {
-        OssCommand::Component { subcommand } => {
-            let factory = factory().await?;
+    parsed.command.run(ctx).await
+}
 
-            subcommand
-                .handle(
-                    format,
-                    factory.component_service(),
-                    factory.deploy_service(),
-                    factory.project_resolver().as_ref(),
-                )
-                .await
-        }
-        OssCommand::Worker { subcommand } => {
-            let factory = factory().await?;
+pub async fn run_without_profile<ExtraCommands: CliCommand<UnintializedOssCommandContext>>(
+    format: Format,
+    config_dir: PathBuf,
+    command: Command,
+    parsed: GolemOssCli<ExtraCommands>,
+) -> Result<GolemResult, GolemError> {
+    let ctx = UnintializedOssCommandContext {
+        format,
+        config_dir,
+        command,
+    };
 
-            subcommand
-                .handle(format, factory.worker_service(), factory.project_resolver())
-                .await
-        }
-        OssCommand::Examples(golem_examples::cli::Command::New {
-            name_or_language,
-            package_name,
-            component_name,
-        }) => examples::process_new(
-            name_or_language.example_name(),
-            component_name,
-            package_name,
-        ),
-        OssCommand::Examples(golem_examples::cli::Command::ListExamples { min_tier, language }) => {
-            examples::process_list_examples(min_tier, language)
-        }
-        #[cfg(feature = "stubgen")]
-        OssCommand::Stubgen { subcommand } => handle_stubgen(subcommand).await,
-        OssCommand::ApiDefinition { subcommand } => {
-            let factory = factory().await?;
+    parsed.command.run(ctx).await
+}
 
-            subcommand
-                .handle(
-                    factory.api_definition_service().as_ref(),
-                    factory.project_resolver().as_ref(),
-                )
-                .await
-        }
-        OssCommand::ApiDeployment { subcommand } => {
-            let factory = factory().await?;
+/// Commands only available in OSS
+#[derive(Subcommand, Debug)]
+#[command()]
+pub enum OssOnlyCommand {
+    /// Get resource by URI
+    ///
+    /// Use resource URN or URL to get resource metadata.
+    #[command()]
+    Get {
+        #[arg(value_name = "URI")]
+        uri: ResourceUri,
+    },
+}
 
-            subcommand
-                .handle(
-                    factory.api_deployment_service().as_ref(),
-                    factory.project_resolver().as_ref(),
-                )
-                .await
-        }
+/// Shared command with oss-specific arguments.
+type SpecializedSharedCommand =
+    SharedCommand<OssContext, ComponentUriArg, OssWorkerUriArg, OssPluginScopeArgs, OssProfileAdd>;
 
-        OssCommand::ApiSecurityScheme { subcommand } => {
-            let factory = factory().await?;
+#[derive(Parser, Debug)]
+#[command(author, version = crate::VERSION, about, long_about, rename_all = "kebab-case")]
+/// Command line interface for OSS version of Golem.
+pub struct GolemOssCli<ExtraCommand: Subcommand> {
+    #[command(flatten)]
+    pub verbosity: Verbosity,
 
-            subcommand
-                .handle(
-                    factory.api_security_scheme_service().as_ref(),
-                    factory.project_resolver().as_ref(),
-                )
-                .await
-        }
-        OssCommand::Profile { subcommand } => {
-            subcommand.handle(cli_kind, &config_dir, profile_auth).await
-        }
-        OssCommand::Init {} => {
-            let profile_name = ProfileName::default(cli_kind);
+    #[arg(short = 'F', long, global = true, default_value = "text")]
+    pub format: Option<Format>,
 
-            let res = init_profile(cli_kind, profile_name, &config_dir, profile_auth).await?;
+    #[command(subcommand)]
+    pub command: command::Zip<
+        command::Zip<StaticSharedCommand, SpecializedSharedCommand>,
+        command::Zip<OssOnlyCommand, ExtraCommand>,
+    >,
+}
 
-            if res.auth_required {
-                profile_auth.auth(&res.profile_name, &config_dir).await?
+/// Full context after the user has initialized the profile.
+pub struct OssCommandContext {
+    pub format: Format,
+    pub factory: OssServiceFactory,
+    pub config_dir: PathBuf,
+    pub command: Command,
+}
+
+impl CliCommand<OssCommandContext> for OssOnlyCommand {
+    async fn run(self, ctx: OssCommandContext) -> Result<GolemResult, GolemError> {
+        match self {
+            OssOnlyCommand::Get { uri } => {
+                let factory = ctx.factory;
+
+                resource::get_resource_by_uri(uri, &factory).await
             }
-
-            Ok(GolemResult::Str("Profile created".to_string()))
-        }
-        OssCommand::Get { uri } => {
-            let factory = factory().await?;
-
-            get_resource_by_uri(uri, &factory).await
-        }
-        OssCommand::Completion { generator } => {
-            GolemOssCommand::<ProfileAdd>::print_completion(generator);
-            Ok(GolemResult::Str("".to_string()))
-        }
-        OssCommand::Diagnose { command } => {
-            diagnose(command);
-            Ok(GolemResult::Str("".to_string()))
-        }
-        OssCommand::Plugin { subcommand } => {
-            let factory = factory().await?;
-
-            subcommand
-                .handle::<PluginDefinitionDefaultPluginOwnerDefaultPluginScope, PluginDefinitionWithoutOwnerDefaultPluginScope, OssContext, DefaultPluginScope, DefaultComponentOwner, OssContext>(
-                    format,
-                    factory.plugin_client(),
-                    factory.project_resolver(),
-                    factory.component_service(),
-                )
-                .await
         }
     }
 }
 
-async fn get_resource_by_urn(
-    urn: ResourceUrn,
-    factory: &OssServiceFactory,
-) -> Result<GolemResult, GolemError> {
-    let ctx = &OssContext::EMPTY;
+impl CliCommand<OssCommandContext> for SpecializedSharedCommand {
+    async fn run(self, ctx: OssCommandContext) -> Result<GolemResult, GolemError> {
+        match self {
+            SharedCommand::Component { subcommand } => {
+                let factory = ctx.factory;
 
-    match urn {
-        ResourceUrn::Component(c) => {
-            factory
-                .component_service()
-                .get(ComponentUri::URN(c), None, None)
-                .await
-        }
-        ResourceUrn::ComponentVersion(c) => {
-            factory
-                .component_service()
-                .get(
-                    ComponentUri::URN(ComponentUrn { id: c.id }),
-                    Some(c.version),
-                    None,
+                subcommand
+                    .handle(
+                        ctx.format,
+                        factory.component_service(),
+                        factory.deploy_service(),
+                        factory.project_resolver().as_ref(),
+                    )
+                    .await
+            }
+            SharedCommand::Worker { subcommand } => {
+                let factory = ctx.factory;
+
+                subcommand
+                    .handle(
+                        ctx.format,
+                        factory.worker_service(),
+                        factory.project_resolver(),
+                    )
+                    .await
+            }
+            SharedCommand::ApiDefinition { subcommand } => {
+                let factory = ctx.factory;
+
+                subcommand
+                    .handle(
+                        factory.api_definition_service().as_ref(),
+                        factory.project_resolver().as_ref(),
+                    )
+                    .await
+            }
+            SharedCommand::ApiDeployment { subcommand } => {
+                let factory = ctx.factory;
+
+                subcommand
+                    .handle(
+                        factory.api_deployment_service().as_ref(),
+                        factory.project_resolver().as_ref(),
+                    )
+                    .await
+            }
+            SharedCommand::ApiSecurityScheme { subcommand } => {
+                let factory = ctx.factory;
+
+                subcommand
+                    .handle(
+                        factory.api_security_scheme_service().as_ref(),
+                        factory.project_resolver().as_ref(),
+                    )
+                    .await
+            }
+            SharedCommand::Profile { subcommand } => {
+                subcommand
+                    .handle(CliKind::Oss, &ctx.config_dir, &DummyProfileAuth)
+                    .await
+            }
+            SharedCommand::Init {} => {
+                let profile_name = ProfileName::default(CliKind::Oss);
+
+                init_profile(
+                    CliKind::Oss,
+                    profile_name,
+                    &ctx.config_dir,
+                    &DummyProfileAuth,
                 )
-                .await
+                .await?;
+
+                Ok(GolemResult::Str("Profile created".to_string()))
+            }
+            SharedCommand::Completion { generator } => {
+                completion::print_completion(ctx.command, generator);
+                Ok(GolemResult::Str("".to_string()))
+            }
+            SharedCommand::Plugin { subcommand } => {
+                let factory = ctx.factory;
+
+                subcommand
+                    .handle::<PluginDefinitionDefaultPluginOwnerDefaultPluginScope, PluginDefinitionWithoutOwnerDefaultPluginScope, OssContext, DefaultPluginScope, DefaultComponentOwner, OssContext>(
+                        ctx.format,
+                        factory.plugin_client(),
+                        factory.project_resolver(),
+                        factory.component_service(),
+                    )
+                    .await
+            }
         }
-        ResourceUrn::Worker(w) => factory.worker_service().get(WorkerUri::URN(w), None).await,
-        ResourceUrn::WorkerFunction(f) => {
-            factory
-                .worker_service()
-                .get_function(
-                    WorkerUri::URN(WorkerUrn {
-                        id: f.id.into_target_worker_id(),
-                    }),
-                    &f.function,
-                    None,
-                )
-                .await
-        }
-        ResourceUrn::ApiDefinition(ad) => {
-            factory
-                .api_definition_service()
-                .get(
-                    ApiDefinitionId(ad.id),
-                    ApiDefinitionVersion(ad.version),
-                    ctx,
-                )
-                .await
-        }
-        ResourceUrn::ApiDeployment(ad) => factory.api_deployment_service().get(ad.site).await,
     }
 }
 
-async fn get_resource_by_url(
-    url: ResourceUrl,
-    factory: &OssServiceFactory,
-) -> Result<GolemResult, GolemError> {
-    let ctx = &OssContext::EMPTY;
+/// Context before the user has initialized the profile.
+pub struct UnintializedOssCommandContext {
+    pub format: Format,
+    pub config_dir: PathBuf,
+    pub command: Command,
+}
 
-    match url {
-        ResourceUrl::Component(c) => {
-            factory
-                .component_service()
-                .get(ComponentUri::URL(c), None, None)
-                .await
-        }
-        ResourceUrl::ComponentVersion(c) => {
-            factory
-                .component_service()
-                .get(
-                    ComponentUri::URL(ComponentUrl { name: c.name }),
-                    Some(c.version),
-                    None,
-                )
-                .await
-        }
-        ResourceUrl::Worker(w) => factory.worker_service().get(WorkerUri::URL(w), None).await,
-        ResourceUrl::WorkerFunction(f) => {
-            factory
-                .worker_service()
-                .get_function(
-                    WorkerUri::URL(WorkerUrl {
-                        component_name: f.component_name,
-                        worker_name: Some(f.worker_name),
-                    }),
-                    &f.function,
-                    None,
-                )
-                .await
-        }
-        ResourceUrl::ApiDefinition(ad) => {
-            factory
-                .api_definition_service()
-                .get(
-                    ApiDefinitionId(ad.name),
-                    ApiDefinitionVersion(ad.version),
-                    ctx,
-                )
-                .await
-        }
-        ResourceUrl::ApiDeployment(ad) => factory.api_deployment_service().get(ad.site).await,
+impl UnintializedOssCommandContext {
+    // \! is an experimental type. Once stable, use in the return type.
+    pub fn fail_uninitialized(&self) -> Result<GolemResult, GolemError> {
+        Err(GolemError(
+            "Your Golem CLI is not configured. Please run `golem-cli init`".to_owned(),
+        ))
     }
 }
 
-async fn get_resource_by_uri(
-    uri: ResourceUri,
-    factory: &OssServiceFactory,
-) -> Result<GolemResult, GolemError> {
-    match uri {
-        ResourceUri::URN(urn) => get_resource_by_urn(urn, factory).await,
-        ResourceUri::URL(url) => get_resource_by_url(url, factory).await,
+impl CliCommand<UnintializedOssCommandContext> for OssOnlyCommand {
+    async fn run(self, ctx: UnintializedOssCommandContext) -> Result<GolemResult, GolemError> {
+        match self {
+            OssOnlyCommand::Get { .. } => ctx.fail_uninitialized(),
+        }
+    }
+}
+
+impl CliCommand<UnintializedOssCommandContext> for SpecializedSharedCommand {
+    async fn run(self, ctx: UnintializedOssCommandContext) -> Result<GolemResult, GolemError> {
+        match self {
+            SharedCommand::Init {} => {
+                let profile_name = ProfileName::default(CliKind::Oss);
+
+                init_profile(
+                    CliKind::Oss,
+                    profile_name,
+                    &ctx.config_dir,
+                    &DummyProfileAuth,
+                )
+                .await?;
+
+                Ok(GolemResult::Str("Profile created".to_string()))
+            }
+            SharedCommand::Profile { subcommand } => {
+                subcommand
+                    .handle(CliKind::Oss, &ctx.config_dir, &DummyProfileAuth)
+                    .await
+            }
+            SharedCommand::Completion { generator } => {
+                completion::print_completion(ctx.command, generator);
+                Ok(GolemResult::Str("".to_string()))
+            }
+            _ => ctx.fail_uninitialized(),
+        }
     }
 }
