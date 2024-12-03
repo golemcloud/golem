@@ -163,7 +163,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 {
     pub async fn new(
         services: Svcs,
-        lazy_worker_activator: Arc<LazyWorkerActivator>,
+        lazy_worker_activator: Arc<LazyWorkerActivator<Ctx>>,
         port: u16,
     ) -> Result<Self, Error> {
         let worker_executor = WorkerExecutorImpl {

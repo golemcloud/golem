@@ -47,12 +47,15 @@ use golem_api_grpc::proto::golem::component::{Component, PluginInstallation};
 use golem_common::grpc::{proto_component_id_string, proto_plugin_installation_id_string};
 use golem_common::model::component::DefaultComponentOwner;
 use golem_common::model::component_constraint::FunctionConstraintCollection;
-use golem_common::model::plugin::{PluginInstallationCreation, PluginInstallationUpdate};
+use golem_common::model::plugin::{
+    DefaultPluginOwner, DefaultPluginScope, PluginInstallationCreation, PluginInstallationUpdate,
+};
 use golem_common::model::{ComponentId, ComponentType};
 use golem_common::recorded_grpc_api_request;
 use golem_component_service_base::api::common::ComponentTraceErrorKind;
 use golem_component_service_base::model::ComponentConstraints;
 use golem_component_service_base::service::component;
+use golem_component_service_base::service::plugin::{PluginError, PluginService};
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status, Streaming};
 
@@ -75,6 +78,8 @@ fn internal_error(error: &str) -> ComponentError {
 pub struct ComponentGrpcApi {
     pub component_service:
         Arc<dyn component::ComponentService<DefaultComponentOwner> + Sync + Send>,
+    pub plugin_service:
+        Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope> + Sync + Send>,
 }
 
 impl ComponentGrpcApi {
@@ -283,14 +288,37 @@ impl ComponentGrpcApi {
             parameters: request.parameters.clone(),
         };
 
-        let response = self
-            .component_service
-            .create_plugin_installation_for_component(
-                &DefaultComponentOwner,
-                &component_id,
-                plugin_installation_creation,
+        let plugin_definition = self
+            .plugin_service
+            .get(
+                &DefaultPluginOwner,
+                &plugin_installation_creation.name,
+                &plugin_installation_creation.version,
             )
             .await?;
+
+        let response = if let Some(plugin_definition) = plugin_definition {
+            if plugin_definition.scope.valid_in_component(&component_id) {
+                self.component_service
+                    .create_plugin_installation_for_component(
+                        &DefaultComponentOwner,
+                        &component_id,
+                        plugin_installation_creation.clone(),
+                    )
+                    .await
+            } else {
+                Err(PluginError::InvalidScope {
+                    plugin_name: plugin_installation_creation.name,
+                    plugin_version: plugin_installation_creation.version,
+                    details: format!("not available for component {}", component_id),
+                })
+            }
+        } else {
+            Err(PluginError::PluginNotFound {
+                plugin_name: plugin_installation_creation.name,
+                plugin_version: plugin_installation_creation.version,
+            })
+        }?;
 
         Ok(response.into())
     }

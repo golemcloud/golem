@@ -16,7 +16,8 @@ use crate::api::{ComponentError, Result};
 use futures_util::TryStreamExt;
 use golem_common::model::component::DefaultComponentOwner;
 use golem_common::model::plugin::{
-    PluginInstallation, PluginInstallationCreation, PluginInstallationUpdate,
+    DefaultPluginOwner, DefaultPluginScope, PluginInstallation, PluginInstallationCreation,
+    PluginInstallationUpdate,
 };
 use golem_common::model::ComponentFilePathWithPermissionsList;
 use golem_common::model::{ComponentId, ComponentType, Empty, PluginInstallationId};
@@ -25,6 +26,7 @@ use golem_component_service_base::model::{
     InitialComponentFilesArchiveAndPermissions, UpdatePayload,
 };
 use golem_component_service_base::service::component::ComponentService;
+use golem_component_service_base::service::plugin::{PluginError, PluginService};
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::*;
 use golem_service_base::poem::TempFileUpload;
@@ -38,6 +40,8 @@ use tracing::Instrument;
 
 pub struct ComponentApi {
     pub component_service: Arc<dyn ComponentService<DefaultComponentOwner> + Sync + Send>,
+    pub plugin_service:
+        Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope> + Sync + Send>,
 }
 
 #[OpenApi(prefix_path = "/v1/components", tag = ApiTags::Component)]
@@ -386,18 +390,35 @@ impl ComponentApi {
             plugin_version = plugin.version.clone()
         );
 
-        let response = self
-            .component_service
-            .create_plugin_installation_for_component(
-                &DefaultComponentOwner,
-                &component_id.0,
-                plugin.0,
-            )
-            .await
-            .map_err(|e| e.into())
-            .map(Json);
+        let plugin_definition = self
+            .plugin_service
+            .get(&DefaultPluginOwner, &plugin.name, &plugin.version)
+            .await?;
 
-        record.result(response)
+        let response = if let Some(plugin_definition) = plugin_definition {
+            if plugin_definition.scope.valid_in_component(&component_id.0) {
+                self.component_service
+                    .create_plugin_installation_for_component(
+                        &DefaultComponentOwner,
+                        &component_id.0,
+                        plugin.0,
+                    )
+                    .await
+            } else {
+                Err(PluginError::InvalidScope {
+                    plugin_name: plugin.name.clone(),
+                    plugin_version: plugin.version.clone(),
+                    details: format!("not available for component {}", component_id.0),
+                })
+            }
+        } else {
+            Err(PluginError::PluginNotFound {
+                plugin_name: plugin.name.clone(),
+                plugin_version: plugin.version.clone(),
+            })
+        };
+
+        record.result(response.map_err(|e| e.into()).map(Json))
     }
 
     /// Updates the priority or parameters of a plugin installation
