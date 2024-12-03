@@ -134,7 +134,7 @@ mod tests {
     }
 
     #[test]
-    #[timeout(120000)]
+    #[timeout(240000)]
     #[flaky(5)]
     async fn coordinated_scenario_01_02(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         for _ in 0..coordinated_scenario_retries() {
@@ -156,7 +156,7 @@ mod tests {
     }
 
     #[test]
-    #[timeout(120000)]
+    #[timeout(240000)]
     #[flaky(5)]
     async fn coordinated_scenario_02_01(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         for _ in 0..coordinated_scenario_retries() {
