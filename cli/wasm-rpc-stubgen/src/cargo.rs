@@ -12,20 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
-use std::path::{Path, PathBuf};
-
-use crate::commands::log::{log_action, log_warn_action};
-use crate::fs::get_file_name;
-use crate::naming;
+use crate::fs::PathExtra;
+use crate::log::{log_action, log_warn_action, LogColorize};
 use crate::stub::StubDefinition;
+use crate::wit_resolve::ResolvedWitDir;
+use crate::{fs, naming};
+use anyhow::{anyhow, Context};
 use cargo_toml::{
     Dependency, DependencyDetail, DepsSet, Edition, Inheritable, LtoSetting, Manifest, Profile,
-    Profiles, StripSetting,
+    Profiles, StripSetting, Workspace,
 };
 use golem_wasm_rpc::WASM_RPC_VERSION;
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 use toml::Value;
 use wit_parser::PackageName;
 
@@ -71,6 +71,10 @@ struct WitDependency {
 pub fn generate_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
     let mut manifest = Manifest::default();
 
+    if def.config.seal_cargo_workspace {
+        manifest.workspace = Some(Workspace::default());
+    }
+
     let mut wit_dependencies = BTreeMap::new();
 
     wit_dependencies.insert(
@@ -87,9 +91,9 @@ pub fn generate_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
         },
     );
 
-    let stub_package_name = def.stub_package_name();
-    for (dep_package, (dep_package_path, _)) in def.packages_with_wit_sources() {
-        if dep_package.name == stub_package_name {
+    let stub_dep_package_ids = def.stub_dep_package_ids();
+    for (dep_package_id, dep_package, dep_package_sources) in def.packages_with_wit_sources() {
+        if !stub_dep_package_ids.contains(&dep_package_id) {
             continue;
         }
 
@@ -97,20 +101,18 @@ pub fn generate_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
             wit_dependencies.insert(
                 format_package_name_without_version(&def.source_package_name),
                 WitDependency {
-                    path: naming::wit::package_wit_dep_dir_from_package_name(
-                        &def.source_package_name,
-                    )
-                    .to_string_lossy()
-                    .to_string(),
+                    path: naming::wit::package_wit_dep_dir_from_parser(&def.source_package_name)
+                        .to_string_lossy()
+                        .to_string(),
                 },
             );
         } else {
             wit_dependencies.insert(
                 format_package_name_without_version(&dep_package.name),
                 WitDependency {
-                    path: naming::wit::package_wit_dep_dir_from_package_dir_name(&get_file_name(
-                        dep_package_path,
-                    )?)
+                    path: naming::wit::package_wit_dep_dir_from_package_dir_name(
+                        &PathExtra::new(&dep_package_sources.dir).file_name_to_string()?,
+                    )
                     .to_string_lossy()
                     .to_string(),
                 },
@@ -131,7 +133,8 @@ pub fn generate_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
         }),
     };
 
-    let mut package = cargo_toml::Package::new(def.target_crate_name(), &def.stub_crate_version);
+    let mut package =
+        cargo_toml::Package::new(def.target_crate_name(), &def.config.stub_crate_version);
     package.edition = Inheritable::Set(Edition::E2021);
     package.metadata = Some(metadata);
     manifest.package = Some(package);
@@ -170,8 +173,18 @@ pub fn generate_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
     }));
 
     let dep_golem_wasm_rpc = Dependency::Detailed(Box::new(DependencyDetail {
-        version: if def.wasm_rpc_override.wasm_rpc_path_override.is_none() {
-            if let Some(version) = def.wasm_rpc_override.wasm_rpc_version_override.as_ref() {
+        version: if def
+            .config
+            .wasm_rpc_override
+            .wasm_rpc_path_override
+            .is_none()
+        {
+            if let Some(version) = def
+                .config
+                .wasm_rpc_override
+                .wasm_rpc_version_override
+                .as_ref()
+            {
                 Some(version.to_string())
             } else {
                 Some(WASM_RPC_VERSION.to_string())
@@ -179,7 +192,7 @@ pub fn generate_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
         } else {
             None
         },
-        path: def.wasm_rpc_override.wasm_rpc_path_override.clone(),
+        path: def.config.wasm_rpc_override.wasm_rpc_path_override.clone(),
         default_features: false,
         features: vec!["stub".to_string()],
         ..Default::default()
@@ -196,7 +209,7 @@ pub fn generate_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
         "Generating",
         format!(
             "Cargo.toml to {}",
-            def.target_cargo_path().to_string_lossy()
+            def.target_cargo_path().log_color_highlight()
         ),
     );
     fs::write(def.target_cargo_path(), cargo_toml)?;
@@ -242,16 +255,19 @@ pub fn add_workspace_members(path: &Path, members: &[String]) -> anyhow::Result<
 
     let cargo_toml = toml::to_string(&manifest)?;
 
-    log_action("Writing", format!("updated Cargo.toml to {:?}", path));
+    log_action(
+        "Writing",
+        format!("updated Cargo.toml to {:?}", path.log_color_highlight()),
+    );
     fs::write(path, cargo_toml)?;
     Ok(())
 }
 
-pub fn add_dependencies_to_cargo_toml(
-    cargo_path: &Path,
+pub fn add_cargo_package_component_deps(
+    cargo_toml_path: &Path,
     wit_sources: BTreeMap<PackageName, PathBuf>,
 ) -> anyhow::Result<()> {
-    let raw_manifest = fs::read_to_string(cargo_path)?;
+    let raw_manifest = fs::read_to_string(cargo_toml_path)?;
     let mut manifest: Manifest<MetadataRoot> =
         Manifest::from_slice_with_metadata(raw_manifest.as_bytes())?;
     if let Some(ref mut package) = manifest.package {
@@ -278,11 +294,97 @@ pub fn add_dependencies_to_cargo_toml(
 
                 let cargo_toml = toml::to_string(&manifest)?;
 
-                log_warn_action("Updating", format!("Cargo.toml at {:?}", cargo_path));
-                fs::write(cargo_path, cargo_toml)?;
+                log_warn_action(
+                    "Updating",
+                    format!("Cargo.toml at {:?}", cargo_toml_path.log_color_highlight()),
+                );
+                fs::write(cargo_toml_path, cargo_toml)?;
             }
         }
     }
+
+    Ok(())
+}
+
+pub fn regenerate_cargo_package_component(
+    cargo_toml_path: &Path,
+    wit_path: &Path,
+    world: Option<String>,
+) -> anyhow::Result<()> {
+    let cargo_toml_path = PathExtra::new(cargo_toml_path);
+
+    log_warn_action(
+        "Regenerating",
+        format!(
+            "package component in {}",
+            cargo_toml_path.log_color_highlight()
+        ),
+    );
+
+    let project_root = cargo_toml_path.parent()?;
+    let relative_wit_path = wit_path.strip_prefix(project_root).with_context(|| {
+        anyhow!(
+            "Failed to create relative path for wit dir: {}, project root: {}",
+            wit_path.log_color_highlight(),
+            project_root.log_color_highlight()
+        )
+    })?;
+
+    let raw_manifest = fs::read_to_string(&cargo_toml_path).with_context(|| {
+        anyhow!(
+            "Failed to read Cargo.toml at {}",
+            cargo_toml_path.log_color_highlight()
+        )
+    })?;
+    let mut manifest: Manifest<MetadataRoot> =
+        Manifest::from_slice_with_metadata(raw_manifest.as_bytes()).with_context(|| {
+            anyhow!(
+                "Failed to parse Cargo.toml at {}",
+                cargo_toml_path.log_color_highlight()
+            )
+        })?;
+    let package = manifest.package.as_mut().ok_or_else(|| {
+        anyhow!(
+            "No package found in {}",
+            cargo_toml_path.log_color_highlight()
+        )
+    })?;
+
+    let wit_dir = ResolvedWitDir::new(wit_path)?;
+
+    package.metadata = Some(MetadataRoot {
+        component: Some(ComponentMetadata {
+            package: None,
+            target: Some(ComponentTarget {
+                world,
+                path: relative_wit_path.to_string_lossy().to_string(),
+                dependencies: wit_dir
+                    .package_sources
+                    .iter()
+                    .filter(|(&package_id, _)| package_id != wit_dir.package_id)
+                    .map(|(package_id, package_sources)| {
+                        (
+                            format_package_name_without_version(
+                                &wit_dir.package(*package_id).unwrap().name,
+                            ),
+                            WitDependency {
+                                path: PathExtra::new(
+                                    PathExtra::new(&package_sources.dir)
+                                        .strip_prefix(project_root)
+                                        .unwrap(),
+                                )
+                                .to_string()
+                                .unwrap(),
+                            },
+                        )
+                    })
+                    .collect(),
+            }),
+        }),
+    });
+
+    let cargo_toml = toml::to_string(&manifest)?;
+    fs::write(cargo_toml_path, cargo_toml)?;
 
     Ok(())
 }

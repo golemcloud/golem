@@ -15,6 +15,7 @@
 //! Tests in this module are verifying the STUB WASM created by the stub generator
 //! regardless of how the actual wasm generator is implemented. (Currently generates Rust code and compiles it)
 
+use fs_extra::dir::CopyOptions;
 use test_r::test;
 
 use golem_wasm_ast::analysis::analysed_type::*;
@@ -26,7 +27,7 @@ use golem_wasm_ast::analysis::{
 use golem_wasm_ast::component::Component;
 use golem_wasm_ast::IgnoreAllButMetadata;
 use golem_wasm_rpc_stubgen::commands::generate::generate_and_build_stub;
-use golem_wasm_rpc_stubgen::stub::StubDefinition;
+use golem_wasm_rpc_stubgen::stub::{StubConfig, StubDefinition};
 use tempfile::tempdir;
 use wasm_rpc_stubgen_tests_integration::{test_data_path, wasm_rpc_override};
 
@@ -34,21 +35,31 @@ test_r::enable!();
 
 #[test]
 async fn all_wit_types() {
-    let source_wit_root = test_data_path().join("all-wit-types");
-    let target_root = tempdir().unwrap();
-    let canonical_target_root = target_root.path().canonicalize().unwrap();
+    let source = test_data_path().join("wit/all-wit-types");
+    let source_wit_root = tempdir().unwrap();
 
-    let def = StubDefinition::new(
-        &source_wit_root,
-        &canonical_target_root,
-        &None,
-        "1.0.0",
-        &wasm_rpc_override(),
-        false,
+    fs_extra::dir::copy(
+        source,
+        source_wit_root.path(),
+        &CopyOptions::new().content_only(true),
     )
     .unwrap();
 
-    let wasm_path = generate_and_build_stub(&def).await.unwrap();
+    let target_root = tempdir().unwrap();
+    let canonical_target_root = target_root.path().canonicalize().unwrap();
+
+    let def = StubDefinition::new(StubConfig {
+        source_wit_root: source_wit_root.path().to_path_buf(),
+        target_root: canonical_target_root,
+        selected_world: None,
+        stub_crate_version: "1.0.0".to_string(),
+        wasm_rpc_override: wasm_rpc_override(),
+        extract_source_interface_package: true,
+        seal_cargo_workspace: false,
+    })
+    .unwrap();
+
+    let wasm_path = generate_and_build_stub(&def, false).await.unwrap();
 
     let stub_bytes = std::fs::read(wasm_path).unwrap();
     let stub_component = Component::<IgnoreAllButMetadata>::from_bytes(&stub_bytes).unwrap();

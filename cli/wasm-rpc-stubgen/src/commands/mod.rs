@@ -22,7 +22,4 @@ pub mod dependencies;
 pub mod composition;
 
 /// Declarative subcommands
-pub mod declarative;
-
-/// Logging
-pub mod log;
+pub mod app;

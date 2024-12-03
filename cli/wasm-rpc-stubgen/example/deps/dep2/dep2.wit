@@ -1,5 +1,0 @@
-package test:dep2@0.1.0;
-
-interface types {
-    type out = bool;
-}

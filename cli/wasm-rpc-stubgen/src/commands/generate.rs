@@ -14,16 +14,16 @@
 
 use crate::cargo::generate_cargo_toml;
 use crate::compilation::compile;
-use crate::fs::copy;
+use crate::fs;
+use crate::log::{log_action, LogColorize, LogIndent};
 use crate::naming;
 use crate::rust::generate_stub_source;
 use crate::stub::StubDefinition;
-use crate::wit::{copy_wit_dependencies, generate_stub_wit_to_target};
+use crate::wit_generate::{add_dependencies_to_stub_wit_dir, generate_stub_wit_to_target};
 use crate::wit_resolve::ResolvedWitDir;
-use anyhow::Context;
+use anyhow::{anyhow, Context};
 use fs_extra::dir::CopyOptions;
 use heck::ToSnakeCase;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 pub fn generate(stub_def: &StubDefinition) -> anyhow::Result<()> {
@@ -37,15 +37,15 @@ pub async fn build(
     stub_def: &StubDefinition,
     dest_wasm: &Path,
     dest_wit_root: &Path,
+    offline: bool,
 ) -> anyhow::Result<()> {
-    let wasm_path = generate_and_build_stub(stub_def).await?;
+    let wasm_path = generate_and_build_stub(stub_def, offline).await?;
 
-    copy(wasm_path, dest_wasm).context("Failed to copy the WASM file to the destination")?;
-
+    fs::copy(wasm_path, dest_wasm).context("Failed to copy the WASM file to the destination")?;
     fs::create_dir_all(dest_wit_root).context("Failed to create the target WIT root directory")?;
 
     fs_extra::dir::copy(
-        stub_def.target_root.join(naming::wit::WIT_DIR),
+        stub_def.config.target_root.join(naming::wit::WIT_DIR),
         dest_wit_root,
         &CopyOptions::new().content_only(true).overwrite(true),
     )
@@ -54,24 +54,32 @@ pub async fn build(
     Ok(())
 }
 
-pub fn generate_stub_wit_dir(stub_def: &StubDefinition) -> anyhow::Result<ResolvedWitDir> {
-    generate_stub_wit_to_target(stub_def).context("Failed to generate the stub wit file")?;
-    copy_wit_dependencies(stub_def).context("Failed to copy the dependent wit files")?;
-    stub_def
-        .resolve_target_wit()
-        .context("Failed to resolve the result WIT root")
-}
-
-pub async fn generate_and_build_stub(stub_def: &StubDefinition) -> anyhow::Result<PathBuf> {
+pub async fn generate_and_build_stub(
+    stub_def: &StubDefinition,
+    offline: bool,
+) -> anyhow::Result<PathBuf> {
     let _ = generate_stub_wit_dir(stub_def)?;
     generate_cargo_toml(stub_def).context("Failed to generate the Cargo.toml file")?;
     generate_stub_source(stub_def).context("Failed to generate the stub Rust source")?;
 
-    compile(&stub_def.target_root)
-        .await
-        .context("Failed to compile the generated stub")?;
+    compile(
+        &stub_def
+            .config
+            .target_root
+            .canonicalize()
+            .with_context(|| {
+                anyhow!(
+                    "Failed to canonicalize stub target root {}",
+                    stub_def.config.target_root.log_color_error_highlight()
+                )
+            })?,
+        offline,
+    )
+    .await
+    .context("Failed to compile the generated stub")?;
 
     let wasm_path = stub_def
+        .config
         .target_root
         .join("target")
         .join("wasm32-wasi")
@@ -81,4 +89,20 @@ pub async fn generate_and_build_stub(stub_def: &StubDefinition) -> anyhow::Resul
             stub_def.target_crate_name().to_snake_case()
         ));
     Ok(wasm_path)
+}
+
+pub fn generate_stub_wit_dir(stub_def: &StubDefinition) -> anyhow::Result<ResolvedWitDir> {
+    log_action(
+        "Generating",
+        format!(
+            "stub WIT directory to {}",
+            stub_def.config.target_root.log_color_highlight()
+        ),
+    );
+    let _indent = LogIndent::new();
+    generate_stub_wit_to_target(stub_def).context("Failed to generate the stub wit file")?;
+    add_dependencies_to_stub_wit_dir(stub_def).context("Failed to copy the dependent wit files")?;
+    stub_def
+        .resolve_target_wit()
+        .context("Failed to resolve the result WIT root")
 }

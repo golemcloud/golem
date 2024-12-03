@@ -1,4 +1,6 @@
-use crate::commands::log::log_warn_action;
+use crate::fs;
+use crate::fs::PathExtra;
+use crate::log::{log_warn_action, LogColorize};
 use anyhow::Context;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -14,14 +16,11 @@ pub async fn compose(
     // with allowing missing plugs (through the also customized plug function below)
     // and using local packages only (for now)
 
+    let dest_wasm = PathExtra::new(dest_wasm);
+
     let mut graph = CompositionGraph::new();
 
-    let socket = std::fs::read(source_wasm).with_context(|| {
-        format!(
-            "failed to read socket component `{socket}`",
-            socket = source_wasm.to_string_lossy()
-        )
-    })?;
+    let socket = fs::read(source_wasm).context("Failed to read socket component")?;
 
     let socket = Package::from_bytes("socket", None, socket, graph.types_mut())?;
     let socket = graph.register_package(socket)?;
@@ -42,10 +41,8 @@ pub async fn compose(
 
     let bytes = graph.encode(EncodeOptions::default())?;
 
-    std::fs::write(dest_wasm, bytes).context(format!(
-        "failed to write output file `{path}`",
-        path = dest_wasm.display()
-    ))?;
+    fs::create_dir_all(dest_wasm.parent()?)?;
+    fs::write(dest_wasm, bytes)?;
 
     Ok(())
 }
@@ -108,7 +105,10 @@ fn plug(
     };
 
     for plug_name in unused_plugs {
-        log_warn_action("Skipping", format!("{}, not used", plug_name));
+        log_warn_action(
+            "Skipping",
+            format!("{}, not used", plug_name.log_color_highlight()),
+        );
     }
 
     // Export all exports from the socket component.

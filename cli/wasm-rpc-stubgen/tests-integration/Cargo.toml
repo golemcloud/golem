@@ -13,6 +13,10 @@ path = "src/lib.rs"
 harness = false
 
 [[test]]
+name = "app"
+harness = false
+
+[[test]]
 name = "compose"
 harness = false
 
@@ -21,6 +25,7 @@ name = "stub_wasm"
 harness = false
 
 [dependencies]
+assert2  = { workspace = true}
 fs_extra = { workspace = true }
 golem-wasm-ast = { workspace = true }
 golem-wasm-rpc-stubgen = { path = "../../wasm-rpc-stubgen", version = "0.0.0" }
