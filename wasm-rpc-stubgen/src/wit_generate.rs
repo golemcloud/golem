@@ -426,7 +426,7 @@ pub fn add_stub_as_dependency_to_wit_dir(config: AddStubAsDepConfig) -> anyhow::
     if let Some(target_parent) = config.dest_wit_root.parent() {
         let target_cargo_toml = target_parent.join("Cargo.toml");
         if target_cargo_toml.exists() && target_cargo_toml.is_file() {
-                if config.update_cargo_toml != UpdateCargoToml::NoUpdate {
+            if config.update_cargo_toml != UpdateCargoToml::NoUpdate {
                 cargo::is_cargo_component_toml(&target_cargo_toml).context(format!(
                     "The file {target_cargo_toml:?} is not a valid cargo-component project"
                 ))?;

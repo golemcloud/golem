@@ -54,7 +54,10 @@ pub async fn build(
     Ok(())
 }
 
-pub async fn generate_and_build_stub(stub_def: &StubDefinition, offline: bool) -> anyhow::Result<PathBuf> {
+pub async fn generate_and_build_stub(
+    stub_def: &StubDefinition,
+    offline: bool,
+) -> anyhow::Result<PathBuf> {
     let _ = generate_stub_wit_dir(stub_def)?;
     generate_cargo_toml(stub_def).context("Failed to generate the Cargo.toml file")?;
     generate_stub_source(stub_def).context("Failed to generate the stub Rust source")?;
