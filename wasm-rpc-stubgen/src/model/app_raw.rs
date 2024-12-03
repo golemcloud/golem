@@ -68,7 +68,7 @@ pub struct ComponentTemplate {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct Component {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub template: Option<String>,
