@@ -48,9 +48,9 @@ pub enum ApplicationSourceMode {
 }
 
 pub struct ApplicationContext<CPE: ComponentPropertiesExtensions> {
-    config: Config<CPE>,
-    application: Application<CPE>,
-    wit: ResolvedWitApplication,
+    pub config: Config<CPE>,
+    pub application: Application<CPE>,
+    pub wit: ResolvedWitApplication,
     common_wit_deps: OnceCell<anyhow::Result<WitDepsResolver>>,
     component_generated_base_wit_deps: HashMap<ComponentName, WitDepsResolver>,
 }
