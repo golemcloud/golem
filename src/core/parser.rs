@@ -325,9 +325,7 @@ impl<T: TryFromExprSource + Debug + Clone + PartialEq> TryFrom<wasmparser::DataK
     }
 }
 
-impl<T: TryFromExprSource + Debug + Clone + PartialEq> TryFrom<wasmparser::Data<'_>>
-    for Data<T>
-{
+impl<T: TryFromExprSource + Debug + Clone + PartialEq> TryFrom<wasmparser::Data<'_>> for Data<T> {
     type Error = String;
 
     fn try_from(value: wasmparser::Data) -> Result<Self, Self::Error> {
