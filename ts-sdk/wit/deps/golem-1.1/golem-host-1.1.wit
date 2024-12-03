@@ -1,4 +1,4 @@
-package golem:api@0.2.0;
+package golem:api@1.1.0;
 
 /// The Golem host API provides low level access to Golem specific features such as promises and control over
 /// the durability and transactional guarantees the executor provides.
@@ -22,7 +22,6 @@ interface host {
         worker-name: string
     }
 
-
     /// Represents a Golem component
     record component-id {
         uuid: uuid,
@@ -37,6 +36,11 @@ interface host {
       low-bits: u64
     }
 
+    /// Represents a Golem Cloud account
+    record account-id {
+        value: string
+    }
+
     /// Configures how the executor retries failures
     record retry-policy {
         /// The maximum number of retries before the worker becomes permanently failed
@@ -46,7 +50,9 @@ interface host {
         /// The maximum delay between retries
         max-delay: duration,
         /// Multiplier applied to the delay on each retry to implement exponential backoff
-        multiplier: f64
+        multiplier: f64,
+        /// The maximum amount of jitter to add to the delay
+        max-jitter-factor: option<f64>
     }
 
     /// Configurable persistence level for workers
@@ -171,9 +177,6 @@ interface host {
 
     /// Deletes the given promise
     delete-promise: func(promise-id: promise-id) -> ();
-
-    /// Returns a Golem worker URI that can be used to invoke a given function on the current worker
-    get-self-uri: func(function-name: string) -> uri;
 
     /// Returns the current position in the persistent op log
     get-oplog-index: func() -> oplog-index;
