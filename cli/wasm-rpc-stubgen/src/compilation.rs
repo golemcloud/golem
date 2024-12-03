@@ -33,7 +33,7 @@ pub async fn compile(root: &Path, offline: bool) -> anyhow::Result<()> {
     let metadata = load_metadata(cargo_args.manifest_path.as_deref())?;
     let packages =
         load_component_metadata(&metadata, cargo_args.packages.iter(), cargo_args.workspace)?;
-    
+
     let mut spawn_args = vec!["build".to_string(), "--release".to_string()];
     if offline {
         spawn_args.push("--offline".to_string());
