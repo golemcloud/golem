@@ -12,20 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::wit_generate;
-use crate::wit_generate::AddStubAsDepConfig;
-use std::path::Path;
+use test_r::test;
 
-pub use crate::wit_generate::UpdateCargoToml;
+test_r::enable!();
 
-pub fn add_stub_dependency(
-    stub_wit_root: &Path,
-    dest_wit_root: &Path,
-    update_cargo_toml: UpdateCargoToml,
-) -> anyhow::Result<()> {
-    wit_generate::add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
-        stub_wit_root: stub_wit_root.to_path_buf(),
-        dest_wit_root: dest_wit_root.to_path_buf(),
-        update_cargo_toml,
-    })
+#[test]
+async fn rust_project() {
+    // TODO
 }

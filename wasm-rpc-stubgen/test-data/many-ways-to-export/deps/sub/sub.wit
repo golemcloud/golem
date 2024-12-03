@@ -1,5 +1,0 @@
-package test:sub;
-
-interface iface4 {
-  func5: func();
-}

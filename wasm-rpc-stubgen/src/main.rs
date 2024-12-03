@@ -17,6 +17,9 @@ use colored::Colorize;
 use golem_wasm_rpc_stubgen::*;
 use std::process::ExitCode;
 
+#[cfg(feature = "app-command")]
+use golem_wasm_rpc_stubgen::model::app::ComponentPropertiesExtensionsNone;
+
 #[tokio::main]
 async fn main() -> ExitCode {
     pretty_env_logger::init();
@@ -31,8 +34,10 @@ async fn main() -> ExitCode {
         Command::InitializeWorkspace(init_workspace_args) => {
             initialize_workspace(init_workspace_args, "wasm-rpc-stubgen", &[])
         }
-        #[cfg(feature = "unstable-dec-dep")]
-        Command::App { subcommand } => run_declarative_command(subcommand).await,
+        #[cfg(feature = "app-command")]
+        Command::App { subcommand } => {
+            run_app_command::<ComponentPropertiesExtensionsNone>(subcommand).await
+        }
     };
 
     match result {

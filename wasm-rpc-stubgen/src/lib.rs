@@ -16,18 +16,23 @@ pub mod cargo;
 pub mod commands;
 pub mod compilation;
 pub mod fs;
+pub mod log;
 pub mod make;
 pub mod model;
 pub mod naming;
 pub mod rust;
 pub mod stub;
-pub mod wit;
+pub mod validation;
+pub mod wit_encode;
+pub mod wit_generate;
 pub mod wit_resolve;
 
-use crate::commands::dependencies::UpdateCargoToml;
-use crate::stub::StubDefinition;
+use crate::model::app::{ComponentPropertiesExtensions, ComponentPropertiesExtensionsAny};
+use crate::stub::{StubConfig, StubDefinition};
+use crate::wit_generate::UpdateCargoToml;
 use anyhow::Context;
 use clap::{Parser, Subcommand};
+use std::marker::PhantomData;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
@@ -48,8 +53,8 @@ pub enum Command {
     /// Initializes a Golem-specific cargo-make configuration in a Cargo workspace for automatically
     /// generating stubs and composing results.
     InitializeWorkspace(InitializeWorkspaceArgs),
-    /// Build components and stubs with application manifests
-    #[cfg(feature = "unstable-dec-dep")]
+    /// Build components with application manifests
+    #[cfg(feature = "app-command")]
     App {
         #[command(subcommand)]
         subcommand: App,
@@ -81,7 +86,7 @@ pub struct GenerateArgs {
     /// it from the stub WIT. This is useful for example with ComponentizeJS currently where otherwise
     /// the original component's interface would be added as an import to the final WASM.
     #[clap(long, default_value_t = false)]
-    pub always_inline_types: bool,
+    pub always_inline_types: bool, // TODO: deprecated
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -127,7 +132,7 @@ pub struct BuildArgs {
     /// it from the stub WIT. This is useful for example with ComponentizeJS currently where otherwise
     /// the original component's interface would be added as an import to the final WASM.
     #[clap(long, default_value_t = false)]
-    pub always_inline_types: bool,
+    pub always_inline_types: bool, // TODO: deprecated
 }
 
 /// Adds a generated stub as a dependency to another WASM component
@@ -145,7 +150,7 @@ pub struct AddStubDependencyArgs {
     /// This command would not do anything if it detects that it would change an existing WIT file's contents at
     /// the destination. With this flag, it can be forced to overwrite those files.
     #[clap(short, long)]
-    pub overwrite: bool,
+    pub overwrite: bool, // TODO: deprecate
     /// Enables updating the Cargo.toml file in the parent directory of `dest-wit-root` with the copied
     /// dependencies.
     #[clap(short, long)]
@@ -187,44 +192,60 @@ pub struct InitializeWorkspaceArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum App {
-    /// Creates application manifest for component
-    Init(DeclarativeInitArgs),
-    /// Runs the pre-component-build steps (stub generation and adding wit dependencies)
-    PreComponentBuild(DeclarativeBuildArgs),
     /// Runs component build steps
-    ComponentBuild(DeclarativeBuildArgs),
-    /// Runs the post-component-build steps (composing stubs)
-    PostComponentBuild(DeclarativeBuildArgs),
-    /// Runs all build steps (pre-component, component, post-component)
-    Build(DeclarativeBuildArgs),
+    Build(AppBuildArgs),
+    /// Clean outputs
+    Clean(AppCleanArgs),
+    /// Run custom command
+    #[clap(external_subcommand)]
+    CustomCommand(Vec<String>),
 }
 
 #[derive(clap::Args, Debug)]
 #[command(version, about, long_about = None)]
-pub struct DeclarativeInitArgs {
-    #[clap(long, short, required = true)]
-    pub component_name: String,
-}
-
-#[derive(clap::Args, Debug)]
-#[command(version, about, long_about = None)]
-pub struct DeclarativeBuildArgs {
+pub struct AppBuildArgs {
     /// List of application manifests, can be defined multiple times
     #[clap(long, short)]
     pub app: Vec<PathBuf>,
     /// When set to true will skip modification time based up-to-date checks, defaults to false
     #[clap(long, short, default_value = "false")]
     pub force_build: bool,
+    /// Selects a build profile
+    #[clap(long, short)]
+    pub profile: Option<String>,
+    /// When set to true will use offline mode where applicable (e.g. stub cargo builds), defaults to false
+    #[clap(long, short, default_value = "false")]
+    pub offline: bool,
+}
+
+#[derive(clap::Args, Debug)]
+#[command(version, about, long_about = None)]
+pub struct AppCleanArgs {
+    /// List of application manifests, can be defined multiple times
+    #[clap(long, short)]
+    pub app: Vec<PathBuf>,
+}
+
+#[derive(clap::Args, Debug)]
+#[command(version, about, long_about = None)]
+pub struct AppCustomCommand {
+    #[clap(flatten)]
+    args: AppBuildArgs,
+    #[arg(value_name = "custom command")]
+    command: String,
 }
 
 pub fn generate(args: GenerateArgs) -> anyhow::Result<()> {
     let stub_def = StubDefinition::new(
-        &args.source_wit_root,
-        &args.dest_crate_root,
-        &args.world,
-        &args.stub_crate_version,
-        &args.wasm_rpc_override,
-        args.always_inline_types,
+        StubConfig {
+            source_wit_root: args.source_wit_root,
+            target_root: args.dest_crate_root,
+            selected_world: args.world,
+            stub_crate_version: args.stub_crate_version,
+            wasm_rpc_override: args.wasm_rpc_override,
+            extract_source_interface_package: true,
+            seal_cargo_workspace: false,
+        }
     )
         .context("Failed to gather information for the stub generator. Make sure source_wit_root has a valid WIT file.")?;
     commands::generate::generate(&stub_def)
@@ -232,26 +253,25 @@ pub fn generate(args: GenerateArgs) -> anyhow::Result<()> {
 
 pub async fn build(args: BuildArgs) -> anyhow::Result<()> {
     let target_root = TempDir::new()?;
-    let canonical_target_root = target_root.path().canonicalize()?;
 
-    let stub_def = StubDefinition::new(
-        &args.source_wit_root,
-        &canonical_target_root,
-        &args.world,
-        &args.stub_crate_version,
-        &args.wasm_rpc_override,
-        args.always_inline_types,
-    )
+    let stub_def = StubDefinition::new(StubConfig {
+        source_wit_root: args.source_wit_root,
+        target_root: target_root.path().to_path_buf(),
+        selected_world: args.world,
+        stub_crate_version: args.stub_crate_version,
+        wasm_rpc_override: args.wasm_rpc_override,
+        extract_source_interface_package: true,
+        seal_cargo_workspace: false,
+    })
     .context("Failed to gather information for the stub generator")?;
 
-    commands::generate::build(&stub_def, &args.dest_wasm, &args.dest_wit_root).await
+    commands::generate::build(&stub_def, &args.dest_wasm, &args.dest_wit_root, false).await
 }
 
 pub fn add_stub_dependency(args: AddStubDependencyArgs) -> anyhow::Result<()> {
     commands::dependencies::add_stub_dependency(
         &args.stub_wit_root,
         &args.dest_wit_root,
-        args.overwrite,
         if args.update_cargo_toml {
             UpdateCargoToml::Update
         } else {
@@ -278,31 +298,41 @@ pub fn initialize_workspace(
     )
 }
 
-pub async fn run_declarative_command(command: App) -> anyhow::Result<()> {
+pub async fn run_app_command<CPE: ComponentPropertiesExtensions>(
+    command: App,
+) -> anyhow::Result<()> {
     match command {
-        App::Init(args) => commands::declarative::init(args.component_name),
-        App::PreComponentBuild(args) => {
-            commands::declarative::pre_component_build(dec_build_args_to_config(args)).await
+        App::Build(args) => {
+            commands::app::build(commands::app::Config {
+                app_resolve_mode: app_manifest_sources_to_resolve_mode(args.app),
+                skip_up_to_date_checks: args.force_build,
+                profile: args.profile.map(|profile| profile.into()),
+                offline: args.offline,
+                extensions: PhantomData::<CPE>,
+            })
+            .await
         }
-        App::ComponentBuild(args) => {
-            commands::declarative::component_build(dec_build_args_to_config(args))
+        App::Clean(args) => commands::app::clean(commands::app::Config {
+            app_resolve_mode: app_manifest_sources_to_resolve_mode(args.app),
+            skip_up_to_date_checks: false,
+            profile: None,
+            offline: false,
+            extensions: PhantomData::<ComponentPropertiesExtensionsAny>,
+        }),
+        App::CustomCommand(_args) => {
+            // TODO: parse app manifest / profile args
+            // commands::app::custom_command(app_args_to_config(args.args), args.command)
+            Ok(())
         }
-        App::PostComponentBuild(args) => {
-            commands::declarative::post_component_build(dec_build_args_to_config(args)).await
-        }
-        App::Build(args) => commands::declarative::build(dec_build_args_to_config(args)).await,
     }
 }
 
-fn dec_build_args_to_config(args: DeclarativeBuildArgs) -> commands::declarative::Config {
-    commands::declarative::Config {
-        app_resolve_mode: {
-            if args.app.is_empty() {
-                commands::declarative::ApplicationResolveMode::Automatic
-            } else {
-                commands::declarative::ApplicationResolveMode::Explicit(args.app)
-            }
-        },
-        skip_up_to_date_checks: args.force_build,
+fn app_manifest_sources_to_resolve_mode(
+    sources: Vec<PathBuf>,
+) -> commands::app::ApplicationSourceMode {
+    if sources.is_empty() {
+        commands::app::ApplicationSourceMode::Automatic
+    } else {
+        commands::app::ApplicationSourceMode::Explicit(sources)
     }
 }

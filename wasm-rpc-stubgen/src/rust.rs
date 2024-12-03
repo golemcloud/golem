@@ -12,13 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::commands::log::log_action;
-use crate::stub::{FunctionResultStub, FunctionStub, InterfaceStub, StubDefinition, StubTypeOwner};
+use crate::fs;
+use crate::fs::PathExtra;
+use crate::log::{log_action, LogColorize};
+use crate::stub::{FunctionResultStub, FunctionStub, InterfaceStub, StubDefinition};
 use anyhow::anyhow;
 use heck::{ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase};
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
-use std::fs;
 use wit_bindgen_rust::to_rust_ident;
 use wit_parser::{
     Enum, Flags, Handle, Record, Result_, Tuple, Type, TypeDef, TypeDefKind, TypeOwner, Variant,
@@ -44,7 +45,7 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
     let mut exports = Vec::new();
     let mut resource_type_aliases = Vec::new();
 
-    for interface in def.source_interfaces() {
+    for interface in def.stub_imported_interfaces() {
         let interface_ident = to_rust_ident(&interface.name).to_upper_camel_case();
         let interface_name = Ident::new(&interface_ident, Span::call_site());
 
@@ -116,7 +117,7 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
     }
 
     let mut interface_impls = Vec::new();
-    for interface in def.source_interfaces() {
+    for interface in def.stub_imported_interfaces() {
         let interface_ident = to_rust_ident(&interface.name).to_upper_camel_case();
         let interface_name = Ident::new(&interface_ident, Span::call_site());
         let guest_interface_name =
@@ -236,8 +237,8 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
         let remote_function_name = get_remote_function_name(
             def,
             "drop",
-            interface.interface_name().as_ref(),
-            interface.resource_name().as_ref(),
+            interface.interface_name(),
+            interface.resource_name(),
         );
         if interface.is_resource() {
             interface_impls.push(quote! {
@@ -284,14 +285,13 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
     let syntax_tree = syn::parse2(lib)?;
     let src = prettyplease::unparse(&syntax_tree);
 
+    let target_rust_path = PathExtra::new(def.target_rust_path());
+
     log_action(
         "Generating",
-        format!(
-            "stub source to {}",
-            def.target_rust_path().to_string_lossy()
-        ),
+        format!("stub source to {}", target_rust_path.log_color_highlight()),
     );
-    fs::create_dir_all(def.target_rust_path().parent().unwrap())?;
+    fs::create_dir_all(target_rust_path.parent()?)?;
     fs::write(def.target_rust_path(), src)?;
     Ok(())
 }
@@ -331,8 +331,8 @@ fn generate_result_wrapper_get_source(
     let remote_function_name = get_remote_function_name(
         def,
         &function.name,
-        interface.interface_name().as_ref(),
-        interface.resource_name().as_ref(),
+        interface.interface_name(),
+        interface.resource_name(),
     );
 
     Ok(quote! {
@@ -392,8 +392,8 @@ fn generate_function_stub_source(
     let remote_function_name = get_remote_function_name(
         def,
         &function.name,
-        owner.interface_name().as_ref(),
-        owner.resource_name().as_ref(),
+        owner.interface_name(),
+        owner.resource_name(),
     );
 
     let rpc = match mode {
@@ -518,14 +518,14 @@ fn get_output_values_source(
 ) -> anyhow::Result<Vec<TokenStream>> {
     let mut output_values = Vec::new();
     match &function.results {
-        FunctionResultStub::Single(typ) => {
+        FunctionResultStub::Anon(typ) => {
             output_values.push(extract_from_wit_value(
                 typ,
                 def,
                 quote! { result.tuple_element(0).expect("tuple not found") },
             )?);
         }
-        FunctionResultStub::Multi(params) => {
+        FunctionResultStub::Named(params) => {
             for (n, param) in params.iter().enumerate() {
                 output_values.push(extract_from_wit_value(
                     &param.typ,
@@ -560,13 +560,13 @@ fn get_result_type_source(
     function: &FunctionStub,
 ) -> anyhow::Result<TokenStream> {
     let result_type = match &function.results {
-        FunctionResultStub::Single(typ) => {
+        FunctionResultStub::Anon(typ) => {
             let typ = type_to_rust_ident(typ, def)?;
             quote! {
                 #typ
             }
         }
-        FunctionResultStub::Multi(params) => {
+        FunctionResultStub::Named(params) => {
             let mut results = Vec::new();
             for param in params {
                 let param_name = Ident::new(&to_rust_ident(&param.name), Span::call_site());
@@ -593,8 +593,8 @@ fn get_result_type_source(
 fn get_remote_function_name(
     def: &StubDefinition,
     function_name: &str,
-    interface_name: Option<&String>,
-    resource_name: Option<&String>,
+    interface_name: Option<&str>,
+    resource_name: Option<&str>,
 ) -> String {
     match (interface_name, resource_name) {
         (Some(remote_interface), None) => {
@@ -716,9 +716,8 @@ fn type_to_rust_ident(typ: &Type, def: &StubDefinition) -> anyhow::Result<TokenS
                     let mut path = Vec::new();
                     path.push(quote! { crate });
                     path.push(quote! { bindings });
-                    let fixed_owner = def.fix_inlined_owner(type_def);
-                    match &fixed_owner {
-                        StubTypeOwner::Source(TypeOwner::World(world_id)) => {
+                    match &type_def.owner {
+                        TypeOwner::World(world_id) => {
                             let world = def.get_world(*world_id)?;
                             let package_id =
                                 world.package.ok_or(anyhow!("world has no package"))?;
@@ -732,7 +731,7 @@ fn type_to_rust_ident(typ: &Type, def: &StubDefinition) -> anyhow::Result<TokenS
                             path.push(quote! { #ns_ident });
                             path.push(quote! { #name_ident });
                         }
-                        StubTypeOwner::Source(TypeOwner::Interface(interface_id)) => {
+                        TypeOwner::Interface(interface_id) => {
                             let interface = def.get_interface(*interface_id)?;
                             let package_id = interface
                                 .package
@@ -754,27 +753,7 @@ fn type_to_rust_ident(typ: &Type, def: &StubDefinition) -> anyhow::Result<TokenS
                             path.push(quote! { #name_ident });
                             path.push(quote! { #interface_ident });
                         }
-                        StubTypeOwner::Source(TypeOwner::None) => {}
-                        StubTypeOwner::StubInterface => {
-                            let root_ns = Ident::new(
-                                &def.source_package_name.namespace.to_snake_case(),
-                                Span::call_site(),
-                            );
-                            let root_name = Ident::new(
-                                &format!("{}_stub", def.source_package_name.name.to_snake_case()),
-                                Span::call_site(),
-                            );
-                            let stub_interface_name = format!("stub-{}", def.source_world_name());
-                            let stub_interface_name = Ident::new(
-                                &to_rust_ident(&stub_interface_name).to_snake_case(),
-                                Span::call_site(),
-                            );
-
-                            path.push(quote! { exports });
-                            path.push(quote! { #root_ns });
-                            path.push(quote! { #root_name });
-                            path.push(quote! { #stub_interface_name });
-                        }
+                        TypeOwner::None => {}
                     }
                     Ok(quote! { #(#path)::*::#typ })
                 }
@@ -1308,10 +1287,10 @@ fn extract_from_wit_value(
                     extract_from_result_value(result, def, base_expr)
                 }
                 TypeDefKind::List(elem) => extract_from_list_value(elem, def, base_expr),
-                TypeDefKind::Future(_) => Ok(quote!(todo!("future"))),
-                TypeDefKind::Stream(_) => Ok(quote!(todo!("stream"))),
+                TypeDefKind::Future(_) => Ok(quote!(panic!("Future is not supported yet"))),
+                TypeDefKind::Stream(_) => Ok(quote!(panic!("Stream is not supported yet"))),
                 TypeDefKind::Type(typ) => extract_from_wit_value(typ, def, base_expr),
-                TypeDefKind::Unknown => Ok(quote!(todo!("unknown"))),
+                TypeDefKind::Unknown => Ok(quote!(panic!("Unexpected unknown type!"))),
             }
         }
     }

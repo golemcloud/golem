@@ -12,46 +12,59 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::wit_resolve::ResolvedWitDir;
+use crate::wit_encode::EncodedWitDir;
+use crate::wit_generate::extract_main_interface_as_wit_dep;
+use crate::wit_resolve::{PackageSource, ResolvedWitDir};
 use crate::{naming, WasmRpcOverride};
-use anyhow::anyhow;
+use anyhow::{anyhow, Context};
 use indexmap::IndexMap;
+use itertools::Itertools;
 use std::cell::OnceCell;
-use std::path::{Path, PathBuf};
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use wit_parser::{
     Function, FunctionKind, Interface, InterfaceId, Package, PackageId, PackageName, Resolve,
     Results, Type, TypeDef, TypeDefKind, TypeId, TypeOwner, World, WorldId, WorldItem, WorldKey,
 };
 
-/// All the gathered information for generating the stub crate.
-pub struct StubDefinition {
-    resolve: Resolve,
-    source_world_id: WorldId,
-    sources: IndexMap<PackageId, (PathBuf, Vec<PathBuf>)>,
-    source_interfaces: OnceCell<Vec<InterfaceStub>>,
-
-    pub source_package_name: PackageName,
+#[derive(Clone, Debug)]
+pub struct StubConfig {
     pub source_wit_root: PathBuf,
     pub target_root: PathBuf,
+    pub selected_world: Option<String>,
     pub stub_crate_version: String,
     pub wasm_rpc_override: WasmRpcOverride,
-    pub always_inline_types: bool,
+    pub extract_source_interface_package: bool,
+    pub seal_cargo_workspace: bool,
+}
+
+pub struct StubDefinition {
+    pub config: StubConfig,
+
+    resolve: Resolve,
+    source_world_id: WorldId,
+    package_sources: IndexMap<PackageId, PackageSource>,
+
+    stub_imported_interfaces: OnceCell<Vec<InterfaceStub>>,
+    stub_used_type_defs: OnceCell<Vec<InterfaceStubTypeDef>>,
+    stub_dep_package_ids: OnceCell<HashSet<PackageId>>,
+
+    pub source_package_id: PackageId,
+    pub source_package_name: PackageName,
 }
 
 impl StubDefinition {
-    pub fn new(
-        source_wit_root: &Path,
-        target_root: &Path,
-        selected_world: &Option<String>,
-        stub_crate_version: &str,
-        wasm_rpc_override: &WasmRpcOverride,
-        always_inline_types: bool,
-    ) -> anyhow::Result<Self> {
-        let resolved_source = ResolvedWitDir::new(source_wit_root)?;
+    pub fn new(config: StubConfig) -> anyhow::Result<Self> {
+        if config.extract_source_interface_package {
+            extract_main_interface_as_wit_dep(&config.source_wit_root)
+                .context("Failed to extract the source interface package")?
+        }
+
+        let resolved_source = ResolvedWitDir::new(&config.source_wit_root)?;
 
         let source_world_id = resolved_source
             .resolve
-            .select_world(resolved_source.package_id, selected_world.as_deref())?;
+            .select_world(resolved_source.package_id, config.selected_world.as_deref())?;
 
         let source_package_name = resolved_source
             .resolve
@@ -67,16 +80,15 @@ impl StubDefinition {
             .clone();
 
         Ok(Self {
+            config,
             resolve: resolved_source.resolve,
             source_world_id,
-            sources: resolved_source.sources,
-            source_interfaces: OnceCell::new(),
+            package_sources: resolved_source.package_sources,
+            stub_imported_interfaces: OnceCell::new(),
+            stub_used_type_defs: OnceCell::new(),
+            stub_dep_package_ids: OnceCell::new(),
+            source_package_id: resolved_source.package_id,
             source_package_name,
-            source_wit_root: source_wit_root.to_path_buf(),
-            target_root: target_root.to_path_buf(),
-            stub_crate_version: stub_crate_version.to_string(),
-            wasm_rpc_override: wasm_rpc_override.clone(),
-            always_inline_types,
         })
     }
 
@@ -92,17 +104,18 @@ impl StubDefinition {
 
     pub fn packages_with_wit_sources(
         &self,
-    ) -> impl Iterator<Item = (&Package, &(PathBuf, Vec<PathBuf>))> {
+    ) -> impl Iterator<Item = (PackageId, &Package, &PackageSource)> {
         self.resolve
             .topological_packages()
             .into_iter()
             .map(|package_id| {
                 (
+                    package_id,
                     self.resolve
                         .packages
                         .get(package_id)
                         .unwrap_or_else(|| panic!("package not found")),
-                    self.sources
+                    self.package_sources
                         .get(&package_id)
                         .unwrap_or_else(|| panic!("sources for package not found")),
                 )
@@ -120,12 +133,16 @@ impl StubDefinition {
             .unwrap_or_else(|| panic!("selected world not found"))
     }
 
-    pub fn source_world_name(&self) -> String {
-        self.source_world().name.clone()
+    pub fn source_world_name(&self) -> &str {
+        &self.source_world().name
+    }
+
+    pub fn encode_source(&self) -> anyhow::Result<EncodedWitDir> {
+        EncodedWitDir::new(&self.resolve)
     }
 
     pub fn target_cargo_path(&self) -> PathBuf {
-        self.target_root.join("Cargo.toml")
+        self.config.target_root.join("Cargo.toml")
     }
 
     pub fn target_crate_name(&self) -> String {
@@ -133,15 +150,21 @@ impl StubDefinition {
     }
 
     pub fn target_rust_path(&self) -> PathBuf {
-        self.target_root.join("src/lib.rs")
+        self.config.target_root.join("src/lib.rs")
+    }
+
+    pub fn target_interface_name(&self) -> String {
+        // TODO: naming
+        format!("stub-{}", self.source_world_name())
     }
 
     pub fn target_world_name(&self) -> String {
+        // TODO: naming
         format!("wasm-rpc-stub-{}", self.source_world_name())
     }
 
     pub fn target_wit_root(&self) -> PathBuf {
-        self.target_root.join(naming::wit::WIT_DIR)
+        self.config.target_root.join(naming::wit::WIT_DIR)
     }
 
     pub fn target_wit_path(&self) -> PathBuf {
@@ -152,42 +175,8 @@ impl StubDefinition {
         ResolvedWitDir::new(&self.target_wit_root())
     }
 
-    pub fn fix_inlined_owner(&self, typedef: &TypeDef) -> StubTypeOwner {
-        if self.is_inlined(typedef) {
-            StubTypeOwner::StubInterface
-        } else {
-            StubTypeOwner::Source(typedef.owner)
-        }
-    }
-
-    fn is_inlined(&self, typedef: &TypeDef) -> bool {
-        match &typedef.owner {
-            TypeOwner::Interface(interface_id) => {
-                if self.always_inline_types {
-                    if let Some(resolved_owner_interface) =
-                        self.resolve.interfaces.get(*interface_id)
-                    {
-                        if let Some(name) = resolved_owner_interface.name.as_ref() {
-                            self.source_interfaces()
-                                .iter()
-                                .any(|interface| &interface.name == name)
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                }
-            }
-            TypeOwner::World(_) => true,
-            TypeOwner::None => false,
-        }
-    }
-
-    pub fn source_interfaces(&self) -> &Vec<InterfaceStub> {
-        self.source_interfaces.get_or_init(|| {
+    pub fn stub_imported_interfaces(&self) -> &Vec<InterfaceStub> {
+        self.stub_imported_interfaces.get_or_init(|| {
             let WorldItemsByType {
                 types,
                 functions,
@@ -200,6 +189,148 @@ impl StubDefinition {
                 .chain(self.global_stub_interface(types, functions))
                 .collect::<Vec<_>>()
         })
+    }
+
+    pub fn stub_used_type_defs(&self) -> &Vec<InterfaceStubTypeDef> {
+        self.stub_used_type_defs.get_or_init(|| {
+            let imported_type_ids = self
+                .stub_imported_interfaces()
+                .iter()
+                .flat_map(|interface| &interface.used_types)
+                .cloned()
+                .collect::<HashSet<_>>();
+
+            let imported_type_names = {
+                let mut imported_type_names = HashMap::<String, HashSet<TypeId>>::new();
+                for type_id in imported_type_ids {
+                    let type_def = self.resolve.types.get(type_id).unwrap_or_else(|| {
+                        panic!("Imported type not found, type id: {:?}", type_id)
+                    });
+                    let type_name = type_def
+                        .name
+                        .clone()
+                        .unwrap_or_else(|| panic!("Missing type name, type id: {:?}", type_id));
+
+                    imported_type_names
+                        .entry(type_name)
+                        .or_default()
+                        .insert(type_id);
+                }
+                imported_type_names
+            };
+
+            imported_type_names
+                .into_iter()
+                .flat_map(|(type_name, type_ids)| {
+                    let type_name_is_unique = type_ids.len() == 1;
+                    type_ids.into_iter().map(move |type_id| {
+                        let type_def = self
+                            .resolve
+                            .types
+                            .get(type_id)
+                            .unwrap_or_else(|| {
+                                panic!("Imported type not found, type id: {:?}", type_id)
+                            })
+                            .clone();
+
+                        let TypeOwner::Interface(interface_id) = type_def.owner else {
+                            panic!(
+                                "Expected interface owner for type, got: {:?}, type name: {:?}",
+                                type_def, type_def.name
+                            );
+                        };
+
+                        let interface =
+                            self.resolve
+                                .interfaces
+                                .get(interface_id)
+                                .unwrap_or_else(|| {
+                                    panic!("Interface not found, interface id: {:?}", interface_id)
+                                });
+
+                        let interface_name = interface.name.clone().unwrap_or_else(|| {
+                            panic!("Missing interface name, interface id: {:?}", interface_id)
+                        });
+
+                        let package = interface.package.map(|package_id| {
+                            self.resolve.packages.get(package_id).unwrap_or_else(|| {
+                                panic!(
+                            "Missing package for interface, package id: {:?}, interface id: {:?}",
+                            package_id, interface_id,
+                        )
+                            })
+                        });
+
+                        let interface_identifier = package
+                            .map(|package| package.name.interface_id(&interface_name))
+                            .unwrap_or(interface_name.clone());
+
+                        let type_name_alias = (!type_name_is_unique).then(|| match &package {
+                            Some(package) => format!(
+                                "{}-{}-{}-{}",
+                                package.name.namespace,
+                                package.name.name,
+                                interface_name,
+                                &type_name
+                            ),
+                            None => format!("{}-{}", interface_name, type_name),
+                        });
+
+                        InterfaceStubTypeDef {
+                            package_id: interface.package,
+                            type_id,
+                            type_def,
+                            interface_identifier,
+                            type_name: type_name.clone(),
+                            type_name_alias,
+                        }
+                    })
+                })
+                .sorted_by(|a, b| {
+                    let a = (&a.interface_identifier, &a.type_name, &a.type_name_alias);
+                    let b = (&b.interface_identifier, &b.type_name, &b.type_name_alias);
+                    a.cmp(&b)
+                })
+                .collect::<Vec<_>>()
+        })
+    }
+
+    pub fn stub_dep_package_ids(&self) -> &HashSet<PackageId> {
+        self.stub_dep_package_ids.get_or_init(|| {
+            self.stub_used_type_defs()
+                .iter()
+                .flat_map(|type_def| {
+                    let mut package_ids = Vec::<PackageId>::new();
+                    self.type_def_owner_package_ids(&type_def.type_def, &mut package_ids);
+                    package_ids
+                })
+                .collect()
+        })
+    }
+
+    fn type_def_owner_package_ids(&self, type_def: &TypeDef, package_ids: &mut Vec<PackageId>) {
+        let package_id = match type_def.owner {
+            TypeOwner::World(_) => None,
+            TypeOwner::Interface(interface) => self
+                .resolve
+                .interfaces
+                .get(interface)
+                .and_then(|interface| interface.package),
+            TypeOwner::None => None,
+        };
+
+        if let Some(package_id) = package_id {
+            package_ids.push(package_id);
+        }
+
+        if let TypeDefKind::Type(Type::Id(type_id)) = type_def.kind {
+            self.type_def_owner_package_ids(
+                self.resolve.types.get(type_id).unwrap_or_else(|| {
+                    panic!("Type alias target not found, type id: {:?}", type_id)
+                }),
+                package_ids,
+            );
+        }
     }
 
     fn partition_world_items<'a>(
@@ -258,9 +389,9 @@ impl StubDefinition {
                         typ: *typ,
                     });
                 }
-                FunctionResultStub::Multi(param_stubs)
+                FunctionResultStub::Named(param_stubs)
             }
-            Results::Anon(single) => FunctionResultStub::Single(*single),
+            Results::Anon(single) => FunctionResultStub::Anon(*single),
         };
 
         FunctionStub {
@@ -291,12 +422,12 @@ impl StubDefinition {
                 .filter(|function| function.kind == FunctionKind::Freestanding),
         );
 
-        let (imported_interfaces, _) = self.extract_interface_stubs_from_types(types.into_iter());
+        let (used_types, _) = self.extract_interface_stubs_from_types(types.into_iter());
 
         Some(InterfaceStub {
-            name,
+            name: name.to_string(),
             functions,
-            imports: imported_interfaces,
+            used_types,
             global: true,
             constructor_params: None,
             static_functions: vec![],
@@ -311,7 +442,7 @@ impl StubDefinition {
     ) -> Vec<InterfaceStub> {
         let functions = Self::functions_to_stubs(interface.functions.values());
 
-        let (imported_interfaces, resource_interfaces) = self.extract_interface_stubs_from_types(
+        let (used_types, resource_interfaces) = self.extract_interface_stubs_from_types(
             interface
                 .types
                 .iter()
@@ -323,7 +454,7 @@ impl StubDefinition {
         interface_stubs.push(InterfaceStub {
             name,
             functions,
-            imports: imported_interfaces,
+            used_types,
             global: false,
             constructor_params: None,
             static_functions: vec![],
@@ -337,8 +468,8 @@ impl StubDefinition {
     fn extract_interface_stubs_from_types(
         &self,
         types: impl Iterator<Item = (String, TypeId)>,
-    ) -> (Vec<InterfaceStubTypeDef>, Vec<InterfaceStub>) {
-        let mut imported_interfaces = Vec::<InterfaceStubTypeDef>::new();
+    ) -> (Vec<TypeId>, Vec<InterfaceStub>) {
+        let mut used_types = Vec::<TypeId>::new();
         let mut resource_interfaces = Vec::<InterfaceStub>::new();
 
         for (type_name, type_id) in types {
@@ -362,43 +493,12 @@ impl StubDefinition {
                         type_id,
                     ))
                 } else {
-                    imported_interfaces.push(self.type_def_to_stub(
-                        owner_interface,
-                        type_name,
-                        type_def.clone(),
-                    ));
+                    used_types.push(type_id);
                 }
             }
         }
 
-        (imported_interfaces, resource_interfaces)
-    }
-
-    fn type_def_to_stub(
-        &self,
-        owner_interface: &Interface,
-        type_name: String,
-        type_def: TypeDef,
-    ) -> InterfaceStubTypeDef {
-        let package = owner_interface
-            .package
-            .and_then(|id| self.resolve.packages.get(id));
-
-        let interface_name = owner_interface
-            .name
-            .clone()
-            .unwrap_or_else(|| panic!("Failed to get owner interface name"));
-
-        let interface_path = package
-            .map(|p| p.name.interface_id(&interface_name))
-            .unwrap_or(interface_name);
-
-        InterfaceStubTypeDef {
-            name: type_name,
-            path: interface_path,
-            package_name: package.map(|p| p.name.clone()),
-            type_def,
-        }
+        (used_types, resource_interfaces)
     }
 
     fn resource_interface_stub(
@@ -417,7 +517,7 @@ impl StubDefinition {
         let function_stubs_by_kind =
             |kind: FunctionKind| Self::functions_to_stubs(functions_by_kind(kind));
 
-        let (imported_interfaces, _) = self.extract_interface_stubs_from_types(
+        let (used_types, _) = self.extract_interface_stubs_from_types(
             owner_interface
                 .types
                 .iter()
@@ -439,7 +539,7 @@ impl StubDefinition {
         InterfaceStub {
             name: type_name,
             functions: function_stubs_by_kind(FunctionKind::Method(type_id)),
-            imports: imported_interfaces,
+            used_types,
             global: false,
             constructor_params,
             static_functions: function_stubs_by_kind(FunctionKind::Static(type_id)),
@@ -482,6 +582,14 @@ impl StubDefinition {
             .get(type_id)
             .ok_or_else(|| anyhow!("failed to get type by id: {:?}", type_id))
     }
+
+    pub fn get_stub_used_type_alias(&self, type_id: TypeId) -> Option<&str> {
+        // TODO: hash map
+        self.stub_used_type_defs()
+            .iter()
+            .find(|type_def| type_def.type_id == type_id)
+            .and_then(|type_def| type_def.type_name_alias.as_deref())
+    }
 }
 
 struct WorldItemsByType<'a> {
@@ -496,9 +604,19 @@ pub struct InterfaceStub {
     pub constructor_params: Option<Vec<FunctionParamStub>>,
     pub functions: Vec<FunctionStub>,
     pub static_functions: Vec<FunctionStub>,
-    pub imports: Vec<InterfaceStubTypeDef>,
+    pub used_types: Vec<TypeId>,
     pub global: bool,
     pub owner_interface: Option<String>,
+}
+
+impl InterfaceStub {
+    // The returned bool is true if the function is static
+    pub fn all_functions(&self) -> impl Iterator<Item = (&FunctionStub, bool)> {
+        self.static_functions
+            .iter()
+            .map(|f| (f, true))
+            .chain(self.functions.iter().map(|f| (f, false)))
+    }
 }
 
 impl InterfaceStub {
@@ -506,20 +624,20 @@ impl InterfaceStub {
         self.constructor_params.is_some()
     }
 
-    pub fn interface_name(&self) -> Option<String> {
+    pub fn interface_name(&self) -> Option<&str> {
         if self.global {
             None
         } else {
             match &self.owner_interface {
-                Some(iface) => Some(iface.clone()),
-                None => Some(self.name.clone()),
+                Some(iface) => Some(iface),
+                None => Some(&self.name),
             }
         }
     }
 
-    pub fn resource_name(&self) -> Option<String> {
+    pub fn resource_name(&self) -> Option<&str> {
         if self.is_resource() {
-            Some(self.name.clone())
+            Some(&self.name)
         } else {
             None
         }
@@ -528,24 +646,17 @@ impl InterfaceStub {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct InterfaceStubTypeDef {
-    pub name: String,
-    pub path: String,
-    pub package_name: Option<PackageName>,
+    pub package_id: Option<PackageId>,
+    pub type_id: TypeId,
     pub type_def: TypeDef,
+    pub interface_identifier: String,
+    pub type_name: String,
+    pub type_name_alias: Option<String>,
 }
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct InterfaceStubImport {
-    pub name: String,
-    pub path: String,
-}
-
-impl From<&InterfaceStubTypeDef> for InterfaceStubImport {
-    fn from(value: &InterfaceStubTypeDef) -> Self {
-        Self {
-            name: value.name.clone(),
-            path: value.path.clone(),
-        }
+impl InterfaceStubTypeDef {
+    pub fn stub_type_name(&self) -> &str {
+        self.type_name_alias.as_deref().unwrap_or(&self.type_name)
     }
 }
 
@@ -558,27 +669,15 @@ pub struct FunctionStub {
 
 impl FunctionStub {
     pub fn as_method(&self) -> Option<FunctionStub> {
-        self.name.strip_prefix("[method]").and_then(|method_name| {
-            let parts = method_name.split('.').collect::<Vec<_>>();
-            if parts.len() != 2 {
-                None
-            } else {
-                Some(FunctionStub {
-                    name: parts[1].to_string(),
-                    params: self
-                        .params
-                        .iter()
-                        .filter(|p| p.name != "self")
-                        .cloned()
-                        .collect(),
-                    results: self.results.clone(),
-                })
-            }
-        })
+        self.as_function_stub_without_prefix("[method]")
     }
 
     pub fn as_static(&self) -> Option<FunctionStub> {
-        self.name.strip_prefix("[static]").and_then(|method_name| {
+        self.as_function_stub_without_prefix("[static]")
+    }
+
+    fn as_function_stub_without_prefix(&self, prefix: &str) -> Option<FunctionStub> {
+        self.name.strip_prefix(prefix).and_then(|method_name| {
             let parts = method_name.split('.').collect::<Vec<_>>();
             if parts.len() != 2 {
                 None
@@ -614,23 +713,17 @@ pub struct FunctionParamStub {
 
 #[derive(Debug, Clone)]
 pub enum FunctionResultStub {
-    Single(Type),
-    Multi(Vec<FunctionParamStub>),
+    Anon(Type),
+    Named(Vec<FunctionParamStub>),
     SelfType,
 }
 
 impl FunctionResultStub {
     pub fn is_empty(&self) -> bool {
         match self {
-            FunctionResultStub::Single(_) => false,
-            FunctionResultStub::Multi(params) => params.is_empty(),
+            FunctionResultStub::Anon(_) => false,
+            FunctionResultStub::Named(params) => params.is_empty(),
             FunctionResultStub::SelfType => false,
         }
     }
-}
-
-#[derive(Debug, Clone)]
-pub enum StubTypeOwner {
-    StubInterface,
-    Source(TypeOwner),
 }
