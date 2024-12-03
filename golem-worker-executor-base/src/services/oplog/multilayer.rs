@@ -27,15 +27,17 @@ use tokio::sync::oneshot::Sender;
 use tracing::{debug, error, info, warn, Instrument};
 
 use crate::error::GolemError;
-use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
-use golem_common::model::{AccountId, ComponentId, ComponentType, OwnedWorkerId, ScanCursor};
-
+use crate::model::ExecutionStatus;
 use crate::services::oplog::ephemeral::EphemeralOplog;
 use crate::services::oplog::multilayer::BackgroundTransferMessage::{
     TransferFromLower, TransferFromPrimary,
 };
 use crate::services::oplog::{
     downcast_oplog, CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService,
+};
+use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
+use golem_common::model::{
+    AccountId, ComponentId, ComponentType, OwnedWorkerId, ScanCursor, WorkerMetadata,
 };
 
 #[async_trait]
@@ -158,7 +160,8 @@ struct CreateOplogConstructor {
     primary: Arc<dyn OplogService + Send + Sync>,
     service: MultiLayerOplogService,
     last_oplog_index: OplogIndex,
-    component_type: ComponentType,
+    initial_worker_metadata: WorkerMetadata,
+    execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
 }
 
 impl CreateOplogConstructor {
@@ -168,7 +171,8 @@ impl CreateOplogConstructor {
         primary: Arc<dyn OplogService + Send + Sync>,
         service: MultiLayerOplogService,
         last_oplog_index: OplogIndex,
-        component_type: ComponentType,
+        initial_worker_metadata: WorkerMetadata,
+        execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
     ) -> Self {
         Self {
             owned_worker_id,
@@ -176,7 +180,8 @@ impl CreateOplogConstructor {
             primary,
             service,
             last_oplog_index,
-            component_type,
+            initial_worker_metadata,
+            execution_status,
         }
     }
 }
@@ -187,18 +192,26 @@ impl OplogConstructor for CreateOplogConstructor {
         self,
         close: Box<dyn FnOnce() + Send + Sync>,
     ) -> Arc<dyn Oplog + Send + Sync> {
-        match self.component_type {
+        let component_type = self.execution_status.read().unwrap().component_type();
+
+        match component_type {
             ComponentType::Durable => {
                 let primary = if let Some(initial_entry) = self.initial_entry {
                     self.primary
-                        .create(&self.owned_worker_id, initial_entry, self.component_type)
+                        .create(
+                            &self.owned_worker_id,
+                            initial_entry,
+                            self.initial_worker_metadata,
+                            self.execution_status,
+                        )
                         .await
                 } else {
                     self.primary
                         .open(
                             &self.owned_worker_id,
                             self.last_oplog_index,
-                            self.component_type,
+                            self.initial_worker_metadata,
+                            self.execution_status,
                         )
                         .await
                 };
@@ -210,7 +223,8 @@ impl OplogConstructor for CreateOplogConstructor {
                     .open(
                         &self.owned_worker_id,
                         self.last_oplog_index,
-                        self.component_type,
+                        self.initial_worker_metadata,
+                        self.execution_status,
                     )
                     .await;
 
@@ -245,7 +259,8 @@ impl OplogService for MultiLayerOplogService {
         &self,
         owned_worker_id: &OwnedWorkerId,
         initial_entry: OplogEntry,
-        component_type: ComponentType,
+        initial_worker_metadata: WorkerMetadata,
+        execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
     ) -> Arc<dyn Oplog + Send + Sync> {
         self.oplogs
             .get_or_open(
@@ -256,7 +271,8 @@ impl OplogService for MultiLayerOplogService {
                     self.primary.clone(),
                     self.clone(),
                     OplogIndex::INITIAL,
-                    component_type,
+                    initial_worker_metadata,
+                    execution_status,
                 ),
             )
             .await
@@ -266,9 +282,9 @@ impl OplogService for MultiLayerOplogService {
         &self,
         owned_worker_id: &OwnedWorkerId,
         last_oplog_index: OplogIndex,
-        component_type: ComponentType,
+        initial_worker_metadata: WorkerMetadata,
+        execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
     ) -> Arc<dyn Oplog + Send + Sync> {
-        debug!("MultiLayerOplogService::open {owned_worker_id}");
         self.oplogs
             .get_or_open(
                 &owned_worker_id.worker_id,
@@ -278,7 +294,8 @@ impl OplogService for MultiLayerOplogService {
                     self.primary.clone(),
                     self.clone(),
                     last_oplog_index,
-                    component_type,
+                    initial_worker_metadata,
+                    execution_status,
                 ),
             )
             .await

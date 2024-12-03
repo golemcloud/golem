@@ -172,7 +172,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         component_version: Option<u64>,
         parent: Option<WorkerId>,
     ) -> Result<Self, GolemError> {
-        let worker_metadata = Self::get_or_create_worker_metadata(
+        let (worker_metadata, execution_status) = Self::get_or_create_worker_metadata(
             deps,
             &owned_worker_id,
             component_version,
@@ -189,13 +189,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 Some(worker_metadata.last_known_status.component_version),
             )
             .await?;
+        execution_status
+            .write()
+            .unwrap()
+            .set_component_type(initial_component_metadata.component_type);
+
         let last_oplog_index = deps.oplog_service().get_last_index(&owned_worker_id).await;
+
         let oplog = deps
             .oplog_service()
             .open(
                 &owned_worker_id,
                 last_oplog_index,
-                initial_component_metadata.component_type,
+                worker_metadata.clone(),
+                execution_status.clone(),
             )
             .await;
 
@@ -231,12 +238,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }),
         )));
         let instance = Arc::new(Mutex::new(WorkerInstance::Unloaded));
-
-        let execution_status = Arc::new(RwLock::new(ExecutionStatus::Suspended {
-            last_known_status: worker_metadata.last_known_status.clone(),
-            component_type: initial_component_metadata.component_type,
-            timestamp: Timestamp::now_utc(),
-        }));
 
         let stopping = AtomicBool::new(false);
 
@@ -1039,19 +1040,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
         parent: Option<WorkerId>,
-    ) -> Result<WorkerMetadata, GolemError> {
+    ) -> Result<(WorkerMetadata, Arc<RwLock<ExecutionStatus>>), GolemError> {
+        let component_id = owned_worker_id.component_id();
+        let component_metadata = this
+            .component_service()
+            .get_metadata(
+                &owned_worker_id.account_id,
+                &component_id,
+                component_version,
+            )
+            .await?;
         match this.worker_service().get(owned_worker_id).await {
             None => {
-                let component_id = owned_worker_id.component_id();
-                let component_metadata = this
-                    .component_service()
-                    .get_metadata(
-                        &owned_worker_id.account_id,
-                        &component_id,
-                        component_version,
-                    )
-                    .await?;
-
                 let initial_status =
                     calculate_last_known_status(this, owned_worker_id, &None).await?;
                 let worker_metadata = WorkerMetadata {
@@ -1069,23 +1069,39 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             .iter()
                             .map(|m| m.initial)
                             .sum(),
+                        extensions: WorkerStatusRecordExtensions::Extension1 {
+                            active_plugins: component_metadata
+                                .plugin_installations
+                                .iter()
+                                .map(|i| i.id.clone())
+                                .collect(),
+                        },
                         ..initial_status
                     },
                 };
-                this.worker_service()
+                let execution_status = this
+                    .worker_service()
                     .add(&worker_metadata, component_metadata.component_type)
                     .await?;
-                Ok(worker_metadata)
+                Ok((worker_metadata, execution_status))
             }
-            Some(previous_metadata) => Ok(WorkerMetadata {
-                last_known_status: calculate_last_known_status(
-                    this,
-                    owned_worker_id,
-                    &Some(previous_metadata.clone()),
-                )
-                .await?,
-                ..previous_metadata
-            }),
+            Some(previous_metadata) => {
+                let worker_metadata = WorkerMetadata {
+                    last_known_status: calculate_last_known_status(
+                        this,
+                        owned_worker_id,
+                        &Some(previous_metadata.clone()),
+                    )
+                    .await?,
+                    ..previous_metadata
+                };
+                let execution_status = Arc::new(RwLock::new(ExecutionStatus::Suspended {
+                    last_known_status: worker_metadata.last_known_status.clone(),
+                    component_type: component_metadata.component_type,
+                    timestamp: Timestamp::now_utc(),
+                }));
+                Ok((worker_metadata, execution_status))
+            }
         }
     }
 }

@@ -43,6 +43,7 @@ exclude = [
     "test-components/key-value-service",
     "test-components/logging",
     "test-components/networking",
+    "test-components/oplog-processor",
     "test-components/option-service",
     "test-components/promise",
     "test-components/read-stdin",
@@ -104,7 +105,7 @@ futures-core = "0.3.29"
 futures-util = "0.3.29"
 git-version = "0.3.9"
 golem-wasm-ast = "1.0.1"
-golem-wasm-rpc = { version = "1.0.7", default-features = false, features = [
+golem-wasm-rpc = { version = "1.0.12", default-features = false, features = [
     "host",
 ] }
 hex = "0.4.3"

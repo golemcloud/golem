@@ -36,6 +36,8 @@ interface api {
   checkout: func() -> checkout-result;
 
   get-cart-contents: func() -> list<product-item>;
+
+  force-commit: func(count: u8);
 }
 
 world shopping-cart {
