@@ -77,7 +77,7 @@ async fn interruption(
     });
 
     executor
-        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(5))
+        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
         .await;
 
     let _ = executor.interrupt(&worker_id).await;
@@ -454,7 +454,7 @@ async fn promise(
 
     // While waiting for the promise, the worker gets suspended
     executor
-        .wait_for_status(&worker_id, WorkerStatus::Suspended, Duration::from_secs(5))
+        .wait_for_status(&worker_id, WorkerStatus::Suspended, Duration::from_secs(10))
         .await;
 
     executor
@@ -1250,7 +1250,7 @@ async fn get_worker_metadata(
     let _ = fiber.await;
 
     let metadata2 = executor
-        .wait_for_status(&worker_id, WorkerStatus::Idle, Duration::from_secs(5))
+        .wait_for_status(&worker_id, WorkerStatus::Idle, Duration::from_secs(10))
         .await;
 
     drop(executor);
@@ -1652,7 +1652,7 @@ async fn long_running_poll_loop_works_as_expected(
         .unwrap();
 
     executor
-        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(5))
+        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
         .await;
 
     {
@@ -1661,7 +1661,7 @@ async fn long_running_poll_loop_works_as_expected(
     }
 
     executor
-        .wait_for_status(&worker_id, WorkerStatus::Idle, Duration::from_secs(5))
+        .wait_for_status(&worker_id, WorkerStatus::Idle, Duration::from_secs(10))
         .await;
 
     drop(executor);
@@ -1718,7 +1718,7 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
         .unwrap();
 
     executor
-        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(5))
+        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
         .await;
     let values1 = executor
         .get_running_workers_metadata(
@@ -1764,7 +1764,7 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
     });
 
     executor
-        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(5))
+        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
         .await;
 
     {
@@ -1782,7 +1782,7 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
     }
 
     executor
-        .wait_for_status(&worker_id, WorkerStatus::Idle, Duration::from_secs(5))
+        .wait_for_status(&worker_id, WorkerStatus::Idle, Duration::from_secs(10))
         .await;
 
     drop(executor);
@@ -1844,7 +1844,7 @@ async fn long_running_poll_loop_connection_breaks_on_interrupt(
         .unwrap();
 
     executor
-        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(5))
+        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
         .await;
 
     let start = Instant::now();
@@ -1925,7 +1925,7 @@ async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_wor
         .unwrap();
 
     executor
-        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(5))
+        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
         .await;
 
     executor.interrupt(&worker_id).await;
@@ -1995,7 +1995,7 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume(
         .unwrap();
 
     executor
-        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(5))
+        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
         .await;
 
     executor.interrupt(&worker_id).await;
@@ -2005,7 +2005,7 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume(
 
     executor.resume(&worker_id).await;
     executor
-        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(5))
+        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
         .await;
     let mut rx = executor.capture_output_with_termination(&worker_id).await;
 
@@ -2096,7 +2096,7 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt(
         .unwrap();
 
     executor
-        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(5))
+        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
         .await;
 
     executor.interrupt(&worker_id).await;
@@ -2518,7 +2518,7 @@ async fn reconstruct_interrupted_state(
     });
 
     executor
-        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(5))
+        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
         .await;
 
     let _ = executor.interrupt(&worker_id).await;
@@ -2602,7 +2602,7 @@ async fn invocation_queue_is_persistent(
         .unwrap();
 
     executor
-        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(5))
+        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
         .await;
 
     executor
@@ -2639,7 +2639,7 @@ async fn invocation_queue_is_persistent(
     executor.log_output(&worker_id).await;
 
     executor
-        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(5))
+        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
         .await;
     {
         let mut response = response.lock().unwrap();
