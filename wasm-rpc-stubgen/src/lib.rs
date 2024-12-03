@@ -27,14 +27,11 @@ pub mod wit_encode;
 pub mod wit_generate;
 pub mod wit_resolve;
 
-use crate::log::LogColorize;
 use crate::model::app::{ComponentPropertiesExtensions, ComponentPropertiesExtensionsAny};
 use crate::stub::{StubConfig, StubDefinition};
 use crate::wit_generate::UpdateCargoToml;
 use anyhow::Context;
 use clap::{Parser, Subcommand};
-use colored::Colorize;
-use itertools::Itertools;
 use std::marker::PhantomData;
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -57,7 +54,7 @@ pub enum Command {
     /// generating stubs and composing results.
     InitializeWorkspace(InitializeWorkspaceArgs),
     /// Build components with application manifests
-    #[clap(about = app_about(), long_about = None)]
+    #[cfg(feature = "app-command")]
     App {
         #[command(subcommand)]
         subcommand: App,
@@ -327,31 +324,6 @@ pub async fn run_app_command<CPE: ComponentPropertiesExtensions>(
             // commands::app::custom_command(app_args_to_config(args.args), args.command)
             Ok(())
         }
-    }
-}
-
-// TODO: currently this is added on top of the derived help, also, it should by grouped by profiles (also handling overlaps)
-fn app_about() -> String {
-    let commands = commands::app::available_custom_commands(commands::app::Config {
-        app_resolve_mode: commands::app::ApplicationSourceMode::Automatic,
-        skip_up_to_date_checks: false,
-        profile: None,
-        offline: false,
-        extensions: PhantomData::<ComponentPropertiesExtensionsAny>,
-    });
-
-    match commands {
-        Ok(commands) if !commands.is_empty() => {
-            format!(
-                "\n\n{}\n{}",
-                "Custom commands:".bold().underline(),
-                commands
-                    .into_iter()
-                    .map(|cmd| format!("  {}", cmd.log_color_highlight()))
-                    .join("\n")
-            )
-        }
-        _ => "".to_string(),
     }
 }
 
