@@ -11,8 +11,8 @@ use heck::{
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::fmt::Display;
 use std::fmt::Formatter;
+use std::fmt::{Debug, Display};
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
 use wit_parser::PackageName;
@@ -610,11 +610,110 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
                         }
                     };
 
-                    if let Some(properties) = component_properties {
-                        // TODO: validate (build steps and extensions too)
+                    if let Some(mut properties) = component_properties {
+                        fn validate_properties_and_convert_extensions<
+                            CPE: ComponentPropertiesExtensions,
+                        >(
+                            validation: &mut ValidationBuilder,
+                            properties: &mut ComponentProperties<CPE>,
+                        ) -> bool {
+                            let mut any_error = false;
 
-                        resolved_components
-                            .insert(component_name.clone(), Component { source, properties });
+                            for (name, value) in [
+                                ("sourceWit", &properties.source_wit),
+                                ("generatedWit", &properties.source_wit),
+                                ("componentWasm", &properties.source_wit),
+                            ] {
+                                if value.is_empty() {
+                                    validation.add_error(format!(
+                                        "Property {} is empty or undefined",
+                                        name.log_color_highlight()
+                                    ));
+                                    any_error = true;
+                                }
+                            }
+
+                            properties.extensions =
+                                properties.extensions_raw.convert_and_validate(validation);
+                            any_error |= properties.extensions.is_none();
+
+                            any_error
+                        }
+
+                        let any_error: bool = match &mut properties {
+                            ResolvedComponentProperties::Properties {
+                                template_name,
+                                any_template_overrides,
+                                properties,
+                            } => {
+                                template_name.iter().for_each(|template_name| {
+                                    validation.push_context("template", template_name.to_string());
+                                    validation.push_context(
+                                        "overrides",
+                                        any_template_overrides.to_string(),
+                                    );
+                                });
+
+                                let any_error = validate_properties_and_convert_extensions(
+                                    &mut validation,
+                                    properties,
+                                );
+
+                                if template_name.is_some() {
+                                    validation.pop_context();
+                                    validation.pop_context();
+                                }
+
+                                any_error
+                            }
+                            ResolvedComponentProperties::Profiles {
+                                template_name,
+                                any_template_overrides,
+                                profiles,
+                                ..
+                            } => {
+                                template_name.iter().for_each(|template_name| {
+                                    validation.push_context("template", template_name.to_string());
+                                });
+
+                                let mut any_error = false;
+
+                                for (profile_name, properties) in profiles {
+                                    validation.push_context("profile", profile_name.to_string());
+                                    let any_template_overrides =
+                                        any_template_overrides.get(profile_name);
+                                    any_template_overrides.iter().for_each(
+                                        |any_template_overrides| {
+                                            validation.push_context(
+                                                "overrides",
+                                                any_template_overrides.to_string(),
+                                            );
+                                        },
+                                    );
+
+                                    any_error |= validate_properties_and_convert_extensions(
+                                        &mut validation,
+                                        properties,
+                                    );
+
+                                    if any_template_overrides.is_some() {
+                                        validation.pop_context();
+                                    }
+                                    validation.pop_context();
+                                }
+
+                                if template_name.is_some() {
+                                    validation.pop_context();
+                                }
+
+                                any_error
+                            }
+                        };
+
+                        if !any_error {
+                            resolved_components
+                                .insert(component_name.clone(), Component { source, properties });
+                        }
                     }
                 }
 
@@ -929,7 +1028,8 @@ pub struct ComponentProperties<CPE: ComponentPropertiesExtensions> {
     pub build: Vec<app_raw::ExternalCommand>,
     pub custom_commands: HashMap<String, Vec<app_raw::ExternalCommand>>,
     pub clean: Vec<String>,
-    pub extensions: CPE,
+    pub extensions_raw: CPE,
+    pub extensions: Option<CPE::Validated>,
 }
 
 impl<CPE: ComponentPropertiesExtensions> ComponentProperties<CPE> {
@@ -942,7 +1042,8 @@ impl<CPE: ComponentPropertiesExtensions> ComponentProperties<CPE> {
             build: raw.build,
             custom_commands: raw.custom_commands,
             clean: raw.clean,
-            extensions: CPE::from_serde_json(serde_json::Value::Object(raw.extensions))?,
+            extensions_raw: CPE::from_serde_json(serde_json::Value::Object(raw.extensions))?,
+            extensions: None,
         })
     }
 
@@ -994,12 +1095,12 @@ impl<CPE: ComponentPropertiesExtensions> ComponentProperties<CPE> {
     }
 }
 
-pub trait ComponentPropertiesExtensions {
-    fn from_serde_json(extensions: serde_json::Value) -> serde_json::Result<Self>
-    where
-        Self: Sized;
+pub trait ComponentPropertiesExtensions: Sized + Debug + Clone {
+    type Validated: Debug + Clone;
 
-    fn validate(&self, validation: &mut ValidationBuilder);
+    fn from_serde_json(extensions: serde_json::Value) -> serde_json::Result<Self>;
+
+    fn convert_and_validate(&self, validation: &mut ValidationBuilder) -> Option<Self::Validated>;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1007,6 +1108,8 @@ pub trait ComponentPropertiesExtensions {
 pub struct ComponentPropertiesExtensionsNone {}
 
 impl ComponentPropertiesExtensions for ComponentPropertiesExtensionsNone {
+    type Validated = Self;
+
     fn from_serde_json(extensions: serde_json::Value) -> serde_json::Result<Self>
     where
         Self: Sized,
@@ -1014,8 +1117,8 @@ impl ComponentPropertiesExtensions for ComponentPropertiesExtensionsNone {
         serde_json::from_value(extensions)
     }
 
-    fn validate(&self, _validation: &mut ValidationBuilder) {
-        // NOP
+    fn convert_and_validate(&self, _validation: &mut ValidationBuilder) -> Option<Self::Validated> {
+        Some(ComponentPropertiesExtensionsNone {})
     }
 }
 
@@ -1023,6 +1126,8 @@ impl ComponentPropertiesExtensions for ComponentPropertiesExtensionsNone {
 pub struct ComponentPropertiesExtensionsAny;
 
 impl ComponentPropertiesExtensions for ComponentPropertiesExtensionsAny {
+    type Validated = Self;
+
     fn from_serde_json(_extensions: serde_json::Value) -> serde_json::Result<Self>
     where
         Self: Sized,
@@ -1030,7 +1135,7 @@ impl ComponentPropertiesExtensions for ComponentPropertiesExtensionsAny {
         Ok(ComponentPropertiesExtensionsAny)
     }
 
-    fn validate(&self, _validation: &mut ValidationBuilder) {
-        // NOP
+    fn convert_and_validate(&self, _validation: &mut ValidationBuilder) -> Option<Self::Validated> {
+        Some(ComponentPropertiesExtensionsAny)
     }
 }
