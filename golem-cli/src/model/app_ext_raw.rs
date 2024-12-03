@@ -31,7 +31,7 @@ pub struct InitialComponentFile {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GolemComponentPropertiesExt {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub component_type: Option<ComponentType>,
