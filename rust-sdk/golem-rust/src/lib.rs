@@ -43,6 +43,7 @@ pub struct RetryPolicy {
     pub min_delay: std::time::Duration,
     pub max_delay: std::time::Duration,
     pub multiplier: f64,
+    pub max_jitter_factory: Option<f64>,
 }
 
 impl From<bindings::golem::api::host::RetryPolicy> for RetryPolicy {
@@ -52,6 +53,7 @@ impl From<bindings::golem::api::host::RetryPolicy> for RetryPolicy {
             min_delay: std::time::Duration::from_nanos(value.min_delay),
             max_delay: std::time::Duration::from_nanos(value.max_delay),
             multiplier: value.multiplier,
+            max_jitter_factory: value.max_jitter_factor,
         }
     }
 }
@@ -63,6 +65,7 @@ impl From<RetryPolicy> for bindings::golem::api::host::RetryPolicy {
             min_delay: val.min_delay.as_nanos() as u64,
             max_delay: val.max_delay.as_nanos() as u64,
             multiplier: val.multiplier,
+            max_jitter_factor: val.max_jitter_factory,
         }
     }
 }

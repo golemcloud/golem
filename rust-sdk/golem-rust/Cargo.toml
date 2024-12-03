@@ -31,7 +31,7 @@ package = "golem:rust"
 path = "wit"
 
 [package.metadata.component.target.dependencies]
-"golem:api" = { path = "wit/deps/golem" }
+"golem:api" = { path = "wit/deps/golem-1.1" }
 "golem:rpc" = { path = "wit/deps/wasm-rpc" }
 "wasi:clocks" = { path = "wit/deps/clocks" }
 "wasi:io" = { path = "wit/deps/io" }
