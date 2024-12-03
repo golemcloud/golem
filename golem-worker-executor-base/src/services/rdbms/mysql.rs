@@ -161,7 +161,6 @@ pub(crate) mod sqlx_rdbms {
             DbValue::Enumeration(v) => Ok(query.bind(v)),
             DbValue::Set(v) => Ok(query.bind(v)),
             // DbValue::Bit(v) => Ok(query.bind(v)),
-            // DbValue::Interval(v) => Ok(query.bind(chrono::Duration::milliseconds(v))),
             DbValue::Null => Ok(query.bind(None::<String>)),
             _ => Err(format!("Type '{}' is not supported", value)),
         }

@@ -54,6 +54,7 @@ pub(crate) mod sqlx_rdbms {
     use futures_util::stream::BoxStream;
     use sqlx::postgres::types::{Oid, PgInterval, PgRange, PgTimeTz};
     use sqlx::postgres::{PgConnectOptions, PgTypeKind};
+    use sqlx::types::mac_address::MacAddress;
     use sqlx::types::BitVec;
     use sqlx::{Column, ConnectOptions, Pool, Row, TypeInfo};
     use std::net::IpAddr;
@@ -345,8 +346,8 @@ pub(crate) mod sqlx_rdbms {
                     }
                     DbValuePrimitive::Timetz(_) => {
                         let values: Vec<_> = get_plain_values(vs, |v| {
-                            if let DbValuePrimitive::Timetz((v, o)) = v {
-                                Some(PgTimeTz { time: v, offset: o })
+                            if let DbValuePrimitive::Timetz((time, offset)) = v {
+                                Some(PgTimeTz { time, offset })
                             } else {
                                 None
                             }
@@ -354,9 +355,13 @@ pub(crate) mod sqlx_rdbms {
                         Ok(query.bind(values))
                     }
                     DbValuePrimitive::Interval(_) => {
-                        let values: Vec<chrono::Duration> = get_plain_values(vs, |v| {
-                            if let DbValuePrimitive::Interval(v) = v {
-                                Some(v)
+                        let values: Vec<_> = get_plain_values(vs, |v| {
+                            if let DbValuePrimitive::Interval((months, days, microseconds)) = v {
+                                Some(PgInterval {
+                                    months,
+                                    days,
+                                    microseconds,
+                                })
                             } else {
                                 None
                             }
@@ -509,8 +514,16 @@ pub(crate) mod sqlx_rdbms {
             DbValuePrimitive::Time(v) => Ok(query.bind(v)),
             DbValuePrimitive::Timetz((v, o)) => Ok(query.bind(PgTimeTz { time: v, offset: o })),
             DbValuePrimitive::Date(v) => Ok(query.bind(v)),
-            DbValuePrimitive::Interval(v) => Ok(query.bind(v)),
+            DbValuePrimitive::Interval((months, days, microseconds)) => {
+                Ok(query.bind(PgInterval {
+                    months,
+                    days,
+                    microseconds,
+                }))
+            }
             DbValuePrimitive::Inet(v) => Ok(query.bind(v)),
+            DbValuePrimitive::Cidr(v) => Ok(query.bind(v)),
+            DbValuePrimitive::Macaddr(v) => Ok(query.bind(v)),
             DbValuePrimitive::Bit(v) => Ok(query.bind(v)),
             DbValuePrimitive::Varbit(v) => Ok(query.bind(v)),
             DbValuePrimitive::Int4range(v) => Ok(query.bind(get_range(v))),
@@ -651,10 +664,11 @@ pub(crate) mod sqlx_rdbms {
             pg_type_name::INTERVAL => {
                 let v: Option<PgInterval> = row.try_get(index).map_err(|e| e.to_string())?;
                 match v {
-                    Some(v) => {
-                        let d = get_duration(v)?;
-                        DbValue::Primitive(DbValuePrimitive::Interval(d))
-                    }
+                    Some(v) => DbValue::Primitive(DbValuePrimitive::Interval((
+                        v.months,
+                        v.days,
+                        v.microseconds,
+                    ))),
                     None => DbValue::Primitive(DbValuePrimitive::Null),
                 }
             }
@@ -700,6 +714,20 @@ pub(crate) mod sqlx_rdbms {
                 let v: Option<IpAddr> = row.try_get(index).map_err(|e| e.to_string())?;
                 match v {
                     Some(v) => DbValue::Primitive(DbValuePrimitive::Inet(v)),
+                    None => DbValue::Primitive(DbValuePrimitive::Null),
+                }
+            }
+            pg_type_name::CIDR => {
+                let v: Option<IpAddr> = row.try_get(index).map_err(|e| e.to_string())?;
+                match v {
+                    Some(v) => DbValue::Primitive(DbValuePrimitive::Cidr(v)),
+                    None => DbValue::Primitive(DbValuePrimitive::Null),
+                }
+            }
+            pg_type_name::MACADDR => {
+                let v: Option<MacAddress> = row.try_get(index).map_err(|e| e.to_string())?;
+                match v {
+                    Some(v) => DbValue::Primitive(DbValuePrimitive::Macaddr(v)),
                     None => DbValue::Primitive(DbValuePrimitive::Null),
                 }
             }
@@ -902,8 +930,11 @@ pub(crate) mod sqlx_rdbms {
                     Some(vs) => {
                         let mut values = Vec::with_capacity(vs.len());
                         for v in vs.into_iter() {
-                            let d = get_duration(v)?;
-                            values.push(DbValuePrimitive::Interval(d));
+                            values.push(DbValuePrimitive::Interval((
+                                v.months,
+                                v.days,
+                                v.microseconds,
+                            )));
                         }
                         DbValue::Array(values)
                     }
@@ -967,6 +998,24 @@ pub(crate) mod sqlx_rdbms {
                 match vs {
                     Some(vs) => {
                         DbValue::Array(vs.into_iter().map(DbValuePrimitive::Inet).collect())
+                    }
+                    None => DbValue::Array(vec![]),
+                }
+            }
+            pg_type_name::CIDR_ARRAY => {
+                let vs: Option<Vec<IpAddr>> = row.try_get(index).map_err(|e| e.to_string())?;
+                match vs {
+                    Some(vs) => {
+                        DbValue::Array(vs.into_iter().map(DbValuePrimitive::Cidr).collect())
+                    }
+                    None => DbValue::Array(vec![]),
+                }
+            }
+            pg_type_name::MACADDR_ARRAY => {
+                let vs: Option<Vec<MacAddress>> = row.try_get(index).map_err(|e| e.to_string())?;
+                match vs {
+                    Some(vs) => {
+                        DbValue::Array(vs.into_iter().map(DbValuePrimitive::Macaddr).collect())
                     }
                     None => DbValue::Array(vec![]),
                 }
@@ -1219,16 +1268,6 @@ pub(crate) mod sqlx_rdbms {
         }
     }
 
-    fn get_duration(interval: PgInterval) -> Result<chrono::Duration, String> {
-        if interval.months != 0 {
-            Err("postgres 'INTERVAL' with months is not supported".to_string())
-        } else {
-            let mut d = chrono::Duration::days(interval.days as i64);
-            d += chrono::Duration::microseconds(interval.microseconds);
-            Ok(d)
-        }
-    }
-
     fn get_bounds<T>(range: PgRange<T>) -> (Bound<T>, Bound<T>) {
         (range.start, range.end)
     }
@@ -1382,6 +1421,7 @@ pub(crate) mod sqlx_rdbms {
 pub mod types {
     use bigdecimal::BigDecimal;
     use itertools::Itertools;
+    use sqlx::types::mac_address::MacAddress;
     use sqlx::types::BitVec;
     use std::fmt::Display;
     use std::net::IpAddr;
@@ -1413,6 +1453,8 @@ pub mod types {
         Json,
         Jsonb,
         Inet,
+        Cidr,
+        Macaddr,
         Bit,
         Varbit,
         Int4range,
@@ -1451,6 +1493,8 @@ pub mod types {
                 DbColumnTypePrimitive::Xml => write!(f, "xml"),
                 DbColumnTypePrimitive::Uuid => write!(f, "uuid"),
                 DbColumnTypePrimitive::Inet => write!(f, "inet"),
+                DbColumnTypePrimitive::Cidr => write!(f, "cidr"),
+                DbColumnTypePrimitive::Macaddr => write!(f, "macaddr"),
                 DbColumnTypePrimitive::Bit => write!(f, "bit"),
                 DbColumnTypePrimitive::Varbit => write!(f, "varbit"),
                 DbColumnTypePrimitive::Int4range => write!(f, "int4range"),
@@ -1495,7 +1539,7 @@ pub mod types {
         Date(chrono::NaiveDate),
         Time(chrono::NaiveTime),
         Timetz((chrono::NaiveTime, chrono::FixedOffset)),
-        Interval(chrono::Duration),
+        Interval((i32, i32, i64)),
         Text(String),
         Varchar(String),
         Bpchar(String),
@@ -1505,6 +1549,8 @@ pub mod types {
         Xml(String),
         Uuid(Uuid),
         Inet(IpAddr),
+        Cidr(IpAddr),
+        Macaddr(MacAddress),
         Bit(BitVec),
         Varbit(BitVec),
         Int4range((Bound<i32>, Bound<i32>)),
@@ -1544,7 +1590,7 @@ pub mod types {
                 DbValuePrimitive::Date(v) => write!(f, "{}", v),
                 DbValuePrimitive::Time(v) => write!(f, "{}", v),
                 DbValuePrimitive::Timetz(v) => write!(f, "{} {}", v.0, v.1),
-                DbValuePrimitive::Interval(v) => write!(f, "{}", v),
+                DbValuePrimitive::Interval(v) => write!(f, "{}m{}d{}ms", v.0, v.1, v.2),
                 DbValuePrimitive::Text(v) => write!(f, "{}", v),
                 DbValuePrimitive::Varchar(v) => write!(f, "{}", v),
                 DbValuePrimitive::Bpchar(v) => write!(f, "{}", v),
@@ -1554,6 +1600,8 @@ pub mod types {
                 DbValuePrimitive::Xml(v) => write!(f, "{}", v),
                 DbValuePrimitive::Uuid(v) => write!(f, "{}", v),
                 DbValuePrimitive::Inet(v) => write!(f, "{}", v),
+                DbValuePrimitive::Cidr(v) => write!(f, "{}", v),
+                DbValuePrimitive::Macaddr(v) => write!(f, "{}", v),
                 DbValuePrimitive::Bit(v) => write!(f, "{:?}", v),
                 DbValuePrimitive::Varbit(v) => write!(f, "{:?}", v),
                 DbValuePrimitive::Int4range(v) => write!(f, "{:?}, {:?}", v.0, v.1),

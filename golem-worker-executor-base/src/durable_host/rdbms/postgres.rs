@@ -23,6 +23,7 @@ use crate::services::rdbms::postgres::PostgresType;
 use crate::services::rdbms::RdbmsPoolKey;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
+use sqlx::types::mac_address::MacAddress;
 use sqlx::types::BitVec;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::ops::Deref;
@@ -334,7 +335,7 @@ impl TryFrom<DbValuePrimitive> for crate::services::rdbms::postgres::types::DbVa
                 let value = utils::date_to_nativedate(v)?;
                 Ok(Self::Date(value))
             }
-            DbValuePrimitive::Interval(v) => Ok(Self::Interval(chrono::Duration::microseconds(v))),
+            DbValuePrimitive::Interval(v) => Ok(Self::Interval(v)),
             DbValuePrimitive::Text(s) => Ok(Self::Text(s)),
             DbValuePrimitive::Varchar(s) => Ok(Self::Varchar(s)),
             DbValuePrimitive::Bpchar(s) => Ok(Self::Bpchar(s)),
@@ -362,6 +363,17 @@ impl TryFrom<DbValuePrimitive> for crate::services::rdbms::postgres::types::DbVa
                     Ok(Self::Inet(IpAddr::V6(v)))
                 }
             },
+            DbValuePrimitive::Cidr(v) => match v {
+                IpAddress::Ipv4((a, b, c, d)) => {
+                    let v = Ipv4Addr::new(a, b, c, d);
+                    Ok(Self::Cidr(IpAddr::V4(v)))
+                }
+                IpAddress::Ipv6((a, b, c, d, e, f, g, h)) => {
+                    let v = Ipv6Addr::new(a, b, c, d, e, f, g, h);
+                    Ok(Self::Cidr(IpAddr::V6(v)))
+                }
+            },
+            DbValuePrimitive::Macaddr(v) => Ok(Self::Macaddr(MacAddress::new(v.into()))),
             DbValuePrimitive::Int4range(v) => {
                 let v = utils::int4range_to_bounds(v);
                 Ok(Self::Int4range(v))
@@ -425,7 +437,7 @@ impl From<crate::services::rdbms::postgres::types::DbValuePrimitive> for DbValue
                 Self::Date(utils::naivedate_to_date(v))
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Interval(v) => {
-                Self::Interval(v.num_milliseconds())
+                Self::Interval(v)
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Text(s) => Self::Text(s),
             crate::services::rdbms::postgres::types::DbValuePrimitive::Varchar(s) => {
@@ -454,6 +466,14 @@ impl From<crate::services::rdbms::postgres::types::DbValuePrimitive> for DbValue
                 IpAddr::V4(v) => Self::Inet(IpAddress::Ipv4(v.octets().into())),
                 IpAddr::V6(v) => Self::Inet(IpAddress::Ipv6(v.segments().into())),
             },
+            crate::services::rdbms::postgres::types::DbValuePrimitive::Cidr(v) => match v {
+                IpAddr::V4(v) => Self::Cidr(IpAddress::Ipv4(v.octets().into())),
+                IpAddr::V6(v) => Self::Cidr(IpAddress::Ipv6(v.segments().into())),
+            },
+            crate::services::rdbms::postgres::types::DbValuePrimitive::Macaddr(v) => {
+                let v = v.bytes();
+                DbValuePrimitive::Macaddr(v.into())
+            }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Tsrange(v) => {
                 Self::Tsrange(utils::bounds_to_tsrange(v))
             }
@@ -568,6 +588,10 @@ impl From<crate::services::rdbms::postgres::types::DbColumnTypePrimitive>
             crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Varbit => Self::Varbit,
             crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Oid => Self::Oid,
             crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Inet => Self::Inet,
+            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Cidr => Self::Cidr,
+            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Macaddr => {
+                Self::Macaddr
+            }
             crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Int4range => {
                 Self::Int4range
             }

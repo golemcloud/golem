@@ -19,11 +19,15 @@ interface postgres {
     ipv6(ipv6-address),
   }
 
+  type mac-address = tuple<u8, u8, u8, u8, u8, u8>;
+
   type date = tuple<s32, u8, u8>; // year, month, day
   type time = tuple<u8, u8, u8, u32>; // hour, minute, second, nanosecond
   type timetz = tuple<u8, u8, u8, u32, s32>; // hour, minute, second, nanosecond, timezone offset in seconds
   type timestamp = tuple<s32, u8, u8, u8, u8, u8, u32>; // year, month, day, hour, minute, second, nanosecond
   type timestamptz = tuple<s32, u8, u8, u8, u8, u8, u32, s32>; // year, month, day, hour, minute, second, nanosecond, timezone offset in seconds
+
+  type interval = tuple<s32, s32, s64>; // months, days, microseconds
 
   type int4range = tuple<option<tuple<s32, bool>>, option<tuple<s32, bool>>>;
   type int8range = tuple<option<tuple<s64, bool>>, option<tuple<s64, bool>>>;
@@ -58,6 +62,8 @@ interface postgres {
     json,
     jsonb,
     inet,
+    cidr,
+    macaddr,
     bit,
     varbit,
     int4range,
@@ -68,8 +74,6 @@ interface postgres {
     daterange,
     oid,
     custom-enum(string)
-    //     macaddr,
-    //     cidr,
     //     point,
     //     line,
     //     lseg,
@@ -84,13 +88,7 @@ interface postgres {
     //     hstore,
     //     tsvector,
     //     tsquery,
-    //     range,
-    //     tstzrange,
-    //     int4range,
-    //     int8range,
-    //     numrange,
-    //     tsrange,
-    //     tstzrange
+    //     range
   }
 
   variant db-value-primitive {
@@ -110,13 +108,15 @@ interface postgres {
     date(date),
     time(time),
     timetz(timetz),
-    interval(s64),
+    interval(interval),
     bytea(list<u8>),
     json(string),
     jsonb(string),
     xml(string),
     uuid(uuid),
     inet(ip-address),
+    cidr(ip-address),
+    macaddr(mac-address),
     bit(bit-vec),
     varbit(bit-vec),
     int4range(int4range),
