@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::app_ext::GolemComponentExtensions;
 use crate::model::{GolemError, GolemResult};
 use golem_wasm_rpc_stubgen::Command;
 
@@ -24,9 +23,6 @@ pub async fn handle_stubgen(command: Command) -> Result<GolemResult, GolemError>
         Command::Compose(args) => golem_wasm_rpc_stubgen::compose(args).await,
         Command::InitializeWorkspace(args) => {
             golem_wasm_rpc_stubgen::initialize_workspace(args, "golem-cli", &["stubgen"])
-        }
-        Command::App { subcommand } => {
-            golem_wasm_rpc_stubgen::run_app_command::<GolemComponentExtensions>(subcommand).await
         }
     };
 

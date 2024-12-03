@@ -23,6 +23,7 @@ pub mod worker;
 use crate::command::api_security::ApiSecuritySchemeSubcommand;
 use crate::diagnose::{self, diagnose};
 use crate::examples;
+use crate::model::app_ext::GolemComponentExtensions;
 use crate::model::{ComponentUriArg, GolemError, GolemResult};
 use crate::oss::model::OssContext;
 use crate::stubgen::handle_stubgen;
@@ -83,20 +84,25 @@ impl<Ctx> CliCommand<Ctx> for EmptyCommand {
 /// Commands that are supported by both the OSS and Cloud version and have the same implementation
 #[derive(Debug, Subcommand)]
 pub enum StaticSharedCommand {
+    /// Build components defined in application manifests
+    #[cfg(feature = "stubgen")]
+    App {
+        #[command(subcommand)]
+        subcommand: golem_wasm_rpc_stubgen::App,
+    },
+
     /// Diagnose required tooling
     #[command()]
     Diagnose {
         #[command(flatten)]
         command: diagnose::cli::Command,
     },
-
     /// WASM RPC stub generator
     #[cfg(feature = "stubgen")]
     Stubgen {
         #[command(subcommand)]
         subcommand: golem_wasm_rpc_stubgen::Command,
     },
-
     /// Create a new Golem component from built-in examples
     #[command(flatten)]
     Examples(golem_examples::cli::Command),
@@ -105,6 +111,13 @@ pub enum StaticSharedCommand {
 impl<Ctx> CliCommand<Ctx> for StaticSharedCommand {
     async fn run(self, _ctx: Ctx) -> Result<GolemResult, GolemError> {
         match self {
+            #[cfg(feature = "stubgen")]
+            StaticSharedCommand::App { subcommand } => {
+                golem_wasm_rpc_stubgen::run_app_command::<GolemComponentExtensions>(subcommand)
+                    .await
+                    .map(|_| GolemResult::Str("".to_string()))
+                    .map_err(Into::into)
+            }
             StaticSharedCommand::Diagnose { command } => {
                 diagnose(command);
                 Ok(GolemResult::Str("".to_string()))
