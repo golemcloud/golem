@@ -14,7 +14,7 @@
 
 use crate::clients::component::ComponentClient;
 use crate::clients::file_download::FileDownloadClient;
-use crate::model::application_manifest::InitialComponentFile;
+use crate::model::app_ext::InitialComponentFile;
 use crate::model::component::{Component, ComponentView};
 use crate::model::text::component::{ComponentAddView, ComponentGetView, ComponentUpdateView};
 use crate::model::{ComponentName, Format, GolemError, GolemResult, PathBufOrStdin};
