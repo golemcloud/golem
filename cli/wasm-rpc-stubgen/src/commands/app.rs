@@ -47,7 +47,7 @@ pub enum ApplicationSourceMode {
     Explicit(Vec<PathBuf>),
 }
 
-struct ApplicationContext<CPE: ComponentPropertiesExtensions> {
+pub struct ApplicationContext<CPE: ComponentPropertiesExtensions> {
     config: Config<CPE>,
     application: Application<CPE>,
     wit: ResolvedWitApplication,
