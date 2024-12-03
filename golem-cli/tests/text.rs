@@ -285,6 +285,7 @@ fn text_component_list(
 ) -> Result<(), anyhow::Error> {
     let component_name = format!("{name: <9} text component list");
     let env_service = deps.component_directory().join("environment-service.wasm");
+    let expected_size = std::fs::metadata(&env_service)?.len();
     let cfg = &cli.config;
     let component: ComponentView = cli.run(&[
         "component",
@@ -306,11 +307,12 @@ fn text_component_list(
         +----------------------------------------------------+-------------------------------+---------+-------+---------------+
         | URN                                                | Name                          | Version | Size  | Exports count |
         +----------------------------------------------------+-------------------------------+---------+-------+---------------+
-        | {} | {} |       0 | 70000 |             2 |
+        | {} | {} |       0 | {} |             2 |
         +----------------------------------------------------+-------------------------------+---------+-------+---------------+
         ",
         component.component_urn,
         component_name,
+        expected_size
     );
 
     assert_eq!(strip_ansi_escapes::strip_str(list_res), expected);
