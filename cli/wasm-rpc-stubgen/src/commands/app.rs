@@ -6,7 +6,8 @@ use crate::log::{
     LogIndent,
 };
 use crate::model::app::{
-    includes_from_yaml_file, Application, ComponentName, ProfileName, DEFAULT_CONFIG_FILE_NAME,
+    includes_from_yaml_file, Application, ComponentName, ComponentPropertiesExtensions,
+    ProfileName, DEFAULT_CONFIG_FILE_NAME,
 };
 use crate::model::app_raw;
 use crate::model::app_raw::ExternalCommand;
@@ -26,16 +27,18 @@ use itertools::Itertools;
 use std::cell::OnceCell;
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashMap};
+use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::SystemTime;
 use walkdir::WalkDir;
 
-pub struct Config {
+pub struct Config<CPE: ComponentPropertiesExtensions> {
     pub app_resolve_mode: ApplicationSourceMode,
     pub skip_up_to_date_checks: bool,
     pub profile: Option<ProfileName>,
     pub offline: bool,
+    pub extensions: PhantomData<CPE>,
 }
 
 #[derive(Debug, Clone)]
@@ -44,16 +47,16 @@ pub enum ApplicationSourceMode {
     Explicit(Vec<PathBuf>),
 }
 
-struct ApplicationContext {
-    config: Config,
-    application: Application,
+struct ApplicationContext<CPE: ComponentPropertiesExtensions> {
+    config: Config<CPE>,
+    application: Application<CPE>,
     wit: ResolvedWitApplication,
     common_wit_deps: OnceCell<anyhow::Result<WitDepsResolver>>,
     component_generated_base_wit_deps: HashMap<ComponentName, WitDepsResolver>,
 }
 
-impl ApplicationContext {
-    fn new(config: Config) -> anyhow::Result<ApplicationContext> {
+impl<CPE: ComponentPropertiesExtensions> ApplicationContext<CPE> {
+    fn new(config: Config<CPE>) -> anyhow::Result<ApplicationContext<CPE>> {
         let ctx = to_anyhow(
             "Failed to create application context, see problems above",
             load_app_validated(&config).and_then(|application| {
@@ -297,18 +300,22 @@ impl ApplicationContext {
     }
 }
 
-pub async fn pre_component_build(config: Config) -> anyhow::Result<()> {
+pub async fn pre_component_build<CPE: ComponentPropertiesExtensions>(
+    config: Config<CPE>,
+) -> anyhow::Result<()> {
     let mut ctx = ApplicationContext::new(config)?;
     pre_component_build_ctx(&mut ctx).await
 }
 
-async fn pre_component_build_ctx(ctx: &mut ApplicationContext) -> anyhow::Result<()> {
+async fn pre_component_build_ctx<CPE: ComponentPropertiesExtensions>(
+    ctx: &mut ApplicationContext<CPE>,
+) -> anyhow::Result<()> {
     log_action("Executing", "pre-component-build steps");
     let _indent = LogIndent::new();
 
     {
         for component_name in ctx.wit.component_order_cloned() {
-            create_generatde_base_wit(ctx, &component_name)?;
+            create_generated_base_wit(ctx, &component_name)?;
         }
         for component_name in &ctx.application.all_wasm_rpc_dependencies() {
             build_stub(ctx, component_name).await?;
@@ -333,12 +340,16 @@ async fn pre_component_build_ctx(ctx: &mut ApplicationContext) -> anyhow::Result
     Ok(())
 }
 
-pub fn component_build(config: Config) -> anyhow::Result<()> {
+pub fn component_build<CPE: ComponentPropertiesExtensions>(
+    config: Config<CPE>,
+) -> anyhow::Result<()> {
     let ctx = ApplicationContext::new(config)?;
     component_build_ctx(&ctx)
 }
 
-fn component_build_ctx(ctx: &ApplicationContext) -> anyhow::Result<()> {
+fn component_build_ctx<CPE: ComponentPropertiesExtensions>(
+    ctx: &ApplicationContext<CPE>,
+) -> anyhow::Result<()> {
     log_action("Executing", "component-build steps");
     let _indent = LogIndent::new();
 
@@ -375,12 +386,16 @@ fn component_build_ctx(ctx: &ApplicationContext) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub async fn post_component_build(config: Config) -> anyhow::Result<()> {
+pub async fn post_component_build<CPE: ComponentPropertiesExtensions>(
+    config: Config<CPE>,
+) -> anyhow::Result<()> {
     let ctx = ApplicationContext::new(config)?;
     post_component_build_ctx(&ctx).await
 }
 
-async fn post_component_build_ctx(ctx: &ApplicationContext) -> anyhow::Result<()> {
+async fn post_component_build_ctx<CPE: ComponentPropertiesExtensions>(
+    ctx: &ApplicationContext<CPE>,
+) -> anyhow::Result<()> {
     log_action("Executing", "post-component-build steps");
     let _indent = LogIndent::new();
 
@@ -459,8 +474,8 @@ async fn post_component_build_ctx(ctx: &ApplicationContext) -> anyhow::Result<()
     Ok(())
 }
 
-pub async fn build(config: Config) -> anyhow::Result<()> {
-    let mut ctx = ApplicationContext::new(config)?;
+pub async fn build<CPE: ComponentPropertiesExtensions>(config: Config<CPE>) -> anyhow::Result<()> {
+    let mut ctx = ApplicationContext::<CPE>::new(config)?;
 
     pre_component_build_ctx(&mut ctx).await?;
     component_build_ctx(&ctx)?;
@@ -469,7 +484,7 @@ pub async fn build(config: Config) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn clean(config: Config) -> anyhow::Result<()> {
+pub fn clean<CPE: ComponentPropertiesExtensions>(config: Config<CPE>) -> anyhow::Result<()> {
     let app = to_anyhow(
         "Failed to load application manifest(s), see problems above",
         load_app_validated(&config),
@@ -560,7 +575,9 @@ pub fn clean(config: Config) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn available_custom_commands(config: Config) -> anyhow::Result<BTreeSet<String>> {
+pub fn available_custom_commands<CPE: ComponentPropertiesExtensions>(
+    config: Config<CPE>,
+) -> anyhow::Result<BTreeSet<String>> {
     let app = to_anyhow(
         "Failed to load application manifest(s), see problems above",
         load_app_validated(&config),
@@ -576,7 +593,10 @@ pub fn available_custom_commands(config: Config) -> anyhow::Result<BTreeSet<Stri
     Ok(commands)
 }
 
-pub fn custom_command(config: Config, command: String) -> anyhow::Result<()> {
+pub fn custom_command<CPE: ComponentPropertiesExtensions>(
+    config: Config<CPE>,
+    command: String,
+) -> anyhow::Result<()> {
     let ctx = ApplicationContext::new(config)?;
 
     let all_custom_commands = ctx.application.all_custom_commands(ctx.profile());
@@ -645,7 +665,9 @@ fn delete_path(context: &str, path: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn load_app_validated(config: &Config) -> ValidatedResult<Application> {
+fn load_app_validated<CPE: ComponentPropertiesExtensions>(
+    config: &Config<CPE>,
+) -> ValidatedResult<Application<CPE>> {
     let sources = collect_sources(&config.app_resolve_mode);
     let oam_apps = sources.and_then(|sources| {
         sources
@@ -886,8 +908,8 @@ fn compile_and_collect_globs(root_dir: &Path, globs: &[String]) -> Result<Vec<Pa
         })
 }
 
-fn create_generatde_base_wit(
-    ctx: &mut ApplicationContext,
+fn create_generated_base_wit<CPE: ComponentPropertiesExtensions>(
+    ctx: &mut ApplicationContext<CPE>,
     component_name: &ComponentName,
 ) -> Result<bool, Error> {
     let component_source_wit = ctx
@@ -980,8 +1002,8 @@ fn create_generatde_base_wit(
     }
 }
 
-fn create_generated_wit(
-    ctx: &ApplicationContext,
+fn create_generated_wit<CPE: ComponentPropertiesExtensions>(
+    ctx: &ApplicationContext<CPE>,
     component_name: &ComponentName,
 ) -> Result<bool, Error> {
     let component_generated_base_wit = ctx.application.component_generated_base_wit(component_name);
@@ -1022,8 +1044,8 @@ fn create_generated_wit(
     }
 }
 
-fn update_cargo_toml(
-    ctx: &ApplicationContext,
+fn update_cargo_toml<CPE: ComponentPropertiesExtensions>(
+    ctx: &ApplicationContext<CPE>,
     component_name: &ComponentName,
 ) -> anyhow::Result<()> {
     let component_source_wit = PathExtra::new(
@@ -1050,8 +1072,8 @@ fn update_cargo_toml(
     Ok(())
 }
 
-async fn build_stub(
-    ctx: &ApplicationContext,
+async fn build_stub<CPE: ComponentPropertiesExtensions>(
+    ctx: &ApplicationContext<CPE>,
     component_name: &ComponentName,
 ) -> anyhow::Result<bool> {
     let target_root = ctx.application.stub_temp_build_dir(component_name);
@@ -1124,7 +1146,10 @@ async fn build_stub(
     }
 }
 
-fn add_stub_deps(ctx: &ApplicationContext, component_name: &ComponentName) -> Result<bool, Error> {
+fn add_stub_deps<CPE: ComponentPropertiesExtensions>(
+    ctx: &ApplicationContext<CPE>,
+    component_name: &ComponentName,
+) -> Result<bool, Error> {
     let dependencies = ctx
         .application
         .component_wasm_rpc_dependencies(component_name);
@@ -1206,8 +1231,8 @@ fn copy_wit_sources(source: &Path, target: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn execute_external_command(
-    ctx: &ApplicationContext,
+fn execute_external_command<CPE: ComponentPropertiesExtensions>(
+    ctx: &ApplicationContext<CPE>,
     component_name: &ComponentName,
     command: &ExternalCommand,
 ) -> anyhow::Result<()> {

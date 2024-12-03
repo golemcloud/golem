@@ -1,6 +1,6 @@
 use crate::fs::PathExtra;
 use crate::log::{log_action, LogColorize, LogIndent};
-use crate::model::app::{Application, ComponentName, ProfileName};
+use crate::model::app::{Application, ComponentName, ComponentPropertiesExtensions, ProfileName};
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use crate::{fs, naming};
 use anyhow::{anyhow, bail, Context, Error};
@@ -182,7 +182,10 @@ pub struct ResolvedWitApplication {
 }
 
 impl ResolvedWitApplication {
-    pub fn new(app: &Application, profile: Option<&ProfileName>) -> ValidatedResult<Self> {
+    pub fn new<CPE: ComponentPropertiesExtensions>(
+        app: &Application<CPE>,
+        profile: Option<&ProfileName>,
+    ) -> ValidatedResult<Self> {
         log_action("Resolving", "application wit directories");
         let _indent = LogIndent::new();
 
@@ -256,10 +259,10 @@ impl ResolvedWitApplication {
         self.components.insert(component_name, resolved_component);
     }
 
-    fn add_components_from_app(
+    fn add_components_from_app<CPE: ComponentPropertiesExtensions>(
         &mut self,
         validation: &mut ValidationBuilder,
-        app: &Application,
+        app: &Application<CPE>,
         profile: Option<&ProfileName>,
     ) {
         for component_name in app.component_names() {
@@ -350,7 +353,11 @@ impl ResolvedWitApplication {
         }
     }
 
-    fn collect_component_deps(&mut self, app: &Application, validation: &mut ValidationBuilder) {
+    fn collect_component_deps<CPE: ComponentPropertiesExtensions>(
+        &mut self,
+        app: &Application<CPE>,
+        validation: &mut ValidationBuilder,
+    ) {
         fn component_deps<
             'a,
             I: IntoIterator<Item = &'a PackageName>,

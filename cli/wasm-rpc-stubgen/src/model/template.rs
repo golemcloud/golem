@@ -59,7 +59,7 @@ impl<C: Serialize, T: Template<C>> Template<C> for HashMap<String, T> {
         env: &minijinja::Environment,
         ctx: &C,
     ) -> Result<Self::Rendered, minijinja::Error> {
-        let mut rendered = HashMap::<String, T::Rendered>::new();
+        let mut rendered = HashMap::<String, T::Rendered>::with_capacity(self.len());
         for (key, template) in self {
             rendered.insert(key.clone(), template.render(env, ctx)?);
         }
@@ -84,6 +84,54 @@ impl<C: Serialize> Template<C> for app_raw::ExternalCommand {
     }
 }
 
+impl<C: Serialize> Template<C> for serde_json::Value {
+    type Rendered = serde_json::Value;
+
+    fn render(
+        &self,
+        env: &minijinja::Environment,
+        ctx: &C,
+    ) -> Result<Self::Rendered, minijinja::Error> {
+        Ok(match self {
+            value @ serde_json::Value::Null => value.clone(),
+            value @ serde_json::Value::Bool(_) => value.clone(),
+            value @ serde_json::Value::Number(_) => value.clone(),
+            value @ serde_json::Value::String(_) => value.clone(),
+            serde_json::Value::Array(elems) => {
+                let mut rendered_elems = Vec::<serde_json::Value>::with_capacity(elems.len());
+                for template in elems {
+                    rendered_elems.push(template.render(env, ctx)?);
+                }
+                serde_json::Value::Array(rendered_elems)
+            }
+            serde_json::Value::Object(props) => {
+                let mut rendered_props =
+                    serde_json::Map::<String, serde_json::Value>::with_capacity(props.len());
+                for (name, template) in props {
+                    rendered_props.insert(name.clone(), template.render(env, ctx)?);
+                }
+                serde_json::Value::Object(rendered_props)
+            }
+        })
+    }
+}
+
+impl<C: Serialize> Template<C> for serde_json::Map<String, serde_json::Value> {
+    type Rendered = serde_json::Map<String, serde_json::Value>;
+
+    fn render(
+        &self,
+        env: &minijinja::Environment,
+        ctx: &C,
+    ) -> Result<Self::Rendered, minijinja::Error> {
+        let mut rendered = serde_json::Map::<String, serde_json::Value>::with_capacity(self.len());
+        for (key, template) in self {
+            rendered.insert(key.clone(), template.render(env, ctx)?);
+        }
+        Ok(rendered)
+    }
+}
+
 impl<C: Serialize> Template<C> for app_raw::ComponentProperties {
     type Rendered = app_raw::ComponentProperties;
 
@@ -100,6 +148,7 @@ impl<C: Serialize> Template<C> for app_raw::ComponentProperties {
             build: self.build.render(env, ctx)?,
             custom_commands: self.custom_commands.render(env, ctx)?,
             clean: self.clean.render(env, ctx)?,
+            extensions: self.extensions.render(env, ctx)?,
         })
     }
 }
