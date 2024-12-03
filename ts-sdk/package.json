@@ -1,31 +1,31 @@
 {
-	"name": "@golemcloud/golem-ts",
-	"version": "0.2.0",
-	"description": "A library that help writing Golem programs by providing higher level wrappers for Golem's runtime APIs, including functions for defining and performing operations transactionally.",
-	"repository": {
-		"url": "git+https://github.com/golemcloud/golem-ts.git",
-		"directory": "lib"
-	},
-	"license": "Apache-2.0",
-	"keywords": [
-		"golem",
-		"typescript",
-		"runtime"
-	],
-	"main": "out/index.js",
-	"types": "out/index.d.ts",
-	"files": [
-		"out/"
-	],
-	"scripts": {
-		"build": "tsc && cp -r src/bindgen out/bindgen",
-		"check": "npx @biomejs/biome check",
-		"fix": "npx @biomejs/biome check --write"
-	},
-	"devDependencies": {
-		"@biomejs/biome": "1.8.0",
-		"@bytecodealliance/jco": "1.2.4",
-		"@types/node": "^20.14.2",
-		"typescript": "^4.9.5"
-	}
+  "name": "@golemcloud/golem-ts",
+  "version": "1.1.0",
+  "description": "A library that help writing Golem programs by providing higher level wrappers for Golem's runtime APIs, including functions for defining and performing operations transactionally.",
+  "repository": {
+    "url": "git+https://github.com/golemcloud/golem-ts.git",
+    "directory": "lib"
+  },
+  "license": "Apache-2.0",
+  "keywords": [
+    "golem",
+    "typescript",
+    "runtime"
+  ],
+  "main": "out/index.js",
+  "types": "out/index.d.ts",
+  "files": [
+    "out/"
+  ],
+  "scripts": {
+    "build": "tsc && cp -r src/bindgen out/bindgen",
+    "check": "npx @biomejs/biome check",
+    "fix": "npx @biomejs/biome check --write"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "1.8.0",
+    "@bytecodealliance/jco": "1.2.4",
+    "@types/node": "^20.14.2",
+    "typescript": "^4.9.5"
+  }
 }
