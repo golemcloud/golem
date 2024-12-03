@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::rdbms::utils;
+use crate::durable_host::rdbms::rdbms_utils;
 use crate::durable_host::DurableWorkerCtx;
 use crate::metrics::wasm::record_host_function_call;
 use crate::preview2::wasi::rdbms::mysql::{
@@ -334,19 +334,19 @@ impl TryFrom<DbValue> for crate::services::rdbms::mysql::types::DbValue {
                 Ok(Self::Json(v))
             }
             DbValue::Timestamp(v) => {
-                let value = utils::timestamp_to_datetime(v)?;
+                let value = rdbms_utils::timestamp_to_datetime(v)?;
                 Ok(Self::Timestamp(value))
             }
             DbValue::Date(v) => {
-                let value = utils::date_to_nativedate(v)?;
+                let value = rdbms_utils::date_to_nativedate(v)?;
                 Ok(Self::Date(value))
             }
             DbValue::Time(v) => {
-                let value = utils::time_to_nativetime(v)?;
+                let value = rdbms_utils::time_to_nativetime(v)?;
                 Ok(Self::Time(value))
             }
             DbValue::Datetime(v) => {
-                let value = utils::timestamp_to_datetime(v)?;
+                let value = rdbms_utils::timestamp_to_datetime(v)?;
                 Ok(Self::Datetime(value))
             }
             DbValue::Year(v) => Ok(Self::Year(v)),
@@ -395,16 +395,16 @@ impl From<crate::services::rdbms::mysql::types::DbValue> for DbValue {
             crate::services::rdbms::mysql::types::DbValue::Longtext(v) => Self::Longtext(v),
             crate::services::rdbms::mysql::types::DbValue::Json(v) => Self::Json(v.to_string()),
             crate::services::rdbms::mysql::types::DbValue::Timestamp(v) => {
-                Self::Timestamp(utils::datetime_to_timestamp(v))
+                Self::Timestamp(rdbms_utils::datetime_to_timestamp(v))
             }
             crate::services::rdbms::mysql::types::DbValue::Date(v) => {
-                Self::Date(utils::naivedate_to_date(v))
+                Self::Date(rdbms_utils::naivedate_to_date(v))
             }
             crate::services::rdbms::mysql::types::DbValue::Time(v) => {
-                Self::Time(utils::naivetime_to_time(v))
+                Self::Time(rdbms_utils::naivetime_to_time(v))
             }
             crate::services::rdbms::mysql::types::DbValue::Datetime(v) => {
-                Self::Datetime(utils::datetime_to_timestamp(v))
+                Self::Datetime(rdbms_utils::datetime_to_timestamp(v))
             }
             crate::services::rdbms::mysql::types::DbValue::Year(v) => Self::Year(v),
             crate::services::rdbms::mysql::types::DbValue::Set(v) => Self::Set(v),

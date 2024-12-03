@@ -42,7 +42,7 @@ impl Display for PostgresType {
 pub(crate) mod sqlx_rdbms {
     use crate::services::golem_config::{RdbmsConfig, RdbmsPoolConfig};
     use crate::services::rdbms::postgres::types::{
-        get_plain_values, DbColumn, DbColumnType, DbColumnTypePrimitive, DbValue, DbValuePrimitive,
+        DbColumn, DbColumnType, DbColumnTypePrimitive, DbValue, DbValuePrimitive,
     };
     use crate::services::rdbms::postgres::{PostgresType, POSTGRES};
     use crate::services::rdbms::sqlx_common::{
@@ -488,6 +488,25 @@ pub(crate) mod sqlx_rdbms {
         }
     }
 
+    fn get_plain_values<T>(
+        values: Vec<DbValuePrimitive>,
+        f: impl Fn(DbValuePrimitive) -> Option<T>,
+    ) -> Result<Vec<T>, String> {
+        let mut result: Vec<T> = Vec::with_capacity(values.len());
+        for (index, value) in values.iter().enumerate() {
+            if let Some(v) = f(value.clone()) {
+                result.push(v);
+            } else {
+                Err(format!(
+                    "Array element '{}' with index {} has different type than expected",
+                    value.clone(),
+                    index
+                ))?
+            }
+        }
+        Ok(result)
+    }
+
     fn bind_value_primitive(
         query: sqlx::query::Query<sqlx::Postgres, sqlx::postgres::PgArguments>,
         value: DbValuePrimitive,
@@ -512,7 +531,7 @@ pub(crate) mod sqlx_rdbms {
             DbValuePrimitive::Timestamp(v) => Ok(query.bind(v)),
             DbValuePrimitive::Timestamptz(v) => Ok(query.bind(v)),
             DbValuePrimitive::Time(v) => Ok(query.bind(v)),
-            DbValuePrimitive::Timetz((v, o)) => Ok(query.bind(PgTimeTz { time: v, offset: o })),
+            DbValuePrimitive::Timetz((time, offset)) => Ok(query.bind(PgTimeTz { time, offset })),
             DbValuePrimitive::Date(v) => Ok(query.bind(v)),
             DbValuePrimitive::Interval((months, days, microseconds)) => {
                 Ok(query.bind(PgInterval {
@@ -1638,24 +1657,5 @@ pub mod types {
         pub name: String,
         pub db_type: DbColumnType,
         pub db_type_name: String,
-    }
-
-    pub(crate) fn get_plain_values<T>(
-        values: Vec<DbValuePrimitive>,
-        f: impl Fn(DbValuePrimitive) -> Option<T>,
-    ) -> Result<Vec<T>, String> {
-        let mut result: Vec<T> = Vec::with_capacity(values.len());
-        for (index, value) in values.iter().enumerate() {
-            if let Some(v) = f(value.clone()) {
-                result.push(v);
-            } else {
-                Err(format!(
-                    "Array element '{}' with index {} has different type than expected",
-                    value.clone(),
-                    index
-                ))?
-            }
-        }
-        Ok(result)
     }
 }

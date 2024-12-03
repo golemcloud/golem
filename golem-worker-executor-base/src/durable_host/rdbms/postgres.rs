@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::rdbms::utils;
+use crate::durable_host::rdbms::rdbms_utils;
 use crate::durable_host::DurableWorkerCtx;
 use crate::metrics::wasm::record_host_function_call;
 use crate::preview2::wasi::rdbms::postgres::{
@@ -316,23 +316,23 @@ impl TryFrom<DbValuePrimitive> for crate::services::rdbms::postgres::types::DbVa
             DbValuePrimitive::Float8(f) => Ok(Self::Float8(f)),
             DbValuePrimitive::Boolean(b) => Ok(Self::Boolean(b)),
             DbValuePrimitive::Timestamp(v) => {
-                let value = utils::timestamp_to_datetime(v)?;
+                let value = rdbms_utils::timestamp_to_datetime(v)?;
                 Ok(Self::Timestamp(value))
             }
             DbValuePrimitive::Timestamptz(v) => {
-                let value = utils::timestamptz_to_datetime(v)?;
+                let value = rdbms_utils::timestamptz_to_datetime(v)?;
                 Ok(Self::Timestamptz(value))
             }
             DbValuePrimitive::Time(v) => {
-                let value = utils::time_to_nativetime(v)?;
+                let value = rdbms_utils::time_to_nativetime(v)?;
                 Ok(Self::Time(value))
             }
             DbValuePrimitive::Timetz(v) => {
-                let value = utils::timetz_to_nativetime_and_offset(v)?;
+                let value = rdbms_utils::timetz_to_nativetime_and_offset(v)?;
                 Ok(Self::Timetz(value))
             }
             DbValuePrimitive::Date(v) => {
-                let value = utils::date_to_nativedate(v)?;
+                let value = rdbms_utils::date_to_nativedate(v)?;
                 Ok(Self::Date(value))
             }
             DbValuePrimitive::Interval(v) => Ok(Self::Interval(v)),
@@ -353,49 +353,31 @@ impl TryFrom<DbValuePrimitive> for crate::services::rdbms::postgres::types::DbVa
             DbValuePrimitive::Bit(v) => Ok(Self::Bit(BitVec::from_iter(v))),
             DbValuePrimitive::Varbit(v) => Ok(Self::Varbit(BitVec::from_iter(v))),
             DbValuePrimitive::Oid(v) => Ok(Self::Oid(v)),
-            DbValuePrimitive::Inet(v) => match v {
-                IpAddress::Ipv4((a, b, c, d)) => {
-                    let v = Ipv4Addr::new(a, b, c, d);
-                    Ok(Self::Inet(IpAddr::V4(v)))
-                }
-                IpAddress::Ipv6((a, b, c, d, e, f, g, h)) => {
-                    let v = Ipv6Addr::new(a, b, c, d, e, f, g, h);
-                    Ok(Self::Inet(IpAddr::V6(v)))
-                }
-            },
-            DbValuePrimitive::Cidr(v) => match v {
-                IpAddress::Ipv4((a, b, c, d)) => {
-                    let v = Ipv4Addr::new(a, b, c, d);
-                    Ok(Self::Cidr(IpAddr::V4(v)))
-                }
-                IpAddress::Ipv6((a, b, c, d, e, f, g, h)) => {
-                    let v = Ipv6Addr::new(a, b, c, d, e, f, g, h);
-                    Ok(Self::Cidr(IpAddr::V6(v)))
-                }
-            },
+            DbValuePrimitive::Inet(v) => Ok(Self::Inet(v.into())),
+            DbValuePrimitive::Cidr(v) => Ok(Self::Cidr(v.into())),
             DbValuePrimitive::Macaddr(v) => Ok(Self::Macaddr(MacAddress::new(v.into()))),
             DbValuePrimitive::Int4range(v) => {
-                let v = utils::int4range_to_bounds(v);
+                let v = postgres_utils::int4range_to_bounds(v);
                 Ok(Self::Int4range(v))
             }
             DbValuePrimitive::Int8range(v) => {
-                let v = utils::int8range_to_bounds(v);
+                let v = postgres_utils::int8range_to_bounds(v);
                 Ok(Self::Int8range(v))
             }
             DbValuePrimitive::Numrange(v) => {
-                let v = utils::numrange_to_bounds(v)?;
+                let v = postgres_utils::numrange_to_bounds(v)?;
                 Ok(Self::Numrange(v))
             }
             DbValuePrimitive::Tsrange(v) => {
-                let v = utils::tsrange_to_bounds(v)?;
+                let v = postgres_utils::tsrange_to_bounds(v)?;
                 Ok(Self::Tsrange(v))
             }
             DbValuePrimitive::Tstzrange(v) => {
-                let v = utils::tstzrange_to_bounds(v)?;
+                let v = postgres_utils::tstzrange_to_bounds(v)?;
                 Ok(Self::Tstzrange(v))
             }
             DbValuePrimitive::Daterange(v) => {
-                let v = utils::daterange_to_bounds(v)?;
+                let v = postgres_utils::daterange_to_bounds(v)?;
                 Ok(Self::Daterange(v))
             }
             DbValuePrimitive::CustomEnum(v) => Ok(Self::CustomEnum(v)),
@@ -422,19 +404,19 @@ impl From<crate::services::rdbms::postgres::types::DbValuePrimitive> for DbValue
                 Self::Boolean(b)
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Timestamp(v) => {
-                Self::Timestamp(utils::datetime_to_timestamp(v))
+                Self::Timestamp(rdbms_utils::datetime_to_timestamp(v))
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Timestamptz(v) => {
-                Self::Timestamptz(utils::datetime_to_timestamptz(v))
+                Self::Timestamptz(rdbms_utils::datetime_to_timestamptz(v))
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Time(v) => {
-                Self::Time(utils::naivetime_to_time(v))
+                Self::Time(rdbms_utils::naivetime_to_time(v))
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Timetz((v, o)) => {
-                Self::Timetz(utils::naivetime_and_offset_to_time(v, o))
+                Self::Timetz(rdbms_utils::naivetime_and_offset_to_time(v, o))
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Date(v) => {
-                Self::Date(utils::naivedate_to_date(v))
+                Self::Date(rdbms_utils::naivedate_to_date(v))
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Interval(v) => {
                 Self::Interval(v)
@@ -462,35 +444,33 @@ impl From<crate::services::rdbms::postgres::types::DbValuePrimitive> for DbValue
                 Self::Varbit(v.iter().collect())
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Oid(v) => Self::Oid(v),
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Inet(v) => match v {
-                IpAddr::V4(v) => Self::Inet(IpAddress::Ipv4(v.octets().into())),
-                IpAddr::V6(v) => Self::Inet(IpAddress::Ipv6(v.segments().into())),
-            },
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Cidr(v) => match v {
-                IpAddr::V4(v) => Self::Cidr(IpAddress::Ipv4(v.octets().into())),
-                IpAddr::V6(v) => Self::Cidr(IpAddress::Ipv6(v.segments().into())),
-            },
+            crate::services::rdbms::postgres::types::DbValuePrimitive::Inet(v) => {
+                Self::Inet(v.into())
+            }
+            crate::services::rdbms::postgres::types::DbValuePrimitive::Cidr(v) => {
+                Self::Cidr(v.into())
+            }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Macaddr(v) => {
                 let v = v.bytes();
                 DbValuePrimitive::Macaddr(v.into())
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Tsrange(v) => {
-                Self::Tsrange(utils::bounds_to_tsrange(v))
+                Self::Tsrange(postgres_utils::bounds_to_tsrange(v))
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Tstzrange(v) => {
-                Self::Tstzrange(utils::bounds_to_tstzrange(v))
+                Self::Tstzrange(postgres_utils::bounds_to_tstzrange(v))
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Daterange(v) => {
-                Self::Daterange(utils::bounds_to_daterange(v))
+                Self::Daterange(postgres_utils::bounds_to_daterange(v))
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Int4range(v) => {
-                Self::Int4range(utils::bounds_to_int4range(v))
+                Self::Int4range(postgres_utils::bounds_to_int4range(v))
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Int8range(v) => {
-                Self::Int8range(utils::bounds_to_int8range(v))
+                Self::Int8range(postgres_utils::bounds_to_int8range(v))
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Numrange(v) => {
-                Self::Numrange(utils::bounds_to_numrange(v))
+                Self::Numrange(postgres_utils::bounds_to_numrange(v))
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::CustomEnum(v) => {
                 Self::CustomEnum(v)
@@ -654,6 +634,196 @@ impl From<crate::services::rdbms::Error> for Error {
             }
             crate::services::rdbms::Error::QueryResponseFailure(v) => Self::QueryResponseFailure(v),
             crate::services::rdbms::Error::Other(v) => Self::Other(v),
+        }
+    }
+}
+
+impl From<IpAddr> for IpAddress {
+    fn from(value: IpAddr) -> Self {
+        match value {
+            IpAddr::V4(v) => Self::Ipv4(v.octets().into()),
+            IpAddr::V6(v) => Self::Ipv6(v.segments().into()),
+        }
+    }
+}
+
+impl From<IpAddress> for IpAddr {
+    fn from(value: IpAddress) -> Self {
+        match value {
+            IpAddress::Ipv4((a, b, c, d)) => {
+                let v = Ipv4Addr::new(a, b, c, d);
+                IpAddr::V4(v)
+            }
+            IpAddress::Ipv6((a, b, c, d, e, f, g, h)) => {
+                let v = Ipv6Addr::new(a, b, c, d, e, f, g, h);
+                IpAddr::V6(v)
+            }
+        }
+    }
+}
+
+pub(crate) mod postgres_utils {
+    use crate::durable_host::rdbms::rdbms_utils::{
+        date_to_nativedate, datetime_to_timestamp, datetime_to_timestamptz, naivedate_to_date,
+        timestamp_to_datetime, timestamptz_to_datetime,
+    };
+    use crate::preview2::wasi::rdbms::postgres::{
+        Daterange, Int4range, Int8range, Numrange, Tsrange, Tstzrange,
+    };
+    use bigdecimal::BigDecimal;
+    use std::ops::Bound;
+    use std::str::FromStr;
+
+    pub(crate) fn int4range_to_bounds(value: Int4range) -> (Bound<i32>, Bound<i32>) {
+        let (lower, upper) = value;
+        let lower = to_bounds(lower);
+        let upper = to_bounds(upper);
+        (lower, upper)
+    }
+
+    pub(crate) fn int8range_to_bounds(value: Int8range) -> (Bound<i64>, Bound<i64>) {
+        let (lower, upper) = value;
+        let lower = to_bounds(lower);
+        let upper = to_bounds(upper);
+        (lower, upper)
+    }
+
+    pub(crate) fn numrange_to_bounds(
+        value: Numrange,
+    ) -> Result<(Bound<BigDecimal>, Bound<BigDecimal>), String> {
+        let (lower, upper) = value;
+        let lower = to_converted_bounds(lower, |v| {
+            BigDecimal::from_str(&v).map_err(|e| e.to_string())
+        })?;
+        let upper = to_converted_bounds(upper, |v| {
+            BigDecimal::from_str(&v).map_err(|e| e.to_string())
+        })?;
+        Ok((lower, upper))
+    }
+
+    pub(crate) fn tsrange_to_bounds(
+        value: Tsrange,
+    ) -> Result<
+        (
+            Bound<chrono::DateTime<chrono::Utc>>,
+            Bound<chrono::DateTime<chrono::Utc>>,
+        ),
+        String,
+    > {
+        let (lower, upper) = value;
+        let lower = to_converted_bounds(lower, timestamp_to_datetime)?;
+        let upper = to_converted_bounds(upper, timestamp_to_datetime)?;
+        Ok((lower, upper))
+    }
+
+    pub(crate) fn tstzrange_to_bounds(
+        value: Tstzrange,
+    ) -> Result<
+        (
+            Bound<chrono::DateTime<chrono::Utc>>,
+            Bound<chrono::DateTime<chrono::Utc>>,
+        ),
+        String,
+    > {
+        let (lower, upper) = value;
+        let lower = to_converted_bounds(lower, timestamptz_to_datetime)?;
+        let upper = to_converted_bounds(upper, timestamptz_to_datetime)?;
+        Ok((lower, upper))
+    }
+
+    pub(crate) fn daterange_to_bounds(
+        value: Daterange,
+    ) -> Result<(Bound<chrono::NaiveDate>, Bound<chrono::NaiveDate>), String> {
+        let (lower, upper) = value;
+        let lower = to_converted_bounds(lower, date_to_nativedate)?;
+        let upper = to_converted_bounds(upper, date_to_nativedate)?;
+        Ok((lower, upper))
+    }
+
+    fn to_bounds<T>(value: Option<(T, bool)>) -> Bound<T> {
+        match value {
+            Some((v, true)) => Bound::Included(v),
+            Some((v, false)) => Bound::Excluded(v),
+            None => Bound::Unbounded,
+        }
+    }
+
+    fn to_converted_bounds<I, O>(
+        value: Option<(I, bool)>,
+        f: impl Fn(I) -> Result<O, String>,
+    ) -> Result<Bound<O>, String> {
+        match value {
+            Some((v, true)) => {
+                let v = f(v)?;
+                Ok(Bound::Included(v))
+            }
+            Some((v, false)) => {
+                let v = f(v)?;
+                Ok(Bound::Excluded(v))
+            }
+            None => Ok(Bound::Unbounded),
+        }
+    }
+
+    pub(crate) fn bounds_to_int4range(value: (Bound<i32>, Bound<i32>)) -> Int4range {
+        let (lower, upper) = value;
+        let lower = from_bounds(lower);
+        let upper = from_bounds(upper);
+        (lower, upper)
+    }
+
+    pub(crate) fn bounds_to_int8range(value: (Bound<i64>, Bound<i64>)) -> Int8range {
+        let (lower, upper) = value;
+        let lower = from_bounds(lower);
+        let upper = from_bounds(upper);
+        (lower, upper)
+    }
+
+    pub(crate) fn bounds_to_numrange(value: (Bound<BigDecimal>, Bound<BigDecimal>)) -> Numrange {
+        let (lower, upper) = value;
+        let lower = from_bounds(lower.map(|v| v.to_string()));
+        let upper = from_bounds(upper.map(|v| v.to_string()));
+        (lower, upper)
+    }
+
+    pub(crate) fn bounds_to_tsrange(
+        value: (
+            Bound<chrono::DateTime<chrono::Utc>>,
+            Bound<chrono::DateTime<chrono::Utc>>,
+        ),
+    ) -> Tsrange {
+        let (lower, upper) = value;
+        let lower = from_bounds(lower.map(datetime_to_timestamp));
+        let upper = from_bounds(upper.map(datetime_to_timestamp));
+        (lower, upper)
+    }
+
+    pub(crate) fn bounds_to_tstzrange(
+        value: (
+            Bound<chrono::DateTime<chrono::Utc>>,
+            Bound<chrono::DateTime<chrono::Utc>>,
+        ),
+    ) -> Tstzrange {
+        let (lower, upper) = value;
+        let lower = from_bounds(lower.map(datetime_to_timestamptz));
+        let upper = from_bounds(upper.map(datetime_to_timestamptz));
+        (lower, upper)
+    }
+
+    pub(crate) fn bounds_to_daterange(
+        value: (Bound<chrono::NaiveDate>, Bound<chrono::NaiveDate>),
+    ) -> Daterange {
+        let (lower, upper) = value;
+        let lower = from_bounds(lower.map(naivedate_to_date));
+        let upper = from_bounds(upper.map(naivedate_to_date));
+        (lower, upper)
+    }
+
+    fn from_bounds<T>(value: Bound<T>) -> Option<(T, bool)> {
+        match value {
+            Bound::Included(v) => Some((v, true)),
+            Bound::Excluded(v) => Some((v, false)),
+            Bound::Unbounded => None,
         }
     }
 }
