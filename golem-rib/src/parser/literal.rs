@@ -116,6 +116,7 @@ mod internal {
 
 #[cfg(test)]
 mod literal_parse_tests {
+    use bigdecimal::BigDecimal;
     use test_r::test;
 
     use crate::parser::rib_expr::rib_expr;
@@ -162,7 +163,7 @@ mod literal_parse_tests {
                     Expr::identifier("foo"),
                     Expr::concat(vec![Expr::literal("bar-"), Expr::identifier("worker_id")])
                 ),
-                Expr::untyped_number(1f64),
+                Expr::untyped_number(BigDecimal::from(1)),
                 Expr::literal("baz"),
             )
         );

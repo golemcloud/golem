@@ -14,7 +14,6 @@
 
 use crate::gateway_binding::{ResponseMapping, WorkerBinding};
 use crate::gateway_rib_compiler::{DefaultWorkerServiceRibCompiler, WorkerServiceRibCompiler};
-use bincode::{Decode, Encode};
 use golem_service_base::model::VersionedComponentId;
 use golem_wasm_ast::analysis::AnalysedExport;
 use rib::{Expr, RibByteCode, RibInputTypeInfo, RibOutputTypeInfo, WorkerFunctionsInRib};
@@ -61,7 +60,7 @@ impl WorkerBindingCompiled {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct WorkerNameCompiled {
     pub worker_name: Expr,
     pub compiled_worker_name: RibByteCode,
@@ -83,7 +82,7 @@ impl WorkerNameCompiled {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct IdempotencyKeyCompiled {
     pub idempotency_key: Expr,
     pub compiled_idempotency_key: RibByteCode,

@@ -39,6 +39,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use bigdecimal::BigDecimal;
     use test_r::test;
 
     use super::*;
@@ -54,8 +55,8 @@ mod tests {
         let expr = block_without_return().easy_parse(input).unwrap().0;
 
         let expected = vec![
-            Expr::let_binding("x", Expr::untyped_number(1f64)),
-            Expr::let_binding("y", Expr::untyped_number(2f64)),
+            Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1))),
+            Expr::let_binding("y", Expr::untyped_number(BigDecimal::from(2))),
             Expr::plus(Expr::identifier("x"), Expr::identifier("y")),
         ];
         assert_eq!(expr, expected);
