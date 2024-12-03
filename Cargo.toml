@@ -129,7 +129,7 @@ opentelemetry = "0.24.0"
 opentelemetry-prometheus = "0.17.0"
 opentelemetry_sdk = "0.24.1"
 phf = { version = "0.11.2", features = ["macros"] }
-poem-openapi = { version = "5.0.3", features = [
+poem-openapi = { version = "=5.1.3", features = [
     "swagger-ui",
     "chrono",
     "time",

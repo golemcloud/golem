@@ -3710,7 +3710,7 @@ dependencies = [
  "http-body-util",
  "hyper 1.5.1",
  "include_dir",
- "opentelemetry 0.24.0",
+ "opentelemetry",
  "opentelemetry-prometheus",
  "opentelemetry_sdk",
  "poem",
@@ -3953,7 +3953,7 @@ dependencies = [
  "humantime-serde",
  "lazy_static 1.5.0",
  "mappable-rc",
- "opentelemetry 0.24.0",
+ "opentelemetry",
  "opentelemetry-prometheus",
  "opentelemetry_sdk",
  "poem",
@@ -4476,7 +4476,7 @@ dependencies = [
  "lazy_static 1.5.0",
  "nom 7.1.3",
  "openapiv3",
- "opentelemetry 0.24.0",
+ "opentelemetry",
  "opentelemetry-prometheus",
  "opentelemetry_sdk",
  "poem",
@@ -4535,7 +4535,7 @@ dependencies = [
  "nom 7.1.3",
  "openapiv3",
  "openidconnect",
- "opentelemetry 0.24.0",
+ "opentelemetry",
  "opentelemetry-prometheus",
  "opentelemetry_sdk",
  "poem",
@@ -6623,29 +6623,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "opentelemetry"
-version = "0.27.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ab70038c28ed37b97d8ed414b6429d343a8bbf44c9f79ec854f3a643029ba6d7"
-dependencies = [
- "futures-core",
- "futures-sink",
- "js-sys",
- "pin-project-lite",
- "thiserror",
- "tracing",
-]
-
-[[package]]
 name = "opentelemetry-http"
-version = "0.27.0"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "10a8a7f5f6ba7c1b286c2fbca0454eaba116f63bbe69ed250b642d36fbb04d80"
+checksum = "ad31e9de44ee3538fb9d64fe3376c1362f406162434609e79aea2a41a0af78ab"
 dependencies = [
  "async-trait",
  "bytes 1.9.0",
  "http 1.1.0",
- "opentelemetry 0.27.1",
+ "opentelemetry",
 ]
 
 [[package]]
@@ -6655,7 +6641,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cc4191ce34aa274621861a7a9d68dbcf618d5b6c66b10081631b61fd81fbc015"
 dependencies = [
  "once_cell",
- "opentelemetry 0.24.0",
+ "opentelemetry",
  "opentelemetry_sdk",
  "prometheus",
  "protobuf",
@@ -6679,7 +6665,7 @@ dependencies = [
  "futures-util",
  "glob",
  "once_cell",
- "opentelemetry 0.24.0",
+ "opentelemetry",
  "percent-encoding",
  "rand",
  "serde_json",
@@ -7207,9 +7193,9 @@ dependencies = [
 
 [[package]]
 name = "poem"
-version = "3.1.5"
+version = "3.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "671795ac42dc4ea9210e44942e8e9844c16541d799499aec2747ab8d4fef50ef"
+checksum = "20d9d595efb128dddda67e32c3d6d26c10a94a81c914d6c5cf0c9f92d19136ae"
 dependencies = [
  "base64 0.22.1",
  "bytes 1.9.0",
@@ -7224,7 +7210,7 @@ dependencies = [
  "mime",
  "multer 3.1.0",
  "nix 0.29.0",
- "opentelemetry 0.27.1",
+ "opentelemetry",
  "opentelemetry-http",
  "opentelemetry-prometheus",
  "opentelemetry-semantic-conventions",
@@ -7268,9 +7254,9 @@ dependencies = [
 
 [[package]]
 name = "poem-openapi"
-version = "5.1.4"
+version = "5.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0d3c2262b16245f8bfc9b53fd6d7f8262251ecc8fa37db337bbf37b00eb18d7"
+checksum = "d92bcce356da677d56723f1f2017276457659d6b93abdcf3ebb218b5050f5bc6"
 dependencies = [
  "base64 0.22.1",
  "bytes 1.9.0",
@@ -7298,9 +7284,9 @@ dependencies = [
 
 [[package]]
 name = "poem-openapi-derive"
-version = "5.1.4"
+version = "5.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c31ef68da842fb0c6f8392a8d266170e2a6b8bc2021912f45c4d0247e481598e"
+checksum = "6c59f3a8822f162875cc5de29c8cd911e367a79078b06a9fedc081e1f259dd24"
 dependencies = [
  "darling",
  "http 1.1.0",
