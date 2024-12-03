@@ -87,6 +87,7 @@ impl<C: Serialize> Template<C> for app_raw::ExternalCommand {
 impl<C: Serialize> Template<C> for serde_json::Value {
     type Rendered = serde_json::Value;
 
+    #[warn(clippy::only_used_in_recursion)]
     fn render(
         &self,
         env: &minijinja::Environment,
