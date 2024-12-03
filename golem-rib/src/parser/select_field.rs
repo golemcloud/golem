@@ -123,6 +123,7 @@ mod internal {
 
 #[cfg(test)]
 mod tests {
+    use bigdecimal::BigDecimal;
     use test_r::test;
 
     use combine::EasyParser;
@@ -224,7 +225,7 @@ mod tests {
             Ok((
                 Expr::greater_than(
                     Expr::select_field(Expr::identifier("foo"), "bar"),
-                    Expr::untyped_number(1f64)
+                    Expr::untyped_number(BigDecimal::from(1))
                 ),
                 ""
             ))
@@ -241,7 +242,7 @@ mod tests {
                 Expr::cond(
                     Expr::greater_than(
                         Expr::select_field(Expr::identifier("foo"), "bar"),
-                        Expr::untyped_number(1f64)
+                        Expr::untyped_number(BigDecimal::from(1))
                     ),
                     Expr::select_field(Expr::identifier("foo"), "bar"),
                     Expr::select_field(Expr::identifier("foo"), "baz")

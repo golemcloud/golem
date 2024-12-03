@@ -87,8 +87,9 @@ message LiteralExpr {
 }
 
 message NumberExpr {
-  double float = 1;
+  optional double float = 1;
   optional TypeName type_name = 2;
+  optional string number = 3;
 }
 
 message FlagsExpr {

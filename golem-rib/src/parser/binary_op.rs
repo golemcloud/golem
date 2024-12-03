@@ -54,6 +54,7 @@ pub enum BinaryOp {
 
 #[cfg(test)]
 mod test {
+    use bigdecimal::BigDecimal;
     use test_r::test;
 
     use crate::parser::rib_expr::rib_expr;
@@ -168,8 +169,14 @@ mod test {
             result,
             Ok((
                 Expr::equal_to(
-                    Expr::record(vec![("foo".to_string(), Expr::untyped_number(1f64))]),
-                    Expr::record(vec![("foo".to_string(), Expr::untyped_number(2f64))]),
+                    Expr::record(vec![(
+                        "foo".to_string(),
+                        Expr::untyped_number(BigDecimal::from(1))
+                    )]),
+                    Expr::record(vec![(
+                        "foo".to_string(),
+                        Expr::untyped_number(BigDecimal::from(2))
+                    )]),
                 ),
                 ""
             ))
@@ -184,8 +191,14 @@ mod test {
             result,
             Ok((
                 Expr::equal_to(
-                    Expr::sequence(vec![Expr::untyped_number(1f64), Expr::untyped_number(2f64)]),
-                    Expr::sequence(vec![Expr::untyped_number(3f64), Expr::untyped_number(4f64)]),
+                    Expr::sequence(vec![
+                        Expr::untyped_number(BigDecimal::from(1)),
+                        Expr::untyped_number(BigDecimal::from(2))
+                    ]),
+                    Expr::sequence(vec![
+                        Expr::untyped_number(BigDecimal::from(3)),
+                        Expr::untyped_number(BigDecimal::from(4))
+                    ]),
                 ),
                 ""
             ))
@@ -200,8 +213,14 @@ mod test {
             result,
             Ok((
                 Expr::equal_to(
-                    Expr::tuple(vec![Expr::untyped_number(1f64), Expr::untyped_number(2f64)]),
-                    Expr::tuple(vec![Expr::untyped_number(3f64), Expr::untyped_number(4f64)]),
+                    Expr::tuple(vec![
+                        Expr::untyped_number(BigDecimal::from(1)),
+                        Expr::untyped_number(BigDecimal::from(2))
+                    ]),
+                    Expr::tuple(vec![
+                        Expr::untyped_number(BigDecimal::from(3)),
+                        Expr::untyped_number(BigDecimal::from(4))
+                    ]),
                 ),
                 ""
             ))
