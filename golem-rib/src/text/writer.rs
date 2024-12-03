@@ -140,7 +140,7 @@ impl<W: Write> Writer<W> {
                 self.write_display(")")
             }
             Expr::Number(number, type_name, _) => {
-                self.write_display(number.value)?;
+                self.write_display(number.value.to_string())?;
                 if let Some(type_name) = type_name {
                     self.write_display(type_name)?;
                 }

@@ -73,6 +73,7 @@ mod internal {
 
 #[cfg(test)]
 mod name_binding_tests {
+    use bigdecimal::BigDecimal;
     use test_r::test;
 
     use crate::call_type::CallType;
@@ -94,7 +95,7 @@ mod name_binding_tests {
         let let_binding = Expr::Let(
             VariableId::local("x", 0),
             None,
-            Box::new(Expr::untyped_number(1f64)),
+            Box::new(Expr::untyped_number(BigDecimal::from(1))),
             InferredType::Unknown,
         );
 
@@ -134,14 +135,14 @@ mod name_binding_tests {
         let let_binding1 = Expr::Let(
             VariableId::local("x", 0),
             None,
-            Box::new(Expr::untyped_number(1f64)),
+            Box::new(Expr::untyped_number(BigDecimal::from(1))),
             InferredType::Unknown,
         );
 
         let let_binding2 = Expr::Let(
             VariableId::local("y", 0),
             None,
-            Box::new(Expr::untyped_number(2f64)),
+            Box::new(Expr::untyped_number(BigDecimal::from(2))),
             InferredType::Unknown,
         );
 
@@ -195,14 +196,14 @@ mod name_binding_tests {
         let let_binding1 = Expr::Let(
             VariableId::local("x", 0),
             None,
-            Box::new(Expr::untyped_number(1f64)),
+            Box::new(Expr::untyped_number(BigDecimal::from(1))),
             InferredType::Unknown,
         );
 
         let let_binding2 = Expr::Let(
             VariableId::local("x", 1),
             None,
-            Box::new(Expr::untyped_number(2f64)),
+            Box::new(Expr::untyped_number(BigDecimal::from(2))),
             InferredType::Unknown,
         );
 

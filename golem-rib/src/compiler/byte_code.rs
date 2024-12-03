@@ -679,6 +679,7 @@ mod internal {
 
 #[cfg(test)]
 mod compiler_tests {
+    use bigdecimal::BigDecimal;
     use test_r::test;
 
     use super::*;
@@ -755,8 +756,20 @@ mod compiler_tests {
 
     #[test]
     fn test_instructions_equal_to() {
-        let number_f32 = Expr::Number(Number { value: 1f64 }, None, InferredType::F32);
-        let number_u32 = Expr::Number(Number { value: 1f64 }, None, InferredType::U32);
+        let number_f32 = Expr::Number(
+            Number {
+                value: BigDecimal::from(1),
+            },
+            None,
+            InferredType::F32,
+        );
+        let number_u32 = Expr::Number(
+            Number {
+                value: BigDecimal::from(1),
+            },
+            None,
+            InferredType::U32,
+        );
 
         let expr = Expr::equal_to(number_f32, number_u32);
         let empty_registry = FunctionTypeRegistry::empty();
@@ -782,8 +795,20 @@ mod compiler_tests {
 
     #[test]
     fn test_instructions_greater_than() {
-        let number_f32 = Expr::Number(Number { value: 1f64 }, None, InferredType::F32);
-        let number_u32 = Expr::Number(Number { value: 2f64 }, None, InferredType::U32);
+        let number_f32 = Expr::Number(
+            Number {
+                value: BigDecimal::from(1),
+            },
+            None,
+            InferredType::F32,
+        );
+        let number_u32 = Expr::Number(
+            Number {
+                value: BigDecimal::from(2),
+            },
+            None,
+            InferredType::U32,
+        );
 
         let expr = Expr::greater_than(number_f32, number_u32);
         let empty_registry = FunctionTypeRegistry::empty();
@@ -809,8 +834,20 @@ mod compiler_tests {
 
     #[test]
     fn test_instructions_less_than() {
-        let number_f32 = Expr::Number(Number { value: 1f64 }, None, InferredType::F32);
-        let number_u32 = Expr::Number(Number { value: 1f64 }, None, InferredType::U32);
+        let number_f32 = Expr::Number(
+            Number {
+                value: BigDecimal::from(1),
+            },
+            None,
+            InferredType::F32,
+        );
+        let number_u32 = Expr::Number(
+            Number {
+                value: BigDecimal::from(1),
+            },
+            None,
+            InferredType::U32,
+        );
 
         let expr = Expr::less_than(number_f32, number_u32);
         let empty_registry = FunctionTypeRegistry::empty();
@@ -836,8 +873,20 @@ mod compiler_tests {
 
     #[test]
     fn test_instructions_greater_than_or_equal_to() {
-        let number_f32 = Expr::Number(Number { value: 1f64 }, None, InferredType::F32);
-        let number_u32 = Expr::Number(Number { value: 1f64 }, None, InferredType::U32);
+        let number_f32 = Expr::Number(
+            Number {
+                value: BigDecimal::from(1),
+            },
+            None,
+            InferredType::F32,
+        );
+        let number_u32 = Expr::Number(
+            Number {
+                value: BigDecimal::from(1),
+            },
+            None,
+            InferredType::U32,
+        );
 
         let expr = Expr::greater_than_or_equal_to(number_f32, number_u32);
         let empty_registry = FunctionTypeRegistry::empty();
@@ -863,8 +912,20 @@ mod compiler_tests {
 
     #[test]
     fn test_instructions_less_than_or_equal_to() {
-        let number_f32 = Expr::Number(Number { value: 1f64 }, None, InferredType::F32);
-        let number_u32 = Expr::Number(Number { value: 1f64 }, None, InferredType::U32);
+        let number_f32 = Expr::Number(
+            Number {
+                value: BigDecimal::from(1),
+            },
+            None,
+            InferredType::F32,
+        );
+        let number_u32 = Expr::Number(
+            Number {
+                value: BigDecimal::from(1),
+            },
+            None,
+            InferredType::U32,
+        );
 
         let expr = Expr::less_than_or_equal_to(number_f32, number_u32);
         let empty_registry = FunctionTypeRegistry::empty();
