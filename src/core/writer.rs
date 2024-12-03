@@ -352,7 +352,7 @@ fn add_to_import_section(section: &mut wasm_encoder::ImportSection, value: &Impo
     section.import(&value.module, &value.name, entity_type);
 }
 
-impl<'a> From<Custom> for wasm_encoder::CustomSection<'a> {
+impl From<Custom> for wasm_encoder::CustomSection<'_> {
     fn from(value: Custom) -> Self {
         wasm_encoder::CustomSection {
             name: value.name.into(),
