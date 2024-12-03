@@ -277,8 +277,9 @@ description = "Runs sharding integration tests only"
 dependencies = ["build-bins"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 script = '''
-cargo test --package integration-tests --test sharding -- --report-time $JUNIT_OPTS
+cargo test --package integration-tests --test sharding -- --report-time
 '''
+# $JUNIT_OPTS temporarily removed to help debugging on CI
 
 [tasks.sharding-tests-debug]
 dependencies = ["build-bins"]

@@ -21,7 +21,7 @@ use chrono::Datelike;
 use golem_test_framework::dsl::{events_to_lines, log_event_to_string, TestDslUnsafe};
 use golem_wasm_rpc::Value;
 use std::collections::HashMap;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -55,9 +55,15 @@ async fn javascript_example_1(
 
     let end = chrono::Utc::now().timestamp_millis() as u64;
 
-    tokio::time::sleep(Duration::from_secs(5)).await;
     let mut events = vec![];
-    rx.recv_many(&mut events, 100).await;
+    let start_time = Instant::now();
+    while events.len() < 2 && start_time.elapsed() < Duration::from_secs(5) {
+        if let Some(event) = rx.recv().await {
+            events.push(event);
+        } else {
+            break;
+        }
+    }
 
     drop(executor);
 
@@ -147,8 +153,12 @@ async fn csharp_example_1(
         .await
         .unwrap();
 
-    tokio::time::sleep(Duration::from_secs(5)).await;
-    let lines = events_to_lines(&mut rx).await;
+    let mut lines = Vec::new();
+    let start = Instant::now();
+
+    while lines.len() < 4 && start.elapsed() < Duration::from_secs(5) {
+        lines.extend(events_to_lines(&mut rx).await);
+    }
 
     drop(executor);
 
