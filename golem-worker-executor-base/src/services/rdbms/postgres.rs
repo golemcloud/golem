@@ -917,7 +917,7 @@ pub(crate) mod sqlx_rdbms {
                     Some(vs) => {
                         DbValue::Array(vs.into_iter().map(DbValuePrimitive::Timestamp).collect())
                     }
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
+                    None => DbValue::Array(vec![]),
                 }
             }
             pg_type_name::TIMESTAMPTZ_ARRAY => {
@@ -927,7 +927,7 @@ pub(crate) mod sqlx_rdbms {
                     Some(vs) => {
                         DbValue::Array(vs.into_iter().map(DbValuePrimitive::Timestamptz).collect())
                     }
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
+                    None => DbValue::Array(vec![]),
                 }
             }
             pg_type_name::DATE_ARRAY => {
@@ -937,7 +937,7 @@ pub(crate) mod sqlx_rdbms {
                     Some(vs) => {
                         DbValue::Array(vs.into_iter().map(DbValuePrimitive::Date).collect())
                     }
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
+                    None => DbValue::Array(vec![]),
                 }
             }
             pg_type_name::TIME_ARRAY => {
@@ -947,7 +947,7 @@ pub(crate) mod sqlx_rdbms {
                     Some(vs) => {
                         DbValue::Array(vs.into_iter().map(DbValuePrimitive::Time).collect())
                     }
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
+                    None => DbValue::Array(vec![]),
                 }
             }
             pg_type_name::TIMETZ_ARRAY => {
@@ -959,7 +959,7 @@ pub(crate) mod sqlx_rdbms {
                             .map(|t| DbValuePrimitive::Timetz((t.time, t.offset)))
                             .collect(),
                     ),
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
+                    None => DbValue::Array(vec![]),
                 }
             }
             pg_type_name::INET_ARRAY => {
@@ -968,14 +968,14 @@ pub(crate) mod sqlx_rdbms {
                     Some(vs) => {
                         DbValue::Array(vs.into_iter().map(DbValuePrimitive::Inet).collect())
                     }
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
+                    None => DbValue::Array(vec![]),
                 }
             }
             pg_type_name::BIT_ARRAY => {
                 let vs: Option<Vec<BitVec>> = row.try_get(index).map_err(|e| e.to_string())?;
                 match vs {
                     Some(vs) => DbValue::Array(vs.into_iter().map(DbValuePrimitive::Bit).collect()),
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
+                    None => DbValue::Array(vec![]),
                 }
             }
             pg_type_name::VARBIT_ARRAY => {
@@ -984,7 +984,7 @@ pub(crate) mod sqlx_rdbms {
                     Some(vs) => {
                         DbValue::Array(vs.into_iter().map(DbValuePrimitive::Varbit).collect())
                     }
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
+                    None => DbValue::Array(vec![]),
                 }
             }
             pg_type_name::INT4RANGE_ARRAY => {
@@ -996,7 +996,7 @@ pub(crate) mod sqlx_rdbms {
                             .map(|v| DbValuePrimitive::Int4range(get_bounds(v)))
                             .collect(),
                     ),
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
+                    None => DbValue::Array(vec![]),
                 }
             }
             pg_type_name::INT8RANGE_ARRAY => {
@@ -1008,7 +1008,7 @@ pub(crate) mod sqlx_rdbms {
                             .map(|v| DbValuePrimitive::Int8range(get_bounds(v)))
                             .collect(),
                     ),
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
+                    None => DbValue::Array(vec![]),
                 }
             }
             pg_type_name::NUMRANGE_ARRAY => {
@@ -1020,7 +1020,7 @@ pub(crate) mod sqlx_rdbms {
                             .map(|v| DbValuePrimitive::Numrange(get_bounds(v)))
                             .collect(),
                     ),
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
+                    None => DbValue::Array(vec![]),
                 }
             }
             pg_type_name::TSRANGE_ARRAY => {
@@ -1032,7 +1032,7 @@ pub(crate) mod sqlx_rdbms {
                             .map(|v| DbValuePrimitive::Tsrange(get_bounds(v)))
                             .collect(),
                     ),
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
+                    None => DbValue::Array(vec![]),
                 }
             }
             pg_type_name::TSTZRANGE_ARRAY => {
@@ -1044,7 +1044,7 @@ pub(crate) mod sqlx_rdbms {
                             .map(|v| DbValuePrimitive::Tstzrange(get_bounds(v)))
                             .collect(),
                     ),
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
+                    None => DbValue::Array(vec![]),
                 }
             }
             pg_type_name::DATERANGE_ARRAY => {
@@ -1056,7 +1056,7 @@ pub(crate) mod sqlx_rdbms {
                             .map(|v| DbValuePrimitive::Daterange(get_bounds(v)))
                             .collect(),
                     ),
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
+                    None => DbValue::Array(vec![]),
                 }
             }
             pg_type_name::OID_ARRAY => {
@@ -1065,7 +1065,7 @@ pub(crate) mod sqlx_rdbms {
                     Some(vs) => {
                         DbValue::Array(vs.into_iter().map(|v| DbValuePrimitive::Oid(v.0)).collect())
                     }
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
+                    None => DbValue::Array(vec![]),
                 }
             }
             _ => match column.type_info().kind() {
@@ -1085,7 +1085,7 @@ pub(crate) mod sqlx_rdbms {
                                 .map(|v| DbValuePrimitive::CustomEnum(v.0))
                                 .collect(),
                         ),
-                        None => DbValue::Primitive(DbValuePrimitive::Null),
+                        None => DbValue::Array(vec![]),
                     }
                 }
                 _ => Err(format!("Type '{}' is not supported", type_name))?,
@@ -1264,10 +1264,7 @@ pub(crate) mod sqlx_rdbms {
         }
 
         fn array_compatible(ty: &sqlx::postgres::PgTypeInfo) -> bool {
-            match ty.kind() {
-                PgTypeKind::Array(ty) if matches!(ty.kind(), PgTypeKind::Enum(_)) => true,
-                _ => false,
-            }
+            matches!(ty.kind(), PgTypeKind::Array(ty) if <PgEnum as sqlx::types::Type<sqlx::Postgres>>::compatible(ty))
         }
     }
 
