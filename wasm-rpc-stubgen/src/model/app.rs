@@ -622,8 +622,8 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
 
                             for (name, value) in [
                                 ("sourceWit", &properties.source_wit),
-                                ("generatedWit", &properties.source_wit),
-                                ("componentWasm", &properties.source_wit),
+                                ("generatedWit", &properties.generated_wit),
+                                ("componentWasm", &properties.component_wasm),
                             ] {
                                 if value.is_empty() {
                                     validation.add_error(format!(
