@@ -614,6 +614,7 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
                         fn validate_properties_and_convert_extensions<
                             CPE: ComponentPropertiesExtensions,
                         >(
+                            source: &Path,
                             validation: &mut ValidationBuilder,
                             properties: &mut ComponentProperties<CPE>,
                         ) -> bool {
@@ -634,6 +635,7 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
                             }
 
                             properties.extensions = CPE::convert_and_validate(
+                                source,
                                 validation,
                                 properties.extensions_raw.take().unwrap(),
                             );
@@ -657,6 +659,7 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
                                 });
 
                                 let any_error = validate_properties_and_convert_extensions(
+                                    &source,
                                     &mut validation,
                                     properties,
                                 );
@@ -694,6 +697,7 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
                                     );
 
                                     any_error |= validate_properties_and_convert_extensions(
+                                        &source,
                                         &mut validation,
                                         properties,
                                     );
@@ -1106,7 +1110,11 @@ pub trait ComponentPropertiesExtensions: Sized + Debug + Clone {
 
     fn raw_from_serde_json(extensions: serde_json::Value) -> serde_json::Result<Self::Raw>;
 
-    fn convert_and_validate(validation: &mut ValidationBuilder, raw: Self::Raw) -> Option<Self>;
+    fn convert_and_validate(
+        source: &Path,
+        validation: &mut ValidationBuilder,
+        raw: Self::Raw,
+    ) -> Option<Self>;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1123,7 +1131,11 @@ impl ComponentPropertiesExtensions for ComponentPropertiesExtensionsNone {
         serde_json::from_value(extensions)
     }
 
-    fn convert_and_validate(_validation: &mut ValidationBuilder, raw: Self::Raw) -> Option<Self> {
+    fn convert_and_validate(
+        _source: &Path,
+        _validation: &mut ValidationBuilder,
+        raw: Self::Raw,
+    ) -> Option<Self> {
         Some(raw)
     }
 }
@@ -1142,6 +1154,7 @@ impl ComponentPropertiesExtensions for ComponentPropertiesExtensionsAny {
     }
 
     fn convert_and_validate(
+        _source: &Path,
         _validation: &mut ValidationBuilder,
         raw: Self::Raw,
     ) -> Option<Self::Raw> {
