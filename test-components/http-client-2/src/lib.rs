@@ -85,7 +85,7 @@ impl Guest for Component {
                         println!("Poll loop finished");
                         return;
                     } else {
-                        std::thread::sleep(std::time::Duration::from_secs(2));
+                        std::thread::sleep(std::time::Duration::from_millis(100));
                     }
                 }
                 Err(err) => {

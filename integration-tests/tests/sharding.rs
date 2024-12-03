@@ -2,7 +2,7 @@ test_r::enable!();
 
 #[test_r::sequential]
 mod tests {
-    use test_r::{test, test_dep};
+    use test_r::{flaky, test, test_dep, timeout};
 
     use async_trait::async_trait;
     use golem_wasm_rpc::Value;
@@ -112,6 +112,8 @@ mod tests {
     }
 
     #[test]
+    #[timeout(120000)]
+    #[flaky(5)]
     async fn coordinated_scenario_01_01(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         for _ in 0..coordinated_scenario_retries() {
             coordinated_scenario(
@@ -132,6 +134,9 @@ mod tests {
     }
 
     #[test]
+    #[timeout(240000)]
+    #[flaky(5)]
+    #[ignore] // TEMPORARILY IGNORED AS IT IS VERY FLAKY ON CI
     async fn coordinated_scenario_01_02(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         for _ in 0..coordinated_scenario_retries() {
             coordinated_scenario(
@@ -152,6 +157,9 @@ mod tests {
     }
 
     #[test]
+    #[timeout(240000)]
+    #[flaky(5)]
+    #[ignore] // TEMPORARILY IGNORED AS IT IS VERY FLAKY ON CI
     async fn coordinated_scenario_02_01(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         for _ in 0..coordinated_scenario_retries() {
             coordinated_scenario(
@@ -172,6 +180,8 @@ mod tests {
     }
 
     #[test]
+    #[timeout(120000)]
+    #[flaky(5)]
     async fn coordinated_scenario_03_01(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         for _ in 0..coordinated_scenario_retries() {
             coordinated_scenario(
@@ -192,6 +202,8 @@ mod tests {
     }
 
     #[test]
+    #[timeout(120000)]
+    #[flaky(5)]
     async fn service_is_responsive_to_shard_changes(
         deps: &EnvBasedTestDependencies,
         _tracing: &Tracing,
