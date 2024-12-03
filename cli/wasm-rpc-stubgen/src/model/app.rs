@@ -633,8 +633,10 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
                                 }
                             }
 
-                            properties.extensions =
-                                properties.extensions_raw.convert_and_validate(validation);
+                            properties.extensions = CPE::convert_and_validate(
+                                validation,
+                                properties.extensions_raw.take().unwrap(),
+                            );
                             any_error |= properties.extensions.is_none();
 
                             any_error
@@ -1028,8 +1030,10 @@ pub struct ComponentProperties<CPE: ComponentPropertiesExtensions> {
     pub build: Vec<app_raw::ExternalCommand>,
     pub custom_commands: HashMap<String, Vec<app_raw::ExternalCommand>>,
     pub clean: Vec<String>,
-    pub extensions_raw: CPE,
-    pub extensions: Option<CPE::Validated>,
+
+    // TODO: clean up: move extensions_raw to a temporary var and make extensions non optional
+    pub extensions_raw: Option<CPE::Raw>,
+    pub extensions: Option<CPE>,
 }
 
 impl<CPE: ComponentPropertiesExtensions> ComponentProperties<CPE> {
@@ -1042,7 +1046,9 @@ impl<CPE: ComponentPropertiesExtensions> ComponentProperties<CPE> {
             build: raw.build,
             custom_commands: raw.custom_commands,
             clean: raw.clean,
-            extensions_raw: CPE::from_serde_json(serde_json::Value::Object(raw.extensions))?,
+            extensions_raw: Some(CPE::raw_from_serde_json(serde_json::Value::Object(
+                raw.extensions,
+            ))?),
             extensions: None,
         })
     }
@@ -1096,11 +1102,11 @@ impl<CPE: ComponentPropertiesExtensions> ComponentProperties<CPE> {
 }
 
 pub trait ComponentPropertiesExtensions: Sized + Debug + Clone {
-    type Validated: Debug + Clone;
+    type Raw: Debug + Clone;
 
-    fn from_serde_json(extensions: serde_json::Value) -> serde_json::Result<Self>;
+    fn raw_from_serde_json(extensions: serde_json::Value) -> serde_json::Result<Self::Raw>;
 
-    fn convert_and_validate(&self, validation: &mut ValidationBuilder) -> Option<Self::Validated>;
+    fn convert_and_validate(validation: &mut ValidationBuilder, raw: Self::Raw) -> Option<Self>;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1108,17 +1114,17 @@ pub trait ComponentPropertiesExtensions: Sized + Debug + Clone {
 pub struct ComponentPropertiesExtensionsNone {}
 
 impl ComponentPropertiesExtensions for ComponentPropertiesExtensionsNone {
-    type Validated = Self;
+    type Raw = Self;
 
-    fn from_serde_json(extensions: serde_json::Value) -> serde_json::Result<Self>
+    fn raw_from_serde_json(extensions: serde_json::Value) -> serde_json::Result<Self::Raw>
     where
         Self: Sized,
     {
         serde_json::from_value(extensions)
     }
 
-    fn convert_and_validate(&self, _validation: &mut ValidationBuilder) -> Option<Self::Validated> {
-        Some(ComponentPropertiesExtensionsNone {})
+    fn convert_and_validate(_validation: &mut ValidationBuilder, raw: Self::Raw) -> Option<Self> {
+        Some(raw)
     }
 }
 
@@ -1126,16 +1132,19 @@ impl ComponentPropertiesExtensions for ComponentPropertiesExtensionsNone {
 pub struct ComponentPropertiesExtensionsAny;
 
 impl ComponentPropertiesExtensions for ComponentPropertiesExtensionsAny {
-    type Validated = Self;
+    type Raw = Self;
 
-    fn from_serde_json(_extensions: serde_json::Value) -> serde_json::Result<Self>
+    fn raw_from_serde_json(_extensions: serde_json::Value) -> serde_json::Result<Self>
     where
         Self: Sized,
     {
         Ok(ComponentPropertiesExtensionsAny)
     }
 
-    fn convert_and_validate(&self, _validation: &mut ValidationBuilder) -> Option<Self::Validated> {
-        Some(ComponentPropertiesExtensionsAny)
+    fn convert_and_validate(
+        _validation: &mut ValidationBuilder,
+        raw: Self::Raw,
+    ) -> Option<Self::Raw> {
+        Some(raw)
     }
 }
