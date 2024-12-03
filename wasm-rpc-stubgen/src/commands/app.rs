@@ -56,7 +56,7 @@ pub struct ApplicationContext<CPE: ComponentPropertiesExtensions> {
 }
 
 impl<CPE: ComponentPropertiesExtensions> ApplicationContext<CPE> {
-    fn new(config: Config<CPE>) -> anyhow::Result<ApplicationContext<CPE>> {
+    pub fn new(config: Config<CPE>) -> anyhow::Result<ApplicationContext<CPE>> {
         let ctx = to_anyhow(
             "Failed to create application context, see problems above",
             load_app_validated(&config).and_then(|application| {
