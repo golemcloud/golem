@@ -9,7 +9,7 @@ use heck::{
     ToTitleCase, ToTrainCase, ToUpperCamelCase,
 };
 use itertools::Itertools;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Display;
 use std::fmt::Formatter;
@@ -115,17 +115,17 @@ pub fn includes_from_yaml_file(source: &Path) -> Vec<String> {
 }
 
 #[derive(Clone, Debug)]
-pub enum ResolvedComponentProperties {
+pub enum ResolvedComponentProperties<CPE: ComponentPropertiesExtensions> {
     Properties {
         template_name: Option<TemplateName>,
         any_template_overrides: bool,
-        properties: ComponentProperties,
+        properties: ComponentProperties<CPE>,
     },
     Profiles {
         template_name: Option<TemplateName>,
         any_template_overrides: HashMap<ProfileName, bool>,
         default_profile: ProfileName,
-        profiles: HashMap<ProfileName, ComponentProperties>,
+        profiles: HashMap<ProfileName, ComponentProperties<CPE>>,
     },
 }
 
@@ -137,15 +137,15 @@ pub struct ComponentEffectivePropertySource<'a> {
 }
 
 #[derive(Clone, Debug)]
-pub struct Application {
+pub struct Application<CPE: ComponentPropertiesExtensions> {
     temp_dir: Option<String>,
     wit_deps: Vec<String>,
-    components: BTreeMap<ComponentName, Component>,
+    components: BTreeMap<ComponentName, Component<CPE>>,
     dependencies: BTreeMap<ComponentName, BTreeSet<ComponentName>>,
     no_dependencies: BTreeSet<ComponentName>,
 }
 
-impl Application {
+impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
     pub fn from_raw_apps(apps: Vec<app_raw::ApplicationWithSource>) -> ValidatedResult<Self> {
         let mut validation = ValidationBuilder::new();
 
@@ -387,7 +387,7 @@ impl Application {
         let components = {
             let template_env = Self::template_env();
 
-            let mut resolved_components = BTreeMap::<ComponentName, Component>::new();
+            let mut resolved_components = BTreeMap::<ComponentName, Component<CPE>>::new();
             for (component_name, (source, mut component)) in components {
                 validation.push_context("source", source.to_string_lossy().to_string());
                 validation.push_context("component", component_name.to_string());
@@ -450,7 +450,7 @@ impl Application {
 
                                 if template.profiles.is_empty() {
                                     let rendered_template_properties =
-                                        ComponentProperties::from_template(
+                                        ComponentProperties::from_raw_template(
                                             &template_env,
                                             &template_context,
                                             &template.component_properties,
@@ -481,14 +481,14 @@ impl Application {
                                     let mut any_template_overrides =
                                         HashMap::<ProfileName, bool>::new();
                                     let mut profiles =
-                                        HashMap::<ProfileName, ComponentProperties>::new();
+                                        HashMap::<ProfileName, ComponentProperties<CPE>>::new();
                                     let mut any_template_render_error = false;
 
                                     for (profile_name, template_component_properties) in
                                         &template.profiles
                                     {
                                         let rendered_template_properties =
-                                            ComponentProperties::from_template(
+                                            ComponentProperties::from_raw_template(
                                                 &template_env,
                                                 &template_context,
                                                 template_component_properties,
@@ -553,13 +553,23 @@ impl Application {
                                     ));
                                     None
                                 } else {
-                                    Some(ResolvedComponentProperties::Properties {
-                                        template_name: None,
-                                        any_template_overrides: false,
-                                        properties: ComponentProperties::from(
-                                            component.component_properties,
-                                        ),
-                                    })
+                                    let properties = ComponentProperties::<CPE>::from_raw(
+                                        component.component_properties,
+                                    );
+
+                                    match properties {
+                                        Ok(properties) => {
+                                            Some(ResolvedComponentProperties::Properties {
+                                                template_name: None,
+                                                any_template_overrides: false,
+                                                properties,
+                                            })
+                                        }
+                                        Err(err) => {
+                                            validation.add_error(format!("{:?}", err));
+                                            None
+                                        }
+                                    }
                                 }
                             } else if component.default_profile.is_none() {
                                 validation.add_error(format!(
@@ -582,11 +592,17 @@ impl Application {
                                     profiles: component
                                         .profiles
                                         .into_iter()
-                                        .map(|(profile_name, properties)| {
-                                            (
-                                                ProfileName::from(profile_name),
-                                                ComponentProperties::from(properties),
-                                            )
+                                        .filter_map(|(profile_name, properties)| {
+                                            match ComponentProperties::<CPE>::from_raw(properties) {
+                                                Ok(properties) => Some((
+                                                    ProfileName::from(profile_name),
+                                                    properties,
+                                                )),
+                                                Err(err) => {
+                                                    validation.add_error(format!("{:?}", err));
+                                                    None
+                                                }
+                                            }
                                         })
                                         .collect(),
                                 })
@@ -595,7 +611,7 @@ impl Application {
                     };
 
                     if let Some(properties) = component_properties {
-                        // TODO: validate (build steps too)
+                        // TODO: validate (build steps and extensions too)
 
                         resolved_components
                             .insert(component_name.clone(), Component { source, properties });
@@ -686,7 +702,7 @@ impl Application {
         }
     }
 
-    fn component(&self, component_name: &ComponentName) -> &Component {
+    fn component(&self, component_name: &ComponentName) -> &Component<CPE> {
         self.components
             .get(component_name)
             .unwrap_or_else(|| panic!("Component not found: {}", component_name))
@@ -766,7 +782,7 @@ impl Application {
         &self,
         component_name: &ComponentName,
         profile: Option<&ProfileName>,
-    ) -> &ComponentProperties {
+    ) -> &ComponentProperties<CPE> {
         match &self.component(component_name).properties {
             ResolvedComponentProperties::Properties { properties, .. } => properties,
             ResolvedComponentProperties::Profiles {
@@ -888,12 +904,12 @@ impl Application {
 }
 
 #[derive(Clone, Debug)]
-pub struct Component {
+pub struct Component<CPE: ComponentPropertiesExtensions> {
     pub source: PathBuf,
-    pub properties: ResolvedComponentProperties,
+    pub properties: ResolvedComponentProperties<CPE>,
 }
 
-impl Component {
+impl<CPE: ComponentPropertiesExtensions> Component<CPE> {
     pub fn source_dir(&self) -> &Path {
         self.source.parent().unwrap_or_else(|| {
             panic!(
@@ -905,7 +921,7 @@ impl Component {
 }
 
 #[derive(Clone, Debug)]
-pub struct ComponentProperties {
+pub struct ComponentProperties<CPE: ComponentPropertiesExtensions> {
     pub source_wit: String,
     pub generated_wit: String,
     pub component_wasm: String,
@@ -913,17 +929,29 @@ pub struct ComponentProperties {
     pub build: Vec<app_raw::ExternalCommand>,
     pub custom_commands: HashMap<String, Vec<app_raw::ExternalCommand>>,
     pub clean: Vec<String>,
+    pub extensions: CPE,
 }
 
-impl ComponentProperties {
-    fn from_template<C: Serialize>(
+impl<CPE: ComponentPropertiesExtensions> ComponentProperties<CPE> {
+    fn from_raw(raw: app_raw::ComponentProperties) -> anyhow::Result<Self> {
+        Ok(Self {
+            source_wit: raw.source_wit.unwrap_or_default(),
+            generated_wit: raw.generated_wit.unwrap_or_default(),
+            component_wasm: raw.component_wasm.unwrap_or_default(),
+            linked_wasm: raw.linked_wasm,
+            build: raw.build,
+            custom_commands: raw.custom_commands,
+            clean: raw.clean,
+            extensions: CPE::from_serde_json(serde_json::Value::Object(raw.extensions))?,
+        })
+    }
+
+    fn from_raw_template<C: Serialize>(
         env: &minijinja::Environment,
         ctx: &C,
         template_properties: &app_raw::ComponentProperties,
     ) -> anyhow::Result<Self> {
-        Ok(ComponentProperties::from(
-            template_properties.render(env, ctx)?,
-        ))
+        ComponentProperties::from_raw(template_properties.render(env, ctx)?)
     }
 
     fn merge_with_overrides(mut self, overrides: app_raw::ComponentProperties) -> (Self, bool) {
@@ -966,16 +994,43 @@ impl ComponentProperties {
     }
 }
 
-impl From<app_raw::ComponentProperties> for ComponentProperties {
-    fn from(value: app_raw::ComponentProperties) -> Self {
-        Self {
-            source_wit: value.source_wit.unwrap_or_default(),
-            generated_wit: value.generated_wit.unwrap_or_default(),
-            component_wasm: value.component_wasm.unwrap_or_default(),
-            linked_wasm: value.linked_wasm,
-            build: value.build,
-            custom_commands: value.custom_commands,
-            clean: value.clean,
-        }
+pub trait ComponentPropertiesExtensions {
+    fn from_serde_json(extensions: serde_json::Value) -> serde_json::Result<Self>
+    where
+        Self: Sized;
+
+    fn validate(&self, validation: &mut ValidationBuilder);
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ComponentPropertiesExtensionsNone {}
+
+impl ComponentPropertiesExtensions for ComponentPropertiesExtensionsNone {
+    fn from_serde_json(extensions: serde_json::Value) -> serde_json::Result<Self>
+    where
+        Self: Sized,
+    {
+        serde_json::from_value(extensions)
+    }
+
+    fn validate(&self, _validation: &mut ValidationBuilder) {
+        // NOP
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ComponentPropertiesExtensionsAny;
+
+impl ComponentPropertiesExtensions for ComponentPropertiesExtensionsAny {
+    fn from_serde_json(_extensions: serde_json::Value) -> serde_json::Result<Self>
+    where
+        Self: Sized,
+    {
+        Ok(ComponentPropertiesExtensionsAny)
+    }
+
+    fn validate(&self, _validation: &mut ValidationBuilder) {
+        // NOP
     }
 }

@@ -97,6 +97,8 @@ pub struct ComponentProperties {
     pub custom_commands: HashMap<String, Vec<ExternalCommand>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clean: Vec<String>,
+    #[serde(flatten)]
+    pub extensions: serde_json::Map<String, serde_json::Value>,
 }
 
 impl ComponentProperties {
@@ -126,6 +128,8 @@ impl ComponentProperties {
         if !self.custom_commands.is_empty() {
             vec.push("customCommands");
         }
+
+        self.extensions.keys().for_each(|name| vec.push(name));
 
         vec
     }

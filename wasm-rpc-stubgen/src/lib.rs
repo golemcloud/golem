@@ -27,14 +27,15 @@ pub mod wit_encode;
 pub mod wit_generate;
 pub mod wit_resolve;
 
-use crate::commands::app::ApplicationSourceMode;
 use crate::log::LogColorize;
+use crate::model::app::{ComponentPropertiesExtensions, ComponentPropertiesExtensionsAny};
 use crate::stub::{StubConfig, StubDefinition};
 use crate::wit_generate::UpdateCargoToml;
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 use itertools::Itertools;
+use std::marker::PhantomData;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
@@ -300,7 +301,9 @@ pub fn initialize_workspace(
     )
 }
 
-pub async fn run_app_command(command: App) -> anyhow::Result<()> {
+pub async fn run_app_command<CPE: ComponentPropertiesExtensions>(
+    command: App,
+) -> anyhow::Result<()> {
     match command {
         App::Build(args) => {
             commands::app::build(commands::app::Config {
@@ -308,6 +311,7 @@ pub async fn run_app_command(command: App) -> anyhow::Result<()> {
                 skip_up_to_date_checks: args.force_build,
                 profile: args.profile.map(|profile| profile.into()),
                 offline: args.offline,
+                extensions: PhantomData::<CPE>,
             })
             .await
         }
@@ -316,6 +320,7 @@ pub async fn run_app_command(command: App) -> anyhow::Result<()> {
             skip_up_to_date_checks: false,
             profile: None,
             offline: false,
+            extensions: PhantomData::<ComponentPropertiesExtensionsAny>,
         }),
         App::CustomCommand(_args) => {
             // TODO: parse app manifest / profile args
@@ -328,10 +333,11 @@ pub async fn run_app_command(command: App) -> anyhow::Result<()> {
 // TODO: currently this is added on top of the derived help, also, it should by grouped by profiles (also handling overlaps)
 fn app_about() -> String {
     let commands = commands::app::available_custom_commands(commands::app::Config {
-        app_resolve_mode: ApplicationSourceMode::Automatic,
+        app_resolve_mode: commands::app::ApplicationSourceMode::Automatic,
         skip_up_to_date_checks: false,
         profile: None,
         offline: false,
+        extensions: PhantomData::<ComponentPropertiesExtensionsAny>,
     });
 
     match commands {
