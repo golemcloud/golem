@@ -14,9 +14,11 @@
 
 use clap::Parser;
 use colored::Colorize;
-use golem_wasm_rpc_stubgen::model::app::ComponentPropertiesExtensionsNone;
 use golem_wasm_rpc_stubgen::*;
 use std::process::ExitCode;
+
+#[cfg(feature = "app-command")]
+use golem_wasm_rpc_stubgen::model::app::ComponentPropertiesExtensionsNone;
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -32,6 +34,7 @@ async fn main() -> ExitCode {
         Command::InitializeWorkspace(init_workspace_args) => {
             initialize_workspace(init_workspace_args, "wasm-rpc-stubgen", &[])
         }
+        #[cfg(feature = "app-command")]
         Command::App { subcommand } => {
             run_app_command::<ComponentPropertiesExtensionsNone>(subcommand).await
         }
