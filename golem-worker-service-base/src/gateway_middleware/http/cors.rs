@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use bigdecimal::BigDecimal;
 use http::header::*;
 use poem_openapi::Object;
 use rib::{Expr, GetLiteralValue, RibInput, TypeName};
@@ -285,7 +286,7 @@ impl CorsPreflightExpr {
         if let Some(max_age) = &cors.max_age {
             cors_parameters.push((
                 ACCESS_CONTROL_MAX_AGE.to_string(),
-                Expr::untyped_number_with_type_name(*max_age as f64, TypeName::U64),
+                Expr::untyped_number_with_type_name(BigDecimal::from(*max_age), TypeName::U64),
             ));
         }
 

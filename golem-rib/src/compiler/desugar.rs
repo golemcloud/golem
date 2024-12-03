@@ -598,6 +598,7 @@ mod desugar_tests {
     }
     mod expectations {
         use crate::{Expr, InferredType, Number, TypeName, VariableId};
+        use bigdecimal::BigDecimal;
         pub(crate) fn expected_condition_with_identifiers() -> Expr {
             Expr::Cond(
                 Box::new(Expr::EqualTo(
@@ -645,7 +646,9 @@ mod desugar_tests {
                         InferredType::Bool,
                     )),
                     Box::new(Expr::Number(
-                        Number { value: 1f64 },
+                        Number {
+                            value: BigDecimal::from(1),
+                        },
                         Some(TypeName::U64),
                         InferredType::U64,
                     )),

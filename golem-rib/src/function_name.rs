@@ -268,7 +268,7 @@ pub enum ParsedFunctionReference {
     },
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Encode, Decode)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum DynamicParsedFunctionReference {
     Function {
         function: String,
@@ -902,7 +902,7 @@ pub struct ParsedFunctionName {
 // `Examples`:
 // `DynamicParsedFunctionName` : ns:name/interface.{resource1(identifier1, { field-a: some(identifier2) }).new}
 // `ParsedFunctionName` : ns:name/interface.{resource1("foo", { field-a: some("bar") }).new}
-#[derive(Debug, PartialEq, Eq, Clone, Encode, Decode)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct DynamicParsedFunctionName {
     pub site: ParsedFunctionSite,
     pub function: DynamicParsedFunctionReference,
