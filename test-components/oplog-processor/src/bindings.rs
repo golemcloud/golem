@@ -508,7 +508,7 @@ pub mod golem {
 
                     #[cfg(target_arch = "wasm32")]
                     {
-                        #[link(wasm_import_module = "golem:api/host@1.1.0-rc1")]
+                        #[link(wasm_import_module = "golem:api/host@1.1.0")]
                         extern "C" {
                             #[link_name = "[resource-drop]get-workers"]
                             fn drop(_: u32);
@@ -664,7 +664,7 @@ pub mod golem {
                             None => (0i32, ::core::ptr::null_mut(), 0usize),
                         };
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:api/host@1.1.0-rc1")]
+                        #[link(wasm_import_module = "golem:api/host@1.1.0")]
                         extern "C" {
                             #[link_name = "[constructor]get-workers"]
                             fn wit_import(
@@ -710,7 +710,7 @@ pub mod golem {
                         let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 12]);
                         let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:api/host@1.1.0-rc1")]
+                        #[link(wasm_import_module = "golem:api/host@1.1.0")]
                         extern "C" {
                             #[link_name = "[method]get-workers.get-next"]
                             fn wit_import(_: i32, _: *mut u8);
@@ -839,7 +839,7 @@ pub mod golem {
                     let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 32]);
                     let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.0-rc1")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.0")]
                     extern "C" {
                         #[link_name = "create-promise"]
                         fn wit_import(_: *mut u8);
@@ -897,7 +897,7 @@ pub mod golem {
                     let len4 = vec4.len();
                     let ptr5 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.0-rc1")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.0")]
                     extern "C" {
                         #[link_name = "await-promise"]
                         fn wit_import(_: i64, _: i64, _: *mut u8, _: usize, _: i64, _: *mut u8);
@@ -947,7 +947,7 @@ pub mod golem {
                     let len5 = vec5.len();
 
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.0-rc1")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.0")]
                     extern "C" {
                         #[link_name = "complete-promise"]
                         fn wit_import(
@@ -1007,7 +1007,7 @@ pub mod golem {
                     let len4 = vec4.len();
 
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.0-rc1")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.0")]
                     extern "C" {
                         #[link_name = "delete-promise"]
                         fn wit_import(_: i64, _: i64, _: *mut u8, _: usize, _: i64);
@@ -1031,7 +1031,7 @@ pub mod golem {
             pub fn get_oplog_index() -> OplogIndex {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.0-rc1")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.0")]
                     extern "C" {
                         #[link_name = "get-oplog-index"]
                         fn wit_import() -> i64;
@@ -1051,7 +1051,7 @@ pub mod golem {
             pub fn set_oplog_index(oplog_idx: OplogIndex) {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.0-rc1")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.0")]
                     extern "C" {
                         #[link_name = "set-oplog-index"]
                         fn wit_import(_: i64);
@@ -1070,7 +1070,7 @@ pub mod golem {
             pub fn oplog_commit(replicas: u8) {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.0-rc1")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.0")]
                     extern "C" {
                         #[link_name = "oplog-commit"]
                         fn wit_import(_: i32);
@@ -1091,7 +1091,7 @@ pub mod golem {
             pub fn mark_begin_operation() -> OplogIndex {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.0-rc1")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.0")]
                     extern "C" {
                         #[link_name = "mark-begin-operation"]
                         fn wit_import() -> i64;
@@ -1111,7 +1111,7 @@ pub mod golem {
             pub fn mark_end_operation(begin: OplogIndex) {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.0-rc1")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.0")]
                     extern "C" {
                         #[link_name = "mark-end-operation"]
                         fn wit_import(_: i64);
@@ -1133,7 +1133,7 @@ pub mod golem {
                     let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 48]);
                     let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.0-rc1")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.0")]
                     extern "C" {
                         #[link_name = "get-retry-policy"]
                         fn wit_import(_: *mut u8);
@@ -1186,7 +1186,7 @@ pub mod golem {
                         None => (0i32, 0.0f64),
                     };
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.0-rc1")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.0")]
                     extern "C" {
                         #[link_name = "set-retry-policy"]
                         fn wit_import(_: i32, _: i64, _: i64, _: f64, _: i32, _: f64);
@@ -1211,7 +1211,7 @@ pub mod golem {
             pub fn get_oplog_persistence_level() -> PersistenceLevel {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.0-rc1")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.0")]
                     extern "C" {
                         #[link_name = "get-oplog-persistence-level"]
                         fn wit_import() -> i32;
@@ -1245,7 +1245,7 @@ pub mod golem {
                     };
 
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.0-rc1")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.0")]
                     extern "C" {
                         #[link_name = "set-oplog-persistence-level"]
                         fn wit_import(_: i32);
@@ -1263,7 +1263,7 @@ pub mod golem {
             pub fn get_idempotence_mode() -> bool {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.0-rc1")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.0")]
                     extern "C" {
                         #[link_name = "get-idempotence-mode"]
                         fn wit_import() -> i32;
@@ -1285,7 +1285,7 @@ pub mod golem {
             pub fn set_idempotence_mode(idempotent: bool) {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.0-rc1")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.0")]
                     extern "C" {
                         #[link_name = "set-idempotence-mode"]
                         fn wit_import(_: i32);
@@ -1312,7 +1312,7 @@ pub mod golem {
                     let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 16]);
                     let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.0-rc1")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.0")]
                     extern "C" {
                         #[link_name = "generate-idempotency-key"]
                         fn wit_import(_: *mut u8);
@@ -1354,7 +1354,7 @@ pub mod golem {
                     let len3 = vec3.len();
 
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.0-rc1")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.0")]
                     extern "C" {
                         #[link_name = "update-worker"]
                         fn wit_import(_: i64, _: i64, _: *mut u8, _: usize, _: i64, _: i32);
@@ -1383,7 +1383,7 @@ pub mod golem {
                     let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 64]);
                     let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.0-rc1")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.0")]
                     extern "C" {
                         #[link_name = "get-self-metadata"]
                         fn wit_import(_: *mut u8);
@@ -1482,7 +1482,7 @@ pub mod golem {
                     let len3 = vec3.len();
                     let ptr4 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.0-rc1")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.0")]
                     extern "C" {
                         #[link_name = "get-worker-metadata"]
                         fn wit_import(_: i64, _: i64, _: *mut u8, _: usize, _: *mut u8);
@@ -2273,7 +2273,7 @@ pub mod golem {
 
                     #[cfg(target_arch = "wasm32")]
                     {
-                        #[link(wasm_import_module = "golem:api/oplog@1.1.0-rc1")]
+                        #[link(wasm_import_module = "golem:api/oplog@1.1.0")]
                         extern "C" {
                             #[link_name = "[resource-drop]get-oplog"]
                             fn drop(_: u32);
@@ -2317,7 +2317,7 @@ pub mod golem {
 
                     #[cfg(target_arch = "wasm32")]
                     {
-                        #[link(wasm_import_module = "golem:api/oplog@1.1.0-rc1")]
+                        #[link(wasm_import_module = "golem:api/oplog@1.1.0")]
                         extern "C" {
                             #[link_name = "[resource-drop]search-oplog"]
                             fn drop(_: u32);
@@ -2347,7 +2347,7 @@ pub mod golem {
                         let len3 = vec3.len();
 
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:api/oplog@1.1.0-rc1")]
+                        #[link(wasm_import_module = "golem:api/oplog@1.1.0")]
                         extern "C" {
                             #[link_name = "[constructor]get-oplog"]
                             fn wit_import(_: i64, _: i64, _: *mut u8, _: usize, _: i64) -> i32;
@@ -2377,7 +2377,7 @@ pub mod golem {
                         let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 12]);
                         let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:api/oplog@1.1.0-rc1")]
+                        #[link(wasm_import_module = "golem:api/oplog@1.1.0")]
                         extern "C" {
                             #[link_name = "[method]get-oplog.get-next"]
                             fn wit_import(_: i32, _: *mut u8);
@@ -5746,7 +5746,7 @@ pub mod golem {
                         let len4 = vec4.len();
 
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:api/oplog@1.1.0-rc1")]
+                        #[link(wasm_import_module = "golem:api/oplog@1.1.0")]
                         extern "C" {
                             #[link_name = "[constructor]search-oplog"]
                             fn wit_import(
@@ -5791,7 +5791,7 @@ pub mod golem {
                         let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 12]);
                         let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:api/oplog@1.1.0-rc1")]
+                        #[link(wasm_import_module = "golem:api/oplog@1.1.0")]
                         extern "C" {
                             #[link_name = "[method]search-oplog.get-next"]
                             fn wit_import(_: i32, _: *mut u8);
@@ -11862,9 +11862,7 @@ pub mod exports {
 
                         #[cfg(target_arch = "wasm32")]
                         {
-                            #[link(
-                                wasm_import_module = "[export]golem:api/oplog-processor@1.1.0-rc1"
-                            )]
+                            #[link(wasm_import_module = "[export]golem:api/oplog-processor@1.1.0")]
                             extern "C" {
                                 #[link_name = "[resource-drop]processor"]
                                 fn drop(_: u32);
@@ -15216,9 +15214,7 @@ pub mod exports {
 
                         #[cfg(target_arch = "wasm32")]
                         {
-                            #[link(
-                                wasm_import_module = "[export]golem:api/oplog-processor@1.1.0-rc1"
-                            )]
+                            #[link(wasm_import_module = "[export]golem:api/oplog-processor@1.1.0")]
                             extern "C" {
                                 #[link_name = "[resource-new]processor"]
                                 fn new(_: *mut u8) -> u32;
@@ -15240,9 +15236,7 @@ pub mod exports {
 
                         #[cfg(target_arch = "wasm32")]
                         {
-                            #[link(
-                                wasm_import_module = "[export]golem:api/oplog-processor@1.1.0-rc1"
-                            )]
+                            #[link(wasm_import_module = "[export]golem:api/oplog-processor@1.1.0")]
                             extern "C" {
                                 #[link_name = "[resource-rep]processor"]
                                 fn rep(_: u32) -> *mut u8;
@@ -15276,25 +15270,25 @@ pub mod exports {
                 }
                 #[doc(hidden)]
 
-                macro_rules! __export_golem_api_oplog_processor_1_1_0_rc1_cabi{
+                macro_rules! __export_golem_api_oplog_processor_1_1_0_cabi{
                                     ($ty:ident with_types_in $($path_to_types:tt)*) => (const _: () = {
 
-                                      #[export_name = "golem:api/oplog-processor@1.1.0-rc1#[constructor]processor"]
+                                      #[export_name = "golem:api/oplog-processor@1.1.0#[constructor]processor"]
                                       unsafe extern "C" fn export_constructor_processor(arg0: *mut u8,arg1: usize,arg2: i64,arg3: i64,arg4: *mut u8,arg5: usize,) -> i32 {
                                         $($path_to_types)*::_export_constructor_processor_cabi::<<$ty as $($path_to_types)*::Guest>::Processor>(arg0, arg1, arg2, arg3, arg4, arg5)
                                       }
-                                      #[export_name = "golem:api/oplog-processor@1.1.0-rc1#[method]processor.process"]
+                                      #[export_name = "golem:api/oplog-processor@1.1.0#[method]processor.process"]
                                       unsafe extern "C" fn export_method_processor_process(arg0: *mut u8,) -> *mut u8 {
                                         $($path_to_types)*::_export_method_processor_process_cabi::<<$ty as $($path_to_types)*::Guest>::Processor>(arg0)
                                       }
-                                      #[export_name = "cabi_post_golem:api/oplog-processor@1.1.0-rc1#[method]processor.process"]
+                                      #[export_name = "cabi_post_golem:api/oplog-processor@1.1.0#[method]processor.process"]
                                       unsafe extern "C" fn _post_return_method_processor_process(arg0: *mut u8,) {
                                         $($path_to_types)*::__post_return_method_processor_process::<<$ty as $($path_to_types)*::Guest>::Processor>(arg0)
                                       }
 
                                       const _: () = {
                                         #[doc(hidden)]
-                                        #[export_name = "golem:api/oplog-processor@1.1.0-rc1#[dtor]processor"]
+                                        #[export_name = "golem:api/oplog-processor@1.1.0#[dtor]processor"]
                                         #[allow(non_snake_case)]
                                         unsafe extern "C" fn dtor(rep: *mut u8) {
                                           $($path_to_types)*::Processor::dtor::<
@@ -15306,7 +15300,7 @@ pub mod exports {
                                     };);
                                   }
                 #[doc(hidden)]
-                pub(crate) use __export_golem_api_oplog_processor_1_1_0_rc1_cabi;
+                pub(crate) use __export_golem_api_oplog_processor_1_1_0_cabi;
                 #[repr(align(4))]
                 struct _RetArea([::core::mem::MaybeUninit<u8>; 12]);
                 static mut _RET_AREA: _RetArea = _RetArea([::core::mem::MaybeUninit::uninit(); 12]);
@@ -15712,7 +15706,7 @@ macro_rules! __export_oplog_processor_impl {
                           ($ty:ident) => (self::export!($ty with_types_in self););
                           ($ty:ident with_types_in $($path_to_types_root:tt)*) => (
                           $($path_to_types_root)*::exports::golem::component::api::__export_golem_component_api_cabi!($ty with_types_in $($path_to_types_root)*::exports::golem::component::api);
-                          $($path_to_types_root)*::exports::golem::api::oplog_processor::__export_golem_api_oplog_processor_1_1_0_rc1_cabi!($ty with_types_in $($path_to_types_root)*::exports::golem::api::oplog_processor);
+                          $($path_to_types_root)*::exports::golem::api::oplog_processor::__export_golem_api_oplog_processor_1_1_0_cabi!($ty with_types_in $($path_to_types_root)*::exports::golem::api::oplog_processor);
                           )
                         }
 #[doc(inline)]
@@ -15721,8 +15715,8 @@ pub(crate) use __export_oplog_processor_impl as export;
 #[cfg(target_arch = "wasm32")]
 #[link_section = "component-type:wit-bindgen:0.25.0:oplog-processor:encoded world"]
 #[doc(hidden)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 7371] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xc58\x01A\x02\x01A\x1e\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 7359] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xb98\x01A\x02\x01A\x1e\
 \x01B\x05\x01r\x02\x07secondsw\x0bnanosecondsy\x04\0\x08datetime\x03\0\0\x01@\0\0\
 \x01\x04\0\x03now\x01\x02\x04\0\x0aresolution\x01\x02\x03\x01\x1cwasi:clocks/wal\
 l-clock@0.2.0\x05\0\x01B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\
@@ -15795,18 +15789,18 @@ J\x01@\0\0\x7f\x04\0\x14get-idempotence-mode\x01K\x01@\x01\x0aidempotent\x7f\x01
 \0\x04\0\x14set-idempotence-mode\x01L\x01@\0\0\x09\x04\0\x18generate-idempotency\
 -key\x01M\x01@\x03\x09worker-id\x0d\x0etarget-version\x07\x04mode\x18\x01\0\x04\0\
 \x0dupdate-worker\x01N\x01@\0\05\x04\0\x11get-self-metadata\x01O\x01k5\x01@\x01\x09\
-worker-id\x0d\0\xd0\0\x04\0\x13get-worker-metadata\x01Q\x03\x01\x18golem:api/hos\
-t@1.1.0-rc1\x05\x07\x02\x03\0\0\x08datetime\x02\x03\0\x02\x09wit-value\x02\x03\0\
-\x04\x0aaccount-id\x02\x03\0\x04\x11component-version\x02\x03\0\x04\x0boplog-ind\
-ex\x02\x03\0\x04\x0cretry-policy\x02\x03\0\x04\x04uuid\x02\x03\0\x04\x09worker-i\
-d\x01Be\x02\x03\x02\x01\x08\x04\0\x08datetime\x03\0\0\x02\x03\x02\x01\x09\x04\0\x09\
-wit-value\x03\0\x02\x02\x03\x02\x01\x0a\x04\0\x0aaccount-id\x03\0\x04\x02\x03\x02\
-\x01\x0b\x04\0\x11component-version\x03\0\x06\x02\x03\x02\x01\x0c\x04\0\x0boplog\
--index\x03\0\x08\x02\x03\x02\x01\x0d\x04\0\x0cretry-policy\x03\0\x0a\x02\x03\x02\
-\x01\x0e\x04\0\x04uuid\x03\0\x0c\x02\x03\x02\x01\x0f\x04\0\x09worker-id\x03\0\x0e\
-\x01k\x09\x01q\x05\x0aread-local\0\0\x0bwrite-local\0\0\x0bread-remote\0\0\x0cwr\
-ite-remote\0\0\x14write-remote-batched\x01\x10\0\x04\0\x15wrapped-function-type\x03\
-\0\x11\x01o\x02ss\x01p\x13\x01r\x04\x0finstallation-id\x0d\x04names\x07versions\x0a\
+worker-id\x0d\0\xd0\0\x04\0\x13get-worker-metadata\x01Q\x03\x01\x14golem:api/hos\
+t@1.1.0\x05\x07\x02\x03\0\0\x08datetime\x02\x03\0\x02\x09wit-value\x02\x03\0\x04\
+\x0aaccount-id\x02\x03\0\x04\x11component-version\x02\x03\0\x04\x0boplog-index\x02\
+\x03\0\x04\x0cretry-policy\x02\x03\0\x04\x04uuid\x02\x03\0\x04\x09worker-id\x01B\
+e\x02\x03\x02\x01\x08\x04\0\x08datetime\x03\0\0\x02\x03\x02\x01\x09\x04\0\x09wit\
+-value\x03\0\x02\x02\x03\x02\x01\x0a\x04\0\x0aaccount-id\x03\0\x04\x02\x03\x02\x01\
+\x0b\x04\0\x11component-version\x03\0\x06\x02\x03\x02\x01\x0c\x04\0\x0boplog-ind\
+ex\x03\0\x08\x02\x03\x02\x01\x0d\x04\0\x0cretry-policy\x03\0\x0a\x02\x03\x02\x01\
+\x0e\x04\0\x04uuid\x03\0\x0c\x02\x03\x02\x01\x0f\x04\0\x09worker-id\x03\0\x0e\x01\
+k\x09\x01q\x05\x0aread-local\0\0\x0bwrite-local\0\0\x0bread-remote\0\0\x0cwrite-\
+remote\0\0\x14write-remote-batched\x01\x10\0\x04\0\x15wrapped-function-type\x03\0\
+\x11\x01o\x02ss\x01p\x13\x01r\x04\x0finstallation-id\x0d\x04names\x07versions\x0a\
 parameters\x14\x04\0\x1fplugin-installation-description\x03\0\x15\x01ps\x01k\x0f\
 \x01p\x16\x01r\x0a\x09timestamp\x01\x09worker-id\x0f\x11component-version\x07\x04\
 args\x17\x03env\x14\x0aaccount-id\x05\x06parent\x18\x0ecomponent-sizew\x20initia\
@@ -15856,23 +15850,23 @@ structor]get-oplog\x01U\x01hR\x01p\xd1\0\x01k\xd7\0\x01@\x01\x04self\xd6\0\0\xd8
 \0\x04\0\x1a[method]get-oplog.get-next\x01Y\x01iS\x01@\x02\x09worker-id\x0f\x04t\
 exts\0\xda\0\x04\0\x19[constructor]search-oplog\x01[\x01hS\x01o\x02\x09\xd1\0\x01\
 p\xdd\0\x01k\xde\0\x01@\x01\x04self\xdc\0\0\xdf\0\x04\0\x1d[method]search-oplog.\
-get-next\x01`\x03\x01\x19golem:api/oplog@1.1.0-rc1\x05\x10\x01B\x03\x01ps\x01@\0\
-\0\0\x04\0\x15get-invoked-functions\x01\x01\x04\x01\x13golem:component/api\x05\x11\
-\x02\x03\0\x04\x0ccomponent-id\x02\x03\0\x04\x0fworker-metadata\x02\x03\0\x05\x0b\
-oplog-entry\x01B\x1d\x02\x03\x02\x01\x08\x04\0\x08datetime\x03\0\0\x02\x03\x02\x01\
-\x09\x04\0\x09wit-value\x03\0\x02\x02\x03\x02\x01\x0a\x04\0\x0aaccount-id\x03\0\x04\
-\x02\x03\x02\x01\x12\x04\0\x0ccomponent-id\x03\0\x06\x02\x03\x02\x01\x0c\x04\0\x0b\
-oplog-index\x03\0\x08\x02\x03\x02\x01\x0f\x04\0\x09worker-id\x03\0\x0a\x02\x03\x02\
+get-next\x01`\x03\x01\x15golem:api/oplog@1.1.0\x05\x10\x01B\x03\x01ps\x01@\0\0\0\
+\x04\0\x15get-invoked-functions\x01\x01\x04\x01\x13golem:component/api\x05\x11\x02\
+\x03\0\x04\x0ccomponent-id\x02\x03\0\x04\x0fworker-metadata\x02\x03\0\x05\x0bopl\
+og-entry\x01B\x1d\x02\x03\x02\x01\x08\x04\0\x08datetime\x03\0\0\x02\x03\x02\x01\x09\
+\x04\0\x09wit-value\x03\0\x02\x02\x03\x02\x01\x0a\x04\0\x0aaccount-id\x03\0\x04\x02\
+\x03\x02\x01\x12\x04\0\x0ccomponent-id\x03\0\x06\x02\x03\x02\x01\x0c\x04\0\x0bop\
+log-index\x03\0\x08\x02\x03\x02\x01\x0f\x04\0\x09worker-id\x03\0\x0a\x02\x03\x02\
 \x01\x13\x04\0\x0fworker-metadata\x03\0\x0c\x02\x03\x02\x01\x14\x04\0\x0boplog-e\
 ntry\x03\0\x0e\x01r\x01\x0aaccount-id\x05\x04\0\x0caccount-info\x03\0\x10\x04\0\x09\
 processor\x03\x01\x01o\x02ss\x01p\x13\x01i\x12\x01@\x03\x0caccount-info\x11\x0cc\
 omponent-id\x07\x06config\x14\0\x15\x04\0\x16[constructor]processor\x01\x16\x01h\
 \x12\x01p\x0f\x01j\0\x01s\x01@\x05\x04self\x17\x09worker-id\x0b\x08metadata\x0d\x11\
 first-entry-index\x09\x07entries\x18\0\x19\x04\0\x19[method]processor.process\x01\
-\x1a\x04\x01#golem:api/oplog-processor@1.1.0-rc1\x05\x15\x04\x01\x1fgolem:compon\
-ent/oplog-processor\x04\0\x0b\x15\x01\0\x0foplog-processor\x03\0\0\0G\x09produce\
-rs\x01\x0cprocessed-by\x02\x0dwit-component\x070.208.1\x10wit-bindgen-rust\x060.\
-25.0";
+\x1a\x04\x01\x1fgolem:api/oplog-processor@1.1.0\x05\x15\x04\x01\x1fgolem:compone\
+nt/oplog-processor\x04\0\x0b\x15\x01\0\x0foplog-processor\x03\0\0\0G\x09producer\
+s\x01\x0cprocessed-by\x02\x0dwit-component\x070.208.1\x10wit-bindgen-rust\x060.2\
+5.0";
 
 #[inline(never)]
 #[doc(hidden)]
