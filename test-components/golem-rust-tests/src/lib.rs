@@ -17,6 +17,7 @@ impl Guest for Component {
             min_delay: Duration::from_secs(1),
             max_delay: Duration::from_secs(1),
             multiplier: 1.0,
+            max_jitter_factor: None
         });
 
         panic!("Fail now");

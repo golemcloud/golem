@@ -13,7 +13,7 @@ rand = "0.8.5"
 uuid = { version = "1.4.1", features = ["v4"] }
 wit-bindgen-rt = { version = "0.26.0", features = ["bitflags"] }
 
-golem-rust = "1"
+golem-rust = "1.2.1"
 
 [package.metadata.component.target]
 path = "wit"
