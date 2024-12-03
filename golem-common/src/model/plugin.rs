@@ -39,6 +39,13 @@ impl DefaultPluginScope {
     pub fn component(component_id: ComponentId) -> Self {
         DefaultPluginScope::Component(ComponentPluginScope { component_id })
     }
+
+    pub fn valid_in_component(&self, component_id: &ComponentId) -> bool {
+        match self {
+            DefaultPluginScope::Global(_) => true,
+            DefaultPluginScope::Component(scope) => &scope.component_id == component_id,
+        }
+    }
 }
 
 impl Default for DefaultPluginScope {

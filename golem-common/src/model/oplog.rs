@@ -24,7 +24,7 @@ use bincode::enc::write::Writer;
 use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
-use golem_wasm_ast::analysis::analysed_type::u64;
+use golem_wasm_ast::analysis::analysed_type::{r#enum, u64};
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::{IntoValue, Value};
 use poem_openapi::{Enum, NewType};
@@ -230,6 +230,16 @@ impl Display for WorkerResourceId {
     }
 }
 
+impl IntoValue for WorkerResourceId {
+    fn into_value(self) -> Value {
+        Value::U64(self.0)
+    }
+
+    fn get_type() -> AnalysedType {
+        u64()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
 pub struct IndexedResourceKey {
     pub resource_name: String,
@@ -266,6 +276,27 @@ pub enum LogLevel {
     Warn,
     Error,
     Critical,
+}
+
+impl IntoValue for LogLevel {
+    fn into_value(self) -> Value {
+        match self {
+            LogLevel::Stdout => Value::Enum(0),
+            LogLevel::Stderr => Value::Enum(1),
+            LogLevel::Trace => Value::Enum(2),
+            LogLevel::Debug => Value::Enum(3),
+            LogLevel::Info => Value::Enum(4),
+            LogLevel::Warn => Value::Enum(5),
+            LogLevel::Error => Value::Enum(6),
+            LogLevel::Critical => Value::Enum(7),
+        }
+    }
+
+    fn get_type() -> AnalysedType {
+        r#enum(&[
+            "stdout", "stderr", "trace", "debug", "info", "warn", "error", "critical",
+        ])
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Encode, Decode)]

@@ -23,7 +23,7 @@ use golem_test_framework::dsl::{log_event_to_string, TestDslUnsafe};
 use golem_wasm_rpc::Value;
 use http_02::{Response, StatusCode};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tonic::transport::Body;
 use warp::Filter;
 
@@ -96,13 +96,19 @@ async fn tinygo_example(
         .await
         .unwrap();
 
-    tokio::time::sleep(Duration::from_secs(5)).await;
     let mut events = vec![];
-    rx.recv_many(&mut events, 100).await;
+    let start = Instant::now();
+    while events.len() < 5 && start.elapsed() < Duration::from_secs(5) {
+        if let Some(event) = rx.recv().await {
+            events.push(event);
+        } else {
+            break;
+        }
+    }
 
     drop(executor);
 
-    assert!(events.len() >= 4);
+    assert!(events.len() >= 5);
 
     let first_line = log_event_to_string(&events[1]);
     let second_line = log_event_to_string(&events[2]);
@@ -266,9 +272,15 @@ async fn java_example_1(
         .await
         .unwrap();
 
-    tokio::time::sleep(Duration::from_secs(5)).await;
     let mut events = vec![];
-    rx.recv_many(&mut events, 100).await;
+    let start = Instant::now();
+    while events.len() < 2 && start.elapsed() < Duration::from_secs(5) {
+        if let Some(event) = rx.recv().await {
+            events.push(event);
+        } else {
+            break;
+        }
+    }
 
     drop(executor);
 
@@ -401,9 +413,15 @@ async fn c_example_1(
         .await
         .unwrap();
 
-    tokio::time::sleep(Duration::from_secs(5)).await;
     let mut events = vec![];
-    rx.recv_many(&mut events, 100).await;
+    let start = Instant::now();
+    while events.len() < 2 && start.elapsed() < Duration::from_secs(5) {
+        if let Some(event) = rx.recv().await {
+            events.push(event);
+        } else {
+            break;
+        }
+    }
 
     drop(executor);
 
@@ -437,9 +455,15 @@ async fn c_example_2(
         .await
         .unwrap();
 
-    tokio::time::sleep(Duration::from_secs(5)).await;
     let mut events = vec![];
-    rx.recv_many(&mut events, 100).await;
+    let start = Instant::now();
+    while events.len() < 2 && start.elapsed() < Duration::from_secs(5) {
+        if let Some(event) = rx.recv().await {
+            events.push(event);
+        } else {
+            break;
+        }
+    }
 
     drop(executor);
 

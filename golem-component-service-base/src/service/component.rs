@@ -1441,8 +1441,8 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
         installation: PluginInstallationCreation,
     ) -> Result<PluginInstallation, PluginError> {
         let namespace = owner.to_string();
-        let owner: Owner::Row = owner.clone().into();
-        let plugin_owner = owner.into();
+        let owner_row: Owner::Row = owner.clone().into();
+        let plugin_owner_row = owner_row.into();
 
         let latest = self
             .component_repo
@@ -1464,7 +1464,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
                     component_version: latest.version as u64,
                 }
                 .into(),
-                owner: plugin_owner,
+                owner: plugin_owner_row,
             };
 
             let new_component_version = self.component_repo.install_plugin(&record).await?;

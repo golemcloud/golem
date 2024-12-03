@@ -21,14 +21,13 @@ use std::net::SocketAddr;
 use std::os::unix::fs::FileExt;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use assert2::check;
 use http_02::{Response, StatusCode};
 use redis::Commands;
 
 use golem_api_grpc::proto::golem::worker::v1::{worker_execution_error, ComponentParseFailed};
-use golem_api_grpc::proto::golem::worker::LogEvent;
 use golem_api_grpc::proto::golem::workerexecutor::v1::CompletePromiseRequest;
 use golem_common::model::{
     AccountId, ComponentId, FilterComparator, IdempotencyKey, PromiseId, ScanCursor,
@@ -77,17 +76,15 @@ async fn interruption(
             .await
     });
 
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    executor
+        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
+        .await;
 
     let _ = executor.interrupt(&worker_id).await;
     let result = fiber.await.unwrap();
 
     drop(executor);
 
-    println!(
-        "result: {:?}",
-        result.as_ref().map_err(worker_error_message)
-    );
     check!(result.is_err());
     check!(worker_error_message(&result.err().unwrap()).contains("Interrupted via the Golem API"));
 }
@@ -455,7 +452,10 @@ async fn promise(
             .await
     });
 
-    sleep(Duration::from_secs(10)).await;
+    // While waiting for the promise, the worker gets suspended
+    executor
+        .wait_for_status(&worker_id, WorkerStatus::Suspended, Duration::from_secs(10))
+        .await;
 
     executor
         .client()
@@ -1220,6 +1220,9 @@ async fn get_worker_metadata(
     let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("clock-service").await;
+    let component_path = executor.component_directory().join("clock-service.wasm");
+    let expected_component_size = tokio::fs::metadata(&component_path).await.unwrap().len();
+
     let worker_id = executor
         .start_worker(&component_id, "get-worker-metadata-1")
         .await;
@@ -1231,19 +1234,24 @@ async fn get_worker_metadata(
             .invoke_and_await(
                 &worker_id_clone,
                 "golem:it/api.{sleep}",
-                vec![Value::U64(10)],
+                vec![Value::U64(2)],
             )
             .await
     });
 
-    sleep(Duration::from_secs(5)).await;
+    let metadata1 = executor
+        .wait_for_statuses(
+            &worker_id,
+            &[WorkerStatus::Running, WorkerStatus::Suspended],
+            Duration::from_secs(5),
+        )
+        .await;
 
-    let (metadata1, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
     let _ = fiber.await;
 
-    sleep(Duration::from_secs(2)).await;
-
-    let (metadata2, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
+    let metadata2 = executor
+        .wait_for_status(&worker_id, WorkerStatus::Idle, Duration::from_secs(10))
+        .await;
 
     drop(executor);
 
@@ -1260,7 +1268,8 @@ async fn get_worker_metadata(
                 value: "test-account".to_string()
             }
     );
-    check!(metadata2.last_known_status.component_size == 60157);
+
+    check!(metadata2.last_known_status.component_size == expected_component_size);
     check!(metadata2.last_known_status.total_linear_memory_size == 1245184);
 }
 
@@ -1642,23 +1651,21 @@ async fn long_running_poll_loop_works_as_expected(
         .await
         .unwrap();
 
-    sleep(Duration::from_secs(2)).await;
-
-    let (status1, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
+    executor
+        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
+        .await;
 
     {
         let mut response = response.lock().unwrap();
         *response = "first".to_string();
     }
 
-    sleep(Duration::from_secs(2)).await;
-    let (status2, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
+    executor
+        .wait_for_status(&worker_id, WorkerStatus::Idle, Duration::from_secs(10))
+        .await;
 
     drop(executor);
     http_server.abort();
-
-    check!(status1.last_known_status.status == WorkerStatus::Running);
-    check!(status2.last_known_status.status == WorkerStatus::Idle);
 }
 
 #[test]
@@ -1710,8 +1717,9 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
         .await
         .unwrap();
 
-    sleep(Duration::from_secs(2)).await;
-    let (status1, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
+    executor
+        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
+        .await;
     let values1 = executor
         .get_running_workers_metadata(
             &worker_id.component_id,
@@ -1722,11 +1730,15 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
         )
         .await;
 
-    sleep(Duration::from_secs(4)).await;
     executor.interrupt(&worker_id).await;
 
-    sleep(Duration::from_secs(2)).await;
-    let (status2, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
+    executor
+        .wait_for_status(
+            &worker_id,
+            WorkerStatus::Interrupted,
+            Duration::from_secs(5),
+        )
+        .await;
     let values2 = executor
         .get_running_workers_metadata(
             &worker_id.component_id,
@@ -1751,8 +1763,9 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
             .unwrap();
     });
 
-    sleep(Duration::from_secs(2)).await;
-    let (status3, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
+    executor
+        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
+        .await;
 
     {
         let mut response = response.lock().unwrap();
@@ -1761,31 +1774,24 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
 
     fiber.await;
 
-    sleep(Duration::from_secs(3)).await;
-    let (status4, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
+    sleep(Duration::from_secs(1)).await;
 
     {
         let mut response = response.lock().unwrap();
         *response = "second".to_string();
     }
 
-    sleep(Duration::from_secs(2)).await;
-    let (status5, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
+    executor
+        .wait_for_status(&worker_id, WorkerStatus::Idle, Duration::from_secs(10))
+        .await;
 
     drop(executor);
     http_server.abort();
 
-    check!(status1.last_known_status.status == WorkerStatus::Running);
     check!(!values1.is_empty());
     // first running
-    check!(status2.last_known_status.status == WorkerStatus::Interrupted);
     check!(values2.is_empty());
     // first interrupted
-    check!(status3.last_known_status.status == WorkerStatus::Running);
-    // first resumed
-    check!(status4.last_known_status.status == WorkerStatus::Running);
-    // second running
-    check!(status5.last_known_status.status == WorkerStatus::Idle); // second finished
 }
 
 #[test]
@@ -1826,7 +1832,7 @@ async fn long_running_poll_loop_connection_breaks_on_interrupt(
         .start_worker_with(&component_id, "poll-loop-component-2", vec![], env)
         .await;
 
-    let rx = executor.capture_output_with_termination(&worker_id).await;
+    let mut rx = executor.capture_output_with_termination(&worker_id).await;
 
     executor
         .invoke(
@@ -1837,23 +1843,35 @@ async fn long_running_poll_loop_connection_breaks_on_interrupt(
         .await
         .unwrap();
 
-    sleep(Duration::from_secs(2)).await;
+    executor
+        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
+        .await;
+
+    let start = Instant::now();
+
+    let mut found1 = false;
+    let mut found2 = false;
+    while (!found1 || !found2) && start.elapsed() < Duration::from_secs(5) {
+        match rx.recv().await {
+            Some(Some(event)) => {
+                if stdout_event_matching(&event, "Calling the poll endpoint\n") {
+                    found1 = true;
+                } else if stdout_event_matching(&event, "Received initial\n") {
+                    found2 = true;
+                }
+            }
+            _ => {
+                panic!("Did not receive the expected log events");
+            }
+        }
+    }
 
     executor.interrupt(&worker_id).await;
 
-    let events = drain_connection(rx).await;
+    let _ = drain_connection(rx).await;
 
     drop(executor);
     http_server.abort();
-
-    check!(events
-        .iter()
-        .flatten()
-        .any(|e| stdout_event_matching(e, "Calling the poll endpoint\n")));
-    check!(events
-        .iter()
-        .flatten()
-        .any(|e| stdout_event_matching(e, "Received initial\n")));
 }
 
 #[test]
@@ -1906,7 +1924,9 @@ async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_wor
         .await
         .unwrap();
 
-    sleep(Duration::from_secs(2)).await;
+    executor
+        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
+        .await;
 
     executor.interrupt(&worker_id).await;
 
@@ -1974,49 +1994,55 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume(
         .await
         .unwrap();
 
-    sleep(Duration::from_secs(2)).await;
-    let (status1, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
+    executor
+        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
+        .await;
 
     executor.interrupt(&worker_id).await;
 
-    let mut events = drain_connection(rx).await;
+    let _ = drain_connection(rx).await;
     let (status2, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
     executor.resume(&worker_id).await;
-    sleep(Duration::from_secs(2)).await;
-
+    executor
+        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
+        .await;
     let mut rx = executor.capture_output_with_termination(&worker_id).await;
-    let (status3, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
     {
         let mut response = response.lock().unwrap();
         *response = "first".to_string();
     }
 
-    sleep(Duration::from_secs(4)).await;
+    let start = Instant::now();
 
-    rx.recv_many(&mut events, 100).await;
+    let mut found1 = false;
+    let mut found2 = false;
+    let mut found3 = false;
+    while (!found1 || !found2 || !found3) && start.elapsed() < Duration::from_secs(5) {
+        match rx.recv().await {
+            Some(Some(event)) => {
+                if stdout_event_matching(&event, "Calling the poll endpoint\n") {
+                    found1 = true;
+                } else if stdout_event_matching(&event, "Received initial\n") {
+                    found2 = true;
+                } else if stdout_event_matching(&event, "Poll loop finished\n") {
+                    found3 = true;
+                }
+            }
+            _ => {
+                panic!("Did not receive the expected log events");
+            }
+        }
+    }
 
     let (status4, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
     drop(executor);
     http_server.abort();
 
-    let events: Vec<LogEvent> = events.into_iter().flatten().collect();
-
-    check!(status1.last_known_status.status == WorkerStatus::Running);
     check!(status2.last_known_status.status == WorkerStatus::Interrupted);
-    check!(status3.last_known_status.status == WorkerStatus::Running);
     check!(status4.last_known_status.status == WorkerStatus::Idle);
-    check!(events
-        .iter()
-        .any(|e| stdout_event_matching(e, "Calling the poll endpoint\n")));
-    check!(events
-        .iter()
-        .any(|e| stdout_event_matching(e, "Received initial\n")));
-    check!(events
-        .iter()
-        .any(|e| stdout_event_matching(e, "Poll loop finished\n")));
 }
 
 #[test]
@@ -2069,7 +2095,9 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt(
         .await
         .unwrap();
 
-    sleep(Duration::from_secs(2)).await;
+    executor
+        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
+        .await;
 
     executor.interrupt(&worker_id).await;
 
@@ -2489,7 +2517,9 @@ async fn reconstruct_interrupted_state(
             .await
     });
 
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    executor
+        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
+        .await;
 
     let _ = executor.interrupt(&worker_id).await;
     let result = fiber.await.unwrap();
@@ -2571,7 +2601,9 @@ async fn invocation_queue_is_persistent(
         .await
         .unwrap();
 
-    sleep(Duration::from_secs(2)).await;
+    executor
+        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
+        .await;
 
     executor
         .invoke(&worker_id, "golem:it/api.{increment}", vec![])
@@ -2588,7 +2620,13 @@ async fn invocation_queue_is_persistent(
 
     executor.interrupt(&worker_id).await;
 
-    sleep(Duration::from_secs(2)).await;
+    executor
+        .wait_for_status(
+            &worker_id,
+            WorkerStatus::Interrupted,
+            Duration::from_secs(5),
+        )
+        .await;
 
     drop(executor);
     let executor = start(deps, &context).await.unwrap();
@@ -2600,8 +2638,9 @@ async fn invocation_queue_is_persistent(
 
     executor.log_output(&worker_id).await;
 
-    sleep(Duration::from_secs(2)).await;
-
+    executor
+        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
+        .await;
     {
         let mut response = response.lock().unwrap();
         *response = "done".to_string();

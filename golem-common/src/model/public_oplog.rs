@@ -21,8 +21,11 @@ use crate::model::{
     AccountId, ComponentVersion, Empty, IdempotencyKey, PluginInstallationId, Timestamp, WorkerId,
 };
 use golem_api_grpc::proto::golem::worker::{oplog_entry, worker_invocation, wrapped_function_type};
+use golem_wasm_ast::analysis::analysed_type::{
+    case, f64, field, list, option, record, s64, str, tuple, u32, u64, u8, unit_case, variant,
+};
 use golem_wasm_ast::analysis::{AnalysedType, NameOptionTypePair};
-use golem_wasm_rpc::{Value, ValueAndType};
+use golem_wasm_rpc::{IntoValue, Value, ValueAndType, WitValue};
 use poem_openapi::types::{ParseFromParameter, ParseResult};
 use poem_openapi::{Object, Union};
 use serde::{Deserialize, Serialize};
@@ -42,6 +45,28 @@ pub struct SnapshotBasedUpdateParameters {
 pub enum PublicUpdateDescription {
     Automatic(Empty),
     SnapshotBased(SnapshotBasedUpdateParameters),
+}
+
+impl IntoValue for PublicUpdateDescription {
+    fn into_value(self) -> Value {
+        match self {
+            PublicUpdateDescription::Automatic(_) => Value::Variant {
+                case_idx: 0,
+                case_value: None,
+            },
+            PublicUpdateDescription::SnapshotBased(params) => Value::Variant {
+                case_idx: 1,
+                case_value: Some(Box::new(params.payload.into_value())),
+            },
+        }
+    }
+
+    fn get_type() -> AnalysedType {
+        variant(vec![
+            unit_case("auto-update"),
+            case("snapshot-based", list(u8())),
+        ])
+    }
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
@@ -88,6 +113,43 @@ impl From<WrappedFunctionType> for PublicWrappedFunctionType {
     }
 }
 
+impl IntoValue for PublicWrappedFunctionType {
+    fn into_value(self) -> Value {
+        match self {
+            PublicWrappedFunctionType::ReadLocal(_) => Value::Variant {
+                case_idx: 0,
+                case_value: None,
+            },
+            PublicWrappedFunctionType::WriteLocal(_) => Value::Variant {
+                case_idx: 1,
+                case_value: None,
+            },
+            PublicWrappedFunctionType::ReadRemote(_) => Value::Variant {
+                case_idx: 2,
+                case_value: None,
+            },
+            PublicWrappedFunctionType::WriteRemote(_) => Value::Variant {
+                case_idx: 3,
+                case_value: None,
+            },
+            PublicWrappedFunctionType::WriteRemoteBatched(params) => Value::Variant {
+                case_idx: 4,
+                case_value: Some(Box::new(params.index.into_value())),
+            },
+        }
+    }
+
+    fn get_type() -> AnalysedType {
+        variant(vec![
+            unit_case("read-local"),
+            unit_case("write-local"),
+            unit_case("read-remote"),
+            unit_case("write-remote"),
+            case("write-remote-batched", option(u64())),
+        ])
+    }
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
 pub struct DetailsParameter {
     pub details: String,
@@ -116,11 +178,54 @@ impl From<RetryConfig> for PublicRetryConfig {
     }
 }
 
+impl IntoValue for PublicRetryConfig {
+    fn into_value(self) -> Value {
+        Value::Record(vec![
+            self.max_attempts.into_value(),
+            self.min_delay.into_value(),
+            self.max_delay.into_value(),
+            self.multiplier.into_value(),
+            self.max_jitter_factor.into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("max-attempts", u32()),
+            field("min-delay", u64()),
+            field("max-delay", u64()),
+            field("multiplier", f64()),
+            field("max-jitter-factor", option(f64())),
+        ])
+    }
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
 pub struct ExportedFunctionParameters {
     pub idempotency_key: IdempotencyKey,
     pub full_function_name: String,
     pub function_input: Option<Vec<ValueAndType>>,
+}
+
+impl IntoValue for ExportedFunctionParameters {
+    fn into_value(self) -> Value {
+        let wit_values: Option<Vec<WitValue>> = self
+            .function_input
+            .map(|inputs| inputs.into_iter().map(Into::into).collect());
+        Value::Record(vec![
+            self.idempotency_key.into_value(),
+            self.full_function_name.into_value(),
+            wit_values.into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("idempotency-key", IdempotencyKey::get_type()),
+            field("full-function-name", str()),
+            field("function-input", option(list(WitValue::get_type()))),
+        ])
+    }
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
@@ -136,12 +241,59 @@ pub enum PublicWorkerInvocation {
     ManualUpdate(ManualUpdateParameters),
 }
 
+impl IntoValue for PublicWorkerInvocation {
+    fn into_value(self) -> Value {
+        match self {
+            PublicWorkerInvocation::ExportedFunction(params) => Value::Variant {
+                case_idx: 0,
+                case_value: Some(Box::new(params.into_value())),
+            },
+            PublicWorkerInvocation::ManualUpdate(params) => Value::Variant {
+                case_idx: 1,
+                case_value: Some(Box::new(params.target_version.into_value())),
+            },
+        }
+    }
+
+    fn get_type() -> AnalysedType {
+        variant(vec![
+            case("exported-function", ExportedFunctionParameters::get_type()),
+            case("manual-update", ComponentVersion::get_type()),
+        ])
+    }
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq, Eq, PartialOrd, Ord, Deserialize, Object)]
 pub struct PluginInstallationDescription {
     pub installation_id: PluginInstallationId,
     pub plugin_name: String,
     pub plugin_version: String,
     pub parameters: BTreeMap<String, String>,
+}
+
+impl IntoValue for PluginInstallationDescription {
+    fn into_value(self) -> Value {
+        Value::Record(vec![
+            self.installation_id.into_value(),
+            self.plugin_name.into_value(),
+            self.plugin_version.into_value(),
+            Value::List(
+                self.parameters
+                    .into_iter()
+                    .map(|(k, v)| Value::Tuple(vec![k.into_value(), v.into_value()]))
+                    .collect::<Vec<Value>>(),
+            ),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("installation_id", PluginInstallationId::get_type()),
+            field("name", str()),
+            field("version", str()),
+            field("parameters", list(tuple(vec![str(), str()]))),
+        ])
+    }
 }
 
 impl From<PluginInstallation> for PluginInstallationDescription {
@@ -202,6 +354,49 @@ pub struct CreateParameters {
     pub initial_active_plugins: BTreeSet<PluginInstallationDescription>,
 }
 
+impl IntoValue for CreateParameters {
+    fn into_value(self) -> Value {
+        Value::Record(vec![
+            self.timestamp.into_value(),
+            self.worker_id.into_value(),
+            self.component_version.into_value(),
+            self.args.into_value(),
+            Value::List(
+                self.env
+                    .into_iter()
+                    .map(|(k, v)| Value::Tuple(vec![k.into_value(), v.into_value()]))
+                    .collect::<Vec<Value>>(),
+            ),
+            self.account_id.into_value(),
+            self.parent.into_value(),
+            self.component_size.into_value(),
+            self.initial_total_linear_memory_size.into_value(),
+            self.initial_active_plugins
+                .into_iter()
+                .collect::<Vec<_>>()
+                .into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("timestamp", Timestamp::get_type()),
+            field("worker_id", WorkerId::get_type()),
+            field("component_version", ComponentVersion::get_type()),
+            field("args", list(str())),
+            field("env", list(tuple(vec![str(), str()]))),
+            field("account_id", AccountId::get_type()),
+            field("parent", option(WorkerId::get_type())),
+            field("component_size", u64()),
+            field("initial_total_linear_memory_size", u64()),
+            field(
+                "initial_active_plugins",
+                list(PluginInstallationDescription::get_type()),
+            ),
+        ])
+    }
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
 pub struct ImportedFunctionInvokedParameters {
     pub timestamp: Timestamp,
@@ -209,6 +404,33 @@ pub struct ImportedFunctionInvokedParameters {
     pub request: ValueAndType,
     pub response: ValueAndType,
     pub wrapped_function_type: PublicWrappedFunctionType,
+}
+
+impl IntoValue for ImportedFunctionInvokedParameters {
+    fn into_value(self) -> Value {
+        let request_wit_value: WitValue = self.request.into();
+        let response_wit_value: WitValue = self.response.into();
+        Value::Record(vec![
+            self.timestamp.into_value(),
+            self.function_name.into_value(),
+            request_wit_value.into_value(),
+            response_wit_value.into_value(),
+            self.wrapped_function_type.into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("timestamp", Timestamp::get_type()),
+            field("function_name", str()),
+            field("request", WitValue::get_type()),
+            field("response", WitValue::get_type()),
+            field(
+                "wrapped_function_type",
+                PublicWrappedFunctionType::get_type(),
+            ),
+        ])
+    }
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
@@ -219,11 +441,53 @@ pub struct ExportedFunctionInvokedParameters {
     pub idempotency_key: IdempotencyKey,
 }
 
+impl IntoValue for ExportedFunctionInvokedParameters {
+    fn into_value(self) -> Value {
+        Value::Record(vec![
+            self.timestamp.into_value(),
+            self.function_name.into_value(),
+            self.request
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<WitValue>>()
+                .into_value(),
+            self.idempotency_key.into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("timestamp", Timestamp::get_type()),
+            field("request", list(WitValue::get_type())),
+            field("idempotency-key", IdempotencyKey::get_type()),
+        ])
+    }
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
 pub struct ExportedFunctionCompletedParameters {
     pub timestamp: Timestamp,
     pub response: ValueAndType,
     pub consumed_fuel: i64,
+}
+
+impl IntoValue for ExportedFunctionCompletedParameters {
+    fn into_value(self) -> Value {
+        let wit_value: WitValue = self.response.into();
+        Value::Record(vec![
+            self.timestamp.into_value(),
+            wit_value.into_value(),
+            self.consumed_fuel.into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("timestamp", Timestamp::get_type()),
+            field("response", WitValue::get_type()),
+            field("consumed-fuel", s64()),
+        ])
+    }
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
@@ -237,10 +501,41 @@ pub struct ErrorParameters {
     pub error: String,
 }
 
+impl IntoValue for ErrorParameters {
+    fn into_value(self) -> Value {
+        Value::Record(vec![self.timestamp.into_value(), self.error.into_value()])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("timestamp", Timestamp::get_type()),
+            field("error", str()),
+        ])
+    }
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
 pub struct JumpParameters {
     pub timestamp: Timestamp,
     pub jump: OplogRegion,
+}
+
+impl IntoValue for JumpParameters {
+    fn into_value(self) -> Value {
+        Value::Record(vec![
+            self.timestamp.into_value(),
+            self.jump.start.into_value(),
+            self.jump.end.into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("timestamp", Timestamp::get_type()),
+            field("start", OplogIndex::get_type()),
+            field("end", OplogIndex::get_type()),
+        ])
+    }
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
@@ -249,10 +544,42 @@ pub struct ChangeRetryPolicyParameters {
     pub new_policy: PublicRetryConfig,
 }
 
+impl IntoValue for ChangeRetryPolicyParameters {
+    fn into_value(self) -> Value {
+        Value::Record(vec![
+            self.timestamp.into_value(),
+            self.new_policy.into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("timestamp", Timestamp::get_type()),
+            field("retry-policy", PublicRetryConfig::get_type()),
+        ])
+    }
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
 pub struct EndRegionParameters {
     pub timestamp: Timestamp,
     pub begin_index: OplogIndex,
+}
+
+impl IntoValue for EndRegionParameters {
+    fn into_value(self) -> Value {
+        Value::Record(vec![
+            self.timestamp.into_value(),
+            self.begin_index.into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("timestamp", Timestamp::get_type()),
+            field("begin-index", OplogIndex::get_type()),
+        ])
+    }
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
@@ -261,11 +588,45 @@ pub struct PendingWorkerInvocationParameters {
     pub invocation: PublicWorkerInvocation,
 }
 
+impl IntoValue for PendingWorkerInvocationParameters {
+    fn into_value(self) -> Value {
+        Value::Record(vec![
+            self.timestamp.into_value(),
+            self.invocation.into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("timestamp", Timestamp::get_type()),
+            field("invocation", PublicWorkerInvocation::get_type()),
+        ])
+    }
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
 pub struct PendingUpdateParameters {
     pub timestamp: Timestamp,
     pub target_version: ComponentVersion,
     pub description: PublicUpdateDescription,
+}
+
+impl IntoValue for PendingUpdateParameters {
+    fn into_value(self) -> Value {
+        Value::Record(vec![
+            self.timestamp.into_value(),
+            self.target_version.into_value(),
+            self.description.into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("timestamp", Timestamp::get_type()),
+            field("target-version", ComponentVersion::get_type()),
+            field("update-description", PublicUpdateDescription::get_type()),
+        ])
+    }
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
@@ -276,11 +637,55 @@ pub struct SuccessfulUpdateParameters {
     pub new_active_plugins: BTreeSet<PluginInstallationDescription>,
 }
 
+impl IntoValue for SuccessfulUpdateParameters {
+    fn into_value(self) -> Value {
+        Value::Record(vec![
+            self.timestamp.into_value(),
+            self.target_version.into_value(),
+            self.new_component_size.into_value(),
+            self.new_active_plugins
+                .into_iter()
+                .collect::<Vec<_>>()
+                .into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("timestamp", Timestamp::get_type()),
+            field("target-version", ComponentVersion::get_type()),
+            field("new-component-size", u64()),
+            field(
+                "new-active-plugins",
+                list(PluginInstallationDescription::get_type()),
+            ),
+        ])
+    }
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
 pub struct FailedUpdateParameters {
     pub timestamp: Timestamp,
     pub target_version: ComponentVersion,
     pub details: Option<String>,
+}
+
+impl IntoValue for FailedUpdateParameters {
+    fn into_value(self) -> Value {
+        Value::Record(vec![
+            self.timestamp.into_value(),
+            self.target_version.into_value(),
+            self.details.into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("timestamp", Timestamp::get_type()),
+            field("target-version", ComponentVersion::get_type()),
+            field("details", option(str())),
+        ])
+    }
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
@@ -289,10 +694,36 @@ pub struct GrowMemoryParameters {
     pub delta: u64,
 }
 
+impl IntoValue for GrowMemoryParameters {
+    fn into_value(self) -> Value {
+        Value::Record(vec![self.timestamp.into_value(), self.delta.into_value()])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("timestamp", Timestamp::get_type()),
+            field("delta", u64()),
+        ])
+    }
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
 pub struct ResourceParameters {
     pub timestamp: Timestamp,
     pub id: WorkerResourceId,
+}
+
+impl IntoValue for ResourceParameters {
+    fn into_value(self) -> Value {
+        Value::Record(vec![self.timestamp.into_value(), self.id.into_value()])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("timestamp", Timestamp::get_type()),
+            field("id", WorkerResourceId::get_type()),
+        ])
+    }
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
@@ -303,6 +734,30 @@ pub struct DescribeResourceParameters {
     pub resource_params: Vec<ValueAndType>,
 }
 
+impl IntoValue for DescribeResourceParameters {
+    fn into_value(self) -> Value {
+        Value::Record(vec![
+            self.timestamp.into_value(),
+            self.id.into_value(),
+            self.resource_name.into_value(),
+            self.resource_params
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<WitValue>>()
+                .into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("timestamp", Timestamp::get_type()),
+            field("resource-id", WorkerResourceId::get_type()),
+            field("resource-name", str()),
+            field("resource-params", list(WitValue::get_type())),
+        ])
+    }
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
 pub struct LogParameters {
     pub timestamp: Timestamp,
@@ -311,16 +766,62 @@ pub struct LogParameters {
     pub message: String,
 }
 
+impl IntoValue for LogParameters {
+    fn into_value(self) -> Value {
+        Value::Record(vec![
+            self.timestamp.into_value(),
+            self.level.into_value(),
+            self.context.into_value(),
+            self.message.into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("timestamp", Timestamp::get_type()),
+            field("level", LogLevel::get_type()),
+            field("context", str()),
+            field("message", str()),
+        ])
+    }
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
 pub struct ActivatePluginParameters {
     pub timestamp: Timestamp,
     pub plugin: PluginInstallationDescription,
 }
 
+impl IntoValue for ActivatePluginParameters {
+    fn into_value(self) -> Value {
+        Value::Record(vec![self.timestamp.into_value(), self.plugin.into_value()])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("timestamp", Timestamp::get_type()),
+            field("plugin", PluginInstallationDescription::get_type()),
+        ])
+    }
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
 pub struct DeactivatePluginParameters {
     pub timestamp: Timestamp,
     pub plugin: PluginInstallationDescription,
+}
+
+impl IntoValue for DeactivatePluginParameters {
+    fn into_value(self) -> Value {
+        Value::Record(vec![self.timestamp.into_value(), self.plugin.into_value()])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("timestamp", Timestamp::get_type()),
+            field("plugin", PluginInstallationDescription::get_type()),
+        ])
+    }
 }
 
 /// A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
@@ -795,6 +1296,168 @@ impl PublicOplogEntry {
             (Value::Handle { .. }, _) => false,
             _ => false,
         }
+    }
+}
+
+impl IntoValue for PublicOplogEntry {
+    fn into_value(self) -> Value {
+        match self {
+            PublicOplogEntry::Create(params) => Value::Variant {
+                case_idx: 0,
+                case_value: Some(Box::new(params.into_value())),
+            },
+            PublicOplogEntry::ImportedFunctionInvoked(params) => Value::Variant {
+                case_idx: 1,
+                case_value: Some(Box::new(params.into_value())),
+            },
+            PublicOplogEntry::ExportedFunctionInvoked(params) => Value::Variant {
+                case_idx: 2,
+                case_value: Some(Box::new(params.into_value())),
+            },
+            PublicOplogEntry::ExportedFunctionCompleted(params) => Value::Variant {
+                case_idx: 3,
+                case_value: Some(Box::new(params.into_value())),
+            },
+            PublicOplogEntry::Suspend(params) => Value::Variant {
+                case_idx: 4,
+                case_value: Some(Box::new(params.timestamp.into_value())),
+            },
+            PublicOplogEntry::Error(params) => Value::Variant {
+                case_idx: 5,
+                case_value: Some(Box::new(params.into_value())),
+            },
+            PublicOplogEntry::NoOp(params) => Value::Variant {
+                case_idx: 6,
+                case_value: Some(Box::new(params.timestamp.into_value())),
+            },
+            PublicOplogEntry::Jump(params) => Value::Variant {
+                case_idx: 7,
+                case_value: Some(Box::new(params.into_value())),
+            },
+            PublicOplogEntry::Interrupted(params) => Value::Variant {
+                case_idx: 8,
+                case_value: Some(Box::new(params.timestamp.into_value())),
+            },
+            PublicOplogEntry::Exited(params) => Value::Variant {
+                case_idx: 9,
+                case_value: Some(Box::new(params.timestamp.into_value())),
+            },
+            PublicOplogEntry::ChangeRetryPolicy(params) => Value::Variant {
+                case_idx: 10,
+                case_value: Some(Box::new(params.into_value())),
+            },
+            PublicOplogEntry::BeginAtomicRegion(params) => Value::Variant {
+                case_idx: 11,
+                case_value: Some(Box::new(params.timestamp.into_value())),
+            },
+            PublicOplogEntry::EndAtomicRegion(params) => Value::Variant {
+                case_idx: 12,
+                case_value: Some(Box::new(params.into_value())),
+            },
+            PublicOplogEntry::BeginRemoteWrite(params) => Value::Variant {
+                case_idx: 13,
+                case_value: Some(Box::new(params.timestamp.into_value())),
+            },
+            PublicOplogEntry::EndRemoteWrite(params) => Value::Variant {
+                case_idx: 14,
+                case_value: Some(Box::new(params.into_value())),
+            },
+            PublicOplogEntry::PendingWorkerInvocation(params) => Value::Variant {
+                case_idx: 15,
+                case_value: Some(Box::new(params.into_value())),
+            },
+            PublicOplogEntry::PendingUpdate(params) => Value::Variant {
+                case_idx: 16,
+                case_value: Some(Box::new(params.into_value())),
+            },
+            PublicOplogEntry::SuccessfulUpdate(params) => Value::Variant {
+                case_idx: 17,
+                case_value: Some(Box::new(params.into_value())),
+            },
+            PublicOplogEntry::FailedUpdate(params) => Value::Variant {
+                case_idx: 18,
+                case_value: Some(Box::new(params.into_value())),
+            },
+            PublicOplogEntry::GrowMemory(params) => Value::Variant {
+                case_idx: 19,
+                case_value: Some(Box::new(params.into_value())),
+            },
+            PublicOplogEntry::CreateResource(params) => Value::Variant {
+                case_idx: 20,
+                case_value: Some(Box::new(params.into_value())),
+            },
+            PublicOplogEntry::DropResource(params) => Value::Variant {
+                case_idx: 21,
+                case_value: Some(Box::new(params.into_value())),
+            },
+            PublicOplogEntry::DescribeResource(params) => Value::Variant {
+                case_idx: 22,
+                case_value: Some(Box::new(params.into_value())),
+            },
+            PublicOplogEntry::Log(params) => Value::Variant {
+                case_idx: 23,
+                case_value: Some(Box::new(params.into_value())),
+            },
+            PublicOplogEntry::Restart(params) => Value::Variant {
+                case_idx: 24,
+                case_value: Some(Box::new(params.timestamp.into_value())),
+            },
+            PublicOplogEntry::ActivatePlugin(params) => Value::Variant {
+                case_idx: 25,
+                case_value: Some(Box::new(params.into_value())),
+            },
+            PublicOplogEntry::DeactivatePlugin(params) => Value::Variant {
+                case_idx: 26,
+                case_value: Some(Box::new(params.into_value())),
+            },
+        }
+    }
+
+    fn get_type() -> AnalysedType {
+        variant(vec![
+            case("create", CreateParameters::get_type()),
+            case(
+                "imported-function-invoked",
+                ImportedFunctionInvokedParameters::get_type(),
+            ),
+            case(
+                "exported-function-invoked",
+                ExportedFunctionInvokedParameters::get_type(),
+            ),
+            case(
+                "exported-function-completed",
+                ExportedFunctionCompletedParameters::get_type(),
+            ),
+            case("suspend", Timestamp::get_type()),
+            case("error", ErrorParameters::get_type()),
+            case("noop", Timestamp::get_type()),
+            case("jump", JumpParameters::get_type()),
+            case("interrupted", Timestamp::get_type()),
+            case("exited", Timestamp::get_type()),
+            case(
+                "change-retry-policy",
+                ChangeRetryPolicyParameters::get_type(),
+            ),
+            case("begin-atomic-region", Timestamp::get_type()),
+            case("end-atomic-region", EndRegionParameters::get_type()),
+            case("begin-remote-write", Timestamp::get_type()),
+            case("end-remote-write", EndRegionParameters::get_type()),
+            case(
+                "pending-worker-invocation",
+                PendingWorkerInvocationParameters::get_type(),
+            ),
+            case("pending-update", PendingUpdateParameters::get_type()),
+            case("successful-update", SuccessfulUpdateParameters::get_type()),
+            case("failed-update", FailedUpdateParameters::get_type()),
+            case("grow-memory", GrowMemoryParameters::get_type()),
+            case("create-resource", ResourceParameters::get_type()),
+            case("drop-resource", ResourceParameters::get_type()),
+            case("describe-resource", DescribeResourceParameters::get_type()),
+            case("log", LogParameters::get_type()),
+            case("restart", Timestamp::get_type()),
+            case("activate-plugin", ActivatePluginParameters::get_type()),
+            case("deactivate-plugin", DeactivatePluginParameters::get_type()),
+        ])
     }
 }
 

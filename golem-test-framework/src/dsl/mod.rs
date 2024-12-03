@@ -40,7 +40,9 @@ use golem_common::model::oplog::{
 use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope, PluginDefinition};
 use golem_common::model::public_oplog::PublicOplogEntry;
 use golem_common::model::regions::DeletedRegions;
-use golem_common::model::{AccountId, PluginInstallationId, WorkerStatusRecordExtensions};
+use golem_common::model::{
+    AccountId, PluginInstallationId, WorkerStatus, WorkerStatusRecordExtensions,
+};
 use golem_common::model::{
     ComponentFileSystemNode, ComponentId, ComponentType, ComponentVersion, FailedUpdateRecord,
     IdempotencyKey, InitialComponentFile, InitialComponentFileKey, ScanCursor,
@@ -51,6 +53,7 @@ use golem_service_base::model::PublicOplogEntryWithIndex;
 use golem_wasm_rpc::Value;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::time::{Duration, Instant};
 use tokio::select;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::oneshot::Sender;
@@ -77,12 +80,14 @@ pub trait TestDsl {
         files: &[InitialComponentFile],
     ) -> ComponentId;
     async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion;
+
     async fn update_component_with_files(
         &self,
         component_id: &ComponentId,
         name: &str,
         files: &Option<Vec<InitialComponentFile>>,
     ) -> ComponentVersion;
+
     async fn add_initial_component_file(
         &self,
         account_id: &AccountId,
@@ -91,11 +96,13 @@ pub trait TestDsl {
 
     async fn start_worker(&self, component_id: &ComponentId, name: &str)
         -> crate::Result<WorkerId>;
+
     async fn try_start_worker(
         &self,
         component_id: &ComponentId,
         name: &str,
     ) -> crate::Result<Result<WorkerId, Error>>;
+
     async fn start_worker_with(
         &self,
         component_id: &ComponentId,
@@ -103,6 +110,7 @@ pub trait TestDsl {
         args: Vec<String>,
         env: HashMap<String, String>,
     ) -> crate::Result<WorkerId>;
+
     async fn try_start_worker_with(
         &self,
         component_id: &ComponentId,
@@ -110,10 +118,26 @@ pub trait TestDsl {
         args: Vec<String>,
         env: HashMap<String, String>,
     ) -> crate::Result<Result<WorkerId, Error>>;
+
     async fn get_worker_metadata(
         &self,
         worker_id: &WorkerId,
     ) -> crate::Result<Option<(WorkerMetadata, Option<String>)>>;
+
+    async fn wait_for_status(
+        &self,
+        worker_id: &WorkerId,
+        status: WorkerStatus,
+        timeout: Duration,
+    ) -> crate::Result<WorkerMetadata>;
+
+    async fn wait_for_statuses(
+        &self,
+        worker_id: &WorkerId,
+        status: &[WorkerStatus],
+        timeout: Duration,
+    ) -> crate::Result<WorkerMetadata>;
+
     async fn get_workers_metadata(
         &self,
         component_id: &ComponentId,
@@ -173,10 +197,7 @@ pub trait TestDsl {
     async fn capture_output_forever(
         &self,
         worker_id: &WorkerId,
-    ) -> (
-        UnboundedReceiver<Option<LogEvent>>,
-        tokio::sync::oneshot::Sender<()>,
-    );
+    ) -> (UnboundedReceiver<Option<LogEvent>>, Sender<()>);
     async fn capture_output_with_termination(
         &self,
         worker_id: &WorkerId,
@@ -1045,6 +1066,48 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
             )
             .await
     }
+
+    async fn wait_for_status(
+        &self,
+        worker_id: &WorkerId,
+        status: WorkerStatus,
+        timeout: Duration,
+    ) -> crate::Result<WorkerMetadata> {
+        TestDsl::wait_for_statuses(self, worker_id, &[status], timeout).await
+    }
+
+    async fn wait_for_statuses(
+        &self,
+        worker_id: &WorkerId,
+        statuses: &[WorkerStatus],
+        timeout: Duration,
+    ) -> crate::Result<WorkerMetadata> {
+        let start = Instant::now();
+        let mut last_known = None;
+        while start.elapsed() < timeout {
+            let (metadata, _) = TestDsl::get_worker_metadata(self, worker_id)
+                .await?
+                .ok_or(anyhow!("Worker not found"))?;
+            if statuses
+                .iter()
+                .any(|s| s == &metadata.last_known_status.status)
+            {
+                return Ok(metadata);
+            }
+
+            last_known = Some(metadata.last_known_status.status.clone());
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        Err(anyhow!(
+            "Timeout waiting for worker status {} (last known: {last_known:?})",
+            statuses
+                .iter()
+                .map(|s| format!("{s:?}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))
+    }
 }
 
 pub fn stdout_events(events: impl Iterator<Item = LogEvent>) -> Vec<String> {
@@ -1419,6 +1482,21 @@ pub trait TestDslUnsafe {
         &self,
         worker_id: &WorkerId,
     ) -> Option<(WorkerMetadata, Option<String>)>;
+
+    async fn wait_for_status(
+        &self,
+        worker_id: &WorkerId,
+        status: WorkerStatus,
+        timeout: Duration,
+    ) -> WorkerMetadata;
+
+    async fn wait_for_statuses(
+        &self,
+        worker_id: &WorkerId,
+        statuses: &[WorkerStatus],
+        timeout: Duration,
+    ) -> WorkerMetadata;
+
     async fn get_workers_metadata(
         &self,
         component_id: &ComponentId,
@@ -1817,5 +1895,27 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         )
         .await
         .expect("Failed to install plugin")
+    }
+
+    async fn wait_for_status(
+        &self,
+        worker_id: &WorkerId,
+        status: WorkerStatus,
+        timeout: Duration,
+    ) -> WorkerMetadata {
+        <T as TestDsl>::wait_for_status(self, worker_id, status, timeout)
+            .await
+            .expect("Failed to wait for status")
+    }
+
+    async fn wait_for_statuses(
+        &self,
+        worker_id: &WorkerId,
+        statuses: &[WorkerStatus],
+        timeout: Duration,
+    ) -> WorkerMetadata {
+        <T as TestDsl>::wait_for_statuses(self, worker_id, statuses, timeout)
+            .await
+            .expect("Failed to wait for status")
     }
 }

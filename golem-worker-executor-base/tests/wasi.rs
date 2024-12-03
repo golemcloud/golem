@@ -61,9 +61,15 @@ async fn write_stdout(
 
     let _result = executor.invoke_and_await(&worker_id, "run", vec![]).await;
 
-    tokio::time::sleep(Duration::from_secs(2)).await;
     let mut events = vec![];
-    rx.recv_many(&mut events, 100).await;
+    let start_time = Instant::now();
+    while events.len() < 2 && start_time.elapsed() < Duration::from_secs(5) {
+        if let Some(event) = rx.recv().await {
+            events.push(event);
+        } else {
+            break;
+        }
+    }
 
     drop(executor);
 
@@ -87,9 +93,15 @@ async fn write_stderr(
 
     let _result = executor.invoke_and_await(&worker_id, "run", vec![]).await;
 
-    tokio::time::sleep(Duration::from_secs(2)).await;
     let mut events = vec![];
-    rx.recv_many(&mut events, 100).await;
+    let start_time = Instant::now();
+    while events.len() < 2 && start_time.elapsed() < Duration::from_secs(5) {
+        if let Some(event) = rx.recv().await {
+            events.push(event);
+        } else {
+            break;
+        }
+    }
 
     drop(executor);
 
@@ -524,8 +536,9 @@ async fn directories_replay(
 
     // NOTE: if the directory listing would not be stable, replay would fail with divergence error
 
-    tokio::time::sleep(Duration::from_secs(5)).await;
-    let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
+    let metadata = executor
+        .wait_for_status(&worker_id, WorkerStatus::Idle, Duration::from_secs(5))
+        .await;
 
     check!(metadata.last_known_status.status == WorkerStatus::Idle);
 
@@ -953,7 +966,9 @@ async fn http_client_interrupting_response_stream(
 
     executor.resume(&worker_id).await;
 
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    executor
+        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(5))
+        .await;
     executor.log_output(&worker_id).await;
 
     let result = executor
