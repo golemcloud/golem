@@ -24,6 +24,7 @@ use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use std::sync::Arc;
 use test_r::core::{DynamicTestRegistration, TestType};
 use test_r::{add_test, inherit_test_dep, test_dep, test_gen};
+use golem_cli::model::ApiSecurityScheme;
 
 inherit_test_dep!(EnvBasedTestDependencies);
 inherit_test_dep!(Tracing);
@@ -46,6 +47,14 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
         TestType::IntegrationTest,
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             api_deployment_deploy((deps, name.to_string(), cli.with_args(short)))
+        }
+    );
+    add_test!(
+        r,
+        format!("api_deployment_deploy_with_security{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            api_deployment_deploy_with_security((deps, name.to_string(), cli.with_args(short)))
         }
     );
     add_test!(
@@ -85,7 +94,65 @@ pub fn make_definition(
     let def = native_api_definition_request(component_name, &component_id, security);
     let path = make_json_file(&def.id, &def)?;
 
+    if let Some(security_id) = security {
+        let _: ApiSecurityScheme = cli.run(&[
+            "api-security-scheme",
+            "create",
+            "--scheme.id",
+            security_id,
+            "--provider.type",
+            "google",
+            "--client.id",
+            "bar",
+            "--client.secret",
+            "baz",
+            "--redirect.url",
+            "http://localhost:9006/auth/callback",
+        ])?;
+    }
+
     cli.run(&["api-definition", "add", path.to_str().unwrap()])
+}
+
+fn api_deployment_deploy_with_security(
+    (deps, name, cli): (&EnvBasedTestDependencies, String, CliLive),
+) -> Result<(), anyhow::Error> {
+    let security_id = format!("security{name}");
+    let definition = make_definition(deps, &cli, &format!("api_deployment_deploy{name}"), Some(security_id.as_str()))?;
+    let host = format!("deploy-host{name}");
+    let cfg = &cli.config;
+
+    let deployment: ApiDeployment = cli.run(&[
+        "api-deployment",
+        "deploy",
+        &cfg.arg('d', "definition"),
+        &format!("{}/{}", definition.id, definition.version),
+        &cfg.arg('H', "host"),
+        &host,
+        &cfg.arg('s', "subdomain"),
+        "sdomain",
+    ])?;
+
+    let api_definition_info = deployment.api_definitions.first().unwrap();
+
+    assert_eq!(deployment.site.subdomain, Some("sdomain".to_string()));
+    assert_eq!(deployment.site.host, host);
+    assert_eq!(api_definition_info.id, definition.id);
+    assert_eq!(api_definition_info.version, definition.version);
+
+    let updated_def: HttpApiDefinitionResponseData = cli.run(&[
+        "api-definition",
+        "get",
+        &cfg.arg('i', "id"),
+        &deployment.api_definitions.first().unwrap().id,
+        &cfg.arg('V', "version"),
+        &deployment.api_definitions.first().unwrap().version,
+    ])?;
+
+    assert!(definition.draft);
+    assert!(!updated_def.draft, "deploy makes definition immutable");
+
+    Ok(())
 }
 
 fn api_deployment_deploy(

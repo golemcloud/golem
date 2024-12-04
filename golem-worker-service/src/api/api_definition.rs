@@ -53,11 +53,10 @@ impl RegisterApiDefinitionApi {
                 .instrument(record.span.clone())
                 .await?;
 
-            let result =
-                HttpApiDefinitionResponseData::try_from(result).map_err(|e| {
-                    error!("Failed to convert to response data {}", e);
-                    ApiEndpointError::internal(safe(e))
-                });
+            let result = HttpApiDefinitionResponseData::try_from(result).map_err(|e| {
+                error!("Failed to convert to response data {}", e);
+                ApiEndpointError::internal(safe(e))
+            });
 
             result.map(Json)
         };
@@ -282,7 +281,8 @@ impl RegisterApiDefinitionApi {
             let values = data
                 .into_iter()
                 .map(HttpApiDefinitionResponseData::try_from)
-                .collect::<Result<Vec<_>, String>>().map_err(|e| {
+                .collect::<Result<Vec<_>, String>>()
+                .map_err(|e| {
                     error!("Failed to convert to response data {}", e);
                     ApiEndpointError::internal(safe(e))
                 })?;

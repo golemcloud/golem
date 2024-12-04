@@ -277,12 +277,9 @@ mod internal {
                             cors: None
                         })
                     }
-
-
                     (GatewayBindingType::CorsPreflight, method) => {
                         Err(format!("cors-preflight binding type is supported only for 'options' method, but found method '{}'", method))
                     }
-                    
                 }
             }
 

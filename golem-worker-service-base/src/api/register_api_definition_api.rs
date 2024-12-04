@@ -166,7 +166,6 @@ pub struct HttpApiDefinitionResponseData {
 impl<Namespace> TryFrom<CompiledHttpApiDefinition<Namespace>> for HttpApiDefinitionResponseData {
     type Error = String;
     fn try_from(value: CompiledHttpApiDefinition<Namespace>) -> Result<Self, String> {
-
         let mut routes = vec![];
 
         for route in value.routes {
@@ -504,7 +503,9 @@ impl TryFrom<GatewayBindingCompiled> for GatewayBindingWithTypeInfo {
                 let binding_type = match static_binding.deref() {
                     StaticBinding::HttpCorsPreflight(_) => GatewayBindingType::CorsPreflight,
                     StaticBinding::HttpAuthCallBack(_) => {
-                        return Err("Auth call back static binding not to be exposed to users".to_string())
+                        return Err(
+                            "Auth call back static binding not to be exposed to users".to_string()
+                        )
                     }
                 };
 
@@ -520,7 +521,7 @@ impl TryFrom<GatewayBindingCompiled> for GatewayBindingWithTypeInfo {
                     cors_preflight: static_binding.get_cors_preflight(),
                     response_mapping_output: None,
                 })
-            },
+            }
         }
     }
 }
@@ -789,7 +790,7 @@ impl TryFrom<crate::gateway_api_definition::http::Route> for grpc_apidefinition:
 
     fn try_from(value: crate::gateway_api_definition::http::Route) -> Result<Self, Self::Error> {
         let path = value.path.to_string();
-        let binding = grpc_apidefinition::GatewayBinding::from(value.binding);
+        let binding = grpc_apidefinition::GatewayBinding::try_from(value.binding)?;
         let method: grpc_apidefinition::HttpMethod = value.method.into();
         let middlewares = value.middlewares.clone();
         let middleware_proto = middlewares
@@ -813,9 +814,10 @@ impl TryFrom<CompiledRoute> for golem_api_grpc::proto::golem::apidefinition::Com
     fn try_from(value: CompiledRoute) -> Result<Self, Self::Error> {
         let method = value.method as i32;
         let path = value.path.to_string();
-        let binding = golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding::from(
-            value.binding,
-        );
+        let binding =
+            golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding::try_from(
+                value.binding,
+            )?;
 
         let middleware_proto = value
             .middlewares
