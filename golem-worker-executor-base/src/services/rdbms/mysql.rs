@@ -48,10 +48,10 @@ pub(crate) mod sqlx_rdbms {
     };
     use crate::services::rdbms::{DbResultSet, DbRow, Error, Rdbms, RdbmsPoolKey};
     use async_trait::async_trait;
+    use bigdecimal::BigDecimal;
     use futures_util::stream::BoxStream;
     use sqlx::{Column, ConnectOptions, Pool, Row, TypeInfo};
     use std::sync::Arc;
-    use bigdecimal::BigDecimal;
 
     pub(crate) fn new(config: RdbmsConfig) -> Arc<dyn Rdbms<MysqlType> + Send + Sync> {
         let sqlx: SqlxRdbms<MysqlType, sqlx::mysql::MySql> = SqlxRdbms::new(config);
