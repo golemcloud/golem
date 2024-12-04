@@ -526,13 +526,6 @@ impl AnalysisFailure {
 
 #[cfg(test)]
 mod tests {
-    use crate::analysis::analysed_type::{bool, list, str};
-    use crate::analysis::{
-        AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
-        AnalysedInstance,
-    };
-    use poem_openapi::types::ToJSON;
-    use pretty_assertions::assert_eq;
 
     #[cfg(feature = "poem_openapi")]
     #[cfg(feature = "json")]
