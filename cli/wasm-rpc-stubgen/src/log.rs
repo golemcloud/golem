@@ -6,9 +6,17 @@ use std::sync::{LazyLock, RwLock};
 
 static LOG_STATE: LazyLock<RwLock<LogState>> = LazyLock::new(RwLock::default);
 
+#[derive(Debug, Clone, Copy)]
+pub enum Output {
+    Stdout,
+    Stderr,
+    None,
+}
+
 struct LogState {
     indent_count: usize,
     indent_prefix: String,
+    output: Output,
 }
 
 impl LogState {
@@ -16,6 +24,7 @@ impl LogState {
         Self {
             indent_count: 0,
             indent_prefix: "".to_string(),
+            output: Output::Stdout,
         }
     }
 
@@ -31,6 +40,10 @@ impl LogState {
 
     fn regen_indent_prefix(&mut self) {
         self.indent_prefix = "  ".repeat(self.indent_count);
+    }
+
+    fn set_output(&mut self, output: Output) {
+        self.output = output;
     }
 }
 
@@ -61,22 +74,68 @@ impl Drop for LogIndent {
     }
 }
 
+pub struct LogOutput {
+    prev_output: Output,
+}
+
+impl LogOutput {
+    pub fn new(output: Output) -> Self {
+        let prev_output = LOG_STATE.read().unwrap().output;
+        LOG_STATE.write().unwrap().set_output(output);
+        Self { prev_output }
+    }
+}
+
+impl Drop for LogOutput {
+    fn drop(&mut self) {
+        LOG_STATE.write().unwrap().set_output(self.prev_output);
+    }
+}
+
+pub fn set_log_output(output: Output) {
+    LOG_STATE.write().unwrap().set_output(output);
+}
+
 pub fn log_action<T: AsRef<str>>(action: &str, subject: T) {
-    println!(
+    let state = LOG_STATE.read().unwrap();
+    let message = format!(
         "{}{} {}",
-        LOG_STATE.read().unwrap().indent_prefix,
+        state.indent_prefix,
         action.log_color_action(),
         subject.as_ref()
-    )
+    );
+
+    match state.output {
+        Output::Stdout => {
+            println!("{}", message);
+        }
+        Output::Stderr => {
+            eprintln!("{}", message);
+        }
+        Output::None => {
+            // NOP
+        }
+    }
 }
 
 pub fn log_warn_action<T: AsRef<str>>(action: &str, subject: T) {
-    println!(
+    let state = LOG_STATE.read().unwrap();
+    let message = format!(
         "{}{} {}",
         LOG_STATE.read().unwrap().indent_prefix,
         action.log_color_warn(),
         subject.as_ref(),
-    )
+    );
+
+    match state.output {
+        Output::Stdout => {
+            println!("{}", message)
+        }
+        Output::Stderr => {
+            eprintln!("{}", message)
+        }
+        Output::None => {}
+    }
 }
 
 pub fn log_skipping_up_to_date<T: AsRef<str>>(subject: T) {

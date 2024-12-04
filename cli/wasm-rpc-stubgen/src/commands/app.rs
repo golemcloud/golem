@@ -2,8 +2,8 @@ use crate::cargo::regenerate_cargo_package_component;
 use crate::fs;
 use crate::fs::PathExtra;
 use crate::log::{
-    log_action, log_skipping_up_to_date, log_validated_action_result, log_warn_action, LogColorize,
-    LogIndent,
+    log_action, log_skipping_up_to_date, log_validated_action_result, log_warn_action,
+    set_log_output, LogColorize, LogIndent, Output,
 };
 use crate::model::app::{
     includes_from_yaml_file, Application, ComponentName, ComponentPropertiesExtensions,
@@ -27,6 +27,7 @@ use itertools::Itertools;
 use std::cell::OnceCell;
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashMap};
+use std::fmt::Write;
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -39,6 +40,7 @@ pub struct Config<CPE: ComponentPropertiesExtensions> {
     pub profile: Option<ProfileName>,
     pub offline: bool,
     pub extensions: PhantomData<CPE>,
+    pub log_output: Output,
 }
 
 #[derive(Debug, Clone)]
@@ -57,7 +59,10 @@ pub struct ApplicationContext<CPE: ComponentPropertiesExtensions> {
 
 impl<CPE: ComponentPropertiesExtensions> ApplicationContext<CPE> {
     pub fn new(config: Config<CPE>) -> anyhow::Result<ApplicationContext<CPE>> {
+        set_log_output(config.log_output);
+
         let ctx = to_anyhow(
+            config.log_output,
             "Failed to create application context, see problems above",
             load_app_validated(&config).and_then(|application| {
                 ResolvedWitApplication::new(&application, config.profile.as_ref()).map(|wit| {
@@ -252,6 +257,7 @@ impl<CPE: ComponentPropertiesExtensions> ApplicationContext<CPE> {
 
     fn update_wit_context(&mut self) -> anyhow::Result<()> {
         to_anyhow(
+            self.config.log_output,
             "Failed to update application wit context, see problems above",
             ResolvedWitApplication::new(&self.application, self.profile()).map(|wit| {
                 self.wit = wit;
@@ -486,6 +492,7 @@ pub async fn build<CPE: ComponentPropertiesExtensions>(config: Config<CPE>) -> a
 
 pub fn clean<CPE: ComponentPropertiesExtensions>(config: Config<CPE>) -> anyhow::Result<()> {
     let app = to_anyhow(
+        config.log_output,
         "Failed to load application manifest(s), see problems above",
         load_app_validated(&config),
     )?;
@@ -579,6 +586,7 @@ pub fn available_custom_commands<CPE: ComponentPropertiesExtensions>(
     config: Config<CPE>,
 ) -> anyhow::Result<BTreeSet<String>> {
     let app = to_anyhow(
+        config.log_output,
         "Failed to load application manifest(s), see problems above",
         load_app_validated(&config),
     )?;
@@ -781,36 +789,78 @@ fn find_main_source() -> Option<PathBuf> {
     last_source
 }
 
-fn to_anyhow<T>(message: &str, result: ValidatedResult<T>) -> anyhow::Result<T> {
-    fn print_warns(warns: Vec<String>) {
+fn to_anyhow<T>(
+    log_output: Output,
+    message: &str,
+    result: ValidatedResult<T>,
+) -> anyhow::Result<T> {
+    fn format_warns(warns: Vec<String>) -> String {
         let label = "Warning".yellow();
-        for warn in warns {
-            eprintln!("{}: {}", label, warn);
-        }
+        warns
+            .into_iter()
+            .map(|warn| format!("{}: {}", label, warn))
+            .join("\n")
     }
 
-    fn print_errors(errors: Vec<String>) {
+    fn format_errors(errors: Vec<String>) -> String {
         let label = "Error".red();
-        for error in errors {
-            eprintln!("{}: {}", label, error);
-        }
+        errors
+            .into_iter()
+            .map(|error| format!("{}: {}", label, error))
+            .join("\n")
     }
 
     match result {
         ValidatedResult::Ok(value) => Ok(value),
         ValidatedResult::OkWithWarns(components, warns) => {
-            println!();
-            print_warns(warns);
-            println!();
+            match log_output {
+                Output::Stdout => {
+                    println!("\n{}\n", format_warns(warns));
+                }
+                Output::Stderr => {
+                    eprintln!("\n{}\n", format_warns(warns));
+                }
+                Output::None => {
+                    // NOP
+                }
+            }
+
             Ok(components)
         }
         ValidatedResult::WarnsAndErrors(warns, errors) => {
-            println!();
-            print_warns(warns);
-            print_errors(errors);
-            println!();
+            let message = match log_output {
+                Output::Stdout => {
+                    println!("\n");
+                    println!("{}", format_warns(warns));
+                    println!("{}", format_errors(errors));
+                    println!("\n");
 
-            Err(anyhow!(message.to_string()))
+                    message.to_string()
+                }
+                Output::Stderr => {
+                    eprintln!("\n");
+                    eprintln!("{}", format_warns(warns));
+                    eprintln!("{}", format_errors(errors));
+                    eprintln!("\n");
+
+                    message.to_string()
+                }
+                Output::None => {
+                    fn with_new_line_if_not_empty(mut str: String) -> String {
+                        if !str.is_empty() {
+                            str.write_char('\n').unwrap()
+                        }
+                        str
+                    }
+
+                    let warns = with_new_line_if_not_empty(format_warns(warns));
+                    let errors = with_new_line_if_not_empty(format_errors(errors));
+
+                    format!("\n{}{}\n{}", warns, errors, message)
+                }
+            };
+
+            Err(anyhow!(message))
         }
     }
 }
