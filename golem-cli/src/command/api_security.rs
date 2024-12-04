@@ -20,7 +20,7 @@ use clap::Subcommand;
 #[derive(Subcommand, Debug)]
 #[command()]
 pub enum ApiSecuritySchemeSubcommand<ProjectRef: clap::Args> {
-    /// Create or update deployment
+    /// Create ApiSecurity Scheme
     #[command()]
     Create {
         /// The newly created component's owner project

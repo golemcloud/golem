@@ -306,7 +306,7 @@ pub mod api_security {
 pub mod api_definition {
     use crate::model::text::fmt::*;
     use cli_table::{format::Justify, Table};
-    use golem_client::model::{HttpApiDefinitionResponseData, RouteWithTypeInfo};
+    use golem_client::model::{HttpApiDefinitionResponseData, RouteResponseData};
     use golem_common::model::ComponentId;
     use golem_common::uri::oss::urn::ComponentUrn;
     use serde::{Deserialize, Serialize};
@@ -323,8 +323,8 @@ pub mod api_definition {
         pub worker_name: String,
     }
 
-    impl From<&RouteWithTypeInfo> for RouteTableView {
-        fn from(value: &RouteWithTypeInfo) -> Self {
+    impl From<&RouteResponseData> for RouteTableView {
+        fn from(value: &RouteResponseData) -> Self {
             Self {
                 method: value.method.to_string(),
                 path: value.path.to_string(),

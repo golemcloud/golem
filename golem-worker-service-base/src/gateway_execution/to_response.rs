@@ -167,7 +167,7 @@ impl ToHttpResponse for AuthCallBackResult {
                 response = response.header(
                     "Set-Cookie",
                     format!(
-                        "session_id={}; HttpOnly; Secure; Path=/; SameSite=Strict",
+                        "session_id={}; HttpOnly; Secure; Path=/; SameSite=None",
                         session_id
                     )
                     .as_str(),

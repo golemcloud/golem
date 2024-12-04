@@ -15,5 +15,5 @@
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    golem_cli::run_main::<golem::command::SingleExecutableCommand>()
+    golem_cli::oss_main::<golem::command::SingleExecutableCommand>()
 }

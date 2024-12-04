@@ -9,12 +9,12 @@ use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct HttpAuthenticationMiddleware {
-    pub security_scheme: SecuritySchemeWithProviderMetadata,
+    pub security_scheme_with_metadata: SecuritySchemeWithProviderMetadata,
 }
 
 impl HttpAuthenticationMiddleware {
     pub fn get_scopes(&self) -> Vec<Scope> {
-        self.security_scheme.security_scheme.scopes()
+        self.security_scheme_with_metadata.security_scheme.scopes()
     }
 
     pub async fn apply_http_auth(
@@ -24,7 +24,7 @@ impl HttpAuthenticationMiddleware {
         identity_provider: &Arc<dyn IdentityProvider + Send + Sync>,
     ) -> Result<MiddlewareSuccess, MiddlewareError> {
         let client = identity_provider
-            .get_client(&self.security_scheme)
+            .get_client(&self.security_scheme_with_metadata)
             .map_err(|err| {
                 MiddlewareError::Unauthorized(AuthorisationError::Internal(err.to_safe_string()))
             })?;
@@ -32,7 +32,7 @@ impl HttpAuthenticationMiddleware {
         let identity_token_verifier = identity_provider.get_id_token_verifier(&client);
 
         let open_id_client = identity_provider
-            .get_client(&self.security_scheme)
+            .get_client(&self.security_scheme_with_metadata)
             .map_err(|err| {
                 MiddlewareError::Unauthorized(AuthorisationError::Internal(err.to_safe_string()))
             })?;

@@ -55,7 +55,8 @@ fn top_level_get_api_definition(
     let component_name = "top_level_get_api_definition";
     let component = make_shopping_cart_component(deps, component_name, cli)?;
     let component_id = component.component_urn.id.0.to_string();
-    let def = native_api_definition_request(component_name, &component_id);
+    let path = "/{user-id}/get-cart-contents";
+    let def = native_api_definition_request(component_name, &component_id, None, path);
     let path = make_json_file(&def.id, &def)?;
 
     let _: HttpApiDefinitionResponseData =
@@ -117,7 +118,8 @@ fn top_level_get_api_deployment(
     cli: &CliLive,
     _tracing: &Tracing,
 ) -> Result<(), anyhow::Error> {
-    let definition = make_definition(deps, cli, "top_level_get_api_deployment")?;
+    let path = "/{user-id}/get-cart-contents";
+    let definition = make_definition(deps, cli, "top_level_get_api_deployment", None, path)?;
     let host = "get-host-top-level-get";
     let cfg = &cli.config;
 

@@ -411,8 +411,6 @@ async fn test_api_def_with_security_for_input_when_session_expired() {
     )
     .await;
 
-    dbg!(&test_response_from_actual_endpoint);
-
     // And it should be a redirect which is same as the initial redirect to identity provider
     let final_redirect = test_response_from_actual_endpoint.headers();
 
@@ -2017,7 +2015,6 @@ mod internal {
             session_id: &SessionId,
             data_key: &DataKey,
         ) -> Result<DataValue, GatewaySessionError> {
-            dbg!("damss");
             Err(GatewaySessionError::MissingValue {
                 session_id: session_id.clone(),
                 data_key: data_key.clone(),

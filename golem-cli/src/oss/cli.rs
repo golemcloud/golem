@@ -12,11 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::path::PathBuf;
-
-use crate::command;
-use crate::command::profile::OssProfileAdd;
+use super::model::OssContext;
+use crate::command::profile::UniversalProfileAdd;
 use crate::command::worker::OssWorkerUriArg;
+use crate::command::{self, NoProfileCommandContext};
 use crate::command::{CliCommand, SharedCommand, StaticSharedCommand};
 use crate::completion;
 use crate::config::{OssProfile, ProfileName};
@@ -37,15 +36,18 @@ use golem_client::model::{
 use golem_client::DefaultComponentOwner;
 use golem_common::model::plugin::DefaultPluginScope;
 use golem_common::uri::oss::uri::ResourceUri;
+use std::path::PathBuf;
 
-use super::model::OssContext;
-
-pub async fn run_with_profile<ExtraCommands: CliCommand<OssCommandContext>>(
+pub async fn run_with_profile<
+    ProfileAdd: clap::Args + Into<UniversalProfileAdd>,
+    ExtraCommands: CliCommand<OssCommandContext>,
+>(
     format: Format,
     config_dir: PathBuf,
     profile: OssProfile,
     command: Command,
-    parsed: GolemOssCli<ExtraCommands>,
+    parsed: GolemOssCli<ProfileAdd, ExtraCommands>,
+    cli_kind: CliKind,
 ) -> Result<GolemResult, GolemError> {
     let factory = OssServiceFactory::from_profile(&profile)?;
 
@@ -56,21 +58,25 @@ pub async fn run_with_profile<ExtraCommands: CliCommand<OssCommandContext>>(
         factory,
         config_dir,
         command,
+        cli_kind,
     };
 
     parsed.command.run(ctx).await
 }
 
-pub async fn run_without_profile<ExtraCommands: CliCommand<UnintializedOssCommandContext>>(
-    format: Format,
+pub async fn run_without_profile<
+    ProfileAdd: clap::Args + Into<UniversalProfileAdd>,
+    ExtraCommands: CliCommand<NoProfileCommandContext>,
+>(
     config_dir: PathBuf,
     command: Command,
-    parsed: GolemOssCli<ExtraCommands>,
+    parsed: GolemOssCli<ProfileAdd, ExtraCommands>,
+    cli_kind: CliKind,
 ) -> Result<GolemResult, GolemError> {
-    let ctx = UnintializedOssCommandContext {
-        format,
+    let ctx = NoProfileCommandContext {
         config_dir,
         command,
+        cli_kind,
     };
 
     parsed.command.run(ctx).await
@@ -90,14 +96,22 @@ pub enum OssOnlyCommand {
     },
 }
 
+impl CliCommand<NoProfileCommandContext> for OssOnlyCommand {
+    async fn run(self, ctx: NoProfileCommandContext) -> Result<GolemResult, GolemError> {
+        match self {
+            OssOnlyCommand::Get { .. } => ctx.fail_uninitialized(),
+        }
+    }
+}
+
 /// Shared command with oss-specific arguments.
-type SpecializedSharedCommand =
-    SharedCommand<OssContext, ComponentUriArg, OssWorkerUriArg, OssPluginScopeArgs, OssProfileAdd>;
+pub type OssSpecializedSharedCommand<ProfileAdd> =
+    SharedCommand<OssContext, ComponentUriArg, OssWorkerUriArg, OssPluginScopeArgs, ProfileAdd>;
 
 #[derive(Parser, Debug)]
 #[command(author, version = crate::VERSION, about, long_about, rename_all = "kebab-case")]
 /// Command line interface for OSS version of Golem.
-pub struct GolemOssCli<ExtraCommand: Subcommand> {
+pub struct GolemOssCli<ProfileAdd: clap::Args, ExtraCommand: Subcommand> {
     #[command(flatten)]
     pub verbosity: Verbosity,
 
@@ -106,8 +120,11 @@ pub struct GolemOssCli<ExtraCommand: Subcommand> {
 
     #[command(subcommand)]
     pub command: command::Zip<
-        command::Zip<StaticSharedCommand, SpecializedSharedCommand>,
-        command::Zip<OssOnlyCommand, ExtraCommand>,
+        StaticSharedCommand,
+        command::Zip<
+            OssSpecializedSharedCommand<ProfileAdd>,
+            command::Zip<OssOnlyCommand, ExtraCommand>,
+        >,
     >,
 }
 
@@ -117,6 +134,7 @@ pub struct OssCommandContext {
     pub factory: OssServiceFactory,
     pub config_dir: PathBuf,
     pub command: Command,
+    pub cli_kind: CliKind,
 }
 
 impl CliCommand<OssCommandContext> for OssOnlyCommand {
@@ -131,7 +149,9 @@ impl CliCommand<OssCommandContext> for OssOnlyCommand {
     }
 }
 
-impl CliCommand<OssCommandContext> for SpecializedSharedCommand {
+impl<ProfileAdd: clap::Args + Into<UniversalProfileAdd>> CliCommand<OssCommandContext>
+    for OssSpecializedSharedCommand<ProfileAdd>
+{
     async fn run(self, ctx: OssCommandContext) -> Result<GolemResult, GolemError> {
         match self {
             SharedCommand::Component { subcommand } => {
@@ -189,14 +209,14 @@ impl CliCommand<OssCommandContext> for SpecializedSharedCommand {
             }
             SharedCommand::Profile { subcommand } => {
                 subcommand
-                    .handle(CliKind::Oss, &ctx.config_dir, &DummyProfileAuth)
+                    .handle(ctx.cli_kind, &ctx.config_dir, &DummyProfileAuth)
                     .await
             }
             SharedCommand::Init {} => {
-                let profile_name = ProfileName::default(CliKind::Oss);
+                let profile_name = ProfileName::default(ctx.cli_kind);
 
                 init_profile(
-                    CliKind::Oss,
+                    ctx.cli_kind,
                     profile_name,
                     &ctx.config_dir,
                     &DummyProfileAuth,
@@ -221,60 +241,6 @@ impl CliCommand<OssCommandContext> for SpecializedSharedCommand {
                     )
                     .await
             }
-        }
-    }
-}
-
-/// Context before the user has initialized the profile.
-pub struct UnintializedOssCommandContext {
-    pub format: Format,
-    pub config_dir: PathBuf,
-    pub command: Command,
-}
-
-impl UnintializedOssCommandContext {
-    // \! is an experimental type. Once stable, use in the return type.
-    pub fn fail_uninitialized(&self) -> Result<GolemResult, GolemError> {
-        Err(GolemError(
-            "Your Golem CLI is not configured. Please run `golem-cli init`".to_owned(),
-        ))
-    }
-}
-
-impl CliCommand<UnintializedOssCommandContext> for OssOnlyCommand {
-    async fn run(self, ctx: UnintializedOssCommandContext) -> Result<GolemResult, GolemError> {
-        match self {
-            OssOnlyCommand::Get { .. } => ctx.fail_uninitialized(),
-        }
-    }
-}
-
-impl CliCommand<UnintializedOssCommandContext> for SpecializedSharedCommand {
-    async fn run(self, ctx: UnintializedOssCommandContext) -> Result<GolemResult, GolemError> {
-        match self {
-            SharedCommand::Init {} => {
-                let profile_name = ProfileName::default(CliKind::Oss);
-
-                init_profile(
-                    CliKind::Oss,
-                    profile_name,
-                    &ctx.config_dir,
-                    &DummyProfileAuth,
-                )
-                .await?;
-
-                Ok(GolemResult::Str("Profile created".to_string()))
-            }
-            SharedCommand::Profile { subcommand } => {
-                subcommand
-                    .handle(CliKind::Oss, &ctx.config_dir, &DummyProfileAuth)
-                    .await
-            }
-            SharedCommand::Completion { generator } => {
-                completion::print_completion(ctx.command, generator);
-                Ok(GolemResult::Str("".to_string()))
-            }
-            _ => ctx.fail_uninitialized(),
         }
     }
 }

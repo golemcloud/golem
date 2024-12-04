@@ -18,7 +18,9 @@ use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion, HasGolemBinding
 use crate::gateway_api_definition_transformer::transform_http_api_definition;
 use crate::gateway_binding::WorkerBindingCompiled;
 use crate::gateway_binding::{GatewayBinding, GatewayBindingCompiled};
-use crate::gateway_middleware::{HttpCors, HttpMiddleware, HttpMiddlewares};
+use crate::gateway_middleware::{
+    HttpAuthenticationMiddleware, HttpCors, HttpMiddleware, HttpMiddlewares,
+};
 use crate::gateway_security::SecuritySchemeReference;
 use crate::service::gateway::api_definition::ApiDefinitionError;
 use crate::service::gateway::api_definition_validator::ValidationErrors;
@@ -65,7 +67,7 @@ impl HttpApiDefinition {
                     .clone()
                     .and_then(|x| x.get_http_authentication_middleware())
             })
-            .map(|x| SecuritySchemeReference::from(x.security_scheme))
+            .map(|x| SecuritySchemeReference::from(x.security_scheme_with_metadata))
             .collect()
     }
 
@@ -562,6 +564,12 @@ impl ComponentMetadataDictionary {
 }
 
 impl CompiledRoute {
+    pub fn get_security_middleware(&self) -> Option<HttpAuthenticationMiddleware> {
+        match &self.middlewares {
+            Some(middlewares) => middlewares.get_http_authentication_middleware(),
+            None => None,
+        }
+    }
     pub fn from_route(
         route: &Route,
         metadata_dictionary: &ComponentMetadataDictionary,

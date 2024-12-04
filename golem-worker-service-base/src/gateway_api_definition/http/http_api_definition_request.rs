@@ -57,7 +57,8 @@ impl From<Route> for RouteRequest {
             method: value.method,
             path: value.path,
             binding: value.binding,
-            security: security_middleware.map(|x| SecuritySchemeReference::from(x.security_scheme)),
+            security: security_middleware
+                .map(|x| SecuritySchemeReference::from(x.security_scheme_with_metadata)),
             cors: cors_middleware,
         }
     }

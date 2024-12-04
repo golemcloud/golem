@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::gateway_middleware::{HttpAuthenticationMiddleware, HttpCors};
+use crate::gateway_security::SecuritySchemeWithProviderMetadata;
 
 // Static bindings must NOT contain Rib, in either pre-compiled or raw form,
 // as it may introduce unnecessary latency
@@ -53,27 +54,41 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::StaticBinding> for Sta
                 Ok(StaticBinding::HttpCorsPreflight(Box::new(cors_preflight.try_into()?)))
 
             }
-            _ => Err("Unknown static binding type".to_string()),
+            Some(golem_api_grpc::proto::golem::apidefinition::static_binding::StaticBinding::AuthCallback(auth_call_back)) => {
+                let security_scheme_with_metadata_proto = auth_call_back.security_with_provider_metadata.ok_or("Security Scheme with provider metadata missing".to_string())?;
+
+                let security_scheme_with_metadata = SecuritySchemeWithProviderMetadata::try_from(security_scheme_with_metadata_proto)?;
+
+                Ok(StaticBinding::HttpAuthCallBack(Box::new(HttpAuthenticationMiddleware {
+                    security_scheme_with_metadata
+                })))
+            }
+            None => Err("Static Binding missing".to_string()),
         }
     }
 }
 
-impl From<StaticBinding> for golem_api_grpc::proto::golem::apidefinition::StaticBinding {
-    fn from(value: StaticBinding) -> Self {
+impl TryFrom<StaticBinding> for golem_api_grpc::proto::golem::apidefinition::StaticBinding {
+    type Error = String;
+    fn try_from(value: StaticBinding) -> Result<Self, String> {
         match value {
             StaticBinding::HttpCorsPreflight(cors) => {
-                golem_api_grpc::proto::golem::apidefinition::StaticBinding {
+                Ok(golem_api_grpc::proto::golem::apidefinition::StaticBinding {
                     static_binding: Some(golem_api_grpc::proto::golem::apidefinition::static_binding::StaticBinding::HttpCorsPreflight(
                         golem_api_grpc::proto::golem::apidefinition::CorsPreflight::from(*cors)
                     )),
-                }
+                })
             }
-            StaticBinding::HttpAuthCallBack(_) => {
-                golem_api_grpc::proto::golem::apidefinition::StaticBinding {
+            StaticBinding::HttpAuthCallBack(value) => {
+                Ok(golem_api_grpc::proto::golem::apidefinition::StaticBinding {
                     static_binding: Some(golem_api_grpc::proto::golem::apidefinition::static_binding::StaticBinding::AuthCallback(
-                        golem_api_grpc::proto::golem::apidefinition::AuthCallBack{}
+                        golem_api_grpc::proto::golem::apidefinition::AuthCallBack{
+                            security_with_provider_metadata: Some(golem_api_grpc::proto::golem::apidefinition::SecurityWithProviderMetadata::try_from(
+                                value.security_scheme_with_metadata
+                            )?)
+                        }
                     )),
-                }
+                })
             }
         }
     }

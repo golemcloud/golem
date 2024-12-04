@@ -34,10 +34,10 @@ pub fn auth_transform(
         if let Some(auth_middleware) = auth_middleware {
             distinct_auth_middlewares.insert(
                 auth_middleware
-                    .security_scheme
+                    .security_scheme_with_metadata
                     .security_scheme
                     .scheme_identifier(),
-                auth_middleware.security_scheme,
+                auth_middleware.security_scheme_with_metadata,
             );
         }
     }
@@ -80,7 +80,7 @@ mod internal {
             let method = MethodPattern::Get;
             let binding = GatewayBinding::static_binding(StaticBinding::http_auth_call_back(
                 HttpAuthenticationMiddleware {
-                    security_scheme: scheme,
+                    security_scheme_with_metadata: scheme,
                 },
             ));
 
