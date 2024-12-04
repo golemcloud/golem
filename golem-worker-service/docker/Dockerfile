@@ -17,8 +17,7 @@ COPY /target/$RUST_TARGET/release/golem-worker-service ./
 COPY /golem-worker-service/config/worker-service.toml ./config/worker-service.toml
 COPY /golem-worker-service/db ./db
 
-RUN apt-get update && apt-get install -y libssl-dev
-RUN apt-get update && apt-get install -y ca-certificates
+RUN apt-get update && apt-get install -y pkg-config libssl-dev ca-certificates libfontconfig1-dev
 RUN update-ca-certificates
 
 EXPOSE 9005
