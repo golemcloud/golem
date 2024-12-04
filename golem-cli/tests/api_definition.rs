@@ -24,12 +24,11 @@ use golem_cli::model::{ApiDefinitionFileFormat, ApiSecurityScheme};
 use golem_client::model::{
     GatewayBindingData, GatewayBindingType, GatewayBindingWithTypeInfo, HttpApiDefinitionRequest,
     HttpApiDefinitionResponseData, MethodPattern, RibInputTypeInfo, RibOutputTypeInfo,
-    RouteRequestData, RouteWithTypeInfo, SecuritySchemeData, VersionedComponentId,
+    RouteRequestData, RouteWithTypeInfo, VersionedComponentId,
 };
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_wasm_ast::analysis::analysed_type::{record, str, u64};
 use golem_wasm_ast::analysis::NameTypePair;
-use itertools::Itertools;
 use serde::Serialize;
 use serde_json::json;
 use std::collections::HashMap;

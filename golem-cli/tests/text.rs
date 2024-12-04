@@ -695,6 +695,7 @@ fn text_api_deployment_deploy(
         deps,
         &cli,
         &format!("text_api_deployment_deploy{name}"),
+        None,
     )?;
     let host = format!("text-deploy-host{name}");
     let cfg = &cli.config;
@@ -730,6 +731,7 @@ fn text_api_deployment_get(
         deps,
         &cli,
         &format!("text_api_deployment_get{name}"),
+        None,
     )?;
     let host = format!("text-get-host{name}");
     let cfg = &cli.config;
@@ -771,6 +773,7 @@ fn text_api_deployment_list(
         deps,
         &cli,
         &format!("text_api_deployment_list{name:_>9}"),
+        None,
     )?;
     let host = format!("text-list-host{name:->9}");
     let cfg = &cli.config;

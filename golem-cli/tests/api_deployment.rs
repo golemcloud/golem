@@ -78,10 +78,11 @@ pub fn make_definition(
     deps: &EnvBasedTestDependencies,
     cli: &CliLive,
     component_name: &str,
+    security: Option<&str>,
 ) -> Result<HttpApiDefinitionResponseData, anyhow::Error> {
     let component = make_shopping_cart_component(deps, component_name, cli)?;
     let component_id = component.component_urn.id.0.to_string();
-    let def = native_api_definition_request(component_name, &component_id, None);
+    let def = native_api_definition_request(component_name, &component_id, security);
     let path = make_json_file(&def.id, &def)?;
 
     cli.run(&["api-definition", "add", path.to_str().unwrap()])
@@ -90,7 +91,7 @@ pub fn make_definition(
 fn api_deployment_deploy(
     (deps, name, cli): (&EnvBasedTestDependencies, String, CliLive),
 ) -> Result<(), anyhow::Error> {
-    let definition = make_definition(deps, &cli, &format!("api_deployment_deploy{name}"))?;
+    let definition = make_definition(deps, &cli, &format!("api_deployment_deploy{name}"), None)?;
     let host = format!("deploy-host{name}");
     let cfg = &cli.config;
 
@@ -158,7 +159,7 @@ fn api_deployment_deploy(
 fn api_deployment_get(
     (deps, name, cli): (&EnvBasedTestDependencies, String, CliLive),
 ) -> Result<(), anyhow::Error> {
-    let definition = make_definition(deps, &cli, &format!("api_deployment_get{name}"))?;
+    let definition = make_definition(deps, &cli, &format!("api_deployment_get{name}"), None)?;
     let host = format!("get-host{name}");
     let cfg = &cli.config;
 
@@ -183,7 +184,7 @@ fn api_deployment_get(
 fn api_deployment_list(
     (deps, name, cli): (&EnvBasedTestDependencies, String, CliLive),
 ) -> Result<(), anyhow::Error> {
-    let definition = make_definition(deps, &cli, &format!("api_deployment_list{name}"))?;
+    let definition = make_definition(deps, &cli, &format!("api_deployment_list{name}"), None)?;
     let host = format!("list-host{name}");
     let cfg = &cli.config;
 
@@ -214,7 +215,7 @@ fn api_deployment_list(
 fn api_deployment_delete(
     (deps, name, cli): (&EnvBasedTestDependencies, String, CliLive),
 ) -> Result<(), anyhow::Error> {
-    let definition = make_definition(deps, &cli, &format!("api_deployment_delete{name}"))?;
+    let definition = make_definition(deps, &cli, &format!("api_deployment_delete{name}"), None)?;
     let host = format!("delete-host{name}");
     let cfg = &cli.config;
 

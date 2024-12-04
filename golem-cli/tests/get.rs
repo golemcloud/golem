@@ -117,7 +117,7 @@ fn top_level_get_api_deployment(
     cli: &CliLive,
     _tracing: &Tracing,
 ) -> Result<(), anyhow::Error> {
-    let definition = make_definition(deps, cli, "top_level_get_api_deployment")?;
+    let definition = make_definition(deps, cli, "top_level_get_api_deployment", None)?;
     let host = "get-host-top-level-get";
     let cfg = &cli.config;
 
