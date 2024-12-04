@@ -14,6 +14,6 @@
 
 pub mod cli;
 mod clients;
-mod factory;
+pub mod factory;
 pub mod model;
 mod resource;
