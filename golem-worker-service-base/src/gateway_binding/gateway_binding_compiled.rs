@@ -20,6 +20,7 @@ use crate::gateway_binding::{
 };
 use golem_common::model::GatewayBindingType;
 use rib::RibOutputTypeInfo;
+use golem_api_grpc::proto::golem::apidefinition::GatewayBindingType as ProtoGatewayBindingType;
 
 // A compiled binding is a binding with all existence of Rib Expr
 // get replaced with their compiled form - RibByteCode.
@@ -87,6 +88,11 @@ impl From<GatewayBindingCompiled>
             }
 
             GatewayBindingCompiled::Static(static_binding) => {
+                let binding_type = match static_binding.deref() {
+                    StaticBinding::HttpCorsPreflight(_) => golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::CorsPreflight,
+                    StaticBinding::HttpAuthCallBack(_) => golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::AuthCallBack,
+                };
+
                 golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding {
                     component: None,
                     worker_name: None,
@@ -99,7 +105,7 @@ impl From<GatewayBindingCompiled>
                     compiled_response_expr: None,
                     response_rib_input: None,
                     worker_functions_in_response: None,
-                    binding_type: Some(2),
+                    binding_type: Some(binding_type as i32),
                     static_binding: Some(
                         golem_api_grpc::proto::golem::apidefinition::StaticBinding::from(
                             *static_binding,
@@ -120,8 +126,15 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
     fn try_from(
         value: golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding,
     ) -> Result<Self, Self::Error> {
-        match value.binding_type {
-            Some(0) | Some(1) => {
+        let binding_type = value.binding_type.ok_or("Missing binding_type")?;
+
+        let binding_type =
+            ProtoGatewayBindingType::try_from(binding_type).map_err(
+                |e| format!("Failed to convert binding type: {}", e),
+            )?;
+
+        match binding_type {
+            ProtoGatewayBindingType::FileServer | ProtoGatewayBindingType::Default => {
                 // Convert fields for the Worker variant
                 let component_id = value
                     .component
@@ -204,7 +217,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
                     }))
                 }
             }
-            Some(2) => {
+            ProtoGatewayBindingType::CorsPreflight | ProtoGatewayBindingType::AuthCallBack => {
                 let static_binding = value
                     .static_binding
                     .ok_or("Missing static_binding for Static")?;
@@ -213,7 +226,6 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
                     static_binding.try_into()?,
                 )))
             }
-            _ => Err("Unknown binding type".to_string()),
         }
     }
 }

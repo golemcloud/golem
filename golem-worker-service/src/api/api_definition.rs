@@ -282,7 +282,10 @@ impl RegisterApiDefinitionApi {
             let values = data
                 .into_iter()
                 .map(HttpApiDefinitionResponseData::try_from)
-                .collect::<Result<Vec<_>, String>>()?;
+                .collect::<Result<Vec<_>, String>>().map_err(|e| {
+                    error!("Failed to convert to response data {}", e);
+                    ApiEndpointError::internal(safe(e))
+                })?;
 
             Ok(Json(values))
         };

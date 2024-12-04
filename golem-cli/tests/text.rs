@@ -571,7 +571,7 @@ fn text_api_definition_add(
     let component_name = format!("text_api_definition_add{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();
-    let def = native_api_definition_request(&component_name, &component_id);
+    let def = native_api_definition_request(&component_name, &component_id, None);
     let path = make_json_file(&def.id, &def)?;
 
     let res = cli.with_format(Format::Text).run_string(&[
@@ -598,7 +598,7 @@ fn text_api_definition_update(
     let component_name = format!("text_api_definition_update{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();
-    let def = native_api_definition_request(&component_name, &component_id);
+    let def = native_api_definition_request(&component_name, &component_id, None);
     let path = make_json_file(&def.id, &def)?;
 
     let _: HttpApiDefinitionResponseData =
@@ -627,7 +627,7 @@ fn text_api_definition_list(
     let component_name = format!("text_api_definition_list{name:_>9}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();
-    let def = native_api_definition_request(&component_name, &component_id);
+    let def = native_api_definition_request(&component_name, &component_id, None);
     let path = make_json_file(&def.id, &def)?;
     let cfg = &cli.config;
 
@@ -659,7 +659,7 @@ fn text_api_definition_get(
     let component_name = format!("text_api_definition_get{name:_>9}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();
-    let def = native_api_definition_request(&component_name, &component_id);
+    let def = native_api_definition_request(&component_name, &component_id, None);
     let path = make_json_file(&def.id, &def)?;
 
     let _: HttpApiDefinitionResponseData =

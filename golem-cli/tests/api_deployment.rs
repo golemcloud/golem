@@ -81,7 +81,7 @@ pub fn make_definition(
 ) -> Result<HttpApiDefinitionResponseData, anyhow::Error> {
     let component = make_shopping_cart_component(deps, component_name, cli)?;
     let component_id = component.component_urn.id.0.to_string();
-    let def = native_api_definition_request(component_name, &component_id);
+    let def = native_api_definition_request(component_name, &component_id, None);
     let path = make_json_file(&def.id, &def)?;
 
     cli.run(&["api-definition", "add", path.to_str().unwrap()])
