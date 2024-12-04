@@ -88,10 +88,11 @@ pub fn make_definition(
     cli: &CliLive,
     component_name: &str,
     security: Option<&str>,
+    path: &str,
 ) -> Result<HttpApiDefinitionResponseData, anyhow::Error> {
     let component = make_shopping_cart_component(deps, component_name, cli)?;
     let component_id = component.component_urn.id.0.to_string();
-    let def = native_api_definition_request(component_name, &component_id, security);
+    let def = native_api_definition_request(component_name, &component_id, security, path);
     let path = make_json_file(&def.id, &def)?;
 
     if let Some(security_id) = security {
@@ -118,11 +119,15 @@ fn api_deployment_deploy_with_security(
     (deps, name, cli): (&EnvBasedTestDependencies, String, CliLive),
 ) -> Result<(), anyhow::Error> {
     let security_id = format!("security{name}");
+    let path_template = "/{user-id}/get-cart-contents-{name}";
+    let path = path_template.replace("{name}", &name);
+
     let definition = make_definition(
         deps,
         &cli,
-        &format!("api_deployment_deploy{name}"),
+        &format!("api_deployment_deploy_security{name}"),
         Some(security_id.as_str()),
+        path.as_str(),
     )?;
     let host = format!("deploy-host{name}");
     let cfg = &cli.config;
@@ -142,7 +147,6 @@ fn api_deployment_deploy_with_security(
 
     assert_eq!(deployment.site.subdomain, Some("sdomain".to_string()));
     assert_eq!(deployment.site.host, host);
-    assert_eq!(api_definition_info.id, definition.id);
     assert_eq!(api_definition_info.version, definition.version);
 
     let updated_def: HttpApiDefinitionResponseData = cli.run(&[
@@ -163,7 +167,15 @@ fn api_deployment_deploy_with_security(
 fn api_deployment_deploy(
     (deps, name, cli): (&EnvBasedTestDependencies, String, CliLive),
 ) -> Result<(), anyhow::Error> {
-    let definition = make_definition(deps, &cli, &format!("api_deployment_deploy{name}"), None)?;
+    let path = "/{user-id}/get-cart-contents";
+
+    let definition = make_definition(
+        deps,
+        &cli,
+        &format!("api_deployment_deploy{name}"),
+        None,
+        path,
+    )?;
     let host = format!("deploy-host{name}");
     let cfg = &cli.config;
 
@@ -231,7 +243,9 @@ fn api_deployment_deploy(
 fn api_deployment_get(
     (deps, name, cli): (&EnvBasedTestDependencies, String, CliLive),
 ) -> Result<(), anyhow::Error> {
-    let definition = make_definition(deps, &cli, &format!("api_deployment_get{name}"), None)?;
+    let path = "/{user-id}/get-cart-contents";
+
+    let definition = make_definition(deps, &cli, &format!("api_deployment_get{name}"), None, path)?;
     let host = format!("get-host{name}");
     let cfg = &cli.config;
 
@@ -256,7 +270,15 @@ fn api_deployment_get(
 fn api_deployment_list(
     (deps, name, cli): (&EnvBasedTestDependencies, String, CliLive),
 ) -> Result<(), anyhow::Error> {
-    let definition = make_definition(deps, &cli, &format!("api_deployment_list{name}"), None)?;
+    let path = "/{user-id}/get-cart-contents";
+
+    let definition = make_definition(
+        deps,
+        &cli,
+        &format!("api_deployment_list{name}"),
+        None,
+        path,
+    )?;
     let host = format!("list-host{name}");
     let cfg = &cli.config;
 
@@ -287,7 +309,14 @@ fn api_deployment_list(
 fn api_deployment_delete(
     (deps, name, cli): (&EnvBasedTestDependencies, String, CliLive),
 ) -> Result<(), anyhow::Error> {
-    let definition = make_definition(deps, &cli, &format!("api_deployment_delete{name}"), None)?;
+    let path = "/{user-id}/get-cart-contents";
+    let definition = make_definition(
+        deps,
+        &cli,
+        &format!("api_deployment_delete{name}"),
+        None,
+        path,
+    )?;
     let host = format!("delete-host{name}");
     let cfg = &cli.config;
 

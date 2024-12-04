@@ -216,6 +216,7 @@ fn golem_def_with_response(
     component_id: &str,
     response: String,
     security_id: Option<&str>,
+    path: &str,
 ) -> HttpApiDefinitionRequest {
     HttpApiDefinitionRequest {
         id: id.to_string(),
@@ -224,7 +225,7 @@ fn golem_def_with_response(
         security: security_id.map(|id| vec![id.to_string()]),
         routes: vec![RouteRequestData {
             method: MethodPattern::Get,
-            path: "/{user-id}/get-cart-contents".to_string(),
+            path: path.to_string(),
             cors: None,
             security: security_id.map(|id| id.to_string()),
             binding: GatewayBindingData {
@@ -251,13 +252,15 @@ pub fn native_api_definition_request(
     id: &str,
     component_id: &str,
     security_id: Option<&str>,
+    path: &str,
 ) -> HttpApiDefinitionRequest {
     golem_def_with_response(
         id,
         component_id,
         "let x = golem:it/api.{checkout}();\nlet status: u64 = 200;\n{headers: {ContentType: \"json\", userid: \"foo\"}, body: \"foo\", status: status}"
             .to_string(),
-        security_id
+        security_id,
+        path
     )
 }
 
@@ -442,6 +445,7 @@ fn api_definition_import(
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();
     let component_version = component.component_version;
+    let path = "/{user-id}/get-cart-contents";
 
     let res: HttpApiDefinitionResponseData = match api_definition_format {
         ApiDefinitionFileFormat::Json => {
@@ -487,7 +491,7 @@ fn api_definition_import(
     };
 
     let expected = to_api_definition_with_type_info(
-        native_api_definition_request(&component_name, &component_id, None),
+        native_api_definition_request(&component_name, &component_id, None, path),
         res.created_at,
         rib_output_type_info,
     );
@@ -509,8 +513,13 @@ fn api_definition_add_with_security(
     let security_id = format!("security_{api_definition_format}{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();
-    let def =
-        native_api_definition_request(&component_name, &component_id, Some(security_id.as_str()));
+    let path = "/{user-id}/get-cart-contents";
+    let def = native_api_definition_request(
+        &component_name,
+        &component_id,
+        Some(security_id.as_str()),
+        path,
+    );
 
     let _: ApiSecurityScheme = cli.run(&[
         "api-security-scheme",
@@ -589,7 +598,8 @@ fn api_definition_add(
     let component_name = format!("api_definition_{api_definition_format}_add{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();
-    let def = native_api_definition_request(&component_name, &component_id, None);
+    let path = "/{user-id}/get-cart-contents";
+    let def = native_api_definition_request(&component_name, &component_id, None, path);
 
     let res: HttpApiDefinitionResponseData = match api_definition_format {
         ApiDefinitionFileFormat::Json => {
@@ -652,8 +662,9 @@ fn api_definition_update(
     let component_name = format!("api_definition_{api_definition_format}_update{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();
+    let path = "/{user-id}/get-cart-contents";
 
-    let def = native_api_definition_request(&component_name, &component_id, None);
+    let def = native_api_definition_request(&component_name, &component_id, None, path);
     let path = make_json_file(&def.id, &def)?;
 
     let _: HttpApiDefinitionResponseData =
@@ -664,7 +675,8 @@ fn api_definition_update(
         &component_id,
         "let status: u64 = 200;\n{headers: {ContentType: \"json\", userid: \"bar\"}, body: \"baz\", status: status}"
             .to_string(),
-        None
+        None,
+        "/{user-id}/get-cart-contents"
     );
 
     let res: HttpApiDefinitionResponseData = match api_definition_format {
@@ -727,14 +739,13 @@ fn api_definition_update_immutable(
     let component_name = format!("api_definition_update_immutable{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();
-
-    let mut def = native_api_definition_request(&component_name, &component_id, None);
+    let path = "/{user-id}/get-cart-contents";
+    let mut def = native_api_definition_request(&component_name, &component_id, None, path);
     def.draft = false;
     let path = make_json_file(&def.id, &def)?;
     let _: HttpApiDefinitionResponseData =
         cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
-
-    let updated = golem_def_with_response(&component_name, &component_id, "${let status: u64 = 200; {headers: {ContentType: \"json\", userid: \"bar\"}, body: worker.response, status: status}}".to_string(), None);
+    let updated = golem_def_with_response(&component_name, &component_id, "${let status: u64 = 200; {headers: {ContentType: \"json\", userid: \"bar\"}, body: worker.response, status: status}}".to_string(), None, "/{user-id}/get-cart-contents");
     let path = make_json_file(&updated.id, &updated)?;
     let res = cli.run_string(&["api-definition", "update", path.to_str().unwrap()]);
 
@@ -753,7 +764,9 @@ fn api_definition_list(
     let component_name = format!("api_definition_list{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();
-    let def = native_api_definition_request(&component_name, &component_id, None);
+    let path = "/{user-id}/get-cart-contents";
+
+    let def = native_api_definition_request(&component_name, &component_id, None, path);
     let path = make_json_file(&def.id, &def)?;
 
     let _: HttpApiDefinitionResponseData =
@@ -811,7 +824,8 @@ fn api_definition_list_versions(
     let component_name = format!("api_definition_list_versions{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();
-    let def = native_api_definition_request(&component_name, &component_id, None);
+    let path = "/{user-id}/get-cart-contents";
+    let def = native_api_definition_request(&component_name, &component_id, None, path);
     let path = make_json_file(&def.id, &def)?;
     let cfg = &cli.config;
 
@@ -871,7 +885,8 @@ fn api_definition_get(
     let component_name = format!("api_definition_get{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();
-    let def = native_api_definition_request(&component_name, &component_id, None);
+    let path = "/{user-id}/get-cart-contents";
+    let def = native_api_definition_request(&component_name, &component_id, None, path);
     let path = make_json_file(&def.id, &def)?;
 
     let _: HttpApiDefinitionResponseData =
@@ -931,7 +946,8 @@ fn api_definition_delete(
     let component_name = format!("api_definition_delete{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();
-    let def = native_api_definition_request(&component_name, &component_id, None);
+    let path = "/{user-id}/get-cart-contents";
+    let def = native_api_definition_request(&component_name, &component_id, None, path);
     let path = make_json_file(&def.id, &def)?;
 
     let _: HttpApiDefinitionResponseData =
