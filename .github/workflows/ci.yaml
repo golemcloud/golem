@@ -65,7 +65,7 @@ jobs:
         env:
           PLATFORM_OVERRIDE: ${{ matrix.platform.name }}
         run: cargo make --profile ci package-release
-        
+
       - uses: actions/upload-artifact@v4
         name: Upload Targets
         with:
@@ -486,8 +486,6 @@ jobs:
 
   publish_cli_binaries:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'golemcloud/golem'
-    name: Publish binaries of golem-cli
-    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -506,6 +504,8 @@ jobs:
             os: macos-latest
           - rust-target: x86_64-pc-windows-gnu
             os: windows-latest
+    name: Publish binaries of ${{ matrix.project }}
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: write
     steps:
