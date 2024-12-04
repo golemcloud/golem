@@ -3084,7 +3084,7 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/PluginDefinition<DefaultPluginOwner, DefaultPluginScope>'
+                  $ref: '#/components/schemas/PluginDefinition_DefaultPluginOwner_DefaultPluginScope'
         '400':
           description: ''
           content:
@@ -3130,7 +3130,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/PluginDefinitionWithoutOwner<DefaultPluginScope>'
+              $ref: '#/components/schemas/PluginDefinitionWithoutOwner_DefaultPluginScope'
         required: true
       responses:
         '200':
@@ -3198,7 +3198,7 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/PluginDefinition<DefaultPluginOwner, DefaultPluginScope>'
+                  $ref: '#/components/schemas/PluginDefinition_DefaultPluginOwner_DefaultPluginScope'
         '400':
           description: ''
           content:
@@ -3264,7 +3264,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/PluginDefinition<DefaultPluginOwner, DefaultPluginScope>'
+                $ref: '#/components/schemas/PluginDefinition_DefaultPluginOwner_DefaultPluginScope'
         '400':
           description: ''
           content:
@@ -6414,7 +6414,35 @@ components:
       required:
       - componentId
       - componentVersion
-    PluginDefinition<DefaultPluginOwner, DefaultPluginScope>:
+    PluginDefinitionWithoutOwner_DefaultPluginScope:
+      type: object
+      properties:
+        name:
+          type: string
+        version:
+          type: string
+        description:
+          type: string
+        icon:
+          type: array
+          items:
+            type: integer
+            format: uint8
+        homepage:
+          type: string
+        specs:
+          $ref: '#/components/schemas/PluginTypeSpecificDefinition'
+        scope:
+          $ref: '#/components/schemas/DefaultPluginScope'
+      required:
+      - name
+      - version
+      - description
+      - icon
+      - homepage
+      - specs
+      - scope
+    PluginDefinition_DefaultPluginOwner_DefaultPluginScope:
       type: object
       properties:
         name:
@@ -6445,34 +6473,6 @@ components:
       - specs
       - scope
       - owner
-    PluginDefinitionWithoutOwner<DefaultPluginScope>:
-      type: object
-      properties:
-        name:
-          type: string
-        version:
-          type: string
-        description:
-          type: string
-        icon:
-          type: array
-          items:
-            type: integer
-            format: uint8
-        homepage:
-          type: string
-        specs:
-          $ref: '#/components/schemas/PluginTypeSpecificDefinition'
-        scope:
-          $ref: '#/components/schemas/DefaultPluginScope'
-      required:
-      - name
-      - version
-      - description
-      - icon
-      - homepage
-      - specs
-      - scope
     PluginInstallation:
       type: object
       properties:
