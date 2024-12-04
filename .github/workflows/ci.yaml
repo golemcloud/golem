@@ -490,14 +490,6 @@ jobs:
 
   publish_cli_binaries:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'golemcloud/golem'
-    needs:
-      [
-        build-and-test,
-        worker-tests,
-        integration-tests,
-        cli-tests,
-        sharding-tests
-      ]
     name: Publish binaries of golem-cli
     runs-on: ${{ matrix.os }}
     strategy:
@@ -508,9 +500,9 @@ jobs:
           - golem
         cfg:
           - rust-target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ubuntu-latest-xlarge
           - rust-target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ubuntu-latest-xlarge
             cross: true
           - rust-target: x86_64-apple-darwin
             os: macos-latest
