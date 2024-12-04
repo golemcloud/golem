@@ -114,9 +114,9 @@ dependencies = [
 
 [[package]]
 name = "anstream"
-version = "0.6.18"
+version = "0.6.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8acc5369981196006228e28809f761875c0327210a891e941f4c683b3a99529b"
+checksum = "64e15c1ab1f89faffbf04a634d5e1962e9074f2741eef6d97f3c4e322426d526"
 dependencies = [
  "anstyle",
  "anstyle-parse",
@@ -144,21 +144,21 @@ dependencies = [
 
 [[package]]
 name = "anstyle-query"
-version = "1.1.2"
+version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "79947af37f4177cfead1110013d678905c37501914fba0efea834c3fe9a8d60c"
+checksum = "6d36fc52c7f6c869915e99412912f22093507da8d9e942ceaf66fe4b7c14422a"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
 name = "anstyle-wincon"
-version = "3.0.6"
+version = "3.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2109dbce0e72be3ec00bed26e6a7479ca384ad226efdd66db8fa2e3a38c83125"
+checksum = "5bf74e1b6e971609db8ca7a9ce79fd5768ab6ae46441c572e46cf596f59e57f8"
 dependencies = [
  "anstyle",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1868,9 +1868,9 @@ checksum = "d2fabcfbdc87f4758337ca535fb41a6d701b65693ce38287d856d1674551ec9b"
 
 [[package]]
 name = "golem-wasm-ast"
-version = "1.0.1"
+version = "1.1.0-rc1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "01e3d202f10d115066f6b2840127d7ab3a9b9f61ecc5e64ab69cab21e6d7960d"
+checksum = "7fdc418403c365a36acb38514a2674e3c467826b60863ddfdd98f19f2072458f"
 dependencies = [
  "bincode",
  "leb128",
@@ -4588,9 +4588,9 @@ dependencies = [
 
 [[package]]
 name = "test-r"
-version = "0.0.13"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f81c856ebb383e7edb390dd642458f8bc91356760c88df9aab258d8a8d01ecd"
+checksum = "f222e9ef5e70ba864934fc58a46e076f5fefdec71b2f8638f3da28470361a270"
 dependencies = [
  "ctor",
  "test-r-core",
@@ -4600,12 +4600,14 @@ dependencies = [
 
 [[package]]
 name = "test-r-core"
-version = "0.0.12"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3cc908dda80def66445eef3560ea54df65cb26b557d43fc1d7fdc3ae5675f31f"
+checksum = "0e3e1de4496823b3fd5c0b5411900988f79ca2b9c1e33c8a22a48e65934c65d0"
 dependencies = [
  "anstream",
  "anstyle",
+ "anstyle-query",
+ "anstyle-wincon",
  "bincode",
  "clap",
  "escape8259",
@@ -4621,9 +4623,9 @@ dependencies = [
 
 [[package]]
 name = "test-r-macro"
-version = "0.0.13"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34e97f6324519d7b08bf4a3cf529f5a14fdce61587771717b7571c6f9af0f458"
+checksum = "46b98fd96e98960e8b99b0840008563f8c528335307287ff6fa7636ac4d0840c"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -4778,9 +4780,9 @@ dependencies = [
 
 [[package]]
 name = "tokio-util"
-version = "0.7.12"
+version = "0.7.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "61e7c3654c13bcd040d4a03abee2c75b1d14a37b423cf5a813ceae1cc903ec6a"
+checksum = "d7fcaa8d55a2bdd6b83ace262b016eca0d79ee02818c5c1bcdf0305114081078"
 dependencies = [
  "bytes",
  "futures-core",
