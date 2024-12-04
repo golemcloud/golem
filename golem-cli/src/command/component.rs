@@ -26,6 +26,7 @@ use clap::Subcommand;
 use golem_client::model::ComponentType;
 use golem_common::model::PluginInstallationId;
 use golem_wasm_rpc_stubgen::commands::app::{ApplicationContext, ApplicationSourceMode, Config};
+use golem_wasm_rpc_stubgen::log::Output;
 use golem_wasm_rpc_stubgen::model::app;
 use itertools::Itertools;
 use std::collections::HashMap;
@@ -507,6 +508,7 @@ fn app_ctx(
         profile: build_profile,
         offline: false,
         extensions: PhantomData::<GolemComponentExtensions>,
+        log_output: Output::None,
     })?)
 }
 
