@@ -535,8 +535,12 @@ jobs:
         run: cargo make --profile ci set-version
       - run: cargo build -p ${{ matrix.project }} --release --target ${{ matrix.cfg.rust-target }}
         if: ${{ ! matrix.cfg.cross }}
+
       - run: cargo install cross
         if: ${{ matrix.cfg.cross }}
+      - uses: ilammy/setup-nasm@v1
+        if: matrix.os == 'windows-latest'
+
       - run: cross build -p ${{ matrix.project }} --release --target ${{ matrix.cfg.rust-target }}
         if: ${{ matrix.cfg.cross }}
       - run: mv ./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}.exe ./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}.exe
