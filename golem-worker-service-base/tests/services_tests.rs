@@ -16,7 +16,7 @@ use golem_service_base::migration::{Migrations, MigrationsDir};
 use test_r::test;
 
 use async_trait::async_trait;
-use golem_common::config::{DbPostgresConfig, DbSqliteConfig};
+use golem_common::config::{DbPostgresConfig, DbSqliteConfig, RedisConfig, RetryConfig};
 use golem_common::model::ComponentId;
 use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
 use golem_service_base::db;
@@ -41,13 +41,15 @@ use golem_worker_service_base::service::gateway::http_api_definition_validator::
 
 use chrono::Utc;
 use golem_common::model::component_constraint::FunctionConstraintCollection;
+use golem_common::redis::RedisPool;
 use golem_wasm_ast::analysis::analysed_type::str;
 use golem_worker_service_base::api;
 use golem_worker_service_base::gateway_api_deployment::{
     ApiDeploymentRequest, ApiSite, ApiSiteString,
 };
 use golem_worker_service_base::gateway_execution::gateway_session::{
-    DataKey, DataValue, GatewaySession, GatewaySessionError, SessionId,
+    DataKey, DataValue, GatewaySession, GatewaySessionError, GatewaySessionWithInMemoryCache,
+    RedisGatewaySession, SessionId,
 };
 use golem_worker_service_base::gateway_security::{
     AuthorizationUrl, DefaultIdentityProvider, GolemIdentityProviderMetadata, IdentityProvider,
@@ -100,6 +102,34 @@ async fn start_docker_postgres() -> (DbPostgresConfig, ContainerAsync<Postgres>)
     (config, container)
 }
 
+async fn start_docker_redis() -> (
+    RedisConfig,
+    ContainerAsync<testcontainers_modules::redis::Redis>,
+) {
+    let container = testcontainers_modules::redis::Redis::default()
+        .with_tag("6.2.6")
+        .start()
+        .await
+        .expect("Failed to start redis container");
+
+    let redis_config = RedisConfig {
+        host: "localhost".to_string(),
+        port: container
+            .get_host_port_ipv4(6379)
+            .await
+            .expect("Failed to get port"),
+        database: 0,
+        tracing: false,
+        pool_size: 10,
+        retries: RetryConfig::default(),
+        key_prefix: "".to_string(),
+        username: None,
+        password: None,
+    };
+
+    (redis_config, container)
+}
+
 struct SqliteDb {
     db_path: String,
 }
@@ -147,6 +177,102 @@ pub async fn test_with_postgres_db() {
         security_scheme_repo,
     )
     .await;
+}
+
+#[test]
+pub async fn test_gateway_session_expiry() {
+    let (redis_config, _container) = start_docker_redis().await;
+
+    let redis = RedisPool::configured(&redis_config).await.unwrap();
+
+    let data_value = DataValue(serde_json::Value::String(
+        Nonce::new_random().secret().to_string(),
+    ));
+
+    // Longer Expiry in Redis returns value
+    let value = insert_and_get_with_redis(
+        SessionId("test1".to_string()),
+        DataKey::nonce(),
+        data_value.clone(),
+        60 * 60,
+        &redis,
+    )
+    .await
+    .expect("Expecting a value for longer expiry");
+
+    assert_eq!(value, data_value.clone());
+
+    // Instant expiry in Redis returns missing value, and we should get missing value
+    let result = insert_and_get_with_redis(
+        SessionId("test2".to_string()),
+        DataKey::nonce(),
+        data_value.clone(),
+        0,
+        &redis,
+    )
+    .await;
+
+    assert!(is_missing_value(result));
+
+    // Redis backed by in-memory cache should return value
+    let result = insert_and_get_with_redis_with_in_memory_cache(
+        SessionId("test2".to_string()),
+        DataKey::nonce(),
+        data_value.clone(),
+        &redis,
+    )
+    .await
+    .expect("Expecting a value from redis cache backed by in-memory");
+
+    assert_eq!(result, data_value);
+}
+
+fn is_missing_value(result: Result<DataValue, GatewaySessionError>) -> bool {
+    match result {
+        Err(GatewaySessionError::MissingValue { .. }) => true,
+        _ => false,
+    }
+}
+
+async fn insert_and_get_with_redis(
+    session_id: SessionId,
+    data_key: DataKey,
+    data_value: DataValue,
+    redis_expiry_in_seconds: u64,
+    redis: &RedisPool,
+) -> Result<DataValue, GatewaySessionError> {
+    let session_store = Arc::new(RedisGatewaySession::new(
+        redis.clone(),
+        redis_expiry_in_seconds as i64,
+    ));
+
+    session_store
+        .insert(session_id.clone(), data_key.clone(), data_value)
+        .await
+        .unwrap();
+
+    session_store.get(&session_id, &data_key).await
+}
+
+async fn insert_and_get_with_redis_with_in_memory_cache(
+    session_id: SessionId,
+    data_key: DataKey,
+    data_value: DataValue,
+    redis: &RedisPool,
+) -> Result<DataValue, GatewaySessionError> {
+    let redis_session = RedisGatewaySession::new(redis.clone(), 60 * 60);
+    let redis_with_in_memory = Arc::new(GatewaySessionWithInMemoryCache::new(
+        redis_session.clone(),
+        60 * 60,
+        60,
+    ));
+
+    redis_with_in_memory
+        .insert(session_id.clone(), data_key.clone(), data_value.clone())
+        .await
+        .unwrap();
+
+    redis_with_in_memory.get(&session_id, &data_key).await
 }
 
 #[test]
