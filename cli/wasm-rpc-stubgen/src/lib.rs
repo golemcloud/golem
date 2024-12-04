@@ -27,6 +27,7 @@ pub mod wit_encode;
 pub mod wit_generate;
 pub mod wit_resolve;
 
+use crate::log::Output;
 use crate::model::app::{ComponentPropertiesExtensions, ComponentPropertiesExtensionsAny};
 use crate::stub::{StubConfig, StubDefinition};
 use crate::wit_generate::UpdateCargoToml;
@@ -309,6 +310,7 @@ pub async fn run_app_command<CPE: ComponentPropertiesExtensions>(
                 profile: args.profile.map(|profile| profile.into()),
                 offline: args.offline,
                 extensions: PhantomData::<CPE>,
+                log_output: Output::Stdout,
             })
             .await
         }
@@ -318,6 +320,7 @@ pub async fn run_app_command<CPE: ComponentPropertiesExtensions>(
             profile: None,
             offline: false,
             extensions: PhantomData::<ComponentPropertiesExtensionsAny>,
+            log_output: Output::Stdout,
         }),
         App::CustomCommand(_args) => {
             // TODO: parse app manifest / profile args
