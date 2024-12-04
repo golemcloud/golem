@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::ops::Deref;
 use crate::gateway_binding::StaticBinding;
 use crate::gateway_binding::{
     GatewayBinding, IdempotencyKeyCompiled, ResponseMappingCompiled, WorkerBinding,
@@ -27,6 +28,19 @@ pub enum GatewayBindingCompiled {
     Worker(WorkerBindingCompiled),
     Static(Box<StaticBinding>),
     FileServer(WorkerBindingCompiled),
+}
+
+impl GatewayBindingCompiled {
+    pub fn is_security_binding(&self) -> bool {
+        match self {
+            GatewayBindingCompiled::Worker(_) => false,
+            GatewayBindingCompiled::FileServer(_) => false,
+            GatewayBindingCompiled::Static(static_binding) => match static_binding.deref() {
+                StaticBinding::HttpCorsPreflight(_) => false,
+                StaticBinding::HttpAuthCallBack(_) => true
+            }
+        }
+    }
 }
 
 impl From<GatewayBindingCompiled> for GatewayBinding {
@@ -85,7 +99,7 @@ impl From<GatewayBindingCompiled>
                     compiled_response_expr: None,
                     response_rib_input: None,
                     worker_functions_in_response: None,
-                    binding_type: Some(1),
+                    binding_type: Some(2),
                     static_binding: Some(
                         golem_api_grpc::proto::golem::apidefinition::StaticBinding::from(
                             *static_binding,

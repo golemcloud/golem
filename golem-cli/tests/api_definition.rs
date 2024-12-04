@@ -20,12 +20,8 @@ use crate::Tracing;
 use assert2::assert;
 use chrono::{DateTime, Utc};
 use golem_cli::model::component::ComponentView;
-use golem_cli::model::ApiDefinitionFileFormat;
-use golem_client::model::{
-    GatewayBindingData, GatewayBindingType, GatewayBindingWithTypeInfo, HttpApiDefinitionRequest,
-    HttpApiDefinitionResponseData, MethodPattern, RibInputTypeInfo, RibOutputTypeInfo,
-    RouteRequestData, RouteWithTypeInfo, VersionedComponentId,
-};
+use golem_cli::model::{ApiDefinitionFileFormat, ApiSecurityScheme};
+use golem_client::model::{GatewayBindingData, GatewayBindingType, GatewayBindingWithTypeInfo, HttpApiDefinitionRequest, HttpApiDefinitionResponseData, MethodPattern, RibInputTypeInfo, RibOutputTypeInfo, RouteRequestData, RouteWithTypeInfo, SecuritySchemeData, VersionedComponentId};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_wasm_ast::analysis::analysed_type::{record, str, u64};
 use golem_wasm_ast::analysis::NameTypePair;
@@ -198,12 +194,12 @@ fn golem_def_with_response(
         id: id.to_string(),
         version: "0.1.0".to_string(),
         draft: true,
-        security: None,
+        security: Some(vec!["foo".to_string()]),
         routes: vec![RouteRequestData {
             method: MethodPattern::Get,
             path: "/{user-id}/get-cart-contents".to_string(),
             cors: None,
-            security: None,
+            security: Some("foo".to_string()),
             binding: GatewayBindingData {
                 component_id: Some(VersionedComponentId {
                     component_id: Uuid::parse_str(component_id).unwrap(),
@@ -216,7 +212,7 @@ fn golem_def_with_response(
                 allow_methods: None,
                 allow_headers: None,
                 expose_headers: None,
-                binding_type: None,
+                binding_type: Some(GatewayBindingType::Default),
                 max_age: None,
                 allow_credentials: None,
             },
@@ -481,6 +477,12 @@ fn api_definition_add(
     let component_id = component.component_urn.id.0.to_string();
     let def = native_api_definition_request(&component_name, &component_id);
 
+    dbg!("here?????");
+    let result: ApiSecurityScheme  =
+        cli.run(&["api-security-scheme", "create", "--scheme.id", "foo", "--provider.type", "google", "--client.id", "bar", "--client.secret", "baz", "--redirect.url", "http://localhost:9006/auth/callback"])?;
+
+    dbg!(result.clone());
+
     let res: HttpApiDefinitionResponseData = match api_definition_format {
         ApiDefinitionFileFormat::Json => {
             let path = make_json_file(&def.id, &def)?;
@@ -497,6 +499,8 @@ fn api_definition_add(
             ])?
         }
     };
+
+    dbg!(res.clone());
 
     let rib_output_type_info = RibOutputTypeInfo {
         analysed_type: record(vec![
@@ -545,6 +549,7 @@ fn api_definition_update(
 
     let def = native_api_definition_request(&component_name, &component_id);
     let path = make_json_file(&def.id, &def)?;
+
     let _: HttpApiDefinitionResponseData =
         cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
 

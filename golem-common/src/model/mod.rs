@@ -3093,6 +3093,9 @@ impl From<golem_api_grpc::proto::golem::apidefinition::GatewayBindingType> for G
             golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::CorsPreflight => {
                 GatewayBindingType::CorsPreflight
             }
+            golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::AuthCallBack => {
+                GatewayBindingType::CorsPreflight
+            }
         }
     }
 }

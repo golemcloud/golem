@@ -52,6 +52,17 @@ impl GatewayBinding {
         }
     }
 
+    pub fn is_security_binding(&self) -> bool {
+        match self {
+            Self::Default(_) => false,
+            Self::FileServer(_) => false,
+            Self::Static(s) => match s.deref() {
+                StaticBinding::HttpCorsPreflight(_) => false,
+                StaticBinding::HttpAuthCallBack(_) => true,
+            },
+        }
+    }
+
     pub fn static_binding(value: StaticBinding) -> GatewayBinding {
         GatewayBinding::Static(Box::new(value))
     }
@@ -158,6 +169,13 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::GatewayBinding> for Ga
             golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::CorsPreflight => {
                 let static_binding = value.static_binding.ok_or("Missing static binding")?;
 
+                Ok(GatewayBinding::static_binding(static_binding.try_into()?))
+            }
+
+            golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::AuthCallBack => {
+                let static_binding = value.static_binding.ok_or("Missing static binding")?;
+
+                // Doubtful
                 Ok(GatewayBinding::static_binding(static_binding.try_into()?))
             }
         }

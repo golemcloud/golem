@@ -163,17 +163,28 @@ pub struct HttpApiDefinitionResponseData {
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-impl<Namespace> From<CompiledHttpApiDefinition<Namespace>> for HttpApiDefinitionResponseData {
-    fn from(value: CompiledHttpApiDefinition<Namespace>) -> Self {
-        let routes = value.routes.into_iter().map(|route| route.into()).collect();
+impl<Namespace> TryFrom<CompiledHttpApiDefinition<Namespace>> for HttpApiDefinitionResponseData {
+    type Error = String;
+    fn try_from(value: CompiledHttpApiDefinition<Namespace>) -> Result<Self, String> {
 
-        Self {
+        let mut routes = vec![];
+
+        for route in value.routes {
+            // We shouldn't expose auth call back binding to users
+            // as it is giving away the internal details of the call back system that enables security.
+            if !route.binding.is_security_binding() {
+                let v = RouteWithTypeInfo::try_from(route)?;
+                routes.push(v);
+            }
+        }
+
+        Ok(Self {
             id: value.id,
             version: value.version,
             routes,
             draft: value.draft,
             created_at: Some(value.created_at),
-        }
+        })
     }
 }
 
@@ -264,15 +275,16 @@ pub struct RouteWithTypeInfo {
     pub binding: GatewayBindingWithTypeInfo,
 }
 
-impl From<CompiledRoute> for RouteWithTypeInfo {
-    fn from(value: CompiledRoute) -> Self {
+impl TryFrom<CompiledRoute> for RouteWithTypeInfo {
+    type Error = String;
+    fn try_from(value: CompiledRoute) -> Result<Self, String> {
         let method = value.method;
         let path = value.path.to_string();
-        Self {
+        Ok(Self {
             method,
             path,
-            binding: GatewayBindingWithTypeInfo::from(value.binding),
-        }
+            binding: GatewayBindingWithTypeInfo::try_from(value.binding)?,
+        })
     }
 }
 
@@ -469,34 +481,45 @@ impl GatewayBindingWithTypeInfo {
     }
 }
 
-impl From<GatewayBindingCompiled> for GatewayBindingWithTypeInfo {
-    fn from(value: GatewayBindingCompiled) -> Self {
+impl TryFrom<GatewayBindingCompiled> for GatewayBindingWithTypeInfo {
+    type Error = String;
+
+    fn try_from(value: GatewayBindingCompiled) -> Result<Self, String> {
         let gateway_binding = value.clone();
 
         match gateway_binding {
             GatewayBindingCompiled::FileServer(worker_binding) => {
-                GatewayBindingWithTypeInfo::from_worker_binding_compiled(
+                Ok(GatewayBindingWithTypeInfo::from_worker_binding_compiled(
                     worker_binding,
                     GatewayBindingType::FileServer,
-                )
+                ))
             }
             GatewayBindingCompiled::Worker(worker_binding) => {
-                GatewayBindingWithTypeInfo::from_worker_binding_compiled(
+                Ok(GatewayBindingWithTypeInfo::from_worker_binding_compiled(
                     worker_binding,
                     GatewayBindingType::Default,
-                )
+                ))
             }
-            GatewayBindingCompiled::Static(static_binding) => GatewayBindingWithTypeInfo {
-                component_id: None,
-                worker_name: None,
-                idempotency_key: None,
-                response: None,
-                binding_type: None, // TODO; Remove worker_binding_type to not expose worker_function
-                response_mapping_input: None,
-                worker_name_input: None,
-                idempotency_key_input: None,
-                cors_preflight: static_binding.get_cors_preflight(),
-                response_mapping_output: None,
+            GatewayBindingCompiled::Static(static_binding) => {
+                let binding_type = match static_binding.deref() {
+                    StaticBinding::HttpCorsPreflight(_) => GatewayBindingType::CorsPreflight,
+                    StaticBinding::HttpAuthCallBack(_) => {
+                        return Err("Auth call back static binding not to be exposed to users".to_string())
+                    }
+                };
+
+                Ok(GatewayBindingWithTypeInfo {
+                    component_id: None,
+                    worker_name: None,
+                    idempotency_key: None,
+                    response: None,
+                    binding_type: Some(binding_type),
+                    response_mapping_input: None,
+                    worker_name_input: None,
+                    idempotency_key_input: None,
+                    cors_preflight: static_binding.get_cors_preflight(),
+                    response_mapping_output: None,
+                })
             },
         }
     }
@@ -531,8 +554,12 @@ impl TryFrom<crate::gateway_api_definition::http::HttpApiDefinition>
     ) -> Result<Self, Self::Error> {
         let mut routes = Vec::new();
         for route in value.routes {
-            let v = RouteRequestData::try_from(route)?;
-            routes.push(v);
+            // We shouldn't expose auth call back binding to users
+            // as it is giving away the internal details of the call back system that enables security.
+            if !route.binding.is_security_binding() {
+                let v = RouteRequestData::try_from(route)?;
+                routes.push(v);
+            }
         }
 
         Ok(Self {
