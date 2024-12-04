@@ -56,8 +56,8 @@ fn preview2_mod_gen(golem_wit_path: &str) -> String {
         path: "{golem_wit_path}/wit",
         interfaces: "
           import golem:api/host@0.2.0;
-          import golem:api/host@1.1.0-rc1;
-          import golem:api/oplog@1.1.0-rc1;
+          import golem:api/host@1.1.0;
+          import golem:api/oplog@1.1.0;
 
           import wasi:blobstore/blobstore;
           import wasi:blobstore/container;

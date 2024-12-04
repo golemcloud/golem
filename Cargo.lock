@@ -4033,9 +4033,9 @@ dependencies = [
 
 [[package]]
 name = "golem-examples"
-version = "1.0.7"
+version = "1.1.0-rc1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9b2a21e0f16a33d3ccd3b6c136551c15cab1036a60ec851e674f4db2df6cc57c"
+checksum = "1bb49a530af60e3911d7a5d59ee3d2e375ad11dfbe60b6188a2bc492a8452563"
 dependencies = [
  "Inflector",
  "cargo_metadata",
@@ -4239,9 +4239,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm-ast"
-version = "1.0.1"
+version = "1.1.0-rc1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "01e3d202f10d115066f6b2840127d7ab3a9b9f61ecc5e64ab69cab21e6d7960d"
+checksum = "7fdc418403c365a36acb38514a2674e3c467826b60863ddfdd98f19f2072458f"
 dependencies = [
  "bincode",
  "leb128",
@@ -4259,9 +4259,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm-rpc"
-version = "1.0.16"
+version = "1.1.0-rc1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dfc2dc17c14b7b212e26167aac8ec7a3368188a20bdfac6969a9b2cb1ffb7869"
+checksum = "7baea7a92cac94a5fcd0b6ca2819577d75aed6753029e1f622b723310e9e74f6"
 dependencies = [
  "arbitrary",
  "async-recursion",
@@ -4285,9 +4285,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm-rpc-stubgen"
-version = "1.0.16"
+version = "1.1.0-rc1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca1cbd75d8bc4233f3baa75c7b04efa1cd3d4d48eac7bc31a5bff88f93b02714"
+checksum = "3779675540660de9a20dbd12a74698e5acc647364c4ab270c17426ca0332788c"
 dependencies = [
  "anyhow",
  "assert2",
@@ -4329,9 +4329,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wit"
-version = "1.0.5"
+version = "1.1.0-rc1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32518bbe9eb0e5ba0954ece8bbc8e2a22c449401565e855ffb93881a42b32f47"
+checksum = "2345b9a0945ac9226e06e6813ca1689cf6d038f5cf1802a2ee3424c21e8cee25"
 
 [[package]]
 name = "golem-worker-executor"
@@ -10065,9 +10065,9 @@ dependencies = [
 
 [[package]]
 name = "tokio-util"
-version = "0.7.12"
+version = "0.7.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "61e7c3654c13bcd040d4a03abee2c75b1d14a37b423cf5a813ceae1cc903ec6a"
+checksum = "d7fcaa8d55a2bdd6b83ace262b016eca0d79ee02818c5c1bcdf0305114081078"
 dependencies = [
  "bytes 1.9.0",
  "futures-core",

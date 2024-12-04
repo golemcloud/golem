@@ -2,7 +2,7 @@
 url = "https://github.com/golemcloud/golem-wit/archive/main.tar.gz"
 sha256 = "6ac4f1553003474229bb40a885b48d1eaa4bea2f9d679a115da9afede30b5ad4"
 sha512 = "ced8c18a35dc04123386465d98d2aeba54c486e4e22a30e7efac0548974e176528fcba36c64942d67fa35d9135806ff0fcde259eb4af051c4a29fcb397e9af1c"
-deps = ["blobstore", "cli", "clocks", "filesystem", "golem", "http", "io", "keyvalue", "logging", "random", "sockets", "wasm-rpc"]
+deps = ["blobstore", "cli", "clocks", "filesystem", "golem", "golem-1.1", "http", "io", "keyvalue", "logging", "random", "sockets", "wasm-rpc"]
 
 [blobstore]
 sha256 = "eb50ec776eac937b2ef90b41a281d0dd7c94f0b076466d917bd0f2ed5b01d39d"
@@ -23,6 +23,10 @@ sha512 = "ead452f9b7bfb88593a502ec00d76d4228003d51c40fd0408aebc32d35c94673551b00
 [golem]
 sha256 = "181dfcbb2421c6f52303d49aac4b06d8db67eb683e7460acacf29961153247f4"
 sha512 = "64c51048f90c4bc83b43c99af570376bcaa4b623c66b97fd418be9fef77d17530e37d7c7f59f2e706b7b5dcfb6728eb11e27e3805a96391c59a264818f513d32"
+
+["golem-1.1"]
+sha256 = "1a7f84ace9f5b5d91cb324bc9191e31ef37b24db906212ed995b298d9250644a"
+sha512 = "84fb3db673e40615c4f80bca974b95f57cde20ffd534ba749dfbf3e4ff836fe6cf2790cd00904e9e01ca333d54b9f33ad1cc6c778bd4f0c4397aa4da07271976"
 
 [http]
 sha256 = "8f44402bde16c48e28c47dc53eab0b26af5b3b3482a1852cf77673e0880ba1c1"
