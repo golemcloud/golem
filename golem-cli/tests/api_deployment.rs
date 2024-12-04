@@ -19,12 +19,12 @@ use crate::cli::{Cli, CliLive};
 use crate::Tracing;
 use assert2::assert;
 use golem_cli::model::component::ComponentView;
+use golem_cli::model::ApiSecurityScheme;
 use golem_client::model::{ApiDeployment, HttpApiDefinitionResponseData};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use std::sync::Arc;
 use test_r::core::{DynamicTestRegistration, TestType};
 use test_r::{add_test, inherit_test_dep, test_dep, test_gen};
-use golem_cli::model::ApiSecurityScheme;
 
 inherit_test_dep!(EnvBasedTestDependencies);
 inherit_test_dep!(Tracing);
@@ -118,7 +118,12 @@ fn api_deployment_deploy_with_security(
     (deps, name, cli): (&EnvBasedTestDependencies, String, CliLive),
 ) -> Result<(), anyhow::Error> {
     let security_id = format!("security{name}");
-    let definition = make_definition(deps, &cli, &format!("api_deployment_deploy{name}"), Some(security_id.as_str()))?;
+    let definition = make_definition(
+        deps,
+        &cli,
+        &format!("api_deployment_deploy{name}"),
+        Some(security_id.as_str()),
+    )?;
     let host = format!("deploy-host{name}");
     let cfg = &cli.config;
 

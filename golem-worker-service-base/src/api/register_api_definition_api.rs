@@ -172,8 +172,8 @@ impl<Namespace> TryFrom<CompiledHttpApiDefinition<Namespace>> for HttpApiDefinit
             // We shouldn't expose auth call back binding to users
             // as it is giving away the internal details of the call back system that enables security.
             if !route.binding.is_security_binding() {
-                let v = RouteWithTypeInfo::try_from(route)?;
-                routes.push(v);
+                let route_with_type_info = RouteWithTypeInfo::try_from(route)?;
+                routes.push(route_with_type_info);
             }
         }
 
