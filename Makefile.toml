@@ -304,7 +304,7 @@ description = "Runs CLI tests only"
 dependencies = ["build-bins"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 script = '''
-cargo test --package golem-cli --test integration component_add_from_project_file_short -- --test-threads=1 --report-time $JUNIT_OPTS
+cargo test --package golem-cli --test integration -- --test-threads=1 --report-time $JUNIT_OPTS
 '''
 
 ## ** CHECK-OPENAPI **
