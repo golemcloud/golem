@@ -22,9 +22,9 @@ use chrono::{DateTime, Utc};
 use golem_cli::model::component::ComponentView;
 use golem_cli::model::{ApiDefinitionFileFormat, ApiSecurityScheme};
 use golem_client::model::{
-    GatewayBindingData, GatewayBindingType, GatewayBindingWithTypeInfo, HttpApiDefinitionRequest,
+    GatewayBindingData, GatewayBindingResponseData, GatewayBindingType, HttpApiDefinitionRequest,
     HttpApiDefinitionResponseData, MethodPattern, RibInputTypeInfo, RibOutputTypeInfo,
-    RouteRequestData, RouteWithTypeInfo, VersionedComponentId,
+    RouteRequestData, RouteResponseData, VersionedComponentId,
 };
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_wasm_ast::analysis::analysed_type::{record, str, u64};
@@ -104,7 +104,7 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             api_definition_add_with_security(
                 (deps, name.to_string(), cli.with_args(short)),
-                &ApiDefinitionFileFormat::Yaml,
+                &ApiDefinitionFileFormat::Json,
             )
         }
     );
@@ -403,10 +403,11 @@ pub fn to_api_definition_with_type_info(
             .map(|v0| {
                 let v = v0.clone();
 
-                RouteWithTypeInfo {
+                RouteResponseData {
                     method: v.method,
                     path: v.path,
-                    binding: GatewayBindingWithTypeInfo {
+                    security: v.security.clone(),
+                    binding: GatewayBindingResponseData {
                         component_id: v.binding.component_id,
                         worker_name: v.binding.worker_name.clone(),
                         idempotency_key: v.binding.idempotency_key.clone(),
@@ -504,7 +505,7 @@ fn api_definition_add_with_security(
     ),
     api_definition_format: &ApiDefinitionFileFormat,
 ) -> anyhow::Result<()> {
-    let component_name = format!("api_definition_{api_definition_format}_add{name}");
+    let component_name = format!("api_definition_{api_definition_format}_add_security{name}");
     let security_id = format!("security_{api_definition_format}{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();

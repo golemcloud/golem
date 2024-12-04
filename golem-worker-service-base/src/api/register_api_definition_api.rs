@@ -157,7 +157,7 @@ impl From<SecuritySchemeWithProviderMetadata> for SecuritySchemeData {
 pub struct HttpApiDefinitionResponseData {
     pub id: ApiDefinitionId,
     pub version: ApiVersion,
-    pub routes: Vec<RouteWithTypeInfo>,
+    pub routes: Vec<RouteResponseData>,
     #[serde(default)]
     pub draft: bool,
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -171,8 +171,8 @@ impl<Namespace> TryFrom<CompiledHttpApiDefinition<Namespace>> for HttpApiDefinit
         for route in value.routes {
             // We shouldn't expose auth call back binding to users
             // as it is giving away the internal details of the call back system that enables security.
-            if !route.binding.is_security_binding() {
-                let route_with_type_info = RouteWithTypeInfo::try_from(route)?;
+            if !route.binding.is_static_auth_call_back_binding() {
+                let route_with_type_info = RouteResponseData::try_from(route)?;
                 routes.push(route_with_type_info);
             }
         }
@@ -224,7 +224,7 @@ impl TryFrom<Route> for RouteRequestData {
         let binding = GatewayBindingData::try_from(value.binding.clone())?;
         let security = value.middlewares.clone().and_then(|middlewares| {
             middlewares.get_http_authentication_middleware().map(|x| {
-                x.security_scheme
+                x.security_scheme_with_metadata
                     .security_scheme
                     .scheme_identifier()
                     .to_string()
@@ -268,21 +268,35 @@ impl TryFrom<RouteRequest> for RouteRequestData {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
-pub struct RouteWithTypeInfo {
+pub struct RouteResponseData {
     pub method: MethodPattern,
     pub path: String,
-    pub binding: GatewayBindingWithTypeInfo,
+    pub security: Option<String>,
+    pub binding: GatewayBindingResponseData,
 }
 
-impl TryFrom<CompiledRoute> for RouteWithTypeInfo {
+impl TryFrom<CompiledRoute> for RouteResponseData {
     type Error = String;
     fn try_from(value: CompiledRoute) -> Result<Self, String> {
         let method = value.method;
         let path = value.path.to_string();
+        let security = value.middlewares.and_then(|middlewares| {
+            middlewares
+                .get_http_authentication_middleware()
+                .map(|http_authentication_middleware| {
+                    http_authentication_middleware
+                        .security_scheme_with_metadata
+                        .security_scheme
+                        .scheme_identifier()
+                        .to_string()
+                })
+        });
+
         Ok(Self {
             method,
             path,
-            binding: GatewayBindingWithTypeInfo::try_from(value.binding)?,
+            security,
+            binding: GatewayBindingResponseData::try_from(value.binding)?,
         })
     }
 }
@@ -378,8 +392,9 @@ impl From<HttpMiddlewares> for MiddlewareData {
             match i {
                 HttpMiddleware::AddCorsHeaders(cors0) => cors = Some(cors0.clone()),
                 HttpMiddleware::AuthenticateRequest(auth0) => {
-                    let security_scheme_reference =
-                        SecuritySchemeReferenceData::from(auth0.security_scheme.clone());
+                    let security_scheme_reference = SecuritySchemeReferenceData::from(
+                        auth0.security_scheme_with_metadata.clone(),
+                    );
                     auth = Some(security_scheme_reference)
                 }
             }
@@ -432,7 +447,7 @@ impl From<SecuritySchemeReferenceData> for SecuritySchemeReference {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
-pub struct GatewayBindingWithTypeInfo {
+pub struct GatewayBindingResponseData {
     pub component_id: Option<VersionedComponentId>, // Optional to keep it backward compatible
     pub worker_name: Option<String>,                // If bindingType is Default or FileServer
     pub idempotency_key: Option<String>,            // If bindingType is Default or FileServer
@@ -446,12 +461,12 @@ pub struct GatewayBindingWithTypeInfo {
     pub response_mapping_output: Option<RibOutputTypeInfo>, // If bindingType is Default or FileServer
 }
 
-impl GatewayBindingWithTypeInfo {
+impl GatewayBindingResponseData {
     pub fn from_worker_binding_compiled(
         worker_binding: WorkerBindingCompiled,
         binding_type: GatewayBindingType,
     ) -> Self {
-        GatewayBindingWithTypeInfo {
+        GatewayBindingResponseData {
             component_id: Some(worker_binding.component_id),
             worker_name: worker_binding
                 .worker_name_compiled
@@ -480,7 +495,7 @@ impl GatewayBindingWithTypeInfo {
     }
 }
 
-impl TryFrom<GatewayBindingCompiled> for GatewayBindingWithTypeInfo {
+impl TryFrom<GatewayBindingCompiled> for GatewayBindingResponseData {
     type Error = String;
 
     fn try_from(value: GatewayBindingCompiled) -> Result<Self, String> {
@@ -488,13 +503,13 @@ impl TryFrom<GatewayBindingCompiled> for GatewayBindingWithTypeInfo {
 
         match gateway_binding {
             GatewayBindingCompiled::FileServer(worker_binding) => {
-                Ok(GatewayBindingWithTypeInfo::from_worker_binding_compiled(
+                Ok(GatewayBindingResponseData::from_worker_binding_compiled(
                     worker_binding,
                     GatewayBindingType::FileServer,
                 ))
             }
             GatewayBindingCompiled::Worker(worker_binding) => {
-                Ok(GatewayBindingWithTypeInfo::from_worker_binding_compiled(
+                Ok(GatewayBindingResponseData::from_worker_binding_compiled(
                     worker_binding,
                     GatewayBindingType::Default,
                 ))
@@ -509,7 +524,7 @@ impl TryFrom<GatewayBindingCompiled> for GatewayBindingWithTypeInfo {
                     }
                 };
 
-                Ok(GatewayBindingWithTypeInfo {
+                Ok(GatewayBindingResponseData {
                     component_id: None,
                     worker_name: None,
                     idempotency_key: None,

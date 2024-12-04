@@ -60,7 +60,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::StaticBinding> for Sta
                 let security_scheme_with_metadata = SecuritySchemeWithProviderMetadata::try_from(security_scheme_with_metadata_proto)?;
 
                 Ok(StaticBinding::HttpAuthCallBack(Box::new(HttpAuthenticationMiddleware {
-                    security_scheme: security_scheme_with_metadata
+                    security_scheme_with_metadata
                 })))
             }
             None => Err("Static Binding missing".to_string()),
@@ -84,7 +84,7 @@ impl TryFrom<StaticBinding> for golem_api_grpc::proto::golem::apidefinition::Sta
                     static_binding: Some(golem_api_grpc::proto::golem::apidefinition::static_binding::StaticBinding::AuthCallback(
                         golem_api_grpc::proto::golem::apidefinition::AuthCallBack{
                             security_with_provider_metadata: Some(golem_api_grpc::proto::golem::apidefinition::SecurityWithProviderMetadata::try_from(
-                                value.security_scheme
+                                value.security_scheme_with_metadata
                             )?)
                         }
                     )),

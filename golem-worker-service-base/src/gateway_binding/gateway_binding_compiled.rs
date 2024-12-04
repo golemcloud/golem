@@ -32,7 +32,7 @@ pub enum GatewayBindingCompiled {
 }
 
 impl GatewayBindingCompiled {
-    pub fn is_security_binding(&self) -> bool {
+    pub fn is_static_auth_call_back_binding(&self) -> bool {
         match self {
             GatewayBindingCompiled::Worker(_) => false,
             GatewayBindingCompiled::FileServer(_) => false,
