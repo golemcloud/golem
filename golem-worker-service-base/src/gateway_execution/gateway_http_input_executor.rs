@@ -320,8 +320,11 @@ impl<Namespace: Send + Sync + Clone> GatewayHttpInputExecutor<Namespace>
                 }
 
                 ResolvedBinding::Static(StaticBinding::HttpAuthCallBack(auth_call_back)) => {
-                    self.handle_http_auth_call_binding(&auth_call_back.security_scheme, input)
-                        .await
+                    self.handle_http_auth_call_binding(
+                        &auth_call_back.security_scheme_with_metadata,
+                        input,
+                    )
+                    .await
                 }
 
                 ResolvedBinding::Worker(resolved_worker_binding) => {

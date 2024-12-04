@@ -53,7 +53,12 @@ impl RegisterApiDefinitionApi {
                 .instrument(record.span.clone())
                 .await?;
 
-            Ok(Json(HttpApiDefinitionResponseData::from(result)))
+            let result = HttpApiDefinitionResponseData::try_from(result).map_err(|e| {
+                error!("Failed to convert to response data {}", e);
+                ApiEndpointError::internal(safe(e))
+            });
+
+            result.map(Json)
         };
 
         record.result(response)
@@ -81,12 +86,18 @@ impl RegisterApiDefinitionApi {
                 .try_into()
                 .map_err(|err| ApiEndpointError::bad_request(safe(err)))?;
 
-            let result = self
+            let compiled_definition = self
                 .create_api(&definition)
                 .instrument(record.span.clone())
                 .await?;
 
-            Ok(Json(HttpApiDefinitionResponseData::from(result)))
+            let result =
+                HttpApiDefinitionResponseData::try_from(compiled_definition).map_err(|e| {
+                    error!("Failed to convert to response data {}", e);
+                    ApiEndpointError::internal(safe(e))
+                });
+
+            result.map(Json)
         };
 
         record.result(response)
@@ -128,7 +139,7 @@ impl RegisterApiDefinitionApi {
                     "Unmatched url and body versions.".to_string(),
                 )))
             } else {
-                let result = self
+                let compiled_definition = self
                     .definition_service
                     .update(
                         &definition,
@@ -138,7 +149,13 @@ impl RegisterApiDefinitionApi {
                     .instrument(record.span.clone())
                     .await?;
 
-                Ok(Json(HttpApiDefinitionResponseData::from(result)))
+                let result =
+                    HttpApiDefinitionResponseData::try_from(compiled_definition).map_err(|e| {
+                        error!("Failed to convert to response data {}", e);
+                        ApiEndpointError::internal(safe(e))
+                    });
+
+                result.map(Json)
             }
         };
 
@@ -180,12 +197,17 @@ impl RegisterApiDefinitionApi {
                 .instrument(record.span.clone())
                 .await?;
 
-            let definition = data.ok_or(ApiEndpointError::not_found(safe(format!(
+            let compiled_definition = data.ok_or(ApiEndpointError::not_found(safe(format!(
                 "Can't find api definition with id {api_definition_id}, and version {api_version}"
             ))))?;
 
-            let result = HttpApiDefinitionResponseData::from(definition);
-            Ok(Json(result))
+            let result =
+                HttpApiDefinitionResponseData::try_from(compiled_definition).map_err(|e| {
+                    error!("Failed to convert to response data {}", e);
+                    ApiEndpointError::internal(safe(e))
+                });
+
+            result.map(Json)
         };
 
         record.result(response)
@@ -258,8 +280,12 @@ impl RegisterApiDefinitionApi {
 
             let values = data
                 .into_iter()
-                .map(HttpApiDefinitionResponseData::from)
-                .collect::<Vec<HttpApiDefinitionResponseData>>();
+                .map(HttpApiDefinitionResponseData::try_from)
+                .collect::<Result<Vec<_>, String>>()
+                .map_err(|e| {
+                    error!("Failed to convert to response data {}", e);
+                    ApiEndpointError::internal(safe(e))
+                })?;
 
             Ok(Json(values))
         };
