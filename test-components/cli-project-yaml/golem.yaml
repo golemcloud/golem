@@ -1,8 +1,9 @@
 components:
   component_add_from_project_file_CLI_short:
+    sourceWit: wit-a
+    generatedWit: wit-generated-a
     componentWasm: ../environment-service.wasm
     linkedWasm: ../environment-service.wasm
-    sourceWit: ./wit
     componentType: durable
     files:
     - sourcePath: ./foo.txt
@@ -12,9 +13,10 @@ components:
       targetPath: /bar
       permissions: read-write
   component_add_from_project_file_CLI_long:
+    sourceWit: wit-b
+    generatedWit: wit-generated-b
     componentWasm: ../environment-service.wasm
     linkedWasm: ../environment-service.wasm
-    sourceWit: ./wit
     componentType: durable
     files:
     - sourcePath: ./foo.txt
@@ -23,24 +25,24 @@ components:
     - sourcePath: ./bar
       targetPath: /bar
       permissions: read-write
-    - name: component_update_from_project_file_CLI_short
-      type: wasm
-      properties:
-        componentWasm: ../environment-service.wasm
-        linkedWasm: ../environment-service.wasm
-        sourceWit: ./wit
-        componentType: durable
-        files:
-        - sourcePath: ./foo.txt
-          targetPath: /foo.txt
-          permissions: read-only
-        - sourcePath: ./bar
-          targetPath: /bar
-          permissions: read-write
-  component_update_from_project_file_CLI_long:
+  component_update_from_project_file_CLI_short:
+    sourceWit: wit-c
+    generatedWit: wit-generated-c
     componentWasm: ../environment-service.wasm
     linkedWasm: ../environment-service.wasm
-    sourceWit: ./wit
+    componentType: durable
+    files:
+    - sourcePath: ./foo.txt
+      targetPath: /foo.txt
+      permissions: read-only
+    - sourcePath: ./bar
+      targetPath: /bar
+      permissions: read-write
+  component_update_from_project_file_CLI_long:
+    sourceWit: wit-d
+    generatedWit: wit-generated-d
+    componentWasm: ../environment-service.wasm
+    linkedWasm: ../environment-service.wasm
     componentType: durable
     files:
     - sourcePath: ./foo.txt
