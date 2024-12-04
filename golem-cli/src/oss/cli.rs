@@ -36,12 +36,11 @@ use golem_client::model::{
 use golem_client::DefaultComponentOwner;
 use golem_common::model::plugin::DefaultPluginScope;
 use golem_common::uri::oss::uri::ResourceUri;
-use std::marker::PhantomData;
 use std::path::PathBuf;
 
-pub async fn run_oss_cli<
+pub async fn run_with_profile<
     ProfileAdd: clap::Args + Into<UniversalProfileAdd>,
-    ExtraCommands: CliCommand<OssCommandContext<ProfileAdd>>,
+    ExtraCommands: CliCommand<OssCommandContext>,
 >(
     format: Format,
     config_dir: PathBuf,
@@ -55,7 +54,34 @@ pub async fn run_oss_cli<
 
     check_for_newer_server_version(factory.version_service().as_ref(), VERSION).await;
 
-    let ctx = OssCommandContext::new(format, factory, config_dir, command, profile_auth, cli_kind);
+    let ctx = OssCommandContext {
+        format,
+        factory,
+        config_dir,
+        command,
+        profile_auth,
+        cli_kind,
+    };
+
+    parsed.command.run(ctx).await
+}
+
+pub async fn run_without_profile<
+    ProfileAdd: clap::Args + Into<UniversalProfileAdd>,
+    ExtraCommands: CliCommand<NoProfileCommandContext>,
+>(
+    config_dir: PathBuf,
+    command: Command,
+    parsed: GolemOssCli<ProfileAdd, ExtraCommands>,
+    cli_kind: CliKind,
+    profile_auth: Box<dyn ProfileAuth + Send + Sync>,
+) -> Result<GolemResult, GolemError> {
+    let ctx = NoProfileCommandContext {
+        config_dir,
+        command,
+        profile_auth,
+        cli_kind,
+    };
 
     parsed.command.run(ctx).await
 }
@@ -74,11 +100,8 @@ pub enum OssOnlyCommand {
     },
 }
 
-impl<ProfileAdd> CliCommand<NoProfileCommandContext<ProfileAdd>> for OssOnlyCommand {
-    async fn run(
-        self,
-        ctx: NoProfileCommandContext<ProfileAdd>,
-    ) -> Result<GolemResult, GolemError> {
+impl CliCommand<NoProfileCommandContext> for OssOnlyCommand {
+    async fn run(self, ctx: NoProfileCommandContext) -> Result<GolemResult, GolemError> {
         match self {
             OssOnlyCommand::Get { .. } => ctx.fail_uninitialized(),
         }
@@ -110,39 +133,17 @@ pub struct GolemOssCli<ProfileAdd: clap::Args, ExtraCommand: Subcommand> {
 }
 
 /// Full context after the user has initialized the profile.
-pub struct OssCommandContext<ProfileAdd> {
-    format: Format,
-    factory: OssServiceFactory,
-    config_dir: PathBuf,
-    command: Command,
-    profile_auth: Box<dyn ProfileAuth + Send + Sync>,
-    cli_kind: CliKind,
-    profile_add: PhantomData<ProfileAdd>,
+pub struct OssCommandContext {
+    pub format: Format,
+    pub factory: OssServiceFactory,
+    pub config_dir: PathBuf,
+    pub command: Command,
+    pub profile_auth: Box<dyn ProfileAuth + Send + Sync>,
+    pub cli_kind: CliKind,
 }
 
-impl<ProfileAdd> OssCommandContext<ProfileAdd> {
-    pub fn new(
-        format: Format,
-        factory: OssServiceFactory,
-        config_dir: PathBuf,
-        command: Command,
-        profile_auth: Box<dyn ProfileAuth + Send + Sync>,
-        cli_kind: CliKind,
-    ) -> Self {
-        Self {
-            format,
-            factory,
-            config_dir,
-            command,
-            profile_auth,
-            cli_kind,
-            profile_add: PhantomData,
-        }
-    }
-}
-
-impl<ProfileAdd> CliCommand<OssCommandContext<ProfileAdd>> for OssOnlyCommand {
-    async fn run(self, ctx: OssCommandContext<ProfileAdd>) -> Result<GolemResult, GolemError> {
+impl CliCommand<OssCommandContext> for OssOnlyCommand {
+    async fn run(self, ctx: OssCommandContext) -> Result<GolemResult, GolemError> {
         match self {
             OssOnlyCommand::Get { uri } => {
                 let factory = ctx.factory;
@@ -153,10 +154,10 @@ impl<ProfileAdd> CliCommand<OssCommandContext<ProfileAdd>> for OssOnlyCommand {
     }
 }
 
-impl<ProfileAdd: clap::Args + Into<UniversalProfileAdd>> CliCommand<OssCommandContext<ProfileAdd>>
+impl<ProfileAdd: clap::Args + Into<UniversalProfileAdd>> CliCommand<OssCommandContext>
     for OssSpecializedSharedCommand<ProfileAdd>
 {
-    async fn run(self, ctx: OssCommandContext<ProfileAdd>) -> Result<GolemResult, GolemError> {
+    async fn run(self, ctx: OssCommandContext) -> Result<GolemResult, GolemError> {
         match self {
             SharedCommand::Component { subcommand } => {
                 let factory = ctx.factory;

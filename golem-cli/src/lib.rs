@@ -16,20 +16,17 @@ use crate::config::{NamedProfile, Profile};
 use crate::init::CliKind;
 use crate::model::text::fmt::format_error;
 use crate::service::version::{VersionCheckResult, VersionService};
-use clap::{Command, Parser};
 use clap_verbosity_flag::Verbosity;
 use colored::Colorize;
-use command::profile::{OssProfileAdd, UniversalProfileAdd};
+use command::profile::OssProfileAdd;
 use command::{CliCommand, NoProfileCommandContext};
 use config::{get_config_dir, Config};
 use golem_common::golem_version;
 use indoc::eprintdoc;
-use init::{DummyProfileAuth, ProfileAuth};
+use init::DummyProfileAuth;
 use lenient_bool::LenientBool;
 use log::Level;
-use model::{GolemError, GolemResult};
 use oss::cli::{GolemOssCli, OssCommandContext};
-use std::path::PathBuf;
 use std::process::ExitCode;
 use tracing::{info, warn};
 use tracing_subscriber::FmtSubscriber;
@@ -48,8 +45,6 @@ pub mod model;
 pub mod oss;
 pub mod service;
 pub mod stubgen;
-
-pub use crate::oss::cli::run_oss_cli;
 
 #[cfg(test)]
 test_r::enable!();
@@ -116,25 +111,9 @@ pub async fn check_for_newer_server_version(
     }
 }
 
-pub async fn run_no_profile_cli<
-    ProfileAdd: clap::Args + Into<UniversalProfileAdd>,
-    ExtraCommands: CliCommand<NoProfileCommandContext<ProfileAdd>>,
->(
-    config_dir: PathBuf,
-    command: Command,
-    parsed: GolemOssCli<ProfileAdd, ExtraCommands>,
-    cli_kind: CliKind,
-    profile_auth: Box<dyn ProfileAuth + Send + Sync>,
-) -> Result<GolemResult, GolemError> {
-    let ctx = NoProfileCommandContext::new(config_dir, command, profile_auth, cli_kind);
-
-    parsed.command.run(ctx).await
-}
-
 pub fn oss_main<ExtraCommands>() -> ExitCode
 where
-    ExtraCommands: CliCommand<OssCommandContext<OssProfileAdd>>
-        + CliCommand<NoProfileCommandContext<OssProfileAdd>>,
+    ExtraCommands: CliCommand<OssCommandContext> + CliCommand<NoProfileCommandContext>,
 {
     let config_dir = get_config_dir();
 
@@ -188,7 +167,7 @@ where
     let profile_auth = Box::new(DummyProfileAuth);
 
     let result = if let Some((_, profile)) = oss_profile {
-        runtime.block_on(run_oss_cli(
+        runtime.block_on(oss::cli::run_with_profile(
             format,
             config_dir,
             profile,
@@ -198,7 +177,7 @@ where
             profile_auth,
         ))
     } else {
-        runtime.block_on(run_no_profile_cli(
+        runtime.block_on(oss::cli::run_without_profile(
             config_dir,
             command,
             parsed,

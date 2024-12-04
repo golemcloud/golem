@@ -37,7 +37,6 @@ use golem_common::uri::oss::uri::ComponentUri;
 use plugin::PluginSubcommand;
 use profile::{ProfileSubCommand, UniversalProfileAdd};
 use std::future::Future;
-use std::marker::PhantomData;
 use std::path::PathBuf;
 use worker::WorkerSubcommand;
 
@@ -218,30 +217,14 @@ pub enum SharedCommand<
 }
 
 /// Context before the user has initialized the profile.
-pub struct NoProfileCommandContext<ProfileAdd> {
-    config_dir: PathBuf,
-    command: Command,
-    profile_auth: Box<dyn ProfileAuth + Send + Sync>,
-    cli_kind: CliKind,
-    profile_add: PhantomData<ProfileAdd>,
+pub struct NoProfileCommandContext {
+    pub config_dir: PathBuf,
+    pub command: Command,
+    pub profile_auth: Box<dyn ProfileAuth + Send + Sync>,
+    pub cli_kind: CliKind,
 }
 
-impl<ProfileAdd> NoProfileCommandContext<ProfileAdd> {
-    pub fn new(
-        config_dir: PathBuf,
-        command: Command,
-        profile_auth: Box<dyn ProfileAuth + Send + Sync>,
-        cli_kind: CliKind,
-    ) -> Self {
-        Self {
-            config_dir,
-            command,
-            profile_auth,
-            cli_kind,
-            profile_add: PhantomData,
-        }
-    }
-
+impl NoProfileCommandContext {
     // \! is an experimental type. Once stable, use in the return type.
     pub fn fail_uninitialized(&self) -> Result<GolemResult, GolemError> {
         Err(GolemError(
@@ -256,13 +239,10 @@ impl<
         WorkerRef: clap::Args,
         PluginScopeRef: clap::Args,
         ProfileAdd: clap::Args + Into<UniversalProfileAdd>,
-    > CliCommand<NoProfileCommandContext<ProfileAdd>>
+    > CliCommand<NoProfileCommandContext>
     for SharedCommand<ProjectRef, ComponentRef, WorkerRef, PluginScopeRef, ProfileAdd>
 {
-    async fn run(
-        self,
-        ctx: NoProfileCommandContext<ProfileAdd>,
-    ) -> Result<GolemResult, GolemError> {
+    async fn run(self, ctx: NoProfileCommandContext) -> Result<GolemResult, GolemError> {
         match self {
             SharedCommand::Init {} => {
                 let profile_name = ProfileName::default(ctx.cli_kind);
