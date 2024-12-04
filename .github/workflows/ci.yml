@@ -41,7 +41,7 @@ jobs:
     - name: Check formatting
       run: cargo fmt -- --check
     - name: Clippy
-      run: cargo clippy -- -Dwarnings      
+      run: cargo clippy -- -Dwarnings
     - name: Tests
       run: cargo test --tests --all-features -- --format junit --logfile target/report.xml
     - name: Publish Test Report
