@@ -17,6 +17,6 @@ wit-bindgen-rt = { version = "0.26.0", features = ["bitflags"] }
 fs = "0.0.5"
 
 [package.metadata.component.target]
-path = "wit"
+path = "wit-a"
 
 [package.metadata.component.dependencies]

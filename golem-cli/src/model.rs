@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod application_manifest;
+pub mod app_ext;
+pub mod app_ext_raw;
 pub mod component;
 pub mod deploy;
 pub mod invoke_result_view;
@@ -150,6 +151,12 @@ impl From<reqwest::Error> for GolemError {
 impl From<reqwest::header::InvalidHeaderValue> for GolemError {
     fn from(value: reqwest::header::InvalidHeaderValue) -> Self {
         GolemError(format!("Invalid request header: {value}"))
+    }
+}
+
+impl From<anyhow::Error> for GolemError {
+    fn from(value: anyhow::Error) -> Self {
+        GolemError(format!("{value:#}"))
     }
 }
 
