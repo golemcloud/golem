@@ -24,6 +24,18 @@ pub mod fmt {
         fn print(&self);
     }
 
+    pub trait TableWrapper: Sized {
+        type Table: TextFormat;
+        fn from_vec(vec: &[Self]) -> Self::Table;
+    }
+
+    impl<T: TableWrapper> TextFormat for Vec<T> {
+        fn print(&self) {
+            let table = T::from_vec(self);
+            table.print();
+        }
+    }
+
     pub trait MessageWithFields {
         fn message(&self) -> String;
         fn fields(&self) -> Vec<(String, String)>;
@@ -306,7 +318,7 @@ pub mod api_security {
 pub mod api_definition {
     use crate::model::text::fmt::*;
     use cli_table::{format::Justify, Table};
-    use golem_client::model::{HttpApiDefinitionResponseData, RouteWithTypeInfo};
+    use golem_client::model::{HttpApiDefinitionResponseData, RouteResponseData};
     use golem_common::model::ComponentId;
     use golem_common::uri::oss::urn::ComponentUrn;
     use serde::{Deserialize, Serialize};
@@ -323,8 +335,8 @@ pub mod api_definition {
         pub worker_name: String,
     }
 
-    impl From<&RouteWithTypeInfo> for RouteTableView {
-        fn from(value: &RouteWithTypeInfo) -> Self {
+    impl From<&RouteResponseData> for RouteTableView {
+        fn from(value: &RouteResponseData) -> Self {
             Self {
                 method: value.method.to_string(),
                 path: value.path.to_string(),
@@ -1330,7 +1342,7 @@ pub mod worker {
 pub mod plugin {
     use crate::model::text::fmt::{
         format_id, format_main_id, format_message_highlight, FieldsBuilder, MessageWithFields,
-        TextFormat,
+        TableWrapper, TextFormat,
     };
     use cli_table::{print_stdout, Table, WithTitle};
     use golem_client::model::{
@@ -1380,10 +1392,21 @@ pub mod plugin {
         }
     }
 
-    impl TextFormat for Vec<PluginDefinitionDefaultPluginOwnerDefaultPluginScope> {
+    pub struct PluginDefinitionTable(Vec<PluginDefinitionDefaultPluginOwnerDefaultPluginScope>);
+
+    impl TableWrapper for PluginDefinitionDefaultPluginOwnerDefaultPluginScope {
+        type Table = PluginDefinitionTable;
+
+        fn from_vec(vec: &[Self]) -> Self::Table {
+            PluginDefinitionTable(vec.to_vec())
+        }
+    }
+
+    impl TextFormat for PluginDefinitionTable {
         fn print(&self) {
             print_stdout(
-                self.iter()
+                self.0
+                    .iter()
                     .map(PluginDefinitionTableView::from)
                     .collect::<Vec<_>>()
                     .with_title(),

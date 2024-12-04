@@ -15,7 +15,6 @@
 use async_trait::async_trait;
 use bincode::enc::Encoder;
 use bincode::error::EncodeError;
-use bincode::Encode;
 use bytes::Bytes;
 use fred::interfaces::RedisResult;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
@@ -84,14 +83,26 @@ impl DataKey {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Eq, PartialEq, Clone)]
 pub struct DataValue(pub serde_json::Value);
 
-impl Encode for DataValue {
+impl bincode::Encode for DataValue {
     fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
-        let bytes =
-            serde_json::to_vec(&self.0).map_err(|e| EncodeError::OtherString(e.to_string()))?;
-        bytes.encode(encoder)
+        let serialized = serde_json::to_vec(&self.0)
+            .map_err(|_| EncodeError::OtherString("Failed to serialize JSON".into()))?;
+        serialized.encode(encoder)
+    }
+}
+
+impl bincode::Decode for DataValue {
+    fn decode<D: bincode::de::Decoder>(
+        decoder: &mut D,
+    ) -> Result<Self, bincode::error::DecodeError> {
+        let serialized: Vec<u8> = bincode::Decode::decode(decoder)?;
+        let value = serde_json::from_slice(&serialized).map_err(|_| {
+            bincode::error::DecodeError::OtherString("Failed to deserialize JSON".into())
+        })?;
+        Ok(DataValue(value))
     }
 }
 
@@ -130,7 +141,7 @@ impl GatewaySession for RedisGatewaySession {
         data_key: DataKey,
         data_value: DataValue,
     ) -> Result<(), GatewaySessionError> {
-        let serialised = serde_json::to_vec(&data_value.0)
+        let serialised = golem_common::serialization::serialize(&data_value)
             .map_err(|e| GatewaySessionError::InternalError(e.to_string()))?;
 
         let result: RedisResult<()> = self
@@ -165,10 +176,10 @@ impl GatewaySession for RedisGatewaySession {
             .map_err(|e| GatewaySessionError::InternalError(e.to_string()))?;
 
         if let Some(result) = result {
-            let data_value = serde_json::from_slice(&result)
+            let data_value: DataValue = golem_common::serialization::deserialize(&result)
                 .map_err(|e| GatewaySessionError::InternalError(e.to_string()))?;
 
-            Ok(DataValue(data_value))
+            Ok(data_value)
         } else {
             Err(GatewaySessionError::MissingValue {
                 session_id: session_id.clone(),

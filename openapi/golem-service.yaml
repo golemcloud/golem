@@ -4030,13 +4030,7 @@ components:
           format: uint64
         allowCredentials:
           type: boolean
-    GatewayBindingType:
-      type: string
-      enum:
-      - default
-      - file-server
-      - cors-preflight
-    GatewayBindingWithTypeInfo:
+    GatewayBindingResponseData:
       type: object
       properties:
         componentId:
@@ -4059,6 +4053,12 @@ components:
           $ref: '#/components/schemas/HttpCors'
         responseMappingOutput:
           $ref: '#/components/schemas/RibOutputTypeInfo'
+    GatewayBindingType:
+      type: string
+      enum:
+      - default
+      - file-server
+      - cors-preflight
     GetFilesResponse:
       type: object
       properties:
@@ -4681,7 +4681,7 @@ components:
         routes:
           type: array
           items:
-            $ref: '#/components/schemas/RouteWithTypeInfo'
+            $ref: '#/components/schemas/RouteResponseData'
         draft:
           type: boolean
         createdAt:
@@ -5447,15 +5447,17 @@ components:
       - method
       - path
       - binding
-    RouteWithTypeInfo:
+    RouteResponseData:
       type: object
       properties:
         method:
           $ref: '#/components/schemas/MethodPattern'
         path:
           type: string
+        security:
+          type: string
         binding:
-          $ref: '#/components/schemas/GatewayBindingWithTypeInfo'
+          $ref: '#/components/schemas/GatewayBindingResponseData'
       required:
       - method
       - path

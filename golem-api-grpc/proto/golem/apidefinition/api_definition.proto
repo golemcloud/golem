@@ -118,6 +118,7 @@ enum GatewayBindingType {
   DEFAULT = 0;
   FILE_SERVER = 1;
   CORS_PREFLIGHT = 2;
+  AUTH_CALL_BACK = 3;
 }
 
 // Used in api definition repo and needs to be backward compatible
@@ -134,7 +135,9 @@ message StaticBinding {
   }
 }
 
-message AuthCallBack {}
+message AuthCallBack {
+  SecurityWithProviderMetadata security_with_provider_metadata = 1;
+}
 
 // Used in api definition repo and needs to be backward compatible
 message CorsPreflight {
