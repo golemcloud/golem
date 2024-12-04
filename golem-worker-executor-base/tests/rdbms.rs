@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::fmt::Display;
 use test_r::{inherit_test_dep, test, test_dep};
 
 use crate::common::{start, TestContext, TestWorkerExecutor};
@@ -27,6 +28,9 @@ use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::Value;
+use golem_worker_executor_base::services::rdbms::mysql::MysqlType;
+use golem_worker_executor_base::services::rdbms::postgres::PostgresType;
+use golem_worker_executor_base::services::rdbms::RdbmsType;
 use serde_json::json;
 use tokio::task::JoinSet;
 use uuid::Uuid;
@@ -149,11 +153,10 @@ async fn rdbms_postgres_create_insert_select(
         expected_rows.push(row);
     }
 
-    rdbms_component_test(
+    rdbms_component_test::<PostgresType>(
         last_unique_id,
         deps,
         db_addresses.clone(),
-        "postgres",
         insert_tests,
         1,
     )
@@ -195,11 +198,10 @@ async fn rdbms_postgres_create_insert_select(
         vec![],
         Some(expected),
     );
-    rdbms_component_test(
+    rdbms_component_test::<PostgresType>(
         last_unique_id,
         deps,
         db_addresses.clone(),
-        "postgres",
         vec![select_test],
         3,
     )
@@ -224,7 +226,7 @@ async fn rdbms_postgres_select1(
                         {
                            "db-type":{
                               "primitive":{
-                                 "int32":null
+                                 "int4":null
                               }
                            },
                            "db-type-name":"INT4",
@@ -237,7 +239,7 @@ async fn rdbms_postgres_select1(
                            "values":[
                               {
                                  "primitive":{
-                                    "int32":1
+                                    "int4":1
                                  }
                               }
                            ]
@@ -250,11 +252,10 @@ async fn rdbms_postgres_select1(
 
     let test2 = RdbmsTest::query_test("SELECT 1", vec![], Some(expected));
 
-    rdbms_component_test(
+    rdbms_component_test::<PostgresType>(
         last_unique_id,
         deps,
         postgres.host_connection_strings(),
-        "postgres",
         vec![test1, test2],
         3,
     )
@@ -330,15 +331,8 @@ async fn rdbms_mysql_create_insert_select(
         expected_rows.push(row);
     }
 
-    rdbms_component_test(
-        last_unique_id,
-        deps,
-        db_addresses.clone(),
-        "mysql",
-        insert_tests,
-        1,
-    )
-    .await;
+    rdbms_component_test::<MysqlType>(last_unique_id, deps, db_addresses.clone(), insert_tests, 1)
+        .await;
 
     let expected = json!(
             [
@@ -372,11 +366,10 @@ async fn rdbms_mysql_create_insert_select(
         vec![],
         Some(expected),
     );
-    rdbms_component_test(
+    rdbms_component_test::<MysqlType>(
         last_unique_id,
         deps,
         db_addresses.clone(),
-        "mysql",
         vec![select_test],
         3,
     )
@@ -422,48 +415,40 @@ async fn rdbms_mysql_select1(
 
     let test2 = RdbmsTest::query_test("SELECT 1", vec![], Some(expected));
 
-    rdbms_component_test(
+    rdbms_component_test::<MysqlType>(
         last_unique_id,
         deps,
         mysql.host_connection_strings(),
-        "mysql",
         vec![test1, test2],
         3,
     )
     .await;
 }
 
-async fn rdbms_component_test(
+async fn rdbms_component_test<T: RdbmsType + Default + Display>(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     db_addresses: Vec<String>,
-    db_type: &'static str,
     tests: Vec<RdbmsTest>,
     workers_per_db: u8,
 ) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
     let component_id = executor.store_component("rdbms-service").await;
-    let worker_ids = start_workers(
-        &executor,
-        &component_id,
-        db_addresses,
-        db_type,
-        workers_per_db,
-    )
-    .await;
+    let worker_ids =
+        start_workers::<T>(&executor, &component_id, db_addresses, workers_per_db).await;
 
-    rdbms_workers_test(&executor, worker_ids, db_type, tests).await;
+    rdbms_workers_test::<T>(&executor, worker_ids, tests).await;
 
     drop(executor);
 }
 
-async fn rdbms_workers_test(
+async fn rdbms_workers_test<T: RdbmsType + Default + Display>(
     executor: &TestWorkerExecutor,
     worker_ids: Vec<WorkerId>,
-    db_type: &'static str,
     tests: Vec<RdbmsTest>,
 ) {
+    let db_type = T::default().to_string();
     let mut workers_results: HashMap<WorkerId, HashMap<usize, Result<TypeAnnotatedValue, Error>>> =
         HashMap::new(); // <worker_id, results>
 
@@ -473,12 +458,13 @@ async fn rdbms_workers_test(
         let worker_id_clone = worker_id.clone();
         let executor_clone = executor.clone();
         let tests_clone = tests.clone();
+        let db_type_clone = db_type.clone();
         let _ = fibers.spawn(async move {
             let mut query_results: HashMap<usize, Result<TypeAnnotatedValue, Error>> =
                 HashMap::new();
             for (index, query_test) in tests_clone.into_iter().enumerate() {
                 let fn_name = query_test.fn_name;
-                let component_fn_name = format!("golem:it/api.{{{db_type}-{fn_name}}}");
+                let component_fn_name = format!("golem:it/api.{{{db_type_clone}-{fn_name}}}");
                 let params =
                     Value::List(query_test.params.into_iter().map(Value::String).collect());
                 let result = executor_clone
@@ -528,14 +514,14 @@ async fn rdbms_workers_test(
     }
 }
 
-async fn start_workers(
+async fn start_workers<T: RdbmsType + Default + Display>(
     executor: &TestWorkerExecutor,
     component_id: &ComponentId,
     db_addresses: Vec<String>,
-    db_type: &'static str,
     workers_per_db: u8,
 ) -> Vec<WorkerId> {
     let mut worker_ids: Vec<WorkerId> = Vec::new();
+    let db_type = T::default().to_string();
     let db_env_var = format!("DB_{}_URL", db_type.to_uppercase());
 
     for db_address in db_addresses.into_iter() {

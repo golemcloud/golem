@@ -674,23 +674,30 @@ pub(crate) mod postgres_utils {
     use std::ops::Bound;
     use std::str::FromStr;
 
-    pub(crate) fn int4range_to_bounds(value: Int4range) -> (Bound<i32>, Bound<i32>) {
+    type DateTimeBounds = (
+        Bound<chrono::DateTime<chrono::Utc>>,
+        Bound<chrono::DateTime<chrono::Utc>>,
+    );
+    type NaiveDateBounds = (Bound<chrono::NaiveDate>, Bound<chrono::NaiveDate>);
+    type I32Bounds = (Bound<i32>, Bound<i32>);
+    type I64Bounds = (Bound<i64>, Bound<i64>);
+    type BigDecimalBounds = (Bound<BigDecimal>, Bound<BigDecimal>);
+
+    pub(crate) fn int4range_to_bounds(value: Int4range) -> I32Bounds {
         let (lower, upper) = value;
         let lower = to_bounds(lower);
         let upper = to_bounds(upper);
         (lower, upper)
     }
 
-    pub(crate) fn int8range_to_bounds(value: Int8range) -> (Bound<i64>, Bound<i64>) {
+    pub(crate) fn int8range_to_bounds(value: Int8range) -> I64Bounds {
         let (lower, upper) = value;
         let lower = to_bounds(lower);
         let upper = to_bounds(upper);
         (lower, upper)
     }
 
-    pub(crate) fn numrange_to_bounds(
-        value: Numrange,
-    ) -> Result<(Bound<BigDecimal>, Bound<BigDecimal>), String> {
+    pub(crate) fn numrange_to_bounds(value: Numrange) -> Result<BigDecimalBounds, String> {
         let (lower, upper) = value;
         let lower = to_converted_bounds(lower, |v| {
             BigDecimal::from_str(&v).map_err(|e| e.to_string())
@@ -701,39 +708,21 @@ pub(crate) mod postgres_utils {
         Ok((lower, upper))
     }
 
-    pub(crate) fn tsrange_to_bounds(
-        value: Tsrange,
-    ) -> Result<
-        (
-            Bound<chrono::DateTime<chrono::Utc>>,
-            Bound<chrono::DateTime<chrono::Utc>>,
-        ),
-        String,
-    > {
+    pub(crate) fn tsrange_to_bounds(value: Tsrange) -> Result<DateTimeBounds, String> {
         let (lower, upper) = value;
         let lower = to_converted_bounds(lower, timestamp_to_datetime)?;
         let upper = to_converted_bounds(upper, timestamp_to_datetime)?;
         Ok((lower, upper))
     }
 
-    pub(crate) fn tstzrange_to_bounds(
-        value: Tstzrange,
-    ) -> Result<
-        (
-            Bound<chrono::DateTime<chrono::Utc>>,
-            Bound<chrono::DateTime<chrono::Utc>>,
-        ),
-        String,
-    > {
+    pub(crate) fn tstzrange_to_bounds(value: Tstzrange) -> Result<DateTimeBounds, String> {
         let (lower, upper) = value;
         let lower = to_converted_bounds(lower, timestamptz_to_datetime)?;
         let upper = to_converted_bounds(upper, timestamptz_to_datetime)?;
         Ok((lower, upper))
     }
 
-    pub(crate) fn daterange_to_bounds(
-        value: Daterange,
-    ) -> Result<(Bound<chrono::NaiveDate>, Bound<chrono::NaiveDate>), String> {
+    pub(crate) fn daterange_to_bounds(value: Daterange) -> Result<NaiveDateBounds, String> {
         let (lower, upper) = value;
         let lower = to_converted_bounds(lower, date_to_nativedate)?;
         let upper = to_converted_bounds(upper, date_to_nativedate)?;
@@ -765,54 +754,42 @@ pub(crate) mod postgres_utils {
         }
     }
 
-    pub(crate) fn bounds_to_int4range(value: (Bound<i32>, Bound<i32>)) -> Int4range {
+    pub(crate) fn bounds_to_int4range(value: I32Bounds) -> Int4range {
         let (lower, upper) = value;
         let lower = from_bounds(lower);
         let upper = from_bounds(upper);
         (lower, upper)
     }
 
-    pub(crate) fn bounds_to_int8range(value: (Bound<i64>, Bound<i64>)) -> Int8range {
+    pub(crate) fn bounds_to_int8range(value: I64Bounds) -> Int8range {
         let (lower, upper) = value;
         let lower = from_bounds(lower);
         let upper = from_bounds(upper);
         (lower, upper)
     }
 
-    pub(crate) fn bounds_to_numrange(value: (Bound<BigDecimal>, Bound<BigDecimal>)) -> Numrange {
+    pub(crate) fn bounds_to_numrange(value: BigDecimalBounds) -> Numrange {
         let (lower, upper) = value;
         let lower = from_bounds(lower.map(|v| v.to_string()));
         let upper = from_bounds(upper.map(|v| v.to_string()));
         (lower, upper)
     }
 
-    pub(crate) fn bounds_to_tsrange(
-        value: (
-            Bound<chrono::DateTime<chrono::Utc>>,
-            Bound<chrono::DateTime<chrono::Utc>>,
-        ),
-    ) -> Tsrange {
+    pub(crate) fn bounds_to_tsrange(value: DateTimeBounds) -> Tsrange {
         let (lower, upper) = value;
         let lower = from_bounds(lower.map(datetime_to_timestamp));
         let upper = from_bounds(upper.map(datetime_to_timestamp));
         (lower, upper)
     }
 
-    pub(crate) fn bounds_to_tstzrange(
-        value: (
-            Bound<chrono::DateTime<chrono::Utc>>,
-            Bound<chrono::DateTime<chrono::Utc>>,
-        ),
-    ) -> Tstzrange {
+    pub(crate) fn bounds_to_tstzrange(value: DateTimeBounds) -> Tstzrange {
         let (lower, upper) = value;
         let lower = from_bounds(lower.map(datetime_to_timestamptz));
         let upper = from_bounds(upper.map(datetime_to_timestamptz));
         (lower, upper)
     }
 
-    pub(crate) fn bounds_to_daterange(
-        value: (Bound<chrono::NaiveDate>, Bound<chrono::NaiveDate>),
-    ) -> Daterange {
+    pub(crate) fn bounds_to_daterange(value: NaiveDateBounds) -> Daterange {
         let (lower, upper) = value;
         let lower = from_bounds(lower.map(naivedate_to_date));
         let upper = from_bounds(upper.map(naivedate_to_date));

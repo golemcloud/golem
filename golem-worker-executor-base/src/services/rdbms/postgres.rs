@@ -577,584 +577,297 @@ pub(crate) mod sqlx_rdbms {
         let value = match type_name {
             pg_type_name::BOOL => {
                 let v: Option<bool> = row.try_get(index).map_err(|e| e.to_string())?;
-                match v {
-                    Some(v) => DbValue::Primitive(DbValuePrimitive::Boolean(v)),
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
-                }
+                DbValue::primitive_from(v.map(DbValuePrimitive::Boolean))
             }
             pg_type_name::CHAR => {
                 let v: Option<i8> = row.try_get(index).map_err(|e| e.to_string())?;
-                match v {
-                    Some(v) => DbValue::Primitive(DbValuePrimitive::Character(v)),
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
-                }
+                DbValue::primitive_from(v.map(DbValuePrimitive::Character))
             }
             pg_type_name::INT2 => {
                 let v: Option<i16> = row.try_get(index).map_err(|e| e.to_string())?;
-                match v {
-                    Some(v) => DbValue::Primitive(DbValuePrimitive::Int2(v)),
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
-                }
+                DbValue::primitive_from(v.map(DbValuePrimitive::Int2))
             }
             pg_type_name::INT4 => {
                 let v: Option<i32> = row.try_get(index).map_err(|e| e.to_string())?;
-                match v {
-                    Some(v) => DbValue::Primitive(DbValuePrimitive::Int4(v)),
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
-                }
+                DbValue::primitive_from(v.map(DbValuePrimitive::Int4))
             }
             pg_type_name::INT8 => {
                 let v: Option<i64> = row.try_get(index).map_err(|e| e.to_string())?;
-                match v {
-                    Some(v) => DbValue::Primitive(DbValuePrimitive::Int8(v)),
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
-                }
+                DbValue::primitive_from(v.map(DbValuePrimitive::Int8))
             }
             pg_type_name::FLOAT4 => {
                 let v: Option<f32> = row.try_get(index).map_err(|e| e.to_string())?;
-                match v {
-                    Some(v) => DbValue::Primitive(DbValuePrimitive::Float4(v)),
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
-                }
+                DbValue::primitive_from(v.map(DbValuePrimitive::Float4))
             }
             pg_type_name::FLOAT8 => {
                 let v: Option<f64> = row.try_get(index).map_err(|e| e.to_string())?;
-                match v {
-                    Some(v) => DbValue::Primitive(DbValuePrimitive::Float8(v)),
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
-                }
+                DbValue::primitive_from(v.map(DbValuePrimitive::Float8))
             }
             pg_type_name::TEXT => {
                 let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
-                match v {
-                    Some(v) => DbValue::Primitive(DbValuePrimitive::Text(v)),
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
-                }
+                DbValue::primitive_from(v.map(DbValuePrimitive::Text))
             }
             pg_type_name::VARCHAR => {
                 let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
-                match v {
-                    Some(v) => DbValue::Primitive(DbValuePrimitive::Varchar(v)),
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
-                }
+                DbValue::primitive_from(v.map(DbValuePrimitive::Varchar))
             }
             pg_type_name::BPCHAR => {
                 let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
-                match v {
-                    Some(v) => DbValue::Primitive(DbValuePrimitive::Bpchar(v)),
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
-                }
+                DbValue::primitive_from(v.map(DbValuePrimitive::Bpchar))
             }
             pg_type_name::JSON => {
                 let v: Option<serde_json::Value> = row.try_get(index).map_err(|e| e.to_string())?;
-                match v {
-                    Some(v) => DbValue::Primitive(DbValuePrimitive::Json(v)),
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
-                }
+                DbValue::primitive_from(v.map(DbValuePrimitive::Json))
             }
             pg_type_name::JSONB => {
                 let v: Option<serde_json::Value> = row.try_get(index).map_err(|e| e.to_string())?;
-                match v {
-                    Some(v) => DbValue::Primitive(DbValuePrimitive::Jsonb(v)),
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
-                }
+                DbValue::primitive_from(v.map(DbValuePrimitive::Jsonb))
             }
             pg_type_name::XML => {
                 let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
-                match v {
-                    Some(v) => DbValue::Primitive(DbValuePrimitive::Xml(v)),
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
-                }
+                DbValue::primitive_from(v.map(DbValuePrimitive::Xml))
             }
             pg_type_name::BYTEA => {
                 let v: Option<Vec<u8>> = row.try_get(index).map_err(|e| e.to_string())?;
-                match v {
-                    Some(v) => DbValue::Primitive(DbValuePrimitive::Bytea(v)),
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
-                }
+                DbValue::primitive_from(v.map(DbValuePrimitive::Bytea))
             }
             pg_type_name::UUID => {
                 let v: Option<Uuid> = row.try_get(index).map_err(|e| e.to_string())?;
-                match v {
-                    Some(v) => DbValue::Primitive(DbValuePrimitive::Uuid(v)),
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
-                }
+                DbValue::primitive_from(v.map(DbValuePrimitive::Uuid))
             }
             pg_type_name::INTERVAL => {
                 let v: Option<PgInterval> = row.try_get(index).map_err(|e| e.to_string())?;
-                match v {
-                    Some(v) => DbValue::Primitive(DbValuePrimitive::Interval((
-                        v.months,
-                        v.days,
-                        v.microseconds,
-                    ))),
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
-                }
+                DbValue::primitive_from(
+                    v.map(|v| DbValuePrimitive::Interval((v.months, v.days, v.microseconds))),
+                )
             }
             pg_type_name::TIMESTAMP => {
                 let v: Option<chrono::DateTime<chrono::Utc>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
-                match v {
-                    Some(v) => DbValue::Primitive(DbValuePrimitive::Timestamp(v)),
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
-                }
+                DbValue::primitive_from(v.map(DbValuePrimitive::Timestamp))
             }
             pg_type_name::TIMESTAMPTZ => {
                 let v: Option<chrono::DateTime<chrono::Utc>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
-                match v {
-                    Some(v) => DbValue::Primitive(DbValuePrimitive::Timestamptz(v)),
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
-                }
+                DbValue::primitive_from(v.map(DbValuePrimitive::Timestamptz))
             }
             pg_type_name::DATE => {
                 let v: Option<chrono::NaiveDate> = row.try_get(index).map_err(|e| e.to_string())?;
-                match v {
-                    Some(v) => DbValue::Primitive(DbValuePrimitive::Date(v)),
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
-                }
+                DbValue::primitive_from(v.map(DbValuePrimitive::Date))
             }
             pg_type_name::TIME => {
                 let v: Option<chrono::NaiveTime> = row.try_get(index).map_err(|e| e.to_string())?;
-                match v {
-                    Some(v) => DbValue::Primitive(DbValuePrimitive::Time(v)),
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
-                }
+                DbValue::primitive_from(v.map(DbValuePrimitive::Time))
             }
             pg_type_name::TIMETZ => {
                 let v: Option<PgTimeTz<chrono::NaiveTime, chrono::FixedOffset>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
-                match v {
-                    Some(v) => DbValue::Primitive(DbValuePrimitive::Timetz((v.time, v.offset))),
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
-                }
+                DbValue::primitive_from(v.map(|v| DbValuePrimitive::Timetz((v.time, v.offset))))
             }
             pg_type_name::INET => {
                 let v: Option<IpAddr> = row.try_get(index).map_err(|e| e.to_string())?;
-                match v {
-                    Some(v) => DbValue::Primitive(DbValuePrimitive::Inet(v)),
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
-                }
+                DbValue::primitive_from(v.map(DbValuePrimitive::Inet))
             }
             pg_type_name::CIDR => {
                 let v: Option<IpAddr> = row.try_get(index).map_err(|e| e.to_string())?;
-                match v {
-                    Some(v) => DbValue::Primitive(DbValuePrimitive::Cidr(v)),
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
-                }
+                DbValue::primitive_from(v.map(DbValuePrimitive::Cidr))
             }
             pg_type_name::MACADDR => {
                 let v: Option<MacAddress> = row.try_get(index).map_err(|e| e.to_string())?;
-                match v {
-                    Some(v) => DbValue::Primitive(DbValuePrimitive::Macaddr(v)),
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
-                }
+                DbValue::primitive_from(v.map(DbValuePrimitive::Macaddr))
             }
             pg_type_name::BIT => {
                 let v: Option<BitVec> = row.try_get(index).map_err(|e| e.to_string())?;
-                match v {
-                    Some(v) => DbValue::Primitive(DbValuePrimitive::Bit(v)),
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
-                }
+                DbValue::primitive_from(v.map(DbValuePrimitive::Bit))
             }
             pg_type_name::VARBIT => {
                 let v: Option<BitVec> = row.try_get(index).map_err(|e| e.to_string())?;
-                match v {
-                    Some(v) => DbValue::Primitive(DbValuePrimitive::Varbit(v)),
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
-                }
+                DbValue::primitive_from(v.map(DbValuePrimitive::Varbit))
             }
             pg_type_name::INT4RANGE => {
                 let v: Option<PgRange<i32>> = row.try_get(index).map_err(|e| e.to_string())?;
-                match v {
-                    Some(v) => DbValue::Primitive(DbValuePrimitive::Int4range(get_bounds(v))),
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
-                }
+                DbValue::primitive_from(v.map(|v| DbValuePrimitive::Int4range(get_bounds(v))))
             }
             pg_type_name::INT8RANGE => {
                 let v: Option<PgRange<i64>> = row.try_get(index).map_err(|e| e.to_string())?;
-                match v {
-                    Some(v) => DbValue::Primitive(DbValuePrimitive::Int8range(get_bounds(v))),
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
-                }
+                DbValue::primitive_from(v.map(|v| DbValuePrimitive::Int8range(get_bounds(v))))
             }
             pg_type_name::NUMRANGE => {
                 let v: Option<PgRange<BigDecimal>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
-                match v {
-                    Some(v) => DbValue::Primitive(DbValuePrimitive::Numrange(get_bounds(v))),
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
-                }
+                DbValue::primitive_from(v.map(|v| DbValuePrimitive::Numrange(get_bounds(v))))
             }
             pg_type_name::TSRANGE => {
                 let v: Option<PgRange<chrono::DateTime<chrono::Utc>>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
-                match v {
-                    Some(v) => DbValue::Primitive(DbValuePrimitive::Tsrange(get_bounds(v))),
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
-                }
+                DbValue::primitive_from(v.map(|v| DbValuePrimitive::Tsrange(get_bounds(v))))
             }
             pg_type_name::TSTZRANGE => {
                 let v: Option<PgRange<chrono::DateTime<chrono::Utc>>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
-                match v {
-                    Some(v) => DbValue::Primitive(DbValuePrimitive::Tstzrange(get_bounds(v))),
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
-                }
+                DbValue::primitive_from(v.map(|v| DbValuePrimitive::Tstzrange(get_bounds(v))))
             }
             pg_type_name::DATERANGE => {
                 let v: Option<PgRange<chrono::NaiveDate>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
-                match v {
-                    Some(v) => DbValue::Primitive(DbValuePrimitive::Daterange(get_bounds(v))),
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
-                }
+                DbValue::primitive_from(v.map(|v| DbValuePrimitive::Daterange(get_bounds(v))))
             }
             pg_type_name::OID => {
                 let v: Option<Oid> = row.try_get(index).map_err(|e| e.to_string())?;
-                match v {
-                    Some(v) => DbValue::Primitive(DbValuePrimitive::Oid(v.0)),
-                    None => DbValue::Primitive(DbValuePrimitive::Null),
-                }
+                DbValue::primitive_from(v.map(|v| DbValuePrimitive::Oid(v.0)))
             }
             pg_type_name::BOOL_ARRAY => {
                 let vs: Option<Vec<bool>> = row.try_get(index).map_err(|e| e.to_string())?;
-                match vs {
-                    Some(vs) => {
-                        DbValue::Array(vs.into_iter().map(DbValuePrimitive::Boolean).collect())
-                    }
-                    None => DbValue::Array(vec![]),
-                }
+                DbValue::array_from(vs, DbValuePrimitive::Boolean)
             }
             pg_type_name::INT2_ARRAY => {
                 let vs: Option<Vec<i16>> = row.try_get(index).map_err(|e| e.to_string())?;
-                match vs {
-                    Some(vs) => {
-                        DbValue::Array(vs.into_iter().map(DbValuePrimitive::Int2).collect())
-                    }
-                    None => DbValue::Array(vec![]),
-                }
+                DbValue::array_from(vs, DbValuePrimitive::Int2)
             }
             pg_type_name::INT4_ARRAY => {
                 let vs: Option<Vec<i32>> = row.try_get(index).map_err(|e| e.to_string())?;
-                match vs {
-                    Some(vs) => {
-                        DbValue::Array(vs.into_iter().map(DbValuePrimitive::Int4).collect())
-                    }
-                    None => DbValue::Array(vec![]),
-                }
+                DbValue::array_from(vs, DbValuePrimitive::Int4)
             }
             pg_type_name::INT8_ARRAY => {
                 let vs: Option<Vec<i64>> = row.try_get(index).map_err(|e| e.to_string())?;
-                match vs {
-                    Some(vs) => {
-                        DbValue::Array(vs.into_iter().map(DbValuePrimitive::Int8).collect())
-                    }
-                    None => DbValue::Array(vec![]),
-                }
+                DbValue::array_from(vs, DbValuePrimitive::Int8)
             }
             pg_type_name::FLOAT4_ARRAY => {
                 let vs: Option<Vec<f32>> = row.try_get(index).map_err(|e| e.to_string())?;
-                match vs {
-                    Some(vs) => {
-                        DbValue::Array(vs.into_iter().map(DbValuePrimitive::Float4).collect())
-                    }
-                    None => DbValue::Array(vec![]),
-                }
+                DbValue::array_from(vs, DbValuePrimitive::Float4)
             }
             pg_type_name::FLOAT8_ARRAY => {
                 let vs: Option<Vec<f64>> = row.try_get(index).map_err(|e| e.to_string())?;
-                match vs {
-                    Some(vs) => {
-                        DbValue::Array(vs.into_iter().map(DbValuePrimitive::Float8).collect())
-                    }
-                    None => DbValue::Array(vec![]),
-                }
+                DbValue::array_from(vs, DbValuePrimitive::Float8)
             }
             pg_type_name::TEXT_ARRAY => {
                 let vs: Option<Vec<String>> = row.try_get(index).map_err(|e| e.to_string())?;
-                match vs {
-                    Some(vs) => {
-                        DbValue::Array(vs.into_iter().map(DbValuePrimitive::Text).collect())
-                    }
-                    None => DbValue::Array(vec![]),
-                }
+                DbValue::array_from(vs, DbValuePrimitive::Text)
             }
             pg_type_name::VARCHAR_ARRAY => {
                 let vs: Option<Vec<String>> = row.try_get(index).map_err(|e| e.to_string())?;
-                match vs {
-                    Some(vs) => {
-                        DbValue::Array(vs.into_iter().map(DbValuePrimitive::Varchar).collect())
-                    }
-                    None => DbValue::Array(vec![]),
-                }
+                DbValue::array_from(vs, DbValuePrimitive::Varchar)
             }
             pg_type_name::BPCHAR_ARRAY => {
                 let vs: Option<Vec<String>> = row.try_get(index).map_err(|e| e.to_string())?;
-                match vs {
-                    Some(vs) => {
-                        DbValue::Array(vs.into_iter().map(DbValuePrimitive::Bpchar).collect())
-                    }
-                    None => DbValue::Array(vec![]),
-                }
+                DbValue::array_from(vs, DbValuePrimitive::Bpchar)
             }
             pg_type_name::JSON_ARRAY => {
                 let vs: Option<Vec<serde_json::Value>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
-                match vs {
-                    Some(vs) => {
-                        DbValue::Array(vs.into_iter().map(DbValuePrimitive::Json).collect())
-                    }
-                    None => DbValue::Array(vec![]),
-                }
+                DbValue::array_from(vs, DbValuePrimitive::Json)
             }
             pg_type_name::JSONB_ARRAY => {
                 let vs: Option<Vec<serde_json::Value>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
-                match vs {
-                    Some(vs) => {
-                        DbValue::Array(vs.into_iter().map(DbValuePrimitive::Jsonb).collect())
-                    }
-                    None => DbValue::Array(vec![]),
-                }
+                DbValue::array_from(vs, DbValuePrimitive::Jsonb)
             }
             pg_type_name::XML_ARRAY => {
                 let vs: Option<Vec<String>> = row.try_get(index).map_err(|e| e.to_string())?;
-                match vs {
-                    Some(vs) => DbValue::Array(vs.into_iter().map(DbValuePrimitive::Xml).collect()),
-                    None => DbValue::Array(vec![]),
-                }
+                DbValue::array_from(vs, DbValuePrimitive::Xml)
             }
             pg_type_name::BYTEA_ARRAY => {
                 let vs: Option<Vec<Vec<u8>>> = row.try_get(index).map_err(|e| e.to_string())?;
-                match vs {
-                    Some(vs) => {
-                        DbValue::Array(vs.into_iter().map(DbValuePrimitive::Bytea).collect())
-                    }
-                    None => DbValue::Array(vec![]),
-                }
+                DbValue::array_from(vs, DbValuePrimitive::Bytea)
             }
             pg_type_name::UUID_ARRAY => {
                 let vs: Option<Vec<Uuid>> = row.try_get(index).map_err(|e| e.to_string())?;
-                match vs {
-                    Some(vs) => {
-                        DbValue::Array(vs.into_iter().map(DbValuePrimitive::Uuid).collect())
-                    }
-                    None => DbValue::Array(vec![]),
-                }
+                DbValue::array_from(vs, DbValuePrimitive::Uuid)
             }
             pg_type_name::INTERVAL_ARRAY => {
                 let vs: Option<Vec<PgInterval>> = row.try_get(index).map_err(|e| e.to_string())?;
-                match vs {
-                    Some(vs) => {
-                        let mut values = Vec::with_capacity(vs.len());
-                        for v in vs.into_iter() {
-                            values.push(DbValuePrimitive::Interval((
-                                v.months,
-                                v.days,
-                                v.microseconds,
-                            )));
-                        }
-                        DbValue::Array(values)
-                    }
-                    None => DbValue::Array(vec![]),
-                }
+                DbValue::array_from(vs, |v| {
+                    DbValuePrimitive::Interval((v.months, v.days, v.microseconds))
+                })
             }
             pg_type_name::TIMESTAMP_ARRAY => {
                 let vs: Option<Vec<chrono::DateTime<chrono::Utc>>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
-                match vs {
-                    Some(vs) => {
-                        DbValue::Array(vs.into_iter().map(DbValuePrimitive::Timestamp).collect())
-                    }
-                    None => DbValue::Array(vec![]),
-                }
+                DbValue::array_from(vs, DbValuePrimitive::Timestamp)
             }
             pg_type_name::TIMESTAMPTZ_ARRAY => {
                 let vs: Option<Vec<chrono::DateTime<chrono::Utc>>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
-                match vs {
-                    Some(vs) => {
-                        DbValue::Array(vs.into_iter().map(DbValuePrimitive::Timestamptz).collect())
-                    }
-                    None => DbValue::Array(vec![]),
-                }
+                DbValue::array_from(vs, DbValuePrimitive::Timestamptz)
             }
             pg_type_name::DATE_ARRAY => {
                 let vs: Option<Vec<chrono::NaiveDate>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
-                match vs {
-                    Some(vs) => {
-                        DbValue::Array(vs.into_iter().map(DbValuePrimitive::Date).collect())
-                    }
-                    None => DbValue::Array(vec![]),
-                }
+                DbValue::array_from(vs, DbValuePrimitive::Date)
             }
             pg_type_name::TIME_ARRAY => {
                 let vs: Option<Vec<chrono::NaiveTime>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
-                match vs {
-                    Some(vs) => {
-                        DbValue::Array(vs.into_iter().map(DbValuePrimitive::Time).collect())
-                    }
-                    None => DbValue::Array(vec![]),
-                }
+                DbValue::array_from(vs, DbValuePrimitive::Time)
             }
             pg_type_name::TIMETZ_ARRAY => {
                 let vs: Option<Vec<PgTimeTz<chrono::NaiveTime, chrono::FixedOffset>>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
-                match vs {
-                    Some(vs) => DbValue::Array(
-                        vs.into_iter()
-                            .map(|t| DbValuePrimitive::Timetz((t.time, t.offset)))
-                            .collect(),
-                    ),
-                    None => DbValue::Array(vec![]),
-                }
+                DbValue::array_from(vs, |v| DbValuePrimitive::Timetz((v.time, v.offset)))
             }
             pg_type_name::INET_ARRAY => {
                 let vs: Option<Vec<IpAddr>> = row.try_get(index).map_err(|e| e.to_string())?;
-                match vs {
-                    Some(vs) => {
-                        DbValue::Array(vs.into_iter().map(DbValuePrimitive::Inet).collect())
-                    }
-                    None => DbValue::Array(vec![]),
-                }
+                DbValue::array_from(vs, DbValuePrimitive::Inet)
             }
             pg_type_name::CIDR_ARRAY => {
                 let vs: Option<Vec<IpAddr>> = row.try_get(index).map_err(|e| e.to_string())?;
-                match vs {
-                    Some(vs) => {
-                        DbValue::Array(vs.into_iter().map(DbValuePrimitive::Cidr).collect())
-                    }
-                    None => DbValue::Array(vec![]),
-                }
+                DbValue::array_from(vs, DbValuePrimitive::Cidr)
             }
             pg_type_name::MACADDR_ARRAY => {
                 let vs: Option<Vec<MacAddress>> = row.try_get(index).map_err(|e| e.to_string())?;
-                match vs {
-                    Some(vs) => {
-                        DbValue::Array(vs.into_iter().map(DbValuePrimitive::Macaddr).collect())
-                    }
-                    None => DbValue::Array(vec![]),
-                }
+                DbValue::array_from(vs, DbValuePrimitive::Macaddr)
             }
             pg_type_name::BIT_ARRAY => {
                 let vs: Option<Vec<BitVec>> = row.try_get(index).map_err(|e| e.to_string())?;
-                match vs {
-                    Some(vs) => DbValue::Array(vs.into_iter().map(DbValuePrimitive::Bit).collect()),
-                    None => DbValue::Array(vec![]),
-                }
+                DbValue::array_from(vs, DbValuePrimitive::Bit)
             }
             pg_type_name::VARBIT_ARRAY => {
                 let vs: Option<Vec<BitVec>> = row.try_get(index).map_err(|e| e.to_string())?;
-                match vs {
-                    Some(vs) => {
-                        DbValue::Array(vs.into_iter().map(DbValuePrimitive::Varbit).collect())
-                    }
-                    None => DbValue::Array(vec![]),
-                }
+                DbValue::array_from(vs, DbValuePrimitive::Varbit)
             }
             pg_type_name::INT4RANGE_ARRAY => {
                 let vs: Option<Vec<PgRange<i32>>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
-                match vs {
-                    Some(vs) => DbValue::Array(
-                        vs.into_iter()
-                            .map(|v| DbValuePrimitive::Int4range(get_bounds(v)))
-                            .collect(),
-                    ),
-                    None => DbValue::Array(vec![]),
-                }
+                DbValue::array_from(vs, |v| DbValuePrimitive::Int4range(get_bounds(v)))
             }
             pg_type_name::INT8RANGE_ARRAY => {
                 let vs: Option<Vec<PgRange<i64>>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
-                match vs {
-                    Some(vs) => DbValue::Array(
-                        vs.into_iter()
-                            .map(|v| DbValuePrimitive::Int8range(get_bounds(v)))
-                            .collect(),
-                    ),
-                    None => DbValue::Array(vec![]),
-                }
+                DbValue::array_from(vs, |v| DbValuePrimitive::Int8range(get_bounds(v)))
             }
             pg_type_name::NUMRANGE_ARRAY => {
                 let vs: Option<Vec<PgRange<BigDecimal>>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
-                match vs {
-                    Some(vs) => DbValue::Array(
-                        vs.into_iter()
-                            .map(|v| DbValuePrimitive::Numrange(get_bounds(v)))
-                            .collect(),
-                    ),
-                    None => DbValue::Array(vec![]),
-                }
+                DbValue::array_from(vs, |v| DbValuePrimitive::Numrange(get_bounds(v)))
             }
             pg_type_name::TSRANGE_ARRAY => {
                 let vs: Option<Vec<PgRange<chrono::DateTime<chrono::Utc>>>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
-                match vs {
-                    Some(vs) => DbValue::Array(
-                        vs.into_iter()
-                            .map(|v| DbValuePrimitive::Tsrange(get_bounds(v)))
-                            .collect(),
-                    ),
-                    None => DbValue::Array(vec![]),
-                }
+                DbValue::array_from(vs, |v| DbValuePrimitive::Tsrange(get_bounds(v)))
             }
             pg_type_name::TSTZRANGE_ARRAY => {
                 let vs: Option<Vec<PgRange<chrono::DateTime<chrono::Utc>>>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
-                match vs {
-                    Some(vs) => DbValue::Array(
-                        vs.into_iter()
-                            .map(|v| DbValuePrimitive::Tstzrange(get_bounds(v)))
-                            .collect(),
-                    ),
-                    None => DbValue::Array(vec![]),
-                }
+                DbValue::array_from(vs, |v| DbValuePrimitive::Tstzrange(get_bounds(v)))
             }
             pg_type_name::DATERANGE_ARRAY => {
                 let vs: Option<Vec<PgRange<chrono::NaiveDate>>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
-                match vs {
-                    Some(vs) => DbValue::Array(
-                        vs.into_iter()
-                            .map(|v| DbValuePrimitive::Daterange(get_bounds(v)))
-                            .collect(),
-                    ),
-                    None => DbValue::Array(vec![]),
-                }
+                DbValue::array_from(vs, |v| DbValuePrimitive::Daterange(get_bounds(v)))
             }
             pg_type_name::OID_ARRAY => {
                 let vs: Option<Vec<Oid>> = row.try_get(index).map_err(|e| e.to_string())?;
-                match vs {
-                    Some(vs) => {
-                        DbValue::Array(vs.into_iter().map(|v| DbValuePrimitive::Oid(v.0)).collect())
-                    }
-                    None => DbValue::Array(vec![]),
-                }
+                DbValue::array_from(vs, |v| DbValuePrimitive::Oid(v.0))
             }
             _ => match column.type_info().kind() {
                 // enum in postgres is custom type
                 PgTypeKind::Enum(_) => {
                     let v: Option<PgEnum> = row.try_get(index).map_err(|e| e.to_string())?;
-                    match v {
-                        Some(v) => DbValue::Primitive(DbValuePrimitive::CustomEnum(v.0)),
-                        None => DbValue::Primitive(DbValuePrimitive::Null),
-                    }
+                    DbValue::primitive_from(v.map(|v| DbValuePrimitive::CustomEnum(v.0)))
                 }
                 PgTypeKind::Array(element) if matches!(element.kind(), PgTypeKind::Enum(_)) => {
                     let vs: Option<Vec<PgEnum>> = row.try_get(index).map_err(|e| e.to_string())?;
-                    match vs {
-                        Some(vs) => DbValue::Array(
-                            vs.into_iter()
-                                .map(|v| DbValuePrimitive::CustomEnum(v.0))
-                                .collect(),
-                        ),
-                        None => DbValue::Array(vec![]),
-                    }
+                    DbValue::array_from(vs, |v| DbValuePrimitive::CustomEnum(v.0))
                 }
                 _ => Err(format!("Type '{}' is not supported", type_name))?,
             },
@@ -1221,6 +934,10 @@ pub(crate) mod sqlx_rdbms {
                 }
                 pg_type_name::BYTEA => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Bytea)),
                 pg_type_name::INET => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Inet)),
+                pg_type_name::CIDR => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Cidr)),
+                pg_type_name::MACADDR => {
+                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Macaddr))
+                }
                 pg_type_name::BIT => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Bit)),
                 pg_type_name::VARBIT => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Varbit)),
                 pg_type_name::OID => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Oid)),
@@ -1267,6 +984,10 @@ pub(crate) mod sqlx_rdbms {
                 }
                 pg_type_name::BYTEA_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Bytea)),
                 pg_type_name::INET_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Inet)),
+                pg_type_name::CIDR_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Cidr)),
+                pg_type_name::MACADDR_ARRAY => {
+                    Ok(DbColumnType::Array(DbColumnTypePrimitive::Macaddr))
+                }
                 pg_type_name::BIT_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Bit)),
                 pg_type_name::VARBIT_ARRAY => {
                     Ok(DbColumnType::Array(DbColumnTypePrimitive::Varbit))
@@ -1640,6 +1361,25 @@ pub mod types {
     pub enum DbValue {
         Primitive(DbValuePrimitive),
         Array(Vec<DbValuePrimitive>),
+    }
+
+    impl DbValue {
+        pub(crate) fn array_from<T>(
+            value: Option<Vec<T>>,
+            f: impl Fn(T) -> DbValuePrimitive,
+        ) -> Self {
+            match value {
+                Some(v) => DbValue::Array(v.into_iter().map(f).collect()),
+                None => DbValue::Array(vec![]),
+            }
+        }
+
+        pub(crate) fn primitive_from(value: Option<DbValuePrimitive>) -> Self {
+            match value {
+                Some(v) => DbValue::Primitive(v),
+                None => DbValue::Primitive(DbValuePrimitive::Null),
+            }
+        }
     }
 
     impl Display for DbValue {
