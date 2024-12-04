@@ -48,7 +48,7 @@ impl HttpMiddleware {
         security_scheme: SecuritySchemeWithProviderMetadata,
     ) -> HttpMiddleware {
         HttpMiddleware::AuthenticateRequest(Box::new(HttpAuthenticationMiddleware {
-            security_scheme,
+            security_scheme_with_metadata: security_scheme,
         }))
     }
     pub fn cors(cors: HttpCors) -> Self {

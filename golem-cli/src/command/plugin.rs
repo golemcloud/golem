@@ -107,10 +107,10 @@ impl<PluginScopeRef: clap::Args> PluginSubcommand<PluginScopeRef> {
         components: Arc<dyn ComponentService<ProjectContext = ProjectContext> + Send + Sync>,
     ) -> Result<GolemResult, GolemError>
     where
-        Vec<PluginDefinition>: PrintRes,
         PluginScopeRef: PluginScopeArgs<PluginScope = PluginScope>,
         <PluginScopeRef as PluginScopeArgs>::ComponentRef:
             ComponentRefSplit<ProjectRef> + Send + Sync,
+        Vec<PluginDefinition>: PrintRes,
     {
         match self {
             PluginSubcommand::List { scope } => {

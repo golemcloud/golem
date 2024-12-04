@@ -21,19 +21,23 @@ pub mod profile;
 pub mod worker;
 
 use crate::command::api_security::ApiSecuritySchemeSubcommand;
+use crate::completion;
+use crate::config::ProfileName;
 use crate::diagnose::{self, diagnose};
 use crate::examples;
+use crate::init::{init_profile, CliKind, DummyProfileAuth};
 use crate::model::{ComponentUriArg, GolemError, GolemResult};
 use crate::oss::model::OssContext;
 use crate::stubgen::handle_stubgen;
 use api_definition::ApiDefinitionSubcommand;
 use api_deployment::ApiDeploymentSubcommand;
-use clap::{self, Subcommand};
+use clap::{self, Command, Subcommand};
 use component::ComponentSubCommand;
 use golem_common::uri::oss::uri::ComponentUri;
 use plugin::PluginSubcommand;
-use profile::ProfileSubCommand;
+use profile::{ProfileSubCommand, UniversalProfileAdd};
 use std::future::Future;
+use std::path::PathBuf;
 use worker::WorkerSubcommand;
 
 pub trait ComponentRefSplit<ProjectRef> {
@@ -77,6 +81,19 @@ pub enum EmptyCommand {}
 impl<Ctx> CliCommand<Ctx> for EmptyCommand {
     async fn run(self, _ctx: Ctx) -> Result<GolemResult, GolemError> {
         Ok(GolemResult::Str("".to_string()))
+    }
+}
+
+/// convenience function to get both the clap::Command and the parsed struct in one pass
+pub fn command_and_parsed<T: clap::Parser>() -> (clap::Command, T) {
+    let mut command = T::command();
+
+    let mut matches = command.clone().get_matches();
+    let res = <T as clap::FromArgMatches>::from_arg_matches_mut(&mut matches)
+        .map_err(|e| e.format(&mut command));
+    match res {
+        Ok(t) => (command, t),
+        Err(e) => e.exit(),
     }
 }
 
@@ -197,4 +214,58 @@ pub enum SharedCommand<
         #[arg(long = "generate", value_enum)]
         generator: clap_complete::Shell,
     },
+}
+
+/// Context before the user has initialized the profile.
+pub struct NoProfileCommandContext {
+    pub config_dir: PathBuf,
+    pub command: Command,
+    pub cli_kind: CliKind,
+}
+
+impl NoProfileCommandContext {
+    // \! is an experimental type. Once stable, use in the return type.
+    pub fn fail_uninitialized(&self) -> Result<GolemResult, GolemError> {
+        Err(GolemError(
+            "Your Golem CLI is not configured. Please run `golem-cli init`".to_owned(),
+        ))
+    }
+}
+
+impl<
+        ProjectRef: clap::Args,
+        ComponentRef: clap::Args,
+        WorkerRef: clap::Args,
+        PluginScopeRef: clap::Args,
+        ProfileAdd: clap::Args + Into<UniversalProfileAdd>,
+    > CliCommand<NoProfileCommandContext>
+    for SharedCommand<ProjectRef, ComponentRef, WorkerRef, PluginScopeRef, ProfileAdd>
+{
+    async fn run(self, ctx: NoProfileCommandContext) -> Result<GolemResult, GolemError> {
+        match self {
+            SharedCommand::Init {} => {
+                let profile_name = ProfileName::default(ctx.cli_kind);
+
+                init_profile(
+                    ctx.cli_kind,
+                    profile_name,
+                    &ctx.config_dir,
+                    &DummyProfileAuth,
+                )
+                .await?;
+
+                Ok(GolemResult::Str("Profile created".to_string()))
+            }
+            SharedCommand::Profile { subcommand } => {
+                subcommand
+                    .handle(ctx.cli_kind, &ctx.config_dir, &DummyProfileAuth)
+                    .await
+            }
+            SharedCommand::Completion { generator } => {
+                completion::print_completion(ctx.command, generator);
+                Ok(GolemResult::Str("".to_string()))
+            }
+            _ => ctx.fail_uninitialized(),
+        }
+    }
 }

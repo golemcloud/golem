@@ -16,17 +16,16 @@ use crate::config::{NamedProfile, Profile};
 use crate::init::CliKind;
 use crate::model::text::fmt::format_error;
 use crate::service::version::{VersionCheckResult, VersionService};
-use clap::CommandFactory;
-use clap::Parser;
 use clap_verbosity_flag::Verbosity;
 use colored::Colorize;
-use command::CliCommand;
+use command::profile::OssProfileAdd;
+use command::{CliCommand, NoProfileCommandContext};
 use config::{get_config_dir, Config};
 use golem_common::golem_version;
 use indoc::eprintdoc;
 use lenient_bool::LenientBool;
 use log::Level;
-use oss::main::GolemOssCli;
+use oss::cli::{GolemOssCli, OssCommandContext};
 use std::process::ExitCode;
 use tracing::{info, warn};
 use tracing_subscriber::FmtSubscriber;
@@ -111,9 +110,10 @@ pub async fn check_for_newer_server_version(
     }
 }
 
-pub fn run_main<
-    ExtraCommands: CliCommand<oss::main::OssCommandContext> + CliCommand<oss::main::UnintializedOssCommandContext>,
->() -> ExitCode {
+pub fn oss_main<ExtraCommands>() -> ExitCode
+where
+    ExtraCommands: CliCommand<OssCommandContext> + CliCommand<NoProfileCommandContext>,
+{
     let config_dir = get_config_dir();
 
     let oss_profile = match Config::get_active_profile(CliKind::Oss, &config_dir) {
@@ -141,13 +141,14 @@ pub fn run_main<
         None => None,
     };
 
-    let command = GolemOssCli::<ExtraCommands>::command();
-    let parsed = GolemOssCli::<ExtraCommands>::parse();
+    let (command, parsed) =
+        command::command_and_parsed::<GolemOssCli<OssProfileAdd, ExtraCommands>>();
 
     let format = parsed
         .format
         .or_else(|| oss_profile.as_ref().map(|(_, p)| p.config.default_format))
         .unwrap_or_default();
+
     init_tracing(parsed.verbosity.clone());
 
     info!(
@@ -161,13 +162,15 @@ pub fn run_main<
         .build()
         .expect("Failed to build tokio runtime for cli main");
 
+    let cli_kind = CliKind::Oss;
+
     let result = if let Some((_, profile)) = oss_profile {
-        runtime.block_on(oss::main::run_with_profile(
-            format, config_dir, profile, command, parsed,
+        runtime.block_on(oss::cli::run_with_profile(
+            format, config_dir, profile, command, parsed, cli_kind,
         ))
     } else {
-        runtime.block_on(oss::main::run_without_profile(
-            format, config_dir, command, parsed,
+        runtime.block_on(oss::cli::run_without_profile(
+            config_dir, command, parsed, cli_kind,
         ))
     };
 

@@ -157,23 +157,33 @@ impl From<SecuritySchemeWithProviderMetadata> for SecuritySchemeData {
 pub struct HttpApiDefinitionResponseData {
     pub id: ApiDefinitionId,
     pub version: ApiVersion,
-    pub routes: Vec<RouteWithTypeInfo>,
+    pub routes: Vec<RouteResponseData>,
     #[serde(default)]
     pub draft: bool,
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-impl<Namespace> From<CompiledHttpApiDefinition<Namespace>> for HttpApiDefinitionResponseData {
-    fn from(value: CompiledHttpApiDefinition<Namespace>) -> Self {
-        let routes = value.routes.into_iter().map(|route| route.into()).collect();
+impl<Namespace> TryFrom<CompiledHttpApiDefinition<Namespace>> for HttpApiDefinitionResponseData {
+    type Error = String;
+    fn try_from(value: CompiledHttpApiDefinition<Namespace>) -> Result<Self, String> {
+        let mut routes = vec![];
 
-        Self {
+        for route in value.routes {
+            // We shouldn't expose auth call back binding to users
+            // as it is giving away the internal details of the call back system that enables security.
+            if !route.binding.is_static_auth_call_back_binding() {
+                let route_with_type_info = RouteResponseData::try_from(route)?;
+                routes.push(route_with_type_info);
+            }
+        }
+
+        Ok(Self {
             id: value.id,
             version: value.version,
             routes,
             draft: value.draft,
             created_at: Some(value.created_at),
-        }
+        })
     }
 }
 
@@ -214,7 +224,7 @@ impl TryFrom<Route> for RouteRequestData {
         let binding = GatewayBindingData::try_from(value.binding.clone())?;
         let security = value.middlewares.clone().and_then(|middlewares| {
             middlewares.get_http_authentication_middleware().map(|x| {
-                x.security_scheme
+                x.security_scheme_with_metadata
                     .security_scheme
                     .scheme_identifier()
                     .to_string()
@@ -258,21 +268,36 @@ impl TryFrom<RouteRequest> for RouteRequestData {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
-pub struct RouteWithTypeInfo {
+pub struct RouteResponseData {
     pub method: MethodPattern,
     pub path: String,
-    pub binding: GatewayBindingWithTypeInfo,
+    pub security: Option<String>,
+    pub binding: GatewayBindingResponseData,
 }
 
-impl From<CompiledRoute> for RouteWithTypeInfo {
-    fn from(value: CompiledRoute) -> Self {
+impl TryFrom<CompiledRoute> for RouteResponseData {
+    type Error = String;
+    fn try_from(value: CompiledRoute) -> Result<Self, String> {
         let method = value.method;
         let path = value.path.to_string();
-        Self {
+        let security = value.middlewares.and_then(|middlewares| {
+            middlewares
+                .get_http_authentication_middleware()
+                .map(|http_authentication_middleware| {
+                    http_authentication_middleware
+                        .security_scheme_with_metadata
+                        .security_scheme
+                        .scheme_identifier()
+                        .to_string()
+                })
+        });
+
+        Ok(Self {
             method,
             path,
-            binding: GatewayBindingWithTypeInfo::from(value.binding),
-        }
+            security,
+            binding: GatewayBindingResponseData::try_from(value.binding)?,
+        })
     }
 }
 
@@ -367,8 +392,9 @@ impl From<HttpMiddlewares> for MiddlewareData {
             match i {
                 HttpMiddleware::AddCorsHeaders(cors0) => cors = Some(cors0.clone()),
                 HttpMiddleware::AuthenticateRequest(auth0) => {
-                    let security_scheme_reference =
-                        SecuritySchemeReferenceData::from(auth0.security_scheme.clone());
+                    let security_scheme_reference = SecuritySchemeReferenceData::from(
+                        auth0.security_scheme_with_metadata.clone(),
+                    );
                     auth = Some(security_scheme_reference)
                 }
             }
@@ -421,7 +447,7 @@ impl From<SecuritySchemeReferenceData> for SecuritySchemeReference {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
-pub struct GatewayBindingWithTypeInfo {
+pub struct GatewayBindingResponseData {
     pub component_id: Option<VersionedComponentId>, // Optional to keep it backward compatible
     pub worker_name: Option<String>,                // If bindingType is Default or FileServer
     pub idempotency_key: Option<String>,            // If bindingType is Default or FileServer
@@ -435,12 +461,12 @@ pub struct GatewayBindingWithTypeInfo {
     pub response_mapping_output: Option<RibOutputTypeInfo>, // If bindingType is Default or FileServer
 }
 
-impl GatewayBindingWithTypeInfo {
+impl GatewayBindingResponseData {
     pub fn from_worker_binding_compiled(
         worker_binding: WorkerBindingCompiled,
         binding_type: GatewayBindingType,
     ) -> Self {
-        GatewayBindingWithTypeInfo {
+        GatewayBindingResponseData {
             component_id: Some(worker_binding.component_id),
             worker_name: worker_binding
                 .worker_name_compiled
@@ -469,35 +495,48 @@ impl GatewayBindingWithTypeInfo {
     }
 }
 
-impl From<GatewayBindingCompiled> for GatewayBindingWithTypeInfo {
-    fn from(value: GatewayBindingCompiled) -> Self {
+impl TryFrom<GatewayBindingCompiled> for GatewayBindingResponseData {
+    type Error = String;
+
+    fn try_from(value: GatewayBindingCompiled) -> Result<Self, String> {
         let gateway_binding = value.clone();
 
         match gateway_binding {
             GatewayBindingCompiled::FileServer(worker_binding) => {
-                GatewayBindingWithTypeInfo::from_worker_binding_compiled(
+                Ok(GatewayBindingResponseData::from_worker_binding_compiled(
                     worker_binding,
                     GatewayBindingType::FileServer,
-                )
+                ))
             }
             GatewayBindingCompiled::Worker(worker_binding) => {
-                GatewayBindingWithTypeInfo::from_worker_binding_compiled(
+                Ok(GatewayBindingResponseData::from_worker_binding_compiled(
                     worker_binding,
                     GatewayBindingType::Default,
-                )
+                ))
             }
-            GatewayBindingCompiled::Static(static_binding) => GatewayBindingWithTypeInfo {
-                component_id: None,
-                worker_name: None,
-                idempotency_key: None,
-                response: None,
-                binding_type: None, // TODO; Remove worker_binding_type to not expose worker_function
-                response_mapping_input: None,
-                worker_name_input: None,
-                idempotency_key_input: None,
-                cors_preflight: static_binding.get_cors_preflight(),
-                response_mapping_output: None,
-            },
+            GatewayBindingCompiled::Static(static_binding) => {
+                let binding_type = match static_binding.deref() {
+                    StaticBinding::HttpCorsPreflight(_) => GatewayBindingType::CorsPreflight,
+                    StaticBinding::HttpAuthCallBack(_) => {
+                        return Err(
+                            "Auth call back static binding not to be exposed to users".to_string()
+                        )
+                    }
+                };
+
+                Ok(GatewayBindingResponseData {
+                    component_id: None,
+                    worker_name: None,
+                    idempotency_key: None,
+                    response: None,
+                    binding_type: Some(binding_type),
+                    response_mapping_input: None,
+                    worker_name_input: None,
+                    idempotency_key_input: None,
+                    cors_preflight: static_binding.get_cors_preflight(),
+                    response_mapping_output: None,
+                })
+            }
         }
     }
 }
@@ -531,8 +570,12 @@ impl TryFrom<crate::gateway_api_definition::http::HttpApiDefinition>
     ) -> Result<Self, Self::Error> {
         let mut routes = Vec::new();
         for route in value.routes {
-            let v = RouteRequestData::try_from(route)?;
-            routes.push(v);
+            // We shouldn't expose auth call back binding to users
+            // as it is giving away the internal details of the call back system that enables security.
+            if !route.binding.is_security_binding() {
+                let v = RouteRequestData::try_from(route)?;
+                routes.push(v);
+            }
         }
 
         Ok(Self {
@@ -762,7 +805,7 @@ impl TryFrom<crate::gateway_api_definition::http::Route> for grpc_apidefinition:
 
     fn try_from(value: crate::gateway_api_definition::http::Route) -> Result<Self, Self::Error> {
         let path = value.path.to_string();
-        let binding = grpc_apidefinition::GatewayBinding::from(value.binding);
+        let binding = grpc_apidefinition::GatewayBinding::try_from(value.binding)?;
         let method: grpc_apidefinition::HttpMethod = value.method.into();
         let middlewares = value.middlewares.clone();
         let middleware_proto = middlewares
@@ -786,9 +829,10 @@ impl TryFrom<CompiledRoute> for golem_api_grpc::proto::golem::apidefinition::Com
     fn try_from(value: CompiledRoute) -> Result<Self, Self::Error> {
         let method = value.method as i32;
         let path = value.path.to_string();
-        let binding = golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding::from(
-            value.binding,
-        );
+        let binding =
+            golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding::try_from(
+                value.binding,
+            )?;
 
         let middleware_proto = value
             .middlewares

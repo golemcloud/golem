@@ -138,7 +138,7 @@ impl TryFrom<HttpMiddlewares> for golem_api_grpc::proto::golem::apidefinition::M
                     cors = Some(golem_api_grpc::proto::golem::apidefinition::CorsPreflight::from(cors0.clone()));
                 }
                 HttpMiddleware::AuthenticateRequest(http_request_authentication) => {
-                    auth = Some(golem_api_grpc::proto::golem::apidefinition::SecurityWithProviderMetadata::try_from(http_request_authentication.security_scheme.clone())?)
+                    auth = Some(golem_api_grpc::proto::golem::apidefinition::SecurityWithProviderMetadata::try_from(http_request_authentication.security_scheme_with_metadata.clone())?)
                 }
             }
         }
