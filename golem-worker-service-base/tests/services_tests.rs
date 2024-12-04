@@ -212,7 +212,10 @@ pub async fn test_gateway_session_expiry() {
     )
     .await;
 
-    assert!(is_missing_value(result));
+    assert!(matches!(
+        result,
+        Err(GatewaySessionError::MissingValue { .. })
+    ));
 
     // Redis backed by in-memory cache should return value
     let result = insert_and_get_with_redis_with_in_memory_cache(
@@ -225,13 +228,6 @@ pub async fn test_gateway_session_expiry() {
     .expect("Expecting a value from redis cache backed by in-memory");
 
     assert_eq!(result, data_value);
-}
-
-fn is_missing_value(result: Result<DataValue, GatewaySessionError>) -> bool {
-    match result {
-        Err(GatewaySessionError::MissingValue { .. }) => true,
-        _ => false,
-    }
 }
 
 async fn insert_and_get_with_redis(
