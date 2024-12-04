@@ -27,13 +27,13 @@ use async_trait::async_trait;
 use golem_common::model::WorkerId;
 use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 use std::sync::Arc;
 use url::Url;
 
 pub trait RdbmsType {
-    type DbColumn: Clone + Send + Sync + PartialEq;
-    type DbValue: Clone + Send + Sync + PartialEq;
+    type DbColumn: Clone + Send + Sync + PartialEq + Debug;
+    type DbValue: Clone + Send + Sync + PartialEq + Debug;
 }
 
 #[derive(Clone)]

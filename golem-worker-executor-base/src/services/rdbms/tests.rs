@@ -24,6 +24,8 @@ use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdbs;
 use golem_test_framework::components::rdb::{RdbConnection, RdbsConnections};
 use std::collections::HashMap;
 use std::sync::Arc;
+use bigdecimal::BigDecimal;
+use serde_json::json;
 use test_r::{test, test_dep};
 use tokio::task::JoinSet;
 use uuid::Uuid;
@@ -290,29 +292,164 @@ async fn mysql_execute_test_select1(mysql: &DockerMysqlRdbs, rdbms_service: &Rdb
     .await
 }
 
+// #[test]
+// async fn mysql_execute_test_create_insert_select(
+//     mysql: &DockerMysqlRdbs,
+//     rdbms_service: &RdbmsServiceDefault,
+// ) {
+//     let db_address = mysql.rdbs[1].clone().host_connection_string();
+//     let rdbms = rdbms_service.mysql();
+//     let create_table_statement = r#"
+//             CREATE TABLE IF NOT EXISTS components
+//             (
+//                 component_id        varchar(25)    NOT NULL,
+//                 namespace           varchar(255)    NOT NULL,
+//                 name                varchar(255)    NOT NULL,
+//                 created_on          timestamp NOT NULL DEFAULT NOW(),
+//                 PRIMARY KEY (component_id)
+//             );
+//         "#;
+//
+//     let insert_statement = r#"
+//             INSERT INTO components
+//             (component_id, namespace, name)
+//             VALUES
+//             (?, ?, ?)
+//         "#;
+//
+//     rdbms_execute_test(
+//         rdbms.clone(),
+//         &db_address,
+//         create_table_statement,
+//         vec![],
+//         None,
+//     )
+//     .await;
+//
+//     let count = 100;
+//
+//     let mut rows: Vec<DbRow<mysql_types::DbValue>> = Vec::with_capacity(count);
+//
+//     for i in 0..count {
+//         let params: Vec<mysql_types::DbValue> = vec![
+//             mysql_types::DbValue::Varchar(format!("{:03}", i)),
+//             mysql_types::DbValue::Varchar("default".to_string()),
+//             mysql_types::DbValue::Varchar(format!("name-{}", Uuid::new_v4())),
+//         ];
+//
+//         rdbms_execute_test(
+//             rdbms.clone(),
+//             &db_address,
+//             insert_statement,
+//             params.clone(),
+//             Some(1),
+//         )
+//         .await;
+//
+//         rows.push(DbRow { values: params });
+//     }
+//
+//     let expected_columns = vec![
+//         mysql_types::DbColumn {
+//             name: "component_id".to_string(),
+//             ordinal: 0,
+//             db_type: mysql_types::DbColumnType::Varchar,
+//             db_type_name: "VARCHAR".to_string(),
+//         },
+//         mysql_types::DbColumn {
+//             name: "namespace".to_string(),
+//             ordinal: 1,
+//             db_type: mysql_types::DbColumnType::Varchar,
+//             db_type_name: "VARCHAR".to_string(),
+//         },
+//         mysql_types::DbColumn {
+//             name: "name".to_string(),
+//             ordinal: 2,
+//             db_type: mysql_types::DbColumnType::Varchar,
+//             db_type_name: "VARCHAR".to_string(),
+//         },
+//     ];
+//
+//     rdbms_query_test(
+//         rdbms.clone(),
+//         &db_address,
+//         "SELECT component_id, namespace, name FROM components ORDER BY component_id ASC",
+//         vec![],
+//         Some(expected_columns),
+//         Some(rows),
+//     )
+//     .await;
+//
+//     rdbms_execute_test(
+//         rdbms.clone(),
+//         &db_address,
+//         "DELETE FROM components;",
+//         vec![],
+//         None,
+//     )
+//     .await;
+// }
+
+
 #[test]
-async fn mysql_execute_test_create_insert_select(
+async fn mysql_execute_test_create_insert_select2(
     mysql: &DockerMysqlRdbs,
     rdbms_service: &RdbmsServiceDefault,
 ) {
     let db_address = mysql.rdbs[1].clone().host_connection_string();
     let rdbms = rdbms_service.mysql();
     let create_table_statement = r#"
-            CREATE TABLE IF NOT EXISTS components
+            CREATE TABLE IF NOT EXISTS data_types
             (
-                component_id        varchar(25)    NOT NULL,
-                namespace           varchar(255)    NOT NULL,
-                name                varchar(255)    NOT NULL,
-                created_on          timestamp NOT NULL DEFAULT NOW(),
-                PRIMARY KEY (component_id)
+              `id` VARCHAR(25) PRIMARY KEY,
+              `tinyint_col` TINYINT,
+              `smallint_col` SMALLINT,
+              `mediumint_col` MEDIUMINT,
+              `int_col` INT,
+              `bigint_col` BIGINT,
+              `float_col` FLOAT,
+              `double_col` DOUBLE,
+              `decimal_col` DECIMAL(10,2),
+              `date_col` DATE,
+              `datetime_col` DATETIME,
+              `timestamp_col` TIMESTAMP,
+              `year_col` YEAR,
+              `char_col` CHAR(10),
+              `varchar_col` VARCHAR(255),
+              `tinytext_col` TINYTEXT,
+              `text_col` TEXT,
+              `mediumtext_col` MEDIUMTEXT,
+              `longtext_col` LONGTEXT,
+              `binary_col` BINARY(16),
+              `varbinary_col` VARBINARY(255),
+              `tinyblob_col` TINYBLOB,
+              `blob_col` BLOB,
+              `mediumblob_col` MEDIUMBLOB,
+              `longblob_col` LONGBLOB,
+              `enum_col` ENUM('value1', 'value2', 'value3'),
+              `set_col` SET('value1', 'value2', 'value3'),
+              `json_col` JSON
             );
         "#;
 
     let insert_statement = r#"
-            INSERT INTO components
-            (component_id, namespace, name)
-            VALUES
-            (?, ?, ?)
+            INSERT INTO data_types (
+              id,
+              tinyint_col, smallint_col, mediumint_col, int_col, bigint_col,
+              float_col, double_col, decimal_col, date_col, datetime_col,
+              timestamp_col, char_col, varchar_col, tinytext_col,
+              text_col, mediumtext_col, longtext_col, binary_col, varbinary_col,
+              tinyblob_col, blob_col, mediumblob_col, longblob_col, enum_col,
+              set_col, json_col
+            ) VALUES (
+              ?,
+              ?, ?, ?, ?, ?,
+              ?, ?, ?, ?, ?,
+              ?, ?, ?, ?,
+              ?, ?, ?, ?, ?,
+              ?, ?, ?, ?, ?,
+              ?, ?
+            );
         "#;
 
     rdbms_execute_test(
@@ -322,17 +459,57 @@ async fn mysql_execute_test_create_insert_select(
         vec![],
         None,
     )
-    .await;
+        .await;
 
-    let count = 100;
+    let count = 1;
 
     let mut rows: Vec<DbRow<mysql_types::DbValue>> = Vec::with_capacity(count);
 
     for i in 0..count {
         let params: Vec<mysql_types::DbValue> = vec![
             mysql_types::DbValue::Varchar(format!("{:03}", i)),
-            mysql_types::DbValue::Varchar("default".to_string()),
+            mysql_types::DbValue::Tinyint(1),
+            mysql_types::DbValue::Smallint(2),
+            mysql_types::DbValue::Mediumint(3),
+            mysql_types::DbValue::Int(4),
+            mysql_types::DbValue::Bigint(5),
+            mysql_types::DbValue::Float(6.0),
+            mysql_types::DbValue::Double(7.0),
+            mysql_types::DbValue::Decimal(BigDecimal::from(80)),
+            mysql_types::DbValue::Date(chrono::NaiveDate::from_ymd_opt(2030, 10, 12).unwrap()),
+            mysql_types::DbValue::Datetime(chrono::DateTime::from_naive_utc_and_offset(
+                chrono::NaiveDateTime::new(
+                    chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
+                    chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+                ),
+                chrono::Utc,
+            )),
+            mysql_types::DbValue::Timestamp(chrono::DateTime::from_naive_utc_and_offset(
+                chrono::NaiveDateTime::new(
+                    chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
+                    chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+                ),
+                chrono::Utc,
+            )),
+            mysql_types::DbValue::Fixchar("0123456789".to_string()),
             mysql_types::DbValue::Varchar(format!("name-{}", Uuid::new_v4())),
+            mysql_types::DbValue::Tinytext("Tinytext".to_string()),
+            mysql_types::DbValue::Text("text".to_string()),
+            mysql_types::DbValue::Mediumtext("Mediumtext".to_string()),
+            mysql_types::DbValue::Longtext("Longtext".to_string()),
+            mysql_types::DbValue::Binary("Binary".as_bytes().to_vec()),
+            mysql_types::DbValue::Varbinary("Varbinary".as_bytes().to_vec()),
+            mysql_types::DbValue::Tinyblob("Tinyblob".as_bytes().to_vec()),
+            mysql_types::DbValue::Blob("Blob".as_bytes().to_vec()),
+            mysql_types::DbValue::Mediumblob("Mediumblob".as_bytes().to_vec()),
+            mysql_types::DbValue::Longblob("Longblob".as_bytes().to_vec()),
+            mysql_types::DbValue::Enumeration("value2".to_string()),
+            mysql_types::DbValue::Set("value1,value2".to_string()),
+            mysql_types::DbValue::Json(json!(
+                       {
+                          "id": i
+                       }
+                ))
         ];
 
         rdbms_execute_test(
@@ -342,51 +519,209 @@ async fn mysql_execute_test_create_insert_select(
             params.clone(),
             Some(1),
         )
-        .await;
+            .await;
 
         rows.push(DbRow { values: params });
     }
 
     let expected_columns = vec![
         mysql_types::DbColumn {
-            name: "component_id".to_string(),
+            name: "id".to_string(),
             ordinal: 0,
             db_type: mysql_types::DbColumnType::Varchar,
             db_type_name: "VARCHAR".to_string(),
         },
         mysql_types::DbColumn {
-            name: "namespace".to_string(),
+            name: "tinyint_col".to_string(),
             ordinal: 1,
+            db_type: mysql_types::DbColumnType::Tinyint,
+            db_type_name: "TINYINT".to_string(),
+        },
+        mysql_types::DbColumn {
+            name: "smallint_col".to_string(),
+            ordinal: 2,
+            db_type: mysql_types::DbColumnType::Smallint,
+            db_type_name: "SMALLINT".to_string(),
+        },
+        mysql_types::DbColumn {
+            name: "mediumint_col".to_string(),
+            ordinal: 3,
+            db_type: mysql_types::DbColumnType::Mediumint,
+            db_type_name: "MEDIUMINT".to_string(),
+        },
+        mysql_types::DbColumn {
+            name: "int_col".to_string(),
+            ordinal: 4,
+            db_type: mysql_types::DbColumnType::Int,
+            db_type_name: "INT".to_string(),
+        },
+        mysql_types::DbColumn {
+            name: "bigint_col".to_string(),
+            ordinal: 5,
+            db_type: mysql_types::DbColumnType::Bigint,
+            db_type_name: "BIGINT".to_string(),
+        },
+        mysql_types::DbColumn {
+            name: "float_col".to_string(),
+            ordinal: 6,
+            db_type: mysql_types::DbColumnType::Float,
+            db_type_name: "FLOAT".to_string(),
+        },
+        mysql_types::DbColumn {
+            name: "double_col".to_string(),
+            ordinal: 7,
+            db_type: mysql_types::DbColumnType::Double,
+            db_type_name: "DOUBLE".to_string(),
+        },
+        mysql_types::DbColumn {
+            name: "decimal_col".to_string(),
+            ordinal: 8,
+            db_type: mysql_types::DbColumnType::Decimal,
+            db_type_name: "DECIMAL".to_string(),
+        },
+        mysql_types::DbColumn {
+            name: "date_col".to_string(),
+            ordinal: 9,
+            db_type: mysql_types::DbColumnType::Date,
+            db_type_name: "DATE".to_string(),
+        },
+        mysql_types::DbColumn {
+            name: "datetime_col".to_string(),
+            ordinal: 10,
+            db_type: mysql_types::DbColumnType::Datetime,
+            db_type_name: "DATETIME".to_string(),
+        },
+        mysql_types::DbColumn {
+            name: "timestamp_col".to_string(),
+            ordinal: 11,
+            db_type: mysql_types::DbColumnType::Timestamp,
+            db_type_name: "TIMESTAMP".to_string(),
+        },
+        mysql_types::DbColumn {
+            name: "char_col".to_string(),
+            ordinal: 12,
+            db_type: mysql_types::DbColumnType::Fixchar,
+            db_type_name: "CHAR".to_string(),
+        },
+        mysql_types::DbColumn {
+            name: "varchar_col".to_string(),
+            ordinal: 13,
             db_type: mysql_types::DbColumnType::Varchar,
             db_type_name: "VARCHAR".to_string(),
         },
         mysql_types::DbColumn {
-            name: "name".to_string(),
-            ordinal: 2,
-            db_type: mysql_types::DbColumnType::Varchar,
-            db_type_name: "VARCHAR".to_string(),
+            name: "tinytext_col".to_string(),
+            ordinal: 14,
+            db_type: mysql_types::DbColumnType::Tinytext,
+            db_type_name: "TINYTEXT".to_string(),
+        },
+        mysql_types::DbColumn {
+            name: "text_col".to_string(),
+            ordinal: 15,
+            db_type: mysql_types::DbColumnType::Text,
+            db_type_name: "TEXT".to_string(),
+        },
+        mysql_types::DbColumn {
+            name: "mediumtext_col".to_string(),
+            ordinal: 16,
+            db_type: mysql_types::DbColumnType::Mediumtext,
+            db_type_name: "MEDIUMTEXT".to_string(),
+        },
+        mysql_types::DbColumn {
+            name: "longtext_col".to_string(),
+            ordinal: 17,
+            db_type: mysql_types::DbColumnType::Longtext,
+            db_type_name: "LONGTEXT".to_string(),
+        },
+        mysql_types::DbColumn {
+            name: "binary_col".to_string(),
+            ordinal: 18,
+            db_type: mysql_types::DbColumnType::Binary,
+            db_type_name: "BINARY".to_string(),
+        },
+        mysql_types::DbColumn {
+            name: "varbinary_col".to_string(),
+            ordinal: 19,
+            db_type: mysql_types::DbColumnType::Varbinary,
+            db_type_name: "VARBINARY".to_string(),
+        },
+        mysql_types::DbColumn {
+            name: "tinyblob_col".to_string(),
+            ordinal: 20,
+            db_type: mysql_types::DbColumnType::Tinyblob,
+            db_type_name: "TINYBLOB".to_string(),
+        },
+        mysql_types::DbColumn {
+            name: "blob_col".to_string(),
+            ordinal: 21,
+            db_type: mysql_types::DbColumnType::Blob,
+            db_type_name: "BLOB".to_string(),
+        },
+        mysql_types::DbColumn {
+            name: "mediumblob_col".to_string(),
+            ordinal: 22,
+            db_type: mysql_types::DbColumnType::Mediumblob,
+            db_type_name: "MEDIUMBLOB".to_string(),
+        },
+        mysql_types::DbColumn {
+            name: "longblob_col".to_string(),
+            ordinal: 23,
+            db_type: mysql_types::DbColumnType::Longblob,
+            db_type_name: "LONGBLOB".to_string(),
+        },
+        mysql_types::DbColumn {
+            name: "enum_col".to_string(),
+            ordinal: 24,
+            db_type: mysql_types::DbColumnType::Enumeration,
+            db_type_name: "ENUM".to_string(),
+        },
+        mysql_types::DbColumn {
+            name: "set_col".to_string(),
+            ordinal: 25,
+            db_type: mysql_types::DbColumnType::Set,
+            db_type_name: "SET".to_string(),
+        },
+        mysql_types::DbColumn {
+            name: "json_col".to_string(),
+            ordinal: 26,
+            db_type: mysql_types::DbColumnType::Json,
+            db_type_name: "JSON".to_string(),
         },
     ];
+
+    let select_statement = r#"
+            SELECT
+              id,
+              tinyint_col, smallint_col, mediumint_col, int_col, bigint_col,
+              float_col, double_col, decimal_col, date_col, datetime_col,
+              timestamp_col, char_col, varchar_col, tinytext_col,
+              text_col, mediumtext_col, longtext_col, binary_col, varbinary_col,
+              tinyblob_col, blob_col, mediumblob_col, longblob_col, enum_col,
+              set_col, json_col
+           FROM data_types ORDER BY id ASC;
+        "#;
 
     rdbms_query_test(
         rdbms.clone(),
         &db_address,
-        "SELECT component_id, namespace, name FROM components ORDER BY component_id ASC",
+        select_statement,
         vec![],
         Some(expected_columns),
         Some(rows),
     )
-    .await;
+        .await;
 
     rdbms_execute_test(
         rdbms.clone(),
         &db_address,
-        "DELETE FROM components;",
+        "DELETE FROM data_types;",
         vec![],
         None,
     )
-    .await;
+        .await;
 }
+
+
 
 async fn rdbms_execute_test<T: RdbmsType>(
     rdbms: Arc<dyn Rdbms<T> + Send + Sync>,
@@ -446,6 +781,7 @@ async fn rdbms_query_test<T: RdbmsType>(
     let columns = result.get_columns().await.unwrap();
 
     if let Some(expected) = expected_columns {
+        println!("columns: {:?}", columns);
         check!(
             columns == expected,
             "query {} (executed on {}) - response columns do not match",
@@ -461,6 +797,7 @@ async fn rdbms_query_test<T: RdbmsType>(
     }
 
     if let Some(expected) = expected_rows {
+        println!("rows: {:#?}", rows);
         check!(
             rows == expected,
             "query {} (executed on {}) - response rows do not match",

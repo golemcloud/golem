@@ -51,6 +51,7 @@ pub(crate) mod sqlx_rdbms {
     use futures_util::stream::BoxStream;
     use sqlx::{Column, ConnectOptions, Pool, Row, TypeInfo};
     use std::sync::Arc;
+    use bigdecimal::BigDecimal;
 
     pub(crate) fn new(config: RdbmsConfig) -> Arc<dyn Rdbms<MysqlType> + Send + Sync> {
         let sqlx: SqlxRdbms<MysqlType, sqlx::mysql::MySql> = SqlxRdbms::new(config);
@@ -195,9 +196,13 @@ pub(crate) mod sqlx_rdbms {
                 let v: Option<i16> = row.try_get(index).map_err(|e| e.to_string())?;
                 v.map(DbValue::Smallint).unwrap_or(DbValue::Null)
             }
-            mysql_type_name::INT => {
+            mysql_type_name::MEDIUMINT => {
                 let v: Option<i32> = row.try_get(index).map_err(|e| e.to_string())?;
                 v.map(DbValue::Mediumint).unwrap_or(DbValue::Null)
+            }
+            mysql_type_name::INT => {
+                let v: Option<i32> = row.try_get(index).map_err(|e| e.to_string())?;
+                v.map(DbValue::Int).unwrap_or(DbValue::Null)
             }
             mysql_type_name::BIGINT => {
                 let v: Option<i64> = row.try_get(index).map_err(|e| e.to_string())?;
@@ -226,6 +231,10 @@ pub(crate) mod sqlx_rdbms {
             mysql_type_name::DOUBLE => {
                 let v: Option<f64> = row.try_get(index).map_err(|e| e.to_string())?;
                 v.map(DbValue::Double).unwrap_or(DbValue::Null)
+            }
+            mysql_type_name::DECIMAL => {
+                let v: Option<BigDecimal> = row.try_get(index).map_err(|e| e.to_string())?;
+                v.map(DbValue::Decimal).unwrap_or(DbValue::Null)
             }
             mysql_type_name::TEXT => {
                 let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
@@ -301,10 +310,10 @@ pub(crate) mod sqlx_rdbms {
                 let v: Option<chrono::NaiveTime> = row.try_get(index).map_err(|e| e.to_string())?;
                 v.map(DbValue::Time).unwrap_or(DbValue::Null)
             }
-            mysql_type_name::YEAR => {
-                let v: Option<i8> = row.try_get(index).map_err(|e| e.to_string())?;
-                v.map(DbValue::Year).unwrap_or(DbValue::Null)
-            }
+            // mysql_type_name::YEAR => { // FIXME
+            //     let v: Option<i16> = row.try_get(index).map_err(|e| e.to_string())?;
+            //     v.map(DbValue::Year).unwrap_or(DbValue::Null)
+            // }
             mysql_type_name::SET => {
                 let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
                 v.map(DbValue::Set).unwrap_or(DbValue::Null)
@@ -367,6 +376,7 @@ pub(crate) mod sqlx_rdbms {
                 mysql_type_name::DATETIME => Ok(DbColumnType::Datetime),
                 mysql_type_name::DATE => Ok(DbColumnType::Date),
                 mysql_type_name::TIME => Ok(DbColumnType::Time),
+                mysql_type_name::YEAR => Ok(DbColumnType::Year),
                 mysql_type_name::VARBINARY => Ok(DbColumnType::Varbinary),
                 mysql_type_name::BINARY => Ok(DbColumnType::Binary),
                 mysql_type_name::BLOB => Ok(DbColumnType::Blob),
@@ -375,7 +385,7 @@ pub(crate) mod sqlx_rdbms {
                 mysql_type_name::LONGBLOB => Ok(DbColumnType::Longblob),
                 mysql_type_name::SET => Ok(DbColumnType::Set),
                 mysql_type_name::BIT => Ok(DbColumnType::Bit),
-                mysql_type_name::ENUM => Ok(DbColumnType::Text),
+                mysql_type_name::ENUM => Ok(DbColumnType::Enumeration),
                 _ => Err(format!("Type '{}' is not supported", type_name))?,
             }
         }
@@ -539,7 +549,7 @@ pub mod types {
         Datetime(chrono::DateTime<chrono::Utc>),
         Timestamp(chrono::DateTime<chrono::Utc>),
         Time(chrono::NaiveTime),
-        Year(i8),
+        Year(i16),
         Fixchar(String),
         Varchar(String),
         Tinytext(String),
