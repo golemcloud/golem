@@ -32,7 +32,6 @@ pub mod writer;
 /// The Component Model section nodes.
 ///
 /// See [Section] for more information.
-#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum ComponentSection<Ast: AstCustomization + 'static> {
     Module(Module<Ast>),

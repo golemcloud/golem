@@ -17,7 +17,7 @@ use crate::core::{Data, TryFromExprSource};
 use crate::Sections;
 use wasmparser::{Chunk, Parser, Payload};
 
-impl TryFrom<wasmparser::InstantiationArg<'_>> for InstantiationArg {
+impl<'a> TryFrom<wasmparser::InstantiationArg<'a>> for InstantiationArg {
     type Error = String;
 
     fn try_from(value: wasmparser::InstantiationArg) -> Result<Self, Self::Error> {
@@ -33,7 +33,7 @@ impl TryFrom<wasmparser::InstantiationArg<'_>> for InstantiationArg {
     }
 }
 
-impl TryFrom<wasmparser::Instance<'_>> for Instance {
+impl<'a> TryFrom<wasmparser::Instance<'a>> for Instance {
     type Error = String;
 
     fn try_from(value: wasmparser::Instance) -> Result<Self, Self::Error> {
@@ -65,7 +65,7 @@ impl TryFrom<wasmparser::OuterAliasKind> for OuterAliasKind {
     }
 }
 
-impl TryFrom<wasmparser::ModuleTypeDeclaration<'_>> for ModuleDeclaration {
+impl<'a> TryFrom<wasmparser::ModuleTypeDeclaration<'a>> for ModuleDeclaration {
     type Error = String;
 
     fn try_from(value: wasmparser::ModuleTypeDeclaration) -> Result<Self, Self::Error> {
@@ -112,7 +112,7 @@ impl TryFrom<wasmparser::SubType> for FuncType {
     }
 }
 
-impl TryFrom<wasmparser::CoreType<'_>> for CoreType {
+impl<'a> TryFrom<wasmparser::CoreType<'a>> for CoreType {
     type Error = String;
 
     fn try_from(value: wasmparser::CoreType) -> Result<Self, Self::Error> {
@@ -158,7 +158,7 @@ impl<'a> TryFrom<wasmparser::ComponentInstantiationArg<'a>> for ComponentInstant
     }
 }
 
-impl TryFrom<wasmparser::ComponentExportName<'_>> for ComponentExternName {
+impl<'a> TryFrom<wasmparser::ComponentExportName<'a>> for ComponentExternName {
     type Error = String;
 
     fn try_from(value: wasmparser::ComponentExportName) -> Result<Self, Self::Error> {
@@ -257,7 +257,7 @@ impl<'a> TryFrom<wasmparser::ComponentExport<'a>> for ComponentExport {
     }
 }
 
-impl TryFrom<wasmparser::ComponentInstance<'_>> for ComponentInstance {
+impl<'a> TryFrom<wasmparser::ComponentInstance<'a>> for ComponentInstance {
     type Error = String;
 
     fn try_from(value: wasmparser::ComponentInstance) -> Result<Self, Self::Error> {
@@ -344,7 +344,7 @@ impl<'a> TryFrom<wasmparser::ComponentAlias<'a>> for Alias {
     }
 }
 
-impl TryFrom<wasmparser::VariantCase<'_>> for VariantCase {
+impl<'a> TryFrom<wasmparser::VariantCase<'a>> for VariantCase {
     type Error = String;
 
     fn try_from(value: wasmparser::VariantCase) -> Result<Self, Self::Error> {
@@ -359,7 +359,7 @@ impl TryFrom<wasmparser::VariantCase<'_>> for VariantCase {
     }
 }
 
-impl TryFrom<wasmparser::ComponentDefinedType<'_>> for ComponentDefinedType {
+impl<'a> TryFrom<wasmparser::ComponentDefinedType<'a>> for ComponentDefinedType {
     type Error = String;
 
     fn try_from(value: wasmparser::ComponentDefinedType) -> Result<Self, Self::Error> {
@@ -431,7 +431,7 @@ impl TryFrom<wasmparser::ComponentDefinedType<'_>> for ComponentDefinedType {
     }
 }
 
-impl TryFrom<wasmparser::ComponentFuncResult<'_>> for ComponentFuncResult {
+impl<'a> TryFrom<wasmparser::ComponentFuncResult<'a>> for ComponentFuncResult {
     type Error = String;
 
     fn try_from(value: wasmparser::ComponentFuncResult) -> Result<Self, Self::Error> {
@@ -449,7 +449,7 @@ impl TryFrom<wasmparser::ComponentFuncResult<'_>> for ComponentFuncResult {
     }
 }
 
-impl TryFrom<wasmparser::ComponentFuncType<'_>> for ComponentFuncType {
+impl<'a> TryFrom<wasmparser::ComponentFuncType<'a>> for ComponentFuncType {
     type Error = String;
 
     fn try_from(value: wasmparser::ComponentFuncType) -> Result<Self, Self::Error> {
@@ -464,7 +464,7 @@ impl TryFrom<wasmparser::ComponentFuncType<'_>> for ComponentFuncType {
     }
 }
 
-impl TryFrom<wasmparser::ComponentImportName<'_>> for ComponentExternName {
+impl<'a> TryFrom<wasmparser::ComponentImportName<'a>> for ComponentExternName {
     type Error = String;
 
     fn try_from(value: wasmparser::ComponentImportName) -> Result<Self, Self::Error> {
@@ -472,7 +472,7 @@ impl TryFrom<wasmparser::ComponentImportName<'_>> for ComponentExternName {
     }
 }
 
-impl TryFrom<wasmparser::ComponentImport<'_>> for ComponentImport {
+impl<'a> TryFrom<wasmparser::ComponentImport<'a>> for ComponentImport {
     type Error = String;
 
     fn try_from(value: wasmparser::ComponentImport) -> Result<Self, Self::Error> {
@@ -534,7 +534,7 @@ impl<'a> TryFrom<wasmparser::InstanceTypeDeclaration<'a>> for InstanceTypeDeclar
     }
 }
 
-impl TryFrom<wasmparser::ComponentType<'_>> for ComponentType {
+impl<'a> TryFrom<wasmparser::ComponentType<'a>> for ComponentType {
     type Error = String;
 
     fn try_from(value: wasmparser::ComponentType) -> Result<Self, Self::Error> {

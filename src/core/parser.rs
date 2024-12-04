@@ -129,7 +129,7 @@ impl TryFrom<wasmparser::TypeRef> for TypeRef {
     }
 }
 
-impl TryFrom<wasmparser::Import<'_>> for Import {
+impl<'a> TryFrom<wasmparser::Import<'a>> for Import {
     type Error = String;
 
     fn try_from(value: wasmparser::Import) -> Result<Self, Self::Error> {
@@ -141,7 +141,7 @@ impl TryFrom<wasmparser::Import<'_>> for Import {
     }
 }
 
-impl TryFrom<wasmparser::Table<'_>> for Table {
+impl<'a> TryFrom<wasmparser::Table<'a>> for Table {
     type Error = String;
 
     fn try_from(value: wasmparser::Table) -> Result<Self, Self::Error> {
@@ -227,7 +227,7 @@ impl TryFrom<wasmparser::HeapType> for RefType {
     }
 }
 
-impl TryFrom<wasmparser::Export<'_>> for Export {
+impl<'a> TryFrom<wasmparser::Export<'a>> for Export {
     type Error = String;
 
     fn try_from(value: wasmparser::Export) -> Result<Self, Self::Error> {
@@ -247,7 +247,7 @@ impl TryFrom<wasmparser::Export<'_>> for Export {
     }
 }
 
-impl TryFrom<wasmparser::ElementKind<'_>> for ElemMode {
+impl<'a> TryFrom<wasmparser::ElementKind<'a>> for ElemMode {
     type Error = String;
 
     fn try_from(value: wasmparser::ElementKind) -> Result<Self, Self::Error> {
@@ -265,7 +265,7 @@ impl TryFrom<wasmparser::ElementKind<'_>> for ElemMode {
     }
 }
 
-impl<T: TryFromExprSource> TryFrom<wasmparser::Element<'_>> for Elem<T> {
+impl<'a, T: TryFromExprSource> TryFrom<wasmparser::Element<'a>> for Elem<T> {
     type Error = String;
 
     fn try_from(value: wasmparser::Element) -> Result<Self, Self::Error> {
@@ -302,7 +302,7 @@ impl<T: TryFromExprSource> TryFrom<wasmparser::Element<'_>> for Elem<T> {
     }
 }
 
-impl<T: TryFromExprSource + Debug + Clone + PartialEq> TryFrom<wasmparser::DataKind<'_>>
+impl<'a, T: TryFromExprSource + Debug + Clone + PartialEq> TryFrom<wasmparser::DataKind<'a>>
     for DataMode<T>
 {
     type Error = String;
@@ -325,7 +325,9 @@ impl<T: TryFromExprSource + Debug + Clone + PartialEq> TryFrom<wasmparser::DataK
     }
 }
 
-impl<T: TryFromExprSource + Debug + Clone + PartialEq> TryFrom<wasmparser::Data<'_>> for Data<T> {
+impl<'a, T: TryFromExprSource + Debug + Clone + PartialEq> TryFrom<wasmparser::Data<'a>>
+    for Data<T>
+{
     type Error = String;
 
     fn try_from(value: wasmparser::Data) -> Result<Self, Self::Error> {
@@ -336,7 +338,7 @@ impl<T: TryFromExprSource + Debug + Clone + PartialEq> TryFrom<wasmparser::Data<
     }
 }
 
-impl<T: TryFromExprSource> TryFrom<wasmparser::FunctionBody<'_>> for FuncCode<T> {
+impl<'a, T: TryFromExprSource> TryFrom<wasmparser::FunctionBody<'a>> for FuncCode<T> {
     type Error = String;
 
     fn try_from(value: wasmparser::FunctionBody) -> Result<Self, Self::Error> {
@@ -385,7 +387,7 @@ impl OperatorTarget {
     }
 }
 
-impl TryFrom<OperatorsReader<'_>> for Expr {
+impl<'a> TryFrom<OperatorsReader<'a>> for Expr {
     type Error = String;
 
     fn try_from(value: OperatorsReader) -> Result<Self, Self::Error> {
@@ -1850,7 +1852,7 @@ impl<'a> OperatorsReaderExprSource<'a> {
     }
 }
 
-impl ExprSource for OperatorsReaderExprSource<'_> {
+impl<'a> ExprSource for OperatorsReaderExprSource<'a> {
     fn unparsed(self) -> Result<Vec<u8>, String> {
         let binary_reader: BinaryReader = self.reader.get_binary_reader();
         let range = binary_reader.range();
@@ -1861,7 +1863,7 @@ impl ExprSource for OperatorsReaderExprSource<'_> {
     }
 }
 
-impl IntoIterator for OperatorsReaderExprSource<'_> {
+impl<'a> IntoIterator for OperatorsReaderExprSource<'a> {
     type Item = Result<Instr, String>;
     type IntoIter = Box<dyn Iterator<Item = Result<Instr, String>>>;
 
