@@ -20,7 +20,7 @@ use crate::command::{CliCommand, SharedCommand, StaticSharedCommand};
 use crate::completion;
 use crate::config::{OssProfile, ProfileName};
 use crate::factory::ServiceFactory;
-use crate::init::{init_profile, CliKind, ProfileAuth};
+use crate::init::{init_profile, CliKind, DummyProfileAuth};
 use crate::model::Format;
 use crate::model::{ComponentUriArg, GolemError, GolemResult, OssPluginScopeArgs};
 use crate::oss::factory::OssServiceFactory;
@@ -48,7 +48,6 @@ pub async fn run_with_profile<
     command: Command,
     parsed: GolemOssCli<ProfileAdd, ExtraCommands>,
     cli_kind: CliKind,
-    profile_auth: Box<dyn ProfileAuth + Send + Sync>,
 ) -> Result<GolemResult, GolemError> {
     let factory = OssServiceFactory::from_profile(&profile)?;
 
@@ -59,7 +58,6 @@ pub async fn run_with_profile<
         factory,
         config_dir,
         command,
-        profile_auth,
         cli_kind,
     };
 
@@ -74,12 +72,10 @@ pub async fn run_without_profile<
     command: Command,
     parsed: GolemOssCli<ProfileAdd, ExtraCommands>,
     cli_kind: CliKind,
-    profile_auth: Box<dyn ProfileAuth + Send + Sync>,
 ) -> Result<GolemResult, GolemError> {
     let ctx = NoProfileCommandContext {
         config_dir,
         command,
-        profile_auth,
         cli_kind,
     };
 
@@ -138,7 +134,6 @@ pub struct OssCommandContext {
     pub factory: OssServiceFactory,
     pub config_dir: PathBuf,
     pub command: Command,
-    pub profile_auth: Box<dyn ProfileAuth + Send + Sync>,
     pub cli_kind: CliKind,
 }
 
@@ -214,7 +209,7 @@ impl<ProfileAdd: clap::Args + Into<UniversalProfileAdd>> CliCommand<OssCommandCo
             }
             SharedCommand::Profile { subcommand } => {
                 subcommand
-                    .handle(ctx.cli_kind, &ctx.config_dir, ctx.profile_auth.as_ref())
+                    .handle(ctx.cli_kind, &ctx.config_dir, &DummyProfileAuth)
                     .await
             }
             SharedCommand::Init {} => {
@@ -224,7 +219,7 @@ impl<ProfileAdd: clap::Args + Into<UniversalProfileAdd>> CliCommand<OssCommandCo
                     ctx.cli_kind,
                     profile_name,
                     &ctx.config_dir,
-                    ctx.profile_auth.as_ref(),
+                    &DummyProfileAuth,
                 )
                 .await?;
 

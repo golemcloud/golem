@@ -25,7 +25,7 @@ use crate::completion;
 use crate::config::ProfileName;
 use crate::diagnose::{self, diagnose};
 use crate::examples;
-use crate::init::{init_profile, CliKind, ProfileAuth};
+use crate::init::{init_profile, CliKind, DummyProfileAuth};
 use crate::model::{ComponentUriArg, GolemError, GolemResult};
 use crate::oss::model::OssContext;
 use crate::stubgen::handle_stubgen;
@@ -220,7 +220,6 @@ pub enum SharedCommand<
 pub struct NoProfileCommandContext {
     pub config_dir: PathBuf,
     pub command: Command,
-    pub profile_auth: Box<dyn ProfileAuth + Send + Sync>,
     pub cli_kind: CliKind,
 }
 
@@ -251,7 +250,7 @@ impl<
                     ctx.cli_kind,
                     profile_name,
                     &ctx.config_dir,
-                    ctx.profile_auth.as_ref(),
+                    &DummyProfileAuth,
                 )
                 .await?;
 
@@ -259,7 +258,7 @@ impl<
             }
             SharedCommand::Profile { subcommand } => {
                 subcommand
-                    .handle(ctx.cli_kind, &ctx.config_dir, ctx.profile_auth.as_ref())
+                    .handle(ctx.cli_kind, &ctx.config_dir, &DummyProfileAuth)
                     .await
             }
             SharedCommand::Completion { generator } => {

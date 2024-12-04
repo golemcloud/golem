@@ -23,7 +23,6 @@ use command::{CliCommand, NoProfileCommandContext};
 use config::{get_config_dir, Config};
 use golem_common::golem_version;
 use indoc::eprintdoc;
-use init::DummyProfileAuth;
 use lenient_bool::LenientBool;
 use log::Level;
 use oss::cli::{GolemOssCli, OssCommandContext};
@@ -164,25 +163,14 @@ where
         .expect("Failed to build tokio runtime for cli main");
 
     let cli_kind = CliKind::Oss;
-    let profile_auth = Box::new(DummyProfileAuth);
 
     let result = if let Some((_, profile)) = oss_profile {
         runtime.block_on(oss::cli::run_with_profile(
-            format,
-            config_dir,
-            profile,
-            command,
-            parsed,
-            cli_kind,
-            profile_auth,
+            format, config_dir, profile, command, parsed, cli_kind,
         ))
     } else {
         runtime.block_on(oss::cli::run_without_profile(
-            config_dir,
-            command,
-            parsed,
-            cli_kind,
-            profile_auth,
+            config_dir, command, parsed, cli_kind,
         ))
     };
 
