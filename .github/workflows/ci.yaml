@@ -56,6 +56,9 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - run: cargo install cross
+        if: ${{ matrix.cross }}
+
       - name: Build executables
         run: cargo make --profile ci build-release
         env:
@@ -505,7 +508,7 @@ jobs:
           - rust-target: x86_64-pc-windows-gnu
             os: windows-latest
     name: Publish binaries of ${{ matrix.project }}
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.cfg.os }}
     permissions:
       contents: write
     steps:
@@ -537,16 +540,16 @@ jobs:
       - run: cross build -p ${{ matrix.project }} --release --target ${{ matrix.cfg.rust-target }}
         if: ${{ matrix.cfg.cross }}
       - run: mv ./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}.exe ./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}.exe
-        if: matrix.os == 'windows-latest'
+        if: matrix.cfg.os == 'windows-latest'
       - run: mv ./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }} ./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}
-        if: matrix.os != 'windows-latest'
+        if: matrix.cfg.os != 'windows-latest'
       - name: Login GH CLI
         shell: bash
         run: gh auth login --with-token < <(echo ${{ secrets.GITHUB_TOKEN }})
       - run: gh release upload -R golemcloud/golem --clobber ${{ github.ref_name }} target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}.exe
-        if: matrix.os == 'windows-latest'
+        if: matrix.cfg.os == 'windows-latest'
       - run: gh release upload -R golemcloud/golem --clobber ${{ github.ref_name }} target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}
-        if: matrix.os != 'windows-latest'
+        if: matrix.cfg.os != 'windows-latest'
 
   publish-slack-notification:
     if: ${{ always() && startsWith(github.ref, 'refs/tags/v') }}
