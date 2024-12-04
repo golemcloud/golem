@@ -57,7 +57,7 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - run: cargo install cross
-        if: ${{ matrix.cross }}
+        if: ${{ matrix.platform.cross }}
 
       - name: Build executables
         run: cargo make --profile ci build-release
