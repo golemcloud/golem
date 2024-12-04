@@ -26,7 +26,7 @@ pub mod fmt {
 
     pub trait TableWrapper: Sized {
         type Table: TextFormat;
-        fn from_vec(vec: &Vec<Self>) -> Self::Table;
+        fn from_vec(vec: &[Self]) -> Self::Table;
     }
 
     impl<T: TableWrapper> TextFormat for Vec<T> {
@@ -1397,8 +1397,8 @@ pub mod plugin {
     impl TableWrapper for PluginDefinitionDefaultPluginOwnerDefaultPluginScope {
         type Table = PluginDefinitionTable;
 
-        fn from_vec(vec: &Vec<Self>) -> Self::Table {
-            PluginDefinitionTable(vec.clone())
+        fn from_vec(vec: &[Self]) -> Self::Table {
+            PluginDefinitionTable(vec.to_vec())
         }
     }
 
