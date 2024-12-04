@@ -13,7 +13,7 @@
 // limitations under the License.
 
 pub mod cli;
-mod clients;
+pub mod clients;
 pub mod factory;
 pub mod model;
 mod resource;
