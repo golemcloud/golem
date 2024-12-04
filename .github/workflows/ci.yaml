@@ -32,6 +32,7 @@ jobs:
           - platform: linux/arm64
             name: linux/arm64
             target: aarch64-unknown-linux-gnu
+            cross: true
     name: docker-targets-build (${{ matrix.platform.platform }})
     steps:
       - name: Checkout
@@ -54,22 +55,17 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Install gcc-aarch64-linux-gnu
-        if: matrix.platform.platform == 'linux/arm64'
-        run: |
-          sudo apt-get install gcc-aarch64-linux-gnu
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: release-gcc-aarch64-linux-gnu
-          cache-all-crates: true
-      - name: Build Executables
+
+      - name: Build executables
+        run: cargo make --profile ci build-release
         env:
           PLATFORM_OVERRIDE: ${{ matrix.platform.name }}
-        run: cargo make --profile ci build-release
+
       - name: Prepare Targets
         env:
           PLATFORM_OVERRIDE: ${{ matrix.platform.name }}
         run: cargo make --profile ci package-release
+
       - uses: actions/upload-artifact@v4
         name: Upload Targets
         with:
@@ -490,8 +486,6 @@ jobs:
 
   publish_cli_binaries:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'golemcloud/golem'
-    name: Publish binaries of golem-cli
-    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -510,6 +504,8 @@ jobs:
             os: macos-latest
           - rust-target: x86_64-pc-windows-gnu
             os: windows-latest
+    name: Publish binaries of ${{ matrix.project }}
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: write
     steps:

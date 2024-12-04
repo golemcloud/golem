@@ -107,25 +107,9 @@ args = ["build", "--release", "--target", "x86_64-unknown-linux-gnu"]
 [tasks.build-release-override-linux-arm64]
 description = "Build the project in release mode with target platform override to linux/arm64"
 condition = { env = { "PLATFORM_OVERRIDE" = "linux/arm64" } }
-command = "cargo"
-args = [
-    "build",
-    "-p",
-    "golem-shard-manager", # NOTE: Not all projects are cross-compilable because of an openssl dependency
-    "-p",
-    "golem-worker-executor",
-    "-p",
-    "golem-component-service",
-    "-p",
-    "golem-worker-service",
-    "-p",
-    "golem-component-compilation-service",
-    "--release",
-    "--target",
-    "aarch64-unknown-linux-gnu",
-    "--config",
-    "target.aarch64-unknown-linux-gnu.linker = 'aarch64-linux-gnu-gcc'",
-]
+install_crate = "cross"
+command = "cross"
+args = ["build", "--release", "--target", "aarch64-unknown-linux-gnu"]
 
 ## ** CHECK **
 
