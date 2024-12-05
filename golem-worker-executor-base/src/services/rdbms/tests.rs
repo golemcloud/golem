@@ -191,7 +191,7 @@ async fn postgres_execute_test_create_insert_select(
     )
     .await;
 
-    let count = 3;
+    let count = 2;
 
     let mut rows: Vec<DbRow<postgres_types::DbValue>> = Vec::with_capacity(count);
 
@@ -223,113 +223,123 @@ async fn postgres_execute_test_create_insert_select(
             )),
         );
 
-        let params: Vec<postgres_types::DbValue> = vec![
-            postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Varchar(format!(
-                "{:03}",
-                i
-            ))),
-            postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::CustomEnum(
-                "regular".to_string(),
-            )),
-            postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Character(2)),
-            postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Int2(1)),
-            postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Int4(2)),
-            postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Int8(3)),
-            postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Float4(4.0)),
-            postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Float8(5.0)),
-            postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Numeric(
-                BigDecimal::from(48888),
-            )),
-            postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Boolean(true)),
-            postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Text(
-                "text".to_string(),
-            )),
-            postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Varchar(
-                "varchar".to_string(),
-            )),
-            postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Bpchar(
-                "0123456789".to_string(),
-            )),
-            postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Timestamp(
-                chrono::NaiveDateTime::new(
-                    chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
-                    chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-                ),
-            )),
-            postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Timestamptz(
-                chrono::DateTime::from_naive_utc_and_offset(
+        let mut params: Vec<postgres_types::DbValue> = vec![postgres_types::DbValue::Primitive(
+            postgres_types::DbValuePrimitive::Varchar(format!("{:03}", i)),
+        )];
+
+        if i % 2 == 0 {
+            params.append(&mut vec![
+                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::CustomEnum(
+                    "regular".to_string(),
+                )),
+                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Character(2)),
+                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Int2(1)),
+                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Int4(2)),
+                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Int8(3)),
+                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Float4(4.0)),
+                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Float8(5.0)),
+                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Numeric(
+                    BigDecimal::from(48888),
+                )),
+                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Boolean(true)),
+                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Text(
+                    "text".to_string(),
+                )),
+                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Varchar(
+                    "varchar".to_string(),
+                )),
+                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Bpchar(
+                    "0123456789".to_string(),
+                )),
+                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Timestamp(
                     chrono::NaiveDateTime::new(
-                        chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+                        chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
                         chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
                     ),
-                    chrono::Utc,
-                ),
-            )),
-            postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Date(
-                chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
-            )),
-            postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Time(
-                chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-            )),
-            postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Timetz((
-                chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-                chrono::Utc.fix(),
-            ))),
-            postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Interval((
-                10, 20, 30,
-            ))),
-            postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Bytea(
-                "bytea".as_bytes().to_vec(),
-            )),
-            postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Uuid(
-                Uuid::new_v4(),
-            )),
-            postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Json(json!(
-                   {
-                      "id": i
-                   }
-            ))),
-            postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Jsonb(json!(
-                   {
-                      "index": i
-                   }
-            ))),
-            postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Inet(IpAddr::V4(
-                Ipv4Addr::new(127, 0, 0, 1),
-            ))),
-            postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Cidr(IpAddr::V4(
-                Ipv4Addr::new(198, 168, 0, 1),
-            ))),
-            postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Macaddr(
-                MacAddress::new([0, 1, 2, 3, 4, 5]),
-            )),
-            postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Bit(
-                BitVec::from_iter(vec![true, false, true]),
-            )),
-            postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Varbit(
-                BitVec::from_iter(vec![true, false, false]),
-            )),
-            postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Int4range((
-                Bound::Included(1),
-                Bound::Excluded(4),
-            ))),
-            postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Int8range((
-                Bound::Included(1),
-                Bound::Unbounded,
-            ))),
-            postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Numrange((
-                Bound::Included(BigDecimal::from(11)),
-                Bound::Excluded(BigDecimal::from(221)),
-            ))),
-            postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Tsrange(tsbounds)),
-            postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Tstzrange(
-                tstzbounds,
-            )),
-            // postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Daterange((
-            //     Bound::Excluded(chrono::NaiveDate::from_ymd_opt(2023, 2, 3).unwrap()),
-            //     Bound::Included(chrono::NaiveDate::from_ymd_opt(2024, 2, 4).unwrap()),
-            // ))) // FIXME daterange conversion issue - returning incorrect day value
-        ];
+                )),
+                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Timestamptz(
+                    chrono::DateTime::from_naive_utc_and_offset(
+                        chrono::NaiveDateTime::new(
+                            chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+                            chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+                        ),
+                        chrono::Utc,
+                    ),
+                )),
+                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Date(
+                    chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
+                )),
+                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Time(
+                    chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+                )),
+                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Timetz((
+                    chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+                    chrono::Utc.fix(),
+                ))),
+                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Interval((
+                    10, 20, 30,
+                ))),
+                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Bytea(
+                    "bytea".as_bytes().to_vec(),
+                )),
+                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Uuid(
+                    Uuid::new_v4(),
+                )),
+                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Json(json!(
+                       {
+                          "id": i
+                       }
+                ))),
+                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Jsonb(json!(
+                       {
+                          "index": i
+                       }
+                ))),
+                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Inet(
+                    IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+                )),
+                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Cidr(
+                    IpAddr::V4(Ipv4Addr::new(198, 168, 0, 1)),
+                )),
+                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Macaddr(
+                    MacAddress::new([0, 1, 2, 3, 4, 5]),
+                )),
+                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Bit(
+                    BitVec::from_iter(vec![true, false, true]),
+                )),
+                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Varbit(
+                    BitVec::from_iter(vec![true, false, false]),
+                )),
+                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Int4range((
+                    Bound::Included(1),
+                    Bound::Excluded(4),
+                ))),
+                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Int8range((
+                    Bound::Included(1),
+                    Bound::Unbounded,
+                ))),
+                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Numrange((
+                    Bound::Included(BigDecimal::from(11)),
+                    Bound::Excluded(BigDecimal::from(221)),
+                ))),
+                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Tsrange(
+                    tsbounds,
+                )),
+                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Tstzrange(
+                    tstzbounds,
+                )),
+                // postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Daterange((
+                //     Bound::Excluded(chrono::NaiveDate::from_ymd_opt(2023, 2, 3).unwrap()),
+                //     Bound::Included(chrono::NaiveDate::from_ymd_opt(2024, 2, 4).unwrap()),
+                // ))) // FIXME daterange conversion issue - returning incorrect day value
+            ]);
+        } else {
+            for _ in 0..32 {
+                params.push(postgres_types::DbValue::Primitive(
+                    postgres_types::DbValuePrimitive::Null,
+                ));
+            }
+        }
 
         rdbms_execute_test(
             rdbms.clone(),
@@ -790,7 +800,7 @@ async fn postgres_execute_test_create_insert_select_array(
     )
     .await;
 
-    let count = 3;
+    let count = 2;
 
     let mut rows: Vec<DbRow<postgres_types::DbValue>> = Vec::with_capacity(count);
 
@@ -822,116 +832,130 @@ async fn postgres_execute_test_create_insert_select_array(
             )),
         );
 
-        let params: Vec<postgres_types::DbValue> = vec![
-            postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Varchar(format!(
-                "{:03}",
-                i
-            ))),
-            postgres_types::DbValue::Array(vec![
-                postgres_types::DbValuePrimitive::CustomEnum("second".to_string()),
-                postgres_types::DbValuePrimitive::CustomEnum("third".to_string()),
-            ]),
-            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Character(2)]),
-            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Int2(1)]),
-            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Int4(2)]),
-            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Int8(3)]),
-            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Float4(4.0)]),
-            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Float8(5.0)]),
-            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Numeric(
-                BigDecimal::from(48888),
-            )]),
-            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Boolean(true)]),
-            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Text(
-                "text".to_string(),
-            )]),
-            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Varchar(
-                "varchar".to_string(),
-            )]),
-            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Bpchar(
-                "0123456789".to_string(),
-            )]),
-            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Timestamp(
-                chrono::NaiveDateTime::new(
-                    chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
-                    chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-                ),
-            )]),
-            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Timestamptz(
-                chrono::DateTime::from_naive_utc_and_offset(
+        let mut params: Vec<postgres_types::DbValue> = vec![postgres_types::DbValue::Primitive(
+            postgres_types::DbValuePrimitive::Varchar(format!("{:03}", i)),
+        )];
+
+        if i % 2 == 0 {
+            params.append(&mut vec![
+                postgres_types::DbValue::Array(vec![
+                    postgres_types::DbValuePrimitive::CustomEnum("second".to_string()),
+                    postgres_types::DbValuePrimitive::CustomEnum("third".to_string()),
+                ]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Character(
+                    2,
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Int2(1)]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Int4(2)]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Int8(3)]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Float4(4.0)]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Float8(5.0)]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Numeric(
+                    BigDecimal::from(48888),
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Boolean(
+                    true,
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Text(
+                    "text".to_string(),
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Varchar(
+                    "varchar".to_string(),
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Bpchar(
+                    "0123456789".to_string(),
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Timestamp(
                     chrono::NaiveDateTime::new(
-                        chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+                        chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
                         chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
                     ),
-                    chrono::Utc,
-                ),
-            )]),
-            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Date(
-                chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
-            )]),
-            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Time(
-                chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-            )]),
-            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Timetz((
-                chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-                chrono::Utc.fix(),
-            ))]),
-            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Interval((
-                10, 20, 30,
-            ))]),
-            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Bytea(
-                "bytea".as_bytes().to_vec(),
-            )]),
-            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Uuid(
-                Uuid::new_v4(),
-            )]),
-            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Json(json!(
-                   {
-                      "id": i
-                   }
-            ))]),
-            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Jsonb(json!(
-                   {
-                      "index": i
-                   }
-            ))]),
-            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Inet(
-                IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
-            )]),
-            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Cidr(
-                IpAddr::V4(Ipv4Addr::new(198, 168, 0, 1)),
-            )]),
-            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Macaddr(
-                MacAddress::new([0, 1, 2, 3, 4, 5]),
-            )]),
-            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Bit(
-                BitVec::from_iter(vec![true, false, true]),
-            )]),
-            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Varbit(
-                BitVec::from_iter(vec![true, false, false]),
-            )]),
-            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Int4range((
-                Bound::Included(1),
-                Bound::Excluded(4),
-            ))]),
-            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Int8range((
-                Bound::Included(1),
-                Bound::Unbounded,
-            ))]),
-            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Numrange((
-                Bound::Included(BigDecimal::from(11)),
-                Bound::Excluded(BigDecimal::from(221)),
-            ))]),
-            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Tsrange(
-                tsbounds,
-            )]),
-            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Tstzrange(
-                tstzbounds,
-            )]),
-            // postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Array(vec![(
-            //     Bound::Excluded(chrono::NaiveDate::from_ymd_opt(2023, 2, 3).unwrap()),
-            //     Bound::Included(chrono::NaiveDate::from_ymd_opt(2024, 2, 4).unwrap()),
-            // ))]) // FIXME daterange conversion issue - returning incorrect day value
-        ];
+                )]),
+                postgres_types::DbValue::Array(vec![
+                    postgres_types::DbValuePrimitive::Timestamptz(
+                        chrono::DateTime::from_naive_utc_and_offset(
+                            chrono::NaiveDateTime::new(
+                                chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+                                chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+                            ),
+                            chrono::Utc,
+                        ),
+                    ),
+                ]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Date(
+                    chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Time(
+                    chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Timetz((
+                    chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+                    chrono::Utc.fix(),
+                ))]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Interval((
+                    10, 20, 30,
+                ))]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Bytea(
+                    "bytea".as_bytes().to_vec(),
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Uuid(
+                    Uuid::new_v4(),
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Json(
+                    json!(
+                           {
+                              "id": i
+                           }
+                    ),
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Jsonb(
+                    json!(
+                           {
+                              "index": i
+                           }
+                    ),
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Inet(
+                    IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Cidr(
+                    IpAddr::V4(Ipv4Addr::new(198, 168, 0, 1)),
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Macaddr(
+                    MacAddress::new([0, 1, 2, 3, 4, 5]),
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Bit(
+                    BitVec::from_iter(vec![true, false, true]),
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Varbit(
+                    BitVec::from_iter(vec![true, false, false]),
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Int4range(
+                    (Bound::Included(1), Bound::Excluded(4)),
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Int8range(
+                    (Bound::Included(1), Bound::Unbounded),
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Numrange((
+                    Bound::Included(BigDecimal::from(11)),
+                    Bound::Excluded(BigDecimal::from(221)),
+                ))]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Tsrange(
+                    tsbounds,
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Tstzrange(
+                    tstzbounds,
+                )]),
+                // postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Array(vec![(
+                //     Bound::Excluded(chrono::NaiveDate::from_ymd_opt(2023, 2, 3).unwrap()),
+                //     Bound::Included(chrono::NaiveDate::from_ymd_opt(2024, 2, 4).unwrap()),
+                // ))]) // FIXME daterange conversion issue - returning incorrect day value
+            ]);
+        } else {
+            for _ in 0..32 {
+                params.push(postgres_types::DbValue::Array(vec![]));
+            }
+        }
 
         rdbms_execute_test(
             rdbms.clone(),
@@ -1425,61 +1449,69 @@ async fn mysql_execute_test_create_insert_select(
     )
     .await;
 
-    let count = 3;
+    let count = 2;
 
     let mut rows: Vec<DbRow<mysql_types::DbValue>> = Vec::with_capacity(count);
 
     for i in 0..count {
-        let params: Vec<mysql_types::DbValue> = vec![
-            mysql_types::DbValue::Varchar(format!("{:03}", i)),
-            mysql_types::DbValue::Tinyint(1),
-            mysql_types::DbValue::Smallint(2),
-            mysql_types::DbValue::Mediumint(3),
-            mysql_types::DbValue::Int(4),
-            mysql_types::DbValue::Bigint(5),
-            mysql_types::DbValue::Float(6.0),
-            mysql_types::DbValue::Double(7.0),
-            mysql_types::DbValue::Decimal(BigDecimal::from(80)),
-            mysql_types::DbValue::Date(chrono::NaiveDate::from_ymd_opt(2030, 10, 12).unwrap()),
-            mysql_types::DbValue::Datetime(chrono::DateTime::from_naive_utc_and_offset(
-                chrono::NaiveDateTime::new(
-                    chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
-                    chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-                ),
-                chrono::Utc,
-            )),
-            mysql_types::DbValue::Timestamp(chrono::DateTime::from_naive_utc_and_offset(
-                chrono::NaiveDateTime::new(
-                    chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
-                    chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-                ),
-                chrono::Utc,
-            )),
-            mysql_types::DbValue::Fixchar("0123456789".to_string()),
-            mysql_types::DbValue::Varchar(format!("name-{}", Uuid::new_v4())),
-            mysql_types::DbValue::Tinytext("Tinytext".to_string()),
-            mysql_types::DbValue::Text("text".to_string()),
-            mysql_types::DbValue::Mediumtext("Mediumtext".to_string()),
-            mysql_types::DbValue::Longtext("Longtext".to_string()),
-            mysql_types::DbValue::Binary("Binary".as_bytes().to_vec()),
-            mysql_types::DbValue::Varbinary("Varbinary".as_bytes().to_vec()),
-            mysql_types::DbValue::Tinyblob("Tinyblob".as_bytes().to_vec()),
-            mysql_types::DbValue::Blob("Blob".as_bytes().to_vec()),
-            mysql_types::DbValue::Mediumblob("Mediumblob".as_bytes().to_vec()),
-            mysql_types::DbValue::Longblob("Longblob".as_bytes().to_vec()),
-            mysql_types::DbValue::Enumeration("value2".to_string()),
-            mysql_types::DbValue::Set("value1,value2".to_string()),
-            mysql_types::DbValue::Json(json!(
-                   {
-                      "id": i
-                   }
-            )),
-            mysql_types::DbValue::TinyintUnsigned(10),
-            mysql_types::DbValue::SmallintUnsigned(20),
-            mysql_types::DbValue::MediumintUnsigned(30),
-            mysql_types::DbValue::IntUnsigned(40),
-            mysql_types::DbValue::BigintUnsigned(50),
-        ];
+        let mut params: Vec<mysql_types::DbValue> =
+            vec![mysql_types::DbValue::Varchar(format!("{:03}", i))];
+
+        if i % 2 == 0 {
+            params.append(&mut vec![
+                mysql_types::DbValue::Tinyint(1),
+                mysql_types::DbValue::Smallint(2),
+                mysql_types::DbValue::Mediumint(3),
+                mysql_types::DbValue::Int(4),
+                mysql_types::DbValue::Bigint(5),
+                mysql_types::DbValue::Float(6.0),
+                mysql_types::DbValue::Double(7.0),
+                mysql_types::DbValue::Decimal(BigDecimal::from(80)),
+                mysql_types::DbValue::Date(chrono::NaiveDate::from_ymd_opt(2030, 10, 12).unwrap()),
+                mysql_types::DbValue::Datetime(chrono::DateTime::from_naive_utc_and_offset(
+                    chrono::NaiveDateTime::new(
+                        chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
+                        chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+                    ),
+                    chrono::Utc,
+                )),
+                mysql_types::DbValue::Timestamp(chrono::DateTime::from_naive_utc_and_offset(
+                    chrono::NaiveDateTime::new(
+                        chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
+                        chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+                    ),
+                    chrono::Utc,
+                )),
+                mysql_types::DbValue::Fixchar("0123456789".to_string()),
+                mysql_types::DbValue::Varchar(format!("name-{}", Uuid::new_v4())),
+                mysql_types::DbValue::Tinytext("Tinytext".to_string()),
+                mysql_types::DbValue::Text("text".to_string()),
+                mysql_types::DbValue::Mediumtext("Mediumtext".to_string()),
+                mysql_types::DbValue::Longtext("Longtext".to_string()),
+                mysql_types::DbValue::Binary("Binary".as_bytes().to_vec()),
+                mysql_types::DbValue::Varbinary("Varbinary".as_bytes().to_vec()),
+                mysql_types::DbValue::Tinyblob("Tinyblob".as_bytes().to_vec()),
+                mysql_types::DbValue::Blob("Blob".as_bytes().to_vec()),
+                mysql_types::DbValue::Mediumblob("Mediumblob".as_bytes().to_vec()),
+                mysql_types::DbValue::Longblob("Longblob".as_bytes().to_vec()),
+                mysql_types::DbValue::Enumeration("value2".to_string()),
+                mysql_types::DbValue::Set("value1,value2".to_string()),
+                mysql_types::DbValue::Json(json!(
+                       {
+                          "id": i
+                       }
+                )),
+                mysql_types::DbValue::TinyintUnsigned(10),
+                mysql_types::DbValue::SmallintUnsigned(20),
+                mysql_types::DbValue::MediumintUnsigned(30),
+                mysql_types::DbValue::IntUnsigned(40),
+                mysql_types::DbValue::BigintUnsigned(50),
+            ]);
+        } else {
+            for _ in 0..31 {
+                params.push(mysql_types::DbValue::Null);
+            }
+        };
 
         rdbms_execute_test(
             rdbms.clone(),

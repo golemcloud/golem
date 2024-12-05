@@ -501,22 +501,23 @@ pub(crate) mod sqlx_rdbms {
                         })?;
                         Ok(query.bind(values))
                     }
-                    DbValuePrimitive::Null => {
-                        let values: Vec<Option<String>> = get_plain_values(vs, |v| {
-                            if let DbValuePrimitive::Null = v {
-                                Some(None)
-                            } else {
-                                None
-                            }
-                        })?;
-                        Ok(query.bind(values))
-                    } // _ => Err(format!(
-                      //     "Array param element '{}' with index 0 is not supported",
-                      //     first
-                      // )),
+                    // DbValuePrimitive::Null => {
+                    //     let values: Vec<PgNull> = get_plain_values(vs, |v| {
+                    //         if let DbValuePrimitive::Null = v {
+                    //             Some(PgNull {})
+                    //         } else {
+                    //             None
+                    //         }
+                    //     })?;
+                    //     Ok(query.bind(values))
+                    // }
+                    _ => Err(format!(
+                        "Array param element '{}' with index 0 is not supported",
+                        first
+                    )),
                 }
             }
-            DbValue::Array(vs) if vs.is_empty() => Err("Array cannot be empty".to_string()),
+            DbValue::Array(vs) if vs.is_empty() => Ok(query.bind(PgNull {})),
             _ => Ok(query),
         }
     }
@@ -586,8 +587,7 @@ pub(crate) mod sqlx_rdbms {
             DbValuePrimitive::Daterange(v) => Ok(query.bind(PgRange::from(v))),
             DbValuePrimitive::Oid(v) => Ok(query.bind(Oid(v))),
             DbValuePrimitive::CustomEnum(v) => Ok(query.bind(PgEnum(v))),
-            DbValuePrimitive::Null => Ok(query.bind(None::<String>)),
-            // _ => Err(format!("Type '{}' is not supported", value)),
+            DbValuePrimitive::Null => Ok(query.bind(PgNull {})), // _ => Err(format!("Type '{}' is not supported", value)),
         }
     }
 
@@ -1142,6 +1142,24 @@ pub(crate) mod sqlx_rdbms {
             buf: &mut <sqlx::Postgres as HasArguments<'r>>::ArgumentBuffer,
         ) -> sqlx::encode::IsNull {
             <String as sqlx::Encode<sqlx::Postgres>>::encode_by_ref(&self.0, buf)
+        }
+    }
+
+    struct PgNull;
+
+    impl<'r> sqlx::Encode<'r, sqlx::Postgres> for PgNull {
+        fn encode_by_ref(
+            &self,
+            _buf: &mut <sqlx::Postgres as HasArguments<'r>>::ArgumentBuffer,
+        ) -> sqlx::encode::IsNull {
+            sqlx::encode::IsNull::Yes
+        }
+    }
+
+    impl sqlx::types::Type<sqlx::Postgres> for PgNull {
+        fn type_info() -> sqlx::postgres::PgTypeInfo {
+            // https://github.com/postgres/postgres/blob/master/src/include/catalog/pg_type.dat
+            sqlx::postgres::PgTypeInfo::with_oid(Oid(705)) // unknown type
         }
     }
 
