@@ -595,6 +595,10 @@ impl BlobStorage for S3BlobStorage {
         > {
             let (client, bucket, key, stream) = args;
             Box::pin(async move {
+                let stream_length = stream
+                    .length()
+                    .await
+                    .map_err(SdkErrorOrCustomError::custom_error)?;
                 let stream = stream
                     .make_stream()
                     .await
@@ -606,6 +610,7 @@ impl BlobStorage for S3BlobStorage {
                     .put_object()
                     .bucket(*bucket)
                     .key(key.to_string_lossy())
+                    .content_length(stream_length as i64)
                     .body(byte_stream)
                     .send()
                     .map_err(SdkErrorOrCustomError::sdk_error)
