@@ -26,15 +26,16 @@ use crate::config::ProfileName;
 use crate::diagnose::{self, diagnose};
 use crate::examples;
 use crate::init::{init_profile, CliKind, DummyProfileAuth};
-use crate::model::app_ext::GolemComponentExtensions;
 use crate::model::{ComponentUriArg, GolemError, GolemResult};
 use crate::oss::model::OssContext;
 use crate::stubgen::handle_stubgen;
 use api_definition::ApiDefinitionSubcommand;
 use api_deployment::ApiDeploymentSubcommand;
 use clap::{self, Command, Subcommand};
+use colored::Colorize;
 use component::ComponentSubCommand;
 use golem_common::uri::oss::uri::ComponentUri;
+use golem_wasm_rpc_stubgen::App;
 use plugin::PluginSubcommand;
 use profile::{ProfileSubCommand, UniversalProfileAdd};
 use std::future::Future;
@@ -101,20 +102,13 @@ pub fn command_and_parsed<T: clap::Parser>() -> (clap::Command, T) {
 /// Commands that are supported by both the OSS and Cloud version and have the same implementation
 #[derive(Debug, Subcommand)]
 pub enum StaticSharedCommand {
-    /// Build components defined in application manifests
-    #[cfg(feature = "stubgen")]
-    App {
-        #[command(subcommand)]
-        subcommand: golem_wasm_rpc_stubgen::App,
-    },
-
     /// Diagnose required tooling
     #[command()]
     Diagnose {
         #[command(flatten)]
         command: diagnose::cli::Command,
     },
-    /// WASM RPC stub generator
+    /// [DEPRECATED, use the app command] WASM RPC stub generator
     #[cfg(feature = "stubgen")]
     Stubgen {
         #[command(subcommand)]
@@ -127,14 +121,19 @@ pub enum StaticSharedCommand {
 
 impl<Ctx> CliCommand<Ctx> for StaticSharedCommand {
     async fn run(self, _ctx: Ctx) -> Result<GolemResult, GolemError> {
+        eprintln!(
+            "{}",
+            "WARNING: THIS COMMAND IS DEPRECATED AND MIGHT MODIFY SOURCE WIT FILES!".yellow()
+        );
+        eprintln!(
+            "{}",
+            format!(
+                "\nThe recommended new way to handle wasm-rpc stub generation and linking is the {} command.\n",
+                "golem-cli app".bold().underline(),
+            ).yellow(),
+        );
+
         match self {
-            #[cfg(feature = "stubgen")]
-            StaticSharedCommand::App { subcommand } => {
-                golem_wasm_rpc_stubgen::run_app_command::<GolemComponentExtensions>(subcommand)
-                    .await
-                    .map(|_| GolemResult::Str("".to_string()))
-                    .map_err(Into::into)
-            }
             StaticSharedCommand::Diagnose { command } => {
                 diagnose(command);
                 Ok(GolemResult::Str("".to_string()))
@@ -168,6 +167,13 @@ pub enum SharedCommand<
     PluginScopeRef: clap::Args,
     ProfileAdd: clap::Args,
 > {
+    /// Build components with application manifests
+    #[cfg(feature = "stubgen")]
+    #[group(skip)]
+    App {
+        #[clap(flatten)]
+        command: App,
+    },
     /// Upload and manage Golem components
     #[command()]
     Component {

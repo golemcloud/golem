@@ -29,7 +29,7 @@ use golem_wasm_rpc_stubgen::commands::app::{ApplicationContext, ApplicationSourc
 use golem_wasm_rpc_stubgen::log::Output;
 use golem_wasm_rpc_stubgen::model::app;
 use itertools::Itertools;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -81,6 +81,10 @@ pub enum ComponentSubCommand<ProjectRef: clap::Args, ComponentRef: clap::Args> {
         )]
         app: Vec<PathBuf>,
 
+        /// Select build profile, only effective when application manifest is used
+        #[arg(long, short)]
+        build_profile: Option<String>,
+
         /// Do not ask for confirmation for performing an update in case the component already exists
         #[arg(short = 'y', long)]
         non_interactive: bool,
@@ -117,6 +121,10 @@ pub enum ComponentSubCommand<ProjectRef: clap::Args, ComponentRef: clap::Args> {
         /// Conflicts with `durable` flag.
         #[arg(long, short)]
         app: Vec<PathBuf>,
+
+        /// Select build profile, only effective when application manifest is used
+        #[arg(long, short)]
+        build_profile: Option<String>,
 
         /// Try to automatically update all existing workers to the new version
         #[arg(long, default_value_t = false)]
@@ -286,6 +294,7 @@ impl<
                 component_file: Some(component_file),
                 component_type,
                 app: _,
+                build_profile: _,
                 non_interactive,
             } => {
                 let project_id = projects.resolve_id_or_default(project_ref).await?;
@@ -310,14 +319,14 @@ impl<
                 component_file: None,
                 component_type: _,
                 app,
+                build_profile,
                 non_interactive,
             } => {
                 let project_id = projects.resolve_id_or_default(project_ref).await?;
 
-                // TODO: add build profile as flag
                 let ctx = ApplicationComponentContext::new(
                     app,
-                    Option::<app::ProfileName>::None,
+                    build_profile.map(|profile| profile.into()),
                     &component_name.0,
                 )?;
 
@@ -341,6 +350,7 @@ impl<
                 component_file: Some(component_file),
                 component_type,
                 app: _,
+                build_profile: _,
                 try_update_workers,
                 update_mode,
                 non_interactive,
@@ -373,6 +383,7 @@ impl<
                 component_file: None,
                 component_type: _,
                 app,
+                build_profile,
                 try_update_workers,
                 update_mode,
             } => {
@@ -384,10 +395,9 @@ impl<
 
                 let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
 
-                // TODO: add build profile as flag
                 let ctx = ApplicationComponentContext::new(
                     app,
-                    Option::<app::ProfileName>::None,
+                    build_profile.map(|profile| profile.into()),
                     &component_name,
                 )?;
 
@@ -509,6 +519,7 @@ fn app_ctx(
         offline: false,
         extensions: PhantomData::<GolemComponentExtensions>,
         log_output: Output::None,
+        steps_filter: HashSet::new(),
     })?)
 }
 
