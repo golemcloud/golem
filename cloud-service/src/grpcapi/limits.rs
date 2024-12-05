@@ -339,13 +339,13 @@ impl CloudLimitsService for LimitsGrpcApi {
 
 pub struct LimitsTraceErrorKind<'a>(pub &'a LimitsError);
 
-impl<'a> Debug for LimitsTraceErrorKind<'a> {
+impl Debug for LimitsTraceErrorKind<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)
     }
 }
 
-impl<'a> TraceErrorKind for LimitsTraceErrorKind<'a> {
+impl TraceErrorKind for LimitsTraceErrorKind<'_> {
     fn trace_error_kind(&self) -> &'static str {
         match &self.0.error {
             None => "None",

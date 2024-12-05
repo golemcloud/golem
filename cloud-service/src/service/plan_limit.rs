@@ -96,39 +96,39 @@ impl CheckLimitResult {
 
 #[async_trait]
 pub trait PlanLimitService {
-    /// Get Limits.
-
+    /// Get Account Limits.
     async fn get_account_limits(
         &self,
         account_id: &AccountId,
     ) -> Result<LimitResult, PlanLimitError>;
 
+    /// Get Project Limits.
     async fn get_project_limits(
         &self,
         project_id: &ProjectId,
     ) -> Result<LimitResult, PlanLimitError>;
 
     /// Check Limits.
-
     async fn check_project_limit(
         &self,
         account_id: &AccountId,
     ) -> Result<CheckLimitResult, PlanLimitError>;
 
-    /// Fuel consumption.
-
+    /// Get memory and CPU limits
     async fn get_resource_limits(
         &self,
         account_id: &AccountId,
         auth: &AccountAuthorisation,
     ) -> Result<ResourceLimits, PlanLimitError>;
 
+    /// Record fuel consumption - internal API for executors
     async fn record_fuel_consumption(
         &self,
         updates: HashMap<AccountId, i64>,
         auth: &AccountAuthorisation,
     ) -> Result<(), PlanLimitError>;
 
+    /// Update component limit.
     async fn update_component_limit(
         &self,
         account_id: &AccountId,
@@ -137,6 +137,7 @@ pub trait PlanLimitService {
         auth: &AccountAuthorisation,
     ) -> Result<(), PlanLimitError>;
 
+    /// Update worker limit.
     async fn update_worker_limit(
         &self,
         account_id: &AccountId,
@@ -144,6 +145,7 @@ pub trait PlanLimitService {
         auth: &AccountAuthorisation,
     ) -> Result<(), PlanLimitError>;
 
+    /// Update worker connection limit.
     async fn update_worker_connection_limit(
         &self,
         account_id: &AccountId,

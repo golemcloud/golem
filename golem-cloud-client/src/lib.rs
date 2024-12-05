@@ -32,3 +32,9 @@ impl Display for CloudPluginScope {
         }
     }
 }
+
+impl Default for CloudPluginScope {
+    fn default() -> Self {
+        CloudPluginScope::Global(Empty {})
+    }
+}

@@ -15,6 +15,7 @@ use golem_component_service_base::model::{
     InitialComponentFilesArchiveAndPermissions, UpdatePayload,
 };
 use golem_service_base::model::{ComponentName, ErrorBody, ErrorsBody, VersionedComponentId};
+use golem_service_base::poem::TempFileUpload;
 use poem::Body;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::{Binary, Json};
@@ -30,7 +31,7 @@ pub struct UploadPayload {
     component: Upload,
     component_type: Option<ComponentType>,
     files_permissions: Option<ComponentFilePathWithPermissionsList>,
-    files: Option<Upload>,
+    files: Option<TempFileUpload>,
 }
 
 pub struct ComponentApi {

@@ -2,16 +2,18 @@ use crate::service::api_certificate::CertificateServiceError;
 use crate::service::api_definition::ApiDefinitionError;
 use crate::service::api_domain::ApiDomainServiceError;
 use crate::service::api_domain::RegisterDomainRouteError;
+use crate::service::api_security::SecuritySchemeServiceError;
 use cloud_api_grpc::proto::golem::cloud::project::v1::project_error::Error;
 use cloud_common::auth::CloudNamespace;
 use cloud_common::clients::auth::AuthServiceError;
 use cloud_common::clients::project::ProjectError;
 use golem_common::metrics::api::TraceErrorKind;
-use golem_common::SafeDisplay;
+use golem_common::{safe, SafeDisplay};
 use golem_service_base::model::ErrorBody;
+use golem_worker_service_base::gateway_security::IdentityProviderError;
 use golem_worker_service_base::service::gateway::api_definition::ApiDefinitionError as BaseApiDefinitionError;
 use golem_worker_service_base::service::gateway::api_deployment::ApiDeploymentError;
-use golem_worker_service_base::service::gateway::http_api_definition_validator::RouteValidationError;
+use golem_worker_service_base::service::gateway::security_scheme::SecuritySchemeServiceError as BaseSecuritySchemeServiceError;
 use poem_openapi::payload::Json;
 use poem_openapi::{ApiResponse, Object, Tags, Union};
 
@@ -39,7 +41,7 @@ pub struct MessagesErrorsBody {
 
 #[derive(Object, Debug, Clone)]
 pub struct ValidationErrorsBody {
-    errors: Vec<RouteValidationError>,
+    errors: Vec<String>,
 }
 
 #[derive(Object, Debug, Clone)]
@@ -124,20 +126,54 @@ impl From<ApiDeploymentError<CloudNamespace>> for ApiEndpointError {
     }
 }
 
-impl From<BaseApiDefinitionError<RouteValidationError>> for ApiEndpointError {
-    fn from(value: BaseApiDefinitionError<RouteValidationError>) -> Self {
+impl From<BaseSecuritySchemeServiceError> for ApiEndpointError {
+    fn from(value: BaseSecuritySchemeServiceError) -> Self {
+        match value {
+            BaseSecuritySchemeServiceError::IdentityProviderError(identity_provider_error) => {
+                ApiEndpointError::from(identity_provider_error)
+            }
+            BaseSecuritySchemeServiceError::InternalError(_) => ApiEndpointError::internal(value),
+            BaseSecuritySchemeServiceError::NotFound(_) => ApiEndpointError::not_found(value),
+        }
+    }
+}
+
+impl From<SecuritySchemeServiceError> for ApiEndpointError {
+    fn from(value: SecuritySchemeServiceError) -> Self {
+        match value {
+            SecuritySchemeServiceError::Auth(error) => ApiEndpointError::from(error),
+            SecuritySchemeServiceError::Base(error) => ApiEndpointError::from(error),
+        }
+    }
+}
+
+impl From<IdentityProviderError> for ApiEndpointError {
+    fn from(value: IdentityProviderError) -> Self {
+        match value {
+            IdentityProviderError::ClientInitError(error) => {
+                ApiEndpointError::internal(safe(error))
+            }
+            IdentityProviderError::InvalidIssuerUrl(error) => {
+                ApiEndpointError::bad_request(safe(error))
+            }
+            IdentityProviderError::FailedToDiscoverProviderMetadata(error) => {
+                ApiEndpointError::bad_request(safe(error))
+            }
+            IdentityProviderError::FailedToExchangeCodeForTokens(error) => {
+                ApiEndpointError::unauthorized(safe(error))
+            }
+            IdentityProviderError::IdTokenVerificationError(error) => {
+                ApiEndpointError::unauthorized(safe(error))
+            }
+        }
+    }
+}
+
+impl From<BaseApiDefinitionError> for ApiEndpointError {
+    fn from(value: BaseApiDefinitionError) -> Self {
         match value {
             BaseApiDefinitionError::ValidationError(error) => {
-                let errors = error
-                    .errors
-                    .into_iter()
-                    .map(|e| RouteValidationError {
-                        method: e.method,
-                        path: e.path,
-                        component: e.component,
-                        detail: e.detail,
-                    })
-                    .collect::<Vec<_>>();
+                let errors = error.errors.into_iter().collect::<Vec<_>>();
 
                 let error = ValidationErrorsBody { errors };
 
@@ -159,6 +195,8 @@ impl From<BaseApiDefinitionError<RouteValidationError>> for ApiEndpointError {
             BaseApiDefinitionError::RibCompilationErrors(_) => ApiEndpointError::bad_request(value),
             BaseApiDefinitionError::InternalRepoError(_) => ApiEndpointError::internal(value),
             BaseApiDefinitionError::Internal(_) => ApiEndpointError::internal(value),
+            BaseApiDefinitionError::SecuritySchemeError(error) => ApiEndpointError::from(error),
+            BaseApiDefinitionError::IdentityProviderError(error) => ApiEndpointError::from(error),
         }
     }
 }

@@ -55,20 +55,21 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "ComponentFilePathWithPermissionsList",
                 "golem_common::model::ComponentFilePathWithPermissionsList",
             ),
-            (
-                "CloudComponentOwner",
-                "cloud_common::model::CloudComponentOwner",
-            ),
+            // (
+            //     "CloudComponentOwner",
+            //     "cloud_common::model::CloudComponentOwner",
+            // ),
             ("CloudPluginScope", "crate::CloudPluginScope"),
-            ("CloudPluginOwner", "cloud_common::model::CloudPluginOwner"),
+            // ("CloudPluginOwner", "cloud_common::model::CloudPluginOwner"),
             (
                 "GatewayBindingWithTypeInfo",
                 "golem_client::model::GatewayBindingWithTypeInfo",
             ),
             (
-                "HttpApiDefinitionWithTypeInfo",
-                "golem_client::model::HttpApiDefinitionWithTypeInfo",
+                "HttpApiDefinitionResponseData",
+                "golem_client::model::HttpApiDefinitionResponseData",
             ),
+            ("Provider", "golem_client::model::Provider"),
             (
                 "InitialComponentFile",
                 "golem_common::model::InitialComponentFile",
@@ -87,14 +88,18 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "PluginInstallationCreation",
                 "golem_client::model::PluginInstallationCreation",
             ),
-            ("ProjectAction", "cloud_common::model::ProjectAction"),
+            (
+                "PluginTypeSpecificDefinition",
+                "golem_client::model::PluginTypeSpecificDefinition",
+            ),
+            //("ProjectAction", "cloud_common::model::ProjectAction"),
             ("PromiseId", "golem_common::model::PromiseId"),
             ("RibInputTypeInfo", "golem_client::model::RibInputTypeInfo"),
             (
                 "RouteWithTypeInfo",
                 "golem_client::model::RouteWithTypeInfo",
             ),
-            ("Role", "cloud_common::model::Role"),
+            // ("Role", "cloud_common::model::Role"),
             ("ShardId", "golem_common::model::ShardId"),
             (
                 "TypeAnnotatedValue",

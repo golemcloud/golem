@@ -92,6 +92,22 @@ max_operations_before_commit = 128
 max_operations_before_commit_ephemeral = 512
 max_payload_size = 65536
 
+[plugin_service]
+type = "Grpc"
+
+[plugin_service.config]
+access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
+host = "localhost"
+plugin_cache_size = 1024
+port = 9090
+
+[plugin_service.config.retries]
+max_attempts = 3
+max_delay = "1s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 3.0
+
 [public_worker_api]
 access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
 host = "localhost"
@@ -263,6 +279,22 @@ without_time = false
 # max_operations_before_commit_ephemeral = 512
 # max_payload_size = 65536
 # 
+# [plugin_service]
+# type = "Grpc"
+# 
+# [plugin_service.config]
+# access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
+# host = "localhost"
+# plugin_cache_size = 1024
+# port = 9090
+# 
+# [plugin_service.config.retries]
+# max_attempts = 3
+# max_delay = "1s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 3.0
+# 
 # [public_worker_api]
 # access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
 # host = "localhost"
@@ -389,6 +421,22 @@ without_time = false
 # max_operations_before_commit = 128
 # max_operations_before_commit_ephemeral = 512
 # max_payload_size = 65536
+# 
+# [plugin_service]
+# type = "Grpc"
+# 
+# [plugin_service.config]
+# access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
+# host = "localhost"
+# plugin_cache_size = 1024
+# port = 9090
+# 
+# [plugin_service.config.retries]
+# max_attempts = 3
+# max_delay = "1s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 3.0
 # 
 # [public_worker_api]
 # access_token = "2a354594-7a63-4091-a46b-cc58d379f677"

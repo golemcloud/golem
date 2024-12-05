@@ -82,11 +82,16 @@ impl FileServerBindingHandler<CloudNamespace> for CloudFileServerBindingHandler 
                 .ok_or(FileServerBindingError::InternalError(format!(
                     "File not found in file storage: {}",
                     file.key
-                )))?;
+                )))
+                .map(|stream| {
+                    let mapped =
+                        stream.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e));
+                    Box::pin(mapped)
+                })?;
 
             Ok(FileServerBindingSuccess {
                 binding_details,
-                data: Box::pin(futures::stream::once(async move { Ok(data) })),
+                data,
             })
         } else {
             // Read write files need to be fetched from a running worker.

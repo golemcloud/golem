@@ -1,3 +1,4 @@
+use std::path::Path;
 use test_r::test;
 
 use async_trait::async_trait;
@@ -18,6 +19,7 @@ use cloud_worker_service::service::auth::AuthService;
 use golem_common::config::{DbPostgresConfig, DbSqliteConfig};
 use golem_common::model::{AccountId, ComponentId, ProjectId};
 use golem_service_base::db;
+use golem_service_base::migration::{Migrations, MigrationsDir};
 use std::sync::Arc;
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, ImageExt};
@@ -115,7 +117,8 @@ pub async fn test_with_sqlite_db() {
         max_connections: 10,
     };
 
-    db::sqlite_migrate(&db_config, "./db/migration/sqlite")
+    let migrations = MigrationsDir::new(Path::new("./db/migration").to_path_buf());
+    db::sqlite_migrate(&db_config, migrations.sqlite_migrations())
         .await
         .unwrap();
 
@@ -157,7 +160,8 @@ pub async fn test_with_sqlite_db() {
 pub async fn test_with_postgres_db() {
     let (db_config, _container) = start_docker_postgres().await;
 
-    db::postgres_migrate(&db_config, "./db/migration/postgres")
+    let migrations = MigrationsDir::new(Path::new("./db/migration").to_path_buf());
+    db::postgres_migrate(&db_config, migrations.postgres_migrations())
         .await
         .unwrap();
 

@@ -4,7 +4,7 @@ use crate::service::CloudComponentError;
 use cloud_common::auth::CloudAuthCtx;
 use cloud_common::clients::auth::BaseAuthService;
 use cloud_common::model::{CloudPluginOwner, Role};
-use golem_component_service_base::model::{PluginDefinition, PluginDefinitionWithoutOwner};
+use golem_common::model::plugin::{PluginDefinition, PluginDefinitionWithoutOwner};
 use golem_component_service_base::service::plugin::PluginService;
 use std::sync::Arc;
 

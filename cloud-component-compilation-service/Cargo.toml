@@ -3,9 +3,14 @@ name = "cloud-component-compilation-service"
 version = "0.1.0"
 edition = "2021"
 
-[dependencies]
-golem-component-compilation-service = { workspace = true }
-
 [[bin]]
 name = "cloud-component-compilation-service"
 test = false
+
+[dependencies]
+golem-component-compilation-service = { workspace = true }
+golem-common = { workspace = true }
+
+anyhow = { workspace = true }
+prometheus = { workspace = true }
+tokio = { workspace = true }

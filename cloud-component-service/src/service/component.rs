@@ -1,10 +1,10 @@
-use crate::model::CloudComponentOwner;
+use crate::model::{CloudComponentOwner, CloudPluginScope};
 use crate::service::CloudComponentError;
 use cloud_common::auth::CloudAuthCtx;
 use cloud_common::clients::auth::BaseAuthService;
 use cloud_common::clients::limit::LimitService;
 use cloud_common::clients::project::ProjectService;
-use cloud_common::model::ProjectAction;
+use cloud_common::model::{CloudPluginOwner, ProjectAction};
 use futures_util::Stream;
 use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_common::model::plugin::{
@@ -16,7 +16,7 @@ use golem_component_service_base::model::{
     ComponentConstraints, InitialComponentFilesArchiveAndPermissions,
 };
 use golem_component_service_base::service::component::{ComponentError, ComponentService};
-use golem_component_service_base::service::plugin::PluginError;
+use golem_component_service_base::service::plugin::{PluginError, PluginService};
 use golem_service_base::model::*;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -26,6 +26,7 @@ pub struct CloudComponentService {
     auth_service: Arc<dyn BaseAuthService + Sync + Send>,
     limit_service: Arc<dyn LimitService + Sync + Send>,
     project_service: Arc<dyn ProjectService + Sync + Send>,
+    plugin_service: Arc<dyn PluginService<CloudPluginOwner, CloudPluginScope> + Sync + Send>,
 }
 
 impl CloudComponentService {
@@ -34,12 +35,14 @@ impl CloudComponentService {
         auth_service: Arc<dyn BaseAuthService + Sync + Send>,
         limit_service: Arc<dyn LimitService + Sync + Send>,
         project_service: Arc<dyn ProjectService + Sync + Send>,
+        plugin_service: Arc<dyn PluginService<CloudPluginOwner, CloudPluginScope> + Sync + Send>,
     ) -> Self {
         CloudComponentService {
             base_component_service,
             auth_service,
             limit_service,
             project_service,
+            plugin_service,
         }
     }
 
@@ -97,6 +100,7 @@ impl CloudComponentService {
                 component_type,
                 data.clone(),
                 files,
+                vec![],
                 &owner,
             )
             .await?;
@@ -140,6 +144,7 @@ impl CloudComponentService {
                 component_type,
                 data.clone(),
                 files,
+                vec![],
                 &owner,
             )
             .await?;
@@ -368,9 +373,34 @@ impl CloudComponentService {
         let owner = self
             .is_authorized_by_component(auth, component_id, &ProjectAction::UpdateComponent)
             .await?;
-        self.base_component_service
-            .create_plugin_installation_for_component(&owner, component_id, installation)
-            .await
+        let plugin_owner: CloudPluginOwner = owner.clone().into();
+
+        let plugin_definition = self
+            .plugin_service
+            .get(&plugin_owner, &installation.name, &installation.version)
+            .await?;
+
+        if let Some(plugin_definition) = plugin_definition {
+            if plugin_definition
+                .scope
+                .valid_in_component(component_id, &owner.project_id)
+            {
+                self.base_component_service
+                    .create_plugin_installation_for_component(&owner, component_id, installation)
+                    .await
+            } else {
+                Err(PluginError::InvalidScope {
+                    plugin_name: installation.name.clone(),
+                    plugin_version: installation.version.clone(),
+                    details: format!("not available for component {}", component_id.0),
+                })
+            }
+        } else {
+            Err(PluginError::PluginNotFound {
+                plugin_name: installation.name.clone(),
+                plugin_version: installation.version.clone(),
+            })
+        }
     }
 
     pub async fn update_plugin_installation_for_component(

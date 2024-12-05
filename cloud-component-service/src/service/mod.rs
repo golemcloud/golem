@@ -143,6 +143,10 @@ impl Services {
         let initial_component_files_service: Arc<InitialComponentFilesService> =
             Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
 
+        let base_plugin_service: Arc<
+            dyn PluginService<CloudPluginOwner, CloudPluginScope> + Send + Sync,
+        > = Arc::new(PluginServiceDefault::new(plugin_repo.clone()));
+
         let base_component_service: Arc<
             dyn BaseComponentService<CloudComponentOwner> + Send + Sync,
         > = Arc::new(BaseComponentServiceDefault::new(
@@ -150,17 +154,15 @@ impl Services {
             object_store.clone(),
             compilation_service.clone(),
             initial_component_files_service.clone(),
+            base_plugin_service.clone(),
         ));
-
-        let base_plugin_service: Arc<
-            dyn PluginService<CloudPluginOwner, CloudPluginScope> + Send + Sync,
-        > = Arc::new(PluginServiceDefault::new(plugin_repo.clone()));
 
         let component_service: Arc<CloudComponentService> = Arc::new(CloudComponentService::new(
             base_component_service,
             auth_service.clone(),
             limit_service.clone(),
             project_service.clone(),
+            base_plugin_service.clone(),
         ));
 
         let plugin_service: Arc<CloudPluginService> = Arc::new(CloudPluginService::new(

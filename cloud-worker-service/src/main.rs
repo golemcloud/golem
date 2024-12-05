@@ -2,6 +2,8 @@ use anyhow::anyhow;
 use golem_common::config::DbConfig;
 use golem_common::tracing::init_tracing_with_default_env_filter;
 use golem_service_base::db;
+use golem_service_base::migration::{Migrations, MigrationsDir};
+use std::path::Path;
 use tracing::{error, info};
 
 use cloud_worker_service::app::{app, dump_openapi_yaml};
@@ -21,9 +23,10 @@ async fn main() -> anyhow::Result<()> {
             info!("Golem Worker Service starting up...");
         }
 
+        let migrations = MigrationsDir::new(Path::new("./db/migration").to_path_buf());
         match config.base_config.db.clone() {
             DbConfig::Postgres(c) => {
-                db::postgres_migrate(&c, "./db/migration/postgres")
+                db::postgres_migrate(&c, migrations.postgres_migrations())
                     .await
                     .map_err(|e| {
                         error!("DB - init error: {}", &e);
@@ -34,7 +37,7 @@ async fn main() -> anyhow::Result<()> {
                     })?;
             }
             DbConfig::Sqlite(c) => {
-                db::sqlite_migrate(&c, "./db/migration/sqlite")
+                db::sqlite_migrate(&c, migrations.sqlite_migrations())
                     .await
                     .map_err(|e| {
                         error!("DB - init error: {}", e);

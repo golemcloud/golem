@@ -342,13 +342,13 @@ impl CloudGrantService for GrantGrpcApi {
 
 pub struct GrantTraceErrorKind<'a>(pub &'a GrantError);
 
-impl<'a> Debug for GrantTraceErrorKind<'a> {
+impl Debug for GrantTraceErrorKind<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)
     }
 }
 
-impl<'a> TraceErrorKind for GrantTraceErrorKind<'a> {
+impl TraceErrorKind for GrantTraceErrorKind<'_> {
     fn trace_error_kind(&self) -> &'static str {
         match &self.0.error {
             None => "None",

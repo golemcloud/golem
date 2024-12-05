@@ -266,7 +266,7 @@ impl PluginService for PluginGrpcApi {
 
 // NOTE: Can't define a `From` instance because the gRPC type is defined in `cloud-api-grpc` and the model is defined in `golem-component-service-base`
 fn plugin_definition_to_grpc(
-    plugin_definition: golem_component_service_base::model::PluginDefinition<
+    plugin_definition: golem_common::model::plugin::PluginDefinition<
         CloudPluginOwner,
         CloudPluginScope,
     >,
@@ -284,25 +284,20 @@ fn plugin_definition_to_grpc(
 
 fn plugin_definition_wo_owner_from_grpc(
     plugin_definition: PluginDefinition,
-) -> Result<
-    golem_component_service_base::model::PluginDefinitionWithoutOwner<CloudPluginScope>,
-    String,
-> {
-    Ok(
-        golem_component_service_base::model::PluginDefinitionWithoutOwner {
-            name: plugin_definition.name,
-            version: plugin_definition.version,
-            scope: plugin_definition
-                .scope
-                .ok_or("Missing scope field")?
-                .try_into()?,
-            description: plugin_definition.description,
-            icon: plugin_definition.icon,
-            homepage: plugin_definition.homepage,
-            specs: plugin_definition
-                .specs
-                .ok_or("Missing specs field")?
-                .try_into()?,
-        },
-    )
+) -> Result<golem_common::model::plugin::PluginDefinitionWithoutOwner<CloudPluginScope>, String> {
+    Ok(golem_common::model::plugin::PluginDefinitionWithoutOwner {
+        name: plugin_definition.name,
+        version: plugin_definition.version,
+        scope: plugin_definition
+            .scope
+            .ok_or("Missing scope field")?
+            .try_into()?,
+        description: plugin_definition.description,
+        icon: plugin_definition.icon,
+        homepage: plugin_definition.homepage,
+        specs: plugin_definition
+            .specs
+            .ok_or("Missing specs field")?
+            .try_into()?,
+    })
 }

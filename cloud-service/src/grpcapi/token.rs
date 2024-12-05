@@ -285,13 +285,13 @@ impl CloudTokenService for TokenGrpcApi {
 
 pub struct TokenTraceErrorKind<'a>(pub &'a TokenError);
 
-impl<'a> Debug for TokenTraceErrorKind<'a> {
+impl Debug for TokenTraceErrorKind<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)
     }
 }
 
-impl<'a> TraceErrorKind for TokenTraceErrorKind<'a> {
+impl TraceErrorKind for TokenTraceErrorKind<'_> {
     fn trace_error_kind(&self) -> &'static str {
         match &self.0.error {
             None => "None",

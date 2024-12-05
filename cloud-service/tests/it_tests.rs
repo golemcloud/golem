@@ -20,7 +20,9 @@ use golem_common::config::DbConfig;
 use golem_common::model::AccountId;
 use golem_common::model::ProjectId;
 use golem_service_base::db;
+use golem_service_base::migration::{Migrations, MigrationsDir};
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use std::sync::Arc;
 use std::vec;
 use testcontainers::runners::AsyncRunner;
@@ -484,7 +486,8 @@ pub async fn test_postgres_db() {
         _ => panic!("Invalid DB config"),
     };
 
-    db::postgres_migrate(&db_config, "./db/migration/postgres")
+    let migrations = MigrationsDir::new(Path::new("./db/migration").to_path_buf());
+    db::postgres_migrate(&db_config, migrations.postgres_migrations())
         .await
         .unwrap();
 
@@ -557,7 +560,8 @@ pub async fn test_sqlite_db() {
         _ => panic!("Invalid DB config"),
     };
 
-    db::sqlite_migrate(&db_config, "./db/migration/sqlite")
+    let migrations = MigrationsDir::new(Path::new("./db/migration").to_path_buf());
+    db::sqlite_migrate(&db_config, migrations.sqlite_migrations())
         .await
         .unwrap();
 

@@ -11,12 +11,9 @@ use golem_worker_service_base::{
         http::CompiledHttpApiDefinition, http::HttpApiDefinitionRequest, ApiDefinitionId,
         ApiVersion,
     },
-    service::{
-        gateway::api_definition::{
-            ApiDefinitionError as BaseApiDefinitionError,
-            ApiDefinitionService as BaseApiDefinitionService,
-        },
-        gateway::http_api_definition_validator::RouteValidationError,
+    service::gateway::api_definition::{
+        ApiDefinitionError as BaseApiDefinitionError,
+        ApiDefinitionService as BaseApiDefinitionService,
     },
 };
 
@@ -73,7 +70,7 @@ pub enum ApiDefinitionError {
     #[error(transparent)]
     Auth(#[from] AuthServiceError),
     #[error(transparent)]
-    Base(#[from] BaseApiDefinitionError<RouteValidationError>),
+    Base(#[from] BaseApiDefinitionError),
 }
 
 #[derive(Clone)]
@@ -82,9 +79,7 @@ pub struct ApiDefinitionServiceDefault {
     api_definition_service: BaseService,
 }
 
-type BaseService = Arc<
-    dyn BaseApiDefinitionService<CloudAuthCtx, CloudNamespace, RouteValidationError> + Sync + Send,
->;
+type BaseService = Arc<dyn BaseApiDefinitionService<CloudAuthCtx, CloudNamespace> + Sync + Send>;
 
 impl ApiDefinitionServiceDefault {
     pub fn new(
@@ -111,10 +106,9 @@ impl ApiDefinitionService for ApiDefinitionServiceDefault {
             .authorize_project_action(project_id, ProjectAction::CreateApiDefinition, ctx)
             .await?;
 
-        let api_definition_request = definition.clone();
         let api_definition = self
             .api_definition_service
-            .create(&api_definition_request, &namespace.clone(), ctx)
+            .create(definition, &namespace.clone(), ctx)
             .await?;
 
         Ok((api_definition, namespace))

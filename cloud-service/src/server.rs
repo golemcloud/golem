@@ -5,6 +5,7 @@ use cloud_service::{api, grpcapi, metrics};
 use golem_common::config::DbConfig;
 use golem_common::tracing::init_tracing_with_default_env_filter;
 use golem_service_base::db;
+use golem_service_base::migration::{Migrations, MigrationsDir};
 use opentelemetry::global;
 use opentelemetry_sdk::metrics::MeterProviderBuilder;
 use poem::listener::TcpListener;
@@ -12,6 +13,7 @@ use poem::middleware::{CookieJarManager, Cors, OpenTelemetryMetrics, Tracing};
 use poem::EndpointExt;
 use prometheus::Registry;
 use std::net::{Ipv4Addr, SocketAddrV4};
+use std::path::Path;
 use std::sync::Arc;
 use tokio::select;
 use tracing::error;
@@ -67,9 +69,10 @@ async fn async_main(
 
     dbg!("Starting cloud server", http_port, grpc_port);
 
+    let migrations = MigrationsDir::new(Path::new("./db/migration").to_path_buf());
     match config.db.clone() {
         DbConfig::Postgres(c) => {
-            db::postgres_migrate(&c, "./db/migration/postgres")
+            db::postgres_migrate(&c, migrations.postgres_migrations())
                 .await
                 .map_err(|e| {
                     error!("DB - init error: {}", e);
@@ -77,7 +80,7 @@ async fn async_main(
                 })?;
         }
         DbConfig::Sqlite(c) => {
-            db::sqlite_migrate(&c, "./db/migration/sqlite")
+            db::sqlite_migrate(&c, migrations.sqlite_migrations())
                 .await
                 .map_err(|e| {
                     error!("DB - init error: {}", e);

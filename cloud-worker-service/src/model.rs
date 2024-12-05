@@ -1,9 +1,9 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display};
 
 use cloud_common::auth::CloudNamespace;
 use derive_more::FromStr;
-use golem_common::model::{AccountId, ScanCursor, WorkerId};
+use golem_common::model::{AccountId, PluginInstallationId, ScanCursor, WorkerId};
 use golem_common::model::{ComponentVersion, ProjectId, Timestamp, WorkerStatus};
 use golem_service_base::model::{ResourceMetadata, UpdateRecord};
 use golem_worker_service_base::gateway_api_definition::{ApiDefinitionId, ApiVersion};
@@ -30,6 +30,7 @@ pub struct WorkerMetadata {
     pub component_size: u64,
     pub total_linear_memory_size: u64,
     pub owned_resources: HashMap<u64, ResourceMetadata>,
+    pub active_plugins: HashSet<PluginInstallationId>,
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMetadata {
@@ -61,6 +62,11 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMet
                 .into_iter()
                 .map(|(k, v)| v.try_into().map(|v| (k, v)))
                 .collect::<Result<HashMap<_, _>, _>>()?,
+            active_plugins: value
+                .active_plugins
+                .into_iter()
+                .map(|id| id.try_into())
+                .collect::<Result<HashSet<_>, _>>()?,
         })
     }
 }
@@ -85,6 +91,11 @@ impl From<WorkerMetadata> for golem_api_grpc::proto::golem::worker::WorkerMetada
                 .owned_resources
                 .into_iter()
                 .map(|(k, v)| (k, v.into()))
+                .collect(),
+            active_plugins: value
+                .active_plugins
+                .into_iter()
+                .map(|id| id.into())
                 .collect(),
         }
     }

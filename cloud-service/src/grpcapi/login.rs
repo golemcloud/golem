@@ -248,13 +248,13 @@ impl CloudLoginService for LoginGrpcApi {
 
 pub struct LoginTraceErrorKind<'a>(pub &'a LoginError);
 
-impl<'a> Debug for LoginTraceErrorKind<'a> {
+impl Debug for LoginTraceErrorKind<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)
     }
 }
 
-impl<'a> TraceErrorKind for LoginTraceErrorKind<'a> {
+impl TraceErrorKind for LoginTraceErrorKind<'_> {
     fn trace_error_kind(&self) -> &'static str {
         match &self.0.error {
             None => "None",

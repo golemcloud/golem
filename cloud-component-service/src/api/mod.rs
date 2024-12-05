@@ -109,6 +109,12 @@ impl From<PluginError> for ComponentError {
                     error: value.to_safe_string(),
                 }))
             }
+            PluginError::PluginNotFound { .. } => ComponentError::NotFound(Json(ErrorBody {
+                error: value.to_safe_string(),
+            })),
+            PluginError::InvalidScope { .. } => ComponentError::Unauthorized(Json(ErrorBody {
+                error: value.to_safe_string(),
+            })),
         }
     }
 }

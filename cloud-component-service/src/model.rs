@@ -5,12 +5,12 @@ use cloud_common::auth::CloudAuthCtx;
 use cloud_common::model::CloudPluginOwner;
 use golem_common::model::component::ComponentOwner;
 use golem_common::model::component_metadata::ComponentMetadata;
-use golem_common::model::plugin::ComponentPluginScope;
+use golem_common::model::plugin::PluginScope;
+use golem_common::model::plugin::{ComponentPluginScope, PluginInstallation};
 use golem_common::model::{
     AccountId, ComponentId, ComponentType, Empty, HasAccountId, InitialComponentFile, ProjectId,
 };
-use golem_component_service_base::model::PluginScope;
-use golem_component_service_base::service::plugin::PluginError;
+use golem_common::SafeDisplay;
 use golem_service_base::model::{ComponentName, VersionedComponentId};
 use poem_openapi::types::{ParseError, ParseFromParameter, ParseResult};
 use poem_openapi::{Object, Union};
@@ -27,6 +27,14 @@ use std::time::SystemTime;
 pub struct CloudComponentOwner {
     pub project_id: ProjectId,
     pub account_id: AccountId,
+}
+
+impl From<CloudComponentOwner> for CloudPluginOwner {
+    fn from(value: CloudComponentOwner) -> Self {
+        CloudPluginOwner {
+            account_id: value.account_id,
+        }
+    }
 }
 
 impl Display for CloudComponentOwner {
@@ -89,6 +97,14 @@ impl CloudPluginScope {
 
     pub fn project(project_id: ProjectId) -> Self {
         CloudPluginScope::Project(ProjectPluginScope { project_id })
+    }
+
+    pub fn valid_in_component(&self, component_id: &ComponentId, project_id: &ProjectId) -> bool {
+        match self {
+            CloudPluginScope::Global(_) => true,
+            CloudPluginScope::Component(scope) => &scope.component_id == component_id,
+            CloudPluginScope::Project(scope) => &scope.project_id == project_id,
+        }
     }
 }
 
@@ -185,10 +201,7 @@ impl PluginScope for CloudPluginScope {
 
     type RequestContext = (Arc<CloudComponentService>, CloudAuthCtx);
 
-    async fn accessible_scopes(
-        &self,
-        context: Self::RequestContext,
-    ) -> Result<Vec<Self>, PluginError> {
+    async fn accessible_scopes(&self, context: Self::RequestContext) -> Result<Vec<Self>, String> {
         match self {
             CloudPluginScope::Global(_) =>
             // In global scope we only have access to plugins in global scope
@@ -204,7 +217,8 @@ impl PluginScope for CloudPluginScope {
                 let (component_service, auth_ctx) = context;
                 let component = component_service
                     .get_latest_version(&component.component_id, &auth_ctx)
-                    .await?;
+                    .await
+                    .map_err(|err| err.to_safe_string())?;
 
                 let project = component.map(|component| component.project_id);
 
@@ -235,7 +249,7 @@ pub struct ComponentQuery {
     pub component_name: ComponentName,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct Component {
@@ -247,6 +261,7 @@ pub struct Component {
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
     pub component_type: Option<ComponentType>,
     pub files: Vec<InitialComponentFile>,
+    pub installed_plugins: Vec<PluginInstallation>,
 }
 
 impl Component {
@@ -260,6 +275,7 @@ impl Component {
             created_at: component.created_at,
             component_type: component.component_type,
             files: component.files,
+            installed_plugins: component.installed_plugins,
         }
     }
 }
@@ -288,6 +304,12 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
             .map(|f| f.try_into())
             .collect::<Result<Vec<_>, _>>()?;
 
+        let installed_plugins = value
+            .installed_plugins
+            .into_iter()
+            .map(|p| p.try_into())
+            .collect::<Result<Vec<_>, _>>()?;
+
         Ok(Self {
             versioned_component_id: value
                 .versioned_component_id
@@ -300,6 +322,7 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
             created_at,
             component_type,
             files,
+            installed_plugins,
         })
     }
 }
@@ -320,6 +343,11 @@ impl From<Component> for golem_api_grpc::proto::golem::component::Component {
                 c.into()
             }),
             files: value.files.into_iter().map(|f| f.into()).collect(),
+            installed_plugins: value
+                .installed_plugins
+                .into_iter()
+                .map(|p| p.into())
+                .collect(),
         }
     }
 }
@@ -335,6 +363,7 @@ impl From<golem_component_service_base::model::Component<CloudComponentOwner>> f
             created_at: Some(value.created_at),
             component_type: Some(value.component_type),
             files: value.files,
+            installed_plugins: value.installed_plugins,
         }
     }
 }

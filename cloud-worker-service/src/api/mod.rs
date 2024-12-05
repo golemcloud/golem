@@ -4,34 +4,33 @@ use crate::api::api_certificate::ApiCertificateApi;
 use crate::api::api_definition::ApiDefinitionApi;
 use crate::api::api_deployment::ApiDeploymentApi;
 use crate::api::api_domain::ApiDomainApi;
+use crate::api::api_security::SecuritySchemeApi;
 use crate::api::worker::WorkerApi;
+use crate::service::ApiServices;
 use poem::get;
 use poem::{EndpointExt, Route};
 use poem_openapi::OpenApiService;
-
-use crate::service::ApiServices;
 
 mod api_certificate;
 mod api_definition;
 mod api_deployment;
 mod api_domain;
+mod api_security;
 mod common;
 mod worker;
 mod worker_connect;
 
-pub fn make_open_api_service(
-    services: ApiServices,
-) -> OpenApiService<
-    (
-        HealthcheckApi,
-        WorkerApi,
-        ApiDefinitionApi,
-        ApiDeploymentApi,
-        ApiCertificateApi,
-        ApiDomainApi,
-    ),
-    (),
-> {
+type WorkerServiceApis = (
+    HealthcheckApi,
+    WorkerApi,
+    ApiDefinitionApi,
+    ApiDeploymentApi,
+    ApiCertificateApi,
+    ApiDomainApi,
+    SecuritySchemeApi,
+);
+
+pub fn make_open_api_service(services: ApiServices) -> OpenApiService<WorkerServiceApis, ()> {
     OpenApiService::new(
         (
             HealthcheckApi,
@@ -48,6 +47,7 @@ pub fn make_open_api_service(
             ),
             ApiCertificateApi::new(services.certificate_service),
             ApiDomainApi::new(services.domain_service),
+            SecuritySchemeApi::new(services.security_scheme_service),
         ),
         "Golem API",
         "1.0",
@@ -76,7 +76,8 @@ pub fn custom_http_request_route(services: ApiServices) -> Route {
     let api_handler = CustomHttpRequestApi::new(
         services.worker_request_to_http_service,
         services.http_request_api_definition_lookup_service,
-        services.fileserver_binding_handler,
+        services.file_server_binding_handler,
+        services.gateway_session_store,
     );
 
     Route::new().nest("/", api_handler)

@@ -8,9 +8,9 @@ use golem_common::json_yaml::JsonOrYaml;
 use golem_common::model::ProjectId;
 use golem_common::{recorded_http_api_request, safe};
 use golem_worker_service_base::api::HttpApiDefinitionRequest;
-use golem_worker_service_base::api::HttpApiDefinitionWithTypeInfo;
+use golem_worker_service_base::api::HttpApiDefinitionResponseData;
 use golem_worker_service_base::gateway_api_definition::http::HttpApiDefinitionRequest as CoreHttpApiDefinitionRequest;
-use golem_worker_service_base::gateway_api_definition::http::OpenApiDefinitionRequest;
+use golem_worker_service_base::gateway_api_definition::http::OpenApiHttpApiDefinitionRequest;
 use golem_worker_service_base::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
@@ -39,9 +39,9 @@ impl ApiDefinitionApi {
     async fn create_or_update_open_api(
         &self,
         project_id: Path<ProjectId>,
-        openapi: JsonOrYaml<OpenApiDefinitionRequest>,
+        openapi: JsonOrYaml<OpenApiHttpApiDefinitionRequest>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<HttpApiDefinitionWithTypeInfo>, ApiEndpointError> {
+    ) -> Result<Json<HttpApiDefinitionResponseData>, ApiEndpointError> {
         let project_id = &project_id.0;
         let token = token.secret();
 
@@ -49,7 +49,7 @@ impl ApiDefinitionApi {
             recorded_http_api_request!("import_open_api", project_id = project_id.0.to_string(),);
 
         let response = {
-            let definition = openapi.0.to_http_api_definition().map_err(|e| {
+            let definition = openapi.0.to_http_api_definition_request().map_err(|e| {
                 error!("Invalid Spec {}", e);
                 ApiEndpointError::bad_request(safe(e))
             })?;
@@ -60,7 +60,10 @@ impl ApiDefinitionApi {
                 .instrument(record.span.clone())
                 .await?;
 
-            Ok(Json(result.into()))
+            result
+                .try_into()
+                .map_err(|err| ApiEndpointError::internal(safe(err)))
+                .map(Json)
         };
 
         record.result(response)
@@ -80,7 +83,7 @@ impl ApiDefinitionApi {
         project_id: Path<ProjectId>,
         payload: JsonOrYaml<HttpApiDefinitionRequest>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<HttpApiDefinitionWithTypeInfo>, ApiEndpointError> {
+    ) -> Result<Json<HttpApiDefinitionResponseData>, ApiEndpointError> {
         let project_id = &project_id.0;
         let token = token.secret();
         let record = recorded_http_api_request!(
@@ -104,7 +107,10 @@ impl ApiDefinitionApi {
                 .instrument(record.span.clone())
                 .await?;
 
-            Ok(Json(result.into()))
+            result
+                .try_into()
+                .map_err(|err| ApiEndpointError::internal(safe(err)))
+                .map(Json)
         };
 
         record.result(response)
@@ -125,7 +131,7 @@ impl ApiDefinitionApi {
         version: Path<ApiVersion>,
         payload: JsonOrYaml<HttpApiDefinitionRequest>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<HttpApiDefinitionWithTypeInfo>, ApiEndpointError> {
+    ) -> Result<Json<HttpApiDefinitionResponseData>, ApiEndpointError> {
         let project_id = &project_id.0;
         let token = token.secret();
         let record = recorded_http_api_request!(
@@ -158,7 +164,10 @@ impl ApiDefinitionApi {
                     .instrument(record.span.clone())
                     .await?;
 
-                Ok(Json(result.into()))
+                result
+                    .try_into()
+                    .map_err(|err| ApiEndpointError::internal(safe(err)))
+                    .map(Json)
             }
         };
 
@@ -179,7 +188,7 @@ impl ApiDefinitionApi {
         id: Path<ApiDefinitionId>,
         version: Path<ApiVersion>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<HttpApiDefinitionWithTypeInfo>, ApiEndpointError> {
+    ) -> Result<Json<HttpApiDefinitionResponseData>, ApiEndpointError> {
         let token = token.secret();
         let record = recorded_http_api_request!(
             "get_definition",
@@ -205,7 +214,9 @@ impl ApiDefinitionApi {
                 safe(format!("Can't find api definition with id {api_definition_id}, and version {version} in project {project_id}"))
             ))?;
 
-            Ok(Json(data.into()))
+            data.try_into()
+                .map_err(|err| ApiEndpointError::internal(safe(err)))
+                .map(Json)
         };
 
         record.result(response)
@@ -224,7 +235,7 @@ impl ApiDefinitionApi {
         project_id: Path<ProjectId>,
         #[oai(name = "api-definition-id")] api_definition_id_query: Query<Option<ApiDefinitionId>>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<Vec<HttpApiDefinitionWithTypeInfo>>, ApiEndpointError> {
+    ) -> Result<Json<Vec<HttpApiDefinitionResponseData>>, ApiEndpointError> {
         let token = token.secret();
         let record = recorded_http_api_request!(
             "list_definitions",
@@ -249,7 +260,11 @@ impl ApiDefinitionApi {
                     .instrument(record.span.clone())
                     .await?
             };
-            let values = data.into_iter().map(|d| d.into()).collect();
+            let values = data
+                .into_iter()
+                .map(|d| d.try_into())
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|err| ApiEndpointError::internal(safe(err)))?;
             Ok(Json(values))
         };
 

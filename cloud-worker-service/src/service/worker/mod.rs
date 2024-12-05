@@ -11,7 +11,8 @@ use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::OplogCursor;
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentFileSystemNode, ComponentId, ComponentVersion,
-    IdempotencyKey, ProjectId, ScanCursor, TargetWorkerId, WorkerFilter, WorkerId,
+    IdempotencyKey, PluginInstallationId, ProjectId, ScanCursor, TargetWorkerId, WorkerFilter,
+    WorkerId,
 };
 use golem_common::SafeDisplay;
 use golem_service_base::model::*;
@@ -263,6 +264,20 @@ pub trait WorkerService {
         path: ComponentFilePath,
         namespace: CloudNamespace,
     ) -> Result<Pin<Box<dyn Stream<Item = WorkerResult<Bytes>> + Send + 'static>>, WorkerError>;
+
+    async fn activate_plugin(
+        &self,
+        worker_id: &WorkerId,
+        plugin_installation_id: &PluginInstallationId,
+        namespace: CloudNamespace,
+    ) -> Result<(), WorkerError>;
+
+    async fn deactivate_plugin(
+        &self,
+        worker_id: &WorkerId,
+        plugin_installation_id: &PluginInstallationId,
+        namespace: CloudNamespace,
+    ) -> Result<(), WorkerError>;
 }
 
 #[derive(Clone)]
@@ -667,6 +682,44 @@ impl WorkerService for WorkerServiceDefault {
 
         Ok(response)
     }
+
+    async fn activate_plugin(
+        &self,
+        worker_id: &WorkerId,
+        plugin_installation_id: &PluginInstallationId,
+        namespace: CloudNamespace,
+    ) -> Result<(), WorkerError> {
+        let worker_namespace = self.authorize(namespace).await?;
+
+        self.base_worker_service
+            .activate_plugin(
+                worker_id,
+                plugin_installation_id,
+                worker_namespace.as_worker_request_metadata(),
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn deactivate_plugin(
+        &self,
+        worker_id: &WorkerId,
+        plugin_installation_id: &PluginInstallationId,
+        namespace: CloudNamespace,
+    ) -> Result<(), WorkerError> {
+        let worker_namespace = self.authorize(namespace).await?;
+
+        self.base_worker_service
+            .deactivate_plugin(
+                worker_id,
+                plugin_installation_id,
+                worker_namespace.as_worker_request_metadata(),
+            )
+            .await?;
+
+        Ok(())
+    }
 }
 
 fn convert_metadata(
@@ -688,6 +741,7 @@ fn convert_metadata(
         component_size: metadata.component_size,
         total_linear_memory_size: metadata.total_linear_memory_size,
         owned_resources: metadata.owned_resources,
+        active_plugins: metadata.active_plugins,
     }
 }
 

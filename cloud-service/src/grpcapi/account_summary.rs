@@ -157,13 +157,13 @@ impl CloudAccountSummaryService for AccountSummaryGrpcApi {
 
 pub struct AccountSummaryTraceErrorKind<'a>(pub &'a AccountSummaryError);
 
-impl<'a> Debug for AccountSummaryTraceErrorKind<'a> {
+impl Debug for AccountSummaryTraceErrorKind<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)
     }
 }
 
-impl<'a> TraceErrorKind for AccountSummaryTraceErrorKind<'a> {
+impl TraceErrorKind for AccountSummaryTraceErrorKind<'_> {
     fn trace_error_kind(&self) -> &'static str {
         match &self.0.error {
             None => "None",

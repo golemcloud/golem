@@ -7,6 +7,7 @@
 # The right side values here are available through chamber that reads from SSM.
 source <(chamber env golem-app/infra-outputs/${ENVIRONMENT})
 # Custom names
+export GOLEM__PERSISTENCE__CONFIG__HOST=$REDIS_HOST
 export GOLEM__REDIS__HOST=$REDIS_HOST
 export GOLEM__HEALTH_CHECK__MODE__CONFIG__NAMESPACE=$POD_NAMESPACE
 ./cloud-shard-manager

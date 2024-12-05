@@ -273,7 +273,7 @@ impl ProjectApi {
     #[oai(
         path = "/:project_id/plugins/installs",
         method = "post",
-        operation_id = "install_plugin"
+        operation_id = "install_plugin_to_project"
     )]
     async fn install_plugin(
         &self,
@@ -307,7 +307,7 @@ impl ProjectApi {
     #[oai(
         path = "/:project_id/plugins/installs/:installation_id",
         method = "put",
-        operation_id = "update_installed_plugin"
+        operation_id = "update_installed_plugin_in_project"
     )]
     async fn update_installed_plugin(
         &self,
@@ -346,7 +346,7 @@ impl ProjectApi {
     #[oai(
         path = "/:project_id/latest/plugins/installs/:installation_id",
         method = "delete",
-        operation_id = "uninstall_plugin"
+        operation_id = "uninstall_plugin_from_project"
     )]
     async fn uninstall_plugin(
         &self,

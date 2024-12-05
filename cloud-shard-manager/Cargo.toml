@@ -4,8 +4,13 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+golem-common = { workspace = true }
 golem-shard-manager = { workspace = true }
+
+anyhow = { workspace = true }
+prometheus = { workspace = true }
 rustls = { workspace = true }
+tokio = { workspace = true }
 
 [[bin]]
 name = "cloud-shard-manager"
