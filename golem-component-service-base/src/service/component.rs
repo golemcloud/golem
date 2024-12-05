@@ -1733,6 +1733,13 @@ impl ReplayableStream for ZipEntryStream {
         let mapped_stream = stream.map_err(|e| format!("Error reading entry: {e}"));
         Ok(Box::pin(mapped_stream))
     }
+
+    async fn length(&self) -> Result<u64, String> {
+        Ok(tokio::fs::metadata(self.file.path())
+            .await
+            .map_err(|e| format!("Failed to get file metadata: {e}"))?
+            .len())
+    }
 }
 
 mod internal {

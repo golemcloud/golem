@@ -16,6 +16,8 @@ use aws_config::meta::region::RegionProviderChain;
 use aws_config::BehaviorVersion;
 use aws_sdk_s3::config::Credentials;
 use aws_sdk_s3::Client;
+use bytes::BufMut;
+use futures::{StreamExt, TryStreamExt};
 use golem_common::model::{AccountId, ComponentId};
 use golem_service_base::config::S3BlobStorageConfig;
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
@@ -34,7 +36,8 @@ macro_rules! test_blob_storage {
             use test_r::test;
 
             use assert2::check;
-            use bytes::Bytes;
+            use bytes::{BufMut, Bytes, BytesMut};
+            use futures::TryStreamExt;
             use golem_service_base::storage::blob::*;
             use std::path::Path;
 
@@ -108,6 +111,50 @@ macro_rules! test_blob_storage {
 
                 check!(result1 == None);
                 check!(result2 == Some(data));
+            }
+
+            #[test]
+            #[tracing::instrument]
+            async fn get_put_get_new_dir_streaming() {
+                let test = $init().await;
+                let storage = test.get_blob_storage();
+                let namespace = $ns();
+
+                let path = Path::new("non-existing-dir/test-path");
+                let mut data = BytesMut::new();
+                for n in 1..(10 * 1024 * 1024) {
+                    data.put_u8((n % 100) as u8);
+                }
+                let data = data.freeze();
+
+                let result1 = storage
+                    .get_stream("get_put_get_new_dir", "get-raw", namespace.clone(), path)
+                    .await
+                    .unwrap();
+
+                storage
+                    .put_stream(
+                        "get_put_get_new_dir",
+                        "put-raw",
+                        namespace.clone(),
+                        path,
+                        &data,
+                    )
+                    .await
+                    .unwrap();
+
+                let result2 = storage
+                    .get_stream("get_put_get_new_dir", "get-raw-2", namespace.clone(), path)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .try_collect::<Vec<_>>()
+                    .await
+                    .unwrap()
+                    .concat();
+
+                check!(result1.is_none());
+                check!(result2 == data.to_vec());
             }
 
             #[test]
