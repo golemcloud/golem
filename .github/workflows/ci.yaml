@@ -507,6 +507,9 @@ jobs:
             os: macos-latest
           - rust-target: x86_64-pc-windows-gnu
             os: windows-latest
+        exclude:
+          - project: golem
+            cfg.os: windows-latest # excluded for now because sozu-proxy is not compilable on windows
     name: Publish binaries of ${{ matrix.project }}
     runs-on: ${{ matrix.cfg.os }}
     permissions:
