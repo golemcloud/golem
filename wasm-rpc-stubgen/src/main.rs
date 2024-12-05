@@ -24,7 +24,11 @@ use golem_wasm_rpc_stubgen::model::app::ComponentPropertiesExtensionsNone;
 async fn main() -> ExitCode {
     pretty_env_logger::init();
 
+    #[cfg(feature = "app-command")]
     let mut clap_command = Command::command();
+    #[cfg(not(feature = "app-command"))]
+    let clap_command = Command::command();
+
     // Based on Command::parse, but using cloned command, so we avoid creating clap_command twice
     let parsed_command = {
         let mut matches = clap_command.clone().get_matches();
@@ -33,7 +37,12 @@ async fn main() -> ExitCode {
         res.unwrap_or_else(|e| e.exit())
     };
 
-    if !matches!(parsed_command, Command::App { .. }) {
+    #[cfg(feature = "app-command")]
+    let show_warning = !matches!(parsed_command, Command::App { .. });
+    #[cfg(not(feature = "app-command"))]
+    let show_warning = true;
+
+    if show_warning {
         eprintln!(
             "{}",
             "WARNING: THIS COMMAND IS DEPRECATED AND MIGHT MODIFY SOURCE WIT FILES!".yellow()
@@ -41,8 +50,8 @@ async fn main() -> ExitCode {
         eprintln!(
             "{}",
             format!(
-                "\nThe recommended new way to handle wasm-rpc stub generation and linking is the {} subcommand.\n",
-                "app".bold().underline(),
+                "\nThe recommended new way to handle wasm-rpc stub generation and linking is the {} command.\n",
+                "wasm-rpc-stubgen app".bold().underline(),
             ).yellow(),
         )
     }
