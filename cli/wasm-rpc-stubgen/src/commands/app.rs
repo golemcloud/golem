@@ -1143,9 +1143,10 @@ async fn build_stub<CPE: ComponentPropertiesExtensions>(
         target_root: target_root.clone(),
         selected_world: None,
         stub_crate_version: WASM_RPC_VERSION.to_string(),
+        // NOTE: these overrides are deliberately not part of cli flags or the app manifest, at least for now
         wasm_rpc_override: WasmRpcOverride {
-            wasm_rpc_path_override: None,
-            wasm_rpc_version_override: None,
+            wasm_rpc_path_override: std::env::var("WASM_RPC_PATH_OVERRIDE").ok(),
+            wasm_rpc_version_override: std::env::var("WASM_RPC_VERSION_OVERRIDE").ok(),
         },
         extract_source_interface_package: false,
         seal_cargo_workspace: true,
