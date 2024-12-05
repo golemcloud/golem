@@ -52,6 +52,7 @@ pub(crate) mod sqlx_rdbms {
     use async_trait::async_trait;
     use bigdecimal::BigDecimal;
     use futures_util::stream::BoxStream;
+    use sqlx::database::HasArguments;
     use sqlx::postgres::types::{Oid, PgInterval, PgRange, PgTimeTz};
     use sqlx::postgres::{PgConnectOptions, PgTypeKind};
     use sqlx::types::mac_address::MacAddress;
@@ -378,6 +379,26 @@ pub(crate) mod sqlx_rdbms {
                         })?;
                         Ok(query.bind(values))
                     }
+                    DbValuePrimitive::Cidr(_) => {
+                        let values: Vec<IpAddr> = get_plain_values(vs, |v| {
+                            if let DbValuePrimitive::Cidr(v) = v {
+                                Some(v)
+                            } else {
+                                None
+                            }
+                        })?;
+                        Ok(query.bind(values))
+                    }
+                    DbValuePrimitive::Macaddr(_) => {
+                        let values: Vec<MacAddress> = get_plain_values(vs, |v| {
+                            if let DbValuePrimitive::Macaddr(v) = v {
+                                Some(v)
+                            } else {
+                                None
+                            }
+                        })?;
+                        Ok(query.bind(values))
+                    }
                     DbValuePrimitive::Bit(_) => {
                         let values: Vec<BitVec> = get_plain_values(vs, |v| {
                             if let DbValuePrimitive::Bit(v) = v {
@@ -450,6 +471,16 @@ pub(crate) mod sqlx_rdbms {
                             })?;
                         Ok(query.bind(values))
                     }
+                    DbValuePrimitive::Daterange(_) => {
+                        let values: Vec<PgRange<chrono::NaiveDate>> = get_plain_values(vs, |v| {
+                            if let DbValuePrimitive::Daterange(v) = v {
+                                Some(v.into())
+                            } else {
+                                None
+                            }
+                        })?;
+                        Ok(query.bind(values))
+                    }
                     DbValuePrimitive::Oid(_) => {
                         let values: Vec<_> = get_plain_values(vs, |v| {
                             if let DbValuePrimitive::Oid(v) = v {
@@ -463,7 +494,7 @@ pub(crate) mod sqlx_rdbms {
                     DbValuePrimitive::CustomEnum(_) => {
                         let values: Vec<_> = get_plain_values(vs, |v| {
                             if let DbValuePrimitive::CustomEnum(v) = v {
-                                Some(v)
+                                Some(PgEnum(v))
                             } else {
                                 None
                             }
@@ -479,13 +510,13 @@ pub(crate) mod sqlx_rdbms {
                             }
                         })?;
                         Ok(query.bind(values))
-                    }
-                    _ => Err(format!(
-                        "Array param element '{}' with index 0 is not supported",
-                        first
-                    )),
+                    } // _ => Err(format!(
+                      //     "Array param element '{}' with index 0 is not supported",
+                      //     first
+                      // )),
                 }
             }
+            DbValue::Array(vs) if vs.is_empty() => Err("Array cannot be empty".to_string()),
             _ => Ok(query),
         }
     }
@@ -554,7 +585,7 @@ pub(crate) mod sqlx_rdbms {
             DbValuePrimitive::Tstzrange(v) => Ok(query.bind(PgRange::from(v))),
             DbValuePrimitive::Daterange(v) => Ok(query.bind(PgRange::from(v))),
             DbValuePrimitive::Oid(v) => Ok(query.bind(Oid(v))),
-            DbValuePrimitive::CustomEnum(v) => Ok(query.bind(v)),
+            DbValuePrimitive::CustomEnum(v) => Ok(query.bind(PgEnum(v))),
             DbValuePrimitive::Null => Ok(query.bind(None::<String>)),
             // _ => Err(format!("Type '{}' is not supported", value)),
         }
@@ -726,6 +757,10 @@ pub(crate) mod sqlx_rdbms {
                 let vs: Option<Vec<bool>> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::array_from(vs, DbValuePrimitive::Boolean)
             }
+            pg_type_name::CHAR_ARRAY => {
+                let vs: Option<Vec<i8>> = row.try_get(index).map_err(|e| e.to_string())?;
+                DbValue::array_from(vs, DbValuePrimitive::Character)
+            }
             pg_type_name::INT2_ARRAY => {
                 let vs: Option<Vec<i16>> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::array_from(vs, DbValuePrimitive::Int2)
@@ -892,7 +927,12 @@ pub(crate) mod sqlx_rdbms {
         fn try_from(value: &sqlx::postgres::PgColumn) -> Result<Self, Self::Error> {
             let ordinal = value.ordinal() as u64;
             let db_type: DbColumnType = value.type_info().try_into()?;
-            let db_type_name = value.type_info().name().to_string();
+            let db_type_name = match value.type_info().kind() {
+                PgTypeKind::Array(element) => {
+                    format!("{}[]", element.name())
+                }
+                _ => value.type_info().name().to_string(),
+            };
             let name = value.name().to_string();
             Ok(DbColumn {
                 ordinal,
@@ -1045,7 +1085,7 @@ pub(crate) mod sqlx_rdbms {
                     )),
                     PgTypeKind::Array(element) if matches!(element.kind(), PgTypeKind::Enum(_)) => {
                         Ok(DbColumnType::Array(DbColumnTypePrimitive::CustomEnum(
-                            type_name.to_string(),
+                            element.name().to_string(),
                         )))
                     }
                     _ => Err(format!("Type '{}' is not supported", type_name))?,
@@ -1093,6 +1133,15 @@ pub(crate) mod sqlx_rdbms {
             Ok(Self(<String as sqlx::Decode<sqlx::Postgres>>::decode(
                 value,
             )?))
+        }
+    }
+
+    impl<'r> sqlx::Encode<'r, sqlx::Postgres> for PgEnum {
+        fn encode_by_ref(
+            &self,
+            buf: &mut <sqlx::Postgres as HasArguments<'r>>::ArgumentBuffer,
+        ) -> sqlx::encode::IsNull {
+            <String as sqlx::Encode<sqlx::Postgres>>::encode_by_ref(&self.0, buf)
         }
     }
 

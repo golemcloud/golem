@@ -77,156 +77,6 @@ async fn postgres_execute_test_select1(
     .await
 }
 
-// #[test]
-// async fn postgres_execute_test_create_insert_select(
-//     postgres: &DockerPostgresRdbs,
-//     rdbms_service: &RdbmsServiceDefault,
-// ) {
-//     let db_address = postgres.rdbs[1].host_connection_string();
-//     let rdbms = rdbms_service.postgres();
-//
-//     let create_enum_statement = r#"
-//             CREATE TYPE component_type AS ENUM ('regular', 'special');
-//         "#;
-//
-//     rdbms_execute_test(
-//         rdbms.clone(),
-//         &db_address,
-//         create_enum_statement,
-//         vec![],
-//         None,
-//     )
-//     .await;
-//
-//     let create_table_statement = r#"
-//             CREATE TABLE IF NOT EXISTS components
-//             (
-//                 component_id        uuid    NOT NULL PRIMARY KEY,
-//                 namespace           text    NOT NULL,
-//                 name                text    NOT NULL,
-//                 created_on          timestamp DEFAULT NOW(),
-//                 type                component_type,
-//                 tags                text[]
-//             );
-//         "#;
-//
-//     let insert_statement = r#"
-//             INSERT INTO components
-//             (component_id, namespace, name, tags, type)
-//             VALUES
-//             ($1, $2, $3, $4, $5::component_type);
-//         "#;
-//
-//     rdbms_execute_test(
-//         rdbms.clone(),
-//         &db_address,
-//         create_table_statement,
-//         vec![],
-//         None,
-//     )
-//     .await;
-//
-//     let count = 100;
-//
-//     let mut rows: Vec<DbRow<postgres_types::DbValue>> = Vec::with_capacity(count);
-//
-//     for _ in 0..count {
-//         let params: Vec<postgres_types::DbValue> = vec![
-//             postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Uuid(
-//                 Uuid::new_v4(),
-//             )),
-//             postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Text(
-//                 "default".to_string(),
-//             )),
-//             postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Text(format!(
-//                 "name-{}",
-//                 Uuid::new_v4()
-//             ))),
-//             postgres_types::DbValue::Array(vec![
-//                 postgres_types::DbValuePrimitive::Text("tag1".to_string()),
-//                 postgres_types::DbValuePrimitive::Text("tag2".to_string()),
-//                 postgres_types::DbValuePrimitive::Text("tag3".to_string()),
-//             ]),
-//             postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::CustomEnum(
-//                 "regular".to_string(),
-//             )),
-//         ];
-//
-//         rdbms_execute_test(
-//             rdbms.clone(),
-//             &db_address,
-//             insert_statement,
-//             params.clone(),
-//             Some(1),
-//         )
-//         .await;
-//
-//         rows.push(DbRow { values: params });
-//     }
-//
-//     let expected_columns = vec![
-//         postgres_types::DbColumn {
-//             name: "component_id".to_string(),
-//             ordinal: 0,
-//             db_type: postgres_types::DbColumnType::Primitive(
-//                 postgres_types::DbColumnTypePrimitive::Uuid,
-//             ),
-//             db_type_name: "UUID".to_string(),
-//         },
-//         postgres_types::DbColumn {
-//             name: "namespace".to_string(),
-//             ordinal: 1,
-//             db_type: postgres_types::DbColumnType::Primitive(
-//                 postgres_types::DbColumnTypePrimitive::Text,
-//             ),
-//             db_type_name: "TEXT".to_string(),
-//         },
-//         postgres_types::DbColumn {
-//             name: "name".to_string(),
-//             ordinal: 2,
-//             db_type: postgres_types::DbColumnType::Primitive(
-//                 postgres_types::DbColumnTypePrimitive::Text,
-//             ),
-//             db_type_name: "TEXT".to_string(),
-//         },
-//         postgres_types::DbColumn {
-//             name: "tags".to_string(),
-//             ordinal: 3,
-//             db_type: postgres_types::DbColumnType::Array(
-//                 postgres_types::DbColumnTypePrimitive::Text,
-//             ),
-//             db_type_name: "TEXT[]".to_string(),
-//         },
-//         postgres_types::DbColumn {
-//             name: "type".to_string(),
-//             ordinal: 4,
-//             db_type: postgres_types::DbColumnType::Primitive(
-//                 postgres_types::DbColumnTypePrimitive::CustomEnum("component_type".to_string()),
-//             ),
-//             db_type_name: "component_type".to_string(),
-//         },
-//     ];
-//
-//     rdbms_query_test(
-//         rdbms.clone(),
-//         &db_address,
-//         "SELECT component_id, namespace, name, tags, type FROM components ORDER BY created_on ASC",
-//         vec![],
-//         Some(expected_columns),
-//         Some(rows),
-//     )
-//     .await;
-//
-//     rdbms_execute_test(
-//         rdbms.clone(),
-//         &db_address,
-//         "DELETE FROM components;",
-//         vec![],
-//         None,
-//     )
-//     .await;
-// }
-
 #[test]
 async fn postgres_execute_test_create_insert_select(
     postgres: &DockerPostgresRdbs,
@@ -250,7 +100,7 @@ async fn postgres_execute_test_create_insert_select(
 
     let create_table_statement = r#"
             CREATE TABLE data_types (
-                id UUID PRIMARY KEY,
+                id VARCHAR(25) PRIMARY KEY,
                 enum_col test_enum,
                 char_col "char",
                 int2_col INT2,
@@ -341,7 +191,7 @@ async fn postgres_execute_test_create_insert_select(
     )
     .await;
 
-    let count = 1;
+    let count = 3;
 
     let mut rows: Vec<DbRow<postgres_types::DbValue>> = Vec::with_capacity(count);
 
@@ -374,9 +224,10 @@ async fn postgres_execute_test_create_insert_select(
         );
 
         let params: Vec<postgres_types::DbValue> = vec![
-            postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Uuid(
-                Uuid::new_v4(),
-            )),
+            postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Varchar(format!(
+                "{:03}",
+                i
+            ))),
             postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::CustomEnum(
                 "regular".to_string(),
             )),
@@ -497,9 +348,9 @@ async fn postgres_execute_test_create_insert_select(
             name: "id".to_string(),
             ordinal: 0,
             db_type: postgres_types::DbColumnType::Primitive(
-                postgres_types::DbColumnTypePrimitive::Uuid,
+                postgres_types::DbColumnTypePrimitive::Varchar,
             ),
-            db_type_name: "UUID".to_string(),
+            db_type_name: "VARCHAR".to_string(),
         },
         postgres_types::DbColumn {
             name: "enum_col".to_string(),
@@ -826,6 +677,608 @@ async fn postgres_execute_test_create_insert_select(
 }
 
 #[test]
+async fn postgres_execute_test_create_insert_select_array(
+    postgres: &DockerPostgresRdbs,
+    rdbms_service: &RdbmsServiceDefault,
+) {
+    let db_address = postgres.rdbs[1].host_connection_string();
+    let rdbms = rdbms_service.postgres();
+
+    let create_enum_statement = r#"
+            CREATE TYPE a_test_enum AS ENUM ('first', 'second', 'third');
+        "#;
+
+    rdbms_execute_test(
+        rdbms.clone(),
+        &db_address,
+        create_enum_statement,
+        vec![],
+        None,
+    )
+    .await;
+
+    let create_table_statement = r#"
+            CREATE TABLE array_data_types (
+                id VARCHAR(25) PRIMARY KEY,
+                enum_col a_test_enum[],
+                char_col "char"[],
+                int2_col INT2[],
+                int4_col INT4[],
+                int8_col INT8[],
+                float4_col FLOAT4[],
+                float8_col FLOAT8[],
+                numeric_col NUMERIC(10,2)[],
+                boolean_col BOOLEAN[],
+                text_col TEXT[],
+                varchar_col VARCHAR(255)[],
+                bpchar_col CHAR(10)[],
+                timestamp_col TIMESTAMP[],
+                timestamptz_col TIMESTAMP WITH TIME ZONE[],
+                date_col DATE[],
+                time_col TIME[],
+                timetz_col TIME WITH TIME ZONE[],
+                interval_col INTERVAL[],
+                bytea_col BYTEA[],
+                uuid_col UUID[],
+                json_col JSON[],
+                jsonb_col JSONB[],
+                inet_col INET[],
+                cidr_col CIDR[],
+                macaddr_col MACADDR[],
+                bit_col BIT(3)[],
+                varbit_col VARBIT[],
+                int4range_col INT4RANGE[],
+                int8range_col INT8RANGE[],
+                numrange_col NUMRANGE[],
+                tsrange_col TSRANGE[],
+                tstzrange_col TSTZRANGE[]
+            );
+        "#;
+
+    let insert_statement = r#"
+            INSERT INTO array_data_types
+            (
+            id,
+            enum_col,
+            char_col,
+            int2_col,
+            int4_col,
+            int8_col,
+            float4_col,
+            float8_col,
+            numeric_col,
+            boolean_col,
+            text_col,
+            varchar_col,
+            bpchar_col,
+            timestamp_col,
+            timestamptz_col,
+            date_col,
+            time_col,
+            timetz_col,
+            interval_col,
+            bytea_col,
+            uuid_col,
+            json_col,
+            jsonb_col,
+            inet_col,
+            cidr_col,
+            macaddr_col,
+            bit_col,
+            varbit_col,
+            int4range_col,
+            int8range_col,
+            numrange_col,
+            tsrange_col,
+            tstzrange_col
+            )
+            VALUES
+            (
+                $1, $2::a_test_enum[], $3, $4, $5, $6, $7, $8, $9,
+                $10, $11, $12, $13, $14, $15, $16, $17, $18, $19,
+                $20, $21, $22, $23, $24, $25, $26, $27, $28, $29,
+                $30, $31, $32, $33
+            );
+        "#;
+
+    rdbms_execute_test(
+        rdbms.clone(),
+        &db_address,
+        create_table_statement,
+        vec![],
+        None,
+    )
+    .await;
+
+    let count = 3;
+
+    let mut rows: Vec<DbRow<postgres_types::DbValue>> = Vec::with_capacity(count);
+
+    for i in 0..count {
+        let tstzbounds = (
+            Bound::Included(chrono::DateTime::from_naive_utc_and_offset(
+                chrono::NaiveDateTime::new(
+                    chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
+                    chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+                ),
+                chrono::Utc,
+            )),
+            Bound::Excluded(chrono::DateTime::from_naive_utc_and_offset(
+                chrono::NaiveDateTime::new(
+                    chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+                    chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+                ),
+                chrono::Utc,
+            )),
+        );
+        let tsbounds = (
+            Bound::Included(chrono::NaiveDateTime::new(
+                chrono::NaiveDate::from_ymd_opt(2022, 11, 21).unwrap(),
+                chrono::NaiveTime::from_hms_opt(16, 50, 30).unwrap(),
+            )),
+            Bound::Excluded(chrono::NaiveDateTime::new(
+                chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+                chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+            )),
+        );
+
+        let params: Vec<postgres_types::DbValue> = vec![
+            postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Varchar(format!(
+                "{:03}",
+                i
+            ))),
+            postgres_types::DbValue::Array(vec![
+                postgres_types::DbValuePrimitive::CustomEnum("second".to_string()),
+                postgres_types::DbValuePrimitive::CustomEnum("third".to_string()),
+            ]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Character(2)]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Int2(1)]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Int4(2)]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Int8(3)]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Float4(4.0)]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Float8(5.0)]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Numeric(
+                BigDecimal::from(48888),
+            )]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Boolean(true)]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Text(
+                "text".to_string(),
+            )]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Varchar(
+                "varchar".to_string(),
+            )]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Bpchar(
+                "0123456789".to_string(),
+            )]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Timestamp(
+                chrono::NaiveDateTime::new(
+                    chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
+                    chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+                ),
+            )]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Timestamptz(
+                chrono::DateTime::from_naive_utc_and_offset(
+                    chrono::NaiveDateTime::new(
+                        chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+                        chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+                    ),
+                    chrono::Utc,
+                ),
+            )]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Date(
+                chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
+            )]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Time(
+                chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+            )]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Timetz((
+                chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+                chrono::Utc.fix(),
+            ))]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Interval((
+                10, 20, 30,
+            ))]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Bytea(
+                "bytea".as_bytes().to_vec(),
+            )]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Uuid(
+                Uuid::new_v4(),
+            )]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Json(json!(
+                   {
+                      "id": i
+                   }
+            ))]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Jsonb(json!(
+                   {
+                      "index": i
+                   }
+            ))]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Inet(
+                IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+            )]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Cidr(
+                IpAddr::V4(Ipv4Addr::new(198, 168, 0, 1)),
+            )]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Macaddr(
+                MacAddress::new([0, 1, 2, 3, 4, 5]),
+            )]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Bit(
+                BitVec::from_iter(vec![true, false, true]),
+            )]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Varbit(
+                BitVec::from_iter(vec![true, false, false]),
+            )]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Int4range((
+                Bound::Included(1),
+                Bound::Excluded(4),
+            ))]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Int8range((
+                Bound::Included(1),
+                Bound::Unbounded,
+            ))]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Numrange((
+                Bound::Included(BigDecimal::from(11)),
+                Bound::Excluded(BigDecimal::from(221)),
+            ))]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Tsrange(
+                tsbounds,
+            )]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Tstzrange(
+                tstzbounds,
+            )]),
+            // postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Array(vec![(
+            //     Bound::Excluded(chrono::NaiveDate::from_ymd_opt(2023, 2, 3).unwrap()),
+            //     Bound::Included(chrono::NaiveDate::from_ymd_opt(2024, 2, 4).unwrap()),
+            // ))]) // FIXME daterange conversion issue - returning incorrect day value
+        ];
+
+        rdbms_execute_test(
+            rdbms.clone(),
+            &db_address,
+            insert_statement,
+            params.clone(),
+            Some(1),
+        )
+        .await;
+
+        rows.push(DbRow { values: params });
+    }
+
+    let expected_columns = vec![
+        postgres_types::DbColumn {
+            name: "id".to_string(),
+            ordinal: 0,
+            db_type: postgres_types::DbColumnType::Primitive(
+                postgres_types::DbColumnTypePrimitive::Varchar,
+            ),
+            db_type_name: "VARCHAR".to_string(),
+        },
+        postgres_types::DbColumn {
+            name: "enum_col".to_string(),
+            ordinal: 1,
+            db_type: postgres_types::DbColumnType::Array(
+                postgres_types::DbColumnTypePrimitive::CustomEnum("a_test_enum".to_string()),
+            ),
+            db_type_name: "a_test_enum[]".to_string(),
+        },
+        postgres_types::DbColumn {
+            name: "char_col".to_string(),
+            ordinal: 2,
+            db_type: postgres_types::DbColumnType::Array(
+                postgres_types::DbColumnTypePrimitive::Character,
+            ),
+            db_type_name: "\"CHAR\"[]".to_string(),
+        },
+        postgres_types::DbColumn {
+            name: "int2_col".to_string(),
+            ordinal: 3,
+            db_type: postgres_types::DbColumnType::Array(
+                postgres_types::DbColumnTypePrimitive::Int2,
+            ),
+            db_type_name: "INT2[]".to_string(),
+        },
+        postgres_types::DbColumn {
+            name: "int4_col".to_string(),
+            ordinal: 4,
+            db_type: postgres_types::DbColumnType::Array(
+                postgres_types::DbColumnTypePrimitive::Int4,
+            ),
+            db_type_name: "INT4[]".to_string(),
+        },
+        postgres_types::DbColumn {
+            name: "int8_col".to_string(),
+            ordinal: 5,
+            db_type: postgres_types::DbColumnType::Array(
+                postgres_types::DbColumnTypePrimitive::Int8,
+            ),
+            db_type_name: "INT8[]".to_string(),
+        },
+        postgres_types::DbColumn {
+            name: "float4_col".to_string(),
+            ordinal: 6,
+            db_type: postgres_types::DbColumnType::Array(
+                postgres_types::DbColumnTypePrimitive::Float4,
+            ),
+            db_type_name: "FLOAT4[]".to_string(),
+        },
+        postgres_types::DbColumn {
+            name: "float8_col".to_string(),
+            ordinal: 7,
+            db_type: postgres_types::DbColumnType::Array(
+                postgres_types::DbColumnTypePrimitive::Float8,
+            ),
+            db_type_name: "FLOAT8[]".to_string(),
+        },
+        postgres_types::DbColumn {
+            name: "numeric_col".to_string(),
+            ordinal: 8,
+            db_type: postgres_types::DbColumnType::Array(
+                postgres_types::DbColumnTypePrimitive::Numeric,
+            ),
+            db_type_name: "NUMERIC[]".to_string(),
+        },
+        postgres_types::DbColumn {
+            name: "boolean_col".to_string(),
+            ordinal: 9,
+            db_type: postgres_types::DbColumnType::Array(
+                postgres_types::DbColumnTypePrimitive::Boolean,
+            ),
+            db_type_name: "BOOL[]".to_string(),
+        },
+        postgres_types::DbColumn {
+            name: "text_col".to_string(),
+            ordinal: 10,
+            db_type: postgres_types::DbColumnType::Array(
+                postgres_types::DbColumnTypePrimitive::Text,
+            ),
+            db_type_name: "TEXT[]".to_string(),
+        },
+        postgres_types::DbColumn {
+            name: "varchar_col".to_string(),
+            ordinal: 11,
+            db_type: postgres_types::DbColumnType::Array(
+                postgres_types::DbColumnTypePrimitive::Varchar,
+            ),
+            db_type_name: "VARCHAR[]".to_string(),
+        },
+        postgres_types::DbColumn {
+            name: "bpchar_col".to_string(),
+            ordinal: 12,
+            db_type: postgres_types::DbColumnType::Array(
+                postgres_types::DbColumnTypePrimitive::Bpchar,
+            ),
+            db_type_name: "CHAR[]".to_string(),
+        },
+        postgres_types::DbColumn {
+            name: "timestamp_col".to_string(),
+            ordinal: 13,
+            db_type: postgres_types::DbColumnType::Array(
+                postgres_types::DbColumnTypePrimitive::Timestamp,
+            ),
+            db_type_name: "TIMESTAMP[]".to_string(),
+        },
+        postgres_types::DbColumn {
+            name: "timestamptz_col".to_string(),
+            ordinal: 14,
+            db_type: postgres_types::DbColumnType::Array(
+                postgres_types::DbColumnTypePrimitive::Timestamptz,
+            ),
+            db_type_name: "TIMESTAMPTZ[]".to_string(),
+        },
+        postgres_types::DbColumn {
+            name: "date_col".to_string(),
+            ordinal: 15,
+            db_type: postgres_types::DbColumnType::Array(
+                postgres_types::DbColumnTypePrimitive::Date,
+            ),
+            db_type_name: "DATE[]".to_string(),
+        },
+        postgres_types::DbColumn {
+            name: "time_col".to_string(),
+            ordinal: 16,
+            db_type: postgres_types::DbColumnType::Array(
+                postgres_types::DbColumnTypePrimitive::Time,
+            ),
+            db_type_name: "TIME[]".to_string(),
+        },
+        postgres_types::DbColumn {
+            name: "timetz_col".to_string(),
+            ordinal: 17,
+            db_type: postgres_types::DbColumnType::Array(
+                postgres_types::DbColumnTypePrimitive::Timetz,
+            ),
+            db_type_name: "TIMETZ[]".to_string(),
+        },
+        postgres_types::DbColumn {
+            name: "interval_col".to_string(),
+            ordinal: 18,
+            db_type: postgres_types::DbColumnType::Array(
+                postgres_types::DbColumnTypePrimitive::Interval,
+            ),
+            db_type_name: "INTERVAL[]".to_string(),
+        },
+        postgres_types::DbColumn {
+            name: "bytea_col".to_string(),
+            ordinal: 19,
+            db_type: postgres_types::DbColumnType::Array(
+                postgres_types::DbColumnTypePrimitive::Bytea,
+            ),
+            db_type_name: "BYTEA[]".to_string(),
+        },
+        postgres_types::DbColumn {
+            name: "uuid_col".to_string(),
+            ordinal: 20,
+            db_type: postgres_types::DbColumnType::Array(
+                postgres_types::DbColumnTypePrimitive::Uuid,
+            ),
+            db_type_name: "UUID[]".to_string(),
+        },
+        postgres_types::DbColumn {
+            name: "json_col".to_string(),
+            ordinal: 21,
+            db_type: postgres_types::DbColumnType::Array(
+                postgres_types::DbColumnTypePrimitive::Json,
+            ),
+            db_type_name: "JSON[]".to_string(),
+        },
+        postgres_types::DbColumn {
+            name: "jsonb_col".to_string(),
+            ordinal: 22,
+            db_type: postgres_types::DbColumnType::Array(
+                postgres_types::DbColumnTypePrimitive::Jsonb,
+            ),
+            db_type_name: "JSONB[]".to_string(),
+        },
+        postgres_types::DbColumn {
+            name: "inet_col".to_string(),
+            ordinal: 23,
+            db_type: postgres_types::DbColumnType::Array(
+                postgres_types::DbColumnTypePrimitive::Inet,
+            ),
+            db_type_name: "INET[]".to_string(),
+        },
+        postgres_types::DbColumn {
+            name: "cidr_col".to_string(),
+            ordinal: 24,
+            db_type: postgres_types::DbColumnType::Array(
+                postgres_types::DbColumnTypePrimitive::Cidr,
+            ),
+            db_type_name: "CIDR[]".to_string(),
+        },
+        postgres_types::DbColumn {
+            name: "macaddr_col".to_string(),
+            ordinal: 25,
+            db_type: postgres_types::DbColumnType::Array(
+                postgres_types::DbColumnTypePrimitive::Macaddr,
+            ),
+            db_type_name: "MACADDR[]".to_string(),
+        },
+        postgres_types::DbColumn {
+            name: "bit_col".to_string(),
+            ordinal: 26,
+            db_type: postgres_types::DbColumnType::Array(
+                postgres_types::DbColumnTypePrimitive::Bit,
+            ),
+            db_type_name: "BIT[]".to_string(),
+        },
+        postgres_types::DbColumn {
+            name: "varbit_col".to_string(),
+            ordinal: 27,
+            db_type: postgres_types::DbColumnType::Array(
+                postgres_types::DbColumnTypePrimitive::Varbit,
+            ),
+            db_type_name: "VARBIT[]".to_string(),
+        },
+        postgres_types::DbColumn {
+            name: "int4range_col".to_string(),
+            ordinal: 28,
+            db_type: postgres_types::DbColumnType::Array(
+                postgres_types::DbColumnTypePrimitive::Int4range,
+            ),
+            db_type_name: "INT4RANGE[]".to_string(),
+        },
+        postgres_types::DbColumn {
+            name: "int8range_col".to_string(),
+            ordinal: 29,
+            db_type: postgres_types::DbColumnType::Array(
+                postgres_types::DbColumnTypePrimitive::Int8range,
+            ),
+            db_type_name: "INT8RANGE[]".to_string(),
+        },
+        postgres_types::DbColumn {
+            name: "numrange_col".to_string(),
+            ordinal: 30,
+            db_type: postgres_types::DbColumnType::Array(
+                postgres_types::DbColumnTypePrimitive::Numrange,
+            ),
+            db_type_name: "NUMRANGE[]".to_string(),
+        },
+        postgres_types::DbColumn {
+            name: "tsrange_col".to_string(),
+            ordinal: 31,
+            db_type: postgres_types::DbColumnType::Array(
+                postgres_types::DbColumnTypePrimitive::Tsrange,
+            ),
+            db_type_name: "TSRANGE[]".to_string(),
+        },
+        postgres_types::DbColumn {
+            name: "tstzrange_col".to_string(),
+            ordinal: 32,
+            db_type: postgres_types::DbColumnType::Array(
+                postgres_types::DbColumnTypePrimitive::Tstzrange,
+            ),
+            db_type_name: "TSTZRANGE[]".to_string(),
+        },
+        // postgres_types::DbColumn {
+        //     name: "daterange_col".to_string(),
+        //     ordinal: 33,
+        //     db_type: postgres_types::DbColumnType::Array(
+        //         postgres_types::DbColumnTypePrimitive::Daterange,
+        //     ),
+        //     db_type_name: "DATERANGE[]".to_string(),
+        // }, // FIXME daterange conversion issue - returning incorrect day value
+    ];
+
+    let select_statement = r#"
+            SELECT
+            id,
+            enum_col,
+            char_col,
+            int2_col,
+            int4_col,
+            int8_col,
+            float4_col,
+            float8_col,
+            numeric_col,
+            boolean_col,
+            text_col,
+            varchar_col,
+            bpchar_col,
+            timestamp_col,
+            timestamptz_col,
+            date_col,
+            time_col,
+            timetz_col,
+            interval_col,
+            bytea_col,
+            uuid_col,
+            json_col,
+            jsonb_col,
+            inet_col,
+            cidr_col,
+            macaddr_col,
+            bit_col,
+            varbit_col,
+            int4range_col,
+            int8range_col,
+            numrange_col,
+            tsrange_col,
+            tstzrange_col
+           FROM array_data_types ORDER BY id ASC;
+        "#;
+
+    rdbms_query_test(
+        rdbms.clone(),
+        &db_address,
+        select_statement,
+        vec![],
+        Some(expected_columns),
+        Some(rows),
+    )
+    .await;
+
+    rdbms_execute_test(
+        rdbms.clone(),
+        &db_address,
+        "DELETE FROM array_data_types;",
+        vec![],
+        None,
+    )
+    .await;
+}
+
+#[test]
 async fn postgres_schema_test(postgres: &DockerPostgresRdbs, rdbms_service: &RdbmsServiceDefault) {
     let rdbms = rdbms_service.postgres();
     let schema = "test1";
@@ -894,106 +1347,8 @@ async fn mysql_execute_test_select1(mysql: &DockerMysqlRdbs, rdbms_service: &Rdb
     .await
 }
 
-// #[test]
-// async fn mysql_execute_test_create_insert_select(
-//     mysql: &DockerMysqlRdbs,
-//     rdbms_service: &RdbmsServiceDefault,
-// ) {
-//     let db_address = mysql.rdbs[1].clone().host_connection_string();
-//     let rdbms = rdbms_service.mysql();
-//     let create_table_statement = r#"
-//             CREATE TABLE IF NOT EXISTS components
-//             (
-//                 component_id        varchar(25)    NOT NULL,
-//                 namespace           varchar(255)    NOT NULL,
-//                 name                varchar(255)    NOT NULL,
-//                 created_on          timestamp NOT NULL DEFAULT NOW(),
-//                 PRIMARY KEY (component_id)
-//             );
-//         "#;
-//
-//     let insert_statement = r#"
-//             INSERT INTO components
-//             (component_id, namespace, name)
-//             VALUES
-//             (?, ?, ?)
-//         "#;
-//
-//     rdbms_execute_test(
-//         rdbms.clone(),
-//         &db_address,
-//         create_table_statement,
-//         vec![],
-//         None,
-//     )
-//     .await;
-//
-//     let count = 100;
-//
-//     let mut rows: Vec<DbRow<mysql_types::DbValue>> = Vec::with_capacity(count);
-//
-//     for i in 0..count {
-//         let params: Vec<mysql_types::DbValue> = vec![
-//             mysql_types::DbValue::Varchar(format!("{:03}", i)),
-//             mysql_types::DbValue::Varchar("default".to_string()),
-//             mysql_types::DbValue::Varchar(format!("name-{}", Uuid::new_v4())),
-//         ];
-//
-//         rdbms_execute_test(
-//             rdbms.clone(),
-//             &db_address,
-//             insert_statement,
-//             params.clone(),
-//             Some(1),
-//         )
-//         .await;
-//
-//         rows.push(DbRow { values: params });
-//     }
-//
-//     let expected_columns = vec![
-//         mysql_types::DbColumn {
-//             name: "component_id".to_string(),
-//             ordinal: 0,
-//             db_type: mysql_types::DbColumnType::Varchar,
-//             db_type_name: "VARCHAR".to_string(),
-//         },
-//         mysql_types::DbColumn {
-//             name: "namespace".to_string(),
-//             ordinal: 1,
-//             db_type: mysql_types::DbColumnType::Varchar,
-//             db_type_name: "VARCHAR".to_string(),
-//         },
-//         mysql_types::DbColumn {
-//             name: "name".to_string(),
-//             ordinal: 2,
-//             db_type: mysql_types::DbColumnType::Varchar,
-//             db_type_name: "VARCHAR".to_string(),
-//         },
-//     ];
-//
-//     rdbms_query_test(
-//         rdbms.clone(),
-//         &db_address,
-//         "SELECT component_id, namespace, name FROM components ORDER BY component_id ASC",
-//         vec![],
-//         Some(expected_columns),
-//         Some(rows),
-//     )
-//     .await;
-//
-//     rdbms_execute_test(
-//         rdbms.clone(),
-//         &db_address,
-//         "DELETE FROM components;",
-//         vec![],
-//         None,
-//     )
-//     .await;
-// }
-
 #[test]
-async fn mysql_execute_test_create_insert_select2(
+async fn mysql_execute_test_create_insert_select(
     mysql: &DockerMysqlRdbs,
     rdbms_service: &RdbmsServiceDefault,
 ) {
@@ -1029,7 +1384,12 @@ async fn mysql_execute_test_create_insert_select2(
               `longblob_col` LONGBLOB,
               `enum_col` ENUM('value1', 'value2', 'value3'),
               `set_col` SET('value1', 'value2', 'value3'),
-              `json_col` JSON
+              `json_col` JSON,
+              `tinityint_unsigned_col` TINYINT UNSIGNED,
+              `smallint_unsigned_col` SMALLINT UNSIGNED,
+              `mediumint_unsigned_col` MEDIUMINT UNSIGNED,
+              `int_unsigned_col` INT UNSIGNED,
+              `bigint_unsigned_col` BIGINT UNSIGNED
             );
         "#;
 
@@ -1041,7 +1401,9 @@ async fn mysql_execute_test_create_insert_select2(
               timestamp_col, char_col, varchar_col, tinytext_col,
               text_col, mediumtext_col, longtext_col, binary_col, varbinary_col,
               tinyblob_col, blob_col, mediumblob_col, longblob_col, enum_col,
-              set_col, json_col
+              set_col, json_col,
+              tinityint_unsigned_col, smallint_unsigned_col,
+              mediumint_unsigned_col, int_unsigned_col, bigint_unsigned_col
             ) VALUES (
               ?,
               ?, ?, ?, ?, ?,
@@ -1049,7 +1411,8 @@ async fn mysql_execute_test_create_insert_select2(
               ?, ?, ?, ?,
               ?, ?, ?, ?, ?,
               ?, ?, ?, ?, ?,
-              ?, ?
+              ?, ?,
+              ?, ?, ?, ?, ?
             );
         "#;
 
@@ -1062,7 +1425,7 @@ async fn mysql_execute_test_create_insert_select2(
     )
     .await;
 
-    let count = 1;
+    let count = 3;
 
     let mut rows: Vec<DbRow<mysql_types::DbValue>> = Vec::with_capacity(count);
 
@@ -1111,6 +1474,11 @@ async fn mysql_execute_test_create_insert_select2(
                       "id": i
                    }
             )),
+            mysql_types::DbValue::TinyintUnsigned(10),
+            mysql_types::DbValue::SmallintUnsigned(20),
+            mysql_types::DbValue::MediumintUnsigned(30),
+            mysql_types::DbValue::IntUnsigned(40),
+            mysql_types::DbValue::BigintUnsigned(50),
         ];
 
         rdbms_execute_test(
@@ -1288,6 +1656,36 @@ async fn mysql_execute_test_create_insert_select2(
             db_type: mysql_types::DbColumnType::Json,
             db_type_name: "JSON".to_string(),
         },
+        mysql_types::DbColumn {
+            name: "tiny_unsigned_col".to_string(),
+            ordinal: 27,
+            db_type: mysql_types::DbColumnType::TinyintUnsigned,
+            db_type_name: "TINYINT UNSIGNED".to_string(),
+        },
+        mysql_types::DbColumn {
+            name: "small_unsigned_col".to_string(),
+            ordinal: 28,
+            db_type: mysql_types::DbColumnType::SmallintUnsigned,
+            db_type_name: "SMALLINT UNSIGNED".to_string(),
+        },
+        mysql_types::DbColumn {
+            name: "medium_unsigned_col".to_string(),
+            ordinal: 29,
+            db_type: mysql_types::DbColumnType::MediumintUnsigned,
+            db_type_name: "MEDIUMINT UNSIGNED".to_string(),
+        },
+        mysql_types::DbColumn {
+            name: "unsigned_col".to_string(),
+            ordinal: 30,
+            db_type: mysql_types::DbColumnType::IntUnsigned,
+            db_type_name: "INT UNSIGNED".to_string(),
+        },
+        mysql_types::DbColumn {
+            name: "big_unsigned_col".to_string(),
+            ordinal: 31,
+            db_type: mysql_types::DbColumnType::BigintUnsigned,
+            db_type_name: "BIGINT UNSIGNED".to_string(),
+        },
     ];
 
     let select_statement = r#"
@@ -1298,7 +1696,9 @@ async fn mysql_execute_test_create_insert_select2(
               timestamp_col, char_col, varchar_col, tinytext_col,
               text_col, mediumtext_col, longtext_col, binary_col, varbinary_col,
               tinyblob_col, blob_col, mediumblob_col, longblob_col, enum_col,
-              set_col, json_col
+              set_col, json_col,
+              tinityint_unsigned_col, smallint_unsigned_col,
+              mediumint_unsigned_col, int_unsigned_col, bigint_unsigned_col
            FROM data_types ORDER BY id ASC;
         "#;
 

@@ -306,11 +306,11 @@ impl TryFrom<DbValue> for crate::services::rdbms::mysql::types::DbValue {
             DbValue::Mediumint(v) => Ok(Self::Mediumint(v)),
             DbValue::Int(v) => Ok(Self::Int(v)),
             DbValue::Bigint(v) => Ok(Self::Bigint(v)),
-            DbValue::TinyUnsigned(v) => Ok(Self::TinyUnsigned(v)),
-            DbValue::SmallUnsigned(v) => Ok(Self::SmallUnsigned(v)),
-            DbValue::MediumUnsigned(v) => Ok(Self::MediumUnsigned(v)),
-            DbValue::Unsigned(v) => Ok(Self::Unsigned(v)),
-            DbValue::BigUnsigned(v) => Ok(Self::BigUnsigned(v)),
+            DbValue::TinyintUnsigned(v) => Ok(Self::TinyintUnsigned(v)),
+            DbValue::SmallintUnsigned(v) => Ok(Self::SmallintUnsigned(v)),
+            DbValue::MediumintUnsigned(v) => Ok(Self::MediumintUnsigned(v)),
+            DbValue::IntUnsigned(v) => Ok(Self::IntUnsigned(v)),
+            DbValue::BigintUnsigned(v) => Ok(Self::BigintUnsigned(v)),
             DbValue::Decimal(s) => {
                 let v = bigdecimal::BigDecimal::from_str(&s).map_err(|e| e.to_string())?;
                 Ok(Self::Decimal(v))
@@ -367,15 +367,19 @@ impl From<crate::services::rdbms::mysql::types::DbValue> for DbValue {
             crate::services::rdbms::mysql::types::DbValue::Mediumint(v) => Self::Mediumint(v),
             crate::services::rdbms::mysql::types::DbValue::Int(v) => Self::Int(v),
             crate::services::rdbms::mysql::types::DbValue::Bigint(v) => Self::Bigint(v),
-            crate::services::rdbms::mysql::types::DbValue::TinyUnsigned(v) => Self::TinyUnsigned(v),
-            crate::services::rdbms::mysql::types::DbValue::SmallUnsigned(v) => {
-                Self::SmallUnsigned(v)
+            crate::services::rdbms::mysql::types::DbValue::TinyintUnsigned(v) => {
+                Self::TinyintUnsigned(v)
             }
-            crate::services::rdbms::mysql::types::DbValue::MediumUnsigned(v) => {
-                Self::MediumUnsigned(v)
+            crate::services::rdbms::mysql::types::DbValue::SmallintUnsigned(v) => {
+                Self::SmallintUnsigned(v)
             }
-            crate::services::rdbms::mysql::types::DbValue::Unsigned(v) => Self::Unsigned(v),
-            crate::services::rdbms::mysql::types::DbValue::BigUnsigned(v) => Self::BigUnsigned(v),
+            crate::services::rdbms::mysql::types::DbValue::MediumintUnsigned(v) => {
+                Self::MediumintUnsigned(v)
+            }
+            crate::services::rdbms::mysql::types::DbValue::IntUnsigned(v) => Self::IntUnsigned(v),
+            crate::services::rdbms::mysql::types::DbValue::BigintUnsigned(v) => {
+                Self::BigintUnsigned(v)
+            }
             crate::services::rdbms::mysql::types::DbValue::Decimal(v) => {
                 Self::Decimal(v.to_string())
             }
@@ -434,15 +438,19 @@ impl From<crate::services::rdbms::mysql::types::DbColumnType> for DbColumnType {
             crate::services::rdbms::mysql::types::DbColumnType::Mediumint => Self::Mediumint,
             crate::services::rdbms::mysql::types::DbColumnType::Int => Self::Int,
             crate::services::rdbms::mysql::types::DbColumnType::Bigint => Self::Bigint,
-            crate::services::rdbms::mysql::types::DbColumnType::Unsigned => Self::Unsigned,
-            crate::services::rdbms::mysql::types::DbColumnType::TinyUnsigned => Self::TinyUnsigned,
-            crate::services::rdbms::mysql::types::DbColumnType::SmallUnsigned => {
-                Self::SmallUnsigned
+            crate::services::rdbms::mysql::types::DbColumnType::IntUnsigned => Self::IntUnsigned,
+            crate::services::rdbms::mysql::types::DbColumnType::TinyintUnsigned => {
+                Self::TinyintUnsigned
             }
-            crate::services::rdbms::mysql::types::DbColumnType::MediumUnsigned => {
-                Self::MediumUnsigned
+            crate::services::rdbms::mysql::types::DbColumnType::SmallintUnsigned => {
+                Self::SmallintUnsigned
             }
-            crate::services::rdbms::mysql::types::DbColumnType::BigUnsigned => Self::BigUnsigned,
+            crate::services::rdbms::mysql::types::DbColumnType::MediumintUnsigned => {
+                Self::MediumintUnsigned
+            }
+            crate::services::rdbms::mysql::types::DbColumnType::BigintUnsigned => {
+                Self::BigintUnsigned
+            }
             crate::services::rdbms::mysql::types::DbColumnType::Float => Self::Float,
             crate::services::rdbms::mysql::types::DbColumnType::Double => Self::Double,
             crate::services::rdbms::mysql::types::DbColumnType::Decimal => Self::Decimal,

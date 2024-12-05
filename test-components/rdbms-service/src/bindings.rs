@@ -6123,11 +6123,11 @@ pub mod wasi {
                 Mediumint,
                 Int,
                 Bigint,
-                TinyUnsigned,
-                SmallUnsigned,
-                MediumUnsigned,
-                Unsigned,
-                BigUnsigned,
+                TinyintUnsigned,
+                SmallintUnsigned,
+                MediumintUnsigned,
+                IntUnsigned,
+                BigintUnsigned,
                 Float,
                 Double,
                 Decimal,
@@ -6164,18 +6164,20 @@ pub mod wasi {
                         }
                         DbColumnType::Int => f.debug_tuple("DbColumnType::Int").finish(),
                         DbColumnType::Bigint => f.debug_tuple("DbColumnType::Bigint").finish(),
-                        DbColumnType::TinyUnsigned => {
-                            f.debug_tuple("DbColumnType::TinyUnsigned").finish()
+                        DbColumnType::TinyintUnsigned => {
+                            f.debug_tuple("DbColumnType::TinyintUnsigned").finish()
                         }
-                        DbColumnType::SmallUnsigned => {
-                            f.debug_tuple("DbColumnType::SmallUnsigned").finish()
+                        DbColumnType::SmallintUnsigned => {
+                            f.debug_tuple("DbColumnType::SmallintUnsigned").finish()
                         }
-                        DbColumnType::MediumUnsigned => {
-                            f.debug_tuple("DbColumnType::MediumUnsigned").finish()
+                        DbColumnType::MediumintUnsigned => {
+                            f.debug_tuple("DbColumnType::MediumintUnsigned").finish()
                         }
-                        DbColumnType::Unsigned => f.debug_tuple("DbColumnType::Unsigned").finish(),
-                        DbColumnType::BigUnsigned => {
-                            f.debug_tuple("DbColumnType::BigUnsigned").finish()
+                        DbColumnType::IntUnsigned => {
+                            f.debug_tuple("DbColumnType::IntUnsigned").finish()
+                        }
+                        DbColumnType::BigintUnsigned => {
+                            f.debug_tuple("DbColumnType::BigintUnsigned").finish()
                         }
                         DbColumnType::Float => f.debug_tuple("DbColumnType::Float").finish(),
                         DbColumnType::Double => f.debug_tuple("DbColumnType::Double").finish(),
@@ -6237,16 +6239,16 @@ pub mod wasi {
                 Boolean(bool),
                 Tinyint(i8),
                 Smallint(i16),
-                Mediumint(i32),
                 /// s24
+                Mediumint(i32),
                 Int(i32),
                 Bigint(i64),
-                TinyUnsigned(u8),
-                SmallUnsigned(u16),
-                MediumUnsigned(u32),
+                TinyintUnsigned(u8),
+                SmallintUnsigned(u16),
                 /// u24
-                Unsigned(u32),
-                BigUnsigned(u64),
+                MediumintUnsigned(u32),
+                IntUnsigned(u32),
+                BigintUnsigned(u64),
                 Float(f32),
                 Double(f64),
                 Decimal(_rt::String),
@@ -6286,20 +6288,21 @@ pub mod wasi {
                         }
                         DbValue::Int(e) => f.debug_tuple("DbValue::Int").field(e).finish(),
                         DbValue::Bigint(e) => f.debug_tuple("DbValue::Bigint").field(e).finish(),
-                        DbValue::TinyUnsigned(e) => {
-                            f.debug_tuple("DbValue::TinyUnsigned").field(e).finish()
+                        DbValue::TinyintUnsigned(e) => {
+                            f.debug_tuple("DbValue::TinyintUnsigned").field(e).finish()
                         }
-                        DbValue::SmallUnsigned(e) => {
-                            f.debug_tuple("DbValue::SmallUnsigned").field(e).finish()
+                        DbValue::SmallintUnsigned(e) => {
+                            f.debug_tuple("DbValue::SmallintUnsigned").field(e).finish()
                         }
-                        DbValue::MediumUnsigned(e) => {
-                            f.debug_tuple("DbValue::MediumUnsigned").field(e).finish()
+                        DbValue::MediumintUnsigned(e) => f
+                            .debug_tuple("DbValue::MediumintUnsigned")
+                            .field(e)
+                            .finish(),
+                        DbValue::IntUnsigned(e) => {
+                            f.debug_tuple("DbValue::IntUnsigned").field(e).finish()
                         }
-                        DbValue::Unsigned(e) => {
-                            f.debug_tuple("DbValue::Unsigned").field(e).finish()
-                        }
-                        DbValue::BigUnsigned(e) => {
-                            f.debug_tuple("DbValue::BigUnsigned").field(e).finish()
+                        DbValue::BigintUnsigned(e) => {
+                            f.debug_tuple("DbValue::BigintUnsigned").field(e).finish()
                         }
                         DbValue::Float(e) => f.debug_tuple("DbValue::Float").field(e).finish(),
                         DbValue::Double(e) => f.debug_tuple("DbValue::Double").field(e).finish(),
@@ -6492,11 +6495,11 @@ pub mod wasi {
                                     3 => DbColumnType::Mediumint,
                                     4 => DbColumnType::Int,
                                     5 => DbColumnType::Bigint,
-                                    6 => DbColumnType::TinyUnsigned,
-                                    7 => DbColumnType::SmallUnsigned,
-                                    8 => DbColumnType::MediumUnsigned,
-                                    9 => DbColumnType::Unsigned,
-                                    10 => DbColumnType::BigUnsigned,
+                                    6 => DbColumnType::TinyintUnsigned,
+                                    7 => DbColumnType::SmallintUnsigned,
+                                    8 => DbColumnType::MediumintUnsigned,
+                                    9 => DbColumnType::IntUnsigned,
+                                    10 => DbColumnType::BigintUnsigned,
                                     11 => DbColumnType::Float,
                                     12 => DbColumnType::Double,
                                     13 => DbColumnType::Decimal,
@@ -6652,7 +6655,7 @@ pub mod wasi {
 
                                                                 l13 as u8
                                                             };
-                                                            DbValue::TinyUnsigned(e94)
+                                                            DbValue::TinyintUnsigned(e94)
                                                         }
                                                         7 => {
                                                             let e94 = {
@@ -6662,7 +6665,7 @@ pub mod wasi {
 
                                                                 l14 as u16
                                                             };
-                                                            DbValue::SmallUnsigned(e94)
+                                                            DbValue::SmallintUnsigned(e94)
                                                         }
                                                         8 => {
                                                             let e94 = {
@@ -6671,7 +6674,7 @@ pub mod wasi {
 
                                                                 l15 as u32
                                                             };
-                                                            DbValue::MediumUnsigned(e94)
+                                                            DbValue::MediumintUnsigned(e94)
                                                         }
                                                         9 => {
                                                             let e94 = {
@@ -6680,7 +6683,7 @@ pub mod wasi {
 
                                                                 l16 as u32
                                                             };
-                                                            DbValue::Unsigned(e94)
+                                                            DbValue::IntUnsigned(e94)
                                                         }
                                                         10 => {
                                                             let e94 = {
@@ -6689,7 +6692,7 @@ pub mod wasi {
 
                                                                 l17 as u64
                                                             };
-                                                            DbValue::BigUnsigned(e94)
+                                                            DbValue::BigintUnsigned(e94)
                                                         }
                                                         11 => {
                                                             let e94 = {
@@ -7337,23 +7340,23 @@ pub mod wasi {
                                         *base.add(0).cast::<u8>() = (5i32) as u8;
                                         *base.add(8).cast::<i64>() = _rt::as_i64(e);
                                     }
-                                    DbValue::TinyUnsigned(e) => {
+                                    DbValue::TinyintUnsigned(e) => {
                                         *base.add(0).cast::<u8>() = (6i32) as u8;
                                         *base.add(8).cast::<u8>() = (_rt::as_i32(e)) as u8;
                                     }
-                                    DbValue::SmallUnsigned(e) => {
+                                    DbValue::SmallintUnsigned(e) => {
                                         *base.add(0).cast::<u8>() = (7i32) as u8;
                                         *base.add(8).cast::<u16>() = (_rt::as_i32(e)) as u16;
                                     }
-                                    DbValue::MediumUnsigned(e) => {
+                                    DbValue::MediumintUnsigned(e) => {
                                         *base.add(0).cast::<u8>() = (8i32) as u8;
                                         *base.add(8).cast::<i32>() = _rt::as_i32(e);
                                     }
-                                    DbValue::Unsigned(e) => {
+                                    DbValue::IntUnsigned(e) => {
                                         *base.add(0).cast::<u8>() = (9i32) as u8;
                                         *base.add(8).cast::<i32>() = _rt::as_i32(e);
                                     }
-                                    DbValue::BigUnsigned(e) => {
+                                    DbValue::BigintUnsigned(e) => {
                                         *base.add(0).cast::<u8>() = (10i32) as u8;
                                         *base.add(8).cast::<i64>() = _rt::as_i64(e);
                                     }
@@ -7775,23 +7778,23 @@ pub mod wasi {
                                         *base.add(0).cast::<u8>() = (5i32) as u8;
                                         *base.add(8).cast::<i64>() = _rt::as_i64(e);
                                     }
-                                    DbValue::TinyUnsigned(e) => {
+                                    DbValue::TinyintUnsigned(e) => {
                                         *base.add(0).cast::<u8>() = (6i32) as u8;
                                         *base.add(8).cast::<u8>() = (_rt::as_i32(e)) as u8;
                                     }
-                                    DbValue::SmallUnsigned(e) => {
+                                    DbValue::SmallintUnsigned(e) => {
                                         *base.add(0).cast::<u8>() = (7i32) as u8;
                                         *base.add(8).cast::<u16>() = (_rt::as_i32(e)) as u16;
                                     }
-                                    DbValue::MediumUnsigned(e) => {
+                                    DbValue::MediumintUnsigned(e) => {
                                         *base.add(0).cast::<u8>() = (8i32) as u8;
                                         *base.add(8).cast::<i32>() = _rt::as_i32(e);
                                     }
-                                    DbValue::Unsigned(e) => {
+                                    DbValue::IntUnsigned(e) => {
                                         *base.add(0).cast::<u8>() = (9i32) as u8;
                                         *base.add(8).cast::<i32>() = _rt::as_i32(e);
                                     }
-                                    DbValue::BigUnsigned(e) => {
+                                    DbValue::BigintUnsigned(e) => {
                                         *base.add(0).cast::<u8>() = (10i32) as u8;
                                         *base.add(8).cast::<i64>() = _rt::as_i64(e);
                                     }
@@ -8373,19 +8376,19 @@ pub mod exports {
                                         V10::Bigint => {
                                             *base.add(16).cast::<u8>() = (5i32) as u8;
                                         }
-                                        V10::TinyUnsigned => {
+                                        V10::TinyintUnsigned => {
                                             *base.add(16).cast::<u8>() = (6i32) as u8;
                                         }
-                                        V10::SmallUnsigned => {
+                                        V10::SmallintUnsigned => {
                                             *base.add(16).cast::<u8>() = (7i32) as u8;
                                         }
-                                        V10::MediumUnsigned => {
+                                        V10::MediumintUnsigned => {
                                             *base.add(16).cast::<u8>() = (8i32) as u8;
                                         }
-                                        V10::Unsigned => {
+                                        V10::IntUnsigned => {
                                             *base.add(16).cast::<u8>() = (9i32) as u8;
                                         }
-                                        V10::BigUnsigned => {
+                                        V10::BigintUnsigned => {
                                             *base.add(16).cast::<u8>() = (10i32) as u8;
                                         }
                                         V10::Float => {
@@ -8544,25 +8547,25 @@ pub mod exports {
                                                     *base.add(0).cast::<u8>() = (5i32) as u8;
                                                     *base.add(8).cast::<i64>() = _rt::as_i64(e);
                                                 }
-                                                V35::TinyUnsigned(e) => {
+                                                V35::TinyintUnsigned(e) => {
                                                     *base.add(0).cast::<u8>() = (6i32) as u8;
                                                     *base.add(8).cast::<u8>() =
                                                         (_rt::as_i32(e)) as u8;
                                                 }
-                                                V35::SmallUnsigned(e) => {
+                                                V35::SmallintUnsigned(e) => {
                                                     *base.add(0).cast::<u8>() = (7i32) as u8;
                                                     *base.add(8).cast::<u16>() =
                                                         (_rt::as_i32(e)) as u16;
                                                 }
-                                                V35::MediumUnsigned(e) => {
+                                                V35::MediumintUnsigned(e) => {
                                                     *base.add(0).cast::<u8>() = (8i32) as u8;
                                                     *base.add(8).cast::<i32>() = _rt::as_i32(e);
                                                 }
-                                                V35::Unsigned(e) => {
+                                                V35::IntUnsigned(e) => {
                                                     *base.add(0).cast::<u8>() = (9i32) as u8;
                                                     *base.add(8).cast::<i32>() = _rt::as_i32(e);
                                                 }
-                                                V35::BigUnsigned(e) => {
+                                                V35::BigintUnsigned(e) => {
                                                     *base.add(0).cast::<u8>() = (10i32) as u8;
                                                     *base.add(8).cast::<i64>() = _rt::as_i64(e);
                                                 }
@@ -12510,8 +12513,8 @@ pub(crate) use __export_rdbms_service_impl as export;
 #[cfg(target_arch = "wasm32")]
 #[link_section = "component-type:wit-bindgen:0.25.0:rdbms-service:encoded world"]
 #[doc(hidden)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 3951] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xeb\x1d\x01A\x02\x01\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 3983] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\x8b\x1e\x01A\x02\x01\
 A\x0a\x01BW\x01q\x05\x12connection-failure\x01s\0\x17query-parameter-failure\x01\
 s\0\x17query-execution-failure\x01s\0\x16query-response-failure\x01s\0\x05other\x01\
 s\0\x04\0\x05error\x03\0\0\x01o\x02ww\x04\0\x04uuid\x03\0\x02\x01o\x04}}}}\x04\0\
@@ -12557,45 +12560,46 @@ ry-parameter-failure\x01s\0\x17query-execution-failure\x01s\0\x16query-response-
 failure\x01s\0\x05other\x01s\0\x04\0\x05error\x03\0\0\x01o\x03z}}\x04\0\x04date\x03\
 \0\x02\x01o\x04}}}y\x04\0\x04time\x03\0\x04\x01o\x07z}}}}}y\x04\0\x09timestamp\x03\
 \0\x06\x01p\x7f\x04\0\x07bit-vec\x03\0\x08\x01q#\x07boolean\0\0\x07tinyint\0\0\x08\
-smallint\0\0\x09mediumint\0\0\x03int\0\0\x06bigint\0\0\x0dtiny-unsigned\0\0\x0es\
-mall-unsigned\0\0\x0fmedium-unsigned\0\0\x08unsigned\0\0\x0cbig-unsigned\0\0\x05\
-float\0\0\x06double\0\0\x07decimal\0\0\x04date\0\0\x08datetime\0\0\x09timestamp\0\
-\0\x04time\0\0\x04year\0\0\x07fixchar\0\0\x07varchar\0\0\x08tinytext\0\0\x04text\
-\0\0\x0amediumtext\0\0\x08longtext\0\0\x06binary\0\0\x09varbinary\0\0\x08tinyblo\
-b\0\0\x04blob\0\0\x0amediumblob\0\0\x08longblob\0\0\x0benumeration\0\0\x03set\0\0\
-\x03bit\0\0\x04json\0\0\x04\0\x0edb-column-type\x03\0\x0a\x01r\x04\x07ordinalw\x04\
-names\x07db-type\x0b\x0cdb-type-names\x04\0\x09db-column\x03\0\x0c\x01p}\x01q$\x07\
-boolean\x01\x7f\0\x07tinyint\x01~\0\x08smallint\x01|\0\x09mediumint\x01z\0\x03in\
-t\x01z\0\x06bigint\x01x\0\x0dtiny-unsigned\x01}\0\x0esmall-unsigned\x01{\0\x0fme\
-dium-unsigned\x01y\0\x08unsigned\x01y\0\x0cbig-unsigned\x01w\0\x05float\x01v\0\x06\
-double\x01u\0\x07decimal\x01s\0\x04date\x01\x03\0\x08datetime\x01\x07\0\x09times\
-tamp\x01\x07\0\x04time\x01\x05\0\x04year\x01|\0\x07fixchar\x01s\0\x07varchar\x01\
-s\0\x08tinytext\x01s\0\x04text\x01s\0\x0amediumtext\x01s\0\x08longtext\x01s\0\x06\
-binary\x01\x0e\0\x09varbinary\x01\x0e\0\x08tinyblob\x01\x0e\0\x04blob\x01\x0e\0\x0a\
-mediumblob\x01\x0e\0\x08longblob\x01\x0e\0\x0benumeration\x01s\0\x03set\x01s\0\x03\
-bit\x01\x09\0\x04json\x01s\0\x04null\0\0\x04\0\x08db-value\x03\0\x0f\x01p\x10\x01\
-r\x01\x06values\x11\x04\0\x06db-row\x03\0\x12\x04\0\x0ddb-result-set\x03\x01\x04\
-\0\x0ddb-connection\x03\x01\x01h\x14\x01p\x0d\x01@\x01\x04self\x16\0\x17\x04\0![\
-method]db-result-set.get-columns\x01\x18\x01p\x13\x01k\x19\x01@\x01\x04self\x16\0\
-\x1a\x04\0\x1e[method]db-result-set.get-next\x01\x1b\x01i\x15\x01j\x01\x1c\x01\x01\
-\x01@\x01\x07addresss\0\x1d\x04\0\x1a[static]db-connection.open\x01\x1e\x01h\x15\
-\x01i\x14\x01j\x01\x20\x01\x01\x01@\x03\x04self\x1f\x09statements\x06params\x11\0\
-!\x04\0\x1b[method]db-connection.query\x01\"\x01j\x01w\x01\x01\x01@\x03\x04self\x1f\
-\x09statements\x06params\x11\0#\x04\0\x1d[method]db-connection.execute\x01$\x03\x01\
-\x16wasi:rdbms/mysql@0.0.1\x05\x01\x02\x03\0\0\x06db-row\x02\x03\0\0\x09db-colum\
-n\x02\x03\0\x01\x06db-row\x02\x03\0\x01\x09db-column\x01B\x1d\x02\x03\x02\x01\x02\
-\x04\0\x0fpostgres-db-row\x03\0\0\x02\x03\x02\x01\x03\x04\0\x12postgres-db-colum\
-n\x03\0\x02\x02\x03\x02\x01\x04\x04\0\x0cmysql-db-row\x03\0\x04\x02\x03\x02\x01\x05\
-\x04\0\x0fmysql-db-column\x03\0\x06\x01p\x03\x01p\x01\x01r\x02\x07columns\x08\x04\
-rows\x09\x04\0\x15postgres-query-result\x03\0\x0a\x01p\x07\x01p\x05\x01r\x02\x07\
-columns\x0c\x04rows\x0d\x04\0\x12mysql-query-result\x03\0\x0e\x01@\0\0s\x04\0\x05\
-check\x01\x10\x01ps\x01j\x01w\x01s\x01@\x02\x09statements\x06params\x11\0\x12\x04\
-\0\x0dmysql-execute\x01\x13\x01j\x01\x0f\x01s\x01@\x02\x09statements\x06params\x11\
-\0\x14\x04\0\x0bmysql-query\x01\x15\x04\0\x10postgres-execute\x01\x13\x01j\x01\x0b\
-\x01s\x01@\x02\x09statements\x06params\x11\0\x16\x04\0\x0epostgres-query\x01\x17\
-\x04\x01\x0cgolem:it/api\x05\x06\x04\x01\x16golem:it/rdbms-service\x04\0\x0b\x13\
-\x01\0\x0drdbms-service\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-c\
-omponent\x070.208.1\x10wit-bindgen-rust\x060.25.0";
+smallint\0\0\x09mediumint\0\0\x03int\0\0\x06bigint\0\0\x10tinyint-unsigned\0\0\x11\
+smallint-unsigned\0\0\x12mediumint-unsigned\0\0\x0cint-unsigned\0\0\x0fbigint-un\
+signed\0\0\x05float\0\0\x06double\0\0\x07decimal\0\0\x04date\0\0\x08datetime\0\0\
+\x09timestamp\0\0\x04time\0\0\x04year\0\0\x07fixchar\0\0\x07varchar\0\0\x08tinyt\
+ext\0\0\x04text\0\0\x0amediumtext\0\0\x08longtext\0\0\x06binary\0\0\x09varbinary\
+\0\0\x08tinyblob\0\0\x04blob\0\0\x0amediumblob\0\0\x08longblob\0\0\x0benumeratio\
+n\0\0\x03set\0\0\x03bit\0\0\x04json\0\0\x04\0\x0edb-column-type\x03\0\x0a\x01r\x04\
+\x07ordinalw\x04names\x07db-type\x0b\x0cdb-type-names\x04\0\x09db-column\x03\0\x0c\
+\x01p}\x01q$\x07boolean\x01\x7f\0\x07tinyint\x01~\0\x08smallint\x01|\0\x09medium\
+int\x01z\0\x03int\x01z\0\x06bigint\x01x\0\x10tinyint-unsigned\x01}\0\x11smallint\
+-unsigned\x01{\0\x12mediumint-unsigned\x01y\0\x0cint-unsigned\x01y\0\x0fbigint-u\
+nsigned\x01w\0\x05float\x01v\0\x06double\x01u\0\x07decimal\x01s\0\x04date\x01\x03\
+\0\x08datetime\x01\x07\0\x09timestamp\x01\x07\0\x04time\x01\x05\0\x04year\x01|\0\
+\x07fixchar\x01s\0\x07varchar\x01s\0\x08tinytext\x01s\0\x04text\x01s\0\x0amedium\
+text\x01s\0\x08longtext\x01s\0\x06binary\x01\x0e\0\x09varbinary\x01\x0e\0\x08tin\
+yblob\x01\x0e\0\x04blob\x01\x0e\0\x0amediumblob\x01\x0e\0\x08longblob\x01\x0e\0\x0b\
+enumeration\x01s\0\x03set\x01s\0\x03bit\x01\x09\0\x04json\x01s\0\x04null\0\0\x04\
+\0\x08db-value\x03\0\x0f\x01p\x10\x01r\x01\x06values\x11\x04\0\x06db-row\x03\0\x12\
+\x04\0\x0ddb-result-set\x03\x01\x04\0\x0ddb-connection\x03\x01\x01h\x14\x01p\x0d\
+\x01@\x01\x04self\x16\0\x17\x04\0![method]db-result-set.get-columns\x01\x18\x01p\
+\x13\x01k\x19\x01@\x01\x04self\x16\0\x1a\x04\0\x1e[method]db-result-set.get-next\
+\x01\x1b\x01i\x15\x01j\x01\x1c\x01\x01\x01@\x01\x07addresss\0\x1d\x04\0\x1a[stat\
+ic]db-connection.open\x01\x1e\x01h\x15\x01i\x14\x01j\x01\x20\x01\x01\x01@\x03\x04\
+self\x1f\x09statements\x06params\x11\0!\x04\0\x1b[method]db-connection.query\x01\
+\"\x01j\x01w\x01\x01\x01@\x03\x04self\x1f\x09statements\x06params\x11\0#\x04\0\x1d\
+[method]db-connection.execute\x01$\x03\x01\x16wasi:rdbms/mysql@0.0.1\x05\x01\x02\
+\x03\0\0\x06db-row\x02\x03\0\0\x09db-column\x02\x03\0\x01\x06db-row\x02\x03\0\x01\
+\x09db-column\x01B\x1d\x02\x03\x02\x01\x02\x04\0\x0fpostgres-db-row\x03\0\0\x02\x03\
+\x02\x01\x03\x04\0\x12postgres-db-column\x03\0\x02\x02\x03\x02\x01\x04\x04\0\x0c\
+mysql-db-row\x03\0\x04\x02\x03\x02\x01\x05\x04\0\x0fmysql-db-column\x03\0\x06\x01\
+p\x03\x01p\x01\x01r\x02\x07columns\x08\x04rows\x09\x04\0\x15postgres-query-resul\
+t\x03\0\x0a\x01p\x07\x01p\x05\x01r\x02\x07columns\x0c\x04rows\x0d\x04\0\x12mysql\
+-query-result\x03\0\x0e\x01@\0\0s\x04\0\x05check\x01\x10\x01ps\x01j\x01w\x01s\x01\
+@\x02\x09statements\x06params\x11\0\x12\x04\0\x0dmysql-execute\x01\x13\x01j\x01\x0f\
+\x01s\x01@\x02\x09statements\x06params\x11\0\x14\x04\0\x0bmysql-query\x01\x15\x04\
+\0\x10postgres-execute\x01\x13\x01j\x01\x0b\x01s\x01@\x02\x09statements\x06param\
+s\x11\0\x16\x04\0\x0epostgres-query\x01\x17\x04\x01\x0cgolem:it/api\x05\x06\x04\x01\
+\x16golem:it/rdbms-service\x04\0\x0b\x13\x01\0\x0drdbms-service\x03\0\0\0G\x09pr\
+oducers\x01\x0cprocessed-by\x02\x0dwit-component\x070.208.1\x10wit-bindgen-rust\x06\
+0.25.0";
 
 #[inline(never)]
 #[doc(hidden)]

@@ -132,11 +132,11 @@ pub(crate) mod sqlx_rdbms {
             DbValue::Mediumint(v) => Ok(query.bind(v)),
             DbValue::Int(v) => Ok(query.bind(v)),
             DbValue::Bigint(v) => Ok(query.bind(v)),
-            DbValue::TinyUnsigned(v) => Ok(query.bind(v)),
-            DbValue::SmallUnsigned(v) => Ok(query.bind(v)),
-            DbValue::MediumUnsigned(v) => Ok(query.bind(v)),
-            DbValue::Unsigned(v) => Ok(query.bind(v)),
-            DbValue::BigUnsigned(v) => Ok(query.bind(v)),
+            DbValue::TinyintUnsigned(v) => Ok(query.bind(v)),
+            DbValue::SmallintUnsigned(v) => Ok(query.bind(v)),
+            DbValue::MediumintUnsigned(v) => Ok(query.bind(v)),
+            DbValue::IntUnsigned(v) => Ok(query.bind(v)),
+            DbValue::BigintUnsigned(v) => Ok(query.bind(v)),
             DbValue::Decimal(v) => Ok(query.bind(v)),
             DbValue::Float(v) => Ok(query.bind(v)),
             DbValue::Double(v) => Ok(query.bind(v)),
@@ -210,19 +210,23 @@ pub(crate) mod sqlx_rdbms {
             }
             mysql_type_name::TINYINT_UNSIGNED => {
                 let v: Option<u8> = row.try_get(index).map_err(|e| e.to_string())?;
-                v.map(DbValue::TinyUnsigned).unwrap_or(DbValue::Null)
+                v.map(DbValue::TinyintUnsigned).unwrap_or(DbValue::Null)
             }
             mysql_type_name::SMALLINT_UNSIGNED => {
                 let v: Option<u16> = row.try_get(index).map_err(|e| e.to_string())?;
-                v.map(DbValue::SmallUnsigned).unwrap_or(DbValue::Null)
+                v.map(DbValue::SmallintUnsigned).unwrap_or(DbValue::Null)
+            }
+            mysql_type_name::MEDIUMINT_UNSIGNED => {
+                let v: Option<u32> = row.try_get(index).map_err(|e| e.to_string())?;
+                v.map(DbValue::MediumintUnsigned).unwrap_or(DbValue::Null)
             }
             mysql_type_name::INT_UNSIGNED => {
                 let v: Option<u32> = row.try_get(index).map_err(|e| e.to_string())?;
-                v.map(DbValue::MediumUnsigned).unwrap_or(DbValue::Null)
+                v.map(DbValue::IntUnsigned).unwrap_or(DbValue::Null)
             }
             mysql_type_name::BIGINT_UNSIGNED => {
                 let v: Option<u64> = row.try_get(index).map_err(|e| e.to_string())?;
-                v.map(DbValue::BigUnsigned).unwrap_or(DbValue::Null)
+                v.map(DbValue::BigintUnsigned).unwrap_or(DbValue::Null)
             }
             mysql_type_name::FLOAT => {
                 let v: Option<f32> = row.try_get(index).map_err(|e| e.to_string())?;
@@ -357,11 +361,11 @@ pub(crate) mod sqlx_rdbms {
                 mysql_type_name::MEDIUMINT => Ok(DbColumnType::Mediumint),
                 mysql_type_name::INT => Ok(DbColumnType::Int),
                 mysql_type_name::BIGINT => Ok(DbColumnType::Bigint),
-                mysql_type_name::TINYINT_UNSIGNED => Ok(DbColumnType::TinyUnsigned),
-                mysql_type_name::SMALLINT_UNSIGNED => Ok(DbColumnType::SmallUnsigned),
-                mysql_type_name::MEDIUMINT_UNSIGNED => Ok(DbColumnType::MediumUnsigned),
-                mysql_type_name::INT_UNSIGNED => Ok(DbColumnType::Unsigned),
-                mysql_type_name::BIGINT_UNSIGNED => Ok(DbColumnType::BigUnsigned),
+                mysql_type_name::TINYINT_UNSIGNED => Ok(DbColumnType::TinyintUnsigned),
+                mysql_type_name::SMALLINT_UNSIGNED => Ok(DbColumnType::SmallintUnsigned),
+                mysql_type_name::MEDIUMINT_UNSIGNED => Ok(DbColumnType::MediumintUnsigned),
+                mysql_type_name::INT_UNSIGNED => Ok(DbColumnType::IntUnsigned),
+                mysql_type_name::BIGINT_UNSIGNED => Ok(DbColumnType::BigintUnsigned),
                 mysql_type_name::DECIMAL => Ok(DbColumnType::Decimal),
                 mysql_type_name::FLOAT => Ok(DbColumnType::Float),
                 mysql_type_name::DOUBLE => Ok(DbColumnType::Double),
@@ -454,11 +458,11 @@ pub mod types {
         Mediumint,
         Int,
         Bigint,
-        TinyUnsigned,
-        SmallUnsigned,
-        MediumUnsigned,
-        Unsigned,
-        BigUnsigned,
+        TinyintUnsigned,
+        SmallintUnsigned,
+        MediumintUnsigned,
+        IntUnsigned,
+        BigintUnsigned,
         Float,
         Double,
         Decimal,
@@ -494,11 +498,11 @@ pub mod types {
                 DbColumnType::Mediumint => write!(f, "mediumint"),
                 DbColumnType::Int => write!(f, "int"),
                 DbColumnType::Bigint => write!(f, "bigint"),
-                DbColumnType::TinyUnsigned => write!(f, "tinyunsigned"),
-                DbColumnType::SmallUnsigned => write!(f, "smallunsigned"),
-                DbColumnType::MediumUnsigned => write!(f, "mediumunsigned"),
-                DbColumnType::Unsigned => write!(f, "unsigned"),
-                DbColumnType::BigUnsigned => write!(f, "bigunsigned"),
+                DbColumnType::TinyintUnsigned => write!(f, "tinyint-unsigned"),
+                DbColumnType::SmallintUnsigned => write!(f, "smallint-unsigned"),
+                DbColumnType::MediumintUnsigned => write!(f, "mediumunint-signed"),
+                DbColumnType::IntUnsigned => write!(f, "int-unsigned"),
+                DbColumnType::BigintUnsigned => write!(f, "bigint-unsigned"),
                 DbColumnType::Float => write!(f, "float"),
                 DbColumnType::Double => write!(f, "double"),
                 DbColumnType::Decimal => write!(f, "decimal"),
@@ -536,12 +540,12 @@ pub mod types {
         /// s24
         Int(i32),
         Bigint(i64),
-        TinyUnsigned(u8),
-        SmallUnsigned(u16),
-        MediumUnsigned(u32),
+        TinyintUnsigned(u8),
+        SmallintUnsigned(u16),
+        MediumintUnsigned(u32),
         /// u24
-        Unsigned(u32),
-        BigUnsigned(u64),
+        IntUnsigned(u32),
+        BigintUnsigned(u64),
         Float(f32),
         Double(f64),
         Decimal(BigDecimal),
@@ -578,11 +582,11 @@ pub mod types {
                 DbValue::Mediumint(v) => write!(f, "{}", v),
                 DbValue::Int(v) => write!(f, "{}", v),
                 DbValue::Bigint(v) => write!(f, "{}", v),
-                DbValue::TinyUnsigned(v) => write!(f, "{}", v),
-                DbValue::SmallUnsigned(v) => write!(f, "{}", v),
-                DbValue::MediumUnsigned(v) => write!(f, "{}", v),
-                DbValue::Unsigned(v) => write!(f, "{}", v),
-                DbValue::BigUnsigned(v) => write!(f, "{}", v),
+                DbValue::TinyintUnsigned(v) => write!(f, "{}", v),
+                DbValue::SmallintUnsigned(v) => write!(f, "{}", v),
+                DbValue::MediumintUnsigned(v) => write!(f, "{}", v),
+                DbValue::IntUnsigned(v) => write!(f, "{}", v),
+                DbValue::BigintUnsigned(v) => write!(f, "{}", v),
                 DbValue::Float(v) => write!(f, "{}", v),
                 DbValue::Double(v) => write!(f, "{}", v),
                 DbValue::Decimal(v) => write!(f, "{}", v),
