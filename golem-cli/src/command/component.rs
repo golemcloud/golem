@@ -276,9 +276,9 @@ impl UpdatedComponentTypeArg {
 }
 
 impl<
-    ProjectRef: clap::Args + Send + Sync + 'static,
-    ComponentRef: ComponentRefSplit<ProjectRef> + clap::Args,
-> ComponentSubCommand<ProjectRef, ComponentRef>
+        ProjectRef: clap::Args + Send + Sync + 'static,
+        ComponentRef: ComponentRefSplit<ProjectRef> + clap::Args,
+    > ComponentSubCommand<ProjectRef, ComponentRef>
 {
     pub async fn handle<ProjectContext: Clone + Send + Sync>(
         self,
