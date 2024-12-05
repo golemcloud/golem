@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use clap::Parser;
+use clap::{CommandFactory, FromArgMatches};
 use colored::Colorize;
 use golem_wasm_rpc_stubgen::*;
 use std::process::ExitCode;
@@ -24,7 +24,16 @@ use golem_wasm_rpc_stubgen::model::app::ComponentPropertiesExtensionsNone;
 async fn main() -> ExitCode {
     pretty_env_logger::init();
 
-    let result = match Command::parse() {
+    let mut clap_command = Command::command();
+    // Based on Command::parse, but using cloned command, so we avoid creating clap_command twice
+    let parsed_command = {
+        let mut matches = clap_command.clone().get_matches();
+        let res = Command::from_arg_matches_mut(&mut matches)
+            .map_err(|err| err.format(&mut Command::command()));
+        res.unwrap_or_else(|e| e.exit())
+    };
+
+    let result = match parsed_command {
         Command::Generate(generate_args) => generate(generate_args),
         Command::Build(build_args) => build(build_args).await,
         Command::AddStubDependency(add_stub_dependency_args) => {
@@ -35,8 +44,12 @@ async fn main() -> ExitCode {
             initialize_workspace(init_workspace_args, "wasm-rpc-stubgen", &[])
         }
         #[cfg(feature = "app-command")]
-        Command::App { subcommand } => {
-            run_app_command::<ComponentPropertiesExtensionsNone>(subcommand).await
+        Command::App { command } => {
+            run_app_command::<ComponentPropertiesExtensionsNone>(
+                clap_command.find_subcommand_mut("app").unwrap(),
+                command,
+            )
+            .await
         }
     };
 
