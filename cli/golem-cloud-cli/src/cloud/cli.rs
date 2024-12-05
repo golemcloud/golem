@@ -14,6 +14,7 @@ use crate::cloud::command::token::TokenSubcommand;
 use crate::cloud::model::{CloudComponentUriOrName, ProjectPolicyId, ProjectRef};
 use clap::{ArgMatches, Command, Error, FromArgMatches, Parser, Subcommand};
 use clap_verbosity_flag::Verbosity;
+use colored::Colorize;
 use golem_cli::cloud::{AccountId, ProjectId};
 use golem_cli::command::profile::UniversalProfileAdd;
 use golem_cli::command::worker::WorkerRefSplit;
@@ -22,6 +23,7 @@ use golem_cli::config::{CloudProfile, ProfileName};
 use golem_cli::factory::ServiceFactory;
 use golem_cli::init::ProfileAuth;
 use golem_cli::init::{init_profile, CliKind};
+use golem_cli::model::app_ext::GolemComponentExtensions;
 use golem_cli::model::{Format, GolemError, GolemResult, WorkerName};
 use golem_cli::{check_for_newer_server_version, command, completion};
 use golem_cloud_client::model::CloudPluginOwner;
@@ -473,6 +475,33 @@ impl<ProfileAdd: clap::Args + Into<UniversalProfileAdd>> CliCommand<CloudCommand
 {
     async fn run(self, ctx: CloudCommandContext) -> Result<GolemResult, GolemError> {
         match self {
+            SharedCommand::App { command } => {
+                golem_wasm_rpc_stubgen::run_app_command::<GolemComponentExtensions>(
+                    {
+                        // TODO: it would be nice to use the same logic which is used by default for handling help,
+                        //       and that way include the current context (bin name and parent commands),
+                        //       but that seems to be using errors, error formating and exit directly;
+                        //       and quite different code path compared to calling print_help
+                        let mut clap_command = ctx.command;
+                        let bin_name = clap_command
+                            .get_bin_name()
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| "golem-cli".to_string());
+                        clap_command
+                            .find_subcommand_mut("app")
+                            .unwrap()
+                            .clone()
+                            .override_usage(format!(
+                                "{} [OPTIONS] [COMMAND]",
+                                format!("{} app", bin_name).bold()
+                            ))
+                    },
+                    command,
+                )
+                .await
+                .map(|_| GolemResult::Str("".to_string()))
+                .map_err(Into::into)
+            }
             SharedCommand::Component { subcommand } => {
                 let factory = ctx.factory.await?;
 
