@@ -33,7 +33,7 @@ cargo component build --release
 
 The resulting WASM component implements the **stub interface** corresponding to the source interface, found in the
 target directory's
-`wit/_stub.wit` file. This WASM component is to be composed together with another component that calls the original
+`wit/stub.wit` file. This WASM component is to be composed together with another component that calls the original
 interface via WASM RPC.
 
 ## Build

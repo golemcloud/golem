@@ -6,8 +6,8 @@ pub mod wit {
     pub static DEPS_DIR: &str = "deps";
     pub static WIT_DIR: &str = "wit";
 
-    pub static STUB_WIT_FILE_NAME: &str = "_stub.wit";
-    pub static INTERFACE_WIT_FILE_NAME: &str = "_interface.wit";
+    pub static STUB_WIT_FILE_NAME: &str = "stub.wit";
+    pub static INTERFACE_WIT_FILE_NAME: &str = "interface.wit";
 
     pub fn stub_package_name(package_name: &wit_parser::PackageName) -> wit_parser::PackageName {
         wit_parser::PackageName {
