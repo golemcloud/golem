@@ -51,8 +51,8 @@ pub struct ComponentRecord<Owner: ComponentOwner> {
     pub created_at: DateTime<Utc>,
     pub component_type: i32,
     pub available: bool,
-    pub object_store_key: String,
-    pub transformed_object_store_key: String,
+    pub object_store_key: Option<String>,
+    pub transformed_object_store_key: Option<String>,
     // one-to-many relationship. Retrieved separately
     #[sqlx(skip)]
     pub files: Vec<FileRecord>,
@@ -84,10 +84,12 @@ impl<Owner: ComponentOwner> ComponentRecord<Owner> {
             created_at: value.created_at,
             component_type: value.component_type as i32,
             available,
-            object_store_key: object_store_key.clone(),
-            transformed_object_store_key: value
-                .transformed_object_store_key
-                .unwrap_or(object_store_key),
+            object_store_key: Some(object_store_key.clone()),
+            transformed_object_store_key: Some(
+                value
+                    .transformed_object_store_key
+                    .unwrap_or(object_store_key),
+            ),
             files: value
                 .files
                 .iter()
@@ -141,8 +143,8 @@ impl<Owner: ComponentOwner> TryFrom<ComponentRecord<Owner>> for Component<Owner>
             versioned_component_id,
             created_at: value.created_at,
             component_type: ComponentType::try_from(value.component_type)?,
-            object_store_key: Some(value.object_store_key),
-            transformed_object_store_key: Some(value.transformed_object_store_key),
+            object_store_key: value.object_store_key,
+            transformed_object_store_key: value.transformed_object_store_key,
             files,
             installed_plugins: value
                 .installed_plugins
