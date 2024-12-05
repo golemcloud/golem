@@ -33,6 +33,20 @@ async fn main() -> ExitCode {
         res.unwrap_or_else(|e| e.exit())
     };
 
+    if !matches!(parsed_command, Command::App { .. }) {
+        eprintln!(
+            "{}",
+            "WARNING: THIS COMMAND IS DEPRECATED AND MIGHT MODIFY SOURCE WIT FILES!".yellow()
+        );
+        eprintln!(
+            "{}",
+            format!(
+                "\nThe recommended new way to handle wasm-rpc stub generation and linking is the {} subcommand.\n",
+                "app".bold().underline(),
+            ).yellow(),
+        )
+    }
+
     let result = match parsed_command {
         Command::Generate(generate_args) => generate(generate_args),
         Command::Build(build_args) => build(build_args).await,

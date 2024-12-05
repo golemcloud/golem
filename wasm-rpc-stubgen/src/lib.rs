@@ -47,15 +47,15 @@ test_r::enable!();
 #[derive(Parser, Debug)]
 #[command(name = "wasm-rpc-stubgen", version)]
 pub enum Command {
-    /// Generate a Rust RPC stub crate for a WASM component
+    /// [DEPRECATED] Generate a Rust RPC stub crate for a WASM component
     Generate(GenerateArgs),
-    /// Build an RPC stub for a WASM component
+    /// [DEPRECATED] Build an RPC stub for a WASM component
     Build(BuildArgs),
-    /// Adds a generated stub as a dependency to another WASM component
+    /// [DEPRECATED] Adds a generated stub as a dependency to another WASM component
     AddStubDependency(AddStubDependencyArgs),
-    /// Compose a WASM component with a generated stub WASM
+    /// [DEPRECATED] Compose a WASM component with a generated stub WASM
     Compose(ComposeArgs),
-    /// Initializes a Golem-specific cargo-make configuration in a Cargo workspace for automatically
+    /// [DEPRECATED] Initializes a Golem-specific cargo-make configuration in a Cargo workspace for automatically
     /// generating stubs and composing results.
     InitializeWorkspace(InitializeWorkspaceArgs),
     /// Build components with application manifests
@@ -92,7 +92,7 @@ pub struct GenerateArgs {
     /// it from the stub WIT. This is useful for example with ComponentizeJS currently where otherwise
     /// the original component's interface would be added as an import to the final WASM.
     #[clap(long, default_value_t = false)]
-    pub always_inline_types: bool, // TODO: deprecated
+    pub always_inline_types: bool,
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -138,7 +138,7 @@ pub struct BuildArgs {
     /// it from the stub WIT. This is useful for example with ComponentizeJS currently where otherwise
     /// the original component's interface would be added as an import to the final WASM.
     #[clap(long, default_value_t = false)]
-    pub always_inline_types: bool, // TODO: deprecated
+    pub always_inline_types: bool,
 }
 
 /// Adds a generated stub as a dependency to another WASM component
