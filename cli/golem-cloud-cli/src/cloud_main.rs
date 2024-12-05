@@ -1,14 +1,13 @@
-extern crate derive_more;
-
-use clap::Parser;
 use golem_cli::command::profile::CloudProfileAdd;
 use golem_cli::config::{get_config_dir, CloudProfile, Config, NamedProfile, Profile, ProfileName};
 use golem_cli::init::CliKind;
-use golem_cli::{run_main, ConfiguredMainArgs};
+use golem_cli::init_tracing;
+use golem_cli::model::text::fmt::format_error;
 use golem_cloud_cli::cloud;
-use golem_cloud_cli::cloud::command::GolemCloudCommand;
+use golem_cloud_cli::cloud::cli::GolemCloudCli;
 use std::path::Path;
 use std::process::ExitCode;
+use tracing::info;
 
 fn main() -> ExitCode {
     let config_dir = get_config_dir();
@@ -25,16 +24,43 @@ fn main() -> ExitCode {
         make_default_profile(&config_dir)
     };
 
-    run_main(
-        cloud::main::async_main,
-        ConfiguredMainArgs {
-            cli_kind,
-            config_dir,
-            profile_name,
-            profile,
-            command: GolemCloudCommand::<CloudProfileAdd>::parse(),
-        },
-    )
+    let (command, parsed) =
+        golem_cli::command::command_and_parsed::<GolemCloudCli<CloudProfileAdd>>();
+
+    let format = parsed.format.unwrap_or(profile.config.default_format);
+
+    init_tracing(parsed.verbosity.clone());
+
+    info!(
+        profile = format!("{:?}", profile_name),
+        format = format!("{:?}", format),
+        "Starting Golem CLI",
+    );
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("Failed to build tokio runtime for cli main");
+
+    let result = runtime.block_on(crate::cloud::cli::run(
+        config_dir,
+        profile_name,
+        profile,
+        format,
+        command,
+        parsed,
+    ));
+
+    match result {
+        Ok(result) => {
+            result.print(format);
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("{}", format_error(&error.0));
+            ExitCode::FAILURE
+        }
+    }
 }
 
 fn make_default_profile(config_dir: &Path) -> (ProfileName, CloudProfile) {

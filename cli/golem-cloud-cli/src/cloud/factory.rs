@@ -2,6 +2,7 @@ use crate::cloud::auth::{Auth, AuthLive};
 use crate::cloud::clients::account::{AccountClient, AccountClientLive};
 use crate::cloud::clients::api_definition::ApiDefinitionClientLive;
 use crate::cloud::clients::api_deployment::ApiDeploymentClientLive;
+use crate::cloud::clients::api_security::ApiSecurityClientLive;
 use crate::cloud::clients::certificate::{CertificateClient, CertificateClientLive};
 use crate::cloud::clients::component::ComponentClientLive;
 use crate::cloud::clients::domain::{DomainClient, DomainClientLive};
@@ -14,7 +15,7 @@ use crate::cloud::clients::project_grant::{ProjectGrantClient, ProjectGrantClien
 use crate::cloud::clients::token::{TokenClient, TokenClientLive};
 use crate::cloud::clients::worker::WorkerClientLive;
 use crate::cloud::clients::CloudAuthentication;
-use crate::cloud::model::ProjectRef;
+use crate::cloud::model::{PluginDefinition, PluginDefinitionWithoutOwner, ProjectRef};
 use crate::cloud::service::account::{AccountService, AccountServiceLive};
 use crate::cloud::service::certificate::{CertificateService, CertificateServiceLive};
 use crate::cloud::service::domain::{DomainService, DomainServiceLive};
@@ -26,6 +27,7 @@ use crate::cloud::service::token::{TokenService, TokenServiceLive};
 use async_trait::async_trait;
 use golem_cli::clients::api_definition::ApiDefinitionClient;
 use golem_cli::clients::api_deployment::ApiDeploymentClient;
+use golem_cli::clients::api_security::ApiSecurityClient;
 use golem_cli::clients::component::ComponentClient;
 use golem_cli::clients::file_download::{FileDownloadClient, FileDownloadClientLive};
 use golem_cli::clients::health_check::HealthCheckClient;
@@ -38,9 +40,6 @@ use golem_cli::init::ProfileAuth;
 use golem_cli::model::GolemError;
 use golem_cli::oss::factory::{make_reqwest_client, OssServiceFactoryConfig};
 use golem_cli::service::project::ProjectResolver;
-use golem_cloud_client::model::{
-    PluginDefinitionCloudPluginOwnerCloudPluginScope, PluginDefinitionWithoutOwnerCloudPluginScope,
-};
 use golem_cloud_client::{CloudPluginScope, Context, Security};
 use itertools::Itertools;
 use std::path::Path;
@@ -364,8 +363,8 @@ impl CloudServiceFactory {
 impl ServiceFactory for CloudServiceFactory {
     type ProjectRef = ProjectRef;
     type ProjectContext = ProjectId;
-    type PluginDefinition = PluginDefinitionCloudPluginOwnerCloudPluginScope;
-    type PluginDefinitionWithoutOwner = PluginDefinitionWithoutOwnerCloudPluginScope;
+    type PluginDefinition = PluginDefinition;
+    type PluginDefinitionWithoutOwner = PluginDefinitionWithoutOwner;
     type PluginScope = CloudPluginScope;
 
     fn project_resolver(
@@ -417,6 +416,16 @@ impl ServiceFactory for CloudServiceFactory {
     ) -> Box<dyn ApiDeploymentClient<ProjectContext = Self::ProjectContext> + Send + Sync> {
         Box::new(ApiDeploymentClientLive {
             client: golem_cloud_client::api::ApiDeploymentClientLive {
+                context: self.worker_context(),
+            },
+        })
+    }
+
+    fn api_security_scheme_client(
+        &self,
+    ) -> Box<dyn ApiSecurityClient<ProjectContext = Self::ProjectContext> + Send + Sync> {
+        Box::new(ApiSecurityClientLive {
+            client: golem_cloud_client::api::ApiSecurityClientLive {
                 context: self.worker_context(),
             },
         })

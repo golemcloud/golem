@@ -1,6 +1,7 @@
 pub mod account;
 pub mod api_definition;
 pub mod api_deployment;
+pub mod api_security;
 pub mod certificate;
 pub mod component;
 pub mod domain;

@@ -1,7 +1,8 @@
+use golem_cli::model::GolemError;
 use golem_cli::oss::clients::errors::{display_golem_error, display_worker_service_errors_body};
 use golem_cloud_client::api::{
     AccountError, ApiCertificateError, ApiDefinitionError, ApiDeploymentError, ApiDomainError,
-    ComponentError, GrantError, HealthCheckError, LoginCurrentLoginTokenError,
+    ApiSecurityError, ComponentError, GrantError, HealthCheckError, LoginCurrentLoginTokenError,
     LoginLoginOauth2Error, LoginOauth2WebFlowCallbackGithubError, LoginOauth2WebFlowPollError,
     LoginOauth2WebFlowStartError, LoginStartLoginOauth2Error, PluginError, ProjectError,
     ProjectGrantError, ProjectPolicyError, TokenError,
@@ -12,6 +13,12 @@ use itertools::Itertools;
 #[derive(Clone, PartialEq, Eq)]
 pub struct CloudGolemError(pub String);
 
+impl From<CloudGolemError> for GolemError {
+    fn from(value: CloudGolemError) -> Self {
+        GolemError(value.0)
+    }
+}
+
 impl From<reqwest::Error> for CloudGolemError {
     fn from(error: reqwest::Error) -> Self {
         CloudGolemError(format!("Unexpected client error: {error:?}"))
@@ -21,12 +28,6 @@ impl From<reqwest::Error> for CloudGolemError {
 impl From<reqwest::header::InvalidHeaderValue> for CloudGolemError {
     fn from(value: reqwest::header::InvalidHeaderValue) -> Self {
         CloudGolemError(format!("Invalid request header: {value}"))
-    }
-}
-
-impl From<CloudGolemError> for golem_cli::model::GolemError {
-    fn from(value: CloudGolemError) -> Self {
-        golem_cli::model::GolemError(value.0)
     }
 }
 
@@ -178,6 +179,19 @@ impl ResponseContentErrorMapper for ProjectGrantError {
             ProjectGrantError::Error403(error) => error.error,
             ProjectGrantError::Error404(error) => error.error,
             ProjectGrantError::Error500(error) => error.error,
+        }
+    }
+}
+
+impl ResponseContentErrorMapper for ApiSecurityError {
+    fn map(self) -> String {
+        match self {
+            ApiSecurityError::Error400(errors) => display_worker_service_errors_body(errors),
+            ApiSecurityError::Error401(error) => error.error,
+            ApiSecurityError::Error403(error) => error.error,
+            ApiSecurityError::Error404(message) => message.message,
+            ApiSecurityError::Error409(error) => error,
+            ApiSecurityError::Error500(error) => error.error,
         }
     }
 }

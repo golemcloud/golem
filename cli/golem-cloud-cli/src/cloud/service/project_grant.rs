@@ -1,11 +1,10 @@
 use crate::cloud::clients::project_grant::ProjectGrantClient;
 use crate::cloud::model::text::project::ProjectShareView;
-use crate::cloud::model::{ProjectPolicyId, ProjectRef};
+use crate::cloud::model::{ProjectAction, ProjectPolicyId, ProjectRef};
 use crate::cloud::service::project::ProjectService;
 use async_trait::async_trait;
 use golem_cli::cloud::AccountId;
 use golem_cli::model::{GolemError, GolemResult};
-use golem_cloud_client::model::ProjectAction;
 use std::sync::Arc;
 
 #[async_trait]
@@ -40,7 +39,11 @@ impl ProjectGrantService for ProjectGrantServiceLive {
 
                 let grant = self
                     .client
-                    .create_actions(project_urn, recipient_account_id, actions)
+                    .create_actions(
+                        project_urn,
+                        recipient_account_id,
+                        actions.into_iter().map(|a| a.into()).collect(),
+                    )
                     .await?;
 
                 Ok(GolemResult::Ok(Box::new(ProjectShareView(grant))))

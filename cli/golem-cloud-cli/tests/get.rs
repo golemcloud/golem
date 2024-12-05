@@ -24,7 +24,7 @@ use crate::worker::make_component;
 use crate::Tracing;
 use golem_cli::model::component::ComponentView;
 use golem_cli::model::WorkerMetadataView;
-use golem_client::model::HttpApiDefinitionWithTypeInfo;
+use golem_client::model::HttpApiDefinitionResponseData;
 use golem_cloud_cli::cloud::model::text::account::AccountGetView;
 use golem_cloud_cli::cloud::model::text::project::{ProjectAddView, ProjectGetView};
 use golem_common::model::AccountId;
@@ -96,10 +96,10 @@ fn top_level_get_api_definition(
     let component_name = "top_level_get_api_definition";
     let component = make_shopping_cart_component(deps, component_name, cli)?;
     let component_id = component.component_urn.id.0.to_string();
-    let def = golem_def(component_name, &component_id);
-    let path = make_golem_file(&def)?;
+    let (api_definition_request, rib_output_type) = golem_def(component_name, &component_id);
+    let path = make_golem_file(&api_definition_request)?;
 
-    let _: HttpApiDefinitionWithTypeInfo =
+    let _: HttpApiDefinitionResponseData =
         cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
 
     let url = ApiDefinitionUrl {
@@ -107,9 +107,13 @@ fn top_level_get_api_definition(
         version: "0.1.0".to_string(),
     };
 
-    let res: HttpApiDefinitionWithTypeInfo = cli.run(&["get", &url.to_string()])?;
+    let res: HttpApiDefinitionResponseData = cli.run(&["get", &url.to_string()])?;
 
-    let expected = to_definition(def.clone(), res.created_at);
+    let expected = to_definition(
+        api_definition_request.clone(),
+        res.created_at,
+        rib_output_type.clone(),
+    );
     assert_eq!(res, expected);
 
     let urn = ApiDefinitionUrn {
@@ -117,8 +121,12 @@ fn top_level_get_api_definition(
         version: "0.1.0".to_string(),
     };
 
-    let res: HttpApiDefinitionWithTypeInfo = cli.run(&["get", &urn.to_string()])?;
-    let expected = to_definition(def.clone(), res.created_at);
+    let res: HttpApiDefinitionResponseData = cli.run(&["get", &urn.to_string()])?;
+    let expected = to_definition(
+        api_definition_request.clone(),
+        res.created_at,
+        rib_output_type,
+    );
     assert_eq!(res, expected);
 
     Ok(())

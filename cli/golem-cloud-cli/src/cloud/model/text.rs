@@ -56,7 +56,7 @@ pub mod account {
         }
     }
 
-    #[derive(Debug, Serialize, Deserialize, Eq, PartialEq)]
+    #[derive(Debug, Serialize, Deserialize, PartialEq)]
     pub struct GrantGetView(pub Vec<Role>);
 
     impl TextFormat for GrantGetView {
@@ -447,6 +447,120 @@ pub mod token {
     impl TextFormat for TokenListView {
         fn print(&self) {
             print_table::<_, TokenTableView>(&self.0);
+        }
+    }
+}
+
+pub mod plugin {
+    use crate::cloud::model::PluginDefinition;
+    use cli_table::{print_stdout, Table, WithTitle};
+    use golem_cli::model::text::fmt::{
+        format_id, format_main_id, format_message_highlight, FieldsBuilder, MessageWithFields,
+        TableWrapper, TextFormat,
+    };
+    use golem_client::model::PluginTypeSpecificDefinition;
+    use golem_cloud_client::CloudPluginScope;
+
+    #[derive(Table)]
+    struct PluginDefinitionTableView {
+        #[table(title = "Plugin name")]
+        pub name: String,
+        #[table(title = "Plugin version")]
+        pub version: String,
+        #[table(title = "Description")]
+        pub description: String,
+        #[table(title = "Homepage")]
+        pub homepage: String,
+        #[table(title = "Type")]
+        pub typ: String,
+        #[table(title = "Scope")]
+        pub scope: String,
+    }
+
+    impl From<&PluginDefinition> for PluginDefinitionTableView {
+        fn from(value: &PluginDefinition) -> Self {
+            Self {
+                name: value.0.name.clone(),
+                version: value.0.version.clone(),
+                description: value.0.description.clone(),
+                homepage: value.0.homepage.clone(),
+                typ: match &value.0.specs {
+                    PluginTypeSpecificDefinition::ComponentTransformer(_) => {
+                        "Component Transformer".to_string()
+                    }
+                    PluginTypeSpecificDefinition::OplogProcessor(_) => {
+                        "Oplog Processor".to_string()
+                    }
+                },
+                scope: match &value.0.scope {
+                    CloudPluginScope::Global(_) => "Global".to_string(),
+                    CloudPluginScope::Component(component_scope) => {
+                        format!("Component {}", component_scope.component_id)
+                    }
+                    CloudPluginScope::Project(project_scope) => {
+                        format!("Project {}", project_scope.project_id)
+                    }
+                },
+            }
+        }
+    }
+
+    pub struct PluginDefinitionTable(Vec<PluginDefinition>);
+
+    impl TableWrapper for PluginDefinition {
+        type Table = PluginDefinitionTable;
+
+        fn from_vec(vec: &[Self]) -> Self::Table {
+            PluginDefinitionTable(vec.to_vec())
+        }
+    }
+
+    impl TextFormat for PluginDefinitionTable {
+        fn print(&self) {
+            print_stdout(
+                self.0
+                    .iter()
+                    .map(PluginDefinitionTableView::from)
+                    .collect::<Vec<_>>()
+                    .with_title(),
+            )
+            .unwrap()
+        }
+    }
+
+    impl MessageWithFields for PluginDefinition {
+        fn message(&self) -> String {
+            format!(
+                "Got metadata for plugin {} version {}",
+                format_message_highlight(&self.0.name),
+                format_message_highlight(&self.0.version),
+            )
+        }
+
+        fn fields(&self) -> Vec<(String, String)> {
+            let mut fields = FieldsBuilder::new();
+
+            fields
+                .fmt_field("Name", &self.0.name, format_main_id)
+                .fmt_field("Version", &self.0.version, format_main_id)
+                .fmt_field("Description", &self.0.description, format_id)
+                .fmt_field("Homepage", &self.0.homepage, format_id)
+                .fmt_field("Scope", &self.0.scope, format_id);
+
+            match &self.0.specs {
+                PluginTypeSpecificDefinition::ComponentTransformer(specs) => {
+                    fields.fmt_field("Type", &"Component Transformer".to_string(), format_id);
+                    fields.fmt_field("Validate URL", &specs.validate_url, format_id);
+                    fields.fmt_field("Transform URL", &specs.transform_url, format_id);
+                }
+                PluginTypeSpecificDefinition::OplogProcessor(specs) => {
+                    fields.fmt_field("Type", &"Oplog Processor".to_string(), format_id);
+                    fields.fmt_field("Component ID", &specs.component_id, format_id);
+                    fields.fmt_field("Component Version", &specs.component_version, format_id);
+                }
+            }
+
+            fields.build()
         }
     }
 }

@@ -1,11 +1,9 @@
 use crate::cloud::clients::errors::CloudGolemError;
+use crate::cloud::model::{PluginDefinition, PluginDefinitionWithoutOwner};
 use async_trait::async_trait;
 use golem_cli::clients::plugin::PluginClient;
 use golem_cli::cloud::ProjectId;
 use golem_cli::model::GolemError;
-use golem_cloud_client::model::{
-    PluginDefinitionCloudPluginOwnerCloudPluginScope, PluginDefinitionWithoutOwnerCloudPluginScope,
-};
 use golem_cloud_client::CloudPluginScope;
 use tracing::info;
 
@@ -17,8 +15,8 @@ pub struct PluginClientLive<C: golem_cloud_client::api::PluginClient + Sync + Se
 #[async_trait]
 impl<C: golem_cloud_client::api::PluginClient + Sync + Send> PluginClient for PluginClientLive<C> {
     type ProjectContext = ProjectId;
-    type PluginDefinition = PluginDefinitionCloudPluginOwnerCloudPluginScope;
-    type PluginDefinitionWithoutOwner = PluginDefinitionWithoutOwnerCloudPluginScope;
+    type PluginDefinition = PluginDefinition;
+    type PluginDefinitionWithoutOwner = PluginDefinitionWithoutOwner;
     type PluginScope = CloudPluginScope;
 
     async fn list_plugins(
@@ -27,11 +25,13 @@ impl<C: golem_cloud_client::api::PluginClient + Sync + Send> PluginClient for Pl
     ) -> Result<Vec<Self::PluginDefinition>, GolemError> {
         info!("Getting registered plugins");
 
-        Ok(self
+        let defs = self
             .client
             .list_plugins(scope.as_ref())
             .await
-            .map_err(CloudGolemError::from)?)
+            .map_err(CloudGolemError::from)?;
+
+        Ok(defs.into_iter().map(PluginDefinition).collect())
     }
 
     async fn get_plugin(
@@ -41,30 +41,31 @@ impl<C: golem_cloud_client::api::PluginClient + Sync + Send> PluginClient for Pl
     ) -> Result<Self::PluginDefinition, GolemError> {
         info!("Getting plugin {} version {}", plugin_name, plugin_version);
 
-        Ok(self
-            .client
-            .get_plugin(plugin_name, plugin_version)
-            .await
-            .map_err(CloudGolemError::from)?)
+        Ok(PluginDefinition(
+            self.client
+                .get_plugin(plugin_name, plugin_version)
+                .await
+                .map_err(CloudGolemError::from)?,
+        ))
     }
 
     async fn register_plugin(
         &self,
         definition: Self::PluginDefinitionWithoutOwner,
     ) -> Result<Self::PluginDefinition, GolemError> {
-        info!("Registering plugin {}", definition.name);
+        info!("Registering plugin {}", definition.0.name);
 
         let _ = self
             .client
-            .create_plugin(&definition)
+            .create_plugin(&definition.0)
             .await
             .map_err(CloudGolemError::from)?;
         let definition = self
             .client
-            .get_plugin(&definition.name, &definition.version)
+            .get_plugin(&definition.0.name, &definition.0.version)
             .await
             .map_err(CloudGolemError::from)?;
-        Ok(definition)
+        Ok(PluginDefinition(definition))
     }
 
     async fn unregister_plugin(

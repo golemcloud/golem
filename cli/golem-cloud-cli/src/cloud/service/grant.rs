@@ -1,9 +1,9 @@
 use crate::cloud::clients::grant::GrantClient;
 use crate::cloud::model::text::account::GrantGetView;
+use crate::cloud::model::Role;
 use async_trait::async_trait;
 use golem_cli::cloud::AccountId;
 use golem_cli::model::{GolemError, GolemResult};
-use golem_cloud_client::model::Role;
 
 #[async_trait]
 pub trait GrantService {
@@ -40,7 +40,7 @@ impl GrantService for GrantServiceLive {
         account_id: Option<AccountId>,
     ) -> Result<GolemResult, GolemError> {
         let account_id = account_id.as_ref().unwrap_or(&self.account_id);
-        self.client.put(account_id, role).await?;
+        self.client.put(account_id, role.into()).await?;
 
         Ok(GolemResult::Str("Role granted".to_string()))
     }
@@ -51,7 +51,7 @@ impl GrantService for GrantServiceLive {
         account_id: Option<AccountId>,
     ) -> Result<GolemResult, GolemError> {
         let account_id = account_id.as_ref().unwrap_or(&self.account_id);
-        self.client.delete(account_id, role).await?;
+        self.client.delete(account_id, role.into()).await?;
 
         Ok(GolemResult::Str("Role removed".to_string()))
     }

@@ -1,15 +1,30 @@
 pub mod text;
+pub mod to_cli;
+pub mod to_cloud;
+pub mod to_oss;
 
+use async_trait::async_trait;
 use clap::{ArgMatches, Error, FromArgMatches};
 use derive_more::{Display, FromStr, Into};
 use golem_cli::command::ComponentRefSplit;
-use golem_cli::model::ComponentName;
-use golem_cloud_client::model::{Project, ProjectType};
-use golem_common::model::ProjectId;
+use golem_cli::model::plugin_manifest::{FromPluginManifest, PluginManifest};
+use golem_cli::model::{ComponentIdResolver, ComponentName, GolemError, PluginScopeArgs};
+use golem_client::model::PluginTypeSpecificDefinition;
+use golem_cloud_client::model::{
+    PluginDefinitionCloudPluginOwnerCloudPluginScope, PluginDefinitionWithoutOwnerCloudPluginScope,
+    Project, ProjectType,
+};
+use golem_cloud_client::{CloudPluginScope, ProjectPluginScope};
+use golem_common::model::plugin::ComponentPluginScope;
+use golem_common::model::{Empty, ProjectId};
 use golem_common::uri::cloud::uri::{ComponentUri, ProjectUri, ToOssUri};
 use golem_common::uri::cloud::url::ProjectUrl;
 use golem_common::uri::cloud::urn::ProjectUrn;
 use serde::{Deserialize, Serialize};
+use std::fmt::{Display, Formatter};
+use std::str::FromStr;
+use strum::IntoEnumIterator;
+use strum_macros::EnumIter;
 use uuid::Uuid;
 
 #[derive(Clone, PartialEq, Eq, Debug, Display, FromStr, Into)]
@@ -102,6 +117,66 @@ impl From<&ProjectRef> for ProjectRefArgs {
                     }
                 }
             }
+        }
+    }
+}
+
+#[derive(clap::Args, Debug, Clone)]
+pub struct CloudPluginScopeArgs {
+    /// Global scope (plugin available for all components)
+    #[arg(long, conflicts_with_all=["component", "component_name", "project_id"])]
+    global: bool,
+
+    /// Component scope given by a component URN or URL (plugin only available for this component)
+    #[arg(long, short = 'C', value_name = "URI", conflicts_with_all=["global", "component_name", "project_id"])]
+    component: Option<ComponentUri>,
+
+    /// Component scope given by the component's name (plugin only available for this component)
+    #[arg(long, short = 'c', conflicts_with_all=["global", "component"], requires="project_id")]
+    component_name: Option<String>,
+
+    /// Plugin ID; Required when component name is used. Without a given component, it defines a project scope.
+    #[arg(short = 'p', long, conflicts_with_all = ["global", "component"])]
+    project_id: Option<Uuid>, // NOTE: this should be ProjectUri but we have no way currently to access a ProjectIdResolver in the type class implementation (see https://github.com/golemcloud/golem-cloud/issues/1573)
+}
+
+#[async_trait]
+impl PluginScopeArgs for CloudPluginScopeArgs {
+    type PluginScope = CloudPluginScope;
+    type ComponentRef = CloudComponentUriOrName;
+
+    async fn into(
+        self,
+        resolver: impl ComponentIdResolver<Self::ComponentRef> + Send,
+    ) -> Result<Option<Self::PluginScope>, GolemError> {
+        if self.global {
+            Ok(Some(CloudPluginScope::Global(Empty {})))
+        } else if let Some(uri) = self.component {
+            let component_id = resolver.resolve(CloudComponentUriOrName::Uri(uri)).await?;
+            Ok(Some(CloudPluginScope::Component(ComponentPluginScope {
+                component_id,
+            })))
+        } else if let (Some(name), Some(project_id)) = (self.component_name, self.project_id) {
+            let component_id = resolver
+                .resolve(CloudComponentUriOrName::Name(
+                    ComponentName(name),
+                    ProjectRef {
+                        uri: Some(ProjectUri::URN(ProjectUrn {
+                            id: ProjectId(project_id),
+                        })),
+                        explicit_name: false,
+                    },
+                ))
+                .await?;
+            Ok(Some(CloudPluginScope::Component(ComponentPluginScope {
+                component_id,
+            })))
+        } else if let Some(project_id) = self.project_id {
+            Ok(Some(CloudPluginScope::Project(ProjectPluginScope {
+                project_id: ProjectId(project_id),
+            })))
+        } else {
+            Ok(None)
         }
     }
 }
@@ -278,327 +353,214 @@ impl From<Project> for ProjectView {
     }
 }
 
-pub mod to_oss {
-    use std::collections::HashMap;
-    use std::hash::Hash;
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct PluginDefinition(pub PluginDefinitionCloudPluginOwnerCloudPluginScope);
 
-    pub trait ToOss<T> {
-        fn to_oss(self) -> T;
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct PluginDefinitionWithoutOwner(pub PluginDefinitionWithoutOwnerCloudPluginScope);
+
+impl FromPluginManifest for PluginDefinitionWithoutOwner {
+    type PluginScope = CloudPluginScope;
+
+    fn from_plugin_manifest(
+        manifest: PluginManifest,
+        scope: Self::PluginScope,
+        specs: PluginTypeSpecificDefinition,
+        icon: Vec<u8>,
+    ) -> Self {
+        PluginDefinitionWithoutOwner(PluginDefinitionWithoutOwnerCloudPluginScope {
+            name: manifest.name,
+            version: manifest.version,
+            description: manifest.description,
+            icon,
+            homepage: manifest.homepage,
+            specs,
+            scope,
+        })
     }
+}
 
-    impl<A: ToOss<B>, B> ToOss<Box<B>> for Box<A> {
-        fn to_oss(self) -> Box<B> {
-            Box::new((*self).to_oss())
-        }
+#[derive(Copy, Clone, PartialEq, Eq, Debug, EnumIter, Serialize, Deserialize)]
+pub enum Role {
+    Admin,
+    MarketingAdmin,
+    ViewProject,
+    DeleteProject,
+    CreateProject,
+    InstanceServer,
+    UpdateProject,
+    ViewPlugin,
+    CreatePlugin,
+    DeletePlugin,
+}
+
+impl Display for Role {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Role::Admin => "Admin",
+            Role::MarketingAdmin => "MarketingAdmin",
+            Role::ViewProject => "ViewProject",
+            Role::DeleteProject => "DeleteProject",
+            Role::CreateProject => "CreateProject",
+            Role::InstanceServer => "InstanceServer",
+            Role::UpdateProject => "UpdateProject",
+            Role::ViewPlugin => "ViewPlugin",
+            Role::CreatePlugin => "CreatePlugin",
+            Role::DeletePlugin => "DeletePlugin",
+        };
+
+        Display::fmt(s, f)
     }
+}
 
-    impl<A: ToOss<B>, B> ToOss<Option<B>> for Option<A> {
-        fn to_oss(self) -> Option<B> {
-            self.map(|v| v.to_oss())
-        }
-    }
+impl FromStr for Role {
+    type Err = String;
 
-    impl<A: ToOss<B>, B> ToOss<Vec<B>> for Vec<A> {
-        fn to_oss(self) -> Vec<B> {
-            self.into_iter().map(|v| v.to_oss()).collect()
-        }
-    }
-
-    impl<K: Eq + Hash, A: ToOss<B>, B> ToOss<HashMap<K, B>> for HashMap<K, A> {
-        fn to_oss(self) -> HashMap<K, B> {
-            self.into_iter().map(|(k, v)| (k, v.to_oss())).collect()
-        }
-    }
-
-    impl ToOss<golem_client::model::WorkerId> for golem_cloud_client::model::WorkerId {
-        fn to_oss(self) -> golem_client::model::WorkerId {
-            golem_client::model::WorkerId {
-                component_id: self.component_id,
-                worker_name: self.worker_name,
-            }
-        }
-    }
-
-    impl ToOss<golem_client::model::ScanCursor> for golem_cloud_client::model::ScanCursor {
-        fn to_oss(self) -> golem_client::model::ScanCursor {
-            golem_client::model::ScanCursor {
-                cursor: self.cursor,
-                layer: self.layer,
-            }
-        }
-    }
-
-    impl ToOss<golem_client::model::WorkerStatus> for golem_cloud_client::model::WorkerStatus {
-        fn to_oss(self) -> golem_client::model::WorkerStatus {
-            match self {
-                golem_cloud_client::model::WorkerStatus::Running => {
-                    golem_client::model::WorkerStatus::Running
-                }
-                golem_cloud_client::model::WorkerStatus::Idle => {
-                    golem_client::model::WorkerStatus::Idle
-                }
-                golem_cloud_client::model::WorkerStatus::Suspended => {
-                    golem_client::model::WorkerStatus::Suspended
-                }
-                golem_cloud_client::model::WorkerStatus::Interrupted => {
-                    golem_client::model::WorkerStatus::Interrupted
-                }
-                golem_cloud_client::model::WorkerStatus::Retrying => {
-                    golem_client::model::WorkerStatus::Retrying
-                }
-                golem_cloud_client::model::WorkerStatus::Failed => {
-                    golem_client::model::WorkerStatus::Failed
-                }
-                golem_cloud_client::model::WorkerStatus::Exited => {
-                    golem_client::model::WorkerStatus::Exited
-                }
-            }
-        }
-    }
-
-    impl ToOss<golem_client::model::PendingUpdate> for golem_cloud_client::model::PendingUpdate {
-        fn to_oss(self) -> golem_client::model::PendingUpdate {
-            golem_client::model::PendingUpdate {
-                timestamp: self.timestamp,
-                target_version: self.target_version,
-            }
-        }
-    }
-
-    impl ToOss<golem_client::model::SuccessfulUpdate> for golem_cloud_client::model::SuccessfulUpdate {
-        fn to_oss(self) -> golem_client::model::SuccessfulUpdate {
-            golem_client::model::SuccessfulUpdate {
-                timestamp: self.timestamp,
-                target_version: self.target_version,
-            }
-        }
-    }
-
-    impl ToOss<golem_client::model::FailedUpdate> for golem_cloud_client::model::FailedUpdate {
-        fn to_oss(self) -> golem_client::model::FailedUpdate {
-            golem_client::model::FailedUpdate {
-                timestamp: self.timestamp,
-                target_version: self.target_version,
-                details: self.details,
-            }
-        }
-    }
-
-    impl ToOss<golem_client::model::UpdateRecord> for golem_cloud_client::model::UpdateRecord {
-        fn to_oss(self) -> golem_client::model::UpdateRecord {
-            match self {
-                golem_cloud_client::model::UpdateRecord::PendingUpdate(u) => {
-                    golem_client::model::UpdateRecord::PendingUpdate(u.to_oss())
-                }
-                golem_cloud_client::model::UpdateRecord::SuccessfulUpdate(u) => {
-                    golem_client::model::UpdateRecord::SuccessfulUpdate(u.to_oss())
-                }
-                golem_cloud_client::model::UpdateRecord::FailedUpdate(u) => {
-                    golem_client::model::UpdateRecord::FailedUpdate(u.to_oss())
-                }
-            }
-        }
-    }
-
-    impl ToOss<golem_client::model::IndexedWorkerMetadata>
-        for golem_cloud_client::model::IndexedWorkerMetadata
-    {
-        fn to_oss(self) -> golem_client::model::IndexedWorkerMetadata {
-            golem_client::model::IndexedWorkerMetadata {
-                resource_name: self.resource_name,
-                resource_params: self.resource_params,
-            }
-        }
-    }
-
-    impl ToOss<golem_client::model::ResourceMetadata> for golem_cloud_client::model::ResourceMetadata {
-        fn to_oss(self) -> golem_client::model::ResourceMetadata {
-            golem_client::model::ResourceMetadata {
-                created_at: self.created_at,
-                indexed: self.indexed.to_oss(),
-            }
-        }
-    }
-
-    impl ToOss<golem_client::model::ApiDefinitionInfo>
-        for golem_cloud_client::model::ApiDefinitionInfo
-    {
-        fn to_oss(self) -> golem_client::model::ApiDefinitionInfo {
-            let golem_cloud_client::model::ApiDefinitionInfo { id, version } = self;
-
-            golem_client::model::ApiDefinitionInfo { id, version }
-        }
-    }
-
-    impl ToOss<golem_client::model::ApiSite> for golem_cloud_client::model::ApiSite {
-        fn to_oss(self) -> golem_client::model::ApiSite {
-            let golem_cloud_client::model::ApiSite { host, subdomain } = self;
-            golem_client::model::ApiSite { host, subdomain }
-        }
-    }
-
-    impl ToOss<golem_client::model::VersionedComponentId>
-        for golem_cloud_client::model::VersionedComponentId
-    {
-        fn to_oss(self) -> golem_client::model::VersionedComponentId {
-            golem_client::model::VersionedComponentId {
-                component_id: self.component_id,
-                version: self.version,
-            }
-        }
-    }
-
-    impl ToOss<golem_client::model::InvokeParameters> for golem_cloud_client::model::InvokeParameters {
-        fn to_oss(self) -> golem_client::model::InvokeParameters {
-            golem_client::model::InvokeParameters {
-                params: self.params,
-            }
-        }
-    }
-
-    impl ToOss<golem_client::model::InvokeResult> for golem_cloud_client::model::InvokeResult {
-        fn to_oss(self) -> golem_client::model::InvokeResult {
-            golem_client::model::InvokeResult {
-                result: self.result,
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Admin" => Ok(Role::Admin),
+            "MarketingAdmin" => Ok(Role::MarketingAdmin),
+            "ViewProject" => Ok(Role::ViewProject),
+            "DeleteProject" => Ok(Role::DeleteProject),
+            "CreateProject" => Ok(Role::CreateProject),
+            "InstanceServer" => Ok(Role::InstanceServer),
+            "UpdateProject" => Ok(Role::UpdateProject),
+            "ViewPlugin" => Ok(Role::ViewPlugin),
+            "CreatePlugin" => Ok(Role::CreatePlugin),
+            _ => {
+                let all = Role::iter()
+                    .map(|x| format!("\"{x}\""))
+                    .collect::<Vec<String>>()
+                    .join(", ");
+                Err(format!("Unknown role: {s}. Expected one of {all}"))
             }
         }
     }
 }
 
-pub mod to_cloud {
-    pub trait ToCloud<T> {
-        fn to_cloud(self) -> T;
-    }
-
-    impl<A: ToCloud<B>, B> ToCloud<Box<B>> for Box<A> {
-        fn to_cloud(self) -> Box<B> {
-            Box::new((*self).to_cloud())
+impl From<Role> for golem_cloud_client::model::Role {
+    fn from(value: Role) -> Self {
+        match value {
+            Role::Admin => golem_cloud_client::model::Role::Admin,
+            Role::MarketingAdmin => golem_cloud_client::model::Role::MarketingAdmin,
+            Role::ViewProject => golem_cloud_client::model::Role::ViewProject,
+            Role::DeleteProject => golem_cloud_client::model::Role::DeleteProject,
+            Role::CreateProject => golem_cloud_client::model::Role::CreateProject,
+            Role::InstanceServer => golem_cloud_client::model::Role::InstanceServer,
+            Role::UpdateProject => golem_cloud_client::model::Role::UpdateProject,
+            Role::ViewPlugin => golem_cloud_client::model::Role::ViewPlugin,
+            Role::CreatePlugin => golem_cloud_client::model::Role::CreatePlugin,
+            Role::DeletePlugin => golem_cloud_client::model::Role::DeletePlugin,
         }
     }
+}
 
-    impl<A: ToCloud<B>, B> ToCloud<Option<B>> for Option<A> {
-        fn to_cloud(self) -> Option<B> {
-            self.map(|v| v.to_cloud())
+impl From<golem_cloud_client::model::Role> for Role {
+    fn from(value: golem_cloud_client::model::Role) -> Self {
+        match value {
+            golem_cloud_client::model::Role::Admin => Role::Admin,
+            golem_cloud_client::model::Role::MarketingAdmin => Role::MarketingAdmin,
+            golem_cloud_client::model::Role::ViewProject => Role::ViewProject,
+            golem_cloud_client::model::Role::DeleteProject => Role::DeleteProject,
+            golem_cloud_client::model::Role::CreateProject => Role::CreateProject,
+            golem_cloud_client::model::Role::InstanceServer => Role::InstanceServer,
+            golem_cloud_client::model::Role::UpdateProject => Role::UpdateProject,
+            golem_cloud_client::model::Role::ViewPlugin => Role::ViewPlugin,
+            golem_cloud_client::model::Role::CreatePlugin => Role::CreatePlugin,
+            golem_cloud_client::model::Role::DeletePlugin => Role::DeletePlugin,
         }
     }
+}
 
-    impl<A: ToCloud<B>, B> ToCloud<Vec<B>> for Vec<A> {
-        fn to_cloud(self) -> Vec<B> {
-            self.into_iter().map(|v| v.to_cloud()).collect()
-        }
+#[derive(Copy, Clone, PartialEq, Eq, Debug, EnumIter)]
+pub enum ProjectAction {
+    ViewComponent,
+    CreateComponent,
+    UpdateComponent,
+    DeleteComponent,
+    ViewWorker,
+    CreateWorker,
+    UpdateWorker,
+    DeleteWorker,
+    ViewProjectGrants,
+    CreateProjectGrants,
+    DeleteProjectGrants,
+}
+
+impl Display for ProjectAction {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            ProjectAction::ViewComponent => "ViewComponent",
+            ProjectAction::CreateComponent => "CreateComponent",
+            ProjectAction::UpdateComponent => "UpdateComponent",
+            ProjectAction::DeleteComponent => "DeleteComponent",
+            ProjectAction::ViewWorker => "ViewWorker",
+            ProjectAction::CreateWorker => "CreateWorker",
+            ProjectAction::UpdateWorker => "UpdateWorker",
+            ProjectAction::DeleteWorker => "DeleteWorker",
+            ProjectAction::ViewProjectGrants => "ViewProjectGrants",
+            ProjectAction::CreateProjectGrants => "CreateProjectGrants",
+            ProjectAction::DeleteProjectGrants => "DeleteProjectGrants",
+        };
+
+        Display::fmt(s, f)
     }
+}
 
-    impl ToCloud<golem_cloud_client::model::ComponentType> for golem_client::model::ComponentType {
-        fn to_cloud(self) -> golem_cloud_client::model::ComponentType {
-            match self {
-                golem_client::model::ComponentType::Durable => {
-                    golem_cloud_client::model::ComponentType::Durable
-                }
-                golem_client::model::ComponentType::Ephemeral => {
-                    golem_cloud_client::model::ComponentType::Ephemeral
-                }
-            }
-        }
-    }
+impl FromStr for ProjectAction {
+    type Err = String;
 
-    impl ToCloud<golem_cloud_client::model::ScanCursor> for golem_client::model::ScanCursor {
-        fn to_cloud(self) -> golem_cloud_client::model::ScanCursor {
-            golem_cloud_client::model::ScanCursor {
-                cursor: self.cursor,
-                layer: self.layer,
-            }
-        }
-    }
-
-    impl ToCloud<golem_cloud_client::model::InvokeParameters>
-        for golem_client::model::InvokeParameters
-    {
-        fn to_cloud(self) -> golem_cloud_client::model::InvokeParameters {
-            golem_cloud_client::model::InvokeParameters {
-                params: self.params,
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "ViewComponent" => Ok(ProjectAction::ViewComponent),
+            "CreateComponent" => Ok(ProjectAction::CreateComponent),
+            "UpdateComponent" => Ok(ProjectAction::UpdateComponent),
+            "DeleteComponent" => Ok(ProjectAction::DeleteComponent),
+            "ViewWorker" => Ok(ProjectAction::ViewWorker),
+            "CreateWorker" => Ok(ProjectAction::CreateWorker),
+            "UpdateWorker" => Ok(ProjectAction::UpdateWorker),
+            "DeleteWorker" => Ok(ProjectAction::DeleteWorker),
+            "ViewProjectGrants" => Ok(ProjectAction::ViewProjectGrants),
+            "CreateProjectGrants" => Ok(ProjectAction::CreateProjectGrants),
+            "DeleteProjectGrants" => Ok(ProjectAction::DeleteProjectGrants),
+            _ => {
+                let all = ProjectAction::iter()
+                    .map(|x| format!("\"{x}\""))
+                    .collect::<Vec<String>>()
+                    .join(", ");
+                Err(format!("Unknown action: {s}. Expected one of {all}"))
             }
         }
     }
 }
 
-pub mod to_cli {
-    use crate::cloud::model::to_oss::ToOss;
-    use golem_cli::model::component::Component;
-
-    pub trait ToCli<T> {
-        fn to_cli(self) -> T;
-    }
-
-    impl<A: ToCli<B>, B> ToCli<Option<B>> for Option<A> {
-        fn to_cli(self) -> Option<B> {
-            self.map(|v| v.to_cli())
-        }
-    }
-
-    impl<A: ToCli<B>, B> ToCli<Vec<B>> for Vec<A> {
-        fn to_cli(self) -> Vec<B> {
-            self.into_iter().map(|v| v.to_cli()).collect()
-        }
-    }
-
-    impl ToCli<golem_cli::model::WorkerMetadata> for golem_cloud_client::model::WorkerMetadata {
-        fn to_cli(self) -> golem_cli::model::WorkerMetadata {
-            golem_cli::model::WorkerMetadata {
-                worker_id: self.worker_id.to_oss(),
-                account_id: Some(golem_cli::cloud::AccountId {
-                    id: self.account_id,
-                }),
-                args: self.args,
-                env: self.env,
-                status: self.status.to_oss(),
-                component_version: self.component_version,
-                retry_count: self.retry_count,
-                pending_invocation_count: self.pending_invocation_count,
-                updates: self.updates.to_oss(),
-                created_at: self.created_at,
-                last_error: self.last_error,
-                component_size: self.component_size,
-                total_linear_memory_size: self.total_linear_memory_size,
-                owned_resources: self.owned_resources.to_oss(),
+impl From<ProjectAction> for golem_cloud_client::model::ProjectAction {
+    fn from(value: ProjectAction) -> Self {
+        match value {
+            ProjectAction::ViewComponent => golem_cloud_client::model::ProjectAction::ViewComponent,
+            ProjectAction::CreateComponent => {
+                golem_cloud_client::model::ProjectAction::CreateComponent
             }
-        }
-    }
-
-    impl ToCli<golem_cli::model::WorkersMetadataResponse>
-        for golem_cloud_client::model::WorkersMetadataResponse
-    {
-        fn to_cli(self) -> golem_cli::model::WorkersMetadataResponse {
-            golem_cli::model::WorkersMetadataResponse {
-                cursor: self.cursor.to_oss(),
-                workers: self.workers.to_cli(),
+            ProjectAction::UpdateComponent => {
+                golem_cloud_client::model::ProjectAction::UpdateComponent
             }
-        }
-    }
-
-    impl ToCli<golem_cli::model::ApiDeployment> for golem_cloud_client::model::ApiDeployment {
-        fn to_cli(self) -> golem_cli::model::ApiDeployment {
-            golem_cli::model::ApiDeployment {
-                api_definitions: self.api_definitions.to_oss(),
-                project_id: Some(self.project_id),
-                site: self.site.to_oss(),
-                created_at: self.created_at,
+            ProjectAction::DeleteComponent => {
+                golem_cloud_client::model::ProjectAction::DeleteComponent
             }
-        }
-    }
-
-    impl ToCli<Component> for golem_cloud_client::model::Component {
-        fn to_cli(self) -> Component {
-            Component {
-                versioned_component_id: self.versioned_component_id.to_oss(),
-                component_name: self.component_name,
-                component_size: self.component_size,
-                metadata: self.metadata,
-                project_id: Some(golem_cli::cloud::ProjectId(self.project_id)),
-                created_at: self.created_at,
-                component_type: self
-                    .component_type
-                    .unwrap_or(golem_client::model::ComponentType::Durable),
-                files: self.files,
+            ProjectAction::ViewWorker => golem_cloud_client::model::ProjectAction::ViewWorker,
+            ProjectAction::CreateWorker => golem_cloud_client::model::ProjectAction::CreateWorker,
+            ProjectAction::UpdateWorker => golem_cloud_client::model::ProjectAction::UpdateWorker,
+            ProjectAction::DeleteWorker => golem_cloud_client::model::ProjectAction::DeleteWorker,
+            ProjectAction::ViewProjectGrants => {
+                golem_cloud_client::model::ProjectAction::ViewProjectGrants
+            }
+            ProjectAction::CreateProjectGrants => {
+                golem_cloud_client::model::ProjectAction::CreateProjectGrants
+            }
+            ProjectAction::DeleteProjectGrants => {
+                golem_cloud_client::model::ProjectAction::DeleteProjectGrants
             }
         }
     }
