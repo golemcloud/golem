@@ -46,7 +46,20 @@ async fn main() -> ExitCode {
         #[cfg(feature = "app-command")]
         Command::App { command } => {
             run_app_command::<ComponentPropertiesExtensionsNone>(
-                clap_command.find_subcommand_mut("app").unwrap(),
+                {
+                    // TODO: it would be nice to use the same logic which is used by default for handling help,
+                    //       and that way include the current context (bin name and parent commands),
+                    //       but that seems to be using errors, error formating and exit directly;
+                    //       and quite different code path compared to calling print_help
+                    clap_command
+                        .find_subcommand_mut("app")
+                        .unwrap()
+                        .clone()
+                        .override_usage(format!(
+                            "{} [OPTIONS] [COMMAND]",
+                            "wasm-rpc-stubgen app".bold()
+                        ))
+                },
                 command,
             )
             .await

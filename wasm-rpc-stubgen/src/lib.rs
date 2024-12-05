@@ -307,7 +307,7 @@ pub fn initialize_workspace(
 }
 
 pub async fn run_app_command<CPE: ComponentPropertiesExtensions>(
-    clap_command: &mut clap::Command,
+    mut clap_command: clap::Command,
     command: App,
 ) -> anyhow::Result<()> {
     let (mut config, subcommand) = app_command_to_config_and_subcommand::<CPE>(command);

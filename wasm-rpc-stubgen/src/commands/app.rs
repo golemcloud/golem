@@ -741,7 +741,7 @@ fn collect_sources(mode: &ApplicationSourceMode) -> ValidatedResult<Vec<PathBuf>
                         })
                 }
             }
-            None => ValidatedResult::from_error("No config file found!".to_string()),
+            None => ValidatedResult::from_error("No application manifest found!".to_string()),
         },
         ApplicationSourceMode::Explicit(sources) => {
             let non_unique_source_warns: Vec<_> = sources
