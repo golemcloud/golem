@@ -27,14 +27,18 @@ pub mod wit_encode;
 pub mod wit_generate;
 pub mod wit_resolve;
 
-use crate::log::Output;
-use crate::model::app::{ComponentPropertiesExtensions, ComponentPropertiesExtensionsAny};
+use crate::log::{LogColorize, Output};
+use crate::model::app::{AppBuildStep, ComponentPropertiesExtensions};
 use crate::stub::{StubConfig, StubDefinition};
 use crate::wit_generate::UpdateCargoToml;
 use anyhow::Context;
 use clap::{Parser, Subcommand};
+use colored::Colorize;
+use itertools::Itertools;
+use std::collections::HashSet;
 use std::marker::PhantomData;
 use std::path::PathBuf;
+use std::process::exit;
 use tempfile::TempDir;
 
 #[cfg(test)]
@@ -43,22 +47,23 @@ test_r::enable!();
 #[derive(Parser, Debug)]
 #[command(name = "wasm-rpc-stubgen", version)]
 pub enum Command {
-    /// Generate a Rust RPC stub crate for a WASM component
+    /// [DEPRECATED] Generate a Rust RPC stub crate for a WASM component
     Generate(GenerateArgs),
-    /// Build an RPC stub for a WASM component
+    /// [DEPRECATED] Build an RPC stub for a WASM component
     Build(BuildArgs),
-    /// Adds a generated stub as a dependency to another WASM component
+    /// [DEPRECATED] Adds a generated stub as a dependency to another WASM component
     AddStubDependency(AddStubDependencyArgs),
-    /// Compose a WASM component with a generated stub WASM
+    /// [DEPRECATED] Compose a WASM component with a generated stub WASM
     Compose(ComposeArgs),
-    /// Initializes a Golem-specific cargo-make configuration in a Cargo workspace for automatically
+    /// [DEPRECATED] Initializes a Golem-specific cargo-make configuration in a Cargo workspace for automatically
     /// generating stubs and composing results.
     InitializeWorkspace(InitializeWorkspaceArgs),
     /// Build components with application manifests
     #[cfg(feature = "app-command")]
+    #[group(skip)]
     App {
-        #[command(subcommand)]
-        subcommand: App,
+        #[clap(flatten)]
+        command: App,
     },
 }
 
@@ -87,7 +92,7 @@ pub struct GenerateArgs {
     /// it from the stub WIT. This is useful for example with ComponentizeJS currently where otherwise
     /// the original component's interface would be added as an import to the final WASM.
     #[clap(long, default_value_t = false)]
-    pub always_inline_types: bool, // TODO: deprecated
+    pub always_inline_types: bool,
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -106,7 +111,7 @@ pub struct WasmRpcOverride {
 ///
 /// The resulting WASM component implements the **stub interface** corresponding to the source interface, found in the
 /// target directory's
-/// `wit/_stub.wit` file. This WASM component is to be composed together with another component that calls the original
+/// `wit/stub.wit` file. This WASM component is to be composed together with another component that calls the original
 /// interface via WASM RPC.
 #[derive(clap::Args, Debug)]
 #[command(version, about, long_about = None)]
@@ -133,7 +138,7 @@ pub struct BuildArgs {
     /// it from the stub WIT. This is useful for example with ComponentizeJS currently where otherwise
     /// the original component's interface would be added as an import to the final WASM.
     #[clap(long, default_value_t = false)]
-    pub always_inline_types: bool, // TODO: deprecated
+    pub always_inline_types: bool,
 }
 
 /// Adds a generated stub as a dependency to another WASM component
@@ -191,12 +196,28 @@ pub struct InitializeWorkspaceArgs {
     pub wasm_rpc_override: WasmRpcOverride,
 }
 
+#[derive(clap::Parser, Debug)]
+pub struct App {
+    /// List of application manifests, can be defined multiple times
+    #[clap(long, short)]
+    pub app: Vec<PathBuf>,
+    /// Selects a build profile
+    #[clap(long, short)]
+    pub build_profile: Option<String>,
+    /// When set to true will use offline mode where applicable (e.g. stub cargo builds), defaults to false
+    #[clap(long, short, default_value = "false")]
+    pub offline: bool,
+
+    #[clap(subcommand)]
+    subcommand: Option<AppSubCommand>,
+}
+
 #[derive(Subcommand, Debug)]
-pub enum App {
+pub enum AppSubCommand {
     /// Runs component build steps
     Build(AppBuildArgs),
     /// Clean outputs
-    Clean(AppCleanArgs),
+    Clean,
     /// Run custom command
     #[clap(external_subcommand)]
     CustomCommand(Vec<String>),
@@ -205,26 +226,12 @@ pub enum App {
 #[derive(clap::Args, Debug)]
 #[command(version, about, long_about = None)]
 pub struct AppBuildArgs {
-    /// List of application manifests, can be defined multiple times
+    /// Selects specific build steps, can be defined multiple times
     #[clap(long, short)]
-    pub app: Vec<PathBuf>,
+    pub step: Vec<AppBuildStep>,
     /// When set to true will skip modification time based up-to-date checks, defaults to false
     #[clap(long, short, default_value = "false")]
     pub force_build: bool,
-    /// Selects a build profile
-    #[clap(long, short)]
-    pub profile: Option<String>,
-    /// When set to true will use offline mode where applicable (e.g. stub cargo builds), defaults to false
-    #[clap(long, short, default_value = "false")]
-    pub offline: bool,
-}
-
-#[derive(clap::Args, Debug)]
-#[command(version, about, long_about = None)]
-pub struct AppCleanArgs {
-    /// List of application manifests, can be defined multiple times
-    #[clap(long, short)]
-    pub app: Vec<PathBuf>,
 }
 
 #[derive(clap::Args, Debug)]
@@ -300,34 +307,44 @@ pub fn initialize_workspace(
 }
 
 pub async fn run_app_command<CPE: ComponentPropertiesExtensions>(
+    mut clap_command: clap::Command,
     command: App,
 ) -> anyhow::Result<()> {
-    match command {
-        App::Build(args) => {
-            commands::app::build(commands::app::Config {
-                app_resolve_mode: app_manifest_sources_to_resolve_mode(args.app),
-                skip_up_to_date_checks: args.force_build,
-                profile: args.profile.map(|profile| profile.into()),
-                offline: args.offline,
-                extensions: PhantomData::<CPE>,
-                log_output: Output::Stdout,
-            })
-            .await
-        }
-        App::Clean(args) => commands::app::clean(commands::app::Config {
-            app_resolve_mode: app_manifest_sources_to_resolve_mode(args.app),
-            skip_up_to_date_checks: false,
-            profile: None,
-            offline: false,
-            extensions: PhantomData::<ComponentPropertiesExtensionsAny>,
-            log_output: Output::Stdout,
-        }),
-        App::CustomCommand(_args) => {
-            // TODO: parse app manifest / profile args
-            // commands::app::custom_command(app_args_to_config(args.args), args.command)
-            Ok(())
+    let (mut config, subcommand) = app_command_to_config_and_subcommand::<CPE>(command);
+    match subcommand {
+        Some(subcommand) => match subcommand {
+            AppSubCommand::Build(args) => {
+                config.skip_up_to_date_checks = args.force_build;
+                config.steps_filter = args.step.into_iter().collect();
+                commands::app::build(config).await
+            }
+            AppSubCommand::Clean => commands::app::clean(config),
+            AppSubCommand::CustomCommand(args) => commands::app::custom_command(config, args),
+        },
+        None => {
+            clap_command.print_help()?;
+            println!();
+            print_app_custom_commands_help(config);
+            exit(2);
         }
     }
+}
+
+fn app_command_to_config_and_subcommand<CPE: ComponentPropertiesExtensions>(
+    command: App,
+) -> (commands::app::Config<CPE>, Option<AppSubCommand>) {
+    (
+        commands::app::Config {
+            app_resolve_mode: app_manifest_sources_to_resolve_mode(command.app),
+            skip_up_to_date_checks: false,
+            profile: command.build_profile.map(|profile| profile.into()),
+            offline: command.offline,
+            extensions: PhantomData::<CPE>,
+            log_output: Output::Stdout,
+            steps_filter: HashSet::new(),
+        },
+        command.subcommand,
+    )
 }
 
 fn app_manifest_sources_to_resolve_mode(
@@ -337,5 +354,37 @@ fn app_manifest_sources_to_resolve_mode(
         commands::app::ApplicationSourceMode::Automatic
     } else {
         commands::app::ApplicationSourceMode::Explicit(sources)
+    }
+}
+
+fn print_app_custom_commands_help<CPE: ComponentPropertiesExtensions>(
+    mut config: commands::app::Config<CPE>,
+) {
+    config.log_output = Output::None;
+    match commands::app::collect_custom_commands(config) {
+        Ok(commands) => {
+            if !commands.is_empty() {
+                println!("{}", "Custom commands:".bold().underline());
+                for (command, profiles) in commands {
+                    if profiles.is_empty() {
+                        println!("  {}", command);
+                    } else {
+                        println!(
+                            "  {} ({})",
+                            command,
+                            profiles.iter().map(|s| s.to_string()).join(", ")
+                        );
+                    }
+                }
+                println!();
+            }
+        }
+        Err(err) => {
+            println!(
+                "{}\n{:?}",
+                "Cannot show custom commands:".log_color_warn(),
+                err
+            );
+        }
     }
 }

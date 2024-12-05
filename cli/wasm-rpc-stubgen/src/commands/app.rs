@@ -6,8 +6,8 @@ use crate::log::{
     set_log_output, LogColorize, LogIndent, Output,
 };
 use crate::model::app::{
-    includes_from_yaml_file, Application, ComponentName, ComponentPropertiesExtensions,
-    ProfileName, DEFAULT_CONFIG_FILE_NAME,
+    includes_from_yaml_file, AppBuildStep, Application, ComponentName,
+    ComponentPropertiesExtensions, ProfileName, DEFAULT_CONFIG_FILE_NAME,
 };
 use crate::model::app_raw;
 use crate::model::app_raw::ExternalCommand;
@@ -26,7 +26,7 @@ use golem_wasm_rpc::WASM_RPC_VERSION;
 use itertools::Itertools;
 use std::cell::OnceCell;
 use std::cmp::Ordering;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Write;
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
@@ -41,6 +41,17 @@ pub struct Config<CPE: ComponentPropertiesExtensions> {
     pub offline: bool,
     pub extensions: PhantomData<CPE>,
     pub log_output: Output,
+    pub steps_filter: HashSet<AppBuildStep>,
+}
+
+impl<CPE: ComponentPropertiesExtensions> Config<CPE> {
+    pub fn should_run_step(&self, step: AppBuildStep) -> bool {
+        if self.steps_filter.is_empty() {
+            true
+        } else {
+            self.steps_filter.contains(&step)
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -306,17 +317,10 @@ impl<CPE: ComponentPropertiesExtensions> ApplicationContext<CPE> {
     }
 }
 
-pub async fn pre_component_build<CPE: ComponentPropertiesExtensions>(
-    config: Config<CPE>,
-) -> anyhow::Result<()> {
-    let mut ctx = ApplicationContext::new(config)?;
-    pre_component_build_ctx(&mut ctx).await
-}
-
-async fn pre_component_build_ctx<CPE: ComponentPropertiesExtensions>(
+async fn gen_rpc<CPE: ComponentPropertiesExtensions>(
     ctx: &mut ApplicationContext<CPE>,
 ) -> anyhow::Result<()> {
-    log_action("Executing", "pre-component-build steps");
+    log_action("Generating", "RPC artifacts");
     let _indent = LogIndent::new();
 
     {
@@ -346,19 +350,9 @@ async fn pre_component_build_ctx<CPE: ComponentPropertiesExtensions>(
     Ok(())
 }
 
-pub fn component_build<CPE: ComponentPropertiesExtensions>(
-    config: Config<CPE>,
-) -> anyhow::Result<()> {
-    let ctx = ApplicationContext::new(config)?;
-    component_build_ctx(&ctx)
-}
-
-fn component_build_ctx<CPE: ComponentPropertiesExtensions>(
+fn componentize<CPE: ComponentPropertiesExtensions>(
     ctx: &ApplicationContext<CPE>,
 ) -> anyhow::Result<()> {
-    log_action("Executing", "component-build steps");
-    let _indent = LogIndent::new();
-
     log_action("Building", "components");
     let _indent = LogIndent::new();
 
@@ -392,17 +386,10 @@ fn component_build_ctx<CPE: ComponentPropertiesExtensions>(
     Ok(())
 }
 
-pub async fn post_component_build<CPE: ComponentPropertiesExtensions>(
-    config: Config<CPE>,
-) -> anyhow::Result<()> {
-    let ctx = ApplicationContext::new(config)?;
-    post_component_build_ctx(&ctx).await
-}
-
-async fn post_component_build_ctx<CPE: ComponentPropertiesExtensions>(
+async fn link_rpc<CPE: ComponentPropertiesExtensions>(
     ctx: &ApplicationContext<CPE>,
 ) -> anyhow::Result<()> {
-    log_action("Executing", "post-component-build steps");
+    log_action("Linking", "RPC");
     let _indent = LogIndent::new();
 
     for component_name in ctx.application.component_names() {
@@ -483,9 +470,15 @@ async fn post_component_build_ctx<CPE: ComponentPropertiesExtensions>(
 pub async fn build<CPE: ComponentPropertiesExtensions>(config: Config<CPE>) -> anyhow::Result<()> {
     let mut ctx = ApplicationContext::<CPE>::new(config)?;
 
-    pre_component_build_ctx(&mut ctx).await?;
-    component_build_ctx(&ctx)?;
-    post_component_build_ctx(&ctx).await?;
+    if ctx.config.should_run_step(AppBuildStep::GenRpc) {
+        gen_rpc(&mut ctx).await?;
+    }
+    if ctx.config.should_run_step(AppBuildStep::Componentize) {
+        componentize(&ctx)?;
+    }
+    if ctx.config.should_run_step(AppBuildStep::LinkRpc) {
+        link_rpc(&ctx).await?;
+    }
 
     Ok(())
 }
@@ -582,9 +575,11 @@ pub fn clean<CPE: ComponentPropertiesExtensions>(config: Config<CPE>) -> anyhow:
     Ok(())
 }
 
-pub fn available_custom_commands<CPE: ComponentPropertiesExtensions>(
+pub fn collect_custom_commands<CPE: ComponentPropertiesExtensions>(
     config: Config<CPE>,
-) -> anyhow::Result<BTreeSet<String>> {
+) -> anyhow::Result<BTreeMap<String, BTreeSet<ProfileName>>> {
+    set_log_output(config.log_output);
+
     let app = to_anyhow(
         config.log_output,
         "Failed to load application manifest(s), see problems above",
@@ -593,9 +588,19 @@ pub fn available_custom_commands<CPE: ComponentPropertiesExtensions>(
 
     let all_profiles = app.all_option_profiles();
 
-    let mut commands = BTreeSet::<String>::new();
+    let mut commands = BTreeMap::<String, BTreeSet<ProfileName>>::new();
     for profile in &all_profiles {
-        commands.extend(app.all_custom_commands(profile.as_ref()))
+        for command in app.all_custom_commands(profile.as_ref()) {
+            if !commands.contains_key(command.as_str()) {
+                commands.insert(command.clone(), BTreeSet::new());
+            }
+            profile.iter().for_each(|profile| {
+                commands
+                    .get_mut(command.as_str())
+                    .unwrap()
+                    .insert(profile.clone());
+            });
+        }
     }
 
     Ok(commands)
@@ -603,12 +608,17 @@ pub fn available_custom_commands<CPE: ComponentPropertiesExtensions>(
 
 pub fn custom_command<CPE: ComponentPropertiesExtensions>(
     config: Config<CPE>,
-    command: String,
+    args: Vec<String>,
 ) -> anyhow::Result<()> {
+    if args.len() != 1 {
+        bail!("Invalid number of arguments for custom command, expected exactly one argument");
+    }
+    let command = &args[0];
+
     let ctx = ApplicationContext::new(config)?;
 
     let all_custom_commands = ctx.application.all_custom_commands(ctx.profile());
-    if !all_custom_commands.contains(&command) {
+    if !all_custom_commands.contains(command) {
         if all_custom_commands.is_empty() {
             bail!(
                 "Custom command {} not found, no custom command is available",
@@ -636,7 +646,7 @@ pub fn custom_command<CPE: ComponentPropertiesExtensions>(
         let properties = &ctx
             .application
             .component_properties(component_name, ctx.profile());
-        if let Some(custom_command) = properties.custom_commands.get(&command) {
+        if let Some(custom_command) = properties.custom_commands.get(command) {
             log_action(
                 "Executing",
                 format!(
@@ -731,7 +741,7 @@ fn collect_sources(mode: &ApplicationSourceMode) -> ValidatedResult<Vec<PathBuf>
                         })
                 }
             }
-            None => ValidatedResult::from_error("No config file found!".to_string()),
+            None => ValidatedResult::from_error("No application manifest found!".to_string()),
         },
         ApplicationSourceMode::Explicit(sources) => {
             let non_unique_source_warns: Vec<_> = sources
@@ -1133,9 +1143,10 @@ async fn build_stub<CPE: ComponentPropertiesExtensions>(
         target_root: target_root.clone(),
         selected_world: None,
         stub_crate_version: WASM_RPC_VERSION.to_string(),
+        // NOTE: these overrides are deliberately not part of cli flags or the app manifest, at least for now
         wasm_rpc_override: WasmRpcOverride {
-            wasm_rpc_path_override: None,
-            wasm_rpc_version_override: None,
+            wasm_rpc_path_override: std::env::var("WASM_RPC_PATH_OVERRIDE").ok(),
+            wasm_rpc_version_override: std::env::var("WASM_RPC_VERSION_OVERRIDE").ok(),
         },
         extract_source_interface_package: false,
         seal_cargo_workspace: true,

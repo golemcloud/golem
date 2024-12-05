@@ -19,6 +19,14 @@ use wit_parser::PackageName;
 
 pub const DEFAULT_CONFIG_FILE_NAME: &str = "golem.yaml";
 
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[clap(rename_all = "kebab_case")]
+pub enum AppBuildStep {
+    GenRpc,
+    Componentize,
+    LinkRpc,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ComponentName(String);
 
@@ -634,6 +642,17 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
                                 }
                             }
 
+                            let reserved_commands = BTreeSet::from(["build", "clean"]);
+
+                            for custom_command in properties.custom_commands.keys() {
+                                if reserved_commands.contains(custom_command.as_str()) {
+                                    validation.add_error(format!("Cannot use {} as custom command name, reserved command names: {}",
+                                    custom_command.log_color_error_highlight(),
+                                        reserved_commands.iter().map(|s| s.log_color_highlight()).join(", ")
+                                    ));
+                                }
+                            }
+
                             properties.extensions = CPE::convert_and_validate(
                                 source,
                                 validation,
@@ -875,7 +894,7 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
                     .unwrap_or_default();
                 ComponentEffectivePropertySource {
                     template_name: template_name.as_ref(),
-                    profile,
+                    profile: Some(effective_profile),
                     is_requested_profile,
                     any_template_overrides,
                 }
