@@ -349,7 +349,7 @@ impl TryFrom<DbValue> for crate::services::rdbms::mysql::types::DbValue {
                 let value = rdbms_utils::timestamp_to_datetime(v)?;
                 Ok(Self::Datetime(value))
             }
-            DbValue::Year(v) => Ok(Self::Year(v as i16)),
+            DbValue::Year(v) => Ok(Self::Year(v)),
             DbValue::Set(v) => Ok(Self::Set(v)),
             DbValue::Enumeration(v) => Ok(Self::Enumeration(v)),
             DbValue::Bit(v) => Ok(Self::Bit(BitVec::from_iter(v))),
@@ -406,7 +406,7 @@ impl From<crate::services::rdbms::mysql::types::DbValue> for DbValue {
             crate::services::rdbms::mysql::types::DbValue::Datetime(v) => {
                 Self::Datetime(rdbms_utils::datetime_to_timestamp(v))
             }
-            crate::services::rdbms::mysql::types::DbValue::Year(v) => Self::Year(v as i8),
+            crate::services::rdbms::mysql::types::DbValue::Year(v) => Self::Year(v),
             crate::services::rdbms::mysql::types::DbValue::Set(v) => Self::Set(v),
             crate::services::rdbms::mysql::types::DbValue::Enumeration(v) => Self::Enumeration(v),
             crate::services::rdbms::mysql::types::DbValue::Bit(v) => Self::Bit(v.iter().collect()),

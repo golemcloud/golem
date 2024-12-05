@@ -6254,7 +6254,7 @@ pub mod wasi {
                 Datetime(Timestamp),
                 Timestamp(Timestamp),
                 Time(Time),
-                Year(i8),
+                Year(i16),
                 Fixchar(_rt::String),
                 Varchar(_rt::String),
                 Tinytext(_rt::String),
@@ -6826,10 +6826,10 @@ pub mod wasi {
                                                         18 => {
                                                             let e94 = {
                                                                 let l44 = i32::from(
-                                                                    *base.add(8).cast::<i8>(),
+                                                                    *base.add(8).cast::<i16>(),
                                                                 );
 
-                                                                l44 as i8
+                                                                l44 as i16
                                                             };
                                                             DbValue::Year(e94)
                                                         }
@@ -7412,7 +7412,7 @@ pub mod wasi {
                                     }
                                     DbValue::Year(e) => {
                                         *base.add(0).cast::<u8>() = (18i32) as u8;
-                                        *base.add(8).cast::<u8>() = (_rt::as_i32(e)) as u8;
+                                        *base.add(8).cast::<u16>() = (_rt::as_i32(e)) as u16;
                                     }
                                     DbValue::Fixchar(e) => {
                                         *base.add(0).cast::<u8>() = (19i32) as u8;
@@ -7850,7 +7850,7 @@ pub mod wasi {
                                     }
                                     DbValue::Year(e) => {
                                         *base.add(0).cast::<u8>() = (18i32) as u8;
-                                        *base.add(8).cast::<u8>() = (_rt::as_i32(e)) as u8;
+                                        *base.add(8).cast::<u16>() = (_rt::as_i32(e)) as u16;
                                     }
                                     DbValue::Fixchar(e) => {
                                         *base.add(0).cast::<u8>() = (19i32) as u8;
@@ -8657,8 +8657,8 @@ pub mod exports {
                                                 }
                                                 V35::Year(e) => {
                                                     *base.add(0).cast::<u8>() = (18i32) as u8;
-                                                    *base.add(8).cast::<u8>() =
-                                                        (_rt::as_i32(e)) as u8;
+                                                    *base.add(8).cast::<u16>() =
+                                                        (_rt::as_i32(e)) as u16;
                                                 }
                                                 V35::Fixchar(e) => {
                                                     *base.add(0).cast::<u8>() = (19i32) as u8;
@@ -12569,7 +12569,7 @@ boolean\x01\x7f\0\x07tinyint\x01~\0\x08smallint\x01|\0\x09mediumint\x01z\0\x03in
 t\x01z\0\x06bigint\x01x\0\x0dtiny-unsigned\x01}\0\x0esmall-unsigned\x01{\0\x0fme\
 dium-unsigned\x01y\0\x08unsigned\x01y\0\x0cbig-unsigned\x01w\0\x05float\x01v\0\x06\
 double\x01u\0\x07decimal\x01s\0\x04date\x01\x03\0\x08datetime\x01\x07\0\x09times\
-tamp\x01\x07\0\x04time\x01\x05\0\x04year\x01~\0\x07fixchar\x01s\0\x07varchar\x01\
+tamp\x01\x07\0\x04time\x01\x05\0\x04year\x01|\0\x07fixchar\x01s\0\x07varchar\x01\
 s\0\x08tinytext\x01s\0\x04text\x01s\0\x0amediumtext\x01s\0\x08longtext\x01s\0\x06\
 binary\x01\x0e\0\x09varbinary\x01\x0e\0\x08tinyblob\x01\x0e\0\x04blob\x01\x0e\0\x0a\
 mediumblob\x01\x0e\0\x08longblob\x01\x0e\0\x0benumeration\x01s\0\x03set\x01s\0\x03\

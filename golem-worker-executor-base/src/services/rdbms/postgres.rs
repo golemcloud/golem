@@ -399,9 +399,9 @@ pub(crate) mod sqlx_rdbms {
                         Ok(query.bind(values))
                     }
                     DbValuePrimitive::Int4range(_) => {
-                        let values: Vec<_> = get_plain_values(vs, |v| {
+                        let values: Vec<PgRange<i32>> = get_plain_values(vs, |v| {
                             if let DbValuePrimitive::Int4range(v) = v {
-                                Some(get_range(v))
+                                Some(v.into())
                             } else {
                                 None
                             }
@@ -409,9 +409,9 @@ pub(crate) mod sqlx_rdbms {
                         Ok(query.bind(values))
                     }
                     DbValuePrimitive::Int8range(_) => {
-                        let values: Vec<_> = get_plain_values(vs, |v| {
+                        let values: Vec<PgRange<i64>> = get_plain_values(vs, |v| {
                             if let DbValuePrimitive::Int8range(v) = v {
-                                Some(get_range(v))
+                                Some(v.into())
                             } else {
                                 None
                             }
@@ -419,9 +419,9 @@ pub(crate) mod sqlx_rdbms {
                         Ok(query.bind(values))
                     }
                     DbValuePrimitive::Numrange(_) => {
-                        let values: Vec<_> = get_plain_values(vs, |v| {
+                        let values: Vec<PgRange<BigDecimal>> = get_plain_values(vs, |v| {
                             if let DbValuePrimitive::Numrange(v) = v {
-                                Some(get_range(v))
+                                Some(v.into())
                             } else {
                                 None
                             }
@@ -429,23 +429,25 @@ pub(crate) mod sqlx_rdbms {
                         Ok(query.bind(values))
                     }
                     DbValuePrimitive::Tsrange(_) => {
-                        let values: Vec<_> = get_plain_values(vs, |v| {
-                            if let DbValuePrimitive::Tsrange(v) = v {
-                                Some(get_range(v))
-                            } else {
-                                None
-                            }
-                        })?;
+                        let values: Vec<PgRange<chrono::NaiveDateTime>> =
+                            get_plain_values(vs, |v| {
+                                if let DbValuePrimitive::Tsrange(v) = v {
+                                    Some(v.into())
+                                } else {
+                                    None
+                                }
+                            })?;
                         Ok(query.bind(values))
                     }
                     DbValuePrimitive::Tstzrange(_) => {
-                        let values: Vec<_> = get_plain_values(vs, |v| {
-                            if let DbValuePrimitive::Tstzrange(v) = v {
-                                Some(get_range(v))
-                            } else {
-                                None
-                            }
-                        })?;
+                        let values: Vec<PgRange<chrono::DateTime<chrono::Utc>>> =
+                            get_plain_values(vs, |v| {
+                                if let DbValuePrimitive::Tstzrange(v) = v {
+                                    Some(v.into())
+                                } else {
+                                    None
+                                }
+                            })?;
                         Ok(query.bind(values))
                     }
                     DbValuePrimitive::Oid(_) => {
@@ -545,12 +547,12 @@ pub(crate) mod sqlx_rdbms {
             DbValuePrimitive::Macaddr(v) => Ok(query.bind(v)),
             DbValuePrimitive::Bit(v) => Ok(query.bind(v)),
             DbValuePrimitive::Varbit(v) => Ok(query.bind(v)),
-            DbValuePrimitive::Int4range(v) => Ok(query.bind(get_range(v))),
-            DbValuePrimitive::Int8range(v) => Ok(query.bind(get_range(v))),
-            DbValuePrimitive::Numrange(v) => Ok(query.bind(get_range(v))),
-            DbValuePrimitive::Tsrange(v) => Ok(query.bind(get_range(v))),
-            DbValuePrimitive::Tstzrange(v) => Ok(query.bind(get_range(v))),
-            DbValuePrimitive::Daterange(v) => Ok(query.bind(get_range(v))),
+            DbValuePrimitive::Int4range(v) => Ok(query.bind(PgRange::from(v))),
+            DbValuePrimitive::Int8range(v) => Ok(query.bind(PgRange::from(v))),
+            DbValuePrimitive::Numrange(v) => Ok(query.bind(PgRange::from(v))),
+            DbValuePrimitive::Tsrange(v) => Ok(query.bind(PgRange::from(v))),
+            DbValuePrimitive::Tstzrange(v) => Ok(query.bind(PgRange::from(v))),
+            DbValuePrimitive::Daterange(v) => Ok(query.bind(PgRange::from(v))),
             DbValuePrimitive::Oid(v) => Ok(query.bind(Oid(v))),
             DbValuePrimitive::CustomEnum(v) => Ok(query.bind(v)),
             DbValuePrimitive::Null => Ok(query.bind(None::<String>)),
@@ -603,6 +605,10 @@ pub(crate) mod sqlx_rdbms {
                 let v: Option<f64> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Float8))
             }
+            pg_type_name::NUMERIC => {
+                let v: Option<BigDecimal> = row.try_get(index).map_err(|e| e.to_string())?;
+                DbValue::primitive_from(v.map(DbValuePrimitive::Numeric))
+            }
             pg_type_name::TEXT => {
                 let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Text))
@@ -642,7 +648,7 @@ pub(crate) mod sqlx_rdbms {
                 )
             }
             pg_type_name::TIMESTAMP => {
-                let v: Option<chrono::DateTime<chrono::Utc>> =
+                let v: Option<chrono::NaiveDateTime> =
                     row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Timestamp))
             }
@@ -698,7 +704,7 @@ pub(crate) mod sqlx_rdbms {
                 DbValue::primitive_from(v.map(|v| DbValuePrimitive::Numrange(get_bounds(v))))
             }
             pg_type_name::TSRANGE => {
-                let v: Option<PgRange<chrono::DateTime<chrono::Utc>>> =
+                let v: Option<PgRange<chrono::NaiveDateTime>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::primitive_from(v.map(|v| DbValuePrimitive::Tsrange(get_bounds(v))))
             }
@@ -739,6 +745,10 @@ pub(crate) mod sqlx_rdbms {
             pg_type_name::FLOAT8_ARRAY => {
                 let vs: Option<Vec<f64>> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::array_from(vs, DbValuePrimitive::Float8)
+            }
+            pg_type_name::NUMERIC_ARRAY => {
+                let vs: Option<Vec<BigDecimal>> = row.try_get(index).map_err(|e| e.to_string())?;
+                DbValue::array_from(vs, DbValuePrimitive::Numeric)
             }
             pg_type_name::TEXT_ARRAY => {
                 let vs: Option<Vec<String>> = row.try_get(index).map_err(|e| e.to_string())?;
@@ -781,7 +791,7 @@ pub(crate) mod sqlx_rdbms {
                 })
             }
             pg_type_name::TIMESTAMP_ARRAY => {
-                let vs: Option<Vec<chrono::DateTime<chrono::Utc>>> =
+                let vs: Option<Vec<chrono::NaiveDateTime>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::array_from(vs, DbValuePrimitive::Timestamp)
             }
@@ -841,7 +851,7 @@ pub(crate) mod sqlx_rdbms {
                 DbValue::array_from(vs, |v| DbValuePrimitive::Numrange(get_bounds(v)))
             }
             pg_type_name::TSRANGE_ARRAY => {
-                let vs: Option<Vec<PgRange<chrono::DateTime<chrono::Utc>>>> =
+                let vs: Option<Vec<PgRange<chrono::NaiveDateTime>>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::array_from(vs, |v| DbValuePrimitive::Tsrange(get_bounds(v)))
             }
@@ -941,6 +951,24 @@ pub(crate) mod sqlx_rdbms {
                 pg_type_name::BIT => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Bit)),
                 pg_type_name::VARBIT => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Varbit)),
                 pg_type_name::OID => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Oid)),
+                pg_type_name::INT4RANGE => {
+                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Int4range))
+                }
+                pg_type_name::INT8RANGE => {
+                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Int8range))
+                }
+                pg_type_name::NUMRANGE => {
+                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Numrange))
+                }
+                pg_type_name::TSRANGE => {
+                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Tsrange))
+                }
+                pg_type_name::TSTZRANGE => {
+                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Tstzrange))
+                }
+                pg_type_name::DATERANGE => {
+                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Daterange))
+                }
                 pg_type_name::CHAR_ARRAY => {
                     Ok(DbColumnType::Array(DbColumnTypePrimitive::Character))
                 }
@@ -993,6 +1021,24 @@ pub(crate) mod sqlx_rdbms {
                     Ok(DbColumnType::Array(DbColumnTypePrimitive::Varbit))
                 }
                 pg_type_name::OID_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Oid)),
+                pg_type_name::INT4RANGE_ARRAY => {
+                    Ok(DbColumnType::Array(DbColumnTypePrimitive::Int4range))
+                }
+                pg_type_name::INT8RANGE_ARRAY => {
+                    Ok(DbColumnType::Array(DbColumnTypePrimitive::Int8range))
+                }
+                pg_type_name::NUMRANGE_ARRAY => {
+                    Ok(DbColumnType::Array(DbColumnTypePrimitive::Numrange))
+                }
+                pg_type_name::TSRANGE_ARRAY => {
+                    Ok(DbColumnType::Array(DbColumnTypePrimitive::Tsrange))
+                }
+                pg_type_name::TSTZRANGE_ARRAY => {
+                    Ok(DbColumnType::Array(DbColumnTypePrimitive::Tstzrange))
+                }
+                pg_type_name::DATERANGE_ARRAY => {
+                    Ok(DbColumnType::Array(DbColumnTypePrimitive::Daterange))
+                }
                 _ => match type_kind {
                     PgTypeKind::Enum(_) => Ok(DbColumnType::Primitive(
                         DbColumnTypePrimitive::CustomEnum(type_name.to_string()),
@@ -1010,13 +1056,6 @@ pub(crate) mod sqlx_rdbms {
 
     fn get_bounds<T>(range: PgRange<T>) -> (Bound<T>, Bound<T>) {
         (range.start, range.end)
-    }
-
-    fn get_range<T>(bounds: (Bound<T>, Bound<T>)) -> PgRange<T> {
-        PgRange {
-            start: bounds.0,
-            end: bounds.1,
-        }
     }
 
     struct PgEnum(String);
@@ -1274,7 +1313,7 @@ pub mod types {
         Float8(f64),
         Numeric(BigDecimal),
         Boolean(bool),
-        Timestamp(chrono::DateTime<chrono::Utc>),
+        Timestamp(chrono::NaiveDateTime),
         Timestamptz(chrono::DateTime<chrono::Utc>),
         Date(chrono::NaiveDate),
         Time(chrono::NaiveTime),
@@ -1296,12 +1335,7 @@ pub mod types {
         Int4range((Bound<i32>, Bound<i32>)),
         Int8range((Bound<i64>, Bound<i64>)),
         Numrange((Bound<BigDecimal>, Bound<BigDecimal>)),
-        Tsrange(
-            (
-                Bound<chrono::DateTime<chrono::Utc>>,
-                Bound<chrono::DateTime<chrono::Utc>>,
-            ),
-        ),
+        Tsrange((Bound<chrono::NaiveDateTime>, Bound<chrono::NaiveDateTime>)),
         Tstzrange(
             (
                 Bound<chrono::DateTime<chrono::Utc>>,

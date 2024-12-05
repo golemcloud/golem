@@ -63,6 +63,12 @@ pub(crate) mod rdbms_utils {
     pub(crate) fn timestamp_to_datetime(
         value: Timestamp,
     ) -> Result<chrono::DateTime<chrono::Utc>, String> {
+        timestamp_to_naivedatetime(value).map(|v| v.and_utc())
+    }
+
+    pub(crate) fn timestamp_to_naivedatetime(
+        value: Timestamp,
+    ) -> Result<chrono::NaiveDateTime, String> {
         let (year, month, day, hour, minute, second, nanosecond) = value;
         let date = chrono::naive::NaiveDate::from_ymd_opt(year, month as u32, day as u32)
             .ok_or("Date value is not valid")?;
@@ -73,7 +79,7 @@ pub(crate) mod rdbms_utils {
             nanosecond,
         )
         .ok_or("Time value is not valid")?;
-        Ok(chrono::naive::NaiveDateTime::new(date, time).and_utc())
+        Ok(chrono::naive::NaiveDateTime::new(date, time))
     }
 
     pub(crate) fn timestamptz_to_datetime(
@@ -125,9 +131,13 @@ pub(crate) mod rdbms_utils {
     }
 
     pub(crate) fn datetime_to_timestamp(v: chrono::DateTime<chrono::Utc>) -> Timestamp {
-        let year = v.date_naive().year();
-        let month = v.date_naive().month() as u8;
-        let day = v.date_naive().day() as u8;
+        naivedatetime_to_timestamp(v.naive_utc())
+    }
+
+    pub(crate) fn naivedatetime_to_timestamp(v: chrono::NaiveDateTime) -> Timestamp {
+        let year = v.year();
+        let month = v.month() as u8;
+        let day = v.day() as u8;
         let hour = v.time().hour() as u8;
         let minute = v.time().minute() as u8;
         let second = v.time().second() as u8;

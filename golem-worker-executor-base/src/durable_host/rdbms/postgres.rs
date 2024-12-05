@@ -316,7 +316,7 @@ impl TryFrom<DbValuePrimitive> for crate::services::rdbms::postgres::types::DbVa
             DbValuePrimitive::Float8(f) => Ok(Self::Float8(f)),
             DbValuePrimitive::Boolean(b) => Ok(Self::Boolean(b)),
             DbValuePrimitive::Timestamp(v) => {
-                let value = rdbms_utils::timestamp_to_datetime(v)?;
+                let value = rdbms_utils::timestamp_to_naivedatetime(v)?;
                 Ok(Self::Timestamp(value))
             }
             DbValuePrimitive::Timestamptz(v) => {
@@ -404,7 +404,7 @@ impl From<crate::services::rdbms::postgres::types::DbValuePrimitive> for DbValue
                 Self::Boolean(b)
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Timestamp(v) => {
-                Self::Timestamp(rdbms_utils::datetime_to_timestamp(v))
+                Self::Timestamp(rdbms_utils::naivedatetime_to_timestamp(v))
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Timestamptz(v) => {
                 Self::Timestamptz(rdbms_utils::datetime_to_timestamptz(v))
@@ -664,8 +664,8 @@ impl From<IpAddress> for IpAddr {
 
 pub(crate) mod postgres_utils {
     use crate::durable_host::rdbms::rdbms_utils::{
-        date_to_nativedate, datetime_to_timestamp, datetime_to_timestamptz, naivedate_to_date,
-        timestamp_to_datetime, timestamptz_to_datetime,
+        date_to_nativedate, datetime_to_timestamptz, naivedate_to_date, naivedatetime_to_timestamp,
+        timestamp_to_naivedatetime, timestamptz_to_datetime,
     };
     use crate::preview2::wasi::rdbms::postgres::{
         Daterange, Int4range, Int8range, Numrange, Tsrange, Tstzrange,
@@ -674,6 +674,7 @@ pub(crate) mod postgres_utils {
     use std::ops::Bound;
     use std::str::FromStr;
 
+    type NaiveDateTimeBounds = (Bound<chrono::NaiveDateTime>, Bound<chrono::NaiveDateTime>);
     type DateTimeBounds = (
         Bound<chrono::DateTime<chrono::Utc>>,
         Bound<chrono::DateTime<chrono::Utc>>,
@@ -708,10 +709,10 @@ pub(crate) mod postgres_utils {
         Ok((lower, upper))
     }
 
-    pub(crate) fn tsrange_to_bounds(value: Tsrange) -> Result<DateTimeBounds, String> {
+    pub(crate) fn tsrange_to_bounds(value: Tsrange) -> Result<NaiveDateTimeBounds, String> {
         let (lower, upper) = value;
-        let lower = to_converted_bounds(lower, timestamp_to_datetime)?;
-        let upper = to_converted_bounds(upper, timestamp_to_datetime)?;
+        let lower = to_converted_bounds(lower, timestamp_to_naivedatetime)?;
+        let upper = to_converted_bounds(upper, timestamp_to_naivedatetime)?;
         Ok((lower, upper))
     }
 
@@ -775,10 +776,10 @@ pub(crate) mod postgres_utils {
         (lower, upper)
     }
 
-    pub(crate) fn bounds_to_tsrange(value: DateTimeBounds) -> Tsrange {
+    pub(crate) fn bounds_to_tsrange(value: NaiveDateTimeBounds) -> Tsrange {
         let (lower, upper) = value;
-        let lower = from_bounds(lower.map(datetime_to_timestamp));
-        let upper = from_bounds(upper.map(datetime_to_timestamp));
+        let lower = from_bounds(lower.map(naivedatetime_to_timestamp));
+        let upper = from_bounds(upper.map(naivedatetime_to_timestamp));
         (lower, upper)
     }
 

@@ -89,7 +89,7 @@ interface mysql {
        datetime(timestamp),
        timestamp(timestamp),
        time(time),
-       year(s8),
+       year(s16),
        fixchar(string),
        varchar(string),
        tinytext(string),
