@@ -16,8 +16,6 @@ use aws_config::meta::region::RegionProviderChain;
 use aws_config::BehaviorVersion;
 use aws_sdk_s3::config::Credentials;
 use aws_sdk_s3::Client;
-use bytes::BufMut;
-use futures::{StreamExt, TryStreamExt};
 use golem_common::model::{AccountId, ComponentId};
 use golem_service_base::config::S3BlobStorageConfig;
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
