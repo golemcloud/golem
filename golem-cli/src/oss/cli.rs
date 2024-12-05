@@ -21,6 +21,7 @@ use crate::completion;
 use crate::config::{OssProfile, ProfileName};
 use crate::factory::ServiceFactory;
 use crate::init::{init_profile, CliKind, DummyProfileAuth};
+use crate::model::app_ext::GolemComponentExtensions;
 use crate::model::Format;
 use crate::model::{ComponentUriArg, GolemError, GolemResult, OssPluginScopeArgs};
 use crate::oss::factory::OssServiceFactory;
@@ -29,6 +30,7 @@ use crate::{check_for_newer_server_version, VERSION};
 use clap::Parser;
 use clap::{Command, Subcommand};
 use clap_verbosity_flag::Verbosity;
+use colored::Colorize;
 use golem_client::model::{
     PluginDefinitionDefaultPluginOwnerDefaultPluginScope,
     PluginDefinitionWithoutOwnerDefaultPluginScope,
@@ -154,6 +156,29 @@ impl<ProfileAdd: clap::Args + Into<UniversalProfileAdd>> CliCommand<OssCommandCo
 {
     async fn run(self, ctx: OssCommandContext) -> Result<GolemResult, GolemError> {
         match self {
+            SharedCommand::App { command } => {
+                golem_wasm_rpc_stubgen::run_app_command::<GolemComponentExtensions>(
+                    {
+                        // TODO: it would be nice to use the same logic which is used by default for handling help,
+                        //       and that way include the current context (bin name and parent commands),
+                        //       but that seems to be using errors, error formating and exit directly;
+                        //       and quite different code path compared to calling print_help
+                        let mut clap_command = ctx.command;
+                        clap_command
+                            .find_subcommand_mut("app")
+                            .unwrap()
+                            .clone()
+                            .override_usage(format!(
+                                "{} [OPTIONS] [COMMAND]",
+                                "golem-cli app".bold()
+                            ))
+                    },
+                    command,
+                )
+                .await
+                .map(|_| GolemResult::Str("".to_string()))
+                .map_err(Into::into)
+            }
             SharedCommand::Component { subcommand } => {
                 let factory = ctx.factory;
 
