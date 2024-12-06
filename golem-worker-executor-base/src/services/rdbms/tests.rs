@@ -128,12 +128,13 @@ async fn postgres_execute_test_create_insert_select(
                 macaddr_col MACADDR,
                 bit_col BIT(3),
                 varbit_col VARBIT,
+                xml_col XML,
                 int4range_col INT4RANGE,
                 int8range_col INT8RANGE,
                 numrange_col NUMRANGE,
                 tsrange_col TSRANGE,
                 tstzrange_col TSTZRANGE,
-                xml_col XML
+                daterange_col DATERANGE
             );
         "#;
 
@@ -173,14 +174,15 @@ async fn postgres_execute_test_create_insert_select(
             int8range_col,
             numrange_col,
             tsrange_col,
-            tstzrange_col
+            tstzrange_col,
+            daterange_col
             )
             VALUES
             (
                 $1, $2::test_enum, $3, $4, $5, $6, $7, $8, $9,
                 $10, $11, $12, $13, $14, $15, $16, $17, $18, $19,
                 $20, $21, $22, $23, $24, $25, $26, $27, $28, $29,
-                $30, $31, $32, $33, $34
+                $30, $31, $32, $33, $34, $35
             );
         "#;
 
@@ -334,13 +336,15 @@ async fn postgres_execute_test_create_insert_select(
                 postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Tstzrange(
                     tstzbounds,
                 )),
-                // postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Daterange((
-                //     Bound::Excluded(chrono::NaiveDate::from_ymd_opt(2023, 2, 3).unwrap()),
-                //     Bound::Included(chrono::NaiveDate::from_ymd_opt(2024, 2, 4).unwrap()),
-                // ))) // FIXME daterange conversion issue - returning incorrect day value
+                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Daterange((
+                    Bound::Included(
+                        chrono::NaiveDate::from_ymd_opt(2023 + i as i32, 2, 3).unwrap(),
+                    ),
+                    Bound::Unbounded,
+                ))),
             ]);
         } else {
-            for _ in 0..33 {
+            for _ in 0..34 {
                 params.push(postgres_types::DbValue::Primitive(
                     postgres_types::DbValuePrimitive::Null,
                 ));
@@ -632,14 +636,14 @@ async fn postgres_execute_test_create_insert_select(
             ),
             db_type_name: "TSTZRANGE".to_string(),
         },
-        // postgres_types::DbColumn {
-        //     name: "daterange_col".to_string(),
-        //     ordinal: 33,
-        //     db_type: postgres_types::DbColumnType::Primitive(
-        //         postgres_types::DbColumnTypePrimitive::Daterange,
-        //     ),
-        //     db_type_name: "DATERANGE".to_string(),
-        // }, // FIXME daterange conversion issue - returning incorrect day value,
+        postgres_types::DbColumn {
+            name: "daterange_col".to_string(),
+            ordinal: 34,
+            db_type: postgres_types::DbColumnType::Primitive(
+                postgres_types::DbColumnTypePrimitive::Daterange,
+            ),
+            db_type_name: "DATERANGE".to_string(),
+        }, // FIXME daterange conversion issue - returning incorrect day value,
     ];
 
     let select_statement = r#"
@@ -677,7 +681,8 @@ async fn postgres_execute_test_create_insert_select(
             int8range_col,
             numrange_col,
             tsrange_col,
-            tstzrange_col
+            tstzrange_col,
+            daterange_col
            FROM data_types ORDER BY id ASC;
         "#;
 
@@ -757,7 +762,8 @@ async fn postgres_execute_test_create_insert_select_array(
                 int8range_col INT8RANGE[],
                 numrange_col NUMRANGE[],
                 tsrange_col TSRANGE[],
-                tstzrange_col TSTZRANGE[]
+                tstzrange_col TSTZRANGE[],
+                daterange_col DATERANGE[]
             );
         "#;
 
@@ -797,14 +803,15 @@ async fn postgres_execute_test_create_insert_select_array(
             int8range_col,
             numrange_col,
             tsrange_col,
-            tstzrange_col
+            tstzrange_col,
+            daterange_col
             )
             VALUES
             (
                 $1, $2::a_test_enum[], $3, $4, $5, $6, $7, $8, $9,
                 $10, $11, $12, $13, $14, $15, $16, $17, $18, $19,
                 $20, $21, $22, $23, $24, $25, $26, $27, $28, $29,
-                $30, $31, $32, $33, $34
+                $30, $31, $32, $33, $34, $35
             );
         "#;
 
@@ -966,13 +973,17 @@ async fn postgres_execute_test_create_insert_select_array(
                 postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Tstzrange(
                     tstzbounds,
                 )]),
-                // postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Array(vec![(
-                //     Bound::Excluded(chrono::NaiveDate::from_ymd_opt(2023, 2, 3).unwrap()),
-                //     Bound::Included(chrono::NaiveDate::from_ymd_opt(2024, 2, 4).unwrap()),
-                // ))]) // FIXME daterange conversion issue - returning incorrect day value,
+                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Daterange(
+                    (
+                        Bound::Included(
+                            chrono::NaiveDate::from_ymd_opt(2023 + i as i32, 2, 3).unwrap(),
+                        ),
+                        Bound::Unbounded,
+                    ),
+                )]),
             ]);
         } else {
-            for _ in 0..33 {
+            for _ in 0..34 {
                 params.push(postgres_types::DbValue::Array(vec![]));
             }
         }
@@ -1262,14 +1273,14 @@ async fn postgres_execute_test_create_insert_select_array(
             ),
             db_type_name: "TSTZRANGE[]".to_string(),
         },
-        // postgres_types::DbColumn {
-        //     name: "daterange_col".to_string(),
-        //     ordinal: 33,
-        //     db_type: postgres_types::DbColumnType::Array(
-        //         postgres_types::DbColumnTypePrimitive::Daterange,
-        //     ),
-        //     db_type_name: "DATERANGE[]".to_string(),
-        // }, // FIXME daterange conversion issue - returning incorrect day value,
+        postgres_types::DbColumn {
+            name: "daterange_col".to_string(),
+            ordinal: 34,
+            db_type: postgres_types::DbColumnType::Array(
+                postgres_types::DbColumnTypePrimitive::Daterange,
+            ),
+            db_type_name: "DATERANGE[]".to_string(),
+        },
     ];
 
     let select_statement = r#"
@@ -1307,7 +1318,8 @@ async fn postgres_execute_test_create_insert_select_array(
             int8range_col,
             numrange_col,
             tsrange_col,
-            tstzrange_col
+            tstzrange_col,
+            daterange_col
            FROM array_data_types ORDER BY id ASC;
         "#;
 
