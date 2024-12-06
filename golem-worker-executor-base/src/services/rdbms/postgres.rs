@@ -296,9 +296,9 @@ pub(crate) mod sqlx_rdbms {
                         Ok(query.bind(values))
                     }
                     DbValuePrimitive::Xml(_) => {
-                        let values: Vec<String> = get_plain_values(vs, |v| {
+                        let values: Vec<PgXml> = get_plain_values(vs, |v| {
                             if let DbValuePrimitive::Xml(v) = v {
-                                Some(v)
+                                Some(PgXml(v))
                             } else {
                                 None
                             }
@@ -501,16 +501,6 @@ pub(crate) mod sqlx_rdbms {
                         })?;
                         Ok(query.bind(values))
                     }
-                    // DbValuePrimitive::Null => {
-                    //     let values: Vec<PgNull> = get_plain_values(vs, |v| {
-                    //         if let DbValuePrimitive::Null = v {
-                    //             Some(PgNull {})
-                    //         } else {
-                    //             None
-                    //         }
-                    //     })?;
-                    //     Ok(query.bind(values))
-                    // }
                     _ => Err(format!(
                         "Array param element '{}' with index 0 is not supported",
                         first
@@ -561,7 +551,7 @@ pub(crate) mod sqlx_rdbms {
             DbValuePrimitive::Uuid(v) => Ok(query.bind(v)),
             DbValuePrimitive::Json(v) => Ok(query.bind(v)),
             DbValuePrimitive::Jsonb(v) => Ok(query.bind(v)),
-            DbValuePrimitive::Xml(v) => Ok(query.bind(v)),
+            DbValuePrimitive::Xml(v) => Ok(query.bind(PgXml(v))),
             DbValuePrimitive::Timestamp(v) => Ok(query.bind(v)),
             DbValuePrimitive::Timestamptz(v) => Ok(query.bind(v)),
             DbValuePrimitive::Time(v) => Ok(query.bind(v)),
@@ -587,7 +577,7 @@ pub(crate) mod sqlx_rdbms {
             DbValuePrimitive::Daterange(v) => Ok(query.bind(PgRange::from(v))),
             DbValuePrimitive::Oid(v) => Ok(query.bind(Oid(v))),
             DbValuePrimitive::CustomEnum(v) => Ok(query.bind(PgEnum(v))),
-            DbValuePrimitive::Null => Ok(query.bind(PgNull {})), // _ => Err(format!("Type '{}' is not supported", value)),
+            DbValuePrimitive::Null => Ok(query.bind(PgNull {})),
         }
     }
 
@@ -606,8 +596,8 @@ pub(crate) mod sqlx_rdbms {
 
     fn get_db_value(index: usize, row: &sqlx::postgres::PgRow) -> Result<DbValue, String> {
         let column = &row.columns()[index];
-        let type_name = column.type_info().name();
-        let value = match type_name {
+        let type_name = get_db_type_name(column.type_info());
+        let value = match type_name.as_str() {
             pg_type_name::BOOL => {
                 let v: Option<bool> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Boolean))
@@ -661,8 +651,8 @@ pub(crate) mod sqlx_rdbms {
                 DbValue::primitive_from(v.map(DbValuePrimitive::Jsonb))
             }
             pg_type_name::XML => {
-                let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
-                DbValue::primitive_from(v.map(DbValuePrimitive::Xml))
+                let v: Option<PgXml> = row.try_get(index).map_err(|e| e.to_string())?;
+                DbValue::primitive_from(v.map(|v| DbValuePrimitive::Xml(v.0)))
             }
             pg_type_name::BYTEA => {
                 let v: Option<Vec<u8>> = row.try_get(index).map_err(|e| e.to_string())?;
@@ -808,8 +798,8 @@ pub(crate) mod sqlx_rdbms {
                 DbValue::array_from(vs, DbValuePrimitive::Jsonb)
             }
             pg_type_name::XML_ARRAY => {
-                let vs: Option<Vec<String>> = row.try_get(index).map_err(|e| e.to_string())?;
-                DbValue::array_from(vs, DbValuePrimitive::Xml)
+                let vs: Option<Vec<PgXml>> = row.try_get(index).map_err(|e| e.to_string())?;
+                DbValue::array_from(vs, |v| DbValuePrimitive::Xml(v.0))
             }
             pg_type_name::BYTEA_ARRAY => {
                 let vs: Option<Vec<Vec<u8>>> = row.try_get(index).map_err(|e| e.to_string())?;
@@ -914,9 +904,8 @@ pub(crate) mod sqlx_rdbms {
                     let vs: Option<Vec<PgEnum>> = row.try_get(index).map_err(|e| e.to_string())?;
                     DbValue::array_from(vs, |v| DbValuePrimitive::CustomEnum(v.0))
                 }
-                _ => Err(format!("Type '{}' is not supported", type_name))?,
+                _ => Err(format!("Value type '{}' is not supported", type_name))?,
             },
-            // _ => Err(format!("Type '{}' is not supported", type_name))?,
         };
         Ok(value)
     }
@@ -927,12 +916,7 @@ pub(crate) mod sqlx_rdbms {
         fn try_from(value: &sqlx::postgres::PgColumn) -> Result<Self, Self::Error> {
             let ordinal = value.ordinal() as u64;
             let db_type: DbColumnType = value.type_info().try_into()?;
-            let db_type_name = match value.type_info().kind() {
-                PgTypeKind::Array(element) => {
-                    format!("{}[]", element.name())
-                }
-                _ => value.type_info().name().to_string(),
-            };
+            let db_type_name = get_db_type_name(value.type_info());
             let name = value.name().to_string();
             Ok(DbColumn {
                 ordinal,
@@ -947,10 +931,10 @@ pub(crate) mod sqlx_rdbms {
         type Error = String;
 
         fn try_from(value: &sqlx::postgres::PgTypeInfo) -> Result<Self, Self::Error> {
-            let type_name = value.name();
+            let type_name = get_db_type_name(value);
             let type_kind: &PgTypeKind = value.kind();
 
-            match type_name {
+            match type_name.as_str() {
                 pg_type_name::BOOL => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Boolean)),
                 pg_type_name::CHAR => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Character)),
                 pg_type_name::INT2 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Int2)),
@@ -1081,16 +1065,29 @@ pub(crate) mod sqlx_rdbms {
                 }
                 _ => match type_kind {
                     PgTypeKind::Enum(_) => Ok(DbColumnType::Primitive(
-                        DbColumnTypePrimitive::CustomEnum(type_name.to_string()),
+                        DbColumnTypePrimitive::CustomEnum(value.name().to_string()),
                     )),
                     PgTypeKind::Array(element) if matches!(element.kind(), PgTypeKind::Enum(_)) => {
                         Ok(DbColumnType::Array(DbColumnTypePrimitive::CustomEnum(
                             element.name().to_string(),
                         )))
                     }
-                    _ => Err(format!("Type '{}' is not supported", type_name))?,
+                    _ => Err(format!("Column type '{}' is not supported", type_name))?,
                 },
             }
+        }
+    }
+
+    fn get_db_type_name(type_info: &sqlx::postgres::PgTypeInfo) -> String {
+        match type_info.kind() {
+            PgTypeKind::Enum(_) => type_info.name().to_string(),
+            PgTypeKind::Array(element) if matches!(element.kind(), PgTypeKind::Enum(_)) => {
+                format!("{}[]", element.name())
+            }
+            PgTypeKind::Array(element) => {
+                format!("{}[]", element.name().to_uppercase())
+            }
+            _ => type_info.name().to_uppercase(),
         }
     }
 
@@ -1109,6 +1106,7 @@ pub(crate) mod sqlx_rdbms {
     impl sqlx::types::Type<sqlx::Postgres> for PgEnum {
         fn type_info() -> sqlx::postgres::PgTypeInfo {
             <&str as sqlx::types::Type<sqlx::Postgres>>::type_info()
+            // sqlx::postgres::PgTypeInfo::with_oid(Oid(3500)) // anyenum
         }
 
         fn compatible(ty: &sqlx::postgres::PgTypeInfo) -> bool {
@@ -1160,6 +1158,47 @@ pub(crate) mod sqlx_rdbms {
         fn type_info() -> sqlx::postgres::PgTypeInfo {
             // https://github.com/postgres/postgres/blob/master/src/include/catalog/pg_type.dat
             sqlx::postgres::PgTypeInfo::with_oid(Oid(705)) // unknown type
+        }
+    }
+
+    struct PgXml(String);
+
+    impl From<PgXml> for String {
+        fn from(value: PgXml) -> Self {
+            value.0
+        }
+    }
+
+    impl sqlx::types::Type<sqlx::Postgres> for PgXml {
+        fn type_info() -> sqlx::postgres::PgTypeInfo {
+            // https://github.com/postgres/postgres/blob/master/src/include/catalog/pg_type.dat
+            sqlx::postgres::PgTypeInfo::with_oid(Oid(142)) // xml type
+        }
+    }
+
+    impl sqlx::postgres::PgHasArrayType for PgXml {
+        fn array_type_info() -> sqlx::postgres::PgTypeInfo {
+            // https://github.com/postgres/postgres/blob/master/src/include/catalog/pg_type.dat
+            sqlx::postgres::PgTypeInfo::with_oid(Oid(143)) // xml type array
+        }
+    }
+
+    impl<'r> sqlx::Decode<'r, sqlx::Postgres> for PgXml {
+        fn decode(
+            value: sqlx::postgres::PgValueRef<'r>,
+        ) -> Result<Self, Box<dyn std::error::Error + 'static + Send + Sync>> {
+            Ok(Self(<String as sqlx::Decode<sqlx::Postgres>>::decode(
+                value,
+            )?))
+        }
+    }
+
+    impl<'r> sqlx::Encode<'r, sqlx::Postgres> for PgXml {
+        fn encode_by_ref(
+            &self,
+            buf: &mut <sqlx::Postgres as HasArguments<'r>>::ArgumentBuffer,
+        ) -> sqlx::encode::IsNull {
+            <String as sqlx::Encode<sqlx::Postgres>>::encode_by_ref(&self.0, buf)
         }
     }
 
@@ -1260,7 +1299,7 @@ pub(crate) mod sqlx_rdbms {
         pub(crate) const MONEY_ARRAY: &str = "MONEY[]";
         pub(crate) const VOID: &str = "VOID";
         pub(crate) const XML: &str = "XML";
-        pub(crate) const XML_ARRAY: &str = "XML_ARRAY";
+        pub(crate) const XML_ARRAY: &str = "XML[]";
     }
 }
 

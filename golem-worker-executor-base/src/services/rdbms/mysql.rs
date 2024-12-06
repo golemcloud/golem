@@ -163,7 +163,7 @@ pub(crate) mod sqlx_rdbms {
             DbValue::Set(v) => Ok(query.bind(v)),
             // DbValue::Bit(v) => Ok(query.bind(v)),
             DbValue::Null => Ok(query.bind(None::<String>)),
-            _ => Err(format!("Type '{}' is not supported", value)),
+            _ => Err(format!("Parameter type '{}' is not supported", value)),
         }
     }
 
@@ -326,7 +326,7 @@ pub(crate) mod sqlx_rdbms {
             //     let v: Option<BitVec> = row.try_get(index).map_err(|e| e.to_string())?;
             //     v.map(DbValue::Bit).unwrap_or(DbValue::Null)
             // }
-            _ => Err(format!("Type '{}' is not supported", type_name))?,
+            _ => Err(format!("Value type '{}' is not supported", type_name))?,
         };
         Ok(value)
     }
@@ -390,7 +390,7 @@ pub(crate) mod sqlx_rdbms {
                 mysql_type_name::SET => Ok(DbColumnType::Set),
                 mysql_type_name::BIT => Ok(DbColumnType::Bit),
                 mysql_type_name::ENUM => Ok(DbColumnType::Enumeration),
-                _ => Err(format!("Type '{}' is not supported", type_name))?,
+                _ => Err(format!("Column type '{}' is not supported", type_name))?,
             }
         }
     }

@@ -132,7 +132,8 @@ async fn postgres_execute_test_create_insert_select(
                 int8range_col INT8RANGE,
                 numrange_col NUMRANGE,
                 tsrange_col TSRANGE,
-                tstzrange_col TSTZRANGE
+                tstzrange_col TSTZRANGE,
+                xml_col XML
             );
         "#;
 
@@ -167,6 +168,7 @@ async fn postgres_execute_test_create_insert_select(
             macaddr_col,
             bit_col,
             varbit_col,
+            xml_col,
             int4range_col,
             int8range_col,
             numrange_col,
@@ -178,7 +180,7 @@ async fn postgres_execute_test_create_insert_select(
                 $1, $2::test_enum, $3, $4, $5, $6, $7, $8, $9,
                 $10, $11, $12, $13, $14, $15, $16, $17, $18, $19,
                 $20, $21, $22, $23, $24, $25, $26, $27, $28, $29,
-                $30, $31, $32, $33
+                $30, $31, $32, $33, $34
             );
         "#;
 
@@ -191,43 +193,43 @@ async fn postgres_execute_test_create_insert_select(
     )
     .await;
 
-    let count = 2;
+    let count = 4;
 
     let mut rows: Vec<DbRow<postgres_types::DbValue>> = Vec::with_capacity(count);
 
     for i in 0..count {
-        let tstzbounds = (
-            Bound::Included(chrono::DateTime::from_naive_utc_and_offset(
-                chrono::NaiveDateTime::new(
-                    chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
-                    chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-                ),
-                chrono::Utc,
-            )),
-            Bound::Excluded(chrono::DateTime::from_naive_utc_and_offset(
-                chrono::NaiveDateTime::new(
-                    chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
-                    chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-                ),
-                chrono::Utc,
-            )),
-        );
-        let tsbounds = (
-            Bound::Included(chrono::NaiveDateTime::new(
-                chrono::NaiveDate::from_ymd_opt(2022, 11, 21).unwrap(),
-                chrono::NaiveTime::from_hms_opt(16, 50, 30).unwrap(),
-            )),
-            Bound::Excluded(chrono::NaiveDateTime::new(
-                chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
-                chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-            )),
-        );
-
         let mut params: Vec<postgres_types::DbValue> = vec![postgres_types::DbValue::Primitive(
             postgres_types::DbValuePrimitive::Varchar(format!("{:03}", i)),
         )];
 
         if i % 2 == 0 {
+            let tstzbounds = (
+                Bound::Included(chrono::DateTime::from_naive_utc_and_offset(
+                    chrono::NaiveDateTime::new(
+                        chrono::NaiveDate::from_ymd_opt(2023, 3, 2 + i as u32).unwrap(),
+                        chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+                    ),
+                    chrono::Utc,
+                )),
+                Bound::Excluded(chrono::DateTime::from_naive_utc_and_offset(
+                    chrono::NaiveDateTime::new(
+                        chrono::NaiveDate::from_ymd_opt(2024, 1, 1 + i as u32).unwrap(),
+                        chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+                    ),
+                    chrono::Utc,
+                )),
+            );
+            let tsbounds = (
+                Bound::Included(chrono::NaiveDateTime::new(
+                    chrono::NaiveDate::from_ymd_opt(2022, 2, 2 + i as u32).unwrap(),
+                    chrono::NaiveTime::from_hms_opt(16, 50, 30).unwrap(),
+                )),
+                Bound::Excluded(chrono::NaiveDateTime::new(
+                    chrono::NaiveDate::from_ymd_opt(2024, 1, 1 + i as u32).unwrap(),
+                    chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+                )),
+            );
+
             params.append(&mut vec![
                 postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::CustomEnum(
                     "regular".to_string(),
@@ -299,10 +301,10 @@ async fn postgres_execute_test_create_insert_select(
                     IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
                 )),
                 postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Cidr(
-                    IpAddr::V4(Ipv4Addr::new(198, 168, 0, 1)),
+                    IpAddr::V4(Ipv4Addr::new(198, 168, 0, i as u8)),
                 )),
                 postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Macaddr(
-                    MacAddress::new([0, 1, 2, 3, 4, 5]),
+                    MacAddress::new([0, 1, 2, 3, 4, i as u8]),
                 )),
                 postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Bit(
                     BitVec::from_iter(vec![true, false, true]),
@@ -310,6 +312,10 @@ async fn postgres_execute_test_create_insert_select(
                 postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Varbit(
                     BitVec::from_iter(vec![true, false, false]),
                 )),
+                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Xml(format!(
+                    "<foo>{}</foo>",
+                    i
+                ))),
                 postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Int4range((
                     Bound::Included(1),
                     Bound::Excluded(4),
@@ -334,7 +340,7 @@ async fn postgres_execute_test_create_insert_select(
                 // ))) // FIXME daterange conversion issue - returning incorrect day value
             ]);
         } else {
-            for _ in 0..32 {
+            for _ in 0..33 {
                 params.push(postgres_types::DbValue::Primitive(
                     postgres_types::DbValuePrimitive::Null,
                 ));
@@ -579,8 +585,16 @@ async fn postgres_execute_test_create_insert_select(
             db_type_name: "VARBIT".to_string(),
         },
         postgres_types::DbColumn {
-            name: "int4range_col".to_string(),
+            name: "xml_col".to_string(),
             ordinal: 28,
+            db_type: postgres_types::DbColumnType::Primitive(
+                postgres_types::DbColumnTypePrimitive::Xml,
+            ),
+            db_type_name: "XML".to_string(),
+        },
+        postgres_types::DbColumn {
+            name: "int4range_col".to_string(),
+            ordinal: 29,
             db_type: postgres_types::DbColumnType::Primitive(
                 postgres_types::DbColumnTypePrimitive::Int4range,
             ),
@@ -588,7 +602,7 @@ async fn postgres_execute_test_create_insert_select(
         },
         postgres_types::DbColumn {
             name: "int8range_col".to_string(),
-            ordinal: 29,
+            ordinal: 30,
             db_type: postgres_types::DbColumnType::Primitive(
                 postgres_types::DbColumnTypePrimitive::Int8range,
             ),
@@ -596,7 +610,7 @@ async fn postgres_execute_test_create_insert_select(
         },
         postgres_types::DbColumn {
             name: "numrange_col".to_string(),
-            ordinal: 30,
+            ordinal: 31,
             db_type: postgres_types::DbColumnType::Primitive(
                 postgres_types::DbColumnTypePrimitive::Numrange,
             ),
@@ -604,7 +618,7 @@ async fn postgres_execute_test_create_insert_select(
         },
         postgres_types::DbColumn {
             name: "tsrange_col".to_string(),
-            ordinal: 31,
+            ordinal: 32,
             db_type: postgres_types::DbColumnType::Primitive(
                 postgres_types::DbColumnTypePrimitive::Tsrange,
             ),
@@ -612,7 +626,7 @@ async fn postgres_execute_test_create_insert_select(
         },
         postgres_types::DbColumn {
             name: "tstzrange_col".to_string(),
-            ordinal: 32,
+            ordinal: 33,
             db_type: postgres_types::DbColumnType::Primitive(
                 postgres_types::DbColumnTypePrimitive::Tstzrange,
             ),
@@ -625,7 +639,7 @@ async fn postgres_execute_test_create_insert_select(
         //         postgres_types::DbColumnTypePrimitive::Daterange,
         //     ),
         //     db_type_name: "DATERANGE".to_string(),
-        // }, // FIXME daterange conversion issue - returning incorrect day value
+        // }, // FIXME daterange conversion issue - returning incorrect day value,
     ];
 
     let select_statement = r#"
@@ -658,6 +672,7 @@ async fn postgres_execute_test_create_insert_select(
             macaddr_col,
             bit_col,
             varbit_col,
+            xml_col,
             int4range_col,
             int8range_col,
             numrange_col,
@@ -737,6 +752,7 @@ async fn postgres_execute_test_create_insert_select_array(
                 macaddr_col MACADDR[],
                 bit_col BIT(3)[],
                 varbit_col VARBIT[],
+                xml_col XML[],
                 int4range_col INT4RANGE[],
                 int8range_col INT8RANGE[],
                 numrange_col NUMRANGE[],
@@ -776,6 +792,7 @@ async fn postgres_execute_test_create_insert_select_array(
             macaddr_col,
             bit_col,
             varbit_col,
+            xml_col,
             int4range_col,
             int8range_col,
             numrange_col,
@@ -787,7 +804,7 @@ async fn postgres_execute_test_create_insert_select_array(
                 $1, $2::a_test_enum[], $3, $4, $5, $6, $7, $8, $9,
                 $10, $11, $12, $13, $14, $15, $16, $17, $18, $19,
                 $20, $21, $22, $23, $24, $25, $26, $27, $28, $29,
-                $30, $31, $32, $33
+                $30, $31, $32, $33, $34
             );
         "#;
 
@@ -800,43 +817,43 @@ async fn postgres_execute_test_create_insert_select_array(
     )
     .await;
 
-    let count = 2;
+    let count = 4;
 
     let mut rows: Vec<DbRow<postgres_types::DbValue>> = Vec::with_capacity(count);
 
     for i in 0..count {
-        let tstzbounds = (
-            Bound::Included(chrono::DateTime::from_naive_utc_and_offset(
-                chrono::NaiveDateTime::new(
-                    chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
-                    chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-                ),
-                chrono::Utc,
-            )),
-            Bound::Excluded(chrono::DateTime::from_naive_utc_and_offset(
-                chrono::NaiveDateTime::new(
-                    chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
-                    chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-                ),
-                chrono::Utc,
-            )),
-        );
-        let tsbounds = (
-            Bound::Included(chrono::NaiveDateTime::new(
-                chrono::NaiveDate::from_ymd_opt(2022, 11, 21).unwrap(),
-                chrono::NaiveTime::from_hms_opt(16, 50, 30).unwrap(),
-            )),
-            Bound::Excluded(chrono::NaiveDateTime::new(
-                chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
-                chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-            )),
-        );
-
         let mut params: Vec<postgres_types::DbValue> = vec![postgres_types::DbValue::Primitive(
             postgres_types::DbValuePrimitive::Varchar(format!("{:03}", i)),
         )];
 
         if i % 2 == 0 {
+            let tstzbounds = (
+                Bound::Included(chrono::DateTime::from_naive_utc_and_offset(
+                    chrono::NaiveDateTime::new(
+                        chrono::NaiveDate::from_ymd_opt(2023, 3, 2 + i as u32).unwrap(),
+                        chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+                    ),
+                    chrono::Utc,
+                )),
+                Bound::Excluded(chrono::DateTime::from_naive_utc_and_offset(
+                    chrono::NaiveDateTime::new(
+                        chrono::NaiveDate::from_ymd_opt(2024, 1, 1 + i as u32).unwrap(),
+                        chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+                    ),
+                    chrono::Utc,
+                )),
+            );
+            let tsbounds = (
+                Bound::Included(chrono::NaiveDateTime::new(
+                    chrono::NaiveDate::from_ymd_opt(2022, 2, 2 + i as u32).unwrap(),
+                    chrono::NaiveTime::from_hms_opt(16, 50, 30).unwrap(),
+                )),
+                Bound::Excluded(chrono::NaiveDateTime::new(
+                    chrono::NaiveDate::from_ymd_opt(2024, 1, 1 + i as u32).unwrap(),
+                    chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+                )),
+            );
+
             params.append(&mut vec![
                 postgres_types::DbValue::Array(vec![
                     postgres_types::DbValuePrimitive::CustomEnum("second".to_string()),
@@ -919,16 +936,19 @@ async fn postgres_execute_test_create_insert_select_array(
                     IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
                 )]),
                 postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Cidr(
-                    IpAddr::V4(Ipv4Addr::new(198, 168, 0, 1)),
+                    IpAddr::V4(Ipv4Addr::new(198, 168, 0, i as u8)),
                 )]),
                 postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Macaddr(
-                    MacAddress::new([0, 1, 2, 3, 4, 5]),
+                    MacAddress::new([0, 1, 2, 3, 4, i as u8]),
                 )]),
                 postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Bit(
                     BitVec::from_iter(vec![true, false, true]),
                 )]),
                 postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Varbit(
                     BitVec::from_iter(vec![true, false, false]),
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Xml(
+                    format!("<foo>{}</foo>", i),
                 )]),
                 postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Int4range(
                     (Bound::Included(1), Bound::Excluded(4)),
@@ -949,10 +969,10 @@ async fn postgres_execute_test_create_insert_select_array(
                 // postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Array(vec![(
                 //     Bound::Excluded(chrono::NaiveDate::from_ymd_opt(2023, 2, 3).unwrap()),
                 //     Bound::Included(chrono::NaiveDate::from_ymd_opt(2024, 2, 4).unwrap()),
-                // ))]) // FIXME daterange conversion issue - returning incorrect day value
+                // ))]) // FIXME daterange conversion issue - returning incorrect day value,
             ]);
         } else {
-            for _ in 0..32 {
+            for _ in 0..33 {
                 params.push(postgres_types::DbValue::Array(vec![]));
             }
         }
@@ -1195,8 +1215,16 @@ async fn postgres_execute_test_create_insert_select_array(
             db_type_name: "VARBIT[]".to_string(),
         },
         postgres_types::DbColumn {
-            name: "int4range_col".to_string(),
+            name: "xml_col".to_string(),
             ordinal: 28,
+            db_type: postgres_types::DbColumnType::Array(
+                postgres_types::DbColumnTypePrimitive::Xml,
+            ),
+            db_type_name: "XML[]".to_string(),
+        },
+        postgres_types::DbColumn {
+            name: "int4range_col".to_string(),
+            ordinal: 29,
             db_type: postgres_types::DbColumnType::Array(
                 postgres_types::DbColumnTypePrimitive::Int4range,
             ),
@@ -1204,7 +1232,7 @@ async fn postgres_execute_test_create_insert_select_array(
         },
         postgres_types::DbColumn {
             name: "int8range_col".to_string(),
-            ordinal: 29,
+            ordinal: 30,
             db_type: postgres_types::DbColumnType::Array(
                 postgres_types::DbColumnTypePrimitive::Int8range,
             ),
@@ -1212,7 +1240,7 @@ async fn postgres_execute_test_create_insert_select_array(
         },
         postgres_types::DbColumn {
             name: "numrange_col".to_string(),
-            ordinal: 30,
+            ordinal: 31,
             db_type: postgres_types::DbColumnType::Array(
                 postgres_types::DbColumnTypePrimitive::Numrange,
             ),
@@ -1220,7 +1248,7 @@ async fn postgres_execute_test_create_insert_select_array(
         },
         postgres_types::DbColumn {
             name: "tsrange_col".to_string(),
-            ordinal: 31,
+            ordinal: 32,
             db_type: postgres_types::DbColumnType::Array(
                 postgres_types::DbColumnTypePrimitive::Tsrange,
             ),
@@ -1228,7 +1256,7 @@ async fn postgres_execute_test_create_insert_select_array(
         },
         postgres_types::DbColumn {
             name: "tstzrange_col".to_string(),
-            ordinal: 32,
+            ordinal: 33,
             db_type: postgres_types::DbColumnType::Array(
                 postgres_types::DbColumnTypePrimitive::Tstzrange,
             ),
@@ -1241,7 +1269,7 @@ async fn postgres_execute_test_create_insert_select_array(
         //         postgres_types::DbColumnTypePrimitive::Daterange,
         //     ),
         //     db_type_name: "DATERANGE[]".to_string(),
-        // }, // FIXME daterange conversion issue - returning incorrect day value
+        // }, // FIXME daterange conversion issue - returning incorrect day value,
     ];
 
     let select_statement = r#"
@@ -1274,6 +1302,7 @@ async fn postgres_execute_test_create_insert_select_array(
             macaddr_col,
             bit_col,
             varbit_col,
+            xml_col,
             int4range_col,
             int8range_col,
             numrange_col,
@@ -1958,7 +1987,7 @@ async fn postgres_query_err_test(
         &db_address,
         "SELECT '12.34'::float8::numeric::money;",
         vec![],
-        Error::QueryResponseFailure("Type 'MONEY' is not supported".to_string()),
+        Error::QueryResponseFailure("Column type 'MONEY' is not supported".to_string()),
     )
     .await;
 
@@ -2033,7 +2062,7 @@ async fn mysql_query_err_test(mysql: &DockerMysqlRdbs, rdbms_service: &RdbmsServ
         &db_address,
         "SELECT YEAR(\"2017-06-15\");",
         vec![],
-        Error::QueryResponseFailure("Type 'YEAR' is not supported".to_string()),
+        Error::QueryResponseFailure("Value type 'YEAR' is not supported".to_string()),
     )
     .await;
 }
