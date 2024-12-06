@@ -27,18 +27,59 @@ use crate::preview2::golem::api1_1_0::host::{
     WorkerMetadata, WorkerNameFilter, WorkerPropertyFilter, WorkerStatus, WorkerStatusFilter,
     WorkerVersionFilter,
 };
+use crate::preview2::golem::api1_1_0::identity::Host as IdentityHost;
 use crate::preview2::golem::api1_1_0::oplog::{
     Host as OplogHost, HostGetOplog, HostSearchOplog, OplogEntry, SearchOplog,
 };
+use crate::services::worker_identity::WorkerClaims;
 use crate::services::{HasOplogService, HasPlugins};
 use crate::workerctx::WorkerCtx;
-use anyhow::anyhow;
+use anyhow::{anyhow, Context};
 use async_trait::async_trait;
 use golem_common::config::RetryConfig;
 use golem_common::model::OwnedWorkerId;
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use wasmtime::component::Resource;
 use wasmtime_wasi::WasiView;
+
+#[async_trait]
+impl<Ctx: WorkerCtx> IdentityHost for DurableWorkerCtx<Ctx> {
+    async fn get_token(&mut self) -> anyhow::Result<Option<String>> {
+        let my_claims = WorkerClaims {
+            account_id: self.state.owned_worker_id.account_id.value.clone(),
+            component_id: self
+                .state
+                .owned_worker_id
+                .worker_id
+                .component_id
+                .to_string(),
+            worker_name: self.state.owned_worker_id.worker_id.worker_name.clone(),
+        };
+        let token = self.state.worker_identity_service.sign(my_claims).await?;
+
+        Ok(Some(token))
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> IdentityHost for &mut DurableWorkerCtx<Ctx> {
+    async fn get_token(&mut self) -> anyhow::Result<Option<String>> {
+        let my_claims = WorkerClaims {
+            account_id: self.state.owned_worker_id.account_id.value.clone(),
+            component_id: self
+                .state
+                .owned_worker_id
+                .worker_id
+                .component_id
+                .to_string(),
+            worker_name: self.state.owned_worker_id.worker_id.worker_name.clone(),
+        };
+        let token = self.state.worker_identity_service.sign(my_claims).await?;
+
+        Ok(Some(token))
+    }
+}
 
 #[async_trait]
 impl<Ctx: WorkerCtx> HostGetWorkers for DurableWorkerCtx<Ctx> {

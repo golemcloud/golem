@@ -50,6 +50,7 @@ pub mod guest_languages1;
 pub mod guest_languages2;
 pub mod guest_languages3;
 pub mod hot_update;
+pub mod identity;
 pub mod indexed_storage;
 pub mod key_value_storage;
 pub mod keyvalue;
@@ -67,6 +68,7 @@ test_r::enable!();
 tag_suite!(api, group1);
 tag_suite!(blobstore, group1);
 tag_suite!(keyvalue, group1);
+tag_suite!(identity, group1);
 
 tag_suite!(guest_languages1, group2);
 

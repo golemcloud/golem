@@ -28,6 +28,7 @@ golem-wasm-rpc = { workspace = true }
 
 anyhow = { workspace = true }
 async-trait = { workspace = true }
+base64 = "*"
 bincode = { workspace = true }
 bigdecimal = { workspace = true }
 bytes = { workspace = true }
@@ -47,6 +48,7 @@ mime_guess = "2.0.5"
 nom = { workspace = true }
 openapiv3 = { workspace = true }
 openidconnect = { workspace = true }
+jsonwebtoken = "*"
 opentelemetry = { workspace = true }
 opentelemetry-prometheus = { workspace = true }
 opentelemetry_sdk = { workspace = true }
@@ -84,6 +86,9 @@ tracing-subscriber = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 wasm-wave = { workspace = true }
+ecdsa = "0.16.9"
+jsonwebkey = "0.3.5"
+p256 = "0.13.2"
 
 [dev-dependencies]
 criterion = { version = "0.3", features = ["html_reports"] }

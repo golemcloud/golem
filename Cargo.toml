@@ -38,6 +38,7 @@ exclude = [
     "test-components/golem-rust-tests",
     "test-components/http-client",
     "test-components/http-client-2",
+    "test-components/identity",
     "test-components/interruption",
     "test-components/initial-file-read-write",
     "test-components/key-value-service",

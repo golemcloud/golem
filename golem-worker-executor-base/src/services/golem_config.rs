@@ -26,6 +26,7 @@ use url::Url;
 
 use golem_common::config::{
     ConfigExample, ConfigLoader, DbSqliteConfig, HasConfigExamples, RedisConfig, RetryConfig,
+    WorkerIdentityConfig,
 };
 use golem_common::tracing::TracingConfig;
 
@@ -44,6 +45,7 @@ pub struct GolemConfig {
     pub compiled_component_service: CompiledComponentServiceConfig,
     pub shard_manager_service: ShardManagerServiceConfig,
     pub plugin_service: PluginServiceConfig,
+    pub worker_identity: WorkerIdentityConfig,
     pub oplog: OplogConfig,
     pub suspend: SuspendConfig,
     pub active_workers: ActiveWorkersConfig,
@@ -354,6 +356,7 @@ impl Default for GolemConfig {
             suspend: SuspendConfig::default(),
             scheduler: SchedulerConfig::default(),
             active_workers: ActiveWorkersConfig::default(),
+            worker_identity: WorkerIdentityConfig::default(),
             public_worker_api: WorkerServiceGrpcConfig::default(),
             memory: MemoryConfig::default(),
             grpc_address: "0.0.0.0".to_string(),

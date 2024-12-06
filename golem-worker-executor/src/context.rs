@@ -47,6 +47,7 @@ use golem_worker_executor_base::services::rpc::Rpc;
 use golem_worker_executor_base::services::scheduler::SchedulerService;
 use golem_worker_executor_base::services::worker::WorkerService;
 use golem_worker_executor_base::services::worker_event::WorkerEventService;
+use golem_worker_executor_base::services::worker_identity::WorkerIdentityService;
 use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
 use golem_worker_executor_base::services::{
     worker_enumeration, HasAll, HasConfig, HasOplogService,
@@ -294,6 +295,7 @@ impl WorkerCtx for Context {
         component_metadata: ComponentMetadata,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
+        worker_identity_service: Arc<dyn WorkerIdentityService + Send + Sync>,
         worker_enumeration_service: Arc<
             dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
         >,
@@ -324,6 +326,7 @@ impl WorkerCtx for Context {
             component_metadata,
             promise_service,
             worker_service,
+            worker_identity_service,
             worker_enumeration_service,
             key_value_service,
             blob_store_service,

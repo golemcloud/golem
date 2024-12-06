@@ -39,6 +39,7 @@ use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
 use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
+use crate::services::worker_identity::WorkerIdentityService;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{
     worker_enumeration, HasAll, HasConfig, HasOplog, HasOplogService, HasWorker,
@@ -106,6 +107,7 @@ pub trait WorkerCtx:
         component_metadata: ComponentMetadata,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
+        worker_identity_service: Arc<dyn WorkerIdentityService + Send + Sync>,
         worker_enumeration_service: Arc<
             dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
         >,

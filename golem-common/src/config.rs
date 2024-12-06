@@ -467,3 +467,37 @@ pub struct DbPostgresConfig {
     pub max_connections: u32,
     pub schema: Option<String>,
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WorkerIdentityConfig {
+    pub set: Vec<WorkerIdentityKey>,
+    pub active_keys: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WorkerIdentityKey {
+    pub alg: String,
+    pub kid: String,
+    #[serde(deserialize_with = "base64_to_vec")]
+    pub der: Vec<u8>,
+}
+
+impl Default for WorkerIdentityConfig {
+    fn default() -> Self {
+        Self {
+            set: vec![],
+            active_keys: vec![],
+        }
+    }
+}
+
+use serde::Deserializer;
+
+/// Custom deserializer to decode a Base64 string into `Vec<u8>`
+fn base64_to_vec<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?; // Deserialize as a string
+    base64::decode(&s).map_err(serde::de::Error::custom) // Decode Base64 into Vec<u8>
+}

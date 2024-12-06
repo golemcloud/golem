@@ -17,11 +17,14 @@ use std::time::Duration;
 
 use golem_service_base::config::BlobStorageConfig;
 use http::Uri;
+use openidconnect::JsonWebKey;
 use serde::{Deserialize, Serialize};
 use url::Url;
 use uuid::Uuid;
 
-use golem_common::config::{ConfigExample, HasConfigExamples, RedisConfig, RetryConfig};
+use golem_common::config::{
+    ConfigExample, HasConfigExamples, RedisConfig, RetryConfig, WorkerIdentityConfig,
+};
 use golem_common::config::{DbConfig, DbSqliteConfig};
 use golem_common::tracing::TracingConfig;
 use golem_service_base::service::routing_table::RoutingTableConfig;
@@ -42,6 +45,7 @@ pub struct WorkerServiceBaseConfig {
     pub routing_table: RoutingTableConfig,
     pub worker_executor_retries: RetryConfig,
     pub blob_storage: BlobStorageConfig,
+    pub worker_identity: WorkerIdentityConfig,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -91,6 +95,7 @@ impl Default for WorkerServiceBaseConfig {
                 max_jitter_factor: Some(0.15),
             },
             blob_storage: BlobStorageConfig::default(),
+            worker_identity: WorkerIdentityConfig::default(),
         }
     }
 }

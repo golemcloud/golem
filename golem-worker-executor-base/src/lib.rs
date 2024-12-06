@@ -54,6 +54,7 @@ use crate::services::worker_enumeration::{
     DefaultWorkerEnumerationService, RunningWorkerEnumerationService,
     RunningWorkerEnumerationServiceDefault, WorkerEnumerationService,
 };
+use crate::services::worker_identity::{DefaultWorkerIdentityService, WorkerIdentityService};
 use crate::services::worker_proxy::{RemoteWorkerProxy, WorkerProxy};
 use crate::services::{component, shard_manager, All};
 use crate::storage::indexed::redis::RedisIndexedStorage;
@@ -134,6 +135,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         component_service: Arc<dyn ComponentService + Send + Sync>,
         shard_manager_service: Arc<dyn ShardManagerService + Send + Sync>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
+        worker_identity_service: Arc<dyn WorkerIdentityService + Send + Sync>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService + Send + Sync>,
         running_worker_enumeration_service: Arc<dyn RunningWorkerEnumerationService + Send + Sync>,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
@@ -450,6 +452,10 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
                 plugins.clone(),
             ));
 
+        let worker_identity_service = Arc::new(DefaultWorkerIdentityService::new(
+            golem_config.worker_identity.clone(),
+        ));
+
         let worker_service = Arc::new(DefaultWorkerService::new(
             key_value_storage.clone(),
             shard_service.clone(),
@@ -480,6 +486,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
                 component_service,
                 shard_manager_service,
                 worker_service,
+                worker_identity_service,
                 worker_enumeration_service,
                 running_worker_enumeration_service,
                 promise_service,

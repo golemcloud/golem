@@ -58,6 +58,7 @@ typed-path = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 wasm-wave = { workspace = true }
+base64 = "0.22.1"
 
 [dev-dependencies]
 anyhow = { workspace = true }

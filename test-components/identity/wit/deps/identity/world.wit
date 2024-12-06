@@ -1,0 +1,7 @@
+package golem:api@1.1.0;
+
+
+interface identity {
+    /// Get identity token
+    get-token: func() -> option<string>;
+}

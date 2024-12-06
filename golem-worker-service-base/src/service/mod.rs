@@ -15,6 +15,7 @@
 pub mod component;
 pub mod gateway;
 pub mod worker;
+pub mod worker_identity;
 
 pub fn with_metadata<T, I, K, V>(request: T, metadata: I) -> tonic::Request<T>
 where
