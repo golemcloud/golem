@@ -12,8 +12,8 @@ harness = false
 
 [dependencies]
 # NOTE: these cannot be workspace (git) deps, as that breaks publishing
-golem-client = { version = "=1.1.0-rc10" }
-golem-common = { version = "=1.1.0-rc10" }
+golem-client = { version = "=1.1.0-rc11" }
+golem-common = { version = "=1.1.0-rc11" }
 
 golem-wasm-ast = { workspace = true }
 golem-wasm-rpc = { workspace = true }
