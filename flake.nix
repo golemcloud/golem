@@ -35,7 +35,7 @@
               pkg-config
               protobuf
             ]
-            + lib.optionals stdenv.buildPlatform.isDarwin [
+            ++ lib.optionals stdenv.buildPlatform.isDarwin [
               libiconv
             ];
 
