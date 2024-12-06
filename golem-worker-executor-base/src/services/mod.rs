@@ -42,6 +42,7 @@ pub mod worker;
 pub mod worker_activator;
 pub mod worker_enumeration;
 pub mod worker_event;
+pub mod worker_identity;
 pub mod worker_proxy;
 // HasXXX traits for fine-grained control of which dependencies a function needs
 
@@ -147,6 +148,12 @@ pub trait HasOplogProcessorPlugin {
     fn oplog_processor_plugin(&self) -> Arc<dyn oplog::plugin::OplogProcessorPlugin + Send + Sync>;
 }
 
+pub trait HasWorkerIdentity {
+    fn worker_identity_service(
+        &self,
+    ) -> Arc<dyn worker_identity::WorkerIdentityService + Send + Sync>;
+}
+
 /// HasAll is a shortcut for requiring all available service dependencies
 pub trait HasAll<Ctx: WorkerCtx>:
     HasActiveWorkers<Ctx>
@@ -170,6 +177,7 @@ pub trait HasAll<Ctx: WorkerCtx>:
     + HasFileLoader
     + HasPlugins<<Ctx::ComponentOwner as ComponentOwner>::PluginOwner, Ctx::PluginScope>
     + HasOplogProcessorPlugin
+    + HasWorkerIdentity
     + HasExtraDeps<Ctx>
     + Clone
 {
@@ -198,6 +206,7 @@ impl<
             + HasFileLoader
             + HasPlugins<<Ctx::ComponentOwner as ComponentOwner>::PluginOwner, Ctx::PluginScope>
             + HasOplogProcessorPlugin
+            + HasWorkerIdentity
             + HasExtraDeps<Ctx>
             + Clone,
     > HasAll<Ctx> for T
@@ -235,6 +244,7 @@ pub struct All<Ctx: WorkerCtx> {
             + Sync,
     >,
     oplog_processor_plugin: Arc<dyn oplog::plugin::OplogProcessorPlugin + Send + Sync>,
+    worker_identity_service: Arc<dyn worker_identity::WorkerIdentityService + Send + Sync>,
     extra_deps: Ctx::ExtraDeps,
 }
 
@@ -264,6 +274,7 @@ impl<Ctx: WorkerCtx> Clone for All<Ctx> {
             file_loader: self.file_loader.clone(),
             plugins: self.plugins.clone(),
             oplog_processor_plugin: self.oplog_processor_plugin.clone(),
+            worker_identity_service: self.worker_identity_service.clone(),
             extra_deps: self.extra_deps.clone(),
         }
     }
@@ -303,6 +314,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
                 + Sync,
         >,
         oplog_processor_plugin: Arc<dyn oplog::plugin::OplogProcessorPlugin + Send + Sync>,
+        worker_identity_service: Arc<dyn worker_identity::WorkerIdentityService + Send + Sync>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
         Self {
@@ -329,6 +341,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             file_loader,
             plugins,
             oplog_processor_plugin,
+            worker_identity_service,
             extra_deps,
         }
     }
@@ -358,6 +371,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             this.file_loader(),
             this.plugins(),
             this.oplog_processor_plugin(),
+            this.worker_identity_service(),
             this.extra_deps(),
         )
     }
@@ -520,6 +534,14 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>>
 impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasOplogProcessorPlugin for T {
     fn oplog_processor_plugin(&self) -> Arc<dyn oplog::plugin::OplogProcessorPlugin + Send + Sync> {
         self.all().oplog_processor_plugin.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasWorkerIdentity for T {
+    fn worker_identity_service(
+        &self,
+    ) -> Arc<dyn worker_identity::WorkerIdentityService + Send + Sync> {
+        self.all().worker_identity_service.clone()
     }
 }
 

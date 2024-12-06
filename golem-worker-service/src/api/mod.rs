@@ -1,5 +1,6 @@
 pub mod api_definition;
 pub mod api_deployment;
+pub mod identity;
 mod security_scheme;
 pub mod worker;
 pub mod worker_connect;
@@ -8,6 +9,7 @@ use crate::api::worker::WorkerApi;
 use crate::service::Services;
 use golem_worker_service_base::api::CustomHttpRequestApi;
 use golem_worker_service_base::api::HealthcheckApi;
+use identity::IdentityApi;
 use poem::endpoint::PrometheusExporter;
 use poem::{get, EndpointExt, Route};
 use poem_openapi::OpenApiService;
@@ -19,6 +21,7 @@ pub type ApiServices = (
     api_deployment::ApiDeploymentApi,
     security_scheme::SecuritySchemeApi,
     HealthcheckApi,
+    IdentityApi,
 );
 
 pub fn combined_routes(prometheus_registry: Registry, services: &Services) -> Route {
@@ -63,6 +66,9 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<ApiServices,
             api_deployment::ApiDeploymentApi::new(services.deployment_service.clone()),
             security_scheme::SecuritySchemeApi::new(services.security_scheme_service.clone()),
             HealthcheckApi,
+            identity::IdentityApi {
+                worker_identity_service: services.worker_identity_service.clone(),
+            },
         ),
         "Golem API",
         "1.0",

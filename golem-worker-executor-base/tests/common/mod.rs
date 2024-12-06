@@ -48,6 +48,7 @@ use golem_worker_executor_base::services::shard_manager::ShardManagerService;
 use golem_worker_executor_base::services::worker::WorkerService;
 use golem_worker_executor_base::services::worker_activator::WorkerActivator;
 use golem_worker_executor_base::services::worker_event::WorkerEventService;
+use golem_worker_executor_base::services::worker_identity::WorkerIdentityService;
 use golem_worker_executor_base::services::{plugins, All, HasAll, HasConfig, HasOplogService};
 use golem_worker_executor_base::wasi_host::create_linker;
 use golem_worker_executor_base::workerctx::{
@@ -61,7 +62,7 @@ use tokio::runtime::Handle;
 use tokio::task::JoinSet;
 
 use golem::api0_2_0;
-use golem_common::config::RedisConfig;
+use golem_common::config::{RedisConfig, WorkerIdentityConfig, WorkerIdentityKey};
 
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     get_running_workers_metadata_response, get_workers_metadata_response,
@@ -326,6 +327,14 @@ pub async fn start_limited(
         memory: MemoryConfig {
             system_memory_override,
             ..Default::default()
+        },
+        worker_identity: WorkerIdentityConfig {
+            active_keys: vec!["1".to_string()],
+            set: vec![WorkerIdentityKey {
+                alg: "HS256".to_string(),
+                kid: "1".to_string(),
+                der: "secret".as_bytes().to_vec(),
+            }],
         },
         ..Default::default()
     };
@@ -634,6 +643,7 @@ impl WorkerCtx for TestWorkerCtx {
         component_metadata: ComponentMetadata,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
+        worker_identity_service: Arc<dyn WorkerIdentityService + Send + Sync>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService + Send + Sync>,
         key_value_service: Arc<dyn KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
@@ -662,6 +672,7 @@ impl WorkerCtx for TestWorkerCtx {
             component_metadata,
             promise_service,
             worker_service,
+            worker_identity_service,
             worker_enumeration_service,
             key_value_service,
             blob_store_service,
@@ -800,6 +811,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         component_service: Arc<dyn ComponentService + Send + Sync>,
         shard_manager_service: Arc<dyn ShardManagerService + Send + Sync>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
+        worker_identity_service: Arc<dyn WorkerIdentityService + Send + Sync>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService + Send + Sync>,
         running_worker_enumeration_service: Arc<dyn RunningWorkerEnumerationService + Send + Sync>,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
@@ -842,6 +854,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             file_loader.clone(),
             plugins.clone(),
             oplog_processor_plugin.clone(),
+            worker_identity_service.clone(),
             (),
         ));
         Ok(All::new(
@@ -868,6 +881,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             file_loader,
             plugins,
             oplog_processor_plugin,
+            worker_identity_service,
             (),
         ))
     }
@@ -876,6 +890,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         let mut linker = create_linker(engine, get_durable_ctx)?;
         api0_2_0::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         api1_1_0::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+        api1_1_0::identity::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         golem_wasm_rpc::golem::rpc::types::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         Ok(linker)
     }

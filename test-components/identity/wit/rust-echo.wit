@@ -1,0 +1,11 @@
+package golem:it;
+
+interface api {
+
+  echo: func(input: string) -> string;
+}
+
+world rust-echo {
+  import golem:api/identity@1.1.0;
+  export api;
+}

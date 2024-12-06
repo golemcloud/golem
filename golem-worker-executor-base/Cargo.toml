@@ -49,7 +49,7 @@ fs-set-times = "0.20.1"
 futures = { workspace = true }
 futures-util = { workspace = true }
 gethostname = "0.4.3"
-golem-wit = { version = "=1.1.0-rc1" }
+golem-wit = { path = "../../golem-wit" }
 hex = { workspace = true }
 http = { workspace = true }
 http_02 = { workspace = true }
@@ -68,9 +68,11 @@ nonempty-collections = "0.2.5"
 prometheus = { workspace = true }
 prost = { workspace = true }
 rand = { workspace = true }
+ring = "0.17"
+base64 = "*"
 ringbuf = "0.4.1"
 rustls = { workspace = true }
-serde = { workspace = true }
+serde = { workspace = true, features = [ "derive" ] }
 serde_json = { workspace = true }
 sysinfo = "0.30.12"
 tempfile = { workspace = true }
@@ -92,6 +94,7 @@ wasmtime-wasi-http = { workspace = true }
 windows-sys = "0.52.0"
 zstd = "0.13"
 sqlx = { workspace = true }
+jsonwebtoken = "9.3.0"
 
 [dev-dependencies]
 golem-test-framework = { path = "../golem-test-framework", version = "0.0.0" }

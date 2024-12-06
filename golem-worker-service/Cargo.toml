@@ -65,6 +65,8 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
+jsonwebkey = "0.3.5"
+base64 = "0.22.1"
 
 [dev-dependencies]
 test-r = { workspace = true }

@@ -14,6 +14,7 @@
 
 pub mod component;
 pub mod worker;
+pub mod worker_identity;
 pub mod worker_request_executor;
 
 use golem_service_base::config::BlobStorageConfig;
@@ -31,6 +32,9 @@ use golem_worker_service_base::gateway_api_definition::http::{
 use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
 use golem_worker_service_base::app_config::{KeyValueStorageConfig, WorkerServiceBaseConfig};
 
+use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
+use golem_common::client::{GrpcClientConfig, MultiTargetGrpcClient};
+use golem_common::config::RetryConfig;
 use golem_worker_service_base::gateway_execution::api_definition_lookup::{
     ApiDefinitionsLookup, HttpApiDefinitionLookup,
 };
@@ -44,10 +48,7 @@ use golem_worker_service_base::service::gateway::api_definition::{
 use golem_worker_service_base::service::gateway::api_definition_validator::ApiDefinitionValidatorService;
 use golem_worker_service_base::service::gateway::http_api_definition_validator::HttpApiDefinitionValidator;
 use golem_worker_service_base::service::worker::WorkerServiceDefault;
-
-use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
-use golem_common::client::{GrpcClientConfig, MultiTargetGrpcClient};
-use golem_common::config::RetryConfig;
+use golem_worker_service_base::service::worker_identity::WorkerIdentityServiceDefault;
 
 use golem_common::config::DbConfig;
 use golem_common::redis::RedisPool;
@@ -71,6 +72,7 @@ use tonic::codec::CompressionEncoding;
 #[derive(Clone)]
 pub struct Services {
     pub worker_service: worker::WorkerService,
+    pub worker_identity_service: self::worker_identity::WorkerIdentityService,
     pub component_service: component::ComponentService,
     pub security_scheme_service: Arc<dyn SecuritySchemeService<DefaultNamespace> + Sync + Send>,
     pub definition_service:
@@ -135,6 +137,10 @@ impl Services {
             config.worker_executor_retries.clone(),
             routing_table_service.clone(),
         ));
+
+        let worker_identity_service: worker_identity::WorkerIdentityService = Arc::new(
+            WorkerIdentityServiceDefault::new(config.worker_identity.clone()),
+        );
 
         let worker_to_http_service: Arc<
             dyn GatewayWorkerRequestExecutor<DefaultNamespace> + Sync + Send,
@@ -275,6 +281,7 @@ impl Services {
 
         Ok(Services {
             worker_service,
+            worker_identity_service,
             definition_service,
             security_scheme_service,
             deployment_service,

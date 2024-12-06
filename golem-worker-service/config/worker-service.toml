@@ -89,6 +89,14 @@ max_jitter_factor = 0.15
 min_delay = "10ms"
 multiplier = 10.0
 
+[worker_identity]
+active_keys = ["1"]
+
+[[worker_identity.set]]
+kid = "1"
+alg = "ES256"
+der = "MHcCAQEEIFJwEp6moU1kCBNRBogEmh2P5cB/kyUkFAzKt3VdMxD5oAoGCCqGSM49AwEHoUQDQgAE4O1X2mxySsWcf5cy7hsg+aaKCV9C5FEt8Tv0Wr4cDPcsCCKxHnAqwtUGQwr9WQ8Tpbut0r3had+Xg+UIE+OuGw=="
+
 
 ## Generated from example config: with postgres
 # custom_request_port = 9006

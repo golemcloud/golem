@@ -40,6 +40,7 @@ use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
 use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
+use crate::services::worker_identity::WorkerIdentityService;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{worker_enumeration, HasAll, HasConfig, HasOplog, HasWorker};
 use crate::services::{HasOplogService, HasPlugins};
@@ -142,6 +143,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         component_metadata: ComponentMetadata,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
+        worker_identity_service: Arc<dyn WorkerIdentityService + Send + Sync>,
         worker_enumeration_service: Arc<
             dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
         >,
@@ -221,6 +223,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 promise_service,
                 scheduler_service,
                 worker_service,
+                worker_identity_service,
                 worker_enumeration_service,
                 key_value_service,
                 blob_store_service,
@@ -1751,6 +1754,7 @@ pub struct PrivateDurableWorkerState<Owner: PluginOwner, Scope: PluginScope> {
     promise_service: Arc<dyn PromiseService + Send + Sync>,
     scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
     worker_service: Arc<dyn WorkerService + Send + Sync>,
+    worker_identity_service: Arc<dyn WorkerIdentityService + Send + Sync>,
     worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService + Send + Sync>,
     key_value_service: Arc<dyn KeyValueService + Send + Sync>,
     blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
@@ -1788,6 +1792,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> PrivateDurableWorkerState<Owner, Sc
         promise_service: Arc<dyn PromiseService + Send + Sync>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
+        worker_identity_service: Arc<dyn WorkerIdentityService + Send + Sync>,
         worker_enumeration_service: Arc<
             dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
         >,
@@ -1818,6 +1823,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> PrivateDurableWorkerState<Owner, Sc
             promise_service,
             scheduler_service,
             worker_service,
+            worker_identity_service,
             worker_enumeration_service,
             key_value_service,
             blob_store_service,

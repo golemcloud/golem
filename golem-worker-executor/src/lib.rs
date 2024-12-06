@@ -44,6 +44,7 @@ use golem_worker_executor_base::services::worker_activator::WorkerActivator;
 use golem_worker_executor_base::services::worker_enumeration::{
     RunningWorkerEnumerationService, WorkerEnumerationService,
 };
+use golem_worker_executor_base::services::worker_identity::WorkerIdentityService;
 use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
 use golem_worker_executor_base::services::{plugins, All};
 use golem_worker_executor_base::wasi_host::create_linker;
@@ -92,6 +93,7 @@ impl Bootstrap<Context> for ServerBootstrap {
         component_service: Arc<dyn ComponentService + Send + Sync>,
         shard_manager_service: Arc<dyn ShardManagerService + Send + Sync>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
+        worker_identity_service: Arc<dyn WorkerIdentityService + Send + Sync>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService + Send + Sync>,
         running_worker_enumeration_service: Arc<dyn RunningWorkerEnumerationService + Send + Sync>,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
@@ -136,6 +138,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             file_loader.clone(),
             plugins.clone(),
             oplog_processor_plugin.clone(),
+            worker_identity_service.clone(),
             additional_deps.clone(),
         ));
 
@@ -163,6 +166,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             file_loader.clone(),
             plugins.clone(),
             oplog_processor_plugin,
+            worker_identity_service,
             additional_deps,
         ))
     }
@@ -171,6 +175,7 @@ impl Bootstrap<Context> for ServerBootstrap {
         let mut linker = create_linker(engine, get_durable_ctx)?;
         api0_2_0::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         api1_1_0::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+        api1_1_0::identity::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         golem_wasm_rpc::golem::rpc::types::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         Ok(linker)
     }

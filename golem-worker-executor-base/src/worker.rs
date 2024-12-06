@@ -35,7 +35,7 @@ use crate::services::{
     All, HasActiveWorkers, HasAll, HasBlobStoreService, HasComponentService, HasConfig, HasEvents,
     HasExtraDeps, HasFileLoader, HasKeyValueService, HasOplog, HasOplogService, HasPlugins,
     HasPromiseService, HasRpc, HasSchedulerService, HasWasmtimeEngine, HasWorker,
-    HasWorkerEnumerationService, HasWorkerProxy, HasWorkerService, UsesAllDeps,
+    HasWorkerEnumerationService, HasWorkerIdentity, HasWorkerProxy, HasWorkerService, UsesAllDeps,
 };
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 use anyhow::anyhow;
@@ -1322,6 +1322,7 @@ impl RunningWorker {
             component_metadata,
             parent.promise_service(),
             parent.worker_service(),
+            parent.worker_identity_service(),
             parent.worker_enumeration_service(),
             parent.key_value_service(),
             parent.blob_store_service(),

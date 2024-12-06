@@ -24,6 +24,8 @@ use tokio::runtime::Handle;
 use tracing::debug;
 
 use super::file_loader::FileLoader;
+use super::worker_identity::WorkerIdentityService;
+use super::HasWorkerIdentity;
 use crate::error::GolemError;
 use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
@@ -283,6 +285,7 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
             + Sync,
     >,
     oplog_processor_plugin: Arc<dyn OplogProcessorPlugin + Send + Sync>,
+    worker_identity_service: Arc<dyn WorkerIdentityService + Send + Sync>,
     extra_deps: Ctx::ExtraDeps,
 }
 
@@ -311,6 +314,7 @@ impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
             file_loader: self.file_loader.clone(),
             plugins: self.plugins.clone(),
             oplog_processor_plugin: self.oplog_processor_plugin.clone(),
+            worker_identity_service: self.worker_identity_service.clone(),
             extra_deps: self.extra_deps.clone(),
         }
     }
@@ -469,6 +473,12 @@ impl<Ctx: WorkerCtx> HasOplogProcessorPlugin for DirectWorkerInvocationRpc<Ctx> 
     }
 }
 
+impl<Ctx: WorkerCtx> HasWorkerIdentity for DirectWorkerInvocationRpc<Ctx> {
+    fn worker_identity_service(&self) -> Arc<dyn WorkerIdentityService + Send + Sync> {
+        self.worker_identity_service.clone()
+    }
+}
+
 impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -502,6 +512,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
                 + Sync,
         >,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin + Send + Sync>,
+        worker_identity_service: Arc<dyn WorkerIdentityService + Send + Sync>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
         Self {
@@ -527,6 +538,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             file_loader,
             plugins,
             oplog_processor_plugin,
+            worker_identity_service,
             extra_deps,
         }
     }
