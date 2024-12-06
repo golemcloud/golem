@@ -1745,12 +1745,12 @@ impl ReplayableStream for ZipEntryStream {
             .await
             .map_err(|e| format!("Failed to open zip archive: {e}"))?;
 
-        zip_archive
+        Ok(zip_archive
             .file()
             .entries()
             .get(self.index)
-            .ok_or("Entry with not found in archive")
-            .uncompressed_size()
+            .ok_or("Entry with not found in archive")?
+            .uncompressed_size())
     }
 }
 
