@@ -25,13 +25,19 @@
           stdenv,
           protobuf,
           fontconfig,
+          libiconv,
+          lib,
         }:
         mkShell {
-          nativeBuildInputs = [
-            rust-bin.stable.latest.default
-            pkg-config
-            protobuf
-          ];
+          nativeBuildInputs =
+            [
+              rust-bin.stable.latest.default
+              pkg-config
+              protobuf
+            ]
+            + lib.optionals stdenv.buildPlatform.isDarwin [
+              libiconv
+            ];
 
           depsBuildBuild = [ qemu ];
           buildInputs = [
