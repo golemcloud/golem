@@ -574,10 +574,7 @@ pub(crate) mod sqlx_rdbms {
             DbValuePrimitive::Numrange(v) => Ok(query.bind(PgRange::from(v))),
             DbValuePrimitive::Tsrange(v) => Ok(query.bind(PgRange::from(v))),
             DbValuePrimitive::Tstzrange(v) => Ok(query.bind(PgRange::from(v))),
-            DbValuePrimitive::Daterange(v) => {
-                println!("data range bind: {:#?}", v);
-                Ok(query.bind(PgRange::from(v)))
-            }
+            DbValuePrimitive::Daterange(v) => Ok(query.bind(PgRange::from(v))),
             DbValuePrimitive::Oid(v) => Ok(query.bind(Oid(v))),
             DbValuePrimitive::CustomEnum(v) => Ok(query.bind(PgEnum(v))),
             DbValuePrimitive::Null => Ok(query.bind(PgNull {})),
@@ -740,7 +737,6 @@ pub(crate) mod sqlx_rdbms {
             pg_type_name::DATERANGE => {
                 let v: Option<PgRange<chrono::NaiveDate>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
-                println!("data range get: {:#?}", v);
                 DbValue::primitive_from(v.map(|v| DbValuePrimitive::Daterange(get_bounds(v))))
             }
             pg_type_name::OID => {

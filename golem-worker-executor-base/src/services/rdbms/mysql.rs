@@ -50,6 +50,7 @@ pub(crate) mod sqlx_rdbms {
     use async_trait::async_trait;
     use bigdecimal::BigDecimal;
     use futures_util::stream::BoxStream;
+    use sqlx::types::BitVec;
     use sqlx::{Column, ConnectOptions, Pool, Row, TypeInfo};
     use std::sync::Arc;
 
@@ -161,9 +162,12 @@ pub(crate) mod sqlx_rdbms {
             DbValue::Date(v) => Ok(query.bind(v)),
             DbValue::Enumeration(v) => Ok(query.bind(v)),
             DbValue::Set(v) => Ok(query.bind(v)),
-            // DbValue::Bit(v) => Ok(query.bind(v)),
+            DbValue::Bit(v) => {
+                let value = bit_vec_to_u64(v).ok_or("failed to convert bit vector to u64")?;
+                Ok(query.bind(value))
+            }
             DbValue::Null => Ok(query.bind(None::<String>)),
-            _ => Err(format!("Parameter type '{}' is not supported", value)),
+            // _ => Err(format!("Parameter type '{}' is not supported", value)),
         }
     }
 
@@ -322,10 +326,14 @@ pub(crate) mod sqlx_rdbms {
                 let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
                 v.map(DbValue::Set).unwrap_or(DbValue::Null)
             }
-            // mysql_type_name::BIT => {
-            //     let v: Option<BitVec> = row.try_get(index).map_err(|e| e.to_string())?;
-            //     v.map(DbValue::Bit).unwrap_or(DbValue::Null)
-            // }
+            mysql_type_name::BIT => {
+                let v: Option<u64> = row.try_get(index).map_err(|e| e.to_string())?;
+                v.map(|v| {
+                    let bv = u64_to_bit_vec(v);
+                    DbValue::Bit(bv)
+                })
+                .unwrap_or(DbValue::Null)
+            }
             _ => Err(format!("Value type '{}' is not supported", type_name))?,
         };
         Ok(value)
@@ -393,6 +401,34 @@ pub(crate) mod sqlx_rdbms {
                 _ => Err(format!("Column type '{}' is not supported", type_name))?,
             }
         }
+    }
+
+    fn bit_vec_to_u64(bits: BitVec) -> Option<u64> {
+        if bits.len() > 64 {
+            return None; // Too many bits for u64
+        }
+        let mut result = 0;
+        for (i, bit) in bits.iter().enumerate() {
+            if bit {
+                result |= 1 << (bits.len() - 1 - i);
+            }
+        }
+        Some(result)
+    }
+
+    fn u64_to_bit_vec(num: u64) -> BitVec {
+        let mut bits = Vec::with_capacity(64);
+        let mut n = num;
+
+        for _ in 0..64 {
+            bits.push(n & 1 == 1);
+            n >>= 1;
+        }
+
+        bits.reverse();
+        let mut vec = BitVec::from_iter(bits);
+        vec.shrink_to_fit();
+        vec
     }
 
     /// sqlx_mysql::protocol::text::column::ColumnType is not publicly accessible.

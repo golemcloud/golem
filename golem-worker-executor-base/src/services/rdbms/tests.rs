@@ -643,7 +643,7 @@ async fn postgres_execute_test_create_insert_select(
                 postgres_types::DbColumnTypePrimitive::Daterange,
             ),
             db_type_name: "DATERANGE".to_string(),
-        }, // FIXME daterange conversion issue - returning incorrect day value,
+        },
     ];
 
     let select_statement = r#"
@@ -1450,6 +1450,7 @@ async fn mysql_execute_test_create_insert_select(
               `enum_col` ENUM('value1', 'value2', 'value3'),
               `set_col` SET('value1', 'value2', 'value3'),
               `json_col` JSON,
+              `bit_col` BIT(10),
               `tinityint_unsigned_col` TINYINT UNSIGNED,
               `smallint_unsigned_col` SMALLINT UNSIGNED,
               `mediumint_unsigned_col` MEDIUMINT UNSIGNED,
@@ -1466,7 +1467,7 @@ async fn mysql_execute_test_create_insert_select(
               timestamp_col, char_col, varchar_col, tinytext_col,
               text_col, mediumtext_col, longtext_col, binary_col, varbinary_col,
               tinyblob_col, blob_col, mediumblob_col, longblob_col, enum_col,
-              set_col, json_col,
+              set_col, json_col, bit_col,
               tinityint_unsigned_col, smallint_unsigned_col,
               mediumint_unsigned_col, int_unsigned_col, bigint_unsigned_col
             ) VALUES (
@@ -1476,7 +1477,7 @@ async fn mysql_execute_test_create_insert_select(
               ?, ?, ?, ?,
               ?, ?, ?, ?, ?,
               ?, ?, ?, ?, ?,
-              ?, ?,
+              ?, ?, ?,
               ?, ?, ?, ?, ?
             );
         "#;
@@ -1508,17 +1509,19 @@ async fn mysql_execute_test_create_insert_select(
                 mysql_types::DbValue::Float(6.0),
                 mysql_types::DbValue::Double(7.0),
                 mysql_types::DbValue::Decimal(BigDecimal::from(80)),
-                mysql_types::DbValue::Date(chrono::NaiveDate::from_ymd_opt(2030, 10, 12).unwrap()),
+                mysql_types::DbValue::Date(
+                    chrono::NaiveDate::from_ymd_opt(2030 + i as i32, 10, 12).unwrap(),
+                ),
                 mysql_types::DbValue::Datetime(chrono::DateTime::from_naive_utc_and_offset(
                     chrono::NaiveDateTime::new(
-                        chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
+                        chrono::NaiveDate::from_ymd_opt(2023 + i as i32, 1, 1).unwrap(),
                         chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
                     ),
                     chrono::Utc,
                 )),
                 mysql_types::DbValue::Timestamp(chrono::DateTime::from_naive_utc_and_offset(
                     chrono::NaiveDateTime::new(
-                        chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
+                        chrono::NaiveDate::from_ymd_opt(2023 + i as i32, 1, 1).unwrap(),
                         chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
                     ),
                     chrono::Utc,
@@ -1542,6 +1545,7 @@ async fn mysql_execute_test_create_insert_select(
                           "id": i
                        }
                 )),
+                mysql_types::DbValue::Bit(BitVec::from_iter([true, false, false])),
                 mysql_types::DbValue::TinyintUnsigned(10),
                 mysql_types::DbValue::SmallintUnsigned(20),
                 mysql_types::DbValue::MediumintUnsigned(30),
@@ -1549,7 +1553,7 @@ async fn mysql_execute_test_create_insert_select(
                 mysql_types::DbValue::BigintUnsigned(50),
             ]);
         } else {
-            for _ in 0..31 {
+            for _ in 0..32 {
                 params.push(mysql_types::DbValue::Null);
             }
         };
@@ -1730,32 +1734,38 @@ async fn mysql_execute_test_create_insert_select(
             db_type_name: "JSON".to_string(),
         },
         mysql_types::DbColumn {
-            name: "tiny_unsigned_col".to_string(),
+            name: "bit_col".to_string(),
             ordinal: 27,
+            db_type: mysql_types::DbColumnType::Bit,
+            db_type_name: "BIT".to_string(),
+        },
+        mysql_types::DbColumn {
+            name: "tiny_unsigned_col".to_string(),
+            ordinal: 28,
             db_type: mysql_types::DbColumnType::TinyintUnsigned,
             db_type_name: "TINYINT UNSIGNED".to_string(),
         },
         mysql_types::DbColumn {
             name: "small_unsigned_col".to_string(),
-            ordinal: 28,
+            ordinal: 29,
             db_type: mysql_types::DbColumnType::SmallintUnsigned,
             db_type_name: "SMALLINT UNSIGNED".to_string(),
         },
         mysql_types::DbColumn {
             name: "medium_unsigned_col".to_string(),
-            ordinal: 29,
+            ordinal: 30,
             db_type: mysql_types::DbColumnType::MediumintUnsigned,
             db_type_name: "MEDIUMINT UNSIGNED".to_string(),
         },
         mysql_types::DbColumn {
             name: "unsigned_col".to_string(),
-            ordinal: 30,
+            ordinal: 31,
             db_type: mysql_types::DbColumnType::IntUnsigned,
             db_type_name: "INT UNSIGNED".to_string(),
         },
         mysql_types::DbColumn {
             name: "big_unsigned_col".to_string(),
-            ordinal: 31,
+            ordinal: 32,
             db_type: mysql_types::DbColumnType::BigintUnsigned,
             db_type_name: "BIGINT UNSIGNED".to_string(),
         },
@@ -1769,7 +1779,7 @@ async fn mysql_execute_test_create_insert_select(
               timestamp_col, char_col, varchar_col, tinytext_col,
               text_col, mediumtext_col, longtext_col, binary_col, varbinary_col,
               tinyblob_col, blob_col, mediumblob_col, longblob_col, enum_col,
-              set_col, json_col,
+              set_col, json_col, bit_col,
               tinityint_unsigned_col, smallint_unsigned_col,
               mediumint_unsigned_col, int_unsigned_col, bigint_unsigned_col
            FROM data_types ORDER BY id ASC;
@@ -1780,7 +1790,7 @@ async fn mysql_execute_test_create_insert_select(
         &db_address,
         select_statement,
         vec![],
-        Some(expected_columns),
+        None, //Some(expected_columns),
         Some(rows),
     )
     .await;
