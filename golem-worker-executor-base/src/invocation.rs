@@ -94,6 +94,31 @@ pub async fn invoke_worker<Ctx: WorkerCtx>(
     }
 }
 
+/// Returns the first function from the given list that is available on the instance
+///
+/// This can be used to find an exported function when multiple versions of an interface
+/// is supported, such as for the load-snapshot/save-snapshot interfaces.
+///
+/// This function should not be used on the hot path.
+pub fn find_first_available_function<Ctx: WorkerCtx>(
+    store: &mut impl AsContextMut<Data = Ctx>,
+    instance: &wasmtime::component::Instance,
+    names: Vec<String>,
+) -> Option<String> {
+    let mut store = store.as_context_mut();
+    for name in names {
+        let parsed = ParsedFunctionName::parse(&name).ok()?;
+        if find_function(&mut store, instance, &parsed)
+            .ok()
+            .flatten()
+            .is_some()
+        {
+            return Some(name);
+        }
+    }
+    None
+}
+
 fn find_function<'a, Ctx: WorkerCtx>(
     store: &mut StoreContextMut<'a, Ctx>,
     instance: &'a wasmtime::component::Instance,

@@ -712,3 +712,69 @@ async fn manual_update_on_idle_with_failing_load(
     check!(metadata.last_known_status.failed_updates.len() == 1);
     check!(metadata.last_known_status.successful_updates.is_empty());
 }
+
+#[test]
+#[tracing::instrument]
+async fn manual_update_on_idle_using_v11(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = common::TestContext::new(last_unique_id);
+    let executor = common::start(deps, &context).await.unwrap();
+
+    let host_http_port = context.host_http_port();
+    let http_server = TestHttpServer::start(host_http_port);
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), context.host_http_port().to_string());
+
+    let component_id = executor.store_unique_component("update-test-v2-11").await;
+    let worker_id = executor
+        .start_worker_with(
+            &component_id,
+            "manual_update_on_idle_using_v11",
+            vec![],
+            env,
+        )
+        .await;
+    let _ = executor.log_output(&worker_id).await;
+
+    let target_version = executor
+        .update_component(&component_id, "update-test-v3-11")
+        .await;
+    info!("Updated component to version {target_version}");
+
+    let _ = executor
+        .invoke_and_await(&worker_id, "golem:component/api.{f1}", vec![Value::U64(0)])
+        .await
+        .unwrap();
+
+    let before_update = executor
+        .invoke_and_await(&worker_id, "golem:component/api.{f2}", vec![])
+        .await
+        .unwrap();
+
+    executor
+        .manual_update_worker(&worker_id, target_version)
+        .await;
+
+    let after_update = executor
+        .invoke_and_await(&worker_id, "golem:component/api.{get}", vec![])
+        .await
+        .unwrap();
+
+    let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
+
+    // Explanation: we can call 'get' on the updated component that does not exist in previous
+    // versions, and it returns the previous global state which has been transferred to it
+    // using the v2 component's 'save' function through the v3 component's load function.
+
+    drop(executor);
+    http_server.abort();
+
+    check!(before_update == after_update);
+    check!(metadata.last_known_status.component_version == target_version);
+    check!(metadata.last_known_status.pending_updates.is_empty());
+    check!(metadata.last_known_status.failed_updates.is_empty());
+    check!(metadata.last_known_status.successful_updates.len() == 1);
+}
