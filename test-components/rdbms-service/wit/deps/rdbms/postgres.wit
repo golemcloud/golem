@@ -61,6 +61,7 @@ interface postgres {
     xml,
     json,
     jsonb,
+    jsonpath,
     inet,
     cidr,
     macaddr,
@@ -72,6 +73,7 @@ interface postgres {
     tsrange,
     tstzrange,
     daterange,
+    money,
     oid,
     custom-enum(string)
     //     point,
@@ -112,6 +114,7 @@ interface postgres {
     bytea(list<u8>),
     json(string),
     jsonb(string),
+    jsonpath(string),
     xml(string),
     uuid(uuid),
     inet(ip-address),
@@ -125,6 +128,7 @@ interface postgres {
     tsrange(tsrange),
     tstzrange(tstzrange),
     daterange(daterange),
+    money(s64),
     oid(u32),
     custom-enum(string),
     null

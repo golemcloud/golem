@@ -134,7 +134,9 @@ async fn postgres_execute_test_create_insert_select(
                 numrange_col NUMRANGE,
                 tsrange_col TSRANGE,
                 tstzrange_col TSTZRANGE,
-                daterange_col DATERANGE
+                daterange_col DATERANGE,
+                money_col MONEY,
+                jsonpath_col JSONPATH
             );
         "#;
 
@@ -175,14 +177,16 @@ async fn postgres_execute_test_create_insert_select(
             numrange_col,
             tsrange_col,
             tstzrange_col,
-            daterange_col
+            daterange_col,
+            money_col,
+            jsonpath_col
             )
             VALUES
             (
                 $1, $2::test_enum, $3, $4, $5, $6, $7, $8, $9,
                 $10, $11, $12, $13, $14, $15, $16, $17, $18, $19,
                 $20, $21, $22, $23, $24, $25, $26, $27, $28, $29,
-                $30, $31, $32, $33, $34, $35
+                $30, $31, $32, $33, $34, $35, $36, $37
             );
         "#;
 
@@ -342,9 +346,13 @@ async fn postgres_execute_test_create_insert_select(
                     ),
                     Bound::Unbounded,
                 ))),
+                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Money(12345)),
+                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Jsonpath(
+                    "$.id".to_string(),
+                )),
             ]);
         } else {
-            for _ in 0..34 {
+            for _ in 0..36 {
                 params.push(postgres_types::DbValue::Primitive(
                     postgres_types::DbValuePrimitive::Null,
                 ));
@@ -644,6 +652,22 @@ async fn postgres_execute_test_create_insert_select(
             ),
             db_type_name: "DATERANGE".to_string(),
         },
+        postgres_types::DbColumn {
+            name: "money_col".to_string(),
+            ordinal: 35,
+            db_type: postgres_types::DbColumnType::Primitive(
+                postgres_types::DbColumnTypePrimitive::Money,
+            ),
+            db_type_name: "MONEY".to_string(),
+        },
+        postgres_types::DbColumn {
+            name: "jsonpath_col".to_string(),
+            ordinal: 36,
+            db_type: postgres_types::DbColumnType::Primitive(
+                postgres_types::DbColumnTypePrimitive::Jsonpath,
+            ),
+            db_type_name: "JSONPATH".to_string(),
+        },
     ];
 
     let select_statement = r#"
@@ -682,7 +706,9 @@ async fn postgres_execute_test_create_insert_select(
             numrange_col,
             tsrange_col,
             tstzrange_col,
-            daterange_col
+            daterange_col,
+            money_col,
+            jsonpath_col
            FROM data_types ORDER BY id ASC;
         "#;
 
@@ -763,7 +789,9 @@ async fn postgres_execute_test_create_insert_select_array(
                 numrange_col NUMRANGE[],
                 tsrange_col TSRANGE[],
                 tstzrange_col TSTZRANGE[],
-                daterange_col DATERANGE[]
+                daterange_col DATERANGE[],
+                money_col MONEY[],
+                jsonpath_col JSONPATH[]
             );
         "#;
 
@@ -804,14 +832,16 @@ async fn postgres_execute_test_create_insert_select_array(
             numrange_col,
             tsrange_col,
             tstzrange_col,
-            daterange_col
+            daterange_col,
+            money_col,
+            jsonpath_col
             )
             VALUES
             (
                 $1, $2::a_test_enum[], $3, $4, $5, $6, $7, $8, $9,
                 $10, $11, $12, $13, $14, $15, $16, $17, $18, $19,
                 $20, $21, $22, $23, $24, $25, $26, $27, $28, $29,
-                $30, $31, $32, $33, $34, $35
+                $30, $31, $32, $33, $34, $35, $36, $37
             );
         "#;
 
@@ -981,9 +1011,13 @@ async fn postgres_execute_test_create_insert_select_array(
                         Bound::Unbounded,
                     ),
                 )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Money(1234)]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Jsonpath(
+                    "$.user.addresses[0].city".to_string(),
+                )]),
             ]);
         } else {
-            for _ in 0..34 {
+            for _ in 0..36 {
                 params.push(postgres_types::DbValue::Array(vec![]));
             }
         }
@@ -1281,6 +1315,22 @@ async fn postgres_execute_test_create_insert_select_array(
             ),
             db_type_name: "DATERANGE[]".to_string(),
         },
+        postgres_types::DbColumn {
+            name: "money_col".to_string(),
+            ordinal: 35,
+            db_type: postgres_types::DbColumnType::Array(
+                postgres_types::DbColumnTypePrimitive::Money,
+            ),
+            db_type_name: "MONEY[]".to_string(),
+        },
+        postgres_types::DbColumn {
+            name: "jsonpath_col".to_string(),
+            ordinal: 36,
+            db_type: postgres_types::DbColumnType::Array(
+                postgres_types::DbColumnTypePrimitive::Jsonpath,
+            ),
+            db_type_name: "JSONPATH[]".to_string(),
+        },
     ];
 
     let select_statement = r#"
@@ -1319,7 +1369,9 @@ async fn postgres_execute_test_create_insert_select_array(
             numrange_col,
             tsrange_col,
             tstzrange_col,
-            daterange_col
+            daterange_col,
+            money_col,
+            jsonpath_col
            FROM array_data_types ORDER BY id ASC;
         "#;
 
@@ -2014,14 +2066,14 @@ async fn postgres_query_err_test(
         ),
     )
     .await;
-    rdbms_query_err_test(
-        rdbms.clone(),
-        &db_address,
-        "SELECT '12.34'::float8::numeric::money;",
-        vec![],
-        Error::QueryResponseFailure("Column type 'MONEY' is not supported".to_string()),
-    )
-    .await;
+    // rdbms_query_err_test(
+    //     rdbms.clone(),
+    //     &db_address,
+    //     "SELECT '12.34'::float8::numeric::money;",
+    //     vec![],
+    //     Error::QueryResponseFailure("Column type 'MONEY' is not supported".to_string()),
+    // )
+    // .await;
 
     rdbms_query_err_test(
         rdbms.clone(),

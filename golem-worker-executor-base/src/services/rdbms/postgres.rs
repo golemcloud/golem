@@ -52,8 +52,9 @@ pub(crate) mod sqlx_rdbms {
     use async_trait::async_trait;
     use bigdecimal::BigDecimal;
     use futures_util::stream::BoxStream;
+    use serde_json::json;
     use sqlx::database::HasArguments;
-    use sqlx::postgres::types::{Oid, PgInterval, PgRange, PgTimeTz};
+    use sqlx::postgres::types::{Oid, PgInterval, PgMoney, PgRange, PgTimeTz};
     use sqlx::postgres::{PgConnectOptions, PgTypeKind};
     use sqlx::types::mac_address::MacAddress;
     use sqlx::types::BitVec;
@@ -295,6 +296,16 @@ pub(crate) mod sqlx_rdbms {
                         })?;
                         Ok(query.bind(values))
                     }
+                    DbValuePrimitive::Jsonpath(_) => {
+                        let values: Vec<PgJsonPath> = get_plain_values(vs, |v| {
+                            if let DbValuePrimitive::Jsonpath(v) = v {
+                                Some(PgJsonPath::new(v))
+                            } else {
+                                None
+                            }
+                        })?;
+                        Ok(query.bind(values))
+                    }
                     DbValuePrimitive::Xml(_) => {
                         let values: Vec<PgXml> = get_plain_values(vs, |v| {
                             if let DbValuePrimitive::Xml(v) = v {
@@ -491,6 +502,16 @@ pub(crate) mod sqlx_rdbms {
                         })?;
                         Ok(query.bind(values))
                     }
+                    DbValuePrimitive::Money(_) => {
+                        let values: Vec<_> = get_plain_values(vs, |v| {
+                            if let DbValuePrimitive::Money(v) = v {
+                                Some(PgMoney(v))
+                            } else {
+                                None
+                            }
+                        })?;
+                        Ok(query.bind(values))
+                    }
                     DbValuePrimitive::CustomEnum(_) => {
                         let values: Vec<_> = get_plain_values(vs, |v| {
                             if let DbValuePrimitive::CustomEnum(v) = v {
@@ -551,6 +572,7 @@ pub(crate) mod sqlx_rdbms {
             DbValuePrimitive::Uuid(v) => Ok(query.bind(v)),
             DbValuePrimitive::Json(v) => Ok(query.bind(v)),
             DbValuePrimitive::Jsonb(v) => Ok(query.bind(v)),
+            DbValuePrimitive::Jsonpath(v) => Ok(query.bind(PgJsonPath::new(v))),
             DbValuePrimitive::Xml(v) => Ok(query.bind(PgXml(v))),
             DbValuePrimitive::Timestamp(v) => Ok(query.bind(v)),
             DbValuePrimitive::Timestamptz(v) => Ok(query.bind(v)),
@@ -575,6 +597,7 @@ pub(crate) mod sqlx_rdbms {
             DbValuePrimitive::Tsrange(v) => Ok(query.bind(PgRange::from(v))),
             DbValuePrimitive::Tstzrange(v) => Ok(query.bind(PgRange::from(v))),
             DbValuePrimitive::Daterange(v) => Ok(query.bind(PgRange::from(v))),
+            DbValuePrimitive::Money(v) => Ok(query.bind(PgMoney(v))),
             DbValuePrimitive::Oid(v) => Ok(query.bind(Oid(v))),
             DbValuePrimitive::CustomEnum(v) => Ok(query.bind(PgEnum(v))),
             DbValuePrimitive::Null => Ok(query.bind(PgNull {})),
@@ -649,6 +672,10 @@ pub(crate) mod sqlx_rdbms {
             pg_type_name::JSONB => {
                 let v: Option<serde_json::Value> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Jsonb))
+            }
+            pg_type_name::JSONPATH => {
+                let v: Option<PgJsonPath> = row.try_get(index).map_err(|e| e.to_string())?;
+                DbValue::primitive_from(v.map(|v| DbValuePrimitive::Jsonpath(v.into())))
             }
             pg_type_name::XML => {
                 let v: Option<PgXml> = row.try_get(index).map_err(|e| e.to_string())?;
@@ -743,6 +770,10 @@ pub(crate) mod sqlx_rdbms {
                 let v: Option<Oid> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::primitive_from(v.map(|v| DbValuePrimitive::Oid(v.0)))
             }
+            pg_type_name::MONEY => {
+                let v: Option<PgMoney> = row.try_get(index).map_err(|e| e.to_string())?;
+                DbValue::primitive_from(v.map(|v| DbValuePrimitive::Money(v.0)))
+            }
             pg_type_name::BOOL_ARRAY => {
                 let vs: Option<Vec<bool>> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::array_from(vs, DbValuePrimitive::Boolean)
@@ -796,6 +827,10 @@ pub(crate) mod sqlx_rdbms {
                 let vs: Option<Vec<serde_json::Value>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::array_from(vs, DbValuePrimitive::Jsonb)
+            }
+            pg_type_name::JSONPATH_ARRAY => {
+                let vs: Option<Vec<PgJsonPath>> = row.try_get(index).map_err(|e| e.to_string())?;
+                DbValue::array_from(vs, |v| DbValuePrimitive::Jsonpath(v.into()))
             }
             pg_type_name::XML_ARRAY => {
                 let vs: Option<Vec<PgXml>> = row.try_get(index).map_err(|e| e.to_string())?;
@@ -890,6 +925,10 @@ pub(crate) mod sqlx_rdbms {
                     row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::array_from(vs, |v| DbValuePrimitive::Daterange(get_bounds(v)))
             }
+            pg_type_name::MONEY_ARRAY => {
+                let vs: Option<Vec<PgMoney>> = row.try_get(index).map_err(|e| e.to_string())?;
+                DbValue::array_from(vs, |v| DbValuePrimitive::Money(v.0))
+            }
             pg_type_name::OID_ARRAY => {
                 let vs: Option<Vec<Oid>> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::array_from(vs, |v| DbValuePrimitive::Oid(v.0))
@@ -953,6 +992,9 @@ pub(crate) mod sqlx_rdbms {
                 pg_type_name::BPCHAR => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Bpchar)),
                 pg_type_name::JSON => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Json)),
                 pg_type_name::JSONB => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Jsonb)),
+                pg_type_name::JSONPATH => {
+                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Jsonpath))
+                }
                 pg_type_name::XML => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Xml)),
                 pg_type_name::TIMESTAMP => {
                     Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Timestamp))
@@ -975,6 +1017,7 @@ pub(crate) mod sqlx_rdbms {
                 pg_type_name::BIT => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Bit)),
                 pg_type_name::VARBIT => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Varbit)),
                 pg_type_name::OID => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Oid)),
+                pg_type_name::MONEY => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Money)),
                 pg_type_name::INT4RANGE => {
                     Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Int4range))
                 }
@@ -1019,6 +1062,9 @@ pub(crate) mod sqlx_rdbms {
                 }
                 pg_type_name::JSON_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Json)),
                 pg_type_name::JSONB_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Jsonb)),
+                pg_type_name::JSONPATH_ARRAY => {
+                    Ok(DbColumnType::Array(DbColumnTypePrimitive::Jsonpath))
+                }
                 pg_type_name::XML_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Xml)),
                 pg_type_name::TIMESTAMP_ARRAY => {
                     Ok(DbColumnType::Array(DbColumnTypePrimitive::Timestamp))
@@ -1045,6 +1091,7 @@ pub(crate) mod sqlx_rdbms {
                     Ok(DbColumnType::Array(DbColumnTypePrimitive::Varbit))
                 }
                 pg_type_name::OID_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Oid)),
+                pg_type_name::MONEY_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Money)),
                 pg_type_name::INT4RANGE_ARRAY => {
                     Ok(DbColumnType::Array(DbColumnTypePrimitive::Int4range))
                 }
@@ -1143,6 +1190,56 @@ pub(crate) mod sqlx_rdbms {
         }
     }
 
+    struct PgJsonPath(String);
+
+    impl PgJsonPath {
+        fn new(value: String) -> Self {
+            Self(value)
+        }
+    }
+
+    impl From<PgJsonPath> for String {
+        fn from(value: PgJsonPath) -> Self {
+            value.0
+        }
+    }
+
+    impl sqlx::types::Type<sqlx::Postgres> for PgJsonPath {
+        fn type_info() -> sqlx::postgres::PgTypeInfo {
+            sqlx::postgres::PgTypeInfo::with_oid(Oid(4072))
+        }
+    }
+
+    impl sqlx::postgres::PgHasArrayType for PgJsonPath {
+        fn array_type_info() -> sqlx::postgres::PgTypeInfo {
+            sqlx::postgres::PgTypeInfo::with_oid(Oid(4073))
+        }
+    }
+
+    impl<'r> sqlx::Decode<'r, sqlx::Postgres> for PgJsonPath {
+        fn decode(
+            value: sqlx::postgres::PgValueRef<'r>,
+        ) -> Result<Self, Box<dyn std::error::Error + 'static + Send + Sync>> {
+            let mut buf = value.as_bytes()?;
+            buf = &buf[1..];
+            let v: String =
+                serde_json::from_slice(buf).map_err(Into::<sqlx::error::BoxDynError>::into)?;
+            Ok(PgJsonPath(v))
+        }
+    }
+
+    impl<'r> sqlx::Encode<'r, sqlx::Postgres> for PgJsonPath {
+        fn encode_by_ref(
+            &self,
+            buf: &mut <sqlx::Postgres as HasArguments<'r>>::ArgumentBuffer,
+        ) -> sqlx::encode::IsNull {
+            buf.push(1);
+            serde_json::to_writer(&mut **buf, &json!(self.0))
+                .expect("failed to serialize to JSON for encoding on transmission to the database");
+            sqlx::encode::IsNull::No
+        }
+    }
+
     struct PgNull;
 
     impl<'r> sqlx::Encode<'r, sqlx::Postgres> for PgNull {
@@ -1202,6 +1299,8 @@ pub(crate) mod sqlx_rdbms {
         }
     }
 
+    /// https://www.postgresql.org/docs/current/datatype.html
+    /// https://github.com/postgres/postgres/blob/master/src/include/catalog/pg_type.dat
     /// sqlx::postgres::type_info::PgType is not publicly accessible.
     ///
     #[allow(dead_code)]
@@ -1337,6 +1436,7 @@ pub mod types {
         Xml,
         Json,
         Jsonb,
+        Jsonpath,
         Inet,
         Cidr,
         Macaddr,
@@ -1348,6 +1448,7 @@ pub mod types {
         Tsrange,
         Tstzrange,
         Daterange,
+        Money,
         CustomEnum(String),
         Oid,
     }
@@ -1375,6 +1476,7 @@ pub mod types {
                 DbColumnTypePrimitive::Bytea => write!(f, "bytea"),
                 DbColumnTypePrimitive::Json => write!(f, "json"),
                 DbColumnTypePrimitive::Jsonb => write!(f, "jsonb"),
+                DbColumnTypePrimitive::Jsonpath => write!(f, "jsonpath"),
                 DbColumnTypePrimitive::Xml => write!(f, "xml"),
                 DbColumnTypePrimitive::Uuid => write!(f, "uuid"),
                 DbColumnTypePrimitive::Inet => write!(f, "inet"),
@@ -1390,6 +1492,7 @@ pub mod types {
                 DbColumnTypePrimitive::Daterange => write!(f, "daterange"),
                 DbColumnTypePrimitive::Oid => write!(f, "oid"),
                 DbColumnTypePrimitive::CustomEnum(v) => write!(f, "custom {}", v),
+                DbColumnTypePrimitive::Money => write!(f, "money"),
             }
         }
     }
@@ -1431,6 +1534,7 @@ pub mod types {
         Bytea(Vec<u8>),
         Json(serde_json::Value),
         Jsonb(serde_json::Value),
+        Jsonpath(String),
         Xml(String),
         Uuid(Uuid),
         Inet(IpAddr),
@@ -1449,6 +1553,7 @@ pub mod types {
             ),
         ),
         Daterange((Bound<chrono::NaiveDate>, Bound<chrono::NaiveDate>)),
+        Money(i64),
         CustomEnum(String),
         Oid(u32),
         Null,
@@ -1477,6 +1582,7 @@ pub mod types {
                 DbValuePrimitive::Bytea(v) => write!(f, "{:?}", v),
                 DbValuePrimitive::Json(v) => write!(f, "{}", v),
                 DbValuePrimitive::Jsonb(v) => write!(f, "{}", v),
+                DbValuePrimitive::Jsonpath(v) => write!(f, "{}", v),
                 DbValuePrimitive::Xml(v) => write!(f, "{}", v),
                 DbValuePrimitive::Uuid(v) => write!(f, "{}", v),
                 DbValuePrimitive::Inet(v) => write!(f, "{}", v),
@@ -1491,6 +1597,7 @@ pub mod types {
                 DbValuePrimitive::Tstzrange(v) => write!(f, "{:?}, {:?}", v.0, v.1),
                 DbValuePrimitive::Daterange(v) => write!(f, "{:?}, {:?}", v.0, v.1),
                 DbValuePrimitive::Oid(v) => write!(f, "{}", v),
+                DbValuePrimitive::Money(v) => write!(f, "{}", v),
                 DbValuePrimitive::CustomEnum(v) => write!(f, "{}", v),
                 DbValuePrimitive::Null => write!(f, "NULL"),
             }

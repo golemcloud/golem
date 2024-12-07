@@ -348,6 +348,7 @@ impl TryFrom<DbValuePrimitive> for crate::services::rdbms::postgres::types::DbVa
                 let v: serde_json::Value = serde_json::from_str(&v).map_err(|e| e.to_string())?;
                 Ok(Self::Jsonb(v))
             }
+            DbValuePrimitive::Jsonpath(s) => Ok(Self::Jsonpath(s)),
             DbValuePrimitive::Xml(s) => Ok(Self::Xml(s)),
             DbValuePrimitive::Uuid((h, l)) => Ok(Self::Uuid(Uuid::from_u64_pair(h, l))),
             DbValuePrimitive::Bit(v) => Ok(Self::Bit(BitVec::from_iter(v))),
@@ -380,6 +381,7 @@ impl TryFrom<DbValuePrimitive> for crate::services::rdbms::postgres::types::DbVa
                 let v = postgres_utils::daterange_to_bounds(v)?;
                 Ok(Self::Daterange(v))
             }
+            DbValuePrimitive::Money(v) => Ok(Self::Money(v)),
             DbValuePrimitive::CustomEnum(v) => Ok(Self::CustomEnum(v)),
             DbValuePrimitive::Null => Ok(Self::Null),
         }
@@ -433,6 +435,9 @@ impl From<crate::services::rdbms::postgres::types::DbValuePrimitive> for DbValue
             crate::services::rdbms::postgres::types::DbValuePrimitive::Jsonb(s) => {
                 Self::Jsonb(s.to_string())
             }
+            crate::services::rdbms::postgres::types::DbValuePrimitive::Jsonpath(s) => {
+                Self::Jsonpath(s)
+            }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Xml(s) => Self::Xml(s),
             crate::services::rdbms::postgres::types::DbValuePrimitive::Uuid(uuid) => {
                 Self::Uuid(uuid.as_u64_pair())
@@ -443,7 +448,6 @@ impl From<crate::services::rdbms::postgres::types::DbValuePrimitive> for DbValue
             crate::services::rdbms::postgres::types::DbValuePrimitive::Varbit(v) => {
                 Self::Varbit(v.iter().collect())
             }
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Oid(v) => Self::Oid(v),
             crate::services::rdbms::postgres::types::DbValuePrimitive::Inet(v) => {
                 Self::Inet(v.into())
             }
@@ -472,6 +476,8 @@ impl From<crate::services::rdbms::postgres::types::DbValuePrimitive> for DbValue
             crate::services::rdbms::postgres::types::DbValuePrimitive::Numrange(v) => {
                 Self::Numrange(postgres_utils::bounds_to_numrange(v))
             }
+            crate::services::rdbms::postgres::types::DbValuePrimitive::Oid(v) => Self::Oid(v),
+            crate::services::rdbms::postgres::types::DbValuePrimitive::Money(v) => Self::Money(v),
             crate::services::rdbms::postgres::types::DbValuePrimitive::CustomEnum(v) => {
                 Self::CustomEnum(v)
             }
@@ -563,6 +569,9 @@ impl From<crate::services::rdbms::postgres::types::DbColumnTypePrimitive>
             crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Bytea => Self::Bytea,
             crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Jsonb => Self::Jsonb,
             crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Json => Self::Json,
+            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Jsonpath => {
+                Self::Jsonpath
+            }
             crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Xml => Self::Xml,
             crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Bit => Self::Bit,
             crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Varbit => Self::Varbit,
@@ -591,6 +600,7 @@ impl From<crate::services::rdbms::postgres::types::DbColumnTypePrimitive>
                 Self::Daterange
             }
             crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Uuid => Self::Uuid,
+            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Money => Self::Money,
             crate::services::rdbms::postgres::types::DbColumnTypePrimitive::CustomEnum(v) => {
                 Self::CustomEnum(v)
             }
