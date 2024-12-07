@@ -1735,10 +1735,22 @@ impl ReplayableStream for ZipEntryStream {
     }
 
     async fn length(&self) -> Result<u64, String> {
-        Ok(tokio::fs::metadata(self.file.path())
+        let reopened = self
+            .file
+            .reopen()
+            .map_err(|e| format!("Failed to reopen file: {e}"))?;
+        let file = tokio::fs::File::from_std(reopened);
+        let buf_reader = BufReader::new(file);
+        let zip_archive = ZipFileReader::with_tokio(buf_reader)
             .await
-            .map_err(|e| format!("Failed to get file metadata: {e}"))?
-            .len())
+            .map_err(|e| format!("Failed to open zip archive: {e}"))?;
+
+        Ok(zip_archive
+            .file()
+            .entries()
+            .get(self.index)
+            .ok_or("Entry with not found in archive")?
+            .uncompressed_size())
     }
 }
 

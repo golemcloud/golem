@@ -22,7 +22,7 @@ use crate::durable_host::sync_helper::{SyncHelper, SyncHelperPermit};
 use crate::durable_host::wasm_rpc::UrnExtensions;
 use crate::error::GolemError;
 use crate::function_result_interpreter::interpret_function_results;
-use crate::invocation::{invoke_worker, InvokeResult};
+use crate::invocation::{find_first_available_function, invoke_worker, InvokeResult};
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
 use crate::model::{
     CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, ListDirectoryResult,
@@ -509,64 +509,81 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                             .await
                         {
                             Ok(Some(data)) => {
-                                let idempotency_key = IdempotencyKey::fresh();
-                                store
-                                    .as_context_mut()
-                                    .data_mut()
-                                    .durable_ctx_mut()
-                                    .set_current_idempotency_key(idempotency_key.clone())
+                                let failed = if let Some(load_snapshot) =
+                                    find_first_available_function(
+                                        store,
+                                        instance,
+                                        vec![
+                                            "golem:api/load-snapshot@1.1.0.{load}".to_string(),
+                                            "golem:api/load-snapshot@0.2.0.{load}".to_string(),
+                                        ],
+                                    ) {
+                                    let idempotency_key = IdempotencyKey::fresh();
+                                    store
+                                        .as_context_mut()
+                                        .data_mut()
+                                        .durable_ctx_mut()
+                                        .set_current_idempotency_key(idempotency_key.clone())
+                                        .await;
+
+                                    store
+                                        .as_context_mut()
+                                        .data_mut()
+                                        .begin_call_snapshotting_function();
+                                    let load_result = invoke_worker(
+                                        load_snapshot,
+                                        vec![Value::List(
+                                            data.iter().map(|b| Value::U8(*b)).collect(),
+                                        )],
+                                        store,
+                                        instance,
+                                    )
                                     .await;
+                                    store
+                                        .as_context_mut()
+                                        .data_mut()
+                                        .end_call_snapshotting_function();
 
-                                store
-                                    .as_context_mut()
-                                    .data_mut()
-                                    .begin_call_snapshotting_function();
-                                let load_result = invoke_worker(
-                                    "golem:api/load-snapshot@0.2.0.{load}".to_string(),
-                                    vec![Value::List(data.iter().map(|b| Value::U8(*b)).collect())],
-                                    store,
-                                    instance,
-                                )
-                                .await;
-                                store
-                                    .as_context_mut()
-                                    .data_mut()
-                                    .end_call_snapshotting_function();
-
-                                let failed = match load_result {
-                                    Err(error) => Some(format!(
-                                        "Manual update failed to load snapshot: {error}"
-                                    )),
-                                    Ok(InvokeResult::Failed { error, .. }) => {
-                                        let stderr = store
-                                            .as_context()
-                                            .data()
-                                            .get_public_state()
-                                            .event_service()
-                                            .get_last_invocation_errors();
-                                        let error = error.to_string(&stderr);
-                                        Some(format!(
+                                    match load_result {
+                                        Err(error) => Some(format!(
                                             "Manual update failed to load snapshot: {error}"
-                                        ))
-                                    }
-                                    Ok(InvokeResult::Succeeded { output, .. }) => {
-                                        if output.len() == 1 {
-                                            match &output[0] {
-                                                Value::Result(Err(Some(boxed_error_value))) => {
-                                                    match &**boxed_error_value {
-                                                        Value::String(error) =>
-                                                            Some(format!("Manual update failed to load snapshot: {error}")),
-                                                        _ =>
-                                                            Some("Unexpected result value from the snapshot load function".to_string())
-                                                    }
-                                                }
-                                                _ => None
-                                            }
-                                        } else {
-                                            Some("Unexpected result value from the snapshot load function".to_string())
+                                        )),
+                                        Ok(InvokeResult::Failed { error, .. }) => {
+                                            let stderr = store
+                                                .as_context()
+                                                .data()
+                                                .get_public_state()
+                                                .event_service()
+                                                .get_last_invocation_errors();
+                                            let error = error.to_string(&stderr);
+                                            Some(format!(
+                                                "Manual update failed to load snapshot: {error}"
+                                            ))
                                         }
+                                        Ok(InvokeResult::Succeeded { output, .. }) => {
+                                            if output.len() == 1 {
+                                                match &output[0] {
+                                                        Value::Result(Err(Some(boxed_error_value))) => {
+                                                            match &**boxed_error_value {
+                                                                Value::String(error) =>
+                                                                    Some(format!("Manual update failed to load snapshot: {error}")),
+                                                                _ =>
+                                                                    Some("Unexpected result value from the snapshot load function".to_string())
+                                                            }
+                                                        }
+                                                        _ => None
+                                                    }
+                                            } else {
+                                                Some("Unexpected result value from the snapshot load function".to_string())
+                                            }
+                                        }
+                                        _ => None,
                                     }
-                                    _ => None,
+                                } else {
+                                    Some(
+                                        "Failed to find exported load-snapshot function"
+                                            .to_string(),
+                                    )
                                 };
 
                                 if let Some(error) = failed {
