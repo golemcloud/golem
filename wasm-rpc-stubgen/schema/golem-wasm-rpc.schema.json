@@ -228,6 +228,13 @@
             "command": {
               "type": "string",
               "description": "External command to execute"
+            },
+            "mkdirs": {
+              "type": "array",
+              "description": "List of directories that should be created before running the command",
+              "items": {
+                "type": "string"
+              }
             }
           },
           "additionalProperties": false,
@@ -241,14 +248,21 @@
               "type": "string",
               "description": "External command to execute"
             },
-            "inputs": {
+            "mkdirs": {
+              "type": "array",
+              "description": "List of directories that should be created before running the command",
+              "items": {
+                "type": "string"
+              }
+            },
+            "sources": {
               "type": "array",
               "description": "Inputs (paths and globs) for the external command",
               "items": {
                 "type": "string"
               }
             },
-            "outputs": {
+            "targets": {
               "type": "array",
               "description": "Output (paths and globs) for the external command",
               "items": {

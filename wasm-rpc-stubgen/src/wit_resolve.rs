@@ -186,6 +186,9 @@ impl ResolvedWitApplication {
         app: &Application<CPE>,
         profile: Option<&ProfileName>,
     ) -> ValidatedResult<Self> {
+        // TODO: Can be removed once we fixed all docs and examples
+        std::env::set_var("WIT_REQUIRE_F32_F64", "0");
+
         log_action("Resolving", "application wit directories");
         let _indent = LogIndent::new();
 
@@ -689,6 +692,9 @@ pub struct WitDepsResolver {
 
 impl WitDepsResolver {
     pub fn new(sources: Vec<PathBuf>) -> anyhow::Result<Self> {
+        // TODO: Can be removed once we fixed all docs and examples
+        std::env::set_var("WIT_REQUIRE_F32_F64", "0");
+
         let mut packages = HashMap::<PathBuf, HashMap<PackageName, UnresolvedPackageGroup>>::new();
 
         for source in &sources {
