@@ -32,7 +32,6 @@ use crate::stubgen::handle_stubgen;
 use api_definition::ApiDefinitionSubcommand;
 use api_deployment::ApiDeploymentSubcommand;
 use clap::{self, Command, Subcommand};
-use colored::Colorize;
 use component::ComponentSubCommand;
 use golem_common::uri::oss::uri::ComponentUri;
 use golem_wasm_rpc_stubgen::App;
@@ -121,18 +120,6 @@ pub enum StaticSharedCommand {
 
 impl<Ctx> CliCommand<Ctx> for StaticSharedCommand {
     async fn run(self, _ctx: Ctx) -> Result<GolemResult, GolemError> {
-        eprintln!(
-            "{}",
-            "WARNING: THIS COMMAND IS DEPRECATED AND MIGHT MODIFY SOURCE WIT FILES!".yellow()
-        );
-        eprintln!(
-            "{}",
-            format!(
-                "\nThe recommended new way to handle wasm-rpc stub generation and linking is the {} command.\n",
-                "golem-cli app".bold().underline(),
-            ).yellow(),
-        );
-
         match self {
             StaticSharedCommand::Diagnose { command } => {
                 diagnose(command);
