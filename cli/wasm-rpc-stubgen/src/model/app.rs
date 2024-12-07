@@ -826,6 +826,10 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
         }
     }
 
+    pub fn task_result_marker_dir(&self) -> PathBuf {
+        self.temp_dir().join("task_results")
+    }
+
     fn component(&self, component_name: &ComponentName) -> &Component<CPE> {
         self.components
             .get(component_name)
@@ -1035,12 +1039,17 @@ pub struct Component<CPE: ComponentPropertiesExtensions> {
 
 impl<CPE: ComponentPropertiesExtensions> Component<CPE> {
     pub fn source_dir(&self) -> &Path {
-        self.source.parent().unwrap_or_else(|| {
+        let parent = self.source.parent().unwrap_or_else(|| {
             panic!(
                 "Failed to get parent for component, source: {}",
                 self.source.display()
             )
-        })
+        });
+        if parent.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            parent
+        }
     }
 }
 
