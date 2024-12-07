@@ -10,6 +10,7 @@ use crate::model::app::{
     ComponentPropertiesExtensions, ProfileName, DEFAULT_CONFIG_FILE_NAME,
 };
 use crate::model::app_raw;
+use crate::model::app_raw::ExternalCommand;
 use crate::stub::{StubConfig, StubDefinition};
 use crate::validation::ValidatedResult;
 use crate::wit_generate::{
@@ -23,7 +24,6 @@ use colored::Colorize;
 use glob::{glob_with, MatchOptions};
 use golem_wasm_rpc::WASM_RPC_VERSION;
 use itertools::Itertools;
-use serde::Serialize;
 use std::cell::OnceCell;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -336,7 +336,10 @@ async fn gen_rpc<CPE: ComponentPropertiesExtensions>(
         let mut any_changed = false;
         for component_name in ctx.application.component_names() {
             let changed = create_generated_wit(ctx, component_name)?;
-            update_cargo_toml(ctx, changed, component_name)?;
+            if changed {
+                // TODO: if this fails, it won't be retried, add done file for this
+                update_cargo_toml(ctx, component_name)?;
+            }
             any_changed |= changed;
         }
         if any_changed {
@@ -714,7 +717,7 @@ fn load_app_validated<CPE: ComponentPropertiesExtensions>(
     app
 }
 
-fn collect_sources(mode: &ApplicationSourceMode) -> ValidatedResult<BTreeSet<PathBuf>> {
+fn collect_sources(mode: &ApplicationSourceMode) -> ValidatedResult<Vec<PathBuf>> {
     log_action("Collecting", "sources");
     let _indent = LogIndent::new();
 
@@ -729,12 +732,12 @@ fn collect_sources(mode: &ApplicationSourceMode) -> ValidatedResult<BTreeSet<Pat
 
                 let includes = includes_from_yaml_file(source.as_path());
                 if includes.is_empty() {
-                    ValidatedResult::Ok(BTreeSet::from([source]))
+                    ValidatedResult::Ok(vec![source])
                 } else {
                     ValidatedResult::from_result(compile_and_collect_globs(source_dir, &includes))
                         .map(|mut sources| {
                             sources.insert(0, source);
-                            sources.into_iter().collect()
+                            sources
                         })
                 }
             }
@@ -755,10 +758,7 @@ fn collect_sources(mode: &ApplicationSourceMode) -> ValidatedResult<BTreeSet<Pat
                 })
                 .collect();
 
-            ValidatedResult::from_value_and_warns(
-                sources.iter().cloned().collect(),
-                non_unique_source_warns,
-            )
+            ValidatedResult::from_value_and_warns(sources.clone(), non_unique_source_warns)
         }
     };
 
@@ -976,17 +976,11 @@ fn create_generated_base_wit<CPE: ComponentPropertiesExtensions>(
         .application
         .component_source_wit(component_name, ctx.profile());
     let component_generated_base_wit = ctx.application.component_generated_base_wit(component_name);
-    let task_result_marker = TaskResultMarker::new(
-        &ctx.application.task_result_marker_dir(),
-        ComponentGeneratorMarkerHash {
-            component_name,
-            generator_kind: "base_wit",
-        },
-    )?;
+    let gen_dir_done_marker = GeneratedDirDoneMarker::new(&component_generated_base_wit);
 
     if is_up_to_date(
         ctx.config.skip_up_to_date_checks
-            || !task_result_marker.is_up_to_date()
+            || !gen_dir_done_marker.is_done()
             || !ctx.wit.is_dep_graph_up_to_date(component_name)?,
         || [component_source_wit.clone()],
         || [component_generated_base_wit.clone()],
@@ -1059,17 +1053,12 @@ fn create_generated_base_wit<CPE: ComponentPropertiesExtensions>(
             );
             let _indent = LogIndent::new();
 
-            match extract_main_interface_as_wit_dep(&component_generated_base_wit) {
-                Ok(()) => {
-                    task_result_marker.success()?;
-                    Ok(true)
-                }
-                Err(err) => {
-                    task_result_marker.failure()?;
-                    Err(err)
-                }
-            }
+            extract_main_interface_as_wit_dep(&component_generated_base_wit)?;
         }
+
+        gen_dir_done_marker.mark_as_done()?;
+
+        Ok(true)
     }
 }
 
@@ -1081,17 +1070,11 @@ fn create_generated_wit<CPE: ComponentPropertiesExtensions>(
     let component_generated_wit = ctx
         .application
         .component_generated_wit(component_name, ctx.profile());
-    let task_result_marker = TaskResultMarker::new(
-        &ctx.application.task_result_marker_dir(),
-        ComponentGeneratorMarkerHash {
-            component_name,
-            generator_kind: "wit",
-        },
-    )?;
+    let gen_dir_done_marker = GeneratedDirDoneMarker::new(&component_generated_wit);
 
     if is_up_to_date(
         ctx.config.skip_up_to_date_checks
-            || !task_result_marker.is_up_to_date()
+            || !gen_dir_done_marker.is_done()
             || !ctx.wit.is_dep_graph_up_to_date(component_name)?,
         || [component_generated_base_wit.clone()],
         || [component_generated_wit.clone()],
@@ -1115,7 +1098,7 @@ fn create_generated_wit<CPE: ComponentPropertiesExtensions>(
         copy_wit_sources(&component_generated_base_wit, &component_generated_wit)?;
         add_stub_deps(ctx, component_name)?;
 
-        task_result_marker.success()?;
+        gen_dir_done_marker.mark_as_done()?;
 
         Ok(true)
     }
@@ -1123,7 +1106,6 @@ fn create_generated_wit<CPE: ComponentPropertiesExtensions>(
 
 fn update_cargo_toml<CPE: ComponentPropertiesExtensions>(
     ctx: &ApplicationContext<CPE>,
-    mut skip_up_to_date_checks: bool,
     component_name: &ComponentName,
 ) -> anyhow::Result<()> {
     let component_source_wit = PathExtra::new(
@@ -1138,43 +1120,16 @@ fn update_cargo_toml<CPE: ComponentPropertiesExtensions>(
     })?;
     let cargo_toml = component_source_wit_parent.join("Cargo.toml");
 
-    if !cargo_toml.exists() {
-        return Ok(());
+    if cargo_toml.exists() {
+        regenerate_cargo_package_component(
+            &cargo_toml,
+            &ctx.application
+                .component_generated_wit(component_name, ctx.profile()),
+            None,
+        )?
     }
 
-    let task_result_marker = TaskResultMarker::new(
-        &ctx.application.task_result_marker_dir(),
-        ComponentGeneratorMarkerHash {
-            component_name,
-            generator_kind: "Cargo.toml",
-        },
-    )?;
-
-    skip_up_to_date_checks |= skip_up_to_date_checks || ctx.config.skip_up_to_date_checks;
-    if !skip_up_to_date_checks && task_result_marker.is_up_to_date() {
-        log_skipping_up_to_date(format!(
-            "updating Cargo.toml for {}",
-            component_name.as_str().log_color_highlight()
-        ));
-        return Ok(());
-    }
-
-    let result = regenerate_cargo_package_component(
-        &cargo_toml,
-        &ctx.application
-            .component_generated_wit(component_name, ctx.profile()),
-        None,
-    );
-    match result {
-        Ok(()) => {
-            task_result_marker.success()?;
-            Ok(())
-        }
-        Err(err) => {
-            task_result_marker.failure()?;
-            Err(err)
-        }
-    }
+    Ok(())
 }
 
 async fn build_stub<CPE: ComponentPropertiesExtensions>(
@@ -1210,16 +1165,10 @@ async fn build_stub<CPE: ComponentPropertiesExtensions>(
 
     let stub_wasm = ctx.application.stub_wasm(component_name);
     let stub_wit = ctx.application.stub_wit(component_name);
-    let task_result_marker = TaskResultMarker::new(
-        &ctx.application.task_result_marker_dir(),
-        ComponentGeneratorMarkerHash {
-            component_name,
-            generator_kind: "stub",
-        },
-    )?;
+    let gen_dir_done_marker = GeneratedDirDoneMarker::new(&stub_wit);
 
     if is_up_to_date(
-        ctx.config.skip_up_to_date_checks || !task_result_marker.is_up_to_date(),
+        ctx.config.skip_up_to_date_checks || !gen_dir_done_marker.is_done(),
         || stub_sources,
         || [stub_wit.clone(), stub_wasm.clone()],
     ) {
@@ -1248,19 +1197,13 @@ async fn build_stub<CPE: ComponentPropertiesExtensions>(
         );
         fs::create_dir_all(&target_root)?;
 
-        let result =
-            commands::generate::build(&stub_def, &stub_wasm, &stub_wit, ctx.config.offline).await;
-        match result {
-            Ok(()) => {
-                task_result_marker.success()?;
-                delete_path("stub temp build dir", &target_root)?;
-                Ok(true)
-            }
-            Err(err) => {
-                task_result_marker.failure()?;
-                Err(err)
-            }
-        }
+        commands::generate::build(&stub_def, &stub_wasm, &stub_wit, ctx.config.offline).await?;
+
+        gen_dir_done_marker.mark_as_done()?;
+
+        delete_path("stub temp build dir", &target_root)?;
+
+        Ok(true)
     }
 }
 
@@ -1352,7 +1295,7 @@ fn copy_wit_sources(source: &Path, target: &Path) -> anyhow::Result<()> {
 fn execute_external_command<CPE: ComponentPropertiesExtensions>(
     ctx: &ApplicationContext<CPE>,
     component_name: &ComponentName,
-    command: &app_raw::ExternalCommand,
+    command: &ExternalCommand,
 ) -> anyhow::Result<()> {
     let build_dir = command
         .dir
@@ -1368,22 +1311,11 @@ fn execute_external_command<CPE: ComponentPropertiesExtensions>(
                 .to_path_buf()
         });
 
-    let task_result_marker = TaskResultMarker::new(
-        &ctx.application.task_result_marker_dir(),
-        ResolvedExternalCommandMarkerHash {
-            build_dir: &build_dir,
-            command,
-        },
-    )?;
-
-    let skip_up_to_date_checks =
-        ctx.config.skip_up_to_date_checks || !task_result_marker.is_up_to_date();
-
     if !command.sources.is_empty() && !command.targets.is_empty() {
         let sources = compile_and_collect_globs(&build_dir, &command.sources)?;
         let targets = compile_and_collect_globs(&build_dir, &command.targets)?;
 
-        if is_up_to_date(skip_up_to_date_checks, || sources, || targets) {
+        if is_up_to_date(ctx.config.skip_up_to_date_checks, || sources, || targets) {
             log_skipping_up_to_date(format!(
                 "executing external command '{}' in directory {}",
                 command.command.log_color_highlight(),
@@ -1402,149 +1334,46 @@ fn execute_external_command<CPE: ComponentPropertiesExtensions>(
         ),
     );
 
-    if !command.mkdirs.is_empty() {
-        let _ident = LogIndent::new();
-        for dir in &command.mkdirs {
-            let dir = ctx
-                .application
-                .component_source_dir(component_name)
-                .join(dir);
-            if !std::fs::exists(&dir)? {
-                log_action(
-                    "Creating",
-                    format!("directory {}", dir.log_color_highlight()),
-                );
-                std::fs::create_dir_all(dir)?
-            }
-        }
-    }
-
-    let command_tokens = shlex::split(&command.command)
-        .ok_or_else(|| anyhow::anyhow!("Failed to parse external command: {}", command.command))?;
+    let command_tokens = command.command.split(' ').collect::<Vec<_>>();
     if command_tokens.is_empty() {
         return Err(anyhow!("Empty command!"));
     }
 
-    let result = Command::new(command_tokens[0].clone())
+    let result = Command::new(command_tokens[0])
         .args(command_tokens.iter().skip(1))
         .current_dir(build_dir)
         .status()
         .with_context(|| "Failed to execute command".to_string())?;
 
-    if result.success() {
-        task_result_marker.success()?;
-        Ok(())
-    } else {
-        task_result_marker.failure()?;
-        Err(anyhow!(format!(
+    if !result.success() {
+        return Err(anyhow!(format!(
             "Command failed with exit code: {}",
             result
                 .code()
                 .map(|code| code.to_string().log_color_error_highlight().to_string())
                 .unwrap_or_else(|| "?".to_string())
-        )))
+        )));
     }
+
+    Ok(())
 }
 
-trait TaskResultMarkerHashInput {
-    fn task_kind() -> &'static str;
+static GENERATED_DIR_DONE_MARKER_FILE_NAME: &str = ".done";
 
-    fn hash_input(&self) -> anyhow::Result<Vec<u8>>;
+struct GeneratedDirDoneMarker<'a> {
+    dir: &'a Path,
 }
 
-#[derive(Serialize)]
-struct ResolvedExternalCommandMarkerHash<'a> {
-    build_dir: &'a Path,
-    command: &'a app_raw::ExternalCommand,
-}
-
-impl TaskResultMarkerHashInput for ResolvedExternalCommandMarkerHash<'_> {
-    fn task_kind() -> &'static str {
-        "ResolvedExternalCommandMarkerHash"
+impl<'a> GeneratedDirDoneMarker<'a> {
+    fn new(dir: &'a Path) -> Self {
+        Self { dir }
     }
 
-    fn hash_input(&self) -> anyhow::Result<Vec<u8>> {
-        Ok(serde_yaml::to_string(self)?.into_bytes())
-    }
-}
-
-struct ComponentGeneratorMarkerHash<'a> {
-    component_name: &'a ComponentName,
-    generator_kind: &'a str,
-}
-
-impl TaskResultMarkerHashInput for ComponentGeneratorMarkerHash<'_> {
-    fn task_kind() -> &'static str {
-        "ComponentGeneratorMarkerHash"
+    fn is_done(&self) -> bool {
+        self.dir.join(GENERATED_DIR_DONE_MARKER_FILE_NAME).exists()
     }
 
-    fn hash_input(&self) -> anyhow::Result<Vec<u8>> {
-        Ok(format!("{}-{}", self.component_name, self.generator_kind).into_bytes())
-    }
-}
-
-struct TaskResultMarker {
-    success_marker_file_path: PathBuf,
-    failure_marker_file_path: PathBuf,
-    success_before: bool,
-    failure_before: bool,
-}
-
-static TASK_RESULT_MARKER_SUCCESS_SUFFIX: &str = "-success";
-static TASK_RESULT_MARKER_FAILURE_SUFFIX: &str = "-failure";
-
-impl TaskResultMarker {
-    fn new<T: TaskResultMarkerHashInput>(dir: &Path, task: T) -> anyhow::Result<Self> {
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(T::task_kind().as_bytes());
-        hasher.update(&task.hash_input()?);
-        let hex_hash = hasher.finalize().to_hex().to_string();
-
-        let success_marker_file_path = dir.join(format!(
-            "{}{}",
-            &hex_hash, TASK_RESULT_MARKER_SUCCESS_SUFFIX
-        ));
-        let failure_marker_file_path = dir.join(format!(
-            "{}{}",
-            &hex_hash, TASK_RESULT_MARKER_FAILURE_SUFFIX
-        ));
-
-        let success_marker_exists = success_marker_file_path.exists();
-        let failure_marker_exists = failure_marker_file_path.exists();
-
-        let (success_before, failure_before) = match (success_marker_exists, failure_marker_exists)
-        {
-            (true, false) => (true, false),
-            (false, false) => (false, false),
-            (_, true) => (false, true),
-        };
-
-        if failure_marker_exists || !success_marker_exists {
-            if success_marker_exists {
-                fs::remove(&success_marker_file_path)?
-            }
-            if failure_marker_exists {
-                fs::remove(&failure_marker_file_path)?
-            }
-        }
-
-        Ok(Self {
-            success_marker_file_path,
-            failure_marker_file_path,
-            success_before,
-            failure_before,
-        })
-    }
-
-    fn is_up_to_date(&self) -> bool {
-        !self.failure_before && self.success_before
-    }
-
-    fn success(&self) -> anyhow::Result<()> {
-        fs::write_str(&self.success_marker_file_path, "")
-    }
-
-    fn failure(&self) -> anyhow::Result<()> {
-        fs::write_str(&self.failure_marker_file_path, "")
+    fn mark_as_done(&self) -> anyhow::Result<()> {
+        fs::write_str(self.dir.join(GENERATED_DIR_DONE_MARKER_FILE_NAME), "")
     }
 }
