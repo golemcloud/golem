@@ -118,7 +118,7 @@ identifier_text     ::= letter (letter | digit | "_" | "-")*
 
 type_name           := basic_type | list_type | tuple_type | option_type | result_type
 
-basic_type          ::= "bool" | "s8" | "u8" | "s16" | "u16" | "s32" | "u32" | "s64" | "u64" | "f32" | "f64" | "chr" | "str"
+basic_type          ::= "bool" | "s8" | "u8" | "s16" | "u16" | "s32" | "u32" | "s64" | "u64" | "f32" | "f64" | "char" | "string"
 
 list_type           ::= "list" "<" (basic_type | list_type | tuple_type | option_type | result_type) ">"
 
@@ -338,7 +338,7 @@ However, in situations where you have a standalone script such as `request.body`
 to fix the compil time errors is to annotate it the type.
 
 ```
-let x: str = request.body;
+let x: string = request.body;
 x
 
 ```
@@ -355,7 +355,7 @@ Say the request body is a `record` in Json, as given below. `Rib` sees it as a `
 Then we can use Rib language to select the field `user`, as it considers this request's body as a `WASM` Record type.
 
 ```bash filename="Terminal" copy
-let x: str = request.body.user;
+let x: string = request.body.user;
 x
 ```
 
@@ -363,7 +363,7 @@ x
 
 ```bash filename="Terminal" copy
 let worker_result = worker_function_name(request.body);
-worker_result
+{ body: worker_result.user, headers: { "Content-Type": "application/json" } }
 ```
 
 If the worker response is a record, then we can select the field in the response as follows
@@ -375,8 +375,6 @@ If the worker response is a record, then we can select the field in the response
 }
 
 ```
-
-Then we can use Rib language to select the field `user`, as it considers the value of `worker.response` `WASM` Record type, and therefore a valid selection.
 
 ### Result
 
@@ -598,6 +596,26 @@ Or even as simple as:
   let z = x.a > y.b;
   z
 
+```
+
+### List Comprehension
+
+```bash filename="Terminal" copy
+ let x = ["foo", "bar"];
+
+ for p in x {
+   yield p;
+ }
+```
+
+### List Aggregation
+
+```bash filename="Terminal" copy
+ let ages: list<u16> = [1, 2, 3];
+
+ reduce z, a in ages from 0 {
+   yield z + a;
+ }
 ```
 
 As mentioned above, return value of the script is the last expression in the script, and in this case, it is of the type boolean.
