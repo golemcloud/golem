@@ -163,7 +163,7 @@ pub(crate) mod sqlx_rdbms {
             DbValue::Enumeration(v) => Ok(query.bind(v)),
             DbValue::Set(v) => Ok(query.bind(v)),
             DbValue::Bit(v) => {
-                let value = bit_vec_to_u64(v).ok_or("failed to convert bit vector to u64")?;
+                let value = bit_vec_to_u64(v).ok_or("Bit vector too large")?;
                 Ok(query.bind(value))
             }
             DbValue::Null => Ok(query.bind(None::<String>)),
@@ -318,10 +318,10 @@ pub(crate) mod sqlx_rdbms {
                 let v: Option<chrono::NaiveTime> = row.try_get(index).map_err(|e| e.to_string())?;
                 v.map(DbValue::Time).unwrap_or(DbValue::Null)
             }
-            // mysql_type_name::YEAR => { // FIXME
-            //     let v: Option<i16> = row.try_get(index).map_err(|e| e.to_string())?;
-            //     v.map(DbValue::Year).unwrap_or(DbValue::Null)
-            // }
+            mysql_type_name::YEAR => {
+                let v: Option<u16> = row.try_get(index).map_err(|e| e.to_string())?;
+                v.map(DbValue::Year).unwrap_or(DbValue::Null)
+            }
             mysql_type_name::SET => {
                 let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
                 v.map(DbValue::Set).unwrap_or(DbValue::Null)
@@ -405,30 +405,29 @@ pub(crate) mod sqlx_rdbms {
 
     fn bit_vec_to_u64(bits: BitVec) -> Option<u64> {
         if bits.len() > 64 {
-            return None; // Too many bits for u64
-        }
-        let mut result = 0;
-        for (i, bit) in bits.iter().enumerate() {
-            if bit {
-                result |= 1 << (bits.len() - 1 - i);
+            None // Too many bits for u64
+        } else {
+            let mut result = 0;
+            for (i, bit) in bits.iter().enumerate() {
+                if bit {
+                    result |= 1 << (bits.len() - 1 - i);
+                }
             }
+            Some(result)
         }
-        Some(result)
     }
 
     fn u64_to_bit_vec(num: u64) -> BitVec {
-        let mut bits = Vec::with_capacity(64);
+        let mut bits = Vec::new();
         let mut n = num;
 
-        for _ in 0..64 {
+        while n > 0 {
             bits.push(n & 1 == 1);
             n >>= 1;
         }
 
         bits.reverse();
-        let mut vec = BitVec::from_iter(bits);
-        vec.shrink_to_fit();
-        vec
+        BitVec::from_iter(bits)
     }
 
     /// sqlx_mysql::protocol::text::column::ColumnType is not publicly accessible.
@@ -589,7 +588,7 @@ pub mod types {
         Datetime(chrono::DateTime<chrono::Utc>),
         Timestamp(chrono::DateTime<chrono::Utc>),
         Time(chrono::NaiveTime),
-        Year(i16),
+        Year(u16),
         Fixchar(String),
         Varchar(String),
         Tinytext(String),

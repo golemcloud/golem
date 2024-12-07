@@ -1469,7 +1469,8 @@ async fn mysql_execute_test_create_insert_select(
               tinyblob_col, blob_col, mediumblob_col, longblob_col, enum_col,
               set_col, json_col, bit_col,
               tinityint_unsigned_col, smallint_unsigned_col,
-              mediumint_unsigned_col, int_unsigned_col, bigint_unsigned_col
+              mediumint_unsigned_col, int_unsigned_col, bigint_unsigned_col,
+              year_col
             ) VALUES (
               ?,
               ?, ?, ?, ?, ?,
@@ -1478,7 +1479,8 @@ async fn mysql_execute_test_create_insert_select(
               ?, ?, ?, ?, ?,
               ?, ?, ?, ?, ?,
               ?, ?, ?,
-              ?, ?, ?, ?, ?
+              ?, ?, ?, ?, ?,
+              ?
             );
         "#;
 
@@ -1551,9 +1553,10 @@ async fn mysql_execute_test_create_insert_select(
                 mysql_types::DbValue::MediumintUnsigned(30),
                 mysql_types::DbValue::IntUnsigned(40),
                 mysql_types::DbValue::BigintUnsigned(50),
+                mysql_types::DbValue::Year(2020),
             ]);
         } else {
-            for _ in 0..32 {
+            for _ in 0..33 {
                 params.push(mysql_types::DbValue::Null);
             }
         };
@@ -1769,6 +1772,12 @@ async fn mysql_execute_test_create_insert_select(
             db_type: mysql_types::DbColumnType::BigintUnsigned,
             db_type_name: "BIGINT UNSIGNED".to_string(),
         },
+        mysql_types::DbColumn {
+            name: "year_col".to_string(),
+            ordinal: 33,
+            db_type: mysql_types::DbColumnType::Year,
+            db_type_name: "YEAR".to_string(),
+        },
     ];
 
     let select_statement = r#"
@@ -1781,7 +1790,8 @@ async fn mysql_execute_test_create_insert_select(
               tinyblob_col, blob_col, mediumblob_col, longblob_col, enum_col,
               set_col, json_col, bit_col,
               tinityint_unsigned_col, smallint_unsigned_col,
-              mediumint_unsigned_col, int_unsigned_col, bigint_unsigned_col
+              mediumint_unsigned_col, int_unsigned_col, bigint_unsigned_col,
+              year_col
            FROM data_types ORDER BY id ASC;
         "#;
 
@@ -2079,14 +2089,14 @@ async fn mysql_query_err_test(mysql: &DockerMysqlRdbs, rdbms_service: &RdbmsServ
     )
     .await;
 
-    rdbms_query_err_test(
-        rdbms.clone(),
-        &db_address,
-        "SELECT YEAR(\"2017-06-15\");",
-        vec![],
-        Error::QueryResponseFailure("Value type 'YEAR' is not supported".to_string()),
-    )
-    .await;
+    // rdbms_query_err_test(
+    //     rdbms.clone(),
+    //     &db_address,
+    //     "SELECT YEAR(\"2017-06-15\");",
+    //     vec![],
+    //     Error::QueryResponseFailure("Value type 'YEAR' is not supported".to_string()),
+    // )
+    // .await;
 }
 
 #[test]

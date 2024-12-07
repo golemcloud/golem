@@ -6256,7 +6256,7 @@ pub mod wasi {
                 Datetime(Timestamp),
                 Timestamp(Timestamp),
                 Time(Time),
-                Year(i16),
+                Year(u16),
                 Fixchar(_rt::String),
                 Varchar(_rt::String),
                 Tinytext(_rt::String),
@@ -6829,10 +6829,10 @@ pub mod wasi {
                                                         18 => {
                                                             let e94 = {
                                                                 let l44 = i32::from(
-                                                                    *base.add(8).cast::<i16>(),
+                                                                    *base.add(8).cast::<u16>(),
                                                                 );
 
-                                                                l44 as i16
+                                                                l44 as u16
                                                             };
                                                             DbValue::Year(e94)
                                                         }
@@ -12572,7 +12572,7 @@ n\0\0\x03set\0\0\x03bit\0\0\x04json\0\0\x04\0\x0edb-column-type\x03\0\x0a\x01r\x
 int\x01z\0\x03int\x01z\0\x06bigint\x01x\0\x10tinyint-unsigned\x01}\0\x11smallint\
 -unsigned\x01{\0\x12mediumint-unsigned\x01y\0\x0cint-unsigned\x01y\0\x0fbigint-u\
 nsigned\x01w\0\x05float\x01v\0\x06double\x01u\0\x07decimal\x01s\0\x04date\x01\x03\
-\0\x08datetime\x01\x07\0\x09timestamp\x01\x07\0\x04time\x01\x05\0\x04year\x01|\0\
+\0\x08datetime\x01\x07\0\x09timestamp\x01\x07\0\x04time\x01\x05\0\x04year\x01{\0\
 \x07fixchar\x01s\0\x07varchar\x01s\0\x08tinytext\x01s\0\x04text\x01s\0\x0amedium\
 text\x01s\0\x08longtext\x01s\0\x06binary\x01\x0e\0\x09varbinary\x01\x0e\0\x08tin\
 yblob\x01\x0e\0\x04blob\x01\x0e\0\x0amediumblob\x01\x0e\0\x08longblob\x01\x0e\0\x0b\
