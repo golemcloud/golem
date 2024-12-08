@@ -27,6 +27,7 @@ use std::sync::Arc;
 use futures_util::TryFutureExt;
 use tracing::info;
 use tracing::debug;
+use crate::gateway_middleware::MiddlewareError;
 
 pub type AuthCallBackResult = Result<AuthorisationSuccess, AuthorisationError>;
 
@@ -245,11 +246,17 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
                 .await
                 .map_err(AuthorisationError::SessionError)?;
 
-        let _ = session_store.insert(
-            SessionId(state.clone()),
-            DataKey::claims(),
-            DataValue(serde_json::Value::String(id_token_claims.unwrap().to_string())),
-        );
+        let claims_data_key = DataKey::claims();
+        let json = serde_json::to_value(id_token_claims.unwrap())
+            .map_err(|err| err.to_string())
+            .unwrap();
+
+        let claims_data_value = DataValue(json);
+
+        let _ = session_store
+            .insert(SessionId(state.clone()), claims_data_key, claims_data_value)
+            .await
+            .map_err(|err| AuthorisationError::SessionError(err))?;
 
         Ok(AuthorisationSuccess {
             token_response,

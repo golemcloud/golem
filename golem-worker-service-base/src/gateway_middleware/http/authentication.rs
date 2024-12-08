@@ -4,8 +4,11 @@ use crate::gateway_execution::gateway_session::GatewaySessionStore;
 use crate::gateway_middleware::{MiddlewareError, MiddlewareSuccess};
 use crate::gateway_security::{IdentityProvider, SecuritySchemeWithProviderMetadata};
 use golem_common::SafeDisplay;
-use openidconnect::Scope;
+use openidconnect::{IssuerUrl, Scope};
 use std::sync::Arc;
+use log::info;
+use openidconnect::core::{CoreClient, CoreProviderMetadata};
+use golem_common::tracing::directive::default::info;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct HttpAuthenticationMiddleware {
@@ -23,13 +26,30 @@ impl HttpAuthenticationMiddleware {
         session_store: &GatewaySessionStore,
         identity_provider: &Arc<dyn IdentityProvider + Send + Sync>,
     ) -> Result<MiddlewareSuccess, MiddlewareError> {
-        let client = identity_provider
-            .get_client(&self.security_scheme_with_metadata)
-            .map_err(|err| {
-                MiddlewareError::Unauthorized(AuthorisationError::Internal(err.to_safe_string()))
+
+        let issuer_url =
+            self.security_scheme_with_metadata.security_scheme.provider_type().issue_url().map_err(|err| {
+                MiddlewareError::Unauthorized(AuthorisationError::Internal(err))
             })?;
 
-        let identity_token_verifier = identity_provider.get_id_token_verifier(&client);
+        let provider_metadata =
+            CoreProviderMetadata::discover_async(issuer_url, openidconnect::reqwest::async_http_client).await
+                .map_err(|err| {
+                    MiddlewareError::Unauthorized(AuthorisationError::Internal(err.to_string()))
+                })?;
+
+        info!("Stored provider metadata {:?}", provider_metadata.clone());
+        info!("Client ID: {:?}", self.security_scheme_with_metadata.provider_metadata.clone());
+
+        let client =
+            CoreClient::from_provider_metadata(
+                provider_metadata.clone(),
+                self.security_scheme_with_metadata.security_scheme.client_id().clone(),
+                Some(self.security_scheme_with_metadata.security_scheme.client_secret().clone()),
+            ).set_redirect_uri(self.security_scheme_with_metadata.security_scheme.redirect_url().clone());
+
+        let identity_token_verifier =
+            client.id_token_verifier();
 
         let open_id_client = identity_provider
             .get_client(&self.security_scheme_with_metadata)
@@ -152,6 +172,7 @@ mod internal {
         if let Some(nonce) = nonce.as_string() {
             info!("{:?}", nonce.clone());
             info!("{:?}", id_token.clone());
+
             let token_claims_result: Result<&CoreIdTokenClaims, ClaimsVerificationError> =
                 id_token.claims(&identity_token_verifier, &Nonce::new(nonce));
 
