@@ -2032,10 +2032,7 @@ pub mod security {
     use chrono::{TimeZone, Utc};
     use golem_service_base::auth::DefaultNamespace;
     use golem_service_base::repo::RepoError;
-    use golem_worker_service_base::gateway_security::{
-        AuthorizationUrl, DefaultIdentityProvider, GolemIdentityProviderMetadata, IdentityProvider,
-        IdentityProviderError, OpenIdClient, Provider, SecuritySchemeWithProviderMetadata,
-    };
+    use golem_worker_service_base::gateway_security::{AuthorizationUrl, DefaultIdentityProvider, GolemIdentityProviderMetadata, IdentityProvider, IdentityProviderError, OpenIdClient, Provider, SecurityScheme, SecuritySchemeWithProviderMetadata};
     use golem_worker_service_base::repo::security_scheme::{
         SecuritySchemeRecord, SecuritySchemeRepo,
     };
@@ -2272,12 +2269,12 @@ nUhg4edJVHjqxYyoQT+YSPLlHl6AkLZt9/n1NJ+bft0=
             )
         }
 
-        fn get_client(
+        async fn get_client(
             &self,
-            security_scheme: &SecuritySchemeWithProviderMetadata,
+            security_scheme: &SecurityScheme,
         ) -> Result<OpenIdClient, IdentityProviderError> {
             let identity_provider = DefaultIdentityProvider;
-            identity_provider.get_client(security_scheme)
+            identity_provider.get_client(security_scheme).await
         }
     }
 

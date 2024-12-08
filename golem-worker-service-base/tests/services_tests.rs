@@ -1095,12 +1095,12 @@ impl IdentityProvider for TestIdentityProvider {
         )
     }
 
-    fn get_client(
+    async fn get_client(
         &self,
-        security_scheme: &SecuritySchemeWithProviderMetadata,
+        security_scheme: &SecurityScheme,
     ) -> Result<OpenIdClient, IdentityProviderError> {
         let identity_provider = DefaultIdentityProvider;
-        identity_provider.get_client(security_scheme)
+        identity_provider.get_client(security_scheme).await
     }
 }
 

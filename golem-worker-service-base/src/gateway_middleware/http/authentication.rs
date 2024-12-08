@@ -27,35 +27,12 @@ impl HttpAuthenticationMiddleware {
         identity_provider: &Arc<dyn IdentityProvider + Send + Sync>,
     ) -> Result<MiddlewareSuccess, MiddlewareError> {
 
-        let issuer_url =
-            self.security_scheme_with_metadata.security_scheme.provider_type().issue_url().map_err(|err| {
-                MiddlewareError::Unauthorized(AuthorisationError::Internal(err))
-            })?;
-
-        let provider_metadata =
-            CoreProviderMetadata::discover_async(issuer_url, openidconnect::reqwest::async_http_client).await
-                .map_err(|err| {
-                    MiddlewareError::Unauthorized(AuthorisationError::Internal(err.to_string()))
-                })?;
-
-        info!("New provider metadata {:?}", provider_metadata.clone());
-        info!("Stored provider metadata: {:?}", self.security_scheme_with_metadata.provider_metadata.clone());
-
-        let client =
-            CoreClient::from_provider_metadata(
-                provider_metadata.clone(),
-                self.security_scheme_with_metadata.security_scheme.client_id().clone(),
-                Some(self.security_scheme_with_metadata.security_scheme.client_secret().clone()),
-            ).set_redirect_uri(self.security_scheme_with_metadata.security_scheme.redirect_url().clone());
+        let open_id_client =
+            identity_provider.get_client(&self.security_scheme_with_metadata.security_scheme).await
+                .map_err(|err| MiddlewareError::Unauthorized(AuthorisationError::IdentityProviderError(err)))?;
 
         let identity_token_verifier =
-            client.id_token_verifier();
-
-        let open_id_client = identity_provider
-            .get_client(&self.security_scheme_with_metadata)
-            .map_err(|err| {
-                MiddlewareError::Unauthorized(AuthorisationError::Internal(err.to_safe_string()))
-            })?;
+            open_id_client.id_token_verifier();
 
         let cookie_values = input.get_cookie_values();
 

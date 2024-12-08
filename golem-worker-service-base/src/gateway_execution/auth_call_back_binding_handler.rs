@@ -168,7 +168,8 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
             ))?;
 
         let open_id_client = identity_provider
-            .get_client(security_scheme_with_metadata)
+            .get_client(&security_scheme_with_metadata.security_scheme)
+            .await
             .map_err(AuthorisationError::IdentityProviderError)?;
 
         let token_response = identity_provider
