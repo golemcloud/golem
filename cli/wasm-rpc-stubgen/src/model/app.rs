@@ -467,15 +467,18 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
                                     match rendered_template_properties {
                                         Ok(rendered_template_properties) => {
                                             match rendered_template_properties.merge_with_overrides(
+                                                &source,
+                                                &mut validation,
                                                 component.component_properties,
                                             ) {
-                                                Ok((properties, any_template_overrides)) => {
+                                                Ok((Some(properties), any_template_overrides)) => {
                                                     Some(ResolvedComponentProperties::Properties {
                                                         template_name: Some(template_name),
                                                         any_template_overrides,
                                                         properties,
                                                     })
                                                 }
+                                                Ok((None, _any_template_overrides)) => None,
                                                 Err(err) => {
                                                     validation.add_error(format!(
                                                         "Failed to override template {}, error: {}",
@@ -521,15 +524,20 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
                                                     {
                                                         rendered_template_properties
                                                             .merge_with_overrides(
+                                                                &source,
+                                                                &mut validation,
                                                                 component_properties,
                                                             )
                                                     } else {
-                                                        Ok((rendered_template_properties, false))
+                                                        Ok((
+                                                            Some(rendered_template_properties),
+                                                            false,
+                                                        ))
                                                     }
                                                 };
 
                                                 match properties_with_overrides {
-                                                    Ok((properties, any_overrides)) => {
+                                                    Ok((Some(properties), any_overrides)) => {
                                                         any_template_overrides.insert(
                                                             profile_name.clone().into(),
                                                             any_overrides,
@@ -538,6 +546,9 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
                                                             profile_name.clone().into(),
                                                             properties,
                                                         );
+                                                    }
+                                                    Ok((None, _any_template_overrides)) => {
+                                                        any_template_error = true;
                                                     }
                                                     Err(err) => {
                                                         validation.add_error(format!(
@@ -673,8 +684,8 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
                             for custom_command in properties.custom_commands.keys() {
                                 if reserved_commands.contains(custom_command.as_str()) {
                                     validation.add_error(format!("Cannot use {} as custom command name, reserved command names: {}",
-                                    custom_command.log_color_error_highlight(),
-                                        reserved_commands.iter().map(|s| s.log_color_highlight()).join(", ")
+                                                                 custom_command.log_color_error_highlight(),
+                                                                 reserved_commands.iter().map(|s| s.log_color_highlight()).join(", ")
                                     ));
                                 }
                             }
@@ -1121,8 +1132,10 @@ impl<CPE: ComponentPropertiesExtensions> ComponentProperties<CPE> {
 
     fn merge_with_overrides(
         mut self,
+        source: &Path,
+        validation: &mut ValidationBuilder,
         overrides: app_raw::ComponentProperties,
-    ) -> anyhow::Result<(Self, bool)> {
+    ) -> anyhow::Result<(Option<Self>, bool)> {
         let mut any_overrides = false;
 
         if let Some(source_wit) = overrides.source_wit {
@@ -1158,19 +1171,35 @@ impl<CPE: ComponentPropertiesExtensions> ComponentProperties<CPE> {
                 .insert(custom_command_name, custom_command);
         }
 
-        if !overrides.extensions.is_empty() {
-            let extensions_override =
-                CPE::raw_from_serde_json(serde_json::Value::Object(overrides.extensions))?;
-            let (extensions, any_extension_overrides) = self
-                .extensions
-                .take()
-                .unwrap_or_default()
-                .merge_wit_overrides(extensions_override);
-            self.extensions = Some(extensions);
-            any_overrides |= any_overrides || any_extension_overrides;
-        }
+        let any_extension_error = {
+            if !overrides.extensions.is_empty() {
+                let extensions_override =
+                    CPE::raw_from_serde_json(serde_json::Value::Object(overrides.extensions))?;
+                let (extensions, any_extension_overrides) = self
+                    .extensions
+                    .take()
+                    .unwrap_or_default()
+                    .merge_wit_overrides(source, validation, extensions_override)?;
 
-        Ok((self, any_overrides))
+                any_overrides |= any_overrides || any_extension_overrides;
+
+                match extensions {
+                    Some(extensions) => {
+                        self.extensions = Some(extensions);
+                        false
+                    }
+                    None => true,
+                }
+            } else {
+                false
+            }
+        };
+
+        if any_extension_error {
+            Ok((None, false))
+        } else {
+            Ok((Some(self), any_overrides))
+        }
     }
 }
 
@@ -1185,7 +1214,12 @@ pub trait ComponentPropertiesExtensions: Sized + Debug + Clone + Default {
         raw: Self::Raw,
     ) -> Option<Self>;
 
-    fn merge_wit_overrides(self, overrides: Self::Raw) -> (Self, bool);
+    fn merge_wit_overrides(
+        self,
+        source: &Path,
+        validation: &mut ValidationBuilder,
+        overrides: Self::Raw,
+    ) -> serde_json::Result<(Option<Self>, bool)>;
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1210,8 +1244,13 @@ impl ComponentPropertiesExtensions for ComponentPropertiesExtensionsNone {
         Some(raw)
     }
 
-    fn merge_wit_overrides(self, _overrides: Self::Raw) -> (Self, bool) {
-        (self, true)
+    fn merge_wit_overrides(
+        self,
+        _source: &Path,
+        _validation: &mut ValidationBuilder,
+        _overrides: Self::Raw,
+    ) -> serde_json::Result<(Option<Self>, bool)> {
+        Ok((Some(self), false))
     }
 }
 
@@ -1236,7 +1275,12 @@ impl ComponentPropertiesExtensions for ComponentPropertiesExtensionsAny {
         Some(raw)
     }
 
-    fn merge_wit_overrides(self, _overrides: Self::Raw) -> (Self, bool) {
-        (self, true)
+    fn merge_wit_overrides(
+        self,
+        _source: &Path,
+        _validation: &mut ValidationBuilder,
+        _overrides: Self::Raw,
+    ) -> serde_json::Result<(Option<Self>, bool)> {
+        Ok((Some(self), false))
     }
 }
