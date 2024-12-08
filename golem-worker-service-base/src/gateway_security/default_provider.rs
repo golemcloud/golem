@@ -20,6 +20,8 @@ use openidconnect::core::{
     CoreTokenResponse,
 };
 use openidconnect::{AuthenticationFlow, AuthorizationCode, CsrfToken, Nonce, Scope};
+use poem_openapi::types::ToJSON;
+use tracing::{debug, info};
 
 // All providers can reuse DefaultIdentityProvider if provided internally
 pub struct DefaultIdentityProvider;
@@ -66,6 +68,13 @@ impl IdentityProvider for DefaultIdentityProvider {
         &self,
         security_scheme: &SecuritySchemeWithProviderMetadata,
     ) -> Result<OpenIdClient, IdentityProviderError> {
+        info!("Creating client");
+        info!("Client ID: {:?}", security_scheme.security_scheme.client_id());
+        info!("Client Secret: {:?}", security_scheme.security_scheme.client_secret().secret().to_string());
+        info!("Redirect URL: {:?}", security_scheme.security_scheme.redirect_url());
+
+        dbg!(security_scheme.security_scheme.client_id());
+        dbg!(security_scheme.security_scheme.client_secret());
         let client = CoreClient::from_provider_metadata(
             security_scheme.provider_metadata.clone(),
             security_scheme.security_scheme.client_id().clone(),
@@ -104,13 +113,16 @@ impl IdentityProvider for DefaultIdentityProvider {
         state: Option<CsrfToken>,
         nonce: Option<Nonce>,
     ) -> AuthorizationUrl {
-        let state = || state.unwrap_or_else(CsrfToken::new_random);
-        let nonce = || nonce.unwrap_or_else(Nonce::new_random);
+        let state = || state.unwrap_or_else(|| CsrfToken::new("csrf_token".to_string()));
+        let nonce = || nonce.unwrap_or_else(|| Nonce::new("nonce".to_string()));
+
         let builder = client.client.authorize_url(
             AuthenticationFlow::<CoreResponseType>::AuthorizationCode,
             state,
             nonce,
         );
+
+        info!("scopes is {:?}", scopes.clone());
 
         let builder = scopes
             .iter()

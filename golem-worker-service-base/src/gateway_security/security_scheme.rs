@@ -265,22 +265,6 @@ impl SecurityScheme {
             scopes,
         })
     }
-
-    pub fn google_with_default_scope(
-        scheme_id: &str,
-        client_id: &str,
-        client_secret: &str,
-        redirect_uri: &str,
-    ) -> Result<SecurityScheme, String> {
-        Self::from(
-            Provider::Google,
-            scheme_id,
-            client_id,
-            client_secret,
-            redirect_uri,
-            vec!["openid", "email", "profile"],
-        )
-    }
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::apidefinition::SecurityScheme> for SecurityScheme {

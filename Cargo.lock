@@ -4540,6 +4540,7 @@ dependencies = [
  "humantime-serde",
  "hyper 1.5.1",
  "lazy_static 1.5.0",
+ "log 0.4.22",
  "mime_guess",
  "nom 7.1.3",
  "openapiv3",

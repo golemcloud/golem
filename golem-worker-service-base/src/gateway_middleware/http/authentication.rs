@@ -82,6 +82,7 @@ mod internal {
     use openidconnect::{ClaimsVerificationError, Nonce};
     use std::str::FromStr;
     use std::sync::Arc;
+    use tracing::{debug, info};
 
     pub(crate) async fn get_session_details_or_redirect<'a>(
         state_from_request: &str,
@@ -99,8 +100,12 @@ mod internal {
 
         match nonce_from_session {
             Ok(nonce) => {
+                dbg!(id_token.clone());
                 let id_token = CoreIdToken::from_str(id_token)
-                    .map_err(|_| MiddlewareError::Unauthorized(AuthorisationError::InvalidToken))?;
+                    .map_err(|err| {
+                        debug!("Failed to parse id token for session {}: {}", err, session_id.0);
+                        MiddlewareError::Unauthorized(AuthorisationError::InvalidToken)
+                    })?;
 
                 get_claims(
                     &nonce,
@@ -125,9 +130,12 @@ mod internal {
                 )
                 .await
             }
-            Err(err) => Err(MiddlewareError::Unauthorized(
-                AuthorisationError::SessionError(err),
-            )),
+            Err(err) => {
+                debug!("Failed to get nonce from session store: {:?} for session {}", err, session_id.0);
+                Err(MiddlewareError::Unauthorized(
+                    AuthorisationError::SessionError(err),
+                ))
+            },
         }
     }
     pub(crate) async fn get_claims<'a>(
@@ -142,8 +150,12 @@ mod internal {
         http_authentication_details: &HttpAuthenticationMiddleware,
     ) -> Result<MiddlewareSuccess, MiddlewareError> {
         if let Some(nonce) = nonce.as_string() {
+            info!("{:?}", nonce.clone());
+            info!("{:?}", id_token.clone());
             let token_claims_result: Result<&CoreIdTokenClaims, ClaimsVerificationError> =
                 id_token.claims(&identity_token_verifier, &Nonce::new(nonce));
+
+            debug!("{:?}", token_claims_result.clone());
 
             match token_claims_result {
                 Ok(claims) => {

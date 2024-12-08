@@ -24,6 +24,7 @@ use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Mutex;
 
 #[async_trait]
 pub trait GatewaySession {
@@ -121,6 +122,50 @@ pub struct SessionData {
 pub struct RedisGatewaySession {
     redis: RedisPool,
     expire: i64,
+}
+
+#[derive(Clone)]
+pub struct InMem {
+    data: Arc<Mutex<HashMap<SessionId, SessionData>>>
+}
+
+impl InMem {
+    pub fn new() -> Self {
+        Self {
+            data: Arc::new(Mutex::new(HashMap::new()))
+        }
+    }
+}
+
+#[async_trait]
+impl GatewaySession for InMem {
+    async fn insert(
+        &self,
+        session_id: SessionId,
+        data_key: DataKey,
+        data_value: DataValue,
+    ) -> Result<(), GatewaySessionError> {
+        let mut data = self.data.lock().await;
+        let session_data = data.entry(session_id).or_insert(SessionData { value: HashMap::new() });
+        session_data.value.insert(data_key, data_value);
+        Ok(())
+    }
+
+    async fn get(
+        &self,
+        session_id: &SessionId,
+        data_key: &DataKey,
+    ) -> Result<DataValue, GatewaySessionError> {
+        let data = self.data.lock().await;
+        let session_data = data.get(session_id).ok_or(GatewaySessionError::MissingValue {
+            session_id: session_id.clone(),
+            data_key: data_key.clone(),
+        })?;
+        session_data.value.get(data_key).cloned().ok_or(GatewaySessionError::MissingValue {
+            session_id: session_id.clone(),
+            data_key: data_key.clone(),
+        })
+    }
 }
 
 impl RedisGatewaySession {
