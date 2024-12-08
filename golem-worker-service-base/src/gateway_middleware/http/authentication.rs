@@ -38,8 +38,8 @@ impl HttpAuthenticationMiddleware {
                     MiddlewareError::Unauthorized(AuthorisationError::Internal(err.to_string()))
                 })?;
 
-        info!("Stored provider metadata {:?}", provider_metadata.clone());
-        info!("Client ID: {:?}", self.security_scheme_with_metadata.provider_metadata.clone());
+        info!("New provider metadata {:?}", provider_metadata.clone());
+        info!("Stored provider metadata: {:?}", self.security_scheme_with_metadata.provider_metadata.clone());
 
         let client =
             CoreClient::from_provider_metadata(

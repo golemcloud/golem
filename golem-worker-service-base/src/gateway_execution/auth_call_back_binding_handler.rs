@@ -179,53 +179,6 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
         let access_token = token_response.access_token().secret().clone();
         let id_token = token_response.extra_fields().id_token().unwrap();
 
-        info!("id_token is: {:?}", id_token.clone());
-
-        let id_token_str = id_token.to_string();
-
-        let nonce = session_store
-            .get(
-                &SessionId(state.clone()),
-                &DataKey("nonce".to_string()),
-            )
-            .await
-            .map_err(AuthorisationError::SessionError)?
-            .as_string()
-            .ok_or(AuthorisationError::NonceNotFound)?;
-
-        info!("nonce is: {:?}", nonce.clone());
-
-        let issuer_url =
-            IssuerUrl::new("https://accounts.google.com".to_string()).unwrap_or_else(|err| {
-                unreachable!();
-            });
-
-        let provider_metadata =
-            CoreProviderMetadata::discover_async(issuer_url, openidconnect::reqwest::async_http_client).await;
-
-        let provider_metadata = provider_metadata.unwrap();
-
-        dbg!(provider_metadata.clone());
-
-        let client =
-            CoreClient::from_provider_metadata(
-                provider_metadata.clone(),
-                security_scheme_with_metadata.security_scheme.client_id().clone(),
-                Some(security_scheme_with_metadata.security_scheme.client_secret().clone()),
-            ).set_redirect_uri(security_scheme_with_metadata.security_scheme.redirect_url().clone());
-
-        let id_token_verifier =
-            client.id_token_verifier();
-
-        let id_token_claims: Result<&IdTokenClaims<EmptyAdditionalClaims, CoreGenderClaim>, String> = id_token
-            .claims(&id_token_verifier, &Nonce::new(nonce.clone()))
-            .map_err(|err| {
-                format!("Failed to verify ID token {}", err)
-            });
-
-        debug!("Google returned ID token: {:?}", id_token_claims);
-        info!("Google returned ID token: {:?}", id_token_claims);
-
         // access token in session store
         let _ = session_store
             .insert(
@@ -245,18 +198,6 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
                 )
                 .await
                 .map_err(AuthorisationError::SessionError)?;
-
-        let claims_data_key = DataKey::claims();
-        let json = serde_json::to_value(id_token_claims.unwrap())
-            .map_err(|err| err.to_string())
-            .unwrap();
-
-        let claims_data_value = DataValue(json);
-
-        let _ = session_store
-            .insert(SessionId(state.clone()), claims_data_key, claims_data_value)
-            .await
-            .map_err(|err| AuthorisationError::SessionError(err))?;
 
         Ok(AuthorisationSuccess {
             token_response,
