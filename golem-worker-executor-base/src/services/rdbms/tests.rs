@@ -137,7 +137,9 @@ async fn postgres_execute_test_create_insert_select(
                 tstzrange_col TSTZRANGE,
                 daterange_col DATERANGE,
                 money_col MONEY,
-                jsonpath_col JSONPATH
+                jsonpath_col JSONPATH,
+                tsvector_col TSVECTOR,
+                tsquery_col TSQUERY
             );
         "#;
 
@@ -180,14 +182,16 @@ async fn postgres_execute_test_create_insert_select(
             tstzrange_col,
             daterange_col,
             money_col,
-            jsonpath_col
+            jsonpath_col,
+            tsvector_col,
+            tsquery_col
             )
             VALUES
             (
                 $1, $2::test_enum, $3, $4, $5, $6, $7, $8, $9,
                 $10, $11, $12, $13, $14, $15, $16, $17, $18, $19,
                 $20, $21, $22, $23, $24, $25, $26, $27, $28, $29,
-                $30, $31, $32, $33, $34, $35, $36, $37
+                $30, $31, $32, $33, $34, $35, $36, $37, $38::tsvector, $39::tsquery
             );
         "#;
 
@@ -351,9 +355,15 @@ async fn postgres_execute_test_create_insert_select(
                 postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Jsonpath(
                     "$.id".to_string(),
                 )),
+                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Text(
+                    "'a' 'and' 'ate' 'cat' 'fat' 'mat' 'on' 'rat' 'sat'".to_string(),
+                )),
+                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Text(
+                    "'fat' & 'rat' & !'cat'".to_string(),
+                )),
             ]);
         } else {
-            for _ in 0..36 {
+            for _ in 0..38 {
                 params.push(postgres_types::DbValue::Primitive(
                     postgres_types::DbValuePrimitive::Null,
                 ));
@@ -669,6 +679,22 @@ async fn postgres_execute_test_create_insert_select(
             ),
             db_type_name: "JSONPATH".to_string(),
         },
+        postgres_types::DbColumn {
+            name: "tsvector_col".to_string(),
+            ordinal: 37,
+            db_type: postgres_types::DbColumnType::Primitive(
+                postgres_types::DbColumnTypePrimitive::Text,
+            ),
+            db_type_name: "TEXT".to_string(),
+        },
+        postgres_types::DbColumn {
+            name: "tsquery_col".to_string(),
+            ordinal: 38,
+            db_type: postgres_types::DbColumnType::Primitive(
+                postgres_types::DbColumnTypePrimitive::Text,
+            ),
+            db_type_name: "TEXT".to_string(),
+        },
     ];
 
     let select_statement = r#"
@@ -709,7 +735,9 @@ async fn postgres_execute_test_create_insert_select(
             tstzrange_col,
             daterange_col,
             money_col,
-            jsonpath_col
+            jsonpath_col,
+            tsvector_col::text,
+            tsquery_col::text
            FROM data_types ORDER BY id ASC;
         "#;
 
@@ -792,7 +820,9 @@ async fn postgres_execute_test_create_insert_select_array(
                 tstzrange_col TSTZRANGE[],
                 daterange_col DATERANGE[],
                 money_col MONEY[],
-                jsonpath_col JSONPATH[]
+                jsonpath_col JSONPATH[],
+                tsvector_col TSVECTOR[],
+                tsquery_col TSQUERY[]
             );
         "#;
 
@@ -835,14 +865,16 @@ async fn postgres_execute_test_create_insert_select_array(
             tstzrange_col,
             daterange_col,
             money_col,
-            jsonpath_col
+            jsonpath_col,
+            tsvector_col,
+            tsquery_col
             )
             VALUES
             (
                 $1, $2::a_test_enum[], $3, $4, $5, $6, $7, $8, $9,
                 $10, $11, $12, $13, $14, $15, $16, $17, $18, $19,
                 $20, $21, $22, $23, $24, $25, $26, $27, $28, $29,
-                $30, $31, $32, $33, $34, $35, $36, $37
+                $30, $31, $32, $33, $34, $35, $36, $37, $38::tsvector[], $39::tsquery[]
             );
         "#;
 
@@ -1016,9 +1048,15 @@ async fn postgres_execute_test_create_insert_select_array(
                 postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Jsonpath(
                     "$.user.addresses[0].city".to_string(),
                 )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Text(
+                    "'a' 'and' 'ate' 'cat' 'fat' 'mat' 'on' 'rat' 'sat'".to_string(),
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Text(
+                    "'fat' & 'rat' & !'cat'".to_string(),
+                )]),
             ]);
         } else {
-            for _ in 0..36 {
+            for _ in 0..38 {
                 params.push(postgres_types::DbValue::Array(vec![]));
             }
         }
@@ -1332,6 +1370,22 @@ async fn postgres_execute_test_create_insert_select_array(
             ),
             db_type_name: "JSONPATH[]".to_string(),
         },
+        postgres_types::DbColumn {
+            name: "tsvector_col".to_string(),
+            ordinal: 37,
+            db_type: postgres_types::DbColumnType::Array(
+                postgres_types::DbColumnTypePrimitive::Text,
+            ),
+            db_type_name: "TEXT[]".to_string(),
+        },
+        postgres_types::DbColumn {
+            name: "tsquery_col".to_string(),
+            ordinal: 38,
+            db_type: postgres_types::DbColumnType::Array(
+                postgres_types::DbColumnTypePrimitive::Text,
+            ),
+            db_type_name: "TEXT[]".to_string(),
+        },
     ];
 
     let select_statement = r#"
@@ -1372,7 +1426,9 @@ async fn postgres_execute_test_create_insert_select_array(
             tstzrange_col,
             daterange_col,
             money_col,
-            jsonpath_col
+            jsonpath_col,
+            tsvector_col::text[],
+            tsquery_col::text[]
            FROM array_data_types ORDER BY id ASC;
         "#;
 

@@ -328,7 +328,8 @@ pub(crate) mod sqlx_rdbms {
             }
             DbColumnType::Bit => {
                 let v: Option<u64> = row.try_get(index).map_err(|e| e.to_string())?;
-                v.map(|v| DbValue::Bit(u64_to_bit_vec(v))).unwrap_or(DbValue::Null)
+                v.map(|v| DbValue::Bit(u64_to_bit_vec(v)))
+                    .unwrap_or(DbValue::Null)
             }
         };
         Ok(value)
