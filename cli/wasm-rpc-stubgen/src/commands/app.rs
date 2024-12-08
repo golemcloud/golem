@@ -409,7 +409,7 @@ async fn link_rpc<CPE: ComponentPropertiesExtensions>(
             || [linked_wasm.clone()],
         ) {
             log_skipping_up_to_date(format!(
-                "composing wasm rpc dependencies ({}) into {}",
+                "linking wasm rpc dependencies ({}) into {}",
                 dependencies
                     .iter()
                     .map(|s| s.as_str().log_color_highlight())
@@ -423,7 +423,7 @@ async fn link_rpc<CPE: ComponentPropertiesExtensions>(
             log_action(
                 "Copying",
                 format!(
-                    "(without composing) {} to {}, no wasm rpc dependencies defined",
+                    "(without linking) {} to {}, no wasm rpc dependencies defined",
                     component_wasm.log_color_highlight(),
                     linked_wasm.log_color_highlight(),
                 ),
@@ -431,9 +431,9 @@ async fn link_rpc<CPE: ComponentPropertiesExtensions>(
             fs::copy(&component_wasm, &linked_wasm)?;
         } else {
             log_action(
-                "Composing",
+                "Linking",
                 format!(
-                    "wasm rpc dependencies ({}) into {}",
+                    "WASM RPC dependencies ({}) into {}",
                     dependencies
                         .iter()
                         .map(|s| s.as_str().log_color_highlight())
@@ -1253,7 +1253,18 @@ async fn build_stub<CPE: ComponentPropertiesExtensions>(
         match result {
             Ok(()) => {
                 task_result_marker.success()?;
-                delete_path("stub temp build dir", &target_root)?;
+
+                let skip_delete = std::env::var("WASM_RPC_KEEP_STUB_DIR")
+                    .ok()
+                    .map(|flag| {
+                        let flag = flag.to_lowercase();
+                        flag.starts_with("t") || flag == "1"
+                    })
+                    .unwrap_or_default();
+
+                if !skip_delete {
+                    delete_path("stub temp build dir", &target_root)?;
+                }
                 Ok(true)
             }
             Err(err) => {
