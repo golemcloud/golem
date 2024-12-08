@@ -142,414 +142,8 @@ pub(crate) mod sqlx_rdbms {
     ) -> Result<sqlx::query::Query<sqlx::Postgres, sqlx::postgres::PgArguments>, String> {
         match value {
             DbValue::Primitive(v) => bind_value_primitive(query, v),
-            DbValue::Array(vs) if !vs.is_empty() => {
-                let first = &vs[0];
-                match first {
-                    DbValuePrimitive::Character(_) => {
-                        let values: Vec<i8> = get_plain_values(vs, |v| {
-                            if let DbValuePrimitive::Character(v) = v {
-                                Some(v)
-                            } else {
-                                None
-                            }
-                        })?;
-                        Ok(query.bind(values))
-                    }
-                    DbValuePrimitive::Int2(_) => {
-                        let values: Vec<i16> = get_plain_values(vs, |v| {
-                            if let DbValuePrimitive::Int2(v) = v {
-                                Some(v)
-                            } else {
-                                None
-                            }
-                        })?;
-                        Ok(query.bind(values))
-                    }
-                    DbValuePrimitive::Int4(_) => {
-                        let values: Vec<i32> = get_plain_values(vs, |v| {
-                            if let DbValuePrimitive::Int4(v) = v {
-                                Some(v)
-                            } else {
-                                None
-                            }
-                        })?;
-                        Ok(query.bind(values))
-                    }
-                    DbValuePrimitive::Int8(_) => {
-                        let values: Vec<i64> = get_plain_values(vs, |v| {
-                            if let DbValuePrimitive::Int8(v) = v {
-                                Some(v)
-                            } else {
-                                None
-                            }
-                        })?;
-                        Ok(query.bind(values))
-                    }
-                    DbValuePrimitive::Numeric(_) => {
-                        let values: Vec<BigDecimal> = get_plain_values(vs, |v| {
-                            if let DbValuePrimitive::Numeric(v) = v {
-                                Some(v)
-                            } else {
-                                None
-                            }
-                        })?;
-                        Ok(query.bind(values))
-                    }
-                    DbValuePrimitive::Float4(_) => {
-                        let values: Vec<f32> = get_plain_values(vs, |v| {
-                            if let DbValuePrimitive::Float4(v) = v {
-                                Some(v)
-                            } else {
-                                None
-                            }
-                        })?;
-                        Ok(query.bind(values))
-                    }
-
-                    DbValuePrimitive::Float8(_) => {
-                        let values: Vec<f64> = get_plain_values(vs, |v| {
-                            if let DbValuePrimitive::Float8(v) = v {
-                                Some(v)
-                            } else {
-                                None
-                            }
-                        })?;
-                        Ok(query.bind(values))
-                    }
-                    DbValuePrimitive::Boolean(_) => {
-                        let values: Vec<bool> = get_plain_values(vs, |v| {
-                            if let DbValuePrimitive::Boolean(v) = v {
-                                Some(v)
-                            } else {
-                                None
-                            }
-                        })?;
-                        Ok(query.bind(values))
-                    }
-                    DbValuePrimitive::Text(_) => {
-                        let values: Vec<String> = get_plain_values(vs, |v| {
-                            if let DbValuePrimitive::Text(v) = v {
-                                Some(v)
-                            } else {
-                                None
-                            }
-                        })?;
-                        Ok(query.bind(values))
-                    }
-                    DbValuePrimitive::Varchar(_) => {
-                        let values: Vec<String> = get_plain_values(vs, |v| {
-                            if let DbValuePrimitive::Varchar(v) = v {
-                                Some(v)
-                            } else {
-                                None
-                            }
-                        })?;
-                        Ok(query.bind(values))
-                    }
-                    DbValuePrimitive::Bpchar(_) => {
-                        let values: Vec<String> = get_plain_values(vs, |v| {
-                            if let DbValuePrimitive::Bpchar(v) = v {
-                                Some(v)
-                            } else {
-                                None
-                            }
-                        })?;
-                        Ok(query.bind(values))
-                    }
-                    DbValuePrimitive::Bytea(_) => {
-                        let values: Vec<Vec<u8>> = get_plain_values(vs, |v| {
-                            if let DbValuePrimitive::Bytea(v) = v {
-                                Some(v)
-                            } else {
-                                None
-                            }
-                        })?;
-                        Ok(query.bind(values))
-                    }
-                    DbValuePrimitive::Uuid(_) => {
-                        let values: Vec<Uuid> = get_plain_values(vs, |v| {
-                            if let DbValuePrimitive::Uuid(v) = v {
-                                Some(v)
-                            } else {
-                                None
-                            }
-                        })?;
-                        Ok(query.bind(values))
-                    }
-                    DbValuePrimitive::Json(_) => {
-                        let values: Vec<serde_json::Value> = get_plain_values(vs, |v| {
-                            if let DbValuePrimitive::Json(v) = v {
-                                Some(v)
-                            } else {
-                                None
-                            }
-                        })?;
-                        Ok(query.bind(values))
-                    }
-                    DbValuePrimitive::Jsonb(_) => {
-                        let values: Vec<serde_json::Value> = get_plain_values(vs, |v| {
-                            if let DbValuePrimitive::Jsonb(v) = v {
-                                Some(v)
-                            } else {
-                                None
-                            }
-                        })?;
-                        Ok(query.bind(values))
-                    }
-                    DbValuePrimitive::Jsonpath(_) => {
-                        let values: Vec<PgJsonPath> = get_plain_values(vs, |v| {
-                            if let DbValuePrimitive::Jsonpath(v) = v {
-                                Some(PgJsonPath(v))
-                            } else {
-                                None
-                            }
-                        })?;
-                        Ok(query.bind(values))
-                    }
-                    DbValuePrimitive::Xml(_) => {
-                        let values: Vec<PgXml> = get_plain_values(vs, |v| {
-                            if let DbValuePrimitive::Xml(v) = v {
-                                Some(PgXml(v))
-                            } else {
-                                None
-                            }
-                        })?;
-                        Ok(query.bind(values))
-                    }
-                    DbValuePrimitive::Timestamptz(_) => {
-                        let values: Vec<_> = get_plain_values(vs, |v| {
-                            if let DbValuePrimitive::Timestamptz(v) = v {
-                                Some(v)
-                            } else {
-                                None
-                            }
-                        })?;
-                        Ok(query.bind(values))
-                    }
-                    DbValuePrimitive::Timestamp(_) => {
-                        let values: Vec<_> = get_plain_values(vs, |v| {
-                            if let DbValuePrimitive::Timestamp(v) = v {
-                                Some(v)
-                            } else {
-                                None
-                            }
-                        })?;
-                        Ok(query.bind(values))
-                    }
-                    DbValuePrimitive::Date(_) => {
-                        let values: Vec<_> = get_plain_values(vs, |v| {
-                            if let DbValuePrimitive::Date(v) = v {
-                                Some(v)
-                            } else {
-                                None
-                            }
-                        })?;
-                        Ok(query.bind(values))
-                    }
-                    DbValuePrimitive::Time(_) => {
-                        let values: Vec<_> = get_plain_values(vs, |v| {
-                            if let DbValuePrimitive::Time(v) = v {
-                                Some(v)
-                            } else {
-                                None
-                            }
-                        })?;
-                        Ok(query.bind(values))
-                    }
-                    DbValuePrimitive::Timetz(_) => {
-                        let values: Vec<_> = get_plain_values(vs, |v| {
-                            if let DbValuePrimitive::Timetz((time, offset)) = v {
-                                Some(PgTimeTz { time, offset })
-                            } else {
-                                None
-                            }
-                        })?;
-                        Ok(query.bind(values))
-                    }
-                    DbValuePrimitive::Interval(_) => {
-                        let values: Vec<_> = get_plain_values(vs, |v| {
-                            if let DbValuePrimitive::Interval((months, days, microseconds)) = v {
-                                Some(PgInterval {
-                                    months,
-                                    days,
-                                    microseconds,
-                                })
-                            } else {
-                                None
-                            }
-                        })?;
-                        Ok(query.bind(values))
-                    }
-                    DbValuePrimitive::Inet(_) => {
-                        let values: Vec<IpAddr> = get_plain_values(vs, |v| {
-                            if let DbValuePrimitive::Inet(v) = v {
-                                Some(v)
-                            } else {
-                                None
-                            }
-                        })?;
-                        Ok(query.bind(values))
-                    }
-                    DbValuePrimitive::Cidr(_) => {
-                        let values: Vec<IpAddr> = get_plain_values(vs, |v| {
-                            if let DbValuePrimitive::Cidr(v) = v {
-                                Some(v)
-                            } else {
-                                None
-                            }
-                        })?;
-                        Ok(query.bind(values))
-                    }
-                    DbValuePrimitive::Macaddr(_) => {
-                        let values: Vec<MacAddress> = get_plain_values(vs, |v| {
-                            if let DbValuePrimitive::Macaddr(v) = v {
-                                Some(v)
-                            } else {
-                                None
-                            }
-                        })?;
-                        Ok(query.bind(values))
-                    }
-                    DbValuePrimitive::Bit(_) => {
-                        let values: Vec<BitVec> = get_plain_values(vs, |v| {
-                            if let DbValuePrimitive::Bit(v) = v {
-                                Some(v)
-                            } else {
-                                None
-                            }
-                        })?;
-                        Ok(query.bind(values))
-                    }
-                    DbValuePrimitive::Varbit(_) => {
-                        let values: Vec<BitVec> = get_plain_values(vs, |v| {
-                            if let DbValuePrimitive::Varbit(v) = v {
-                                Some(v)
-                            } else {
-                                None
-                            }
-                        })?;
-                        Ok(query.bind(values))
-                    }
-                    DbValuePrimitive::Int4range(_) => {
-                        let values: Vec<PgRange<i32>> = get_plain_values(vs, |v| {
-                            if let DbValuePrimitive::Int4range(v) = v {
-                                Some(v.into())
-                            } else {
-                                None
-                            }
-                        })?;
-                        Ok(query.bind(values))
-                    }
-                    DbValuePrimitive::Int8range(_) => {
-                        let values: Vec<PgRange<i64>> = get_plain_values(vs, |v| {
-                            if let DbValuePrimitive::Int8range(v) = v {
-                                Some(v.into())
-                            } else {
-                                None
-                            }
-                        })?;
-                        Ok(query.bind(values))
-                    }
-                    DbValuePrimitive::Numrange(_) => {
-                        let values: Vec<PgRange<BigDecimal>> = get_plain_values(vs, |v| {
-                            if let DbValuePrimitive::Numrange(v) = v {
-                                Some(v.into())
-                            } else {
-                                None
-                            }
-                        })?;
-                        Ok(query.bind(values))
-                    }
-                    DbValuePrimitive::Tsrange(_) => {
-                        let values: Vec<PgRange<chrono::NaiveDateTime>> =
-                            get_plain_values(vs, |v| {
-                                if let DbValuePrimitive::Tsrange(v) = v {
-                                    Some(v.into())
-                                } else {
-                                    None
-                                }
-                            })?;
-                        Ok(query.bind(values))
-                    }
-                    DbValuePrimitive::Tstzrange(_) => {
-                        let values: Vec<PgRange<chrono::DateTime<chrono::Utc>>> =
-                            get_plain_values(vs, |v| {
-                                if let DbValuePrimitive::Tstzrange(v) = v {
-                                    Some(v.into())
-                                } else {
-                                    None
-                                }
-                            })?;
-                        Ok(query.bind(values))
-                    }
-                    DbValuePrimitive::Daterange(_) => {
-                        let values: Vec<PgRange<chrono::NaiveDate>> = get_plain_values(vs, |v| {
-                            if let DbValuePrimitive::Daterange(v) = v {
-                                Some(v.into())
-                            } else {
-                                None
-                            }
-                        })?;
-                        Ok(query.bind(values))
-                    }
-                    DbValuePrimitive::Oid(_) => {
-                        let values: Vec<_> = get_plain_values(vs, |v| {
-                            if let DbValuePrimitive::Oid(v) = v {
-                                Some(Oid(v))
-                            } else {
-                                None
-                            }
-                        })?;
-                        Ok(query.bind(values))
-                    }
-                    DbValuePrimitive::Money(_) => {
-                        let values: Vec<_> = get_plain_values(vs, |v| {
-                            if let DbValuePrimitive::Money(v) = v {
-                                Some(PgMoney(v))
-                            } else {
-                                None
-                            }
-                        })?;
-                        Ok(query.bind(values))
-                    }
-                    DbValuePrimitive::CustomEnum(_) => {
-                        let values: Vec<_> = get_plain_values(vs, |v| {
-                            if let DbValuePrimitive::CustomEnum(v) = v {
-                                Some(PgEnum(v))
-                            } else {
-                                None
-                            }
-                        })?;
-                        Ok(query.bind(values))
-                    }
-                    _ => Err(format!(
-                        "Array param element '{}' with index 0 is not supported",
-                        first
-                    )),
-                }
-            }
-            DbValue::Array(vs) if vs.is_empty() => Ok(query.bind(PgNull {})),
-            _ => Ok(query),
+            DbValue::Array(vs) => bind_value_array(query, vs),
         }
-    }
-
-    fn get_plain_values<T>(
-        values: Vec<DbValuePrimitive>,
-        f: impl Fn(DbValuePrimitive) -> Option<T>,
-    ) -> Result<Vec<T>, String> {
-        let mut result: Vec<T> = Vec::with_capacity(values.len());
-        for (index, value) in values.iter().enumerate() {
-            if let Some(v) = f(value.clone()) {
-                result.push(v);
-            } else {
-                Err(format!(
-                    "Array element '{}' with index {} has different type than expected",
-                    value.clone(),
-                    index
-                ))?
-            }
-        }
-        Ok(result)
     }
 
     fn bind_value_primitive(
@@ -604,9 +198,418 @@ pub(crate) mod sqlx_rdbms {
         }
     }
 
-    // trait  SqlxTypeExt {
-    //     fn get<'q, T : 'q + Send + Encode<'q, sqlx::postgres::Postgres> + Type<sqlx::postgres::Postgres>>(&self) -> T ;
-    // }
+    fn bind_value_array(
+        query: sqlx::query::Query<sqlx::Postgres, sqlx::postgres::PgArguments>,
+        values: Vec<DbValuePrimitive>,
+    ) -> Result<sqlx::query::Query<sqlx::Postgres, sqlx::postgres::PgArguments>, String> {
+        if values.is_empty() {
+            Ok(query.bind(PgNull {}))
+        } else {
+            let first = &values[0];
+            match first {
+                DbValuePrimitive::Character(_) => {
+                    let values: Vec<i8> = get_plain_values(values, |v| {
+                        if let DbValuePrimitive::Character(v) = v {
+                            Some(v)
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Int2(_) => {
+                    let values: Vec<i16> = get_plain_values(values, |v| {
+                        if let DbValuePrimitive::Int2(v) = v {
+                            Some(v)
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Int4(_) => {
+                    let values: Vec<i32> = get_plain_values(values, |v| {
+                        if let DbValuePrimitive::Int4(v) = v {
+                            Some(v)
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Int8(_) => {
+                    let values: Vec<i64> = get_plain_values(values, |v| {
+                        if let DbValuePrimitive::Int8(v) = v {
+                            Some(v)
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Numeric(_) => {
+                    let values: Vec<BigDecimal> = get_plain_values(values, |v| {
+                        if let DbValuePrimitive::Numeric(v) = v {
+                            Some(v)
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Float4(_) => {
+                    let values: Vec<f32> = get_plain_values(values, |v| {
+                        if let DbValuePrimitive::Float4(v) = v {
+                            Some(v)
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+
+                DbValuePrimitive::Float8(_) => {
+                    let values: Vec<f64> = get_plain_values(values, |v| {
+                        if let DbValuePrimitive::Float8(v) = v {
+                            Some(v)
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Boolean(_) => {
+                    let values: Vec<bool> = get_plain_values(values, |v| {
+                        if let DbValuePrimitive::Boolean(v) = v {
+                            Some(v)
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Text(_) => {
+                    let values: Vec<String> = get_plain_values(values, |v| {
+                        if let DbValuePrimitive::Text(v) = v {
+                            Some(v)
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Varchar(_) => {
+                    let values: Vec<String> = get_plain_values(values, |v| {
+                        if let DbValuePrimitive::Varchar(v) = v {
+                            Some(v)
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Bpchar(_) => {
+                    let values: Vec<String> = get_plain_values(values, |v| {
+                        if let DbValuePrimitive::Bpchar(v) = v {
+                            Some(v)
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Bytea(_) => {
+                    let values: Vec<Vec<u8>> = get_plain_values(values, |v| {
+                        if let DbValuePrimitive::Bytea(v) = v {
+                            Some(v)
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Uuid(_) => {
+                    let values: Vec<Uuid> = get_plain_values(values, |v| {
+                        if let DbValuePrimitive::Uuid(v) = v {
+                            Some(v)
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Json(_) => {
+                    let values: Vec<serde_json::Value> = get_plain_values(values, |v| {
+                        if let DbValuePrimitive::Json(v) = v {
+                            Some(v)
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Jsonb(_) => {
+                    let values: Vec<serde_json::Value> = get_plain_values(values, |v| {
+                        if let DbValuePrimitive::Jsonb(v) = v {
+                            Some(v)
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Jsonpath(_) => {
+                    let values: Vec<PgJsonPath> = get_plain_values(values, |v| {
+                        if let DbValuePrimitive::Jsonpath(v) = v {
+                            Some(PgJsonPath(v))
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Xml(_) => {
+                    let values: Vec<PgXml> = get_plain_values(values, |v| {
+                        if let DbValuePrimitive::Xml(v) = v {
+                            Some(PgXml(v))
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Timestamptz(_) => {
+                    let values: Vec<_> = get_plain_values(values, |v| {
+                        if let DbValuePrimitive::Timestamptz(v) = v {
+                            Some(v)
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Timestamp(_) => {
+                    let values: Vec<_> = get_plain_values(values, |v| {
+                        if let DbValuePrimitive::Timestamp(v) = v {
+                            Some(v)
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Date(_) => {
+                    let values: Vec<_> = get_plain_values(values, |v| {
+                        if let DbValuePrimitive::Date(v) = v {
+                            Some(v)
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Time(_) => {
+                    let values: Vec<_> = get_plain_values(values, |v| {
+                        if let DbValuePrimitive::Time(v) = v {
+                            Some(v)
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Timetz(_) => {
+                    let values: Vec<_> = get_plain_values(values, |v| {
+                        if let DbValuePrimitive::Timetz((time, offset)) = v {
+                            Some(PgTimeTz { time, offset })
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Interval(_) => {
+                    let values: Vec<_> = get_plain_values(values, |v| {
+                        if let DbValuePrimitive::Interval((months, days, microseconds)) = v {
+                            Some(PgInterval {
+                                months,
+                                days,
+                                microseconds,
+                            })
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Inet(_) => {
+                    let values: Vec<IpAddr> = get_plain_values(values, |v| {
+                        if let DbValuePrimitive::Inet(v) = v {
+                            Some(v)
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Cidr(_) => {
+                    let values: Vec<IpAddr> = get_plain_values(values, |v| {
+                        if let DbValuePrimitive::Cidr(v) = v {
+                            Some(v)
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Macaddr(_) => {
+                    let values: Vec<MacAddress> = get_plain_values(values, |v| {
+                        if let DbValuePrimitive::Macaddr(v) = v {
+                            Some(v)
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Bit(_) => {
+                    let values: Vec<BitVec> = get_plain_values(values, |v| {
+                        if let DbValuePrimitive::Bit(v) = v {
+                            Some(v)
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Varbit(_) => {
+                    let values: Vec<BitVec> = get_plain_values(values, |v| {
+                        if let DbValuePrimitive::Varbit(v) = v {
+                            Some(v)
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Int4range(_) => {
+                    let values: Vec<PgRange<i32>> = get_plain_values(values, |v| {
+                        if let DbValuePrimitive::Int4range(v) = v {
+                            Some(v.into())
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Int8range(_) => {
+                    let values: Vec<PgRange<i64>> = get_plain_values(values, |v| {
+                        if let DbValuePrimitive::Int8range(v) = v {
+                            Some(v.into())
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Numrange(_) => {
+                    let values: Vec<PgRange<BigDecimal>> = get_plain_values(values, |v| {
+                        if let DbValuePrimitive::Numrange(v) = v {
+                            Some(v.into())
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Tsrange(_) => {
+                    let values: Vec<PgRange<chrono::NaiveDateTime>> =
+                        get_plain_values(values, |v| {
+                            if let DbValuePrimitive::Tsrange(v) = v {
+                                Some(v.into())
+                            } else {
+                                None
+                            }
+                        })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Tstzrange(_) => {
+                    let values: Vec<PgRange<chrono::DateTime<chrono::Utc>>> =
+                        get_plain_values(values, |v| {
+                            if let DbValuePrimitive::Tstzrange(v) = v {
+                                Some(v.into())
+                            } else {
+                                None
+                            }
+                        })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Daterange(_) => {
+                    let values: Vec<PgRange<chrono::NaiveDate>> = get_plain_values(values, |v| {
+                        if let DbValuePrimitive::Daterange(v) = v {
+                            Some(v.into())
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Oid(_) => {
+                    let values: Vec<_> = get_plain_values(values, |v| {
+                        if let DbValuePrimitive::Oid(v) = v {
+                            Some(Oid(v))
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Money(_) => {
+                    let values: Vec<_> = get_plain_values(values, |v| {
+                        if let DbValuePrimitive::Money(v) = v {
+                            Some(PgMoney(v))
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::CustomEnum(_) => {
+                    let values: Vec<_> = get_plain_values(values, |v| {
+                        if let DbValuePrimitive::CustomEnum(v) = v {
+                            Some(PgEnum(v))
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(values))
+                }
+                DbValuePrimitive::Null => Err(format!(
+                    "Array param element '{}' with index 0 is not supported",
+                    first
+                )),
+            }
+        }
+    }
+
+    fn get_plain_values<T>(
+        values: Vec<DbValuePrimitive>,
+        f: impl Fn(DbValuePrimitive) -> Option<T>,
+    ) -> Result<Vec<T>, String> {
+        let mut result: Vec<T> = Vec::with_capacity(values.len());
+        for (index, value) in values.iter().enumerate() {
+            if let Some(v) = f(value.clone()) {
+                result.push(v);
+            } else {
+                Err(format!(
+                    "Array element '{}' with index {} has different type than expected",
+                    value.clone(),
+                    index
+                ))?
+            }
+        }
+        Ok(result)
+    }
 
     impl TryFrom<&sqlx::postgres::PgRow> for DbRow<DbValue> {
         type Error = String;

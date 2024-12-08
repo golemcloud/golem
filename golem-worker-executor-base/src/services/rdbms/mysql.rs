@@ -163,7 +163,7 @@ pub(crate) mod sqlx_rdbms {
             DbValue::Enumeration(v) => Ok(query.bind(v)),
             DbValue::Set(v) => Ok(query.bind(v)),
             DbValue::Bit(v) => {
-                let value = bit_vec_to_u64(v).ok_or("Bit vector too large")?;
+                let value = bit_vec_to_u64(v).ok_or("Bit vector is too large")?;
                 Ok(query.bind(value))
             }
             DbValue::Null => Ok(query.bind(None::<String>)),
@@ -328,11 +328,7 @@ pub(crate) mod sqlx_rdbms {
             }
             DbColumnType::Bit => {
                 let v: Option<u64> = row.try_get(index).map_err(|e| e.to_string())?;
-                v.map(|v| {
-                    let bv = u64_to_bit_vec(v);
-                    DbValue::Bit(bv)
-                })
-                .unwrap_or(DbValue::Null)
+                v.map(|v| DbValue::Bit(u64_to_bit_vec(v))).unwrap_or(DbValue::Null)
             }
         };
         Ok(value)
