@@ -200,10 +200,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "69f7f8c3906b62b754cd5326047894316021dcfe5a194c8ea52bdd94934a3457"
 
 [[package]]
+name = "arrayref"
+version = "0.3.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "76a2e8124351fda1ef8aaaa3bbd7ebbcb486bbcd4225aca0aa0d84bb2db8fecb"
+
+[[package]]
 name = "arrayvec"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23b62fc65de8e4e7f52534fb52b0f3ed04746ae267519eef2a83941e8085068b"
+
+[[package]]
+name = "arrayvec"
+version = "0.7.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
 
 [[package]]
 name = "asn1-rs"
@@ -1316,6 +1328,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "blake3"
+version = "1.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b8ee0c1824c4dea5b5f81736aff91bae041d2c07ee1192bec91054e10e3e601e"
+dependencies = [
+ "arrayref",
+ "arrayvec 0.7.6",
+ "cc",
+ "cfg-if",
+ "constant_time_eq",
+]
+
+[[package]]
 name = "block-buffer"
 version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1968,6 +1993,12 @@ name = "const-oid"
 version = "0.9.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2459377285ad874054d797f3ccebf984978aa39129f6eafde5cdc8315b612f8"
+
+[[package]]
+name = "constant_time_eq"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7c74b8349d32d297c9134b8c88677813a227df8f779daa29bfc29c183fe3dca6"
 
 [[package]]
 name = "convert_case"
@@ -4259,9 +4290,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm-rpc"
-version = "1.1.0-rc2"
+version = "1.1.0-rc3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc141eb6c8b15828f356ed541a7187c7a62d1532bcb22964915cb6ddcc303d65"
+checksum = "520f1ff6eb0791ef9ee6fc4d9aab519c28b17dff2e4c08e20a143a6f30641922"
 dependencies = [
  "arbitrary",
  "async-recursion",
@@ -4285,12 +4316,13 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm-rpc-stubgen"
-version = "1.1.0-rc2"
+version = "1.1.0-rc3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cc0f8d37921ec917a2734e73bbfaf548ea80cf2e470f760292c516b0fe7d97e9"
+checksum = "d8d1cea41300636ecf86b2ec525db088f4b0faea652f8ccc0c1b3af48a5ff4b6"
 dependencies = [
  "anyhow",
  "assert2",
+ "blake3",
  "cargo-component",
  "cargo-component-core",
  "cargo_toml",
@@ -4316,6 +4348,7 @@ dependencies = [
  "serde 1.0.215",
  "serde_json",
  "serde_yaml",
+ "shlex",
  "syn 2.0.90",
  "tempfile",
  "tokio",
@@ -5846,7 +5879,7 @@ version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6607c62aa161d23d17a9072cc5da0be67cdfc89d3afb1e8d9c842bebc2525ffe"
 dependencies = [
- "arrayvec",
+ "arrayvec 0.5.2",
  "bitflags 1.3.2",
  "cfg-if",
  "ryu",
