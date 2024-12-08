@@ -186,147 +186,147 @@ pub(crate) mod sqlx_rdbms {
 
     fn get_db_value(index: usize, row: &sqlx::mysql::MySqlRow) -> Result<DbValue, String> {
         let column = &row.columns()[index];
-        let type_name = column.type_info().name();
-        let value = match type_name {
-            mysql_type_name::BOOLEAN => {
+        let db_type: DbColumnType = column.type_info().try_into()?;
+        let value = match db_type {
+            DbColumnType::Boolean => {
                 let v: Option<bool> = row.try_get(index).map_err(|e| e.to_string())?;
                 v.map(DbValue::Boolean).unwrap_or(DbValue::Null)
             }
-            mysql_type_name::TINYINT => {
+            DbColumnType::Tinyint => {
                 let v: Option<i8> = row.try_get(index).map_err(|e| e.to_string())?;
                 v.map(DbValue::Tinyint).unwrap_or(DbValue::Null)
             }
-            mysql_type_name::SMALLINT => {
+            DbColumnType::Smallint => {
                 let v: Option<i16> = row.try_get(index).map_err(|e| e.to_string())?;
                 v.map(DbValue::Smallint).unwrap_or(DbValue::Null)
             }
-            mysql_type_name::MEDIUMINT => {
+            DbColumnType::Mediumint => {
                 let v: Option<i32> = row.try_get(index).map_err(|e| e.to_string())?;
                 v.map(DbValue::Mediumint).unwrap_or(DbValue::Null)
             }
-            mysql_type_name::INT => {
+            DbColumnType::Int => {
                 let v: Option<i32> = row.try_get(index).map_err(|e| e.to_string())?;
                 v.map(DbValue::Int).unwrap_or(DbValue::Null)
             }
-            mysql_type_name::BIGINT => {
+            DbColumnType::Bigint => {
                 let v: Option<i64> = row.try_get(index).map_err(|e| e.to_string())?;
                 v.map(DbValue::Bigint).unwrap_or(DbValue::Null)
             }
-            mysql_type_name::TINYINT_UNSIGNED => {
+            DbColumnType::TinyintUnsigned => {
                 let v: Option<u8> = row.try_get(index).map_err(|e| e.to_string())?;
                 v.map(DbValue::TinyintUnsigned).unwrap_or(DbValue::Null)
             }
-            mysql_type_name::SMALLINT_UNSIGNED => {
+            DbColumnType::SmallintUnsigned => {
                 let v: Option<u16> = row.try_get(index).map_err(|e| e.to_string())?;
                 v.map(DbValue::SmallintUnsigned).unwrap_or(DbValue::Null)
             }
-            mysql_type_name::MEDIUMINT_UNSIGNED => {
+            DbColumnType::MediumintUnsigned => {
                 let v: Option<u32> = row.try_get(index).map_err(|e| e.to_string())?;
                 v.map(DbValue::MediumintUnsigned).unwrap_or(DbValue::Null)
             }
-            mysql_type_name::INT_UNSIGNED => {
+            DbColumnType::IntUnsigned => {
                 let v: Option<u32> = row.try_get(index).map_err(|e| e.to_string())?;
                 v.map(DbValue::IntUnsigned).unwrap_or(DbValue::Null)
             }
-            mysql_type_name::BIGINT_UNSIGNED => {
+            DbColumnType::BigintUnsigned => {
                 let v: Option<u64> = row.try_get(index).map_err(|e| e.to_string())?;
                 v.map(DbValue::BigintUnsigned).unwrap_or(DbValue::Null)
             }
-            mysql_type_name::FLOAT => {
+            DbColumnType::Float => {
                 let v: Option<f32> = row.try_get(index).map_err(|e| e.to_string())?;
                 v.map(DbValue::Float).unwrap_or(DbValue::Null)
             }
-            mysql_type_name::DOUBLE => {
+            DbColumnType::Double => {
                 let v: Option<f64> = row.try_get(index).map_err(|e| e.to_string())?;
                 v.map(DbValue::Double).unwrap_or(DbValue::Null)
             }
-            mysql_type_name::DECIMAL => {
+            DbColumnType::Decimal => {
                 let v: Option<BigDecimal> = row.try_get(index).map_err(|e| e.to_string())?;
                 v.map(DbValue::Decimal).unwrap_or(DbValue::Null)
             }
-            mysql_type_name::TEXT => {
+            DbColumnType::Text => {
                 let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
                 v.map(DbValue::Text).unwrap_or(DbValue::Null)
             }
-            mysql_type_name::VARCHAR => {
+            DbColumnType::Varchar => {
                 let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
                 v.map(DbValue::Varchar).unwrap_or(DbValue::Null)
             }
-            mysql_type_name::CHAR => {
+            DbColumnType::Fixchar => {
                 let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
                 v.map(DbValue::Fixchar).unwrap_or(DbValue::Null)
             }
-            mysql_type_name::TINYTEXT => {
+            DbColumnType::Tinytext => {
                 let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
                 v.map(DbValue::Tinytext).unwrap_or(DbValue::Null)
             }
-            mysql_type_name::MEDIUMTEXT => {
+            DbColumnType::Mediumtext => {
                 let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
                 v.map(DbValue::Mediumtext).unwrap_or(DbValue::Null)
             }
-            mysql_type_name::LONGTEXT => {
+            DbColumnType::Longtext => {
                 let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
                 v.map(DbValue::Longtext).unwrap_or(DbValue::Null)
             }
-            mysql_type_name::JSON => {
+            DbColumnType::Json => {
                 let v: Option<serde_json::Value> = row.try_get(index).map_err(|e| e.to_string())?;
                 v.map(DbValue::Json).unwrap_or(DbValue::Null)
             }
-            mysql_type_name::ENUM => {
+            DbColumnType::Enumeration => {
                 let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
                 v.map(DbValue::Enumeration).unwrap_or(DbValue::Null)
             }
-            mysql_type_name::VARBINARY => {
+            DbColumnType::Varbinary => {
                 let v: Option<Vec<u8>> = row.try_get(index).map_err(|e| e.to_string())?;
                 v.map(DbValue::Varbinary).unwrap_or(DbValue::Null)
             }
-            mysql_type_name::BINARY => {
+            DbColumnType::Binary => {
                 let v: Option<Vec<u8>> = row.try_get(index).map_err(|e| e.to_string())?;
                 v.map(DbValue::Binary).unwrap_or(DbValue::Null)
             }
-            mysql_type_name::BLOB => {
+            DbColumnType::Blob => {
                 let v: Option<Vec<u8>> = row.try_get(index).map_err(|e| e.to_string())?;
                 v.map(DbValue::Blob).unwrap_or(DbValue::Null)
             }
-            mysql_type_name::TINYBLOB => {
+            DbColumnType::Tinyblob => {
                 let v: Option<Vec<u8>> = row.try_get(index).map_err(|e| e.to_string())?;
                 v.map(DbValue::Tinyblob).unwrap_or(DbValue::Null)
             }
-            mysql_type_name::MEDIUMBLOB => {
+            DbColumnType::Mediumblob => {
                 let v: Option<Vec<u8>> = row.try_get(index).map_err(|e| e.to_string())?;
                 v.map(DbValue::Mediumblob).unwrap_or(DbValue::Null)
             }
-            mysql_type_name::LONGBLOB => {
+            DbColumnType::Longblob => {
                 let v: Option<Vec<u8>> = row.try_get(index).map_err(|e| e.to_string())?;
                 v.map(DbValue::Longblob).unwrap_or(DbValue::Null)
             }
-            mysql_type_name::TIMESTAMP => {
+            DbColumnType::Timestamp => {
                 let v: Option<chrono::DateTime<chrono::Utc>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
                 v.map(DbValue::Timestamp).unwrap_or(DbValue::Null)
             }
-            mysql_type_name::DATETIME => {
+            DbColumnType::Datetime => {
                 let v: Option<chrono::DateTime<chrono::Utc>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
                 v.map(DbValue::Datetime).unwrap_or(DbValue::Null)
             }
-            mysql_type_name::DATE => {
+            DbColumnType::Date => {
                 let v: Option<chrono::NaiveDate> = row.try_get(index).map_err(|e| e.to_string())?;
                 v.map(DbValue::Date).unwrap_or(DbValue::Null)
             }
-            mysql_type_name::TIME => {
+            DbColumnType::Time => {
                 let v: Option<chrono::NaiveTime> = row.try_get(index).map_err(|e| e.to_string())?;
                 v.map(DbValue::Time).unwrap_or(DbValue::Null)
             }
-            mysql_type_name::YEAR => {
+            DbColumnType::Year => {
                 let v: Option<u16> = row.try_get(index).map_err(|e| e.to_string())?;
                 v.map(DbValue::Year).unwrap_or(DbValue::Null)
             }
-            mysql_type_name::SET => {
+            DbColumnType::Set => {
                 let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
                 v.map(DbValue::Set).unwrap_or(DbValue::Null)
             }
-            mysql_type_name::BIT => {
+            DbColumnType::Bit => {
                 let v: Option<u64> = row.try_get(index).map_err(|e| e.to_string())?;
                 v.map(|v| {
                     let bv = u64_to_bit_vec(v);
@@ -334,7 +334,6 @@ pub(crate) mod sqlx_rdbms {
                 })
                 .unwrap_or(DbValue::Null)
             }
-            _ => Err(format!("Value type '{}' is not supported", type_name))?,
         };
         Ok(value)
     }

@@ -299,7 +299,7 @@ pub(crate) mod sqlx_rdbms {
                     DbValuePrimitive::Jsonpath(_) => {
                         let values: Vec<PgJsonPath> = get_plain_values(vs, |v| {
                             if let DbValuePrimitive::Jsonpath(v) = v {
-                                Some(PgJsonPath::new(v))
+                                Some(PgJsonPath(v))
                             } else {
                                 None
                             }
@@ -572,7 +572,7 @@ pub(crate) mod sqlx_rdbms {
             DbValuePrimitive::Uuid(v) => Ok(query.bind(v)),
             DbValuePrimitive::Json(v) => Ok(query.bind(v)),
             DbValuePrimitive::Jsonb(v) => Ok(query.bind(v)),
-            DbValuePrimitive::Jsonpath(v) => Ok(query.bind(PgJsonPath::new(v))),
+            DbValuePrimitive::Jsonpath(v) => Ok(query.bind(PgJsonPath(v))),
             DbValuePrimitive::Xml(v) => Ok(query.bind(PgXml(v))),
             DbValuePrimitive::Timestamp(v) => Ok(query.bind(v)),
             DbValuePrimitive::Timestamptz(v) => Ok(query.bind(v)),
@@ -604,6 +604,10 @@ pub(crate) mod sqlx_rdbms {
         }
     }
 
+    // trait  SqlxTypeExt {
+    //     fn get<'q, T : 'q + Send + Encode<'q, sqlx::postgres::Postgres> + Type<sqlx::postgres::Postgres>>(&self) -> T ;
+    // }
+
     impl TryFrom<&sqlx::postgres::PgRow> for DbRow<DbValue> {
         type Error = String;
 
@@ -619,332 +623,349 @@ pub(crate) mod sqlx_rdbms {
 
     fn get_db_value(index: usize, row: &sqlx::postgres::PgRow) -> Result<DbValue, String> {
         let column = &row.columns()[index];
-        let type_name = get_db_type_name(column.type_info());
-        let value = match type_name.as_str() {
-            pg_type_name::BOOL => {
+        let db_type: DbColumnType = column.type_info().try_into()?;
+        match db_type {
+            DbColumnType::Primitive(t) => get_db_value_primitive(index, t, row),
+            DbColumnType::Array(t) => get_db_value_array(index, t, row),
+        }
+    }
+
+    fn get_db_value_primitive(
+        index: usize,
+        db_type: DbColumnTypePrimitive,
+        row: &sqlx::postgres::PgRow,
+    ) -> Result<DbValue, String> {
+        let value = match db_type {
+            DbColumnTypePrimitive::Boolean => {
                 let v: Option<bool> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Boolean))
             }
-            pg_type_name::CHAR => {
+            DbColumnTypePrimitive::Character => {
                 let v: Option<i8> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Character))
             }
-            pg_type_name::INT2 => {
+            DbColumnTypePrimitive::Int2 => {
                 let v: Option<i16> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Int2))
             }
-            pg_type_name::INT4 => {
+            DbColumnTypePrimitive::Int4 => {
                 let v: Option<i32> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Int4))
             }
-            pg_type_name::INT8 => {
+            DbColumnTypePrimitive::Int8 => {
                 let v: Option<i64> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Int8))
             }
-            pg_type_name::FLOAT4 => {
+            DbColumnTypePrimitive::Float4 => {
                 let v: Option<f32> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Float4))
             }
-            pg_type_name::FLOAT8 => {
+            DbColumnTypePrimitive::Float8 => {
                 let v: Option<f64> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Float8))
             }
-            pg_type_name::NUMERIC => {
+            DbColumnTypePrimitive::Numeric => {
                 let v: Option<BigDecimal> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Numeric))
             }
-            pg_type_name::TEXT => {
+            DbColumnTypePrimitive::Text => {
                 let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Text))
             }
-            pg_type_name::VARCHAR => {
+            DbColumnTypePrimitive::Varchar => {
                 let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Varchar))
             }
-            pg_type_name::BPCHAR => {
+            DbColumnTypePrimitive::Bpchar => {
                 let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Bpchar))
             }
-            pg_type_name::JSON => {
+            DbColumnTypePrimitive::Json => {
                 let v: Option<serde_json::Value> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Json))
             }
-            pg_type_name::JSONB => {
+            DbColumnTypePrimitive::Jsonb => {
                 let v: Option<serde_json::Value> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Jsonb))
             }
-            pg_type_name::JSONPATH => {
+            DbColumnTypePrimitive::Jsonpath => {
                 let v: Option<PgJsonPath> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::primitive_from(v.map(|v| DbValuePrimitive::Jsonpath(v.into())))
             }
-            pg_type_name::XML => {
+            DbColumnTypePrimitive::Xml => {
                 let v: Option<PgXml> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::primitive_from(v.map(|v| DbValuePrimitive::Xml(v.0)))
             }
-            pg_type_name::BYTEA => {
+            DbColumnTypePrimitive::Bytea => {
                 let v: Option<Vec<u8>> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Bytea))
             }
-            pg_type_name::UUID => {
+            DbColumnTypePrimitive::Uuid => {
                 let v: Option<Uuid> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Uuid))
             }
-            pg_type_name::INTERVAL => {
+            DbColumnTypePrimitive::Interval => {
                 let v: Option<PgInterval> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::primitive_from(
                     v.map(|v| DbValuePrimitive::Interval((v.months, v.days, v.microseconds))),
                 )
             }
-            pg_type_name::TIMESTAMP => {
+            DbColumnTypePrimitive::Timestamp => {
                 let v: Option<chrono::NaiveDateTime> =
                     row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Timestamp))
             }
-            pg_type_name::TIMESTAMPTZ => {
+            DbColumnTypePrimitive::Timestamptz => {
                 let v: Option<chrono::DateTime<chrono::Utc>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Timestamptz))
             }
-            pg_type_name::DATE => {
+            DbColumnTypePrimitive::Date => {
                 let v: Option<chrono::NaiveDate> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Date))
             }
-            pg_type_name::TIME => {
+            DbColumnTypePrimitive::Time => {
                 let v: Option<chrono::NaiveTime> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Time))
             }
-            pg_type_name::TIMETZ => {
+            DbColumnTypePrimitive::Timetz => {
                 let v: Option<PgTimeTz<chrono::NaiveTime, chrono::FixedOffset>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::primitive_from(v.map(|v| DbValuePrimitive::Timetz((v.time, v.offset))))
             }
-            pg_type_name::INET => {
+            DbColumnTypePrimitive::Inet => {
                 let v: Option<IpAddr> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Inet))
             }
-            pg_type_name::CIDR => {
+            DbColumnTypePrimitive::Cidr => {
                 let v: Option<IpAddr> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Cidr))
             }
-            pg_type_name::MACADDR => {
+            DbColumnTypePrimitive::Macaddr => {
                 let v: Option<MacAddress> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Macaddr))
             }
-            pg_type_name::BIT => {
+            DbColumnTypePrimitive::Bit => {
                 let v: Option<BitVec> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Bit))
             }
-            pg_type_name::VARBIT => {
+            DbColumnTypePrimitive::Varbit => {
                 let v: Option<BitVec> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Varbit))
             }
-            pg_type_name::INT4RANGE => {
+            DbColumnTypePrimitive::Int4range => {
                 let v: Option<PgRange<i32>> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::primitive_from(v.map(|v| DbValuePrimitive::Int4range(get_bounds(v))))
             }
-            pg_type_name::INT8RANGE => {
+            DbColumnTypePrimitive::Int8range => {
                 let v: Option<PgRange<i64>> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::primitive_from(v.map(|v| DbValuePrimitive::Int8range(get_bounds(v))))
             }
-            pg_type_name::NUMRANGE => {
+            DbColumnTypePrimitive::Numrange => {
                 let v: Option<PgRange<BigDecimal>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::primitive_from(v.map(|v| DbValuePrimitive::Numrange(get_bounds(v))))
             }
-            pg_type_name::TSRANGE => {
+            DbColumnTypePrimitive::Tsrange => {
                 let v: Option<PgRange<chrono::NaiveDateTime>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::primitive_from(v.map(|v| DbValuePrimitive::Tsrange(get_bounds(v))))
             }
-            pg_type_name::TSTZRANGE => {
+            DbColumnTypePrimitive::Tstzrange => {
                 let v: Option<PgRange<chrono::DateTime<chrono::Utc>>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::primitive_from(v.map(|v| DbValuePrimitive::Tstzrange(get_bounds(v))))
             }
-            pg_type_name::DATERANGE => {
+            DbColumnTypePrimitive::Daterange => {
                 let v: Option<PgRange<chrono::NaiveDate>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::primitive_from(v.map(|v| DbValuePrimitive::Daterange(get_bounds(v))))
             }
-            pg_type_name::OID => {
+            DbColumnTypePrimitive::Oid => {
                 let v: Option<Oid> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::primitive_from(v.map(|v| DbValuePrimitive::Oid(v.0)))
             }
-            pg_type_name::MONEY => {
+            DbColumnTypePrimitive::Money => {
                 let v: Option<PgMoney> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::primitive_from(v.map(|v| DbValuePrimitive::Money(v.0)))
             }
-            pg_type_name::BOOL_ARRAY => {
+            DbColumnTypePrimitive::CustomEnum(_) => {
+                let v: Option<PgEnum> = row.try_get(index).map_err(|e| e.to_string())?;
+                DbValue::primitive_from(v.map(|v| DbValuePrimitive::CustomEnum(v.0)))
+            }
+        };
+        Ok(value)
+    }
+
+    fn get_db_value_array(
+        index: usize,
+        db_type: DbColumnTypePrimitive,
+        row: &sqlx::postgres::PgRow,
+    ) -> Result<DbValue, String> {
+        let value = match db_type {
+            DbColumnTypePrimitive::Boolean => {
                 let vs: Option<Vec<bool>> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::array_from(vs, DbValuePrimitive::Boolean)
             }
-            pg_type_name::CHAR_ARRAY => {
+            DbColumnTypePrimitive::Character => {
                 let vs: Option<Vec<i8>> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::array_from(vs, DbValuePrimitive::Character)
             }
-            pg_type_name::INT2_ARRAY => {
+            DbColumnTypePrimitive::Int2 => {
                 let vs: Option<Vec<i16>> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::array_from(vs, DbValuePrimitive::Int2)
             }
-            pg_type_name::INT4_ARRAY => {
+            DbColumnTypePrimitive::Int4 => {
                 let vs: Option<Vec<i32>> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::array_from(vs, DbValuePrimitive::Int4)
             }
-            pg_type_name::INT8_ARRAY => {
+            DbColumnTypePrimitive::Int8 => {
                 let vs: Option<Vec<i64>> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::array_from(vs, DbValuePrimitive::Int8)
             }
-            pg_type_name::FLOAT4_ARRAY => {
+            DbColumnTypePrimitive::Float4 => {
                 let vs: Option<Vec<f32>> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::array_from(vs, DbValuePrimitive::Float4)
             }
-            pg_type_name::FLOAT8_ARRAY => {
+            DbColumnTypePrimitive::Float8 => {
                 let vs: Option<Vec<f64>> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::array_from(vs, DbValuePrimitive::Float8)
             }
-            pg_type_name::NUMERIC_ARRAY => {
+            DbColumnTypePrimitive::Numeric => {
                 let vs: Option<Vec<BigDecimal>> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::array_from(vs, DbValuePrimitive::Numeric)
             }
-            pg_type_name::TEXT_ARRAY => {
+            DbColumnTypePrimitive::Text => {
                 let vs: Option<Vec<String>> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::array_from(vs, DbValuePrimitive::Text)
             }
-            pg_type_name::VARCHAR_ARRAY => {
+            DbColumnTypePrimitive::Varchar => {
                 let vs: Option<Vec<String>> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::array_from(vs, DbValuePrimitive::Varchar)
             }
-            pg_type_name::BPCHAR_ARRAY => {
+            DbColumnTypePrimitive::Bpchar => {
                 let vs: Option<Vec<String>> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::array_from(vs, DbValuePrimitive::Bpchar)
             }
-            pg_type_name::JSON_ARRAY => {
+            DbColumnTypePrimitive::Json => {
                 let vs: Option<Vec<serde_json::Value>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::array_from(vs, DbValuePrimitive::Json)
             }
-            pg_type_name::JSONB_ARRAY => {
+            DbColumnTypePrimitive::Jsonb => {
                 let vs: Option<Vec<serde_json::Value>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::array_from(vs, DbValuePrimitive::Jsonb)
             }
-            pg_type_name::JSONPATH_ARRAY => {
+            DbColumnTypePrimitive::Jsonpath => {
                 let vs: Option<Vec<PgJsonPath>> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::array_from(vs, |v| DbValuePrimitive::Jsonpath(v.into()))
             }
-            pg_type_name::XML_ARRAY => {
+            DbColumnTypePrimitive::Xml => {
                 let vs: Option<Vec<PgXml>> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::array_from(vs, |v| DbValuePrimitive::Xml(v.0))
             }
-            pg_type_name::BYTEA_ARRAY => {
+            DbColumnTypePrimitive::Bytea => {
                 let vs: Option<Vec<Vec<u8>>> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::array_from(vs, DbValuePrimitive::Bytea)
             }
-            pg_type_name::UUID_ARRAY => {
+            DbColumnTypePrimitive::Uuid => {
                 let vs: Option<Vec<Uuid>> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::array_from(vs, DbValuePrimitive::Uuid)
             }
-            pg_type_name::INTERVAL_ARRAY => {
+            DbColumnTypePrimitive::Interval => {
                 let vs: Option<Vec<PgInterval>> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::array_from(vs, |v| {
                     DbValuePrimitive::Interval((v.months, v.days, v.microseconds))
                 })
             }
-            pg_type_name::TIMESTAMP_ARRAY => {
+            DbColumnTypePrimitive::Timestamp => {
                 let vs: Option<Vec<chrono::NaiveDateTime>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::array_from(vs, DbValuePrimitive::Timestamp)
             }
-            pg_type_name::TIMESTAMPTZ_ARRAY => {
+            DbColumnTypePrimitive::Timestamptz => {
                 let vs: Option<Vec<chrono::DateTime<chrono::Utc>>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::array_from(vs, DbValuePrimitive::Timestamptz)
             }
-            pg_type_name::DATE_ARRAY => {
+            DbColumnTypePrimitive::Date => {
                 let vs: Option<Vec<chrono::NaiveDate>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::array_from(vs, DbValuePrimitive::Date)
             }
-            pg_type_name::TIME_ARRAY => {
+            DbColumnTypePrimitive::Time => {
                 let vs: Option<Vec<chrono::NaiveTime>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::array_from(vs, DbValuePrimitive::Time)
             }
-            pg_type_name::TIMETZ_ARRAY => {
+            DbColumnTypePrimitive::Timetz => {
                 let vs: Option<Vec<PgTimeTz<chrono::NaiveTime, chrono::FixedOffset>>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::array_from(vs, |v| DbValuePrimitive::Timetz((v.time, v.offset)))
             }
-            pg_type_name::INET_ARRAY => {
+            DbColumnTypePrimitive::Inet => {
                 let vs: Option<Vec<IpAddr>> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::array_from(vs, DbValuePrimitive::Inet)
             }
-            pg_type_name::CIDR_ARRAY => {
+            DbColumnTypePrimitive::Cidr => {
                 let vs: Option<Vec<IpAddr>> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::array_from(vs, DbValuePrimitive::Cidr)
             }
-            pg_type_name::MACADDR_ARRAY => {
+            DbColumnTypePrimitive::Macaddr => {
                 let vs: Option<Vec<MacAddress>> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::array_from(vs, DbValuePrimitive::Macaddr)
             }
-            pg_type_name::BIT_ARRAY => {
+            DbColumnTypePrimitive::Bit => {
                 let vs: Option<Vec<BitVec>> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::array_from(vs, DbValuePrimitive::Bit)
             }
-            pg_type_name::VARBIT_ARRAY => {
+            DbColumnTypePrimitive::Varbit => {
                 let vs: Option<Vec<BitVec>> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::array_from(vs, DbValuePrimitive::Varbit)
             }
-            pg_type_name::INT4RANGE_ARRAY => {
+            DbColumnTypePrimitive::Int4range => {
                 let vs: Option<Vec<PgRange<i32>>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::array_from(vs, |v| DbValuePrimitive::Int4range(get_bounds(v)))
             }
-            pg_type_name::INT8RANGE_ARRAY => {
+            DbColumnTypePrimitive::Int8range => {
                 let vs: Option<Vec<PgRange<i64>>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::array_from(vs, |v| DbValuePrimitive::Int8range(get_bounds(v)))
             }
-            pg_type_name::NUMRANGE_ARRAY => {
+            DbColumnTypePrimitive::Numrange => {
                 let vs: Option<Vec<PgRange<BigDecimal>>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::array_from(vs, |v| DbValuePrimitive::Numrange(get_bounds(v)))
             }
-            pg_type_name::TSRANGE_ARRAY => {
+            DbColumnTypePrimitive::Tsrange => {
                 let vs: Option<Vec<PgRange<chrono::NaiveDateTime>>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::array_from(vs, |v| DbValuePrimitive::Tsrange(get_bounds(v)))
             }
-            pg_type_name::TSTZRANGE_ARRAY => {
+            DbColumnTypePrimitive::Tstzrange => {
                 let vs: Option<Vec<PgRange<chrono::DateTime<chrono::Utc>>>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::array_from(vs, |v| DbValuePrimitive::Tstzrange(get_bounds(v)))
             }
-            pg_type_name::DATERANGE_ARRAY => {
+            DbColumnTypePrimitive::Daterange => {
                 let vs: Option<Vec<PgRange<chrono::NaiveDate>>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::array_from(vs, |v| DbValuePrimitive::Daterange(get_bounds(v)))
             }
-            pg_type_name::MONEY_ARRAY => {
+            DbColumnTypePrimitive::Money => {
                 let vs: Option<Vec<PgMoney>> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::array_from(vs, |v| DbValuePrimitive::Money(v.0))
             }
-            pg_type_name::OID_ARRAY => {
+            DbColumnTypePrimitive::Oid => {
                 let vs: Option<Vec<Oid>> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::array_from(vs, |v| DbValuePrimitive::Oid(v.0))
             }
-            _ => match column.type_info().kind() {
-                // enum in postgres is custom type
-                PgTypeKind::Enum(_) => {
-                    let v: Option<PgEnum> = row.try_get(index).map_err(|e| e.to_string())?;
-                    DbValue::primitive_from(v.map(|v| DbValuePrimitive::CustomEnum(v.0)))
-                }
-                PgTypeKind::Array(element) if matches!(element.kind(), PgTypeKind::Enum(_)) => {
-                    let vs: Option<Vec<PgEnum>> = row.try_get(index).map_err(|e| e.to_string())?;
-                    DbValue::array_from(vs, |v| DbValuePrimitive::CustomEnum(v.0))
-                }
-                _ => Err(format!("Value type '{}' is not supported", type_name))?,
-            },
+            DbColumnTypePrimitive::CustomEnum(_) => {
+                let vs: Option<Vec<PgEnum>> = row.try_get(index).map_err(|e| e.to_string())?;
+                DbValue::array_from(vs, |v| DbValuePrimitive::CustomEnum(v.0))
+            }
         };
         Ok(value)
     }
@@ -1191,12 +1212,6 @@ pub(crate) mod sqlx_rdbms {
     }
 
     struct PgJsonPath(String);
-
-    impl PgJsonPath {
-        fn new(value: String) -> Self {
-            Self(value)
-        }
-    }
 
     impl From<PgJsonPath> for String {
         fn from(value: PgJsonPath) -> Self {

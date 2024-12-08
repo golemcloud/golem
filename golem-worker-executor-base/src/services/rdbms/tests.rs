@@ -29,6 +29,7 @@ use sqlx::types::mac_address::MacAddress;
 use sqlx::types::BitVec;
 use std::collections::{Bound, HashMap};
 use std::net::{IpAddr, Ipv4Addr};
+use std::str::FromStr;
 use std::sync::Arc;
 use test_r::{test, test_dep};
 use tokio::task::JoinSet;
@@ -1493,7 +1494,7 @@ async fn mysql_execute_test_create_insert_select(
               `text_col` TEXT,
               `mediumtext_col` MEDIUMTEXT,
               `longtext_col` LONGTEXT,
-              `binary_col` BINARY(16),
+              `binary_col` BINARY(6),
               `varbinary_col` VARBINARY(255),
               `tinyblob_col` TINYBLOB,
               `blob_col` BLOB,
@@ -1502,8 +1503,8 @@ async fn mysql_execute_test_create_insert_select(
               `enum_col` ENUM('value1', 'value2', 'value3'),
               `set_col` SET('value1', 'value2', 'value3'),
               `json_col` JSON,
-              `bit_col` BIT(10),
-              `tinityint_unsigned_col` TINYINT UNSIGNED,
+              `bit_col` BIT(3),
+              `tinyint_unsigned_col` TINYINT UNSIGNED,
               `smallint_unsigned_col` SMALLINT UNSIGNED,
               `mediumint_unsigned_col` MEDIUMINT UNSIGNED,
               `int_unsigned_col` INT UNSIGNED,
@@ -1520,7 +1521,7 @@ async fn mysql_execute_test_create_insert_select(
               text_col, mediumtext_col, longtext_col, binary_col, varbinary_col,
               tinyblob_col, blob_col, mediumblob_col, longblob_col, enum_col,
               set_col, json_col, bit_col,
-              tinityint_unsigned_col, smallint_unsigned_col,
+              tinyint_unsigned_col, smallint_unsigned_col,
               mediumint_unsigned_col, int_unsigned_col, bigint_unsigned_col,
               year_col
             ) VALUES (
@@ -1562,7 +1563,7 @@ async fn mysql_execute_test_create_insert_select(
                 mysql_types::DbValue::Bigint(5),
                 mysql_types::DbValue::Float(6.0),
                 mysql_types::DbValue::Double(7.0),
-                mysql_types::DbValue::Decimal(BigDecimal::from(80)),
+                mysql_types::DbValue::Decimal(BigDecimal::from_str("80.00").unwrap()),
                 mysql_types::DbValue::Date(
                     chrono::NaiveDate::from_ymd_opt(2030 + i as i32, 10, 12).unwrap(),
                 ),
@@ -1586,7 +1587,7 @@ async fn mysql_execute_test_create_insert_select(
                 mysql_types::DbValue::Text("text".to_string()),
                 mysql_types::DbValue::Mediumtext("Mediumtext".to_string()),
                 mysql_types::DbValue::Longtext("Longtext".to_string()),
-                mysql_types::DbValue::Binary("Binary".as_bytes().to_vec()),
+                mysql_types::DbValue::Binary(vec![66, 105, 110, 97, 114, 121]),
                 mysql_types::DbValue::Varbinary("Varbinary".as_bytes().to_vec()),
                 mysql_types::DbValue::Tinyblob("Tinyblob".as_bytes().to_vec()),
                 mysql_types::DbValue::Blob("Blob".as_bytes().to_vec()),
@@ -1622,7 +1623,21 @@ async fn mysql_execute_test_create_insert_select(
         )
         .await;
 
-        rows.push(DbRow { values: params });
+        let values = params
+            .into_iter()
+            .map(|v| match v {
+                mysql_types::DbValue::Mediumtext(v) => mysql_types::DbValue::Text(v),
+                mysql_types::DbValue::Longtext(v) => mysql_types::DbValue::Text(v),
+                mysql_types::DbValue::Tinytext(v) => mysql_types::DbValue::Text(v),
+                mysql_types::DbValue::Mediumblob(v) => mysql_types::DbValue::Blob(v),
+                mysql_types::DbValue::Longblob(v) => mysql_types::DbValue::Blob(v),
+                mysql_types::DbValue::Tinyblob(v) => mysql_types::DbValue::Blob(v),
+                mysql_types::DbValue::Set(v) => mysql_types::DbValue::Fixchar(v),
+                _ => v,
+            })
+            .collect();
+
+        rows.push(DbRow { values });
     }
 
     let expected_columns = vec![
@@ -1713,8 +1728,8 @@ async fn mysql_execute_test_create_insert_select(
         mysql_types::DbColumn {
             name: "tinytext_col".to_string(),
             ordinal: 14,
-            db_type: mysql_types::DbColumnType::Tinytext,
-            db_type_name: "TINYTEXT".to_string(),
+            db_type: mysql_types::DbColumnType::Text,
+            db_type_name: "TEXT".to_string(),
         },
         mysql_types::DbColumn {
             name: "text_col".to_string(),
@@ -1725,14 +1740,14 @@ async fn mysql_execute_test_create_insert_select(
         mysql_types::DbColumn {
             name: "mediumtext_col".to_string(),
             ordinal: 16,
-            db_type: mysql_types::DbColumnType::Mediumtext,
-            db_type_name: "MEDIUMTEXT".to_string(),
+            db_type: mysql_types::DbColumnType::Text,
+            db_type_name: "TEXT".to_string(),
         },
         mysql_types::DbColumn {
             name: "longtext_col".to_string(),
             ordinal: 17,
-            db_type: mysql_types::DbColumnType::Longtext,
-            db_type_name: "LONGTEXT".to_string(),
+            db_type: mysql_types::DbColumnType::Text,
+            db_type_name: "TEXT".to_string(),
         },
         mysql_types::DbColumn {
             name: "binary_col".to_string(),
@@ -1749,8 +1764,8 @@ async fn mysql_execute_test_create_insert_select(
         mysql_types::DbColumn {
             name: "tinyblob_col".to_string(),
             ordinal: 20,
-            db_type: mysql_types::DbColumnType::Tinyblob,
-            db_type_name: "TINYBLOB".to_string(),
+            db_type: mysql_types::DbColumnType::Blob,
+            db_type_name: "BLOB".to_string(),
         },
         mysql_types::DbColumn {
             name: "blob_col".to_string(),
@@ -1761,14 +1776,14 @@ async fn mysql_execute_test_create_insert_select(
         mysql_types::DbColumn {
             name: "mediumblob_col".to_string(),
             ordinal: 22,
-            db_type: mysql_types::DbColumnType::Mediumblob,
-            db_type_name: "MEDIUMBLOB".to_string(),
+            db_type: mysql_types::DbColumnType::Blob,
+            db_type_name: "BLOB".to_string(),
         },
         mysql_types::DbColumn {
             name: "longblob_col".to_string(),
             ordinal: 23,
-            db_type: mysql_types::DbColumnType::Longblob,
-            db_type_name: "LONGBLOB".to_string(),
+            db_type: mysql_types::DbColumnType::Blob,
+            db_type_name: "BLOB".to_string(),
         },
         mysql_types::DbColumn {
             name: "enum_col".to_string(),
@@ -1779,8 +1794,8 @@ async fn mysql_execute_test_create_insert_select(
         mysql_types::DbColumn {
             name: "set_col".to_string(),
             ordinal: 25,
-            db_type: mysql_types::DbColumnType::Set,
-            db_type_name: "SET".to_string(),
+            db_type: mysql_types::DbColumnType::Fixchar,
+            db_type_name: "CHAR".to_string(),
         },
         mysql_types::DbColumn {
             name: "json_col".to_string(),
@@ -1795,31 +1810,31 @@ async fn mysql_execute_test_create_insert_select(
             db_type_name: "BIT".to_string(),
         },
         mysql_types::DbColumn {
-            name: "tiny_unsigned_col".to_string(),
+            name: "tinyint_unsigned_col".to_string(),
             ordinal: 28,
             db_type: mysql_types::DbColumnType::TinyintUnsigned,
             db_type_name: "TINYINT UNSIGNED".to_string(),
         },
         mysql_types::DbColumn {
-            name: "small_unsigned_col".to_string(),
+            name: "smallint_unsigned_col".to_string(),
             ordinal: 29,
             db_type: mysql_types::DbColumnType::SmallintUnsigned,
             db_type_name: "SMALLINT UNSIGNED".to_string(),
         },
         mysql_types::DbColumn {
-            name: "medium_unsigned_col".to_string(),
+            name: "mediumint_unsigned_col".to_string(),
             ordinal: 30,
             db_type: mysql_types::DbColumnType::MediumintUnsigned,
             db_type_name: "MEDIUMINT UNSIGNED".to_string(),
         },
         mysql_types::DbColumn {
-            name: "unsigned_col".to_string(),
+            name: "int_unsigned_col".to_string(),
             ordinal: 31,
             db_type: mysql_types::DbColumnType::IntUnsigned,
             db_type_name: "INT UNSIGNED".to_string(),
         },
         mysql_types::DbColumn {
-            name: "big_unsigned_col".to_string(),
+            name: "bigint_unsigned_col".to_string(),
             ordinal: 32,
             db_type: mysql_types::DbColumnType::BigintUnsigned,
             db_type_name: "BIGINT UNSIGNED".to_string(),
@@ -1841,7 +1856,7 @@ async fn mysql_execute_test_create_insert_select(
               text_col, mediumtext_col, longtext_col, binary_col, varbinary_col,
               tinyblob_col, blob_col, mediumblob_col, longblob_col, enum_col,
               set_col, json_col, bit_col,
-              tinityint_unsigned_col, smallint_unsigned_col,
+              tinyint_unsigned_col, smallint_unsigned_col,
               mediumint_unsigned_col, int_unsigned_col, bigint_unsigned_col,
               year_col
            FROM data_types ORDER BY id ASC;
@@ -1852,7 +1867,7 @@ async fn mysql_execute_test_create_insert_select(
         &db_address,
         select_statement,
         vec![],
-        None, //Some(expected_columns),
+        Some(expected_columns),
         Some(rows),
     )
     .await;
