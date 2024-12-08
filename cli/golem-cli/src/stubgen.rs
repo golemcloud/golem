@@ -13,9 +13,21 @@
 // limitations under the License.
 
 use crate::model::{GolemError, GolemResult};
+use colored::Colorize;
 use golem_wasm_rpc_stubgen::Command;
 
 pub async fn handle_stubgen(command: Command) -> Result<GolemResult, GolemError> {
+    eprintln!(
+        "{}",
+        "WARNING: THIS COMMAND IS DEPRECATED AND MIGHT MODIFY SOURCE WIT FILES!".yellow()
+    );
+    eprintln!(
+        "{}",
+        format!(
+            "\nThe recommended new way to handle wasm-rpc stub generation and linking is the {} command.\n",
+            "golem-cli app".bold().underline(),
+        ).yellow(),
+    );
     let result = match command {
         Command::Generate(args) => golem_wasm_rpc_stubgen::generate(args),
         Command::Build(args) => golem_wasm_rpc_stubgen::build(args).await,

@@ -28,6 +28,15 @@ pub struct GolemComponentExtensions {
     pub files: Vec<InitialComponentFile>,
 }
 
+impl Default for GolemComponentExtensions {
+    fn default() -> Self {
+        Self {
+            component_type: ComponentType::Durable,
+            files: vec![],
+        }
+    }
+}
+
 impl ComponentPropertiesExtensions for GolemComponentExtensions {
     type Raw = app_ext_raw::GolemComponentPropertiesExt;
 
@@ -40,28 +49,55 @@ impl ComponentPropertiesExtensions for GolemComponentExtensions {
         validation: &mut ValidationBuilder,
         raw: Self::Raw,
     ) -> Option<Self> {
-        let source_count = raw.files.len();
-
-        let files = raw
-            .files
-            .into_iter()
-            .filter_map(|file| convert_component_file(validation, file, source))
-            .collect::<Vec<_>>();
-
-        (files.len() == source_count).then(|| GolemComponentExtensions {
-            component_type: raw
-                .component_type
-                .unwrap_or(app_ext_raw::ComponentType::Durable)
-                .into(),
-            files,
+        convert_component_files(source, validation, raw.files).map(|files| {
+            GolemComponentExtensions {
+                component_type: raw
+                    .component_type
+                    .unwrap_or(app_ext_raw::ComponentType::Durable)
+                    .into(),
+                files,
+            }
         })
+    }
+
+    fn merge_wit_overrides(
+        mut self,
+        source: &Path,
+        validation: &mut ValidationBuilder,
+        overrides: Self::Raw,
+    ) -> serde_json::Result<(Option<Self>, bool)> {
+        let mut any_errors = false;
+        let mut any_overrides = false;
+
+        if let Some(component_type) = overrides.component_type {
+            self.component_type = component_type.into();
+            any_overrides = true;
+        }
+
+        if !overrides.files.is_empty() {
+            any_overrides = true;
+            match convert_component_files(source, validation, overrides.files) {
+                Some(files) => {
+                    self.files.extend(files);
+                }
+                None => {
+                    any_errors = true;
+                }
+            }
+        }
+
+        if any_errors {
+            Ok((None, false))
+        } else {
+            Ok((Some(self), any_overrides))
+        }
     }
 }
 
 fn convert_component_file(
+    source: &Path,
     validation: &mut ValidationBuilder,
     file: app_ext_raw::InitialComponentFile,
-    source: &Path,
 ) -> Option<InitialComponentFile> {
     let source_path = DownloadableFile::make(&file.source_path, source)
         .map_err(|err| {
@@ -80,6 +116,21 @@ fn convert_component_file(
                 .unwrap_or(ComponentFilePermissions::ReadOnly),
         },
     })
+}
+
+fn convert_component_files(
+    source: &Path,
+    validation: &mut ValidationBuilder,
+    files: Vec<app_ext_raw::InitialComponentFile>,
+) -> Option<Vec<InitialComponentFile>> {
+    let source_count = files.len();
+
+    let files = files
+        .into_iter()
+        .filter_map(|file| convert_component_file(source, validation, file))
+        .collect::<Vec<_>>();
+
+    (files.len() == source_count).then_some(files)
 }
 
 /// http, https, file, or protocol relative
