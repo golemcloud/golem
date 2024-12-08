@@ -1446,6 +1446,35 @@ mod interpreter_tests {
         }
 
         #[test]
+        async fn test_list_reduce_text() {
+            let mut interpreter = Interpreter::default();
+
+            let rib_expr = r#"
+           let x = ["foo", "bar"];
+
+          reduce z, a in x from "" {
+            let result = if z == "" then a else "${z}, ${a}";
+
+            yield result;
+          }
+
+          "#;
+
+            let expr = Expr::from_text(rib_expr).unwrap();
+
+            let compiled = compiler::compile(&expr, &vec![]).unwrap();
+
+            let result = interpreter
+                .run(compiled.byte_code)
+                .await
+                .unwrap()
+                .get_val()
+                .unwrap();
+
+            assert_eq!(result, TypeAnnotatedValue::Str("foo, bar".to_string()));
+        }
+
+        #[test]
         async fn test_list_reduce_empty() {
             let mut interpreter = Interpreter::default();
 
