@@ -235,10 +235,9 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
         });
 
         let remote_function_name = get_remote_function_name(
-            def,
-            "drop",
             interface.interface_name(),
             interface.resource_name(),
+            "drop",
         );
         if interface.is_resource() {
             interface_impls.push(quote! {
@@ -329,10 +328,9 @@ fn generate_result_wrapper_get_source(
     let output_values = get_output_values_source(def, function, mode)?;
 
     let remote_function_name = get_remote_function_name(
-        def,
-        &function.name,
         interface.interface_name(),
         interface.resource_name(),
+        &function.name,
     );
 
     Ok(quote! {
@@ -390,10 +388,9 @@ fn generate_function_stub_source(
     let output_values = get_output_values_source(def, function, mode)?;
 
     let remote_function_name = get_remote_function_name(
-        def,
-        &function.name,
         owner.interface_name(),
         owner.resource_name(),
+        &function.name,
     );
 
     let rpc = match mode {
@@ -591,30 +588,16 @@ fn get_result_type_source(
 }
 
 fn get_remote_function_name(
-    def: &StubDefinition,
-    function_name: &str,
     interface_name: Option<&str>,
     resource_name: Option<&str>,
+    function_name: &str,
 ) -> String {
     match (interface_name, resource_name) {
         (Some(remote_interface), None) => {
-            format!(
-                "{}:{}/{}.{{{}}}",
-                def.source_package_name.namespace,
-                def.source_package_name.name,
-                remote_interface,
-                function_name
-            )
+            format!("{}.{{{}}}", remote_interface, function_name)
         }
         (Some(remote_interface), Some(resource)) => {
-            format!(
-                "{}:{}/{}.{{{}.{}}}",
-                def.source_package_name.namespace,
-                def.source_package_name.name,
-                remote_interface,
-                resource,
-                function_name
-            )
+            format!("{}.{{{}.{}}}", remote_interface, resource, function_name)
         }
         (None, Some(resource)) => {
             format!("{}.{}", resource, function_name)

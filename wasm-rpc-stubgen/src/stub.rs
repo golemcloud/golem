@@ -255,9 +255,9 @@ impl StubDefinition {
                         let package = interface.package.map(|package_id| {
                             self.resolve.packages.get(package_id).unwrap_or_else(|| {
                                 panic!(
-                            "Missing package for interface, package id: {:?}, interface id: {:?}",
-                            package_id, interface_id,
-                        )
+                                    "Missing package for interface, package id: {:?}, interface id: {:?}",
+                                    package_id, interface_id,
+                                )
                             })
                         });
 
@@ -440,6 +440,14 @@ impl StubDefinition {
         name: String,
         interface: &Interface,
     ) -> Vec<InterfaceStub> {
+        let package = interface
+            .package
+            .map(|package_id| self.resolve.packages.get(package_id).unwrap());
+        let owner_interface = interface.name.as_ref().map(|name| match package {
+            Some(package) => package.name.interface_id(name),
+            None => name.to_string(),
+        });
+
         let functions = Self::functions_to_stubs(interface.functions.values());
 
         let (used_types, resource_interfaces) = self.extract_interface_stubs_from_types(
@@ -458,7 +466,7 @@ impl StubDefinition {
             global: false,
             constructor_params: None,
             static_functions: vec![],
-            owner_interface: None,
+            owner_interface,
         });
         interface_stubs.extend(resource_interfaces);
 
@@ -507,6 +515,14 @@ impl StubDefinition {
         type_name: String,
         type_id: TypeId,
     ) -> InterfaceStub {
+        let package = owner_interface
+            .package
+            .map(|package_id| self.resolve.packages.get(package_id).unwrap());
+        let owner_interface_name = owner_interface.name.as_ref().map(|name| match package {
+            Some(package) => package.name.interface_id(name),
+            None => name.to_string(),
+        });
+
         let functions_by_kind = |kind: FunctionKind| {
             owner_interface
                 .functions
@@ -543,12 +559,7 @@ impl StubDefinition {
             global: false,
             constructor_params,
             static_functions: function_stubs_by_kind(FunctionKind::Static(type_id)),
-            owner_interface: Some(owner_interface.name.clone().unwrap_or_else(|| {
-                panic!(
-                    "failed to get interface name for interface: {:?}",
-                    owner_interface
-                )
-            })),
+            owner_interface: owner_interface_name,
         }
     }
 
