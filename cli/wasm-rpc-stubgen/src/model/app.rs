@@ -445,7 +445,7 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
                                             "Profile {} cannot be used, as the component uses template {} with the following profiles: {}",
                                             profile_name.log_color_highlight(),
                                             template_name.as_str().log_color_highlight(),
-                                            component.profiles.keys().map(|s| s.log_color_highlight()).join(", ")
+                                            template.profiles.keys().map(|s| s.log_color_highlight()).join(", ")
                                         )
                                     );
                                 }
@@ -466,15 +466,30 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
 
                                     match rendered_template_properties {
                                         Ok(rendered_template_properties) => {
-                                            let (properties, any_template_overrides) =
-                                                rendered_template_properties.merge_with_overrides(
-                                                    component.component_properties,
-                                                );
-                                            Some(ResolvedComponentProperties::Properties {
-                                                template_name: Some(template_name),
-                                                any_template_overrides,
-                                                properties,
-                                            })
+                                            match rendered_template_properties.merge_with_overrides(
+                                                &source,
+                                                &mut validation,
+                                                component.component_properties,
+                                            ) {
+                                                Ok((Some(properties), any_template_overrides)) => {
+                                                    Some(ResolvedComponentProperties::Properties {
+                                                        template_name: Some(template_name),
+                                                        any_template_overrides,
+                                                        properties,
+                                                    })
+                                                }
+                                                Ok((None, _any_template_overrides)) => None,
+                                                Err(err) => {
+                                                    validation.add_error(format!(
+                                                        "Failed to override template {}, error: {}",
+                                                        template_name
+                                                            .as_str()
+                                                            .log_color_highlight(),
+                                                        err.to_string().log_color_error_highlight()
+                                                    ));
+                                                    None
+                                                }
+                                            }
                                         }
                                         Err(err) => {
                                             validation.add_error(format!(
@@ -490,7 +505,7 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
                                         HashMap::<ProfileName, bool>::new();
                                     let mut profiles =
                                         HashMap::<ProfileName, ComponentProperties<CPE>>::new();
-                                    let mut any_template_render_error = false;
+                                    let mut any_template_error = false;
 
                                     for (profile_name, template_component_properties) in
                                         &template.profiles
@@ -503,27 +518,49 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
                                             );
                                         match rendered_template_properties {
                                             Ok(rendered_template_properties) => {
-                                                let (properties, any_overrides) = {
+                                                let properties_with_overrides = {
                                                     if let Some(component_properties) =
                                                         component.profiles.remove(profile_name)
                                                     {
                                                         rendered_template_properties
                                                             .merge_with_overrides(
+                                                                &source,
+                                                                &mut validation,
                                                                 component_properties,
                                                             )
                                                     } else {
-                                                        (rendered_template_properties, false)
+                                                        Ok((
+                                                            Some(rendered_template_properties),
+                                                            false,
+                                                        ))
                                                     }
                                                 };
 
-                                                any_template_overrides.insert(
-                                                    profile_name.clone().into(),
-                                                    any_overrides,
-                                                );
-                                                profiles.insert(
-                                                    profile_name.clone().into(),
-                                                    properties,
-                                                );
+                                                match properties_with_overrides {
+                                                    Ok((Some(properties), any_overrides)) => {
+                                                        any_template_overrides.insert(
+                                                            profile_name.clone().into(),
+                                                            any_overrides,
+                                                        );
+                                                        profiles.insert(
+                                                            profile_name.clone().into(),
+                                                            properties,
+                                                        );
+                                                    }
+                                                    Ok((None, _any_template_overrides)) => {
+                                                        any_template_error = true;
+                                                    }
+                                                    Err(err) => {
+                                                        validation.add_error(format!(
+                                                            "Failed to override template {}, error: {}",
+                                                            template_name
+                                                                .as_str()
+                                                                .log_color_highlight(),
+                                                            err.to_string().log_color_error_highlight()
+                                                        ));
+                                                        any_template_error = true;
+                                                    }
+                                                }
                                             }
                                             Err(err) => {
                                                 validation.add_error(format!(
@@ -531,12 +568,12 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
                                                     template_name.as_str().log_color_highlight(),
                                                     err.to_string().log_color_error_highlight()
                                                 ));
-                                                any_template_render_error = true
+                                                any_template_error = true
                                             }
                                         }
                                     }
 
-                                    (!any_template_render_error).then(|| {
+                                    (!any_template_error).then(|| {
                                         ResolvedComponentProperties::Profiles {
                                             template_name: Some(template_name),
                                             any_template_overrides,
@@ -647,8 +684,8 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
                             for custom_command in properties.custom_commands.keys() {
                                 if reserved_commands.contains(custom_command.as_str()) {
                                     validation.add_error(format!("Cannot use {} as custom command name, reserved command names: {}",
-                                    custom_command.log_color_error_highlight(),
-                                        reserved_commands.iter().map(|s| s.log_color_highlight()).join(", ")
+                                                                 custom_command.log_color_error_highlight(),
+                                                                 reserved_commands.iter().map(|s| s.log_color_highlight()).join(", ")
                                     ));
                                 }
                             }
@@ -824,6 +861,10 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
             Some(temp_dir) => Path::new(temp_dir),
             None => Path::new("golem-temp"),
         }
+    }
+
+    pub fn task_result_marker_dir(&self) -> PathBuf {
+        self.temp_dir().join("task_results")
     }
 
     fn component(&self, component_name: &ComponentName) -> &Component<CPE> {
@@ -1035,12 +1076,17 @@ pub struct Component<CPE: ComponentPropertiesExtensions> {
 
 impl<CPE: ComponentPropertiesExtensions> Component<CPE> {
     pub fn source_dir(&self) -> &Path {
-        self.source.parent().unwrap_or_else(|| {
+        let parent = self.source.parent().unwrap_or_else(|| {
             panic!(
                 "Failed to get parent for component, source: {}",
                 self.source.display()
             )
-        })
+        });
+        if parent.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            parent
+        }
     }
 }
 
@@ -1084,7 +1130,12 @@ impl<CPE: ComponentPropertiesExtensions> ComponentProperties<CPE> {
         ComponentProperties::from_raw(template_properties.render(env, ctx)?)
     }
 
-    fn merge_with_overrides(mut self, overrides: app_raw::ComponentProperties) -> (Self, bool) {
+    fn merge_with_overrides(
+        mut self,
+        source: &Path,
+        validation: &mut ValidationBuilder,
+        overrides: app_raw::ComponentProperties,
+    ) -> anyhow::Result<(Option<Self>, bool)> {
         let mut any_overrides = false;
 
         if let Some(source_wit) = overrides.source_wit {
@@ -1120,11 +1171,39 @@ impl<CPE: ComponentPropertiesExtensions> ComponentProperties<CPE> {
                 .insert(custom_command_name, custom_command);
         }
 
-        (self, any_overrides)
+        let any_extension_error = {
+            if !overrides.extensions.is_empty() {
+                let extensions_override =
+                    CPE::raw_from_serde_json(serde_json::Value::Object(overrides.extensions))?;
+                let (extensions, any_extension_overrides) = self
+                    .extensions
+                    .take()
+                    .unwrap_or_default()
+                    .merge_wit_overrides(source, validation, extensions_override)?;
+
+                any_overrides |= any_overrides || any_extension_overrides;
+
+                match extensions {
+                    Some(extensions) => {
+                        self.extensions = Some(extensions);
+                        false
+                    }
+                    None => true,
+                }
+            } else {
+                false
+            }
+        };
+
+        if any_extension_error {
+            Ok((None, false))
+        } else {
+            Ok((Some(self), any_overrides))
+        }
     }
 }
 
-pub trait ComponentPropertiesExtensions: Sized + Debug + Clone {
+pub trait ComponentPropertiesExtensions: Sized + Debug + Clone + Default {
     type Raw: Debug + Clone;
 
     fn raw_from_serde_json(extensions: serde_json::Value) -> serde_json::Result<Self::Raw>;
@@ -1134,9 +1213,16 @@ pub trait ComponentPropertiesExtensions: Sized + Debug + Clone {
         validation: &mut ValidationBuilder,
         raw: Self::Raw,
     ) -> Option<Self>;
+
+    fn merge_wit_overrides(
+        self,
+        source: &Path,
+        validation: &mut ValidationBuilder,
+        overrides: Self::Raw,
+    ) -> serde_json::Result<(Option<Self>, bool)>;
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ComponentPropertiesExtensionsNone {}
 
@@ -1157,9 +1243,18 @@ impl ComponentPropertiesExtensions for ComponentPropertiesExtensionsNone {
     ) -> Option<Self> {
         Some(raw)
     }
+
+    fn merge_wit_overrides(
+        self,
+        _source: &Path,
+        _validation: &mut ValidationBuilder,
+        _overrides: Self::Raw,
+    ) -> serde_json::Result<(Option<Self>, bool)> {
+        Ok((Some(self), false))
+    }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ComponentPropertiesExtensionsAny;
 
 impl ComponentPropertiesExtensions for ComponentPropertiesExtensionsAny {
@@ -1178,5 +1273,14 @@ impl ComponentPropertiesExtensions for ComponentPropertiesExtensionsAny {
         raw: Self::Raw,
     ) -> Option<Self::Raw> {
         Some(raw)
+    }
+
+    fn merge_wit_overrides(
+        self,
+        _source: &Path,
+        _validation: &mut ValidationBuilder,
+        _overrides: Self::Raw,
+    ) -> serde_json::Result<(Option<Self>, bool)> {
+        Ok((Some(self), false))
     }
 }

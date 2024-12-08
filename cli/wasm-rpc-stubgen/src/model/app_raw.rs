@@ -142,6 +142,8 @@ pub struct ExternalCommand {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dir: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mkdirs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sources: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub targets: Vec<String>,
