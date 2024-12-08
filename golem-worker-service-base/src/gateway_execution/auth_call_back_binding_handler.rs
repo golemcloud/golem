@@ -177,7 +177,8 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
             .map_err(AuthorisationError::FailedCodeExchange)?;
 
         let access_token = token_response.access_token().secret().clone();
-        let id_token = token_response.extra_fields().id_token().unwrap();
+        let id_token =
+            token_response.extra_fields().id_token().map(|x| x.to_string());
 
         // access token in session store
         let _ = session_store
@@ -189,20 +190,22 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
             .await
             .map_err(AuthorisationError::SessionError)?;
 
+        if let Some(id_token) = id_token.clone() {
             // id token in session store
             let _ = session_store
                 .insert(
                     SessionId(state.clone()),
                     DataKey("id_token".to_string()),
-                    DataValue(serde_json::Value::String(id_token.to_string())),
+                    DataValue(serde_json::Value::String(id_token)),
                 )
                 .await
                 .map_err(AuthorisationError::SessionError)?;
+        }
 
         Ok(AuthorisationSuccess {
             token_response,
             target_path,
-            id_token: Some(id_token_str),
+            id_token,
             access_token,
             session: state,
         })

@@ -24,7 +24,10 @@ use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::Arc;
 use std::time::Duration;
+use futures_util::future::err;
+use log::info;
 use tokio::sync::Mutex;
+use tracing::{debug, error};
 
 #[async_trait]
 pub trait GatewaySession {
@@ -198,14 +201,20 @@ impl GatewaySession for RedisGatewaySession {
             )
             .await;
 
-        let _: () = self
+        result.map_err(|e| {
+            error!("Failed to insert session data into Redis: {}", e);
+            GatewaySessionError::InternalError(e.to_string())
+        })?;
+
+        self
             .redis
             .with("gateway_session", "insert")
             .expire(Self::redis_key(&session_id), self.expire)
             .await
-            .map_err(|e| GatewaySessionError::InternalError(e.to_string()))?;
-
-        result.map_err(|e| GatewaySessionError::InternalError(e.to_string()))
+            .map_err(|e| {
+                error!("Failed to set expiry on session data in Redis: {}", e);
+                GatewaySessionError::InternalError(e.to_string())
+            })
     }
 
     async fn get(
@@ -218,7 +227,10 @@ impl GatewaySession for RedisGatewaySession {
             .with("gateway_session", "get_data_value")
             .hget(Self::redis_key(session_id), data_key.0.as_str())
             .await
-            .map_err(|e| GatewaySessionError::InternalError(e.to_string()))?;
+            .map_err(|e| {
+                error!("Failed to get session data from Redis: {}", e);
+                GatewaySessionError::InternalError(e.to_string())
+            })?;
 
         if let Some(result) = result {
             let data_value: DataValue = golem_common::serialization::deserialize(&result)
@@ -272,9 +284,14 @@ impl<A: GatewaySession + Sync + Clone + Send + 'static> GatewaySession
         data_key: DataKey,
         data_value: DataValue,
     ) -> Result<(), GatewaySessionError> {
+        info!("Inserting session data to the backend");
+
         self.backend
             .insert(session_id, data_key, data_value)
             .await?;
+
+        info!("Inserted session data into cache");
+
         Ok(())
     }
 
@@ -283,7 +300,8 @@ impl<A: GatewaySession + Sync + Clone + Send + 'static> GatewaySession
         session_id: &SessionId,
         data_key: &DataKey,
     ) -> Result<DataValue, GatewaySessionError> {
-        self.cache
+        info!("Getting session data from cache");
+        let result = self.cache
             .get_or_insert_simple(&(session_id.clone(), data_key.clone()), || {
                 let inner = self.backend.clone();
                 let session_id = session_id.clone();
@@ -291,6 +309,10 @@ impl<A: GatewaySession + Sync + Clone + Send + 'static> GatewaySession
 
                 Box::pin(async move { inner.get(&session_id, &data_key).await })
             })
-            .await
+            .await?;
+
+        info!("Got session data from cache");
+        Ok(result)
+
     }
 }
