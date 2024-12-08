@@ -68,13 +68,8 @@ impl IdentityProvider for DefaultIdentityProvider {
         &self,
         security_scheme: &SecuritySchemeWithProviderMetadata,
     ) -> Result<OpenIdClient, IdentityProviderError> {
-        info!("Creating client");
-        info!("Client ID: {:?}", security_scheme.security_scheme.client_id());
-        info!("Client Secret: {:?}", security_scheme.security_scheme.client_secret().secret().to_string());
-        info!("Redirect URL: {:?}", security_scheme.security_scheme.redirect_url());
+        debug!("Creating identity provider client for {}", security_scheme.security_scheme.scheme_identifier());
 
-        dbg!(security_scheme.security_scheme.client_id());
-        dbg!(security_scheme.security_scheme.client_secret());
         let client = CoreClient::from_provider_metadata(
             security_scheme.provider_metadata.clone(),
             security_scheme.security_scheme.client_id().clone(),

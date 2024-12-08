@@ -146,10 +146,8 @@ impl Services {
                     .await
                     .map_err(|e| e.to_string())?;
 
-                let gateway_session_with_redis = RedisGatewaySession::new(redis, 60 * 60);
-
-                // let with_in_memory_cache =
-                //     GatewaySessionWithInMemoryCache::new(gateway_session_with_redis, 60 * 60, 60);
+                let gateway_session_with_redis =
+                    RedisGatewaySession::new(redis, 60 * 60);
 
                 Arc::new(gateway_session_with_redis)
             }

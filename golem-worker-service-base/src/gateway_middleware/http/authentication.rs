@@ -120,7 +120,6 @@ mod internal {
 
         match nonce_from_session {
             Ok(nonce) => {
-                dbg!(id_token.clone());
                 let id_token = CoreIdToken::from_str(id_token)
                     .map_err(|err| {
                         debug!("Failed to parse id token for session {}: {}", err, session_id.0);
