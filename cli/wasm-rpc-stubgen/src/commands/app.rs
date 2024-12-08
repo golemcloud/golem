@@ -1405,10 +1405,7 @@ fn execute_external_command<CPE: ComponentPropertiesExtensions>(
     if !command.mkdirs.is_empty() {
         let _ident = LogIndent::new();
         for dir in &command.mkdirs {
-            let dir = ctx
-                .application
-                .component_source_dir(component_name)
-                .join(dir);
+            let dir = build_dir.join(dir);
             if !std::fs::exists(&dir)? {
                 log_action(
                     "Creating",
