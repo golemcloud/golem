@@ -24,7 +24,6 @@ use golem_common::SafeDisplay;
 use openidconnect::core::CoreTokenResponse;
 use openidconnect::{AuthorizationCode, OAuth2TokenResponse};
 use std::sync::Arc;
-use tracing::info;
 
 pub type AuthCallBackResult = Result<AuthorisationSuccess, AuthorisationError>;
 
@@ -145,7 +144,7 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
                 state = Some(v.to_string())
             }
         }
-        
+
         let authorisation_code = code.ok_or(AuthorisationError::CodeNotFound)?;
         let state = state.ok_or(AuthorisationError::StateNotFound)?;
 
@@ -187,13 +186,13 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
             .await
             .map_err(AuthorisationError::SessionError)?;
 
-        if let Some(id_token) = id_token.clone() {
+        if let Some(id_token) = &id_token {
             // id token in session store
             let _ = session_store
                 .insert(
                     SessionId(state.clone()),
                     DataKey::id_token(),
-                    DataValue(serde_json::Value::String(id_token)),
+                    DataValue(serde_json::Value::String(id_token.to_string())),
                 )
                 .await
                 .map_err(AuthorisationError::SessionError)?;
