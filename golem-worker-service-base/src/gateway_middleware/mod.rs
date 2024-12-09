@@ -51,7 +51,7 @@ impl HttpMiddlewares {
                 HttpMiddleware::AddCorsHeaders(_) => {}
                 HttpMiddleware::AuthenticateRequest(auth) => {
                     let result = auth
-                        .apply_http_auth(&http_request_details, &session_store, &identity_provider)
+                        .apply_http_auth(http_request_details, &session_store, &identity_provider)
                         .await?;
 
                     match result {

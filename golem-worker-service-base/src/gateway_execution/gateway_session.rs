@@ -17,14 +17,11 @@ use bincode::enc::Encoder;
 use bincode::error::EncodeError;
 use bytes::Bytes;
 use fred::interfaces::RedisResult;
-use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::redis::RedisPool;
 use golem_common::SafeDisplay;
-use log::info;
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::Arc;
-use std::time::Duration;
 use tracing::error;
 
 #[async_trait]
@@ -204,76 +201,5 @@ impl GatewaySession for RedisGatewaySession {
                 data_key: data_key.clone(),
             })
         }
-    }
-}
-
-pub struct GatewaySessionWithInMemoryCache<A> {
-    backend: A,
-    cache: Cache<(SessionId, DataKey), (), DataValue, GatewaySessionError>,
-}
-
-impl<A> GatewaySessionWithInMemoryCache<A> {
-    pub fn new(
-        inner: A,
-        in_memory_expiration_in_seconds: i64,
-        eviction_period_in_seconds: u64,
-    ) -> Self {
-        let cache = Cache::new(
-            Some(1024),
-            FullCacheEvictionMode::None,
-            BackgroundEvictionMode::OlderThan {
-                ttl: Duration::from_secs(in_memory_expiration_in_seconds as u64),
-                period: Duration::from_secs(eviction_period_in_seconds),
-            },
-            "gateway_session_in_memory",
-        );
-
-        Self {
-            backend: inner,
-            cache,
-        }
-    }
-}
-
-#[async_trait]
-impl<A: GatewaySession + Sync + Clone + Send + 'static> GatewaySession
-    for GatewaySessionWithInMemoryCache<A>
-{
-    async fn insert(
-        &self,
-        session_id: SessionId,
-        data_key: DataKey,
-        data_value: DataValue,
-    ) -> Result<(), GatewaySessionError> {
-        info!("Inserting session data to the backend");
-
-        self.backend
-            .insert(session_id, data_key, data_value)
-            .await?;
-
-        info!("Inserted session data into cache");
-
-        Ok(())
-    }
-
-    async fn get(
-        &self,
-        session_id: &SessionId,
-        data_key: &DataKey,
-    ) -> Result<DataValue, GatewaySessionError> {
-        info!("Getting session data from cache");
-        let result = self
-            .cache
-            .get_or_insert_simple(&(session_id.clone(), data_key.clone()), || {
-                let inner = self.backend.clone();
-                let session_id = session_id.clone();
-                let data_key = data_key.clone();
-
-                Box::pin(async move { inner.get(&session_id, &data_key).await })
-            })
-            .await?;
-
-        info!("Got session data from cache");
-        Ok(result)
     }
 }

@@ -1619,8 +1619,7 @@ mod internal {
     use rib::RibResult;
 
     use golem_worker_service_base::gateway_execution::gateway_session::{
-        DataKey, DataValue, GatewaySession, GatewaySessionError, GatewaySessionStore,
-        GatewaySessionWithInMemoryCache, SessionId,
+        DataKey, DataValue, GatewaySession, GatewaySessionError, GatewaySessionStore, SessionId,
     };
     use serde_json::Value;
     use std::collections::HashMap;
@@ -2008,11 +2007,7 @@ mod internal {
     }
 
     pub fn get_session_store() -> GatewaySessionStore {
-        Arc::new(GatewaySessionWithInMemoryCache::new(
-            TestSessionBackEnd::new(),
-            60 * 60,
-            60,
-        ))
+        Arc::new(TestSessionBackEnd::new())
     }
 
     struct NoopTestSessionBackend;
