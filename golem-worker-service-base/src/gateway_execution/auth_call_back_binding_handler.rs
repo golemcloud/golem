@@ -145,10 +145,7 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
                 state = Some(v.to_string())
             }
         }
-
-        info!("state is: {:?}", state.clone());
-        info!("code is: {:?}", code.clone().map(|x| x.secret().clone()));
-
+        
         let authorisation_code = code.ok_or(AuthorisationError::CodeNotFound)?;
         let state = state.ok_or(AuthorisationError::StateNotFound)?;
 
