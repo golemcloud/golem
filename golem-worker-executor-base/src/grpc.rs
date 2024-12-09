@@ -2502,7 +2502,7 @@ impl GrpcInvokeRequest for golem::workerexecutor::v1::InvokeWorkerRequest {
     }
 
     fn idempotency_key(&self) -> Result<Option<IdempotencyKey>, GolemError> {
-        Ok(None)
+        Ok(self.idempotency_key.clone().map(IdempotencyKey::from))
     }
 
     fn name(&self) -> String {
