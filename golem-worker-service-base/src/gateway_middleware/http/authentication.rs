@@ -79,7 +79,7 @@ mod internal {
     use openidconnect::{ClaimsVerificationError, Nonce};
     use std::str::FromStr;
     use std::sync::Arc;
-    use tracing::{debug, info};
+    use tracing::{debug, error, info};
 
     pub(crate) async fn get_session_details_or_redirect<'a>(
         state_from_request: &str,
@@ -146,13 +146,8 @@ mod internal {
         http_authentication_details: &HttpAuthenticationMiddleware,
     ) -> Result<MiddlewareSuccess, MiddlewareError> {
         if let Some(nonce) = nonce.as_string() {
-            info!("{:?}", nonce.clone());
-            info!("{:?}", id_token.clone());
-
             let token_claims_result: Result<&CoreIdTokenClaims, ClaimsVerificationError> =
                 id_token.claims(&identity_token_verifier, &Nonce::new(nonce));
-
-            debug!("{:?}", token_claims_result.clone());
 
             match token_claims_result {
                 Ok(claims) => {
@@ -172,9 +167,13 @@ mod internal {
                     )
                     .await
                 }
-                Err(_) => Err(MiddlewareError::Unauthorized(
-                    AuthorisationError::InvalidToken,
-                )),
+                Err(claims_verification_error) => {
+                    error!("Invalid token for session {}", claims_verification_error);
+
+                    Err(MiddlewareError::Unauthorized(
+                        AuthorisationError::InvalidToken,
+                    ))
+                },
             }
         } else {
             Err(MiddlewareError::Unauthorized(
