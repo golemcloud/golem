@@ -26,8 +26,8 @@ use crate::model::{
 };
 use crate::service::component::ComponentService;
 use async_trait::async_trait;
-use golem_client::model::{AnalysedType, InvokeParameters, InvokeResult, ScanCursor, WorkerFilter};
-use golem_common::model::{StringFilterComparator, TargetWorkerId, WorkerNameFilter};
+use golem_client::model::{AnalysedType, InvokeParameters, InvokeResult, ScanCursor};
+use golem_common::model::TargetWorkerId;
 use golem_common::uri::oss::uri::{ComponentUri, WorkerUri};
 use golem_common::uri::oss::url::{ComponentUrl, WorkerUrl};
 use golem_common::uri::oss::urn::{ComponentUrn, WorkerUrn};
@@ -216,37 +216,17 @@ async fn resolve_worker_component_version<ProjectContext: Send + Sync>(
     components: &(dyn ComponentService<ProjectContext = ProjectContext> + Send + Sync),
     worker_urn: WorkerUrn,
 ) -> Result<Option<Component>, GolemError> {
-    let TargetWorkerId {
-        component_id,
-        worker_name,
-    } = worker_urn.id;
+    if worker_urn.id.worker_name.is_some() {
+        let component_urn = ComponentUrn {
+            id: worker_urn.id.component_id.clone(),
+        };
 
-    if let Some(worker_name) = worker_name {
-        let component_urn = ComponentUrn { id: component_id };
-
-        let worker_meta = client
-            .find_metadata(
-                component_urn.clone(),
-                Some(WorkerFilter::Name(WorkerNameFilter {
-                    comparator: StringFilterComparator::Equal,
-                    value: worker_name,
-                })),
-                None,
-                Some(2),
-                Some(true),
-            )
-            .await?;
-
-        if worker_meta.workers.len() > 1 {
-            Err(GolemError(
-                "Multiple workers with the same name".to_string(),
-            ))
-        } else if let Some(worker) = worker_meta.workers.first() {
-            Ok(Some(
-                components
-                    .get_metadata(&component_urn, worker.component_version)
-                    .await?,
-            ))
+        let worker_metadata = client.get_metadata_opt(worker_urn).await?;
+        if let Some(worker_metadata) = worker_metadata {
+            let component_metadata = components
+                .get_metadata(&component_urn, worker_metadata.component_version)
+                .await?;
+            Ok(Some(component_metadata))
         } else {
             Ok(None)
         }
