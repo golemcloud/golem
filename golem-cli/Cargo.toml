@@ -45,7 +45,7 @@ glob = "0.3.1"
 golem-examples = "1.1.0-rc1"
 golem-wasm-ast = { workspace = true }
 golem-wasm-rpc = { workspace = true }
-golem-wasm-rpc-stubgen = { version = "1.1.0-rc2", optional = true, default-features = false }
+golem-wasm-rpc-stubgen = { version = "1.1.0-rc3", optional = true, default-features = false }
 h2 = "0.3.24"
 http = { workspace = true }
 humansize = { workspace = true }
