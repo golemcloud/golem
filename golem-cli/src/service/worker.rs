@@ -216,40 +216,16 @@ async fn resolve_worker_component_version<ProjectContext: Send + Sync>(
     components: &(dyn ComponentService<ProjectContext = ProjectContext> + Send + Sync),
     worker_urn: WorkerUrn,
 ) -> Result<Option<Component>, GolemError> {
-    let TargetWorkerId {
-        component_id,
-        worker_name,
-    } = worker_urn.id;
+    if worker_urn.id.worker_name.is_some() {
+        let component_urn = ComponentUrn {
+            id: worker_urn.id.component_id.clone(),
+        };
 
-    if let Some(worker_name) = worker_name {
-        let component_urn = ComponentUrn { id: component_id };
-
-        let worker_meta = client
-            .find_metadata(
-                component_urn.clone(),
-                Some(WorkerFilter::Name(WorkerNameFilter {
-                    comparator: StringFilterComparator::Equal,
-                    value: worker_name,
-                })),
-                None,
-                Some(2),
-                Some(true),
-            )
+        let worker_metadata = client.get_metadata(worker_urn).await?;
+        let component_metadata = components
+            .get_metadata(&component_urn, worker_metadata.component_version)
             .await?;
-
-        if worker_meta.workers.len() > 1 {
-            Err(GolemError(
-                "Multiple workers with the same name".to_string(),
-            ))
-        } else if let Some(worker) = worker_meta.workers.first() {
-            Ok(Some(
-                components
-                    .get_metadata(&component_urn, worker.component_version)
-                    .await?,
-            ))
-        } else {
-            Ok(None)
-        }
+        Ok(Some(component_metadata))
     } else {
         Ok(None)
     }
