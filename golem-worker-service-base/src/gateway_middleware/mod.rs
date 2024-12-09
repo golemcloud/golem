@@ -12,9 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::gateway_execution::gateway_http_input_executor::GatewayHttpInput;
-use crate::gateway_security::SecuritySchemeWithProviderMetadata;
+use crate::gateway_binding::HttpRequestDetails;
+use crate::gateway_execution::gateway_session::GatewaySessionStore;
+use crate::gateway_security::{IdentityProvider, SecuritySchemeWithProviderMetadata};
 pub use http::*;
+use std::sync::Arc;
 
 mod http;
 
@@ -36,9 +38,11 @@ impl HttpMiddlewares {
         self.0.push(HttpMiddleware::cors(cors));
     }
 
-    pub async fn process_middleware_in<Namespace>(
+    pub async fn process_middleware_in(
         &self,
-        input: &GatewayHttpInput<Namespace>,
+        http_request_details: &HttpRequestDetails,
+        session_store: &GatewaySessionStore,
+        identity_provider: &Arc<dyn IdentityProvider + Sync + Send>,
     ) -> Result<MiddlewareSuccess, MiddlewareError> {
         let mut final_session_id = None;
 
@@ -47,11 +51,7 @@ impl HttpMiddlewares {
                 HttpMiddleware::AddCorsHeaders(_) => {}
                 HttpMiddleware::AuthenticateRequest(auth) => {
                     let result = auth
-                        .apply_http_auth(
-                            &input.http_request_details,
-                            &input.session_store,
-                            &input.identity_provider,
-                        )
+                        .apply_http_auth(http_request_details, session_store, identity_provider)
                         .await?;
 
                     match result {

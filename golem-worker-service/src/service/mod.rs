@@ -53,7 +53,7 @@ use golem_common::config::DbConfig;
 use golem_common::redis::RedisPool;
 use golem_service_base::db;
 use golem_worker_service_base::gateway_execution::gateway_session::{
-    GatewaySession, GatewaySessionWithInMemoryCache, RedisGatewaySession,
+    GatewaySession, RedisGatewaySession,
 };
 use golem_worker_service_base::gateway_request::http_request::InputHttpRequest;
 use golem_worker_service_base::gateway_security::DefaultIdentityProvider;
@@ -150,10 +150,7 @@ impl Services {
 
                 let gateway_session_with_redis = RedisGatewaySession::new(redis, 60 * 60);
 
-                let with_in_memory_cache =
-                    GatewaySessionWithInMemoryCache::new(gateway_session_with_redis, 60 * 60, 60);
-
-                Arc::new(with_in_memory_cache)
+                Arc::new(gateway_session_with_redis)
             }
         };
 

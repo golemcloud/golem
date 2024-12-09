@@ -17,13 +17,12 @@ use bincode::enc::Encoder;
 use bincode::error::EncodeError;
 use bytes::Bytes;
 use fred::interfaces::RedisResult;
-use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::redis::RedisPool;
 use golem_common::SafeDisplay;
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::Arc;
-use std::time::Duration;
+use tracing::error;
 
 #[async_trait]
 pub trait GatewaySession {
@@ -72,6 +71,14 @@ pub struct DataKey(pub String);
 impl DataKey {
     pub fn nonce() -> DataKey {
         DataKey("nonce".to_string())
+    }
+
+    pub fn access_token() -> DataKey {
+        DataKey("access_token".to_string())
+    }
+
+    pub fn id_token() -> DataKey {
+        DataKey("id_token".to_string())
     }
 
     pub fn claims() -> DataKey {
@@ -153,14 +160,19 @@ impl GatewaySession for RedisGatewaySession {
             )
             .await;
 
-        let _: () = self
-            .redis
+        result.map_err(|e| {
+            error!("Failed to insert session data into Redis: {}", e);
+            GatewaySessionError::InternalError(e.to_string())
+        })?;
+
+        self.redis
             .with("gateway_session", "insert")
             .expire(Self::redis_key(&session_id), self.expire)
             .await
-            .map_err(|e| GatewaySessionError::InternalError(e.to_string()))?;
-
-        result.map_err(|e| GatewaySessionError::InternalError(e.to_string()))
+            .map_err(|e| {
+                error!("Failed to set expiry on session data in Redis: {}", e);
+                GatewaySessionError::InternalError(e.to_string())
+            })
     }
 
     async fn get(
@@ -173,7 +185,10 @@ impl GatewaySession for RedisGatewaySession {
             .with("gateway_session", "get_data_value")
             .hget(Self::redis_key(session_id), data_key.0.as_str())
             .await
-            .map_err(|e| GatewaySessionError::InternalError(e.to_string()))?;
+            .map_err(|e| {
+                error!("Failed to get session data from Redis: {}", e);
+                GatewaySessionError::InternalError(e.to_string())
+            })?;
 
         if let Some(result) = result {
             let data_value: DataValue = golem_common::serialization::deserialize(&result)
@@ -186,66 +201,5 @@ impl GatewaySession for RedisGatewaySession {
                 data_key: data_key.clone(),
             })
         }
-    }
-}
-
-pub struct GatewaySessionWithInMemoryCache<A> {
-    backend: A,
-    cache: Cache<(SessionId, DataKey), (), DataValue, GatewaySessionError>,
-}
-
-impl<A> GatewaySessionWithInMemoryCache<A> {
-    pub fn new(
-        inner: A,
-        in_memory_expiration_in_seconds: i64,
-        eviction_period_in_seconds: u64,
-    ) -> Self {
-        let cache = Cache::new(
-            Some(1024),
-            FullCacheEvictionMode::None,
-            BackgroundEvictionMode::OlderThan {
-                ttl: Duration::from_secs(in_memory_expiration_in_seconds as u64),
-                period: Duration::from_secs(eviction_period_in_seconds),
-            },
-            "gateway_session_in_memory",
-        );
-
-        Self {
-            backend: inner,
-            cache,
-        }
-    }
-}
-
-#[async_trait]
-impl<A: GatewaySession + Sync + Clone + Send + 'static> GatewaySession
-    for GatewaySessionWithInMemoryCache<A>
-{
-    async fn insert(
-        &self,
-        session_id: SessionId,
-        data_key: DataKey,
-        data_value: DataValue,
-    ) -> Result<(), GatewaySessionError> {
-        self.backend
-            .insert(session_id, data_key, data_value)
-            .await?;
-        Ok(())
-    }
-
-    async fn get(
-        &self,
-        session_id: &SessionId,
-        data_key: &DataKey,
-    ) -> Result<DataValue, GatewaySessionError> {
-        self.cache
-            .get_or_insert_simple(&(session_id.clone(), data_key.clone()), || {
-                let inner = self.backend.clone();
-                let session_id = session_id.clone();
-                let data_key = data_key.clone();
-
-                Box::pin(async move { inner.get(&session_id, &data_key).await })
-            })
-            .await
     }
 }

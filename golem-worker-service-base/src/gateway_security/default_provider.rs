@@ -20,6 +20,7 @@ use openidconnect::core::{
     CoreTokenResponse,
 };
 use openidconnect::{AuthenticationFlow, AuthorizationCode, CsrfToken, Nonce, Scope};
+use tracing::debug;
 
 // All providers can reuse DefaultIdentityProvider if provided internally
 pub struct DefaultIdentityProvider;
@@ -61,20 +62,29 @@ impl IdentityProvider for DefaultIdentityProvider {
         Ok(token_response)
     }
 
-    // To be called before getting the authorisation URL
-    fn get_client(
+    async fn get_client(
         &self,
-        security_scheme: &SecuritySchemeWithProviderMetadata,
+        security_scheme: &SecurityScheme,
     ) -> Result<OpenIdClient, IdentityProviderError> {
+        debug!(
+            "Creating identity provider client for {}",
+            security_scheme.scheme_identifier()
+        );
+
+        let provider_metadata = self
+            .get_provider_metadata(&security_scheme.provider_type())
+            .await?;
+
         let client = CoreClient::from_provider_metadata(
-            security_scheme.provider_metadata.clone(),
-            security_scheme.security_scheme.client_id().clone(),
-            Some(security_scheme.security_scheme.client_secret().clone()),
+            provider_metadata,
+            security_scheme.client_id().clone(),
+            Some(security_scheme.client_secret().clone()),
         )
-        .set_redirect_uri(security_scheme.security_scheme.redirect_url());
+        .set_redirect_uri(security_scheme.redirect_url());
 
         Ok(OpenIdClient { client })
     }
+
     fn get_id_token_verifier<'a>(&self, client: &'a OpenIdClient) -> CoreIdTokenVerifier<'a> {
         client.client.id_token_verifier()
     }
@@ -106,6 +116,7 @@ impl IdentityProvider for DefaultIdentityProvider {
     ) -> AuthorizationUrl {
         let state = || state.unwrap_or_else(CsrfToken::new_random);
         let nonce = || nonce.unwrap_or_else(Nonce::new_random);
+
         let builder = client.client.authorize_url(
             AuthenticationFlow::<CoreResponseType>::AuthorizationCode,
             state,
