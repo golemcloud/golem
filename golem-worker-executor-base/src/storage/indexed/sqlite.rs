@@ -115,7 +115,7 @@ impl IndexedStorage for SqliteIndexedStorage {
     ) -> Result<(ScanCursor, Vec<String>), String> {
         let key = pattern.replace("*", "%").replace("?", "_");
         let query =
-            sqlx::query_as("SELECT key FROM index_storage WHERE namespace = ? AND key LIKE ? ORDER BY key LIMIT ? OFFSET ?;")
+            sqlx::query_as("SELECT DISTINCT key FROM index_storage WHERE namespace = ? AND key LIKE ? ORDER BY key LIMIT ? OFFSET ?;")
                 .bind(Self::namespace(namespace))
                 .bind(&key)
                 .bind(sqlx::types::Json(count))

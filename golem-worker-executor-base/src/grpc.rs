@@ -1726,7 +1726,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             "invoke_worker",
             worker_id = proto_target_worker_id_string(&request.worker_id),
             function = request.name,
-            account_id = proto_account_id_string(&request.account_id)
+            account_id = proto_account_id_string(&request.account_id),
+            idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
         );
 
         match self
@@ -2501,7 +2502,7 @@ impl GrpcInvokeRequest for golem::workerexecutor::v1::InvokeWorkerRequest {
     }
 
     fn idempotency_key(&self) -> Result<Option<IdempotencyKey>, GolemError> {
-        Ok(None)
+        Ok(self.idempotency_key.clone().map(IdempotencyKey::from))
     }
 
     fn name(&self) -> String {

@@ -368,6 +368,10 @@ macro_rules! test_indexed_storage {
                     .await
                     .unwrap();
                 let _ = is
+                    .append("svc", "api", "entity", ns.clone(), &key1, 2, value2)
+                    .await
+                    .unwrap();
+                let _ = is
                     .append("svc", "api", "entity", ns.clone(), &key2, 1, value2)
                     .await
                     .unwrap();
