@@ -295,8 +295,10 @@ impl<Namespace: Clone + Send + Sync + 'static>
                 &self.gateway_session_store,
                 &self.identity_provider,
             )
-                .await
-                .map_err(|err| ErrorOrRedirect::Error(GatewayBindingResolverError::MiddlewareError(err)))?;
+            .await
+            .map_err(|err| {
+                ErrorOrRedirect::Error(GatewayBindingResolverError::MiddlewareError(err))
+            })?;
 
             if let MiddlewareSuccess::Redirect(response) = middleware_result {
                 return Err(ErrorOrRedirect::Redirect(response));

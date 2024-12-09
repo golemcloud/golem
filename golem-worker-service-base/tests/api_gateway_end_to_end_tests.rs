@@ -27,7 +27,9 @@ use chrono::{DateTime, Utc};
 use golem_common::model::IdempotencyKey;
 use golem_worker_service_base::gateway_api_deployment::ApiSiteString;
 use golem_worker_service_base::gateway_execution::auth_call_back_binding_handler::DefaultAuthCallBack;
-use golem_worker_service_base::gateway_execution::gateway_binding_resolver::{DefaultGatewayBindingResolver, ErrorOrRedirect, GatewayBindingResolver};
+use golem_worker_service_base::gateway_execution::gateway_binding_resolver::{
+    DefaultGatewayBindingResolver, ErrorOrRedirect, GatewayBindingResolver,
+};
 use golem_worker_service_base::gateway_execution::gateway_http_input_executor::{
     DefaultGatewayInputExecutor, GatewayHttpInput, GatewayHttpInputExecutor,
 };
@@ -84,8 +86,7 @@ async fn execute(
         Arc::new(test_identity_provider.clone()),
     );
 
-    let resolved_gateway_binding =
-        resolver.resolve_gateway_binding(vec![compiled]).await;
+    let resolved_gateway_binding = resolver.resolve_gateway_binding(vec![compiled]).await;
 
     match resolved_gateway_binding {
         Ok(resolved_binding) => {
@@ -102,12 +103,10 @@ async fn execute(
             test_executor.execute_binding(&input).await
         }
 
-        Err(binding_resolver_error) => {
-            match binding_resolver_error {
-                ErrorOrRedirect::Redirect(response) => response,
-                ErrorOrRedirect::Error(error) => error.to_http_response()
-            }
-        }
+        Err(binding_resolver_error) => match binding_resolver_error {
+            ErrorOrRedirect::Redirect(response) => response,
+            ErrorOrRedirect::Error(error) => error.to_http_response(),
+        },
     }
 }
 
@@ -1211,8 +1210,10 @@ async fn test_api_def_for_valid_input_with_idempotency_key_in_header() {
             Arc::new(TestIdentityProvider::default()),
         );
 
-        let resolved_route =
-            resolver.resolve_gateway_binding(vec![compiled_api_spec]).await.unwrap();
+        let resolved_route = resolver
+            .resolve_gateway_binding(vec![compiled_api_spec])
+            .await
+            .unwrap();
 
         assert_eq!(
             resolved_route.get_worker_detail().unwrap().idempotency_key,
@@ -2062,7 +2063,13 @@ pub mod security {
     };
     use http::header::{COOKIE, HOST};
     use http::{HeaderMap, HeaderValue, Method, Uri};
-    use openidconnect::core::{CoreClaimName, CoreClaimType, CoreClient, CoreClientAuthMethod, CoreGrantType, CoreIdToken, CoreIdTokenClaims, CoreIdTokenFields, CoreIdTokenVerifier, CoreJsonWebKey, CoreJweContentEncryptionAlgorithm, CoreJweKeyManagementAlgorithm, CoreJwsSigningAlgorithm, CoreProviderMetadata, CoreResponseMode, CoreResponseType, CoreRsaPrivateSigningKey, CoreSubjectIdentifierType, CoreTokenResponse, CoreTokenType};
+    use openidconnect::core::{
+        CoreClaimName, CoreClaimType, CoreClient, CoreClientAuthMethod, CoreGrantType, CoreIdToken,
+        CoreIdTokenClaims, CoreIdTokenFields, CoreIdTokenVerifier, CoreJsonWebKey,
+        CoreJweContentEncryptionAlgorithm, CoreJweKeyManagementAlgorithm, CoreJwsSigningAlgorithm,
+        CoreProviderMetadata, CoreResponseMode, CoreResponseType, CoreRsaPrivateSigningKey,
+        CoreSubjectIdentifierType, CoreTokenResponse, CoreTokenType,
+    };
     use openidconnect::{
         AccessToken, Audience, AuthUrl, AuthenticationContextClass, AuthorizationCode, ClientId,
         ClientSecret, CsrfToken, EmptyAdditionalClaims, EmptyExtraTokenFields, EndUserEmail,
@@ -2297,7 +2304,7 @@ nUhg4edJVHjqxYyoQT+YSPLlHl6AkLZt9/n1NJ+bft0=
                 security_scheme.client_id().clone(),
                 Some(security_scheme.client_secret().clone()),
             )
-                .set_redirect_uri(security_scheme.redirect_url());
+            .set_redirect_uri(security_scheme.redirect_url());
 
             Ok(OpenIdClient { client })
         }
@@ -2310,8 +2317,7 @@ nUhg4edJVHjqxYyoQT+YSPLlHl6AkLZt9/n1NJ+bft0=
             security_scheme: Arc::new(Mutex::new(HashMap::new())),
         });
 
-        let default =
-            DefaultSecuritySchemeService::new(repo,  Arc::new(identity_provider));
+        let default = DefaultSecuritySchemeService::new(repo, Arc::new(identity_provider));
 
         Arc::new(default)
     }
@@ -2511,7 +2517,8 @@ nUhg4edJVHjqxYyoQT+YSPLlHl6AkLZt9/n1NJ+bft0=
             ],
             all_signing_algs.clone(),
             Default::default(),
-        ).set_jwks({
+        )
+        .set_jwks({
             let public_key = rsa::RsaPublicKey::from_public_key_pem(TEST_PUBLIC_KEY)
                 .expect("Failed to parse public key");
 

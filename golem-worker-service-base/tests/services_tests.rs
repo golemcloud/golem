@@ -54,7 +54,6 @@ use golem_worker_service_base::gateway_execution::gateway_session::{
 use golem_worker_service_base::gateway_security::{
     AuthorizationUrl, DefaultIdentityProvider, GolemIdentityProviderMetadata, IdentityProvider,
     IdentityProviderError, OpenIdClient, Provider, SecurityScheme, SecuritySchemeIdentifier,
-    SecuritySchemeWithProviderMetadata,
 };
 use golem_worker_service_base::repo::security_scheme::{DbSecuritySchemeRepo, SecuritySchemeRepo};
 use golem_worker_service_base::service::gateway::security_scheme::{
