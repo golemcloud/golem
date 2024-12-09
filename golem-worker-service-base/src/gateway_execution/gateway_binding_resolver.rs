@@ -96,7 +96,7 @@ impl GatewayBindingResolverError {
                 .status(StatusCode::NOT_FOUND)
                 .body(Body::from_string("Route not found".to_string())),
             GatewayBindingResolverError::RibInputTypeMismatch(_) => poem::Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .status(StatusCode::BAD_REQUEST)
                 .body(Body::from_string("Rib input type mismatch".to_string())),
             GatewayBindingResolverError::MiddlewareError(error) => error
                 .to_response_from_safe_display(|error| match error {
@@ -288,17 +288,19 @@ impl<Namespace: Clone + Send + Sync + 'static>
             ))
         })?;
 
-        let middleware_result = internal::redirect_or_continue(
-            &mut http_request_details,
-            middlewares.as_ref().unwrap(),
-            &self.gateway_session_store,
-            &self.identity_provider,
-        )
-        .await
-        .map_err(|err| ErrorOrRedirect::Error(GatewayBindingResolverError::MiddlewareError(err)))?;
+        if let Some(middlewares) = middlewares {
+            let middleware_result = internal::redirect_or_continue(
+                &mut http_request_details,
+                middlewares,
+                &self.gateway_session_store,
+                &self.identity_provider,
+            )
+                .await
+                .map_err(|err| ErrorOrRedirect::Error(GatewayBindingResolverError::MiddlewareError(err)))?;
 
-        if let MiddlewareSuccess::Redirect(response) = middleware_result {
-            return Err(ErrorOrRedirect::Redirect(response));
+            if let MiddlewareSuccess::Redirect(response) = middleware_result {
+                return Err(ErrorOrRedirect::Redirect(response));
+            }
         }
 
         match binding {

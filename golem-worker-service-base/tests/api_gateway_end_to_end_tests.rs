@@ -27,7 +27,7 @@ use chrono::{DateTime, Utc};
 use golem_common::model::IdempotencyKey;
 use golem_worker_service_base::gateway_api_deployment::ApiSiteString;
 use golem_worker_service_base::gateway_execution::auth_call_back_binding_handler::DefaultAuthCallBack;
-use golem_worker_service_base::gateway_execution::gateway_binding_resolver::GatewayBindingResolver;
+use golem_worker_service_base::gateway_execution::gateway_binding_resolver::{DefaultGatewayBindingResolver, ErrorOrRedirect, GatewayBindingResolver};
 use golem_worker_service_base::gateway_execution::gateway_http_input_executor::{
     DefaultGatewayInputExecutor, GatewayHttpInput, GatewayHttpInputExecutor,
 };
@@ -78,7 +78,14 @@ async fn execute(
     .expect("Failed to compile API definition");
 
     // Resolve the API definition binding from input
-    let resolved_gateway_binding = api_request.resolve_gateway_binding(vec![compiled]).await;
+    let resolver = DefaultGatewayBindingResolver::new(
+        api_request.clone(),
+        Arc::clone(&session_store),
+        Arc::new(test_identity_provider.clone()),
+    );
+
+    let resolved_gateway_binding =
+        resolver.resolve_gateway_binding(vec![compiled]).await;
 
     match resolved_gateway_binding {
         Ok(resolved_binding) => {
@@ -95,7 +102,12 @@ async fn execute(
             test_executor.execute_binding(&input).await
         }
 
-        Err(binding_resolver_error) => binding_resolver_error.to_http_response(),
+        Err(binding_resolver_error) => {
+            match binding_resolver_error {
+                ErrorOrRedirect::Redirect(response) => response,
+                ErrorOrRedirect::Error(error) => error.to_http_response()
+            }
+        }
     }
 }
 
@@ -1192,10 +1204,15 @@ async fn test_api_def_for_valid_input_with_idempotency_key_in_header() {
         )
         .unwrap();
 
-        let resolved_route = api_request
-            .resolve_gateway_binding(vec![compiled_api_spec])
-            .await
-            .unwrap();
+        // Resolve the API definition binding from input
+        let resolver = DefaultGatewayBindingResolver::new(
+            api_request.clone(),
+            internal::get_session_store(),
+            Arc::new(TestIdentityProvider::default()),
+        );
+
+        let resolved_route =
+            resolver.resolve_gateway_binding(vec![compiled_api_spec]).await.unwrap();
 
         assert_eq!(
             resolved_route.get_worker_detail().unwrap().idempotency_key,
