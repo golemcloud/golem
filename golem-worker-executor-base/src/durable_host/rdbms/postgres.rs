@@ -12,24 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::rdbms::rdbms_utils;
 use crate::durable_host::DurableWorkerCtx;
 use crate::metrics::wasm::record_host_function_call;
 use crate::preview2::wasi::rdbms::postgres::{
     DbColumn, DbColumnType, DbColumnTypePrimitive, DbRow, DbValue, DbValuePrimitive, Error, Host,
-    HostDbConnection, HostDbResultSet, IpAddress,
+    HostDbConnection, HostDbResultSet, Interval, IpAddress, MacAddress, Uuid,
 };
 use crate::services::rdbms::postgres::PostgresType;
 use crate::services::rdbms::RdbmsPoolKey;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
-use sqlx::types::mac_address::MacAddress;
 use sqlx::types::BitVec;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::ops::Deref;
 use std::str::FromStr;
 use std::sync::Arc;
-use uuid::Uuid;
 use wasmtime::component::Resource;
 use wasmtime_wasi::WasiView;
 
@@ -316,26 +313,26 @@ impl TryFrom<DbValuePrimitive> for crate::services::rdbms::postgres::types::DbVa
             DbValuePrimitive::Float8(f) => Ok(Self::Float8(f)),
             DbValuePrimitive::Boolean(b) => Ok(Self::Boolean(b)),
             DbValuePrimitive::Timestamp(v) => {
-                let value = rdbms_utils::timestamp_to_naivedatetime(v)?;
+                let value = postgres_utils::timestamp_to_naivedatetime(v)?;
                 Ok(Self::Timestamp(value))
             }
             DbValuePrimitive::Timestamptz(v) => {
-                let value = rdbms_utils::timestamptz_to_datetime(v)?;
+                let value = postgres_utils::timestamptz_to_datetime(v)?;
                 Ok(Self::Timestamptz(value))
             }
             DbValuePrimitive::Time(v) => {
-                let value = rdbms_utils::time_to_nativetime(v)?;
+                let value = postgres_utils::time_to_nativetime(v)?;
                 Ok(Self::Time(value))
             }
             DbValuePrimitive::Timetz(v) => {
-                let value = rdbms_utils::timetz_to_nativetime_and_offset(v)?;
+                let value = postgres_utils::timetz_to_nativetime_and_offset(v)?;
                 Ok(Self::Timetz(value))
             }
             DbValuePrimitive::Date(v) => {
-                let value = rdbms_utils::date_to_nativedate(v)?;
+                let value = postgres_utils::date_to_nativedate(v)?;
                 Ok(Self::Date(value))
             }
-            DbValuePrimitive::Interval(v) => Ok(Self::Interval(v)),
+            DbValuePrimitive::Interval(v) => Ok(Self::Interval((v.months, v.days, v.microseconds))),
             DbValuePrimitive::Text(s) => Ok(Self::Text(s)),
             DbValuePrimitive::Varchar(s) => Ok(Self::Varchar(s)),
             DbValuePrimitive::Bpchar(s) => Ok(Self::Bpchar(s)),
@@ -350,13 +347,18 @@ impl TryFrom<DbValuePrimitive> for crate::services::rdbms::postgres::types::DbVa
             }
             DbValuePrimitive::Jsonpath(s) => Ok(Self::Jsonpath(s)),
             DbValuePrimitive::Xml(s) => Ok(Self::Xml(s)),
-            DbValuePrimitive::Uuid((h, l)) => Ok(Self::Uuid(Uuid::from_u64_pair(h, l))),
+            DbValuePrimitive::Uuid(v) => Ok(Self::Uuid(uuid::Uuid::from_u64_pair(
+                v.high_bits,
+                v.low_bits,
+            ))),
             DbValuePrimitive::Bit(v) => Ok(Self::Bit(BitVec::from_iter(v))),
             DbValuePrimitive::Varbit(v) => Ok(Self::Varbit(BitVec::from_iter(v))),
             DbValuePrimitive::Oid(v) => Ok(Self::Oid(v)),
             DbValuePrimitive::Inet(v) => Ok(Self::Inet(v.into())),
             DbValuePrimitive::Cidr(v) => Ok(Self::Cidr(v.into())),
-            DbValuePrimitive::Macaddr(v) => Ok(Self::Macaddr(MacAddress::new(v.into()))),
+            DbValuePrimitive::Macaddr(v) => Ok(Self::Macaddr(
+                sqlx::types::mac_address::MacAddress::new(v.octets.into()),
+            )),
             DbValuePrimitive::Int4range(v) => {
                 let v = postgres_utils::int4range_to_bounds(v);
                 Ok(Self::Int4range(v))
@@ -406,23 +408,29 @@ impl From<crate::services::rdbms::postgres::types::DbValuePrimitive> for DbValue
                 Self::Boolean(b)
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Timestamp(v) => {
-                Self::Timestamp(rdbms_utils::naivedatetime_to_timestamp(v))
+                Self::Timestamp(postgres_utils::naivedatetime_to_timestamp(v))
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Timestamptz(v) => {
-                Self::Timestamptz(rdbms_utils::datetime_to_timestamptz(v))
+                Self::Timestamptz(postgres_utils::datetime_to_timestamptz(v))
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Time(v) => {
-                Self::Time(rdbms_utils::naivetime_to_time(v))
+                Self::Time(postgres_utils::naivetime_to_time(v))
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Timetz((v, o)) => {
-                Self::Timetz(rdbms_utils::naivetime_and_offset_to_time(v, o))
+                Self::Timetz(postgres_utils::naivetime_and_offset_to_time(v, o))
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Date(v) => {
-                Self::Date(rdbms_utils::naivedate_to_date(v))
+                Self::Date(postgres_utils::naivedate_to_date(v))
             }
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Interval(v) => {
-                Self::Interval(v)
-            }
+            crate::services::rdbms::postgres::types::DbValuePrimitive::Interval((
+                months,
+                days,
+                microseconds,
+            )) => Self::Interval(Interval {
+                months,
+                days,
+                microseconds,
+            }),
             crate::services::rdbms::postgres::types::DbValuePrimitive::Text(s) => Self::Text(s),
             crate::services::rdbms::postgres::types::DbValuePrimitive::Varchar(s) => {
                 Self::Varchar(s)
@@ -440,7 +448,11 @@ impl From<crate::services::rdbms::postgres::types::DbValuePrimitive> for DbValue
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Xml(s) => Self::Xml(s),
             crate::services::rdbms::postgres::types::DbValuePrimitive::Uuid(uuid) => {
-                Self::Uuid(uuid.as_u64_pair())
+                let (high_bits, low_bits) = uuid.as_u64_pair();
+                Self::Uuid(Uuid {
+                    high_bits,
+                    low_bits,
+                })
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Bit(v) => {
                 Self::Bit(v.iter().collect())
@@ -456,7 +468,7 @@ impl From<crate::services::rdbms::postgres::types::DbValuePrimitive> for DbValue
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Macaddr(v) => {
                 let v = v.bytes();
-                DbValuePrimitive::Macaddr(v.into())
+                DbValuePrimitive::Macaddr(MacAddress { octets: v.into() })
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Tsrange(v) => {
                 Self::Tsrange(postgres_utils::bounds_to_tsrange(v))
@@ -673,14 +685,12 @@ impl From<IpAddress> for IpAddr {
 }
 
 pub(crate) mod postgres_utils {
-    use crate::durable_host::rdbms::rdbms_utils::{
-        date_to_nativedate, datetime_to_timestamptz, naivedate_to_date, naivedatetime_to_timestamp,
-        timestamp_to_naivedatetime, timestamptz_to_datetime,
-    };
     use crate::preview2::wasi::rdbms::postgres::{
-        Daterange, Int4range, Int8range, Numrange, Tsrange, Tstzrange,
+        Date, Datebound, Daterange, Int4bound, Int4range, Int8bound, Int8range, Numbound, Numrange,
+        Time, Timestamp, Timestamptz, Timetz, Tsbound, Tsrange, Tstzbound, Tstzrange,
     };
     use bigdecimal::BigDecimal;
+    use chrono::{Datelike, Offset, Timelike};
     use std::ops::Bound;
     use std::str::FromStr;
 
@@ -695,123 +705,248 @@ pub(crate) mod postgres_utils {
     type BigDecimalBounds = (Bound<BigDecimal>, Bound<BigDecimal>);
 
     pub(crate) fn int4range_to_bounds(value: Int4range) -> I32Bounds {
-        let (lower, upper) = value;
-        let lower = to_bounds(lower);
-        let upper = to_bounds(upper);
-        (lower, upper)
+        fn to_bounds(v: Int4bound) -> Bound<i32> {
+            match v {
+                Int4bound::Included(v) => Bound::Included(v),
+                Int4bound::Excluded(v) => Bound::Excluded(v),
+                Int4bound::Unbounded => Bound::Unbounded,
+            }
+        }
+        (to_bounds(value.start), to_bounds(value.end))
     }
 
     pub(crate) fn int8range_to_bounds(value: Int8range) -> I64Bounds {
-        let (lower, upper) = value;
-        let lower = to_bounds(lower);
-        let upper = to_bounds(upper);
-        (lower, upper)
+        fn to_bounds(v: Int8bound) -> Bound<i64> {
+            match v {
+                Int8bound::Included(v) => Bound::Included(v),
+                Int8bound::Excluded(v) => Bound::Excluded(v),
+                Int8bound::Unbounded => Bound::Unbounded,
+            }
+        }
+        (to_bounds(value.start), to_bounds(value.end))
     }
 
     pub(crate) fn numrange_to_bounds(value: Numrange) -> Result<BigDecimalBounds, String> {
-        let (lower, upper) = value;
-        let lower = to_converted_bounds(lower, |v| {
-            BigDecimal::from_str(&v).map_err(|e| e.to_string())
-        })?;
-        let upper = to_converted_bounds(upper, |v| {
-            BigDecimal::from_str(&v).map_err(|e| e.to_string())
-        })?;
-        Ok((lower, upper))
+        fn to_bounds(v: Numbound) -> Result<Bound<BigDecimal>, String> {
+            match v {
+                Numbound::Included(v) => Ok(Bound::Included(
+                    BigDecimal::from_str(&v).map_err(|e| e.to_string())?,
+                )),
+                Numbound::Excluded(v) => Ok(Bound::Excluded(
+                    BigDecimal::from_str(&v).map_err(|e| e.to_string())?,
+                )),
+                Numbound::Unbounded => Ok(Bound::Unbounded),
+            }
+        }
+        Ok((to_bounds(value.start)?, to_bounds(value.end)?))
     }
 
     pub(crate) fn tsrange_to_bounds(value: Tsrange) -> Result<NaiveDateTimeBounds, String> {
-        let (lower, upper) = value;
-        let lower = to_converted_bounds(lower, timestamp_to_naivedatetime)?;
-        let upper = to_converted_bounds(upper, timestamp_to_naivedatetime)?;
-        Ok((lower, upper))
+        fn to_bounds(v: Tsbound) -> Result<Bound<chrono::NaiveDateTime>, String> {
+            match v {
+                Tsbound::Included(v) => Ok(Bound::Included(timestamp_to_naivedatetime(v)?)),
+                Tsbound::Excluded(v) => Ok(Bound::Excluded(timestamp_to_naivedatetime(v)?)),
+                Tsbound::Unbounded => Ok(Bound::Unbounded),
+            }
+        }
+        Ok((to_bounds(value.start)?, to_bounds(value.end)?))
     }
 
     pub(crate) fn tstzrange_to_bounds(value: Tstzrange) -> Result<DateTimeBounds, String> {
-        let (lower, upper) = value;
-        let lower = to_converted_bounds(lower, timestamptz_to_datetime)?;
-        let upper = to_converted_bounds(upper, timestamptz_to_datetime)?;
-        Ok((lower, upper))
+        fn to_bounds(v: Tstzbound) -> Result<Bound<chrono::DateTime<chrono::Utc>>, String> {
+            match v {
+                Tstzbound::Included(v) => Ok(Bound::Included(timestamptz_to_datetime(v)?)),
+                Tstzbound::Excluded(v) => Ok(Bound::Excluded(timestamptz_to_datetime(v)?)),
+                Tstzbound::Unbounded => Ok(Bound::Unbounded),
+            }
+        }
+        Ok((to_bounds(value.start)?, to_bounds(value.end)?))
     }
 
     pub(crate) fn daterange_to_bounds(value: Daterange) -> Result<NaiveDateBounds, String> {
-        let (lower, upper) = value;
-        let lower = to_converted_bounds(lower, date_to_nativedate)?;
-        let upper = to_converted_bounds(upper, date_to_nativedate)?;
-        Ok((lower, upper))
-    }
-
-    fn to_bounds<T>(value: Option<(T, bool)>) -> Bound<T> {
-        match value {
-            Some((v, true)) => Bound::Included(v),
-            Some((v, false)) => Bound::Excluded(v),
-            None => Bound::Unbounded,
-        }
-    }
-
-    fn to_converted_bounds<I, O>(
-        value: Option<(I, bool)>,
-        f: impl Fn(I) -> Result<O, String>,
-    ) -> Result<Bound<O>, String> {
-        match value {
-            Some((v, true)) => {
-                let v = f(v)?;
-                Ok(Bound::Included(v))
+        fn to_bounds(v: Datebound) -> Result<Bound<chrono::NaiveDate>, String> {
+            match v {
+                Datebound::Included(v) => Ok(Bound::Included(date_to_nativedate(v)?)),
+                Datebound::Excluded(v) => Ok(Bound::Excluded(date_to_nativedate(v)?)),
+                Datebound::Unbounded => Ok(Bound::Unbounded),
             }
-            Some((v, false)) => {
-                let v = f(v)?;
-                Ok(Bound::Excluded(v))
-            }
-            None => Ok(Bound::Unbounded),
         }
+        Ok((to_bounds(value.start)?, to_bounds(value.end)?))
     }
 
     pub(crate) fn bounds_to_int4range(value: I32Bounds) -> Int4range {
-        let (lower, upper) = value;
-        let lower = from_bounds(lower);
-        let upper = from_bounds(upper);
-        (lower, upper)
+        fn to_bounds(v: Bound<i32>) -> Int4bound {
+            match v {
+                Bound::Included(v) => Int4bound::Included(v),
+                Bound::Excluded(v) => Int4bound::Excluded(v),
+                Bound::Unbounded => Int4bound::Unbounded,
+            }
+        }
+        Int4range {
+            start: to_bounds(value.0),
+            end: to_bounds(value.1),
+        }
     }
 
     pub(crate) fn bounds_to_int8range(value: I64Bounds) -> Int8range {
-        let (lower, upper) = value;
-        let lower = from_bounds(lower);
-        let upper = from_bounds(upper);
-        (lower, upper)
+        fn to_bounds(v: Bound<i64>) -> Int8bound {
+            match v {
+                Bound::Included(v) => Int8bound::Included(v),
+                Bound::Excluded(v) => Int8bound::Excluded(v),
+                Bound::Unbounded => Int8bound::Unbounded,
+            }
+        }
+        Int8range {
+            start: to_bounds(value.0),
+            end: to_bounds(value.1),
+        }
     }
 
     pub(crate) fn bounds_to_numrange(value: BigDecimalBounds) -> Numrange {
-        let (lower, upper) = value;
-        let lower = from_bounds(lower.map(|v| v.to_string()));
-        let upper = from_bounds(upper.map(|v| v.to_string()));
-        (lower, upper)
+        fn to_bounds(v: Bound<BigDecimal>) -> Numbound {
+            match v {
+                Bound::Included(v) => Numbound::Included(v.to_string()),
+                Bound::Excluded(v) => Numbound::Excluded(v.to_string()),
+                Bound::Unbounded => Numbound::Unbounded,
+            }
+        }
+        Numrange {
+            start: to_bounds(value.0),
+            end: to_bounds(value.1),
+        }
     }
 
     pub(crate) fn bounds_to_tsrange(value: NaiveDateTimeBounds) -> Tsrange {
-        let (lower, upper) = value;
-        let lower = from_bounds(lower.map(naivedatetime_to_timestamp));
-        let upper = from_bounds(upper.map(naivedatetime_to_timestamp));
-        (lower, upper)
+        fn to_bounds(v: Bound<chrono::NaiveDateTime>) -> Tsbound {
+            match v {
+                Bound::Included(v) => Tsbound::Included(naivedatetime_to_timestamp(v)),
+                Bound::Excluded(v) => Tsbound::Excluded(naivedatetime_to_timestamp(v)),
+                Bound::Unbounded => Tsbound::Unbounded,
+            }
+        }
+        Tsrange {
+            start: to_bounds(value.0),
+            end: to_bounds(value.1),
+        }
     }
 
     pub(crate) fn bounds_to_tstzrange(value: DateTimeBounds) -> Tstzrange {
-        let (lower, upper) = value;
-        let lower = from_bounds(lower.map(datetime_to_timestamptz));
-        let upper = from_bounds(upper.map(datetime_to_timestamptz));
-        (lower, upper)
+        fn to_bounds(v: Bound<chrono::DateTime<chrono::Utc>>) -> Tstzbound {
+            match v {
+                Bound::Included(v) => Tstzbound::Included(datetime_to_timestamptz(v)),
+                Bound::Excluded(v) => Tstzbound::Excluded(datetime_to_timestamptz(v)),
+                Bound::Unbounded => Tstzbound::Unbounded,
+            }
+        }
+        Tstzrange {
+            start: to_bounds(value.0),
+            end: to_bounds(value.1),
+        }
     }
 
     pub(crate) fn bounds_to_daterange(value: NaiveDateBounds) -> Daterange {
-        let (lower, upper) = value;
-        let lower = from_bounds(lower.map(naivedate_to_date));
-        let upper = from_bounds(upper.map(naivedate_to_date));
-        (lower, upper)
+        fn to_bounds(v: Bound<chrono::NaiveDate>) -> Datebound {
+            match v {
+                Bound::Included(v) => Datebound::Included(naivedate_to_date(v)),
+                Bound::Excluded(v) => Datebound::Excluded(naivedate_to_date(v)),
+                Bound::Unbounded => Datebound::Unbounded,
+            }
+        }
+        Daterange {
+            start: to_bounds(value.0),
+            end: to_bounds(value.1),
+        }
     }
 
-    fn from_bounds<T>(value: Bound<T>) -> Option<(T, bool)> {
-        match value {
-            Bound::Included(v) => Some((v, true)),
-            Bound::Excluded(v) => Some((v, false)),
-            Bound::Unbounded => None,
+    pub(crate) fn time_to_nativetime(value: Time) -> Result<chrono::NaiveTime, String> {
+        let time = chrono::NaiveTime::from_hms_nano_opt(
+            value.hour as u32,
+            value.minute as u32,
+            value.second as u32,
+            value.nanosecond,
+        )
+        .ok_or("Time value is not valid")?;
+        Ok(time)
+    }
+
+    pub(crate) fn timetz_to_nativetime_and_offset(
+        value: Timetz,
+    ) -> Result<(chrono::NaiveTime, chrono::FixedOffset), String> {
+        let time = time_to_nativetime(value.time)?;
+        let offset = chrono::offset::FixedOffset::west_opt(value.offset)
+            .ok_or("Offset value is not valid")?;
+        Ok((time, offset))
+    }
+
+    pub(crate) fn date_to_nativedate(value: Date) -> Result<chrono::NaiveDate, String> {
+        let date = chrono::naive::NaiveDate::from_ymd_opt(
+            value.year,
+            value.month as u32,
+            value.day as u32,
+        )
+        .ok_or("Date value is not valid")?;
+        Ok(date)
+    }
+
+    pub(crate) fn timestamp_to_naivedatetime(
+        value: Timestamp,
+    ) -> Result<chrono::NaiveDateTime, String> {
+        let date = date_to_nativedate(value.date)?;
+        let time = time_to_nativetime(value.time)?;
+        Ok(chrono::naive::NaiveDateTime::new(date, time))
+    }
+
+    pub(crate) fn timestamptz_to_datetime(
+        value: Timestamptz,
+    ) -> Result<chrono::DateTime<chrono::Utc>, String> {
+        let datetime = timestamp_to_naivedatetime(value.timestamp)?;
+        let offset = chrono::offset::FixedOffset::west_opt(value.offset)
+            .ok_or("Offset value is not valid")?;
+        let datetime = datetime
+            .checked_add_offset(offset)
+            .ok_or("Offset value is not valid")?;
+        Ok(datetime.and_utc())
+    }
+
+    pub(crate) fn naivetime_and_offset_to_time(
+        v: chrono::NaiveTime,
+        o: chrono::FixedOffset,
+    ) -> Timetz {
+        let time = naivetime_to_time(v);
+        let offset = o.local_minus_utc();
+        Timetz { time, offset }
+    }
+
+    pub(crate) fn naivetime_to_time(v: chrono::NaiveTime) -> Time {
+        let hour = v.hour() as u8;
+        let minute = v.minute() as u8;
+        let second = v.second() as u8;
+        let nanosecond = v.nanosecond();
+        Time {
+            hour,
+            minute,
+            second,
+            nanosecond,
         }
+    }
+
+    pub(crate) fn naivedate_to_date(v: chrono::NaiveDate) -> Date {
+        let year = v.year();
+        let month = v.month() as u8;
+        let day = v.day() as u8;
+        Date { year, month, day }
+    }
+
+    pub(crate) fn naivedatetime_to_timestamp(v: chrono::NaiveDateTime) -> Timestamp {
+        let date = naivedate_to_date(v.date());
+        let time = naivetime_to_time(v.time());
+        Timestamp { date, time }
+    }
+
+    pub(crate) fn datetime_to_timestamptz(v: chrono::DateTime<chrono::Utc>) -> Timestamptz {
+        let timestamp = naivedatetime_to_timestamp(v.naive_utc());
+
+        let offset = v.offset().fix().local_minus_utc();
+        Timestamptz { timestamp, offset }
     }
 }

@@ -10,33 +10,118 @@ interface postgres {
     other(string)
   }
 
-  type uuid = tuple<u64, u64>;
-
-  type ipv4-address = tuple<u8, u8, u8, u8>;
-  type ipv6-address = tuple<u16, u16, u16, u16, u16, u16, u16, u16>;
-  variant ip-address {
-    ipv4(ipv4-address),
-    ipv6(ipv6-address),
+  record uuid {
+    high-bits: u64,
+    low-bits: u64
   }
 
-  type mac-address = tuple<u8, u8, u8, u8, u8, u8>;
+  variant ip-address {
+    ipv4(tuple<u8, u8, u8, u8>),
+    ipv6(tuple<u16, u16, u16, u16, u16, u16, u16, u16>),
+  }
 
-  type date = tuple<s32, u8, u8>; // year, month, day
-  type time = tuple<u8, u8, u8, u32>; // hour, minute, second, nanosecond
-  type timetz = tuple<u8, u8, u8, u32, s32>; // hour, minute, second, nanosecond, timezone offset in seconds
-  type timestamp = tuple<s32, u8, u8, u8, u8, u8, u32>; // year, month, day, hour, minute, second, nanosecond
-  type timestamptz = tuple<s32, u8, u8, u8, u8, u8, u32, s32>; // year, month, day, hour, minute, second, nanosecond, timezone offset in seconds
+  record mac-address {
+    octets: tuple<u8, u8, u8, u8, u8, u8>
+  }
 
-  type interval = tuple<s32, s32, s64>; // months, days, microseconds
+  record date {
+    year: s32,
+    month: u8,
+    day: u8
+  }
 
-  type int4range = tuple<option<tuple<s32, bool>>, option<tuple<s32, bool>>>;
-  type int8range = tuple<option<tuple<s64, bool>>, option<tuple<s64, bool>>>;
-  type numrange = tuple<option<tuple<string, bool>>, option<tuple<string, bool>>>;
-  type tsrange = tuple<option<tuple<timestamp, bool>>, option<tuple<timestamp, bool>>>;
-  type tstzrange = tuple<option<tuple<timestamptz, bool>>, option<tuple<timestamptz, bool>>>;
-  type daterange = tuple<option<tuple<date, bool>>, option<tuple<date, bool>>>;
+  record time {
+    hour: u8,
+    minute: u8,
+    second: u8,
+    nanosecond: u32
+  }
 
-  type bit-vec = list<bool>;
+  record timestamp {
+    date: date,
+    time: time
+  }
+
+  record timestamptz {
+    timestamp: timestamp,
+    offset: s32
+  }
+
+  record timetz {
+    time: time,
+    offset: s32
+  }
+
+  record interval {
+    months: s32,
+    days: s32,
+    microseconds: s64
+  }
+
+  variant int4bound {
+    included(s32),
+    excluded(s32),
+    unbounded
+  }
+
+  variant int8bound {
+    included(s64),
+    excluded(s64),
+    unbounded
+  }
+
+  variant numbound {
+    included(string),
+    excluded(string),
+    unbounded
+  }
+
+  variant tsbound {
+    included(timestamp),
+    excluded(timestamp),
+    unbounded
+  }
+  variant tstzbound {
+    included(timestamptz),
+    excluded(timestamptz),
+    unbounded
+  }
+
+  variant datebound {
+    included(date),
+    excluded(date),
+    unbounded
+  }
+
+  record int4range {
+   start: int4bound,
+   end: int4bound
+  }
+
+  record int8range {
+   start: int8bound,
+   end: int8bound
+  }
+
+  record numrange {
+   start: numbound,
+   end: numbound
+  }
+
+  record tsrange {
+   start: tsbound,
+   end: tsbound
+  }
+
+  record tstzrange {
+   start: tstzbound,
+   end: tstzbound
+  }
+
+  record daterange {
+   start: datebound,
+   end: datebound
+  }
 
   variant db-column-type-primitive {
     character,
@@ -120,8 +205,8 @@ interface postgres {
     inet(ip-address),
     cidr(ip-address),
     macaddr(mac-address),
-    bit(bit-vec),
-    varbit(bit-vec),
+    bit(list<bool>),
+    varbit(list<bool>),
     int4range(int4range),
     int8range(int8range),
     numrange(numrange),
