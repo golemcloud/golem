@@ -422,9 +422,7 @@ impl ResolvedWitApplication {
                 {
                     validation.push_context(
                         "source",
-                        app.component_source_dir(component_name)
-                            .to_string_lossy()
-                            .to_string(),
+                        app.component_source(component_name).display().to_string(),
                     );
                 }
 

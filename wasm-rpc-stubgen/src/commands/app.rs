@@ -390,7 +390,7 @@ async fn link_rpc<CPE: ComponentPropertiesExtensions>(
     let _indent = LogIndent::new();
 
     for component_name in ctx.application.component_names() {
-        let source = ctx.application.component_source_dir(component_name);
+        let source = ctx.application.component_source(component_name);
         let dependencies = ctx
             .application
             .component_wasm_rpc_dependencies(component_name);
