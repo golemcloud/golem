@@ -873,6 +873,10 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
             .unwrap_or_else(|| panic!("Component not found: {}", component_name))
     }
 
+    pub fn component_source(&self, component_name: &ComponentName) -> &Path {
+        &self.component(component_name).source
+    }
+
     pub fn component_source_dir(&self, component_name: &ComponentName) -> &Path {
         self.component(component_name).source_dir()
     }
