@@ -3,11 +3,7 @@ use crate::gateway_execution::auth_call_back_binding_handler::AuthorisationError
 use crate::gateway_execution::gateway_session::GatewaySessionStore;
 use crate::gateway_middleware::{MiddlewareError, MiddlewareSuccess};
 use crate::gateway_security::{IdentityProvider, SecuritySchemeWithProviderMetadata};
-use golem_common::tracing::directive::default::info;
-use golem_common::SafeDisplay;
-use log::info;
-use openidconnect::core::{CoreClient, CoreProviderMetadata};
-use openidconnect::{IssuerUrl, Scope};
+use openidconnect::Scope;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -80,7 +76,7 @@ mod internal {
     use openidconnect::{ClaimsVerificationError, Nonce};
     use std::str::FromStr;
     use std::sync::Arc;
-    use tracing::{debug, error, info};
+    use tracing::{debug, error};
 
     pub(crate) async fn get_session_details_or_redirect<'a>(
         state_from_request: &str,

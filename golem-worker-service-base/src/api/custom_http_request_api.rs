@@ -25,7 +25,9 @@ use poem::http::StatusCode;
 use poem::{Body, Endpoint, Request, Response};
 use tracing::error;
 
-use crate::gateway_binding::{DefaultGatewayBindingResolver, ErrorOrRedirect, GatewayBindingResolver, GatewayRequestDetails};
+use crate::gateway_binding::{
+    DefaultGatewayBindingResolver, ErrorOrRedirect, GatewayBindingResolver, GatewayRequestDetails,
+};
 use crate::gateway_execution::auth_call_back_binding_handler::DefaultAuthCallBack;
 use crate::gateway_execution::gateway_http_input_executor::{
     DefaultGatewayInputExecutor, GatewayHttpInput, GatewayHttpInputExecutor,
@@ -84,8 +86,7 @@ impl<Namespace: Clone + Send + Sync + 'static> CustomHttpRequestApi<Namespace> {
     }
 
     pub async fn execute(&self, request: Request) -> Response {
-        let input_http_request_result =
-            InputHttpRequest::from_request(request).await;
+        let input_http_request_result = InputHttpRequest::from_request(request).await;
 
         match input_http_request_result {
             Ok(input_http_request) => {

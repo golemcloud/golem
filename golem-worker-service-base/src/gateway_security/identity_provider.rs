@@ -13,9 +13,7 @@
 // limitations under the License.
 
 use crate::gateway_security::open_id_client::OpenIdClient;
-use crate::gateway_security::{
-    GolemIdentityProviderMetadata, Provider, SecurityScheme, SecuritySchemeWithProviderMetadata,
-};
+use crate::gateway_security::{GolemIdentityProviderMetadata, Provider, SecurityScheme};
 use async_trait::async_trait;
 use golem_common::SafeDisplay;
 use openidconnect::core::{CoreIdTokenClaims, CoreIdTokenVerifier, CoreTokenResponse};

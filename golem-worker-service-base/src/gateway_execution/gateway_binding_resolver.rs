@@ -13,10 +13,14 @@
 // limitations under the License.
 
 use crate::gateway_api_definition::http::{CompiledHttpApiDefinition, VarInfo};
-use crate::gateway_binding::{GatewayBindingCompiled, HttpRequestDetails, RibInputTypeMismatch, StaticBinding};
+use crate::gateway_binding::{
+    GatewayBindingCompiled, HttpRequestDetails, RibInputTypeMismatch, StaticBinding,
+};
 use crate::gateway_binding::{GatewayRequestDetails, ResponseMappingCompiled};
+use crate::gateway_execution::gateway_session::GatewaySessionStore;
 use crate::gateway_execution::router::RouterPattern;
 use crate::gateway_execution::to_response_failure::ToHttpResponseFromSafeDisplay;
+use crate::gateway_middleware::{MiddlewareError, MiddlewareSuccess};
 use crate::gateway_request::http_request::{router, InputHttpRequest};
 use crate::gateway_security::{IdentityProvider, OpenIdClient};
 use async_trait::async_trait;
@@ -25,13 +29,11 @@ use golem_common::SafeDisplay;
 use golem_service_base::model::VersionedComponentId;
 use http::StatusCode;
 use openidconnect::{CsrfToken, Nonce};
+use poem::Body;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
-use poem::Body;
-use crate::gateway_execution::gateway_session::GatewaySessionStore;
-use crate::gateway_middleware::{MiddlewareError, MiddlewareSuccess};
 
 // Every type of request (example: InputHttpRequest (which corresponds to a Route)) can have an instance of this resolver,
 // which will resolve the gateway binding equired for that request.
@@ -68,7 +70,7 @@ pub enum GatewayBindingResolverError {
     RibInputTypeMismatch(RibInputTypeMismatch),
     Internal(String),
     RouteNotFound,
-    MiddlewareError(MiddlewareError)
+    MiddlewareError(MiddlewareError),
 }
 
 impl SafeDisplay for GatewayBindingResolverError {
@@ -79,37 +81,28 @@ impl SafeDisplay for GatewayBindingResolverError {
             }
             GatewayBindingResolverError::Internal(err) => format!("Internal: {}", err),
             GatewayBindingResolverError::RouteNotFound => "RouteNotFound".to_string(),
-            GatewayBindingResolverError::MiddlewareError(err) => err.to_safe_string()
+            GatewayBindingResolverError::MiddlewareError(err) => err.to_safe_string(),
         }
     }
 }
 
-
 impl GatewayBindingResolverError {
-
     pub fn to_http_response(self) -> poem::Response {
         match self {
-            GatewayBindingResolverError::Internal(str) => {
-                poem::Response::builder()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .body(Body::from_string(str))
-            }
-            GatewayBindingResolverError::RouteNotFound => {
-                poem::Response::builder()
-                    .status(StatusCode::NOT_FOUND)
-                    .body(Body::from_string("Route not found".to_string()))
-            }
-            GatewayBindingResolverError::RibInputTypeMismatch(_) => {
-                poem::Response::builder()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .body(Body::from_string("Rib input type mismatch".to_string()))
-            },
-            GatewayBindingResolverError::MiddlewareError(error) => {
-                error.to_response_from_safe_display(|error| match error {
+            GatewayBindingResolverError::Internal(str) => poem::Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from_string(str)),
+            GatewayBindingResolverError::RouteNotFound => poem::Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(Body::from_string("Route not found".to_string())),
+            GatewayBindingResolverError::RibInputTypeMismatch(_) => poem::Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from_string("Rib input type mismatch".to_string())),
+            GatewayBindingResolverError::MiddlewareError(error) => error
+                .to_response_from_safe_display(|error| match error {
                     MiddlewareError::InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
                     MiddlewareError::Unauthorized(_) => StatusCode::UNAUTHORIZED,
-                })
-            }
+                }),
         }
     }
 }
@@ -208,22 +201,27 @@ impl<Namespace> ResolvedGatewayBinding<Namespace> {
 pub struct DefaultGatewayBindingResolver {
     input: InputHttpRequest,
     gateway_session_store: GatewaySessionStore,
-    identity_provider: Arc<dyn IdentityProvider + Sync + Send>
+    identity_provider: Arc<dyn IdentityProvider + Sync + Send>,
 }
 
 impl DefaultGatewayBindingResolver {
-    pub fn new(input: InputHttpRequest, gateway_session_store: GatewaySessionStore, identity_provider: Arc<dyn IdentityProvider + Sync + Send>) -> Self {
+    pub fn new(
+        input: InputHttpRequest,
+        gateway_session_store: GatewaySessionStore,
+        identity_provider: Arc<dyn IdentityProvider + Sync + Send>,
+    ) -> Self {
         DefaultGatewayBindingResolver {
             input,
             gateway_session_store,
-            identity_provider
+            identity_provider,
         }
     }
 }
 
 #[async_trait]
 impl<Namespace: Clone + Send + Sync + 'static>
-    GatewayBindingResolver<Namespace, CompiledHttpApiDefinition<Namespace>> for DefaultGatewayBindingResolver
+    GatewayBindingResolver<Namespace, CompiledHttpApiDefinition<Namespace>>
+    for DefaultGatewayBindingResolver
 {
     async fn resolve_gateway_binding(
         &self,
@@ -237,8 +235,13 @@ impl<Namespace: Clone + Send + Sync + 'static>
         let api_request = self;
         let router = router::build(compiled_routes);
 
-        let path: Vec<&str> = RouterPattern::split(&api_request.input.api_input_path.base_path).collect();
-        let request_query_variables = self.input.api_input_path.query_components().unwrap_or_default();
+        let path: Vec<&str> =
+            RouterPattern::split(&api_request.input.api_input_path.base_path).collect();
+        let request_query_variables = self
+            .input
+            .api_input_path
+            .query_components()
+            .unwrap_or_default();
         let request_body = &self.input.req_body;
         let headers = &self.input.headers;
 
@@ -277,7 +280,8 @@ impl<Namespace: Clone + Send + Sync + 'static>
             request_body,
             headers.clone(),
             middlewares,
-        ).map_err(|err| {
+        )
+        .map_err(|err| {
             ErrorOrRedirect::internal(format!(
                 "Failed to fetch input request details {}",
                 err.join(", ")
@@ -288,78 +292,76 @@ impl<Namespace: Clone + Send + Sync + 'static>
             &mut http_request_details,
             middlewares.as_ref().unwrap(),
             &self.gateway_session_store,
-            &self.identity_provider
-        ).await.map_err(|err| {
-            ErrorOrRedirect::Error(GatewayBindingResolverError::MiddlewareError(err))
-        })?;
+            &self.identity_provider,
+        )
+        .await
+        .map_err(|err| ErrorOrRedirect::Error(GatewayBindingResolverError::MiddlewareError(err)))?;
 
         if let MiddlewareSuccess::Redirect(response) = middleware_result {
             return Err(ErrorOrRedirect::Redirect(response));
         }
 
         match binding {
-            GatewayBindingCompiled::FileServer(worker_binding) => {
-                internal::get_resolved_binding(
-                    worker_binding,
-                    &http_request_details,
-                    namespace,
-                    headers,
-                )
-                    .await
-                    .map(|resolved_binding| ResolvedGatewayBinding {
-                        request_details: GatewayRequestDetails::Http(http_request_details),
-                        resolved_binding: ResolvedBinding::FileServer(resolved_binding),
-                    })
-            },
-            GatewayBindingCompiled::Worker(worker_binding) => {
-                internal::get_resolved_binding(
-                    worker_binding,
-                    &http_request_details,
-                    namespace,
-                    headers,
-                )
-                    .await
-                    .map(|resolved_binding| ResolvedGatewayBinding {
-                        request_details: GatewayRequestDetails::Http(http_request_details),
-                        resolved_binding: ResolvedBinding::Worker(resolved_binding),
-                    })
-            },
-            GatewayBindingCompiled::Static(static_binding) => Ok(
-                ResolvedGatewayBinding::from_static_binding(&GatewayRequestDetails::Http(http_request_details), static_binding),
-            ),
+            GatewayBindingCompiled::FileServer(worker_binding) => internal::get_resolved_binding(
+                worker_binding,
+                &http_request_details,
+                namespace,
+                headers,
+            )
+            .await
+            .map(|resolved_binding| ResolvedGatewayBinding {
+                request_details: GatewayRequestDetails::Http(http_request_details),
+                resolved_binding: ResolvedBinding::FileServer(resolved_binding),
+            }),
+            GatewayBindingCompiled::Worker(worker_binding) => internal::get_resolved_binding(
+                worker_binding,
+                &http_request_details,
+                namespace,
+                headers,
+            )
+            .await
+            .map(|resolved_binding| ResolvedGatewayBinding {
+                request_details: GatewayRequestDetails::Http(http_request_details),
+                resolved_binding: ResolvedBinding::Worker(resolved_binding),
+            }),
+            GatewayBindingCompiled::Static(static_binding) => {
+                Ok(ResolvedGatewayBinding::from_static_binding(
+                    &GatewayRequestDetails::Http(http_request_details),
+                    static_binding,
+                ))
+            }
         }
     }
 }
 
 mod internal {
-    use std::sync::Arc;
-    use crate::gateway_binding::{ErrorOrRedirect, HttpRequestDetails, ResolvedWorkerBinding, RibInputValueResolver, WorkerBindingCompiled, WorkerDetail};
-    use golem_common::model::IdempotencyKey;
-    use http::{HeaderMap};
-    use crate::gateway_execution::gateway_session::{GatewaySessionStore, SessionId};
+    use crate::gateway_binding::{
+        ErrorOrRedirect, HttpRequestDetails, ResolvedWorkerBinding, RibInputValueResolver,
+        WorkerBindingCompiled, WorkerDetail,
+    };
+    use crate::gateway_execution::gateway_session::GatewaySessionStore;
     use crate::gateway_middleware::{HttpMiddlewares, MiddlewareError, MiddlewareSuccess};
-    use crate::gateway_security::{IdentityProvider};
-
-
+    use crate::gateway_security::IdentityProvider;
+    use golem_common::model::IdempotencyKey;
+    use http::HeaderMap;
+    use std::sync::Arc;
 
     pub async fn redirect_or_continue(
         input: &mut HttpRequestDetails,
         middlewares: &HttpMiddlewares,
         session_store: &GatewaySessionStore,
-        identity_provider: &Arc<dyn IdentityProvider + Sync + Send>
-    ) -> Result<MiddlewareSuccess, MiddlewareError>
-    {
-        let input_middleware_result =
-            middlewares.process_middleware_in(input, session_store, identity_provider).await;
+        identity_provider: &Arc<dyn IdentityProvider + Sync + Send>,
+    ) -> Result<MiddlewareSuccess, MiddlewareError> {
+        let input_middleware_result = middlewares
+            .process_middleware_in(input, session_store, identity_provider)
+            .await;
 
         match input_middleware_result {
             Ok(incoming_middleware_result) => match incoming_middleware_result {
                 MiddlewareSuccess::Redirect(response) => Ok(MiddlewareSuccess::Redirect(response)),
-                MiddlewareSuccess::PassThrough { session_id } =>  {
+                MiddlewareSuccess::PassThrough { session_id } => {
                     if let Some(session_id) = &session_id {
-                        let result = input
-                            .inject_auth_details(session_id, session_store)
-                            .await;
+                        let result = input.inject_auth_details(session_id, session_store).await;
 
                         if let Err(err_response) = result {
                             return Err(MiddlewareError::InternalError(err_response));

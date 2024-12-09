@@ -12,12 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-use crate::gateway_execution::gateway_http_input_executor::GatewayHttpInput;
-use crate::gateway_security::{IdentityProvider, SecuritySchemeWithProviderMetadata};
-pub use http::*;
 use crate::gateway_binding::HttpRequestDetails;
 use crate::gateway_execution::gateway_session::GatewaySessionStore;
+use crate::gateway_security::{IdentityProvider, SecuritySchemeWithProviderMetadata};
+pub use http::*;
+use std::sync::Arc;
 
 mod http;
 
@@ -52,11 +51,7 @@ impl HttpMiddlewares {
                 HttpMiddleware::AddCorsHeaders(_) => {}
                 HttpMiddleware::AuthenticateRequest(auth) => {
                     let result = auth
-                        .apply_http_auth(
-                            &http_request_details,
-                            &session_store,
-                            &identity_provider,
-                        )
+                        .apply_http_auth(&http_request_details, &session_store, &identity_provider)
                         .await?;
 
                     match result {

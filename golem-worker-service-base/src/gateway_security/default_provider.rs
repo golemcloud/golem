@@ -20,8 +20,7 @@ use openidconnect::core::{
     CoreTokenResponse,
 };
 use openidconnect::{AuthenticationFlow, AuthorizationCode, CsrfToken, Nonce, Scope};
-use poem_openapi::types::ToJSON;
-use tracing::{debug, info};
+use tracing::debug;
 
 // All providers can reuse DefaultIdentityProvider if provided internally
 pub struct DefaultIdentityProvider;

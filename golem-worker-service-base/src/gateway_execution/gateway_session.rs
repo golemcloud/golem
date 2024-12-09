@@ -17,7 +17,6 @@ use bincode::enc::Encoder;
 use bincode::error::EncodeError;
 use bytes::Bytes;
 use fred::interfaces::RedisResult;
-use futures_util::future::err;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::redis::RedisPool;
 use golem_common::SafeDisplay;
@@ -26,8 +25,7 @@ use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Mutex;
-use tracing::{debug, error};
+use tracing::error;
 
 #[async_trait]
 pub trait GatewaySession {

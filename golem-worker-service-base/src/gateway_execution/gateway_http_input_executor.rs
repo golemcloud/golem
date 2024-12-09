@@ -22,12 +22,9 @@ use crate::gateway_execution::auth_call_back_binding_handler::{
 use crate::gateway_execution::file_server_binding_handler::{
     FileServerBindingHandler, FileServerBindingResult,
 };
-use crate::gateway_execution::gateway_session::{GatewaySession, GatewaySessionStore, SessionId};
+use crate::gateway_execution::gateway_session::{GatewaySession, GatewaySessionStore};
 use crate::gateway_execution::to_response::ToHttpResponse;
 use crate::gateway_execution::to_response_failure::ToHttpResponseFromSafeDisplay;
-use crate::gateway_middleware::{
-    HttpCors as CorsPreflight, HttpMiddlewares, MiddlewareError, MiddlewareSuccess,
-};
 use crate::gateway_rib_interpreter::{EvaluationError, WorkerServiceRibInterpreter};
 use crate::gateway_security::{IdentityProvider, SecuritySchemeWithProviderMetadata};
 use async_trait::async_trait;
@@ -92,7 +89,6 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
     where
         RibInputTypeMismatch: ToHttpResponseFromSafeDisplay,
     {
-
         let rib_input_from_request_details = request_details
             .resolve_rib_input_value(&resolved_worker_binding.compiled_response_mapping.rib_input)
             .map_err(|err| err.to_response_from_safe_display(|_| StatusCode::BAD_REQUEST))?;
@@ -137,8 +133,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         session_store: &GatewaySessionStore,
         request_details: &mut HttpRequestDetails,
         resolved_binding: &ResolvedWorkerBinding<Namespace>,
-    ) -> poem::Response
-    {
+    ) -> poem::Response {
         match self
             .resolve_rib_inputs(request_details, resolved_binding)
             .await
@@ -250,7 +245,7 @@ impl<Namespace: Send + Sync + Clone> GatewayHttpInputExecutor<Namespace>
                     &auth_call_back.security_scheme_with_metadata,
                     input,
                 )
-                    .await
+                .await
             }
 
             ResolvedBinding::Worker(resolved_worker_binding) => {
@@ -266,9 +261,9 @@ impl<Namespace: Send + Sync + Clone> GatewayHttpInputExecutor<Namespace>
                     let result = middleware.process_middleware_out(&mut response).await;
                     match result {
                         Ok(_) => response,
-                        Err(err) => err.to_response_from_safe_display(|_| {
-                            StatusCode::INTERNAL_SERVER_ERROR
-                        }),
+                        Err(err) => {
+                            err.to_response_from_safe_display(|_| StatusCode::INTERNAL_SERVER_ERROR)
+                        }
                     }
                 } else {
                     response
@@ -281,7 +276,7 @@ impl<Namespace: Send + Sync + Clone> GatewayHttpInputExecutor<Namespace>
                     &mut request_details,
                     resolved_file_server_binding,
                 )
-                    .await
+                .await
             }
         }
     }

@@ -224,47 +224,6 @@ impl SecurityScheme {
     pub fn client_secret(&self) -> &ClientSecret {
         &self.client_secret
     }
-
-    fn from(
-        provider: Provider,
-        scheme_id: &str,
-        client_id: &str,
-        client_secret: &str,
-        redirect_uri: &str,
-        scope: Vec<&str>,
-    ) -> Result<SecurityScheme, String> {
-        let redirect_url = RedirectUrl::new(redirect_uri.to_string())
-            .map_err(|err| format!("Invalid redirect URL, {} {}", redirect_uri, err))?;
-
-        let scheme_identifier = if !scheme_id.is_empty() {
-            SecuritySchemeIdentifier(scheme_id.to_string())
-        } else {
-            return Err("Invalid scheme identifier".to_string());
-        };
-
-        let client_id = if !client_id.is_empty() {
-            ClientId::new(client_id.to_string())
-        } else {
-            return Err("Invalid client ID".to_string());
-        };
-
-        let client_secret = if !client_secret.is_empty() {
-            ClientSecret::new(client_secret.to_string())
-        } else {
-            return Err("Invalid client secret".to_string());
-        };
-
-        let scopes = scope.iter().map(|s| Scope::new(s.to_string())).collect();
-
-        Ok(SecurityScheme {
-            provider_type: provider,
-            scheme_identifier,
-            client_id,
-            client_secret,
-            redirect_url,
-            scopes,
-        })
-    }
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::apidefinition::SecurityScheme> for SecurityScheme {

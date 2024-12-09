@@ -16,22 +16,14 @@ use crate::gateway_binding::HttpRequestDetails;
 use crate::gateway_execution::gateway_session::{
     DataKey, DataValue, GatewaySessionError, GatewaySessionStore, SessionId,
 };
-use crate::gateway_middleware::MiddlewareError;
 use crate::gateway_security::{
     IdentityProvider, IdentityProviderError, SecuritySchemeWithProviderMetadata,
 };
 use async_trait::async_trait;
-use futures_util::TryFutureExt;
 use golem_common::SafeDisplay;
-use openidconnect::core::{
-    CoreClient, CoreGenderClaim, CoreIdTokenClaims, CoreProviderMetadata, CoreTokenResponse,
-};
-use openidconnect::{
-    AuthorizationCode, EmptyAdditionalClaims, IdTokenClaims, IssuerUrl, Nonce, OAuth2TokenResponse,
-    TokenResponse,
-};
+use openidconnect::core::CoreTokenResponse;
+use openidconnect::{AuthorizationCode, OAuth2TokenResponse};
 use std::sync::Arc;
-use tracing::debug;
 use tracing::info;
 
 pub type AuthCallBackResult = Result<AuthorisationSuccess, AuthorisationError>;
