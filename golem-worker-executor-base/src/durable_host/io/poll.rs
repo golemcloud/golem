@@ -20,7 +20,7 @@ use wasmtime::component::Resource;
 use wasmtime_wasi::bindings::io::poll::{Host, HostPollable, Pollable};
 
 use crate::durable_host::serialized::SerializableError;
-use crate::durable_host::{Durability, DurableWorkerCtx, SuspendForSleep};
+use crate::durable_host::{Durability2, DurableWorkerCtx, SuspendForSleep};
 use crate::metrics::wasm::record_host_function_call;
 use crate::workerctx::WorkerCtx;
 
@@ -49,18 +49,23 @@ impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn poll(&mut self, in_: Vec<Resource<Pollable>>) -> anyhow::Result<Vec<u32>> {
-        let _permit = self.begin_async_host_function().await?;
-        record_host_function_call("io::poll", "poll");
-
-        let result = Durability::<Ctx, (), Vec<u32>, SerializableError>::wrap_conditionally(
+        let durability = Durability2::<Ctx, Vec<u32>, SerializableError>::new(
             self,
-            WrappedFunctionType::ReadLocal,
-            "golem io::poll::poll",
-            (),
-            |ctx| Box::pin(async move { Host::poll(&mut ctx.as_wasi_view(), in_).await }),
-            |result| is_suspend_for_sleep(result).is_none(), // We must not persist the suspend signal
-        )
-        .await;
+            "golem io::poll",
+            "poll",
+            WrappedFunctionType::ReadLocal
+        ).await?;
+
+        let result = if durability.is_live() {
+            let result = Host::poll(&mut self.as_wasi_view(), in_).await;
+            if is_suspend_for_sleep(&result).is_none() {
+                durability.persist(self, (), result).await
+            } else {
+                result
+            }
+        } else {
+            durability.replay(self).await
+        };
 
         match is_suspend_for_sleep(&result) {
             Some(duration) => {
