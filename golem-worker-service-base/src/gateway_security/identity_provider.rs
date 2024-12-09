@@ -13,9 +13,7 @@
 // limitations under the License.
 
 use crate::gateway_security::open_id_client::OpenIdClient;
-use crate::gateway_security::{
-    GolemIdentityProviderMetadata, Provider, SecuritySchemeWithProviderMetadata,
-};
+use crate::gateway_security::{GolemIdentityProviderMetadata, Provider, SecurityScheme};
 use async_trait::async_trait;
 use golem_common::SafeDisplay;
 use openidconnect::core::{CoreIdTokenClaims, CoreIdTokenVerifier, CoreTokenResponse};
@@ -47,9 +45,9 @@ pub trait IdentityProvider {
     // A client can be created given provider-metadata at any phase of the security workflow in API Gateway.
     // It can be created to create the authorisation URL to redirect user to the provider's login page
     // Or It can be created before exchange of token during the execution of static binding backing auth_call_back endpoint.
-    fn get_client(
+    async fn get_client(
         &self,
-        security_scheme: &SecuritySchemeWithProviderMetadata,
+        security_scheme: &SecurityScheme,
     ) -> Result<OpenIdClient, IdentityProviderError>;
 
     // Get IDToken verifier

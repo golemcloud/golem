@@ -22,12 +22,9 @@ use crate::gateway_execution::auth_call_back_binding_handler::{
 use crate::gateway_execution::file_server_binding_handler::{
     FileServerBindingHandler, FileServerBindingResult,
 };
-use crate::gateway_execution::gateway_session::{GatewaySession, GatewaySessionStore, SessionId};
+use crate::gateway_execution::gateway_session::{GatewaySession, GatewaySessionStore};
 use crate::gateway_execution::to_response::ToHttpResponse;
 use crate::gateway_execution::to_response_failure::ToHttpResponseFromSafeDisplay;
-use crate::gateway_middleware::{
-    HttpCors as CorsPreflight, HttpMiddlewares, MiddlewareError, MiddlewareSuccess,
-};
 use crate::gateway_rib_interpreter::{EvaluationError, WorkerServiceRibInterpreter};
 use crate::gateway_security::{IdentityProvider, SecuritySchemeWithProviderMetadata};
 use async_trait::async_trait;
@@ -35,23 +32,9 @@ use http::StatusCode;
 use rib::{RibInput, RibResult};
 use std::sync::Arc;
 
-// Response is type parameterised here, mainly to support
-// other protocols.
-// Every error and result-types involved in the workflow
-// need to have an instance of ToResponse<ResponseType> where
-// ResponseType depends on the protocol
-// The workflow doesn't need to be changed for each protocol
 #[async_trait]
 pub trait GatewayHttpInputExecutor<Namespace> {
-    async fn execute_binding(&self, input: &GatewayHttpInput<Namespace>) -> poem::Response
-    where
-        EvaluationError: ToHttpResponseFromSafeDisplay,
-        RibInputTypeMismatch: ToHttpResponseFromSafeDisplay,
-        MiddlewareError: ToHttpResponseFromSafeDisplay,
-        RibResult: ToHttpResponse,
-        FileServerBindingResult: ToHttpResponse,
-        CorsPreflight: ToHttpResponse,
-        AuthCallBackResult: ToHttpResponse;
+    async fn execute_binding(&self, input: &GatewayHttpInput<Namespace>) -> poem::Response;
 }
 
 // A product of actual request input (contained in the ResolvedGatewayBinding)
@@ -100,26 +83,12 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
 
     async fn resolve_rib_inputs(
         &self,
-        session_id: Option<SessionId>,
-        session_store: &GatewaySessionStore,
-        request_details: &mut HttpRequestDetails,
+        request_details: &HttpRequestDetails,
         resolved_worker_binding: &ResolvedWorkerBinding<Namespace>,
     ) -> Result<(RibInput, RibInput), poem::Response>
     where
         RibInputTypeMismatch: ToHttpResponseFromSafeDisplay,
     {
-        if let Some(session_id) = session_id {
-            let result = request_details
-                .inject_auth_details(&session_id, session_store)
-                .await;
-
-            if let Err(err_response) = result {
-                return Err(poem::Response::builder()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .body(err_response));
-            }
-        }
-
         let rib_input_from_request_details = request_details
             .resolve_rib_input_value(&resolved_worker_binding.compiled_response_mapping.rib_input)
             .map_err(|err| err.to_response_from_safe_display(|_| StatusCode::BAD_REQUEST))?;
@@ -161,18 +130,12 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
 
     async fn handle_worker_binding(
         &self,
-        session_id: Option<SessionId>,
         session_store: &GatewaySessionStore,
         request_details: &mut HttpRequestDetails,
         resolved_binding: &ResolvedWorkerBinding<Namespace>,
-    ) -> poem::Response
-    where
-        RibResult: ToHttpResponse,
-        EvaluationError: ToHttpResponseFromSafeDisplay,
-        RibInputTypeMismatch: ToHttpResponseFromSafeDisplay,
-    {
+    ) -> poem::Response {
         match self
-            .resolve_rib_inputs(session_id, session_store, request_details, resolved_binding)
+            .resolve_rib_inputs(request_details, resolved_binding)
             .await
         {
             Ok((rib_input_from_request_details, rib_input_from_worker_details)) => {
@@ -196,7 +159,6 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
 
     async fn handle_file_server_binding(
         &self,
-        session_id: Option<SessionId>,
         session_store: &GatewaySessionStore,
         request_details: &mut HttpRequestDetails,
         resolved_binding: &ResolvedWorkerBinding<Namespace>,
@@ -208,7 +170,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         FileServerBindingResult: ToHttpResponse,
     {
         match self
-            .resolve_rib_inputs(session_id, session_store, request_details, resolved_binding)
+            .resolve_rib_inputs(request_details, resolved_binding)
             .await
         {
             Ok((request_rib_input, worker_rib_input)) => {
@@ -259,107 +221,63 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
             .to_response(&input.http_request_details, &input.session_store)
             .await
     }
-
-    // If redirects, it responds with Err(response)
-    // or else it returns the session_id to continue with the rest.
-    async fn redirect_or_continue(
-        input: &GatewayHttpInput<Namespace>,
-        middlewares: &HttpMiddlewares,
-    ) -> Result<Option<SessionId>, poem::Response>
-    where
-        MiddlewareError: ToHttpResponseFromSafeDisplay,
-    {
-        let input_middleware_result = middlewares.process_middleware_in(input).await;
-
-        match input_middleware_result {
-            Ok(incoming_middleware_result) => match incoming_middleware_result {
-                MiddlewareSuccess::Redirect(response) => Err(response),
-                MiddlewareSuccess::PassThrough { session_id } => Ok(session_id),
-            },
-
-            Err(err) => Err(err.to_response_from_safe_display(|error| match error {
-                MiddlewareError::Unauthorized(_) => StatusCode::UNAUTHORIZED,
-                MiddlewareError::InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
-            })),
-        }
-    }
 }
 
 #[async_trait]
 impl<Namespace: Send + Sync + Clone> GatewayHttpInputExecutor<Namespace>
     for DefaultGatewayInputExecutor<Namespace>
 {
-    async fn execute_binding(&self, input: &GatewayHttpInput<Namespace>) -> poem::Response
-    where
-        RibResult: ToHttpResponse,
-        EvaluationError: ToHttpResponseFromSafeDisplay,
-        RibInputTypeMismatch: ToHttpResponseFromSafeDisplay,
-        MiddlewareError: ToHttpResponseFromSafeDisplay,
-        FileServerBindingResult: ToHttpResponse, // FileServerBindingResult can be a direct response in a file server endpoint
-        CorsPreflight: ToHttpResponse, // Cors can be a direct response in a cors preflight endpoint
-        AuthCallBackResult: ToHttpResponse, // AuthCallBackResult can be a direct response in auth callback endpoint
-    {
+    async fn execute_binding(&self, input: &GatewayHttpInput<Namespace>) -> poem::Response {
         let binding = &input.resolved_gateway_binding;
         let middleware_opt = &input.http_request_details.http_middlewares;
         let mut request_details = input.http_request_details.clone();
 
-        let middleware_response = if let Some(middleware) = middleware_opt {
-            Self::redirect_or_continue(input, middleware).await
-        } else {
-            Ok(None)
-        };
-
-        match middleware_response {
-            Err(redirect_response) => redirect_response,
-            Ok(session) => match &binding {
-                ResolvedBinding::Static(StaticBinding::HttpCorsPreflight(cors_preflight)) => {
-                    cors_preflight
-                        .clone()
-                        .to_response(&input.http_request_details, &input.session_store)
-                        .await
-                }
-
-                ResolvedBinding::Static(StaticBinding::HttpAuthCallBack(auth_call_back)) => {
-                    self.handle_http_auth_call_binding(
-                        &auth_call_back.security_scheme_with_metadata,
-                        input,
-                    )
+        match &binding {
+            ResolvedBinding::Static(StaticBinding::HttpCorsPreflight(cors_preflight)) => {
+                cors_preflight
+                    .clone()
+                    .to_response(&input.http_request_details, &input.session_store)
                     .await
-                }
+            }
 
-                ResolvedBinding::Worker(resolved_worker_binding) => {
-                    let mut response = self
-                        .handle_worker_binding(
-                            session,
-                            &input.session_store,
-                            &mut request_details,
-                            resolved_worker_binding,
-                        )
-                        .await;
+            ResolvedBinding::Static(StaticBinding::HttpAuthCallBack(auth_call_back)) => {
+                self.handle_http_auth_call_binding(
+                    &auth_call_back.security_scheme_with_metadata,
+                    input,
+                )
+                .await
+            }
 
-                    if let Some(middleware) = middleware_opt {
-                        let result = middleware.process_middleware_out(&mut response).await;
-                        match result {
-                            Ok(_) => response,
-                            Err(err) => err.to_response_from_safe_display(|_| {
-                                StatusCode::INTERNAL_SERVER_ERROR
-                            }),
-                        }
-                    } else {
-                        response
-                    }
-                }
-
-                ResolvedBinding::FileServer(resolved_file_server_binding) => {
-                    self.handle_file_server_binding(
-                        session,
+            ResolvedBinding::Worker(resolved_worker_binding) => {
+                let mut response = self
+                    .handle_worker_binding(
                         &input.session_store,
                         &mut request_details,
-                        resolved_file_server_binding,
+                        resolved_worker_binding,
                     )
-                    .await
+                    .await;
+
+                if let Some(middleware) = middleware_opt {
+                    let result = middleware.process_middleware_out(&mut response).await;
+                    match result {
+                        Ok(_) => response,
+                        Err(err) => {
+                            err.to_response_from_safe_display(|_| StatusCode::INTERNAL_SERVER_ERROR)
+                        }
+                    }
+                } else {
+                    response
                 }
-            },
+            }
+
+            ResolvedBinding::FileServer(resolved_file_server_binding) => {
+                self.handle_file_server_binding(
+                    &input.session_store,
+                    &mut request_details,
+                    resolved_file_server_binding,
+                )
+                .await
+            }
         }
     }
 }

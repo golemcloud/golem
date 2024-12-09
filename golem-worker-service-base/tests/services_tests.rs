@@ -48,13 +48,11 @@ use golem_worker_service_base::gateway_api_deployment::{
     ApiDeploymentRequest, ApiSite, ApiSiteString,
 };
 use golem_worker_service_base::gateway_execution::gateway_session::{
-    DataKey, DataValue, GatewaySession, GatewaySessionError, GatewaySessionWithInMemoryCache,
-    RedisGatewaySession, SessionId,
+    DataKey, DataValue, GatewaySession, GatewaySessionError, RedisGatewaySession, SessionId,
 };
 use golem_worker_service_base::gateway_security::{
     AuthorizationUrl, DefaultIdentityProvider, GolemIdentityProviderMetadata, IdentityProvider,
     IdentityProviderError, OpenIdClient, Provider, SecurityScheme, SecuritySchemeIdentifier,
-    SecuritySchemeWithProviderMetadata,
 };
 use golem_worker_service_base::repo::security_scheme::{DbSecuritySchemeRepo, SecuritySchemeRepo};
 use golem_worker_service_base::service::gateway::security_scheme::{
@@ -216,18 +214,6 @@ pub async fn test_gateway_session_expiry() {
         result,
         Err(GatewaySessionError::MissingValue { .. })
     ));
-
-    // Redis backed by in-memory cache should return value
-    let result = insert_and_get_with_redis_with_in_memory_cache(
-        SessionId("test2".to_string()),
-        DataKey::nonce(),
-        data_value.clone(),
-        &redis,
-    )
-    .await
-    .expect("Expecting a value from redis cache backed by in-memory");
-
-    assert_eq!(result, data_value);
 }
 
 async fn insert_and_get_with_redis(
@@ -248,27 +234,6 @@ async fn insert_and_get_with_redis(
         .unwrap();
 
     session_store.get(&session_id, &data_key).await
-}
-
-async fn insert_and_get_with_redis_with_in_memory_cache(
-    session_id: SessionId,
-    data_key: DataKey,
-    data_value: DataValue,
-    redis: &RedisPool,
-) -> Result<DataValue, GatewaySessionError> {
-    let redis_session = RedisGatewaySession::new(redis.clone(), 60 * 60);
-    let redis_with_in_memory = Arc::new(GatewaySessionWithInMemoryCache::new(
-        redis_session.clone(),
-        60 * 60,
-        60,
-    ));
-
-    redis_with_in_memory
-        .insert(session_id.clone(), data_key.clone(), data_value.clone())
-        .await
-        .unwrap();
-
-    redis_with_in_memory.get(&session_id, &data_key).await
 }
 
 #[test]
@@ -1095,12 +1060,12 @@ impl IdentityProvider for TestIdentityProvider {
         )
     }
 
-    fn get_client(
+    async fn get_client(
         &self,
-        security_scheme: &SecuritySchemeWithProviderMetadata,
+        security_scheme: &SecurityScheme,
     ) -> Result<OpenIdClient, IdentityProviderError> {
         let identity_provider = DefaultIdentityProvider;
-        identity_provider.get_client(security_scheme)
+        identity_provider.get_client(security_scheme).await
     }
 }
 

@@ -22,7 +22,7 @@ use crate::gateway_security::{
 use async_trait::async_trait;
 use golem_common::SafeDisplay;
 use openidconnect::core::CoreTokenResponse;
-use openidconnect::{AuthorizationCode, OAuth2TokenResponse, TokenResponse};
+use openidconnect::{AuthorizationCode, OAuth2TokenResponse};
 use std::sync::Arc;
 
 pub type AuthCallBackResult = Result<AuthorisationSuccess, AuthorisationError>;
@@ -161,7 +161,8 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
             ))?;
 
         let open_id_client = identity_provider
-            .get_client(security_scheme_with_metadata)
+            .get_client(&security_scheme_with_metadata.security_scheme)
+            .await
             .map_err(AuthorisationError::IdentityProviderError)?;
 
         let token_response = identity_provider
@@ -170,13 +171,16 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
             .map_err(AuthorisationError::FailedCodeExchange)?;
 
         let access_token = token_response.access_token().secret().clone();
-        let id_token = token_response.id_token().map(|x| x.to_string());
+        let id_token = token_response
+            .extra_fields()
+            .id_token()
+            .map(|x| x.to_string());
 
         // access token in session store
         let _ = session_store
             .insert(
                 SessionId(state.clone()),
-                DataKey("access_token".to_string()),
+                DataKey::access_token(),
                 DataValue(serde_json::Value::String(access_token.clone())),
             )
             .await
@@ -187,7 +191,7 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
             let _ = session_store
                 .insert(
                     SessionId(state.clone()),
-                    DataKey("id_token".to_string()),
+                    DataKey::id_token(),
                     DataValue(serde_json::Value::String(id_token.to_string())),
                 )
                 .await

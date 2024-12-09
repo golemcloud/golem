@@ -23,6 +23,7 @@ use golem_common::SafeDisplay;
 use std::fmt::Display;
 use std::hash::Hash;
 use std::sync::Arc;
+use tracing::info;
 
 // The controller phase can decide whether the developer of API deployment
 // has create-security role in Namespace, before calling this service
@@ -151,6 +152,8 @@ impl<Namespace: Display + Clone + Hash + Eq + PartialEq + Send + Sync + 'static>
 
         match provider_metadata {
             Ok(provider_metadata) => {
+                info!("Provider metadata: {:?}", provider_metadata);
+
                 let security_scheme_with_provider_metadata = SecuritySchemeWithProviderMetadata {
                     security_scheme: security_scheme.clone(),
                     provider_metadata,
@@ -165,6 +168,12 @@ impl<Namespace: Display + Clone + Hash + Eq + PartialEq + Send + Sync + 'static>
                 self.repo.create(&record).await.map_err(|err| {
                     SecuritySchemeServiceError::InternalError(err.to_safe_string())
                 })?;
+
+                let result = self
+                    .get(&security_scheme.scheme_identifier(), namespace)
+                    .await?;
+
+                info!("Security scheme created: {:?}", result);
 
                 Ok(security_scheme_with_provider_metadata)
             }
