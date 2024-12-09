@@ -105,9 +105,14 @@ impl From<WorkerServiceError> for WorkerApiBaseError {
             | ServiceError::WorkerNotFound(_) => WorkerApiBaseError::NotFound(Json(ErrorBody {
                 error: error.to_safe_string(),
             })),
-            ServiceError::Golem(golem_error) => {
-                WorkerApiBaseError::InternalError(Json(GolemErrorBody { golem_error }))
-            }
+            ServiceError::Golem(golem_error) => match golem_error {
+                GolemError::WorkerNotFound(error) => {
+                    WorkerApiBaseError::NotFound(Json(ErrorBody {
+                        error: error.to_safe_string(),
+                    }))
+                }
+                _ => WorkerApiBaseError::InternalError(Json(GolemErrorBody { golem_error })),
+            },
             ServiceError::Component(error) => error.into(),
             ServiceError::InternalCallError(_) => internal(error.to_safe_string()),
             ServiceError::FileNotFound(_) => WorkerApiBaseError::NotFound(Json(ErrorBody {

@@ -26,8 +26,8 @@ use crate::model::{
 };
 use crate::service::component::ComponentService;
 use async_trait::async_trait;
-use golem_client::model::{AnalysedType, InvokeParameters, InvokeResult, ScanCursor, WorkerFilter};
-use golem_common::model::{StringFilterComparator, TargetWorkerId, WorkerNameFilter};
+use golem_client::model::{AnalysedType, InvokeParameters, InvokeResult, ScanCursor};
+use golem_common::model::TargetWorkerId;
 use golem_common::uri::oss::uri::{ComponentUri, WorkerUri};
 use golem_common::uri::oss::url::{ComponentUrl, WorkerUrl};
 use golem_common::uri::oss::urn::{ComponentUrn, WorkerUrn};
@@ -221,11 +221,15 @@ async fn resolve_worker_component_version<ProjectContext: Send + Sync>(
             id: worker_urn.id.component_id.clone(),
         };
 
-        let worker_metadata = client.get_metadata(worker_urn).await?;
-        let component_metadata = components
-            .get_metadata(&component_urn, worker_metadata.component_version)
-            .await?;
-        Ok(Some(component_metadata))
+        let worker_metadata = client.get_metadata_opt(worker_urn).await?;
+        if let Some(worker_metadata) = worker_metadata {
+            let component_metadata = components
+                .get_metadata(&component_urn, worker_metadata.component_version)
+                .await?;
+            Ok(Some(component_metadata))
+        } else {
+            Ok(None)
+        }
     } else {
         Ok(None)
     }

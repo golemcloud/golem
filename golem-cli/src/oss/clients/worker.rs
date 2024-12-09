@@ -205,6 +205,26 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
             .into())
     }
 
+    async fn get_metadata_opt(
+        &self,
+        worker_urn: WorkerUrn,
+    ) -> Result<Option<WorkerMetadata>, GolemError> {
+        info!("Getting worker {worker_urn} metadata");
+
+        match self
+            .client
+            .get_worker_metadata(
+                &worker_urn.id.component_id.0,
+                &worker_name_required(&worker_urn)?,
+            )
+            .await
+        {
+            Ok(metadata) => Ok(Some(metadata.into())),
+            Err(Error::Item(WorkerError::Error404(_))) => Ok(None),
+            Err(err) => Err(err.into()),
+        }
+    }
+
     async fn find_metadata(
         &self,
         component_urn: ComponentUrn,
