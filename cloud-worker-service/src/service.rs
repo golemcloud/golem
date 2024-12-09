@@ -50,7 +50,7 @@ use golem_worker_service_base::gateway_execution::api_definition_lookup::{
 };
 use golem_worker_service_base::gateway_execution::file_server_binding_handler::FileServerBindingHandler;
 use golem_worker_service_base::gateway_execution::gateway_session::{
-    GatewaySession, GatewaySessionWithInMemoryCache, RedisGatewaySession,
+    GatewaySession, RedisGatewaySession,
 };
 use golem_worker_service_base::gateway_execution::GatewayWorkerRequestExecutor;
 use golem_worker_service_base::gateway_request::http_request::InputHttpRequest;
@@ -171,22 +171,17 @@ impl ApiServices {
             }
         };
 
-        let redis = match &config.base_config.gateway_session_storage {
-            KeyValueStorageConfig::Redis(redis) => {
-                info!("Using Redis for key-value storage at {}", redis.url());
-                RedisPool::configured(redis)
+        let gateway_session_store = match &config.base_config.gateway_session_storage {
+            KeyValueStorageConfig::Redis(redis_config) => {
+                let redis = RedisPool::configured(redis_config)
                     .await
-                    .map_err(|err| err.to_string())?
+                    .map_err(|e| e.to_string())?;
+
+                let gateway_session_with_redis = RedisGatewaySession::new(redis, 60 * 60);
+
+                Arc::new(gateway_session_with_redis)
             }
         };
-
-        let gateway_redis_storage = RedisGatewaySession::new(redis, 60 * 60);
-
-        let gateway_session_store = Arc::new(GatewaySessionWithInMemoryCache::new(
-            gateway_redis_storage,
-            60 * 60,
-            60,
-        ));
 
         let blob_storage: Arc<dyn BlobStorage + Send + Sync> = match &config
             .base_config

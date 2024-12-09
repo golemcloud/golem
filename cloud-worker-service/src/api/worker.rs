@@ -6,17 +6,20 @@ use crate::service::worker::{WorkerError as WorkerServiceError, WorkerService};
 use cloud_common::auth::{CloudAuthCtx, GolemSecurityScheme};
 use cloud_common::clients::auth::AuthServiceError;
 use cloud_common::model::ProjectAction;
+use futures_util::TryStreamExt;
 use golem_common::metrics::api::TraceErrorKind;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::OplogCursor;
 use golem_common::model::{
-    ComponentId, IdempotencyKey, ScanCursor, TargetWorkerId, WorkerFilter, WorkerId,
+    ComponentFilePath, ComponentId, IdempotencyKey, PluginInstallationId, ScanCursor,
+    TargetWorkerId, WorkerFilter, WorkerId,
 };
 use golem_common::{recorded_http_api_request, SafeDisplay};
 use golem_service_base::model::*;
 use golem_worker_service_base::service::component::{ComponentService, ComponentServiceError};
+use poem::Body;
 use poem_openapi::param::{Header, Path, Query};
-use poem_openapi::payload::Json;
+use poem_openapi::payload::{Binary, Json};
 use poem_openapi::*;
 use std::str::FromStr;
 use tap::TapFallible;
@@ -161,11 +164,14 @@ impl From<WorkerServiceError> for WorkerError {
                         }),
                     }))
                 }
-                BaseServiceError::Golem(golem_error) => {
-                    WorkerError::InternalError(Json(GolemErrorBody {
+                BaseServiceError::Golem(golem_error) => match golem_error {
+                    GolemError::WorkerNotFound(error) => WorkerError::NotFound(Json(ErrorBody {
+                        error: error.to_safe_string(),
+                    })),
+                    _ => WorkerError::InternalError(Json(GolemErrorBody {
                         golem_error: golem_error.clone(),
-                    }))
-                }
+                    })),
+                },
                 BaseServiceError::InternalCallError(inner) => {
                     WorkerError::InternalError(Json(GolemErrorBody {
                         golem_error: GolemError::Unknown(GolemErrorUnknown {
@@ -979,6 +985,164 @@ impl WorkerApi {
             }
         }
     }
+
+    /// List files in a worker
+    #[oai(
+        path = "/:component_id/workers/:worker_name/files/:file_name",
+        method = "get",
+        operation_id = "get_files"
+    )]
+    async fn get_file(
+        &self,
+        component_id: Path<ComponentId>,
+        worker_name: Path<String>,
+        file_name: Path<String>,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<GetFilesResponse>> {
+        let auth = CloudAuthCtx::new(token.secret());
+        let worker_id = validated_worker_id(component_id.0, worker_name.0)?;
+        let record = recorded_http_api_request!("get_file", worker_id = worker_id.to_string());
+
+        let path = make_component_file_path(file_name.0)?;
+
+        let namespace = self
+            .auth_service
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::ViewWorker, &auth)
+            .await?;
+
+        let response = self
+            .worker_service
+            .list_directory(&worker_id.into_target_worker_id(), path, namespace)
+            .instrument(record.span.clone())
+            .await
+            .map(|s| {
+                Json(GetFilesResponse {
+                    nodes: s.into_iter().map(|n| n.into()).collect(),
+                })
+            })
+            .map_err(|e| e.into());
+
+        record.result(response)
+    }
+
+    /// Get contents of a file in a worker
+    #[oai(
+        path = "/:component_id/workers/:worker_name/file-contents/:file_name",
+        method = "get",
+        operation_id = "get_file_content"
+    )]
+    async fn get_file_content(
+        &self,
+        component_id: Path<ComponentId>,
+        worker_name: Path<String>,
+        file_name: Path<String>,
+        token: GolemSecurityScheme,
+    ) -> Result<Binary<Body>> {
+        let auth = CloudAuthCtx::new(token.secret());
+        let worker_id = validated_worker_id(component_id.0, worker_name.0)?;
+        let record = recorded_http_api_request!("get_files", worker_id = worker_id.to_string());
+
+        let path = make_component_file_path(file_name.0)?;
+
+        let namespace = self
+            .auth_service
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::ViewWorker, &auth)
+            .await?;
+
+        let response = self
+            .worker_service
+            .get_file_contents(&worker_id.into_target_worker_id(), path, namespace)
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(|bytes| {
+                Binary(Body::from_bytes_stream(bytes.map_err(|e| {
+                    std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
+                })))
+            });
+
+        record.result(response)
+    }
+
+    /// Activate a plugin
+    ///
+    /// The plugin must be one of the installed plugins for the worker's current component version.
+    #[oai(
+        path = "/:component_id/workers/:worker_name/activate-plugin",
+        method = "post",
+        operation_id = "activate_plugin"
+    )]
+    async fn activate_plugin(
+        &self,
+        component_id: Path<ComponentId>,
+        worker_name: Path<String>,
+        #[oai(name = "plugin-installation-id")] plugin_installation_id: Query<PluginInstallationId>,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<ActivatePluginResponse>> {
+        let auth = CloudAuthCtx::new(token.secret());
+        let worker_id = validated_worker_id(component_id.0, worker_name.0)?;
+
+        let record = recorded_http_api_request!(
+            "activate_plugin",
+            worker_id = worker_id.to_string(),
+            plugin_installation_id = plugin_installation_id.to_string()
+        );
+
+        let namespace = self
+            .auth_service
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
+            .await?;
+
+        let response = self
+            .worker_service
+            .activate_plugin(&worker_id, &plugin_installation_id.0, namespace)
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(|_| Json(ActivatePluginResponse {}));
+
+        record.result(response)
+    }
+
+    /// Deactivate a plugin
+    ///
+    /// The plugin must be one of the installed plugins for the worker's current component version.
+    #[oai(
+        path = "/:component_id/workers/:worker_name/deactivate-plugin",
+        method = "post",
+        operation_id = "deactivate_plugin"
+    )]
+    async fn deactivate_plugin(
+        &self,
+        component_id: Path<ComponentId>,
+        worker_name: Path<String>,
+        #[oai(name = "plugin-installation-id")] plugin_installation_id: Query<PluginInstallationId>,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<DeactivatePluginResponse>> {
+        let auth = CloudAuthCtx::new(token.secret());
+        let worker_id = validated_worker_id(component_id.0, worker_name.0)?;
+
+        let record = recorded_http_api_request!(
+            "activate_plugin",
+            worker_id = worker_id.to_string(),
+            plugin_installation_id = plugin_installation_id.to_string()
+        );
+
+        let namespace = self
+            .auth_service
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
+            .await?;
+
+        let response = self
+            .worker_service
+            .deactivate_plugin(&worker_id, &plugin_installation_id.0, namespace)
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(|_| Json(DeactivatePluginResponse {}));
+
+        record.result(response)
+    }
 }
 
 // TODO: should be in a base library
@@ -1010,5 +1174,14 @@ fn make_target_worker_id(
     Ok(TargetWorkerId {
         component_id,
         worker_name,
+    })
+}
+
+// TODO: should be in a base library
+fn make_component_file_path(name: String) -> std::result::Result<ComponentFilePath, WorkerError> {
+    ComponentFilePath::from_rel_str(&name).map_err(|error| {
+        WorkerError::BadRequest(Json(ErrorsBody {
+            errors: vec![format!("Invalid file name: {error}")],
+        }))
     })
 }
