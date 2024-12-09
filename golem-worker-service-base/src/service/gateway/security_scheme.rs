@@ -169,8 +169,9 @@ impl<Namespace: Display + Clone + Hash + Eq + PartialEq + Send + Sync + 'static>
                     SecuritySchemeServiceError::InternalError(err.to_safe_string())
                 })?;
 
-                let result =
-                    self.get(&security_scheme.scheme_identifier(), namespace).await?;
+                let result = self
+                    .get(&security_scheme.scheme_identifier(), namespace)
+                    .await?;
 
                 info!("Security scheme created: {:?}", result);
 

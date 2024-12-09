@@ -3,12 +3,12 @@ use crate::gateway_execution::auth_call_back_binding_handler::AuthorisationError
 use crate::gateway_execution::gateway_session::GatewaySessionStore;
 use crate::gateway_middleware::{MiddlewareError, MiddlewareSuccess};
 use crate::gateway_security::{IdentityProvider, SecuritySchemeWithProviderMetadata};
+use golem_common::tracing::directive::default::info;
 use golem_common::SafeDisplay;
-use openidconnect::{IssuerUrl, Scope};
-use std::sync::Arc;
 use log::info;
 use openidconnect::core::{CoreClient, CoreProviderMetadata};
-use golem_common::tracing::directive::default::info;
+use openidconnect::{IssuerUrl, Scope};
+use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct HttpAuthenticationMiddleware {
@@ -26,13 +26,14 @@ impl HttpAuthenticationMiddleware {
         session_store: &GatewaySessionStore,
         identity_provider: &Arc<dyn IdentityProvider + Send + Sync>,
     ) -> Result<MiddlewareSuccess, MiddlewareError> {
+        let open_id_client = identity_provider
+            .get_client(&self.security_scheme_with_metadata.security_scheme)
+            .await
+            .map_err(|err| {
+                MiddlewareError::Unauthorized(AuthorisationError::IdentityProviderError(err))
+            })?;
 
-        let open_id_client =
-            identity_provider.get_client(&self.security_scheme_with_metadata.security_scheme).await
-                .map_err(|err| MiddlewareError::Unauthorized(AuthorisationError::IdentityProviderError(err)))?;
-
-        let identity_token_verifier =
-            open_id_client.id_token_verifier();
+        let identity_token_verifier = open_id_client.id_token_verifier();
 
         let cookie_values = input.get_cookie_values();
 
@@ -97,11 +98,13 @@ mod internal {
 
         match nonce_from_session {
             Ok(nonce) => {
-                let id_token = CoreIdToken::from_str(id_token)
-                    .map_err(|err| {
-                        debug!("Failed to parse id token for session {}: {}", err, session_id.0);
-                        MiddlewareError::Unauthorized(AuthorisationError::InvalidToken)
-                    })?;
+                let id_token = CoreIdToken::from_str(id_token).map_err(|err| {
+                    debug!(
+                        "Failed to parse id token for session {}: {}",
+                        err, session_id.0
+                    );
+                    MiddlewareError::Unauthorized(AuthorisationError::InvalidToken)
+                })?;
 
                 get_claims(
                     &nonce,
@@ -127,11 +130,14 @@ mod internal {
                 .await
             }
             Err(err) => {
-                debug!("Failed to get nonce from session store: {:?} for session {}", err, session_id.0);
+                debug!(
+                    "Failed to get nonce from session store: {:?} for session {}",
+                    err, session_id.0
+                );
                 Err(MiddlewareError::Unauthorized(
                     AuthorisationError::SessionError(err),
                 ))
-            },
+            }
         }
     }
     pub(crate) async fn get_claims<'a>(
@@ -173,7 +179,7 @@ mod internal {
                     Err(MiddlewareError::Unauthorized(
                         AuthorisationError::InvalidToken,
                     ))
-                },
+                }
             }
         } else {
             Err(MiddlewareError::Unauthorized(
@@ -235,8 +241,7 @@ mod internal {
     ) -> Result<(), MiddlewareError> {
         let claims_data_key = DataKey::claims();
         let json = serde_json::to_value(claims)
-            .map_err(|err| err.to_string())
-            .unwrap();
+            .map_err(|err| MiddlewareError::InternalError(err.to_string()))?;
 
         let claims_data_value = DataValue(json);
 

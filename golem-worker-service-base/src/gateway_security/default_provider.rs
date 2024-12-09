@@ -67,10 +67,14 @@ impl IdentityProvider for DefaultIdentityProvider {
         &self,
         security_scheme: &SecurityScheme,
     ) -> Result<OpenIdClient, IdentityProviderError> {
-        debug!("Creating identity provider client for {}", security_scheme.scheme_identifier());
+        debug!(
+            "Creating identity provider client for {}",
+            security_scheme.scheme_identifier()
+        );
 
-        let provider_metadata =
-            self.get_provider_metadata(&security_scheme.provider_type()).await?;
+        let provider_metadata = self
+            .get_provider_metadata(&security_scheme.provider_type())
+            .await?;
 
         let client = CoreClient::from_provider_metadata(
             provider_metadata,
@@ -110,16 +114,14 @@ impl IdentityProvider for DefaultIdentityProvider {
         state: Option<CsrfToken>,
         nonce: Option<Nonce>,
     ) -> AuthorizationUrl {
-        let state = || state.unwrap_or_else(|| CsrfToken::new("csrf_token".to_string()));
-        let nonce = || nonce.unwrap_or_else(|| Nonce::new("nonce".to_string()));
+        let state = || state.unwrap_or_else(CsrfToken::new_random);
+        let nonce = || nonce.unwrap_or_else(Nonce::new_random);
 
         let builder = client.client.authorize_url(
             AuthenticationFlow::<CoreResponseType>::AuthorizationCode,
             state,
             nonce,
         );
-
-        info!("scopes is {:?}", scopes.clone());
 
         let builder = scopes
             .iter()

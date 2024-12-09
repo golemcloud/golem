@@ -16,18 +16,23 @@ use crate::gateway_binding::HttpRequestDetails;
 use crate::gateway_execution::gateway_session::{
     DataKey, DataValue, GatewaySessionError, GatewaySessionStore, SessionId,
 };
+use crate::gateway_middleware::MiddlewareError;
 use crate::gateway_security::{
     IdentityProvider, IdentityProviderError, SecuritySchemeWithProviderMetadata,
 };
 use async_trait::async_trait;
-use golem_common::SafeDisplay;
-use openidconnect::core::{CoreClient, CoreGenderClaim, CoreIdTokenClaims, CoreProviderMetadata, CoreTokenResponse};
-use openidconnect::{AuthorizationCode, EmptyAdditionalClaims, IdTokenClaims, IssuerUrl, Nonce, OAuth2TokenResponse, TokenResponse};
-use std::sync::Arc;
 use futures_util::TryFutureExt;
-use tracing::info;
+use golem_common::SafeDisplay;
+use openidconnect::core::{
+    CoreClient, CoreGenderClaim, CoreIdTokenClaims, CoreProviderMetadata, CoreTokenResponse,
+};
+use openidconnect::{
+    AuthorizationCode, EmptyAdditionalClaims, IdTokenClaims, IssuerUrl, Nonce, OAuth2TokenResponse,
+    TokenResponse,
+};
+use std::sync::Arc;
 use tracing::debug;
-use crate::gateway_middleware::MiddlewareError;
+use tracing::info;
 
 pub type AuthCallBackResult = Result<AuthorisationSuccess, AuthorisationError>;
 
@@ -178,14 +183,16 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
             .map_err(AuthorisationError::FailedCodeExchange)?;
 
         let access_token = token_response.access_token().secret().clone();
-        let id_token =
-            token_response.extra_fields().id_token().map(|x| x.to_string());
+        let id_token = token_response
+            .extra_fields()
+            .id_token()
+            .map(|x| x.to_string());
 
         // access token in session store
         let _ = session_store
             .insert(
                 SessionId(state.clone()),
-                DataKey("access_token".to_string()),
+                DataKey::access_token(),
                 DataValue(serde_json::Value::String(access_token.clone())),
             )
             .await
@@ -196,7 +203,7 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
             let _ = session_store
                 .insert(
                     SessionId(state.clone()),
-                    DataKey("id_token".to_string()),
+                    DataKey::id_token(),
                     DataValue(serde_json::Value::String(id_token)),
                 )
                 .await

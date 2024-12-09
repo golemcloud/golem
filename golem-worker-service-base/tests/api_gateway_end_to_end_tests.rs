@@ -2032,7 +2032,11 @@ pub mod security {
     use chrono::{TimeZone, Utc};
     use golem_service_base::auth::DefaultNamespace;
     use golem_service_base::repo::RepoError;
-    use golem_worker_service_base::gateway_security::{AuthorizationUrl, DefaultIdentityProvider, GolemIdentityProviderMetadata, IdentityProvider, IdentityProviderError, OpenIdClient, Provider, SecurityScheme, SecuritySchemeWithProviderMetadata};
+    use golem_worker_service_base::gateway_security::{
+        AuthorizationUrl, DefaultIdentityProvider, GolemIdentityProviderMetadata, IdentityProvider,
+        IdentityProviderError, OpenIdClient, Provider, SecurityScheme,
+        SecuritySchemeWithProviderMetadata,
+    };
     use golem_worker_service_base::repo::security_scheme::{
         SecuritySchemeRecord, SecuritySchemeRepo,
     };

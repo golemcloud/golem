@@ -17,15 +17,15 @@ use bincode::enc::Encoder;
 use bincode::error::EncodeError;
 use bytes::Bytes;
 use fred::interfaces::RedisResult;
+use futures_util::future::err;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::redis::RedisPool;
 use golem_common::SafeDisplay;
+use log::info;
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::Arc;
 use std::time::Duration;
-use futures_util::future::err;
-use log::info;
 use tokio::sync::Mutex;
 use tracing::{debug, error};
 
@@ -76,6 +76,14 @@ pub struct DataKey(pub String);
 impl DataKey {
     pub fn nonce() -> DataKey {
         DataKey("nonce".to_string())
+    }
+
+    pub fn access_token() -> DataKey {
+        DataKey("access_token".to_string())
+    }
+
+    pub fn id_token() -> DataKey {
+        DataKey("id_token".to_string())
     }
 
     pub fn claims() -> DataKey {
@@ -162,8 +170,7 @@ impl GatewaySession for RedisGatewaySession {
             GatewaySessionError::InternalError(e.to_string())
         })?;
 
-        self
-            .redis
+        self.redis
             .with("gateway_session", "insert")
             .expire(Self::redis_key(&session_id), self.expire)
             .await
@@ -257,7 +264,8 @@ impl<A: GatewaySession + Sync + Clone + Send + 'static> GatewaySession
         data_key: &DataKey,
     ) -> Result<DataValue, GatewaySessionError> {
         info!("Getting session data from cache");
-        let result = self.cache
+        let result = self
+            .cache
             .get_or_insert_simple(&(session_id.clone(), data_key.clone()), || {
                 let inner = self.backend.clone();
                 let session_id = session_id.clone();
@@ -269,6 +277,5 @@ impl<A: GatewaySession + Sync + Clone + Send + 'static> GatewaySession
 
         info!("Got session data from cache");
         Ok(result)
-
     }
 }
