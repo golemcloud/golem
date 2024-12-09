@@ -16,6 +16,7 @@ use crate::gateway_execution::auth_call_back_binding_handler::AuthorisationError
 use crate::gateway_execution::gateway_session::SessionId;
 use golem_common::SafeDisplay;
 
+#[derive(Debug)]
 pub enum MiddlewareError {
     Unauthorized(AuthorisationError),
     InternalError(String),

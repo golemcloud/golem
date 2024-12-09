@@ -25,7 +25,7 @@ use poem::http::StatusCode;
 use poem::{Body, Endpoint, Request, Response};
 use tracing::error;
 
-use crate::gateway_binding::{GatewayBindingResolver, GatewayRequestDetails};
+use crate::gateway_binding::{DefaultGatewayBindingResolver, ErrorOrRedirect, GatewayBindingResolver, GatewayRequestDetails};
 use crate::gateway_execution::auth_call_back_binding_handler::DefaultAuthCallBack;
 use crate::gateway_execution::gateway_http_input_executor::{
     DefaultGatewayInputExecutor, GatewayHttpInput, GatewayHttpInputExecutor,
@@ -84,7 +84,8 @@ impl<Namespace: Clone + Send + Sync + 'static> CustomHttpRequestApi<Namespace> {
     }
 
     pub async fn execute(&self, request: Request) -> Response {
-        let input_http_request_result = InputHttpRequest::from_request(request).await;
+        let input_http_request_result =
+            InputHttpRequest::from_request(request).await;
 
         match input_http_request_result {
             Ok(input_http_request) => {
@@ -105,7 +106,13 @@ impl<Namespace: Clone + Send + Sync + 'static> CustomHttpRequestApi<Namespace> {
                     }
                 };
 
-                match input_http_request
+                let resolver = DefaultGatewayBindingResolver::new(
+                    input_http_request,
+                    Arc::clone(&self.gateway_session_store),
+                    Arc::new(DefaultIdentityProvider),
+                );
+
+                match resolver
                     .resolve_gateway_binding(possible_api_definitions)
                     .await
                 {
@@ -119,7 +126,8 @@ impl<Namespace: Clone + Send + Sync + 'static> CustomHttpRequestApi<Namespace> {
                             Arc::clone(&self.gateway_session_store),
                             Arc::new(DefaultIdentityProvider),
                         );
-                        let response: poem::Response = self
+
+                        let response: Response = self
                             .gateway_http_input_executor
                             .execute_binding(&input)
                             .await;
@@ -127,14 +135,16 @@ impl<Namespace: Clone + Send + Sync + 'static> CustomHttpRequestApi<Namespace> {
                         response
                     }
 
-                    Err(resolution_error) => {
+                    Err(ErrorOrRedirect::Error(error)) => {
                         error!(
                             "Failed to resolve the API definition; error: {}",
-                            resolution_error.to_safe_string()
+                            error.to_safe_string()
                         );
 
-                        resolution_error.to_http_response()
+                        error.to_http_response()
                     }
+
+                    Err(ErrorOrRedirect::Redirect(response)) => response,
                 }
             }
             Err(response) => response.into(),
