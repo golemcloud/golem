@@ -9,12 +9,6 @@
 Uploads an OpenAPI JSON document and either creates a new one or updates an existing Golem
 API definition using it.
 
-**Example Request JSON**
-
-```json copy
-null
-```
-
 **Example Response JSON**
 
 ```json copy
@@ -25,15 +19,106 @@ null
     {
       "method": "Get",
       "path": "string",
+      "security": "string",
       "binding": {
-        "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
+        "componentId": {
+          "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
+          "version": 0
+        },
         "workerName": "string",
         "idempotencyKey": "string",
-        "response": "string"
+        "response": "string",
+        "bindingType": "default",
+        "responseMappingInput": {
+          "types": {
+            "property1": {
+              "type": "Variant",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            },
+            "property2": {
+              "type": "Variant",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            }
+          }
+        },
+        "workerNameInput": {
+          "types": {
+            "property1": {
+              "type": "Variant",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            },
+            "property2": {
+              "type": "Variant",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            }
+          }
+        },
+        "idempotencyKeyInput": {
+          "types": {
+            "property1": {
+              "type": "Variant",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            },
+            "property2": {
+              "type": "Variant",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            }
+          }
+        },
+        "corsPreflight": {
+          "allowOrigin": "string",
+          "allowMethods": "string",
+          "allowHeaders": "string",
+          "exposeHeaders": "string",
+          "allowCredentials": true,
+          "maxAge": 0
+        },
+        "responseMappingOutput": {
+          "analysed_type": {
+            "type": "Variant",
+            "cases": [
+              {
+                "name": "string",
+                "typ": {}
+              }
+            ]
+          }
+        }
       }
     }
   ],
-  "draft": true
+  "draft": true,
+  "createdAt": "2019-08-24T14:15:22Z"
 }
 ```
 
@@ -63,15 +148,106 @@ Otherwise lists all API definitions.
       {
         "method": "Get",
         "path": "string",
+        "security": "string",
         "binding": {
-          "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
+          "componentId": {
+            "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
+            "version": 0
+          },
           "workerName": "string",
           "idempotencyKey": "string",
-          "response": "string"
+          "response": "string",
+          "bindingType": "default",
+          "responseMappingInput": {
+            "types": {
+              "property1": {
+                "type": "Variant",
+                "cases": [
+                  {
+                    "name": "string",
+                    "typ": {}
+                  }
+                ]
+              },
+              "property2": {
+                "type": "Variant",
+                "cases": [
+                  {
+                    "name": "string",
+                    "typ": {}
+                  }
+                ]
+              }
+            }
+          },
+          "workerNameInput": {
+            "types": {
+              "property1": {
+                "type": "Variant",
+                "cases": [
+                  {
+                    "name": "string",
+                    "typ": {}
+                  }
+                ]
+              },
+              "property2": {
+                "type": "Variant",
+                "cases": [
+                  {
+                    "name": "string",
+                    "typ": {}
+                  }
+                ]
+              }
+            }
+          },
+          "idempotencyKeyInput": {
+            "types": {
+              "property1": {
+                "type": "Variant",
+                "cases": [
+                  {
+                    "name": "string",
+                    "typ": {}
+                  }
+                ]
+              },
+              "property2": {
+                "type": "Variant",
+                "cases": [
+                  {
+                    "name": "string",
+                    "typ": {}
+                  }
+                ]
+              }
+            }
+          },
+          "corsPreflight": {
+            "allowOrigin": "string",
+            "allowMethods": "string",
+            "allowHeaders": "string",
+            "exposeHeaders": "string",
+            "allowCredentials": true,
+            "maxAge": 0
+          },
+          "responseMappingOutput": {
+            "analysed_type": {
+              "type": "Variant",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            }
+          }
         }
       }
     ],
-    "draft": true
+    "draft": true,
+    "createdAt": "2019-08-24T14:15:22Z"
   }
 ]
 ```
@@ -85,28 +261,6 @@ Otherwise lists all API definitions.
 Creates a new API definition described by Golem's API definition JSON document.
 If an API definition of the same version already exists, its an error.
 
-**Example Request JSON**
-
-```json copy
-{
-  "id": "string",
-  "version": "string",
-  "routes": [
-    {
-      "method": "Get",
-      "path": "string",
-      "binding": {
-        "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
-        "workerName": "string",
-        "idempotencyKey": "string",
-        "response": "string"
-      }
-    }
-  ],
-  "draft": true
-}
-```
-
 **Example Response JSON**
 
 ```json copy
@@ -117,15 +271,106 @@ If an API definition of the same version already exists, its an error.
     {
       "method": "Get",
       "path": "string",
+      "security": "string",
       "binding": {
-        "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
+        "componentId": {
+          "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
+          "version": 0
+        },
         "workerName": "string",
         "idempotencyKey": "string",
-        "response": "string"
+        "response": "string",
+        "bindingType": "default",
+        "responseMappingInput": {
+          "types": {
+            "property1": {
+              "type": "Variant",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            },
+            "property2": {
+              "type": "Variant",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            }
+          }
+        },
+        "workerNameInput": {
+          "types": {
+            "property1": {
+              "type": "Variant",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            },
+            "property2": {
+              "type": "Variant",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            }
+          }
+        },
+        "idempotencyKeyInput": {
+          "types": {
+            "property1": {
+              "type": "Variant",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            },
+            "property2": {
+              "type": "Variant",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            }
+          }
+        },
+        "corsPreflight": {
+          "allowOrigin": "string",
+          "allowMethods": "string",
+          "allowHeaders": "string",
+          "exposeHeaders": "string",
+          "allowCredentials": true,
+          "maxAge": 0
+        },
+        "responseMappingOutput": {
+          "analysed_type": {
+            "type": "Variant",
+            "cases": [
+              {
+                "name": "string",
+                "typ": {}
+              }
+            ]
+          }
+        }
       }
     }
   ],
-  "draft": true
+  "draft": true,
+  "createdAt": "2019-08-24T14:15:22Z"
 }
 ```
 
@@ -147,15 +392,106 @@ An API definition is selected by its API definition ID and version.
     {
       "method": "Get",
       "path": "string",
+      "security": "string",
       "binding": {
-        "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
+        "componentId": {
+          "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
+          "version": 0
+        },
         "workerName": "string",
         "idempotencyKey": "string",
-        "response": "string"
+        "response": "string",
+        "bindingType": "default",
+        "responseMappingInput": {
+          "types": {
+            "property1": {
+              "type": "Variant",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            },
+            "property2": {
+              "type": "Variant",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            }
+          }
+        },
+        "workerNameInput": {
+          "types": {
+            "property1": {
+              "type": "Variant",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            },
+            "property2": {
+              "type": "Variant",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            }
+          }
+        },
+        "idempotencyKeyInput": {
+          "types": {
+            "property1": {
+              "type": "Variant",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            },
+            "property2": {
+              "type": "Variant",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            }
+          }
+        },
+        "corsPreflight": {
+          "allowOrigin": "string",
+          "allowMethods": "string",
+          "allowHeaders": "string",
+          "exposeHeaders": "string",
+          "allowCredentials": true,
+          "maxAge": 0
+        },
+        "responseMappingOutput": {
+          "analysed_type": {
+            "type": "Variant",
+            "cases": [
+              {
+                "name": "string",
+                "typ": {}
+              }
+            ]
+          }
+        }
       }
     }
   ],
-  "draft": true
+  "draft": true,
+  "createdAt": "2019-08-24T14:15:22Z"
 }
 ```
 
@@ -167,28 +503,6 @@ An API definition is selected by its API definition ID and version.
 
 Only draft API definitions can be updated.
 
-**Example Request JSON**
-
-```json copy
-{
-  "id": "string",
-  "version": "string",
-  "routes": [
-    {
-      "method": "Get",
-      "path": "string",
-      "binding": {
-        "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
-        "workerName": "string",
-        "idempotencyKey": "string",
-        "response": "string"
-      }
-    }
-  ],
-  "draft": true
-}
-```
-
 **Example Response JSON**
 
 ```json copy
@@ -199,15 +513,106 @@ Only draft API definitions can be updated.
     {
       "method": "Get",
       "path": "string",
+      "security": "string",
       "binding": {
-        "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
+        "componentId": {
+          "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
+          "version": 0
+        },
         "workerName": "string",
         "idempotencyKey": "string",
-        "response": "string"
+        "response": "string",
+        "bindingType": "default",
+        "responseMappingInput": {
+          "types": {
+            "property1": {
+              "type": "Variant",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            },
+            "property2": {
+              "type": "Variant",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            }
+          }
+        },
+        "workerNameInput": {
+          "types": {
+            "property1": {
+              "type": "Variant",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            },
+            "property2": {
+              "type": "Variant",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            }
+          }
+        },
+        "idempotencyKeyInput": {
+          "types": {
+            "property1": {
+              "type": "Variant",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            },
+            "property2": {
+              "type": "Variant",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            }
+          }
+        },
+        "corsPreflight": {
+          "allowOrigin": "string",
+          "allowMethods": "string",
+          "allowHeaders": "string",
+          "exposeHeaders": "string",
+          "allowCredentials": true,
+          "maxAge": 0
+        },
+        "responseMappingOutput": {
+          "analysed_type": {
+            "type": "Variant",
+            "cases": [
+              {
+                "name": "string",
+                "typ": {}
+              }
+            ]
+          }
+        }
       }
     }
   ],
-  "draft": true
+  "draft": true,
+  "createdAt": "2019-08-24T14:15:22Z"
 }
 ```
 

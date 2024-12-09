@@ -46,7 +46,7 @@ It is guaranteed that this idempotency key will always be the same (per occurren
 To generate an idempotency key:
 
 ```javascript
-import { generateIdempotencyKey } from "golem:api/host@0.2.0"
+import { generateIdempotencyKey } from "golem:api/host@1.1.0"
 
 const key = generateIdempotencyKey()
 ```
@@ -72,7 +72,7 @@ Worker enumeration is a feature of Golem available both through the public HTTP 
 The following example demonstrates how to use the worker enumeration API:
 
 ```javascript
-import { GetWorkers } from "golem:api/host@0.2.0"
+import { GetWorkers } from "golem:api/host@1.1.0"
 
 const componentId = {
   /* ... */
@@ -112,7 +112,7 @@ The third parameter of the `GetWorkers` constructor enables `precise` mode. In t
 To trigger an update for a given worker from one component version to another, use the `updateWorker` function:
 
 ```javascript
-import { updateWorker } from "golem:api/host@0.2.0"
+import { updateWorker } from "golem:api/host@1.1.0"
 
 const workerId = {
   /* ... */

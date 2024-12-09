@@ -5,7 +5,7 @@ These endpoints provide a direct, low level API for calling the exported functio
 
 ## Endpoints
 
-### Invoke
+### Invoke durable workers
 
 The `invoke` endpoint enqueues an invocation for the given worker and returns immediately.
 
@@ -18,7 +18,7 @@ Read the [function name syntax page](/docs/function-names) to learn how the func
 
 The **body** of the POST request must be a JSON object containing a single field called `params`, which is an **array** of typed JSON values. The format of typed JSON values is described below.
 
-### Invoke and await
+### Invoke and await durable workers
 
 The `invoke-and-await` endpoint enqueues an invocation for a given worker and then awaits its completion, returning the successful result value or failure in the response body.
 
@@ -32,6 +32,15 @@ Read the [function name syntax page](/docs/function-names) to learn how the func
 The **body** of the POST request must be a JSON object containing a single field called `params`, which is an **array** of typed JSON values. The format of typed JSON values is described below.
 
 The **response body** is a JSON object with a single field `result`, containing the invoked function's result encoded as a typed JSON value.
+
+### Ephemeral workers
+
+For **ephemeral workers**, as they get automatically created and only live for a single invocation, no worker name is needed in the URI. Otherwise the endpoints work the same:
+
+```
+POST /v1/components/{component_id}/invoke?function={function_name}
+POST /v1/components/{component_id}/invoke-and-await?function={function_name}
+```
 
 ## Implicit worker and resource creation
 

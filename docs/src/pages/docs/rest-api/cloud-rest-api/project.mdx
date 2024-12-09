@@ -146,6 +146,100 @@ Returns a list of actions that can be performed on the project.
 ["ViewComponent"]
 ```
 
+## Gets the list of plugins installed for the given project
+
+| Path                                         | Method | Protected |
+| -------------------------------------------- | ------ | --------- |
+| `/v1/projects/{project_id}/plugins/installs` | GET    | Yes       |
+
+**Example Response JSON**
+
+```json copy
+[
+  {
+    "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+    "name": "string",
+    "version": "string",
+    "priority": 0,
+    "parameters": {
+      "property1": "string",
+      "property2": "string"
+    }
+  }
+]
+```
+
+## Installs a new plugin for this project
+
+| Path                                         | Method | Protected |
+| -------------------------------------------- | ------ | --------- |
+| `/v1/projects/{project_id}/plugins/installs` | POST   | Yes       |
+
+**Example Request JSON**
+
+```json copy
+{
+  "name": "string",
+  "version": "string",
+  "priority": 0,
+  "parameters": {
+    "property1": "string",
+    "property2": "string"
+  }
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "name": "string",
+  "version": "string",
+  "priority": 0,
+  "parameters": {
+    "property1": "string",
+    "property2": "string"
+  }
+}
+```
+
+## Updates the priority or parameters of a plugin installation
+
+| Path                                                           | Method | Protected |
+| -------------------------------------------------------------- | ------ | --------- |
+| `/v1/projects/{project_id}/plugins/installs/{installation_id}` | PUT    | Yes       |
+
+**Example Request JSON**
+
+```json copy
+{
+  "priority": 0,
+  "parameters": {
+    "property1": "string",
+    "property2": "string"
+  }
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{}
+```
+
+## Uninstalls a plugin from this project
+
+| Path                                                                  | Method | Protected |
+| --------------------------------------------------------------------- | ------ | --------- |
+| `/v1/projects/{project_id}/latest/plugins/installs/{installation_id}` | DELETE | Yes       |
+
+**Example Response JSON**
+
+```json copy
+{}
+```
+
 ## Project API Errors
 
 | Status Code | Description                                                              | Body                    |

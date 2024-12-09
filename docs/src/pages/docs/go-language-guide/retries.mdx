@@ -23,20 +23,22 @@ import (
 
 // Setting directly the retry policy
 golemhost.SetRetryPolicy(golemhost.RetryPolicy{
-	MaxAttempts: 10,
-	MinDelay:    100 * time.Millisecond,
-	MaxDelay:    5 * time.Second,
-	Multiplier:  3,
+	MaxAttempts:    10,
+	MinDelay:       100 * time.Millisecond,
+	MaxDelay:       5 * time.Second,
+	Multiplier:     3,
+	MaxRetryFactor: nil,
 })
 
 // WithRetryPolicy stores (using golemhost.GetRetryPolicy) the current retry policy and
 // then restores it after running the provided function
 result, err = golemhost.WithRetryPolicy(
 	golemhost.RetryPolicy{
-		MaxAttempts: 4,
-		MinDelay:    300 * time.Millisecond,
-		MaxDelay:    3 * time.Second,
-		Multiplier:  2,
+		MaxAttempts:    4,
+		MinDelay:       300 * time.Millisecond,
+		MaxDelay:       3 * time.Second,
+		Multiplier:     2,
+		MaxRetryFactor: nil,
 	},
 	func() (string, error) {
 		return "golem", nil
@@ -56,6 +58,8 @@ record retry-policy {
     /// The maximum delay between retries
     max-delay: duration,
     /// Multiplier applied to the delay on each retry to implement exponential backoff
-    multiplier: f64
+    multiplier: f64,
+    /// The maximum amount of jitter to add to the delay
+    max-jitter-factor: option<f64>
 }
 ```

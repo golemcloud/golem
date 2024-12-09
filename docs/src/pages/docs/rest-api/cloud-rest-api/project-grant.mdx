@@ -45,7 +45,7 @@ Creates a new project grant from the following information:
 - `granteeAccountId` the account that gets access for the project
 - `projectPolicyId` the associated policy - see the project policy API below
 
-The response describes the new project grant including it's id that can be used to query specifically this grant in the future.
+The response describes the new project grant including its id that can be used to query specifically this grant in the future.
 
 **Example Request JSON**
 
@@ -114,4 +114,4 @@ Deletes an existing grant of a specific project.
 | 401         | Unauthorized                                                             | `{"error":"string"}`    |
 | 403         | Maximum number of projects exceeded                                      | `{"error":"string"}`    |
 | 404         | Project not found                                                        | `{"error":"string"}`    |
-| 500         | Internal server error                                                    | `{"error":"string"}`    |
+| 500         | Project already exists                                                   | `{"error":"string"}`    |

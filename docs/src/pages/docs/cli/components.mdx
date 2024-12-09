@@ -37,6 +37,14 @@ The returned output contains the following information:
 - **Component size** - size of the `wasm` file - it is important for the storage limit in the hosted Golem Cloud.
 - **Exports** - exported function you can call. You can copy function name (the part before parameters) to call the function. All Golem API expect function names in exactly this format. See the [function name reference page](/docs/function-names) for more details.
 
+### Ephemeral components
+
+Components created are **durable** by default. To create an **ephemeral component** instead, use the `--ephemeral` flag:
+
+```bash
+golem-cli component add --ephemeral --component-name my-component counters.wasm
+```
+
 ## Component search
 
 ### Using URN
@@ -119,6 +127,13 @@ golem-cli component update --component-name my-component counters-v1.wasm
 ```
 
 If you want to trigger an update all worker to the new latest version right after creating this version you can use `--try-update-workers` option.
+
+It is possible to change the **component's type** (from durable to ephemeral, or from ephemeral to durable) when
+updating the component. To do this, use the `--ephemeral` or `--durable` flags:
+
+```bash
+golem-cli component update --durable --component-name my-component counters-v2.wasm
+```
 
 ## Updating workers
 

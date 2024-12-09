@@ -24,6 +24,7 @@ const result: string = withRetryPolicy(
     minDelay: BigInt(100 * 1000 * 1000), // 100 milliseconds
     maxDelay: BigInt(2 * 1000 * 1000 * 1000), // 2 seconds
     multiplier: 1.5,
+    maxJitterFactor: null,
   },
   () => {
     // this closure runs with the custom retry policy
@@ -44,6 +45,8 @@ record retry-policy {
     /// The maximum delay between retries
     max-delay: duration,
     /// Multiplier applied to the delay on each retry to implement exponential backoff
-    multiplier: f64
+    multiplier: f64,
+    /// The maximum amount of jitter to add to the delay
+    max-jitter-factor: option<f64>
 }
 ```

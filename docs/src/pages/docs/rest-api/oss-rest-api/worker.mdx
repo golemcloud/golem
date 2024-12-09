@@ -80,7 +80,8 @@ Returns metadata about an existing component workers:
             "resourceParams": ["string"]
           }
         }
-      }
+      },
+      "activePlugins": ["497f6eca-6276-4993-bfeb-53cbbbba6f08"]
     }
   ],
   "cursor": {
@@ -195,7 +196,8 @@ Returns metadata about an existing worker:
         "resourceParams": ["string"]
       }
     }
-  }
+  },
+  "activePlugins": ["497f6eca-6276-4993-bfeb-53cbbbba6f08"]
 }
 ```
 
@@ -213,7 +215,62 @@ Interrupts and deletes an existing worker.
 {}
 ```
 
-## Invoke a function and await it's resolution
+## Invoke a function and await its resolution on a new worker with a random generated name
+
+| Path                                             | Method | Protected |
+| ------------------------------------------------ | ------ | --------- |
+| `/v1/components/{component_id}/invoke-and-await` | POST   | No        |
+
+Ideal for invoking ephemeral components, but works with durable ones as well.
+Supply the parameters in the request body as JSON.
+
+**Query Parameters**
+
+| Name     | Type   | Required | Description |
+| -------- | ------ | -------- | ----------- |
+| function | string | Yes      | -           |
+
+**Example Request JSON**
+
+```json copy
+{
+  "params": [
+    {
+      "typ": {
+        "type": "Variant",
+        "cases": [
+          {
+            "name": "string",
+            "typ": {}
+          }
+        ]
+      },
+      "value": null
+    }
+  ]
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "result": {
+    "typ": {
+      "type": "Variant",
+      "cases": [
+        {
+          "name": "string",
+          "typ": {}
+        }
+      ]
+    },
+    "value": null
+  }
+}
+```
+
+## Invoke a function and await its resolution
 
 | Path                                                                   | Method | Protected |
 | ---------------------------------------------------------------------- | ------ | --------- |
@@ -269,11 +326,53 @@ Supply the parameters in the request body as JSON.
 
 ## Invoke a function
 
+| Path                                   | Method | Protected |
+| -------------------------------------- | ------ | --------- |
+| `/v1/components/{component_id}/invoke` | POST   | No        |
+
+Ideal for invoking ephemeral components, but works with durable ones as well.
+Triggers the execution of a function and immediately returns.
+
+**Query Parameters**
+
+| Name     | Type   | Required | Description |
+| -------- | ------ | -------- | ----------- |
+| function | string | Yes      | -           |
+
+**Example Request JSON**
+
+```json copy
+{
+  "params": [
+    {
+      "typ": {
+        "type": "Variant",
+        "cases": [
+          {
+            "name": "string",
+            "typ": {}
+          }
+        ]
+      },
+      "value": null
+    }
+  ]
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{}
+```
+
+## Invoke a function
+
 | Path                                                         | Method | Protected |
 | ------------------------------------------------------------ | ------ | --------- |
 | `/v1/components/{component_id}/workers/{worker_name}/invoke` | POST   | No        |
 
-A simpler version of the previously defined invoke and await endpoint just triggers the execution of a function and immediately returns.
+Triggers the execution of a function and immediately returns.
 
 **Query Parameters**
 
@@ -316,7 +415,7 @@ A simpler version of the previously defined invoke and await endpoint just trigg
 
 Completes a promise with a given custom array of bytes.
 The promise must be previously created from within the worker, and it's identifier (a combination of a worker identifier and an oplogIdx ) must be sent out to an external caller so it can use this endpoint to mark the promise completed.
-The data field is sent back to the worker and it has no predefined meaning.
+The data field is sent back to the worker, and it has no predefined meaning.
 
 **Example Request JSON**
 
@@ -448,7 +547,8 @@ Returns metadata about an existing component workers:
             "resourceParams": ["string"]
           }
         }
-      }
+      },
+      "activePlugins": ["497f6eca-6276-4993-bfeb-53cbbbba6f08"]
     }
   ],
   "cursor": {
@@ -484,6 +584,141 @@ Returns metadata about an existing component workers:
   "targetVersion": 0
 }
 ```
+
+**Example Response JSON**
+
+```json copy
+{}
+```
+
+## Get or search the oplog of a worker
+
+| Path                                                        | Method | Protected |
+| ----------------------------------------------------------- | ------ | --------- |
+| `/v1/components/{component_id}/workers/{worker_name}/oplog` | GET    | No        |
+
+**Query Parameters**
+
+| Name   | Type                             | Required | Description |
+| ------ | -------------------------------- | -------- | ----------- |
+| from   | integer                          | No       | -           |
+| count  | integer                          | Yes      | -           |
+| cursor | #/components/schemas/OplogCursor | No       | -           |
+| query  | string                           | No       | -           |
+
+**Example Response JSON**
+
+```json copy
+{
+  "entries": [
+    {
+      "oplogIndex": 0,
+      "entry": {
+        "type": "Create",
+        "timestamp": "2019-08-24T14:15:22Z",
+        "worker_id": {
+          "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
+          "workerName": "string"
+        },
+        "component_version": 0,
+        "args": ["string"],
+        "env": {
+          "property1": "string",
+          "property2": "string"
+        },
+        "account_id": "string",
+        "parent": {
+          "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
+          "workerName": "string"
+        },
+        "component_size": 0,
+        "initial_total_linear_memory_size": 0,
+        "initial_active_plugins": [
+          {
+            "installation_id": "91166175-c6a9-4caf-88e9-3147ffc9c934",
+            "plugin_name": "string",
+            "plugin_version": "string",
+            "parameters": {
+              "property1": "string",
+              "property2": "string"
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "next": {
+    "next_oplog_index": 0,
+    "current_component_version": 0
+  },
+  "firstIndexInChunk": 0,
+  "lastIndex": 0
+}
+```
+
+## List files in a worker
+
+| Path                                                                    | Method | Protected |
+| ----------------------------------------------------------------------- | ------ | --------- |
+| `/v1/components/{component_id}/workers/{worker_name}/files/{file_name}` | GET    | No        |
+
+**Example Response JSON**
+
+```json copy
+{
+  "nodes": [
+    {
+      "name": "string",
+      "lastModified": 0,
+      "kind": "directory",
+      "permissions": "read-only",
+      "size": 0
+    }
+  ]
+}
+```
+
+## Get contents of a file in a worker
+
+| Path                                                                            | Method | Protected |
+| ------------------------------------------------------------------------------- | ------ | --------- |
+| `/v1/components/{component_id}/workers/{worker_name}/file-contents/{file_name}` | GET    | No        |
+
+**Response Body:** `WASM Binary File`
+
+## Activate a plugin
+
+| Path                                                                  | Method | Protected |
+| --------------------------------------------------------------------- | ------ | --------- |
+| `/v1/components/{component_id}/workers/{worker_name}/activate-plugin` | POST   | No        |
+
+The plugin must be one of the installed plugins for the worker's current component version.
+
+**Query Parameters**
+
+| Name                   | Type   | Required | Description |
+| ---------------------- | ------ | -------- | ----------- |
+| plugin-installation-id | string | Yes      | -           |
+
+**Example Response JSON**
+
+```json copy
+{}
+```
+
+## Deactivate a plugin
+
+| Path                                                                    | Method | Protected |
+| ----------------------------------------------------------------------- | ------ | --------- |
+| `/v1/components/{component_id}/workers/{worker_name}/deactivate-plugin` | POST   | No        |
+
+The plugin must be one of the installed plugins for the worker's current component version.
+
+**Query Parameters**
+
+| Name                   | Type   | Required | Description |
+| ---------------------- | ------ | -------- | ----------- |
+| plugin-installation-id | string | Yes      | -           |
 
 **Example Response JSON**
 

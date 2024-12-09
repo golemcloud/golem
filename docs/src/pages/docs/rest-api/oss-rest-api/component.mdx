@@ -81,7 +81,28 @@ Gets all components, optionally filtered by component name.
           "maximum": 0
         }
       ]
-    }
+    },
+    "createdAt": "2019-08-24T14:15:22Z",
+    "componentType": "Durable",
+    "files": [
+      {
+        "key": "string",
+        "path": "string",
+        "permissions": "read-only"
+      }
+    ],
+    "installedPlugins": [
+      {
+        "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+        "name": "string",
+        "version": "string",
+        "priority": 0,
+        "parameters": {
+          "property1": "string",
+          "property2": "string"
+        }
+      }
+    ]
   }
 ]
 ```
@@ -93,6 +114,7 @@ Gets all components, optionally filtered by component name.
 | `/v1/components` | POST   | No        |
 
 The request body is encoded as multipart/form-data containing metadata and the WASM binary.
+If the component type is not specified, it will be considered as a `Durable` component.
 
 **Request Form**: `multipart/form-data`
 
@@ -100,7 +122,28 @@ The request body is encoded as multipart/form-data containing metadata and the W
 
 **Field `name`**: string undefined
 
+**Field `componentType`**: JSON
+
+```json copy
+"Durable"
+```
+
 **Field `component`**: string binary
+
+**Field `filesPermissions`**: JSON
+
+```json copy
+{
+  "values": [
+    {
+      "path": "string",
+      "permissions": "read-only"
+    }
+  ]
+}
+```
+
+**Field `files`**: string binary
 
 **Example Response JSON**
 
@@ -168,7 +211,28 @@ The request body is encoded as multipart/form-data containing metadata and the W
         "maximum": 0
       }
     ]
-  }
+  },
+  "createdAt": "2019-08-24T14:15:22Z",
+  "componentType": "Durable",
+  "files": [
+    {
+      "key": "string",
+      "path": "string",
+      "permissions": "read-only"
+    }
+  ],
+  "installedPlugins": [
+    {
+      "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+      "name": "string",
+      "version": "string",
+      "priority": 0,
+      "parameters": {
+        "property1": "string",
+        "property2": "string"
+      }
+    }
+  ]
 }
 ```
 
@@ -177,6 +241,14 @@ The request body is encoded as multipart/form-data containing metadata and the W
 | Path                                   | Method | Protected |
 | -------------------------------------- | ------ | --------- |
 | `/v1/components/{component_id}/upload` | PUT    | No        |
+
+**Query Parameters**
+
+| Name           | Type                               | Required | Description                                                                                   |
+| -------------- | ---------------------------------- | -------- | --------------------------------------------------------------------------------------------- |
+| component_type | #/components/schemas/ComponentType | No       | Type of the new version of the component - if not specified, the type of the previous version |
+
+is used.
 
 **Request Body**: `WASM Binary File`
 
@@ -248,7 +320,152 @@ The request body is encoded as multipart/form-data containing metadata and the W
         "maximum": 0
       }
     ]
-  }
+  },
+  "createdAt": "2019-08-24T14:15:22Z",
+  "componentType": "Durable",
+  "files": [
+    {
+      "key": "string",
+      "path": "string",
+      "permissions": "read-only"
+    }
+  ],
+  "installedPlugins": [
+    {
+      "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+      "name": "string",
+      "version": "string",
+      "priority": 0,
+      "parameters": {
+        "property1": "string",
+        "property2": "string"
+      }
+    }
+  ]
+}
+```
+
+## Update a component
+
+| Path                                    | Method | Protected |
+| --------------------------------------- | ------ | --------- |
+| `/v1/components/{component_id}/updates` | POST   | No        |
+
+**Request Form**: `multipart/form-data`
+
+> Make sure to include `Content-Type: multipart/form-data` Header
+
+**Field `componentType`**: JSON
+
+```json copy
+"Durable"
+```
+
+**Field `component`**: string binary
+
+**Field `filesPermissions`**: JSON
+
+```json copy
+{
+  "values": [
+    {
+      "path": "string",
+      "permissions": "read-only"
+    }
+  ]
+}
+```
+
+**Field `files`**: string binary
+
+**Example Response JSON**
+
+```json copy
+{
+  "versionedComponentId": {
+    "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
+    "version": 0
+  },
+  "componentName": "string",
+  "componentSize": 0,
+  "metadata": {
+    "exports": [
+      {
+        "type": "Function",
+        "name": "string",
+        "parameters": [
+          {
+            "name": "string",
+            "typ": {
+              "type": "Variant",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            }
+          }
+        ],
+        "results": [
+          {
+            "name": "string",
+            "typ": {
+              "type": "Variant",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            }
+          }
+        ]
+      }
+    ],
+    "producers": [
+      {
+        "fields": [
+          {
+            "name": "string",
+            "values": [
+              {
+                "name": "string",
+                "version": "string"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "memories": [
+      {
+        "initial": 0,
+        "maximum": 0
+      }
+    ]
+  },
+  "createdAt": "2019-08-24T14:15:22Z",
+  "componentType": "Durable",
+  "files": [
+    {
+      "key": "string",
+      "path": "string",
+      "permissions": "read-only"
+    }
+  ],
+  "installedPlugins": [
+    {
+      "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+      "name": "string",
+      "version": "string",
+      "priority": 0,
+      "parameters": {
+        "property1": "string",
+        "property2": "string"
+      }
+    }
+  ]
 }
 ```
 
@@ -278,7 +495,6 @@ Each component can have multiple versions. Every time a new WASM is uploaded for
 This endpoint returns a list of all versions for the component id provided as part of the URL. Each element of the response describes a single version of a component, but does not contain the binary (WASM) itself:
 
 - `versionedComponentId` associates a specific version with the component id
-- `userComponentId` and protectedComponentId are implementation details, not used elsewhere on the public API
 - `componentName` is the human-readable name of the component
 - `componentSize` is the WASM binary's size in bytes
 - `metadata` contains information extracted from the WASM itself
@@ -352,7 +568,28 @@ This endpoint returns a list of all versions for the component id provided as pa
           "maximum": 0
         }
       ]
-    }
+    },
+    "createdAt": "2019-08-24T14:15:22Z",
+    "componentType": "Durable",
+    "files": [
+      {
+        "key": "string",
+        "path": "string",
+        "permissions": "read-only"
+      }
+    ],
+    "installedPlugins": [
+      {
+        "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+        "name": "string",
+        "version": "string",
+        "priority": 0,
+        "parameters": {
+          "property1": "string",
+          "property2": "string"
+        }
+      }
+    ]
   }
 ]
 ```
@@ -431,7 +668,28 @@ Gets the version of a component.
         "maximum": 0
       }
     ]
-  }
+  },
+  "createdAt": "2019-08-24T14:15:22Z",
+  "componentType": "Durable",
+  "files": [
+    {
+      "key": "string",
+      "path": "string",
+      "permissions": "read-only"
+    }
+  ],
+  "installedPlugins": [
+    {
+      "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+      "name": "string",
+      "version": "string",
+      "priority": 0,
+      "parameters": {
+        "property1": "string",
+        "property2": "string"
+      }
+    }
+  ]
 }
 ```
 
@@ -509,8 +767,123 @@ Gets the latest version of a component.
         "maximum": 0
       }
     ]
+  },
+  "createdAt": "2019-08-24T14:15:22Z",
+  "componentType": "Durable",
+  "files": [
+    {
+      "key": "string",
+      "path": "string",
+      "permissions": "read-only"
+    }
+  ],
+  "installedPlugins": [
+    {
+      "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+      "name": "string",
+      "version": "string",
+      "priority": 0,
+      "parameters": {
+        "property1": "string",
+        "property2": "string"
+      }
+    }
+  ]
+}
+```
+
+## Gets the list of plugins installed for the given component version
+
+| Path                                                                | Method | Protected |
+| ------------------------------------------------------------------- | ------ | --------- |
+| `/v1/components/{component_id}/versions/{version}/plugins/installs` | GET    | No        |
+
+**Example Response JSON**
+
+```json copy
+[
+  {
+    "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+    "name": "string",
+    "version": "string",
+    "priority": 0,
+    "parameters": {
+      "property1": "string",
+      "property2": "string"
+    }
+  }
+]
+```
+
+## Installs a new plugin for this component
+
+| Path                                                    | Method | Protected |
+| ------------------------------------------------------- | ------ | --------- |
+| `/v1/components/{component_id}/latest/plugins/installs` | POST   | No        |
+
+**Example Request JSON**
+
+```json copy
+{
+  "name": "string",
+  "version": "string",
+  "priority": 0,
+  "parameters": {
+    "property1": "string",
+    "property2": "string"
   }
 }
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "name": "string",
+  "version": "string",
+  "priority": 0,
+  "parameters": {
+    "property1": "string",
+    "property2": "string"
+  }
+}
+```
+
+## Updates the priority or parameters of a plugin installation
+
+| Path                                                                               | Method | Protected |
+| ---------------------------------------------------------------------------------- | ------ | --------- |
+| `/v1/components/{component_id}/versions/latest/plugins/installs/{installation_id}` | PUT    | No        |
+
+**Example Request JSON**
+
+```json copy
+{
+  "priority": 0,
+  "parameters": {
+    "property1": "string",
+    "property2": "string"
+  }
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{}
+```
+
+## Uninstalls a plugin from this component
+
+| Path                                                                      | Method | Protected |
+| ------------------------------------------------------------------------- | ------ | --------- |
+| `/v1/components/{component_id}/latest/plugins/installs/{installation_id}` | DELETE | No        |
+
+**Example Response JSON**
+
+```json copy
+{}
 ```
 
 ## Component API Errors

@@ -152,7 +152,7 @@ world component1 {
 
 ### Creating the worker client
 
-The worker to be invoked is identified by an URI which consists of the **component ID** and the **worker name**.
+The worker to be invoked is identified by an URI which consists of the **component ID** and, in case of durable workers, the **worker name**. For ephemeral components no worker name needs to be specified.
 
 If the worker pointed by the URI does not exists, it is going to be created automatically and it inherits the environment variables of the caller.
 
@@ -178,6 +178,12 @@ const workerName = "target-worker"
 
 // Create new worker client with an URN constructed from the component ID and worker name
 const component2Worker = new Component2Api({ value: `urn:worker:${componentId}/${workerName}` })
+```
+
+When calling **ephemeral workers**, only the component ID is needed in the URI:
+
+```javascript
+const component2Worker = new Component2Api({ value: `urn:worker:${componentId}` })
 ```
 
 ### Calling worker client functions

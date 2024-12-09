@@ -1,0 +1,161 @@
+# Plugin API
+
+## Lists all the registered plugins (including all versions of each).
+
+| Path          | Method | Protected |
+| ------------- | ------ | --------- |
+| `/v1/plugins` | GET    | Yes       |
+
+**Query Parameters**
+
+| Name  | Type                                  | Required | Description |
+| ----- | ------------------------------------- | -------- | ----------- |
+| scope | #/components/schemas/CloudPluginScope | No       | -           |
+
+**Example Response JSON**
+
+```json copy
+[
+  {
+    "name": "string",
+    "version": "string",
+    "description": "string",
+    "icon": [0],
+    "homepage": "string",
+    "specs": {
+      "type": "ComponentTransformer",
+      "providedWitPackage": "string",
+      "jsonSchema": "string",
+      "validateUrl": "string",
+      "transformUrl": "string"
+    },
+    "scope": {
+      "type": "Global"
+    },
+    "owner": {
+      "accountId": "string"
+    }
+  }
+]
+```
+
+## Registers a new plugin
+
+| Path          | Method | Protected |
+| ------------- | ------ | --------- |
+| `/v1/plugins` | POST   | Yes       |
+
+**Example Request JSON**
+
+```json copy
+{
+  "name": "string",
+  "version": "string",
+  "description": "string",
+  "icon": [0],
+  "homepage": "string",
+  "specs": {
+    "type": "ComponentTransformer",
+    "providedWitPackage": "string",
+    "jsonSchema": "string",
+    "validateUrl": "string",
+    "transformUrl": "string"
+  },
+  "scope": {
+    "type": "Global"
+  }
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{}
+```
+
+## Lists all the registered versions of a specific plugin identified by its name
+
+| Path                 | Method | Protected |
+| -------------------- | ------ | --------- |
+| `/v1/plugins/{name}` | GET    | Yes       |
+
+**Example Response JSON**
+
+```json copy
+[
+  {
+    "name": "string",
+    "version": "string",
+    "description": "string",
+    "icon": [0],
+    "homepage": "string",
+    "specs": {
+      "type": "ComponentTransformer",
+      "providedWitPackage": "string",
+      "jsonSchema": "string",
+      "validateUrl": "string",
+      "transformUrl": "string"
+    },
+    "scope": {
+      "type": "Global"
+    },
+    "owner": {
+      "accountId": "string"
+    }
+  }
+]
+```
+
+## Gets a registered plugin by its name and version
+
+| Path                           | Method | Protected |
+| ------------------------------ | ------ | --------- |
+| `/v1/plugins/{name}/{version}` | GET    | Yes       |
+
+**Example Response JSON**
+
+```json copy
+{
+  "name": "string",
+  "version": "string",
+  "description": "string",
+  "icon": [0],
+  "homepage": "string",
+  "specs": {
+    "type": "ComponentTransformer",
+    "providedWitPackage": "string",
+    "jsonSchema": "string",
+    "validateUrl": "string",
+    "transformUrl": "string"
+  },
+  "scope": {
+    "type": "Global"
+  },
+  "owner": {
+    "accountId": "string"
+  }
+}
+```
+
+## Deletes a registered plugin by its name and version
+
+| Path                           | Method | Protected |
+| ------------------------------ | ------ | --------- |
+| `/v1/plugins/{name}/{version}` | DELETE | Yes       |
+
+**Example Response JSON**
+
+```json copy
+{}
+```
+
+## Plugin API Errors
+
+| Status Code | Description                                                              | Body                    |
+| ----------- | ------------------------------------------------------------------------ | ----------------------- |
+| 400         | Invalid request, returning with a list of issues detected in the request | `{"errors":["string"]}` |
+| 401         | Unauthorized                                                             | `{"error":"string"}`    |
+| 403         | Maximum number of components exceeded                                    | `{"error":"string"}`    |
+| 404         | Component not found                                                      | `{"error":"string"}`    |
+| 409         | Component already exists                                                 | `{"error":"string"}`    |
+| 500         | Internal server error                                                    | `{"error":"string"}`    |

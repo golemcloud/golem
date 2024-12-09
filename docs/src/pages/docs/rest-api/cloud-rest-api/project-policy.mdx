@@ -72,6 +72,6 @@ Creates a new project policy and returns the object describing it, including the
 | Status Code | Description                                                              | Body                    |
 | ----------- | ------------------------------------------------------------------------ | ----------------------- |
 | 400         | Invalid request, returning with a list of issues detected in the request | `{"errors":["string"]}` |
-| 401         | Unauthorized                                                             | `{"error":"string"}`    |
-| 404         | Project not found                                                        | `{"error":"string"}`    |
+| 401         | Unauthorized request                                                     | `{"error":"string"}`    |
+| 404         | Account not found                                                        | `{"error":"string"}`    |
 | 500         | Internal server error                                                    | `{"error":"string"}`    |

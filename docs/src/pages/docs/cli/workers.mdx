@@ -112,6 +112,22 @@ Invocation results in WAVE format:
 - '5'
 ```
 
+### Ephemeral workers
+
+Invoking **ephemeral components** does not require specifying the worker name, as Golem creates a new instance for each invocation. In this case only the **compnent** must be selected by the URN or URL:
+
+```bash
+golem-cli worker invoke-and-await --worker 'worker:///ephemeral_component' \
+  --function 'demo:worker/api.{test}'
+```
+
+or
+
+```bash
+$ golem-cli worker invoke-and-await --worker urn:worker:d8bc9194-a4a2-4a57-8545-43408fc38799 \
+    --function 'demo:worker/api.{test}'
+```
+
 ### Using idempotency key
 
 If you want to make sure function was called only once even if you called CLI multiple times (for instance due to retries on network errors) you can use `--idempotency-key` parameter for both `invoke` and `invoke-and-await` commands.
@@ -183,4 +199,73 @@ golem-cli worker invoke-and-await --worker urn:worker:d8bc9194-a4a2-4a57-8545-43
 ```
 Invocation results in WAVE format:
 - '0'
+```
+
+## Oplog query
+
+It is possible to **query** an existing worker's oplog for debugging purposes. To get the **full oplog** of a worker, use the `worker oplog` command the worker must be specified just like in other `golem-cli worker` commands:
+
+```bash
+golem-cli worker oplog --worker urn:worker:d8bc9194-a4a2-4a57-8545-43408fc38799/counter1
+```
+
+Any other form of identifying a worker can be used (URL syntax, separate component-id and worker name, etc).
+
+With the optional `--from` parameter it is possible to only get oplog entries _after_ a certain oplog index:
+
+```bash
+golem-cli worker oplog --worker urn:worker:d8bc9194-a4a2-4a57-8545-43408fc38799/counter1
+```
+
+Oplog entries are indexed from 1, and the first entry is always a **create** entry that defines the initial state of the worker.
+
+### Searching for oplog entries
+
+The same command can also be used to **search** for oplog entries, using the `--query` parameter. This parameter requries a query using **lucene query syntax**. The following syntax elements are supported:
+
+- `search terms` looks for `search` AND `terms`
+- `AND`, `OR` and `NOT`
+- grouping using parentheses `()`
+- `"quoted terms"`
+- regular expression matches using `/regex/`
+- `field:value` to search for a specific information
+
+The terms and fields are interpreted in the following way:
+
+| Oplog entry                 | Matching queries                                                                                                                              |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Create`                    | `create`                                                                                                                                      |
+| `ImportedFunctionInvoked`   | `imported-function-invoked`, match on invoked function's name, match on function arguments(_), match on result value(_)                       |
+| `ExportedFunctionInvoked`   | `exported-function-invoked`, `exported-function`, match on invoked function's name, match on idempotency key, match on function arguments(\*) |
+| `ExportedFunctionCompleted` | `exported-function-completed`, `exported-function`, match on response value(\*)                                                               |
+| `Suspend`                   | `suspend`                                                                                                                                     |
+| `Error`                     | `error`, match on error message                                                                                                               |
+| `NoOp`                      | `noop`                                                                                                                                        |
+| `Jump`                      | `jump`                                                                                                                                        |
+| `Interrupted`               | `interrupted`                                                                                                                                 |
+| `Exited`                    | `exited`                                                                                                                                      |
+| `ChangeRetryPolicy`         | `change-retry-policy`                                                                                                                         |
+| `BeginAtomicRegion`         | `begin-atomic-region`                                                                                                                         |
+| `EndAtomicRegion`           | `end-atomic-region`                                                                                                                           |
+| `BeginRemoteWrite`          | `begin-remote-write`                                                                                                                          |
+| `EndRemoteWrite`            | `end-remote-write`                                                                                                                            |
+| `PendingWorkerInvocation`   | `pending-worker-invocation`, match on invoked function's name, match on idempotency key, match on function arguments(\*)                      |
+| `PendingUpdate`             | `pending-update`, `update`, match on target version                                                                                           |
+| `SuccessfulUpdate`          | `successful-update`, `update`, match on target version                                                                                        |
+| `FailedUpdate`              | `failed-update`, `update`, match on target version, match on error details                                                                    |
+| `GrowMemory`                | `grow-memory`                                                                                                                                 |
+| `CreateResource`            | `create-resource`                                                                                                                             |
+| `DropResource`              | `drop-resource`                                                                                                                               |
+| `DescribeResource`          | `describe-resource`, match on resource name, match on resource parameters(\*)                                                                 |
+| `Log`                       | `log`, match on context, match on message                                                                                                     |
+| `Restart`                   | `restart`                                                                                                                                     |
+| `ActivatePlugin`            | `activate-plugin`                                                                                                                             |
+| `DeactivatePlugin`          | `deactivate-plugin`                                                                                                                           |
+
+The cases marked with **(\*)** can use the `field:value` syntax to look into the typed, structured parameter and result values.
+
+For example to look for oplog entries that contain parameters or return values of **exported functions** where any of these input/output values is a **record** having a field `product-id` with either value `123` or `456`, we can use the following query:
+
+```bash
+golem-cli worker oplog --worker urn:worker:d8bc9194-a4a2-4a57-8545-43408fc38799/counter1 --query 'exported-function AND (product-id:123 OR product-id:456)'
 ```

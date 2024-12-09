@@ -6,7 +6,7 @@ Golem provides two WIT **packages** of host functions for accessing Golem-specif
 
 These two packages are:
 
-- `golem:api@0.2.0` - provides access to various aspects of Golem for the workers
+- `golem:api@1.1.0` - provides access to various aspects of Golem for the workers
 - `golem:rpc@0.1.0` - defines the types and functions serving the [Worker to Worker communication](concepts/worker-to-worker-communication) in Golem
 
 Please check the **language specific guidelines** to learn the best way to work with these APIs in your language of choice:
@@ -129,11 +129,10 @@ enum worker-status {
 
 The following functions define the **worker metadata API**:
 
-| Function name         | Definition                                   | Description                                                       |
-| --------------------- | -------------------------------------------- | ----------------------------------------------------------------- |
-| `get-worker-metadata` | `func(worker-id) -> option<worker-metadata>` | Returns the metadata of a worker                                  |
-| `get-self-metadata`   | `func() -> worker-metadata`                  | Returns the metadata of the worker that calls this function       |
-| `get-self-uri`        | `func() -> uri`                              | Returns a URI that identifies the worker that calls this function |
+| Function name         | Definition                                   | Description                                                 |
+| --------------------- | -------------------------------------------- | ----------------------------------------------------------- |
+| `get-worker-metadata` | `func(worker-id) -> option<worker-metadata>` | Returns the metadata of a worker                            |
+| `get-self-metadata`   | `func() -> worker-metadata`                  | Returns the metadata of the worker that calls this function |
 
 ### Worker enumeration
 
@@ -259,7 +258,9 @@ record retry-policy {
     /// The maximum delay between retries
     max-delay: duration,
     /// Multiplier applied to the delay on each retry to implement exponential backoff
-    multiplier: f64
+    multiplier: f64,
+    /// The maximum amount of jitter to add to the delay
+    max-jitter-factor: option<f64>
 }
 ```
 
@@ -322,3 +323,85 @@ The following function defines the **update API**:
 | Function name   | Definition                                                                               | Description                                                                                                                                                        |
 | --------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `update-worker` | `func(worker-id: worker-id, target-version: component-version, mode: update-mode) -> ()` | Initiates an update attempt for the given worker. The function returns immediately once the request has been processed, not waiting for the worker to get updated. |
+
+### Oplog search and query
+
+The `oplog` interface in `golem:api` provides functions to search and query the worker's persisted oplog.
+
+The interface defines a big `variant` data type called `oplog-entry`:
+
+```wit
+variant oplog-entry {
+    /// The initial worker oplog entry
+    create(create-parameters),
+    /// The worker invoked a host function
+    imported-function-invoked(imported-function-invoked-parameters),
+    /// The worker has been invoked
+    exported-function-invoked(exported-function-invoked-parameters),
+    /// The worker has completed an invocation
+    exported-function-completed(exported-function-completed-parameters),
+    /// Worker suspended
+    suspend(datetime),
+    /// Worker failed
+    error(error-parameters),
+    /// Marker entry added when get-oplog-index is called from the worker, to make the jumping behavior
+    /// more predictable.
+    no-op(datetime),
+    /// The worker needs to recover up to the given target oplog index and continue running from
+    /// the source oplog index from there
+    /// `jump` is an oplog region representing that from the end of that region we want to go back to the start and
+    /// ignore all recorded operations in between.
+    jump(jump-parameters),
+    /// Indicates that the worker has been interrupted at this point.
+    /// Only used to recompute the worker's (cached) status, has no effect on execution.
+    interrupted(datetime),
+    /// Indicates that the worker has been exited using WASI's exit function.
+    exited(datetime),
+    /// Overrides the worker's retry policy
+    change-retry-policy(change-retry-policy-parameters),
+    /// Begins an atomic region. All oplog entries after `BeginAtomicRegion` are to be ignored during
+    /// recovery except if there is a corresponding `EndAtomicRegion` entry.
+    begin-atomic-region(datetime),
+    /// Ends an atomic region. All oplog entries between the corresponding `BeginAtomicRegion` and this
+    /// entry are to be considered during recovery, and the begin/end markers can be removed during oplog
+    /// compaction.
+    end-atomic-region(end-atomic-region-parameters),
+    /// Begins a remote write operation. Only used when idempotence mode is off. In this case each
+    /// remote write must be surrounded by a `BeginRemoteWrite` and `EndRemoteWrite` log pair and
+    /// unfinished remote writes cannot be recovered.
+    begin-remote-write(datetime),
+    /// Marks the end of a remote write operation. Only used when idempotence mode is off.
+    end-remote-write(end-remote-write-parameters),
+    /// An invocation request arrived while the worker was busy
+    pending-worker-invocation(pending-worker-invocation-parameters),
+    /// An update request arrived and will be applied as soon the worker restarts
+    pending-update(pending-update-parameters),
+    /// An update was successfully applied
+    successful-update(successful-update-parameters),
+    /// An update failed to be applied
+    failed-update(failed-update-parameters),
+    /// Increased total linear memory size
+    grow-memory(grow-memory-parameters),
+    /// Created a resource instance
+    create-resource(create-resource-parameters),
+    /// Dropped a resource instance
+    drop-resource(drop-resource-parameters),
+    /// Adds additional information for a created resource instance
+    describe-resource(describe-resource-parameters),
+    /// The worker emitted a log message
+    log(log-parameters),
+    /// The worker's has been restarted, forgetting all its history
+    restart(datetime),
+    /// Activates a plugin
+    activate-plugin(activate-plugin-parameters),
+    /// Deactivates a plugin
+    deactivate-plugin(deactivate-plugin-parameters)
+}
+```
+
+and two **resources** for querying a worker's oplog.
+
+- the `get-oplog` resource enumerates through **all entries** of the oplog
+- the `search-oplog` resource accepts a **search expression** and only returns the matching entries
+
+Both resources, once constructed, provide a `get-next` function that returns a chunk of oplog entries. Repeatedly calling this function goes through the whole data set, and eventually returns `none`.

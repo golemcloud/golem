@@ -28,7 +28,7 @@ interface api {
 }
 
 world update-test-v3 {
-  export golem:api/save-snapshot@0.2.0;
+  export golem:api/save-snapshot@1.1.0;
 
   export api;
 }
@@ -63,7 +63,7 @@ Add the following dependencies to the `Cargo.toml` file:
 Add the following line to the component's world in its main `WIT` file:
 
 ```wit
-export golem:api/save-snapshot@0.2.0;
+export golem:api/save-snapshot@1.1.0;
 ```
 
 ### Step 4: implement the `save-snapshot` function in Rust
@@ -93,7 +93,7 @@ Implementing the `load-snapshot` function in the new component requires the same
 Once the WIT dependencies are set up, export the `load-snapshot` function in the following way:
 
 ```wit
-export golem:api/load-snapshot@0.2.0;
+export golem:api/load-snapshot@1.1.0;
 ```
 
 and then implement it in Rust:

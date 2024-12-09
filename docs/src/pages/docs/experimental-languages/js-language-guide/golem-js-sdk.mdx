@@ -69,7 +69,7 @@ export default {
     format: "esm",
   },
   external: [
-    "golem:api/host@0.2.0",
+    "golem:api/host@1.1.0",
     "golem:rpc/types@0.1.0",
     "wasi:blobstore/blobstore",
     "wasi:blobstore/container",
@@ -127,7 +127,7 @@ Ensure the `scripts` and `devDependencies` sections are correct (versions may di
   },
   "devDependencies": {
     "@golemcloud/componentize-js": "0.10.5-golem.3",
-    "@golemcloud/golem-ts": "0.2.0",
+    "@golemcloud/golem-ts": "1.1.0",
     "@golemcloud/jco": "1.4.4-golem.1",
     "@rollup/plugin-node-resolve": "^15.2.3",
     "rollup": "^4.18.0"
@@ -178,7 +178,7 @@ Modify it in the following way:
 package golem:demo;
 
 world ts-example {
-  import golem:api/host@0.2.0;
+  import golem:api/host@1.1.0;
   import golem:rpc/types@0.1.0;
 
   import wasi:blobstore/blobstore;

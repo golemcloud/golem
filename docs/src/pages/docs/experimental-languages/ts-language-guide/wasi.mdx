@@ -31,7 +31,7 @@ The following table lists all packages provided by Golem:
 
 ## Bindings
 
-The TypeScript bindings for the WASI and Golem-specific interfaces are provided in the `golem:api/host@0.2.0` module. You can import and use these bindings in your TypeScript code.
+The TypeScript bindings for the WASI and Golem-specific interfaces are provided in the `golem:api/host@1.1.0` module. You can import and use these bindings in your TypeScript code.
 
 ## Additional Golem runtime APIs
 
@@ -46,7 +46,7 @@ It is guaranteed that this idempotency key will always be the same (per occurren
 To generate an idempotency key:
 
 ```typescript
-import { generateIdempotencyKey } from "golem:api/host@0.2.0"
+import { generateIdempotencyKey } from "golem:api/host@1.1.0"
 
 const key: Uuid = generateIdempotencyKey()
 ```
@@ -86,7 +86,7 @@ import {
   WorkerAnyFilter,
   WorkerMetadata,
   WorkerStatusFilter,
-} from "golem:api/host@0.2.0"
+} from "golem:api/host@1.1.0"
 
 const filter: WorkerAnyFilter = {
   filters: [

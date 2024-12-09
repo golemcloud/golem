@@ -199,9 +199,7 @@ use crate::bindings::demo::component1_stub::stub_component1::*;
 
 ### Construct the URI for the target worker
 
-The worker to be invoked is identified by an URI which consists of the **component ID** and the **worker name**.
-
-Workers can get their own URI by using the `get_self_uri` function from the Golem Rust SDK, but it can also be constructed manually.
+The worker to be invoked is identified by an URI which consists of the **component ID** and, in case of durable workers, the **worker name**. For _ephemeral workers_ no name needs to be specified.
 
 If the worker pointed by the URI does not exists, it is going to be created automatically and it inherits the environment variables of the caller.
 
@@ -213,7 +211,15 @@ The following code snippet gets the target component's id from an environment va
 let component_id =
     std::env::var("TARGET_COMPONENT_ID").expect("TARGET_COMPONENT_ID not set");
 let target_uri = Uri {
-    value: format!("worker://{component_id}/target-worker"),
+    value: format!("urn:worker:{component_id}/target-worker"),
+};
+```
+
+In case of **ephemeral workers**, only the component ID needs to be specified in the URI:
+
+```rust
+let target_uri = Uri {
+    value: format!("urn:worker:{component_id}"),
 };
 ```
 

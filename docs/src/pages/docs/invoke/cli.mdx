@@ -11,10 +11,17 @@ Both commands require specifying which worker to invoke, and the name of the fun
 
 There are multiple options for selecting the worker:
 
+**Durable workers identified by a component ID and a worker name**:
+
 - `--worker urn:worker:<component-id>/<worker-name>`
 - `--worker worker:///<component_name>/<worker-name>`
 - `--component urn:component:<component-id> --worker-name <worker-name>`
 - `--component component:///<component-name> --worker-name <worker-name>`
+
+**Ephemeral workers identified by just a component ID**:
+
+- `--worker urn:worker:<component-id>`
+- `--worker worker:///<component_name>`
 
 The function to be invoked is selected by the `--function` parameter. Read the [invocation function name syntax page](/docs/function-names) for more information about the possible function names.
 

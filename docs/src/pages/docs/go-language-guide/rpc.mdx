@@ -174,7 +174,7 @@ $ make bindings
 
 ### Creating the worker client
 
-The worker to be invoked is identified by an URI which consists of the **component ID** and the **worker name**.
+The worker to be invoked is identified by an URI which consists of the **component ID** and, in case of durable workers, the **worker name**. For ephemeral workers no worker name needs to be specified.
 
 If the worker pointed by the URI does not exists, it is going to be created automatically and it inherits the environment variables of the caller.
 
@@ -198,6 +198,16 @@ component2WorkerClient := component1.NewComponent2Api(
 
 // Cleanup the client after use
 defer component2WorkerClient.Drop()
+```
+
+When invoking ephemeral components, only the component ID is needed in the URI:
+
+```go
+component2WorkerClient := component1.NewComponent2Api(
+    component1.GolemRpc0_1_0_TypesUri{
+        Value: fmt.Sprintf("urn:worker:%s", component2ID),
+    },
+)
 ```
 
 ### Calling worker client functions
