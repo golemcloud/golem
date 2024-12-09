@@ -48,8 +48,7 @@ use golem_worker_service_base::gateway_api_deployment::{
     ApiDeploymentRequest, ApiSite, ApiSiteString,
 };
 use golem_worker_service_base::gateway_execution::gateway_session::{
-    DataKey, DataValue, GatewaySession, GatewaySessionError,
-    RedisGatewaySession, SessionId,
+    DataKey, DataValue, GatewaySession, GatewaySessionError, RedisGatewaySession, SessionId,
 };
 use golem_worker_service_base::gateway_security::{
     AuthorizationUrl, DefaultIdentityProvider, GolemIdentityProviderMetadata, IdentityProvider,
@@ -215,7 +214,6 @@ pub async fn test_gateway_session_expiry() {
         result,
         Err(GatewaySessionError::MissingValue { .. })
     ));
-
 }
 
 async fn insert_and_get_with_redis(

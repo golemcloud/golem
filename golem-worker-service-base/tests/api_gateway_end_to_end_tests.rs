@@ -82,7 +82,7 @@ async fn execute(
     // Resolve the API definition binding from input
     let resolver = DefaultGatewayBindingResolver::new(
         api_request.clone(),
-        Arc::clone(&session_store),
+        Arc::clone(session_store),
         Arc::new(test_identity_provider.clone()),
     );
 
@@ -2048,7 +2048,6 @@ pub mod security {
     use golem_worker_service_base::gateway_security::{
         AuthorizationUrl, DefaultIdentityProvider, GolemIdentityProviderMetadata, IdentityProvider,
         IdentityProviderError, OpenIdClient, Provider, SecurityScheme,
-        SecuritySchemeWithProviderMetadata,
     };
     use golem_worker_service_base::repo::security_scheme::{
         SecuritySchemeRecord, SecuritySchemeRepo,
