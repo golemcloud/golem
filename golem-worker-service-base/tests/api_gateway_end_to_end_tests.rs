@@ -553,7 +553,7 @@ async fn test_api_def_with_security_for_valid_input() {
       { body: response, headers: {email: email} }
     "#;
 
-    let identity_provider_resolver = TestIdentityProvider::get_provider_with_valid_id_token();
+    let identity_provider = TestIdentityProvider::get_provider_with_valid_id_token();
 
     let auth_call_back_url =
         RedirectUrl::new("http://localhost/auth/callback".to_string()).unwrap();
@@ -563,7 +563,7 @@ async fn test_api_def_with_security_for_valid_input() {
         worker_name,
         response_mapping,
         &auth_call_back_url,
-        &identity_provider_resolver,
+        &identity_provider,
     )
     .await;
 
@@ -573,7 +573,7 @@ async fn test_api_def_with_security_for_valid_input() {
         &api_request,
         &api_specification,
         &session_store,
-        &identity_provider_resolver,
+        &identity_provider,
     )
     .await;
 
@@ -627,7 +627,7 @@ async fn test_api_def_with_security_for_valid_input() {
             .expect("Failed to get request"),
         &api_specification,
         &session_store,
-        &identity_provider_resolver,
+        &identity_provider,
     )
     .await;
 
@@ -640,7 +640,7 @@ async fn test_api_def_with_security_for_valid_input() {
         &api_request,
         &api_specification,
         &session_store,
-        &identity_provider_resolver,
+        &identity_provider,
     )
     .await;
 
@@ -2062,13 +2062,7 @@ pub mod security {
     };
     use http::header::{COOKIE, HOST};
     use http::{HeaderMap, HeaderValue, Method, Uri};
-    use openidconnect::core::{
-        CoreClaimName, CoreClaimType, CoreClientAuthMethod, CoreGrantType, CoreIdToken,
-        CoreIdTokenClaims, CoreIdTokenFields, CoreIdTokenVerifier, CoreJsonWebKey,
-        CoreJweContentEncryptionAlgorithm, CoreJweKeyManagementAlgorithm, CoreJwsSigningAlgorithm,
-        CoreProviderMetadata, CoreResponseMode, CoreResponseType, CoreRsaPrivateSigningKey,
-        CoreSubjectIdentifierType, CoreTokenResponse, CoreTokenType,
-    };
+    use openidconnect::core::{CoreClaimName, CoreClaimType, CoreClient, CoreClientAuthMethod, CoreGrantType, CoreIdToken, CoreIdTokenClaims, CoreIdTokenFields, CoreIdTokenVerifier, CoreJsonWebKey, CoreJweContentEncryptionAlgorithm, CoreJweKeyManagementAlgorithm, CoreJwsSigningAlgorithm, CoreProviderMetadata, CoreResponseMode, CoreResponseType, CoreRsaPrivateSigningKey, CoreSubjectIdentifierType, CoreTokenResponse, CoreTokenType};
     use openidconnect::{
         AccessToken, Audience, AuthUrl, AuthenticationContextClass, AuthorizationCode, ClientId,
         ClientSecret, CsrfToken, EmptyAdditionalClaims, EmptyExtraTokenFields, EndUserEmail,
@@ -2294,8 +2288,18 @@ nUhg4edJVHjqxYyoQT+YSPLlHl6AkLZt9/n1NJ+bft0=
             &self,
             security_scheme: &SecurityScheme,
         ) -> Result<OpenIdClient, IdentityProviderError> {
-            let identity_provider = DefaultIdentityProvider;
-            identity_provider.get_client(security_scheme).await
+            let provider_metadata = self
+                .get_provider_metadata(&security_scheme.provider_type())
+                .await?;
+
+            let client = CoreClient::from_provider_metadata(
+                provider_metadata,
+                security_scheme.client_id().clone(),
+                Some(security_scheme.client_secret().clone()),
+            )
+                .set_redirect_uri(security_scheme.redirect_url());
+
+            Ok(OpenIdClient { client })
         }
     }
 
@@ -2306,9 +2310,8 @@ nUhg4edJVHjqxYyoQT+YSPLlHl6AkLZt9/n1NJ+bft0=
             security_scheme: Arc::new(Mutex::new(HashMap::new())),
         });
 
-        let identity_provider_resolver = Arc::new(identity_provider);
-
-        let default = DefaultSecuritySchemeService::new(repo, identity_provider_resolver);
+        let default =
+            DefaultSecuritySchemeService::new(repo,  Arc::new(identity_provider));
 
         Arc::new(default)
     }
@@ -2495,7 +2498,8 @@ nUhg4edJVHjqxYyoQT+YSPLlHl6AkLZt9/n1NJ+bft0=
             CoreJweKeyManagementAlgorithm::EcdhEsAesKeyWrap192,
             CoreJweKeyManagementAlgorithm::EcdhEsAesKeyWrap256,
         ];
-        let new_provider_metadata = CoreProviderMetadata::new(
+
+        CoreProviderMetadata::new(
             IssuerUrl::new("https://accounts.google.com".to_string()).unwrap(),
             AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string()).unwrap(),
             JsonWebKeySetUrl::new("https://www.googleapis.com/oauth2/v3/certs".to_string())
@@ -2507,7 +2511,15 @@ nUhg4edJVHjqxYyoQT+YSPLlHl6AkLZt9/n1NJ+bft0=
             ],
             all_signing_algs.clone(),
             Default::default(),
-        )
+        ).set_jwks({
+            let public_key = rsa::RsaPublicKey::from_public_key_pem(TEST_PUBLIC_KEY)
+                .expect("Failed to parse public key");
+
+            let n = public_key.n().to_bytes_be();
+            let e = public_key.e().to_bytes_be();
+            let kid = JsonWebKeyId::new("my-key-id".to_string());
+            JsonWebKeySet::new(vec![CoreJsonWebKey::new_rsa(n, e, Some(kid))])
+        })
         .set_request_object_signing_alg_values_supported(Some(all_signing_algs.clone()))
         .set_token_endpoint_auth_signing_alg_values_supported(Some(vec![
             CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256,
@@ -2630,9 +2642,7 @@ nUhg4edJVHjqxYyoQT+YSPLlHl6AkLZt9/n1NJ+bft0=
         ]))
         .set_acr_values_supported(Some(vec![AuthenticationContextClass::new(
             "PASSWORD".to_string(),
-        )]));
-
-        new_provider_metadata
+        )]))
     }
 
     pub async fn create_request_from_redirect(headers: &HeaderMap) -> InputHttpRequest {

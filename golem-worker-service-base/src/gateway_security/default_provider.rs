@@ -41,7 +41,9 @@ impl IdentityProvider for DefaultIdentityProvider {
             openidconnect::reqwest::async_http_client,
         )
         .await
-        .map_err(|err| IdentityProviderError::FailedToDiscoverProviderMetadata(err.to_string()))?;
+        .map_err(|err| {
+            IdentityProviderError::FailedToDiscoverProviderMetadata(err.to_string())
+        })?;
 
         Ok(provide_metadata)
     }
