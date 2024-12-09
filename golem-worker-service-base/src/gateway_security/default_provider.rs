@@ -85,6 +85,7 @@ impl IdentityProvider for DefaultIdentityProvider {
 
         Ok(OpenIdClient { client })
     }
+
     fn get_id_token_verifier<'a>(&self, client: &'a OpenIdClient) -> CoreIdTokenVerifier<'a> {
         client.client.id_token_verifier()
     }
