@@ -32,9 +32,9 @@ harness = false
 
 [dependencies]
 # NOTE: these cannot be workspace (git) deps, as that breaks publishing
-golem-client = { version = "=1.1.0-rc11" }
-golem-cli = { version = "=1.1.0-rc11" }
-golem-common = { version = "=1.1.0-rc11" }
+golem-client = { version = "=1.1.0" }
+golem-cli = { version = "=1.1.0" }
+golem-common = { version = "=1.1.0" }
 
 golem-cloud-client = { path = "../golem-cloud-client", version = "0.0.0" }
 
@@ -47,10 +47,10 @@ clap_complete = { version = "4.5.13" }
 derive_more = { workspace = true }
 dirs = "5.0.1"
 futures-util = { workspace = true }
-golem-examples = "=1.1.0-rc1"
+golem-examples = "=1.1.0"
 golem-wasm-ast = { workspace = true }
 golem-wasm-rpc = { workspace = true }
-golem-wasm-rpc-stubgen = { version = "=1.1.0-rc2", optional = true, default-features = false }
+golem-wasm-rpc-stubgen = { version = "=1.1.0", optional = true, default-features = false }
 h2 = "0.3.24"
 http = { workspace = true }
 hyper = { workspace = true }
@@ -102,7 +102,7 @@ golem-api-grpc = { workspace = true }
 cloud-api-grpc = { path = "../cloud-api-grpc" }
 
 # NOTE: these cannot be workspace (git) deps, as that breaks publishing
-golem-test-framework = { version = "=1.1.0-rc11" }
+golem-test-framework = { version = "=1.1.0" }
 
 [features]
 default = ["stubgen"]
