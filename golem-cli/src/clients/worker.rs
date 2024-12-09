@@ -53,6 +53,10 @@ pub trait WorkerClient {
     async fn simulated_crash(&self, worker_urn: WorkerUrn) -> Result<(), GolemError>;
     async fn delete(&self, worker_urn: WorkerUrn) -> Result<(), GolemError>;
     async fn get_metadata(&self, worker_urn: WorkerUrn) -> Result<WorkerMetadata, GolemError>;
+    async fn get_metadata_opt(
+        &self,
+        worker_urn: WorkerUrn,
+    ) -> Result<Option<WorkerMetadata>, GolemError>;
     async fn find_metadata(
         &self,
         component_urn: ComponentUrn,
