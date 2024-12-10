@@ -1,0 +1,9 @@
+package test:caller;
+
+interface api {
+  run: func();
+}
+
+world caller {
+    export api;
+}

@@ -1,0 +1,15 @@
+// Test WIT covering three components, A, B and C, referencing each other as A->B->C->A.
+
+package test:b;
+
+interface api-b {
+  enum typ-b {
+    x, y, z
+  }
+
+  func-b: func() -> typ-b;
+}
+
+world b {
+  export api-b;
+}
