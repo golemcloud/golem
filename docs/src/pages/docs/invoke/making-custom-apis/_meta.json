@@ -4,6 +4,7 @@
   "deploy-api-definition": "Deploy API definition",
   "try-out-deployed-api": "Invoke the deployed API",
   "trouble-shooting": "Trouble Shooting",
+  "update-api-deployment": "Update API definitions and deployments",
   "authentication": "Make APIs Secure",
   "cors": "Setting up CORS",
   "rib-in-api-definition": "Request Response Transformation using Rib",

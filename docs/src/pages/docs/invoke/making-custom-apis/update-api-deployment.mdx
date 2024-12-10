@@ -1,0 +1,94 @@
+## Update API definitions and deployments
+
+### Deploying multiple definitions to the same site
+
+Multiple API definitions can be deployed to a specific site (subdomain.domain),
+as far their routes don't conflict.
+
+Example: Let's say we have an API definition with ID/version `my-shopping-cart/0.0.1` deployed in domain `localhost:9006` ,
+and we want to deploy another registered definition `my-todo-app/0.0.1` to the same domain.
+
+```bash filename="Terminal" copy
+./golem-cli api-deployment deploy --host localhost:9006 --definition my-todo-app/0.0.1
+
+API deployment on localhost:9006 with definition my-shopping-cart/0.0.1
+API deployment on localhost:9006 with definition my-todo-app/0.0.1
+
+```
+
+Now all the routes are available under the same domain `localhost:9006`. If there are any conflicts between the
+routes of the two definitions, you will get a conflict error message.
+
+If you try to deploy an API definition with routes that are already deployed and live,
+then you will get a conflict error.
+
+Example:
+
+```bash filename="Terminal" copy
+golem-cli api-deployment deploy --host localhost:9006 --definition my-todo-app/0.0.1
+API deployment definitions conflict error: /v1/healthcheck
+```
+
+### Update a deployed API definition without bumping up it's version
+
+Let's say you want to update the existing API definition that is already deployed without changing its
+version number.
+
+```bash filename="Terminal" copy
+golem-cli api-definition update  my-shopping-cart --def-format my-shopping-cart.yaml
+API definition is not draft: my-shopping-cart
+```
+
+API definition is not draft because the particular version is already deployed and you cannot
+update its routes and register with the same version. If the API definition is not in draft mode,
+and you tried to update the definition itself, then you will get an error message as shown above.
+
+### Update a deployed API definition by bumping up it's version
+
+If you want to update the details of an API definition that is already deployed, you can bump up its version
+and registering it again. API Gateway will consider it as a new API definition, and allows you to deploy it
+as far as there are no conflicts with the existing routes.
+
+In the below example, lets assume we bumped up the version number from 0.0.1 to 0.0.2 in my-shopping-cart.yaml
+(and also updated its routes such that they don't conflict)
+
+```bash filename="Terminal" copy
+golem-cli api-definition add  my-shopping-cart.yaml --def-format yaml
+golem-cli api-deployment deploy --host localhost:9006 --definition my-shopping-cart/0.0.2                          Tue 10 Dec 14:57:22 2024
+
+API deployment on localhost:9006 with definition my-shopping-cart/0.0.1
+API deployment on localhost:9006 with definition my-shopping-cart/0.0.2
+
+```
+
+You can see both versions are running now in the same domain `localhost:9006`.
+You can list all the deployments in a domain for a particular API definition ID (my-shopping-cart) as given below
+
+```bash filename="Terminal" copy
+
+curl -X GET 'http://localhost:9005/v1/api/deployments?api-definition-id=my-shopping-cart'
+[
+  {
+    "apiDefinitions": [
+      {
+        "id": "my-shopping-cart",
+        "version": "0.0.1"
+      },
+      {
+        "id": "my-shopping-cart",
+        "version": "0.0.2"
+      }
+    ],
+    "createdAt": "2024-12-10T04:21:54.872613+00:00",
+    "site": {
+      "host": "localhost:9006",
+      "subdomain": null
+    }
+  }
+]
+
+```
+
+As mentioned earlier, if you try to deploy a new version of an existing API definition or a completely new API definition,
+with conflicting routes, you will get a conflict error message during deployment.
+At this point, you can update the routes in the new API definition and try and deploy it again.

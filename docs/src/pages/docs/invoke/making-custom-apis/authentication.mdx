@@ -25,7 +25,8 @@ We call these details "Api Security Scheme" in Golem API Gateway.
 Make sure you name your security scheme uniquely, and provide the client-id, client-secret and redirect-url as given below.
 
 ```bash filename="Terminal" copy
-golem-cli api-security-scheme create --scheme.id my-unique-security-scheme --provider.type google --client.id 1087126-.apps.googleusercontent.com --client.secret GOCSPXREDACTED- --redirect.url http://localhost:9006/auth/callback
+
+golem-cli api-security-scheme create --scheme.id shopping-cart-security-scheme --provider.type google --client.id $GOOGLE_CLIENT_ID --client.secret $GOOGLE_CLIENT_SECRET --redirect.url http://localhost:9006/auth/callback --scopes openid,email,profile
 
 ```
 

@@ -1,7 +1,9 @@
 ## Watch out for errors during deployment
 
+### Route conflict errors during deployment
+
 Please note the following: If you already deployed an API definition before with the same path `/{user-id}/get-cart-contents`,
-then you will receive a conflict error as given below, instead of the response above.
+then you will receive a conflict error as given below.
 
 ```bash filename="Terminal" copy
 API deployment definitions conflict error: /{user-id}/get-cart-contents
@@ -10,9 +12,14 @@ API deployment definitions conflict error: /{user-id}/get-cart-contents
 This implies, when you update the version, you have to update the path as well, such as `/v5/{user-id}/get-cart-contents`
 under the `path` field in `route`.
 
-## Watch out for errors when using the deployed API
+### Watch out for more errors during API definition and deployment updates
 
-If your API's implementation (Rib script which internally calls workers) gets a wrong input,
+Please read through how to [update API definitions and deployments](/docs/invoke/making-custom-apis/update-api-deployment)
+to understand possible errors and how to manage them.
+
+### BadRequest errors when invoking the API with inputs
+
+If your API's implementation (Rib script which internally calls workers) gets a wrong input (Example: wrong types in http request),
 it produces a `BadRequest`. This makes Golem Gateway much more type safe than a typical Gateway
 where it always routes to the backend regardless of wrong inputs.
 
@@ -25,22 +32,22 @@ should be of the type `u64`.
 let user: u64 = request.path.user-id; \"my-worker-${user}\""
 ```
 
-This implies Rib expects the input `user-id` to be `u64`. Otherwise, it will fail with type-error.
-If you are using golem-OSS, you can see the following in docker logs
+This implies Rib expects the input `user-id` to be `u64`. Otherwise, it will fail with BadRequestError
 
 ```bash filename="Terminal" copy
-Failed to resolve the API definition; error: Worker binding resolution error: Failed to resolve rib input value from http request details Rib input type mismatch:
-Input request details don't match the requirements for rib expression to execute:
-Invalid value for the key path.
-Error: Invalid value for the key user-id. Error: Expected function parameter type is u64.
-But found String.
-Requirements. Record(TypeRecord { fields: [NameTypePair { name: "path", typ: Record(TypeRecord { fields: [NameTypePair { name: "user-id", typ: U64(TypeU64) }] }) }] })
+>
+* Request completely sent off
+< HTTP/1.1 400 Bad Request
+< access-control-allow-origin: *
+< content-length: 392
+< date: Tue, 10 Dec 2024 03:42:54 GMT
+<
+* Connection #1 to host localhost left intact
+Input request details don't match the requirements for rib expression to execute: Invalid value for the key path.
+Error: Invalid value for the key user-id. Error: Expected function parameter type is u64. But found string.
+Requirements. Record(TypeRecord { fields: [NameTypePair { name: "path", typ: Record(TypeRecord { fields: [NameTypePair { name: "user-id", typ: U64(TypeU64) }] }) }] })%
+
 ```
 
 This implies the `request` input should have a field called `path` in it, which in turn has a field called `user-id`,
 and its type _should be_ u64.
-
-This could have been a `BadRequest` error. But sometimes, the route may not be resolved due to wrong types.
-and this time client may not get back the reason for error. We will try to improve this as we go.
-In any case, during development phase, you will need to investigate errors like this by inspecting the logs
-in worker-service docker container.
