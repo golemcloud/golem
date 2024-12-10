@@ -258,6 +258,7 @@ jobs:
         run: git fetch origin --deepen=1
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
+      - uses: cargo-bins/cargo-binstall@main
       - name: Install cargo-component
         run: cargo binstall --no-confirm cargo-component@0.13.2
       - uses: Swatinem/rust-cache@v2

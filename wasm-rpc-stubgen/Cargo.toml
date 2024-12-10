@@ -7,10 +7,6 @@ homepage = "https://golem.cloud"
 repository = "https://github.com/golemcloud/wasm-rpc"
 description = "Golem WASM RPC stub generator"
 
-[features]
-default = ["app-command"]
-app-command = []
-
 [lib]
 path = "src/lib.rs"
 harness = false
