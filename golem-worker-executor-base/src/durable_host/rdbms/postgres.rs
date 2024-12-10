@@ -15,16 +15,20 @@
 use crate::durable_host::DurableWorkerCtx;
 use crate::metrics::wasm::record_host_function_call;
 use crate::preview2::wasi::rdbms::postgres::{
-    DbColumn, DbColumnType, DbColumnTypePrimitive, DbRow, DbValue, DbValuePrimitive, Error, Host,
-    HostDbConnection, HostDbResultSet, Interval, IpAddress, MacAddress, Uuid,
+    Date, Datebound, Daterange, DbColumn, DbColumnType, DbColumnTypePrimitive, DbRow, DbValue,
+    DbValuePrimitive, Error, Host, HostDbConnection, HostDbResultSet, Int4bound, Int4range,
+    Int8bound, Int8range, Interval, IpAddress, MacAddress, Numbound, Numrange, Time, Timestamp,
+    Timestamptz, Timetz, Tsbound, Tsrange, Tstzbound, Tstzrange, Uuid,
 };
 use crate::services::rdbms::postgres::PostgresType;
 use crate::services::rdbms::RdbmsPoolKey;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
+use bigdecimal::BigDecimal;
+use chrono::{Datelike, Offset, Timelike};
 use sqlx::types::BitVec;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::ops::Deref;
+use std::ops::{Bound, Deref};
 use std::str::FromStr;
 use std::sync::Arc;
 use wasmtime::component::Resource;
@@ -313,23 +317,23 @@ impl TryFrom<DbValuePrimitive> for crate::services::rdbms::postgres::types::DbVa
             DbValuePrimitive::Float8(f) => Ok(Self::Float8(f)),
             DbValuePrimitive::Boolean(b) => Ok(Self::Boolean(b)),
             DbValuePrimitive::Timestamp(v) => {
-                let value = postgres_utils::timestamp_to_naivedatetime(v)?;
+                let value = v.try_into()?;
                 Ok(Self::Timestamp(value))
             }
             DbValuePrimitive::Timestamptz(v) => {
-                let value = postgres_utils::timestamptz_to_datetime(v)?;
+                let value = v.try_into()?;
                 Ok(Self::Timestamptz(value))
             }
             DbValuePrimitive::Time(v) => {
-                let value = postgres_utils::time_to_nativetime(v)?;
+                let value = v.try_into()?;
                 Ok(Self::Time(value))
             }
             DbValuePrimitive::Timetz(v) => {
-                let value = postgres_utils::timetz_to_nativetime_and_offset(v)?;
+                let value = v.try_into()?;
                 Ok(Self::Timetz(value))
             }
             DbValuePrimitive::Date(v) => {
-                let value = postgres_utils::date_to_nativedate(v)?;
+                let value = v.try_into()?;
                 Ok(Self::Date(value))
             }
             DbValuePrimitive::Interval(v) => Ok(Self::Interval((v.months, v.days, v.microseconds))),
@@ -359,28 +363,22 @@ impl TryFrom<DbValuePrimitive> for crate::services::rdbms::postgres::types::DbVa
             DbValuePrimitive::Macaddr(v) => Ok(Self::Macaddr(
                 sqlx::types::mac_address::MacAddress::new(v.octets.into()),
             )),
-            DbValuePrimitive::Int4range(v) => {
-                let v = postgres_utils::int4range_to_bounds(v);
-                Ok(Self::Int4range(v))
-            }
-            DbValuePrimitive::Int8range(v) => {
-                let v = postgres_utils::int8range_to_bounds(v);
-                Ok(Self::Int8range(v))
-            }
+            DbValuePrimitive::Int4range(v) => Ok(Self::Int4range(v.into())),
+            DbValuePrimitive::Int8range(v) => Ok(Self::Int8range(v.into())),
             DbValuePrimitive::Numrange(v) => {
-                let v = postgres_utils::numrange_to_bounds(v)?;
+                let v = v.try_into()?;
                 Ok(Self::Numrange(v))
             }
             DbValuePrimitive::Tsrange(v) => {
-                let v = postgres_utils::tsrange_to_bounds(v)?;
+                let v = v.try_into()?;
                 Ok(Self::Tsrange(v))
             }
             DbValuePrimitive::Tstzrange(v) => {
-                let v = postgres_utils::tstzrange_to_bounds(v)?;
+                let v = v.try_into()?;
                 Ok(Self::Tstzrange(v))
             }
             DbValuePrimitive::Daterange(v) => {
-                let v = postgres_utils::daterange_to_bounds(v)?;
+                let v = v.try_into()?;
                 Ok(Self::Daterange(v))
             }
             DbValuePrimitive::Money(v) => Ok(Self::Money(v)),
@@ -408,19 +406,19 @@ impl From<crate::services::rdbms::postgres::types::DbValuePrimitive> for DbValue
                 Self::Boolean(b)
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Timestamp(v) => {
-                Self::Timestamp(postgres_utils::naivedatetime_to_timestamp(v))
+                Self::Timestamp(v.into())
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Timestamptz(v) => {
-                Self::Timestamptz(postgres_utils::datetime_to_timestamptz(v))
+                Self::Timestamptz(v.into())
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Time(v) => {
-                Self::Time(postgres_utils::naivetime_to_time(v))
+                Self::Time(v.into())
             }
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Timetz((v, o)) => {
-                Self::Timetz(postgres_utils::naivetime_and_offset_to_time(v, o))
+            crate::services::rdbms::postgres::types::DbValuePrimitive::Timetz(v) => {
+                Self::Timetz(v.into())
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Date(v) => {
-                Self::Date(postgres_utils::naivedate_to_date(v))
+                Self::Date(v.into())
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Interval((
                 months,
@@ -471,22 +469,22 @@ impl From<crate::services::rdbms::postgres::types::DbValuePrimitive> for DbValue
                 DbValuePrimitive::Macaddr(MacAddress { octets: v.into() })
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Tsrange(v) => {
-                Self::Tsrange(postgres_utils::bounds_to_tsrange(v))
+                Self::Tsrange(v.into())
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Tstzrange(v) => {
-                Self::Tstzrange(postgres_utils::bounds_to_tstzrange(v))
+                Self::Tstzrange(v.into())
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Daterange(v) => {
-                Self::Daterange(postgres_utils::bounds_to_daterange(v))
+                Self::Daterange(v.into())
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Int4range(v) => {
-                Self::Int4range(postgres_utils::bounds_to_int4range(v))
+                Self::Int4range(v.into())
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Int8range(v) => {
-                Self::Int8range(postgres_utils::bounds_to_int8range(v))
+                Self::Int8range(v.into())
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Numrange(v) => {
-                Self::Numrange(postgres_utils::bounds_to_numrange(v))
+                Self::Numrange(v.into())
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Oid(v) => Self::Oid(v),
             crate::services::rdbms::postgres::types::DbValuePrimitive::Money(v) => Self::Money(v),
@@ -684,27 +682,130 @@ impl From<IpAddress> for IpAddr {
     }
 }
 
-pub(crate) mod postgres_utils {
-    use crate::preview2::wasi::rdbms::postgres::{
-        Date, Datebound, Daterange, Int4bound, Int4range, Int8bound, Int8range, Numbound, Numrange,
-        Time, Timestamp, Timestamptz, Timetz, Tsbound, Tsrange, Tstzbound, Tstzrange,
-    };
-    use bigdecimal::BigDecimal;
-    use chrono::{Datelike, Offset, Timelike};
-    use std::ops::Bound;
-    use std::str::FromStr;
+impl TryFrom<Time> for chrono::NaiveTime {
+    type Error = String;
 
-    type NaiveDateTimeBounds = (Bound<chrono::NaiveDateTime>, Bound<chrono::NaiveDateTime>);
-    type DateTimeBounds = (
-        Bound<chrono::DateTime<chrono::Utc>>,
-        Bound<chrono::DateTime<chrono::Utc>>,
-    );
-    type NaiveDateBounds = (Bound<chrono::NaiveDate>, Bound<chrono::NaiveDate>);
-    type I32Bounds = (Bound<i32>, Bound<i32>);
-    type I64Bounds = (Bound<i64>, Bound<i64>);
-    type BigDecimalBounds = (Bound<BigDecimal>, Bound<BigDecimal>);
+    fn try_from(value: Time) -> Result<Self, Self::Error> {
+        let time = chrono::NaiveTime::from_hms_nano_opt(
+            value.hour as u32,
+            value.minute as u32,
+            value.second as u32,
+            value.nanosecond,
+        )
+        .ok_or("Time value is not valid")?;
+        Ok(time)
+    }
+}
 
-    pub(crate) fn int4range_to_bounds(value: Int4range) -> I32Bounds {
+impl TryFrom<Timetz> for (chrono::NaiveTime, chrono::FixedOffset) {
+    type Error = String;
+
+    fn try_from(value: Timetz) -> Result<Self, Self::Error> {
+        let time = value.time.try_into()?;
+        let offset = chrono::offset::FixedOffset::west_opt(value.offset)
+            .ok_or("Offset value is not valid")?;
+        Ok((time, offset))
+    }
+}
+
+impl TryFrom<Date> for chrono::NaiveDate {
+    type Error = String;
+
+    fn try_from(value: Date) -> Result<Self, Self::Error> {
+        let date = chrono::naive::NaiveDate::from_ymd_opt(
+            value.year,
+            value.month as u32,
+            value.day as u32,
+        )
+        .ok_or("Date value is not valid")?;
+        Ok(date)
+    }
+}
+
+impl TryFrom<Timestamp> for chrono::NaiveDateTime {
+    type Error = String;
+
+    fn try_from(value: Timestamp) -> Result<Self, Self::Error> {
+        let date = value.date.try_into()?;
+        let time = value.time.try_into()?;
+        Ok(chrono::naive::NaiveDateTime::new(date, time))
+    }
+}
+
+impl TryFrom<Timestamptz> for chrono::DateTime<chrono::Utc> {
+    type Error = String;
+
+    fn try_from(value: Timestamptz) -> Result<Self, Self::Error> {
+        let datetime: chrono::NaiveDateTime = value.timestamp.try_into()?;
+        let offset = chrono::offset::FixedOffset::west_opt(value.offset)
+            .ok_or("Offset value is not valid")?;
+        let datetime = datetime
+            .checked_add_offset(offset)
+            .ok_or("Offset value is not valid")?;
+        Ok(datetime.and_utc())
+    }
+}
+
+impl From<chrono::NaiveTime> for Time {
+    fn from(v: chrono::NaiveTime) -> Self {
+        let hour = v.hour() as u8;
+        let minute = v.minute() as u8;
+        let second = v.second() as u8;
+        let nanosecond = v.nanosecond();
+        Time {
+            hour,
+            minute,
+            second,
+            nanosecond,
+        }
+    }
+}
+
+impl From<(chrono::NaiveTime, chrono::FixedOffset)> for Timetz {
+    fn from(v: (chrono::NaiveTime, chrono::FixedOffset)) -> Self {
+        let time = v.0.into();
+        let offset = v.1.local_minus_utc();
+        Timetz { time, offset }
+    }
+}
+
+impl From<chrono::NaiveDate> for Date {
+    fn from(v: chrono::NaiveDate) -> Self {
+        let year = v.year();
+        let month = v.month() as u8;
+        let day = v.day() as u8;
+        Date { year, month, day }
+    }
+}
+
+impl From<chrono::NaiveDateTime> for Timestamp {
+    fn from(v: chrono::NaiveDateTime) -> Self {
+        let date = v.date().into();
+        let time = v.time().into();
+        Timestamp { date, time }
+    }
+}
+
+impl From<chrono::DateTime<chrono::Utc>> for Timestamptz {
+    fn from(v: chrono::DateTime<chrono::Utc>) -> Self {
+        let timestamp = v.naive_utc().into();
+        let offset = v.offset().fix().local_minus_utc();
+        Timestamptz { timestamp, offset }
+    }
+}
+
+type NaiveDateTimeBounds = (Bound<chrono::NaiveDateTime>, Bound<chrono::NaiveDateTime>);
+type DateTimeBounds = (
+    Bound<chrono::DateTime<chrono::Utc>>,
+    Bound<chrono::DateTime<chrono::Utc>>,
+);
+type NaiveDateBounds = (Bound<chrono::NaiveDate>, Bound<chrono::NaiveDate>);
+type I32Bounds = (Bound<i32>, Bound<i32>);
+type I64Bounds = (Bound<i64>, Bound<i64>);
+type BigDecimalBounds = (Bound<BigDecimal>, Bound<BigDecimal>);
+
+impl From<Int4range> for I32Bounds {
+    fn from(value: Int4range) -> Self {
         fn to_bounds(v: Int4bound) -> Bound<i32> {
             match v {
                 Int4bound::Included(v) => Bound::Included(v),
@@ -714,8 +815,10 @@ pub(crate) mod postgres_utils {
         }
         (to_bounds(value.start), to_bounds(value.end))
     }
+}
 
-    pub(crate) fn int8range_to_bounds(value: Int8range) -> I64Bounds {
+impl From<Int8range> for I64Bounds {
+    fn from(value: Int8range) -> Self {
         fn to_bounds(v: Int8bound) -> Bound<i64> {
             match v {
                 Int8bound::Included(v) => Bound::Included(v),
@@ -725,8 +828,12 @@ pub(crate) mod postgres_utils {
         }
         (to_bounds(value.start), to_bounds(value.end))
     }
+}
 
-    pub(crate) fn numrange_to_bounds(value: Numrange) -> Result<BigDecimalBounds, String> {
+impl TryFrom<Numrange> for BigDecimalBounds {
+    type Error = String;
+
+    fn try_from(value: Numrange) -> Result<Self, Self::Error> {
         fn to_bounds(v: Numbound) -> Result<Bound<BigDecimal>, String> {
             match v {
                 Numbound::Included(v) => Ok(Bound::Included(
@@ -740,41 +847,55 @@ pub(crate) mod postgres_utils {
         }
         Ok((to_bounds(value.start)?, to_bounds(value.end)?))
     }
+}
 
-    pub(crate) fn tsrange_to_bounds(value: Tsrange) -> Result<NaiveDateTimeBounds, String> {
-        fn to_bounds(v: Tsbound) -> Result<Bound<chrono::NaiveDateTime>, String> {
-            match v {
-                Tsbound::Included(v) => Ok(Bound::Included(timestamp_to_naivedatetime(v)?)),
-                Tsbound::Excluded(v) => Ok(Bound::Excluded(timestamp_to_naivedatetime(v)?)),
-                Tsbound::Unbounded => Ok(Bound::Unbounded),
-            }
-        }
-        Ok((to_bounds(value.start)?, to_bounds(value.end)?))
-    }
+impl TryFrom<Daterange> for NaiveDateBounds {
+    type Error = String;
 
-    pub(crate) fn tstzrange_to_bounds(value: Tstzrange) -> Result<DateTimeBounds, String> {
-        fn to_bounds(v: Tstzbound) -> Result<Bound<chrono::DateTime<chrono::Utc>>, String> {
-            match v {
-                Tstzbound::Included(v) => Ok(Bound::Included(timestamptz_to_datetime(v)?)),
-                Tstzbound::Excluded(v) => Ok(Bound::Excluded(timestamptz_to_datetime(v)?)),
-                Tstzbound::Unbounded => Ok(Bound::Unbounded),
-            }
-        }
-        Ok((to_bounds(value.start)?, to_bounds(value.end)?))
-    }
-
-    pub(crate) fn daterange_to_bounds(value: Daterange) -> Result<NaiveDateBounds, String> {
+    fn try_from(value: Daterange) -> Result<Self, Self::Error> {
         fn to_bounds(v: Datebound) -> Result<Bound<chrono::NaiveDate>, String> {
             match v {
-                Datebound::Included(v) => Ok(Bound::Included(date_to_nativedate(v)?)),
-                Datebound::Excluded(v) => Ok(Bound::Excluded(date_to_nativedate(v)?)),
+                Datebound::Included(v) => Ok(Bound::Included(v.try_into()?)),
+                Datebound::Excluded(v) => Ok(Bound::Excluded(v.try_into()?)),
                 Datebound::Unbounded => Ok(Bound::Unbounded),
             }
         }
         Ok((to_bounds(value.start)?, to_bounds(value.end)?))
     }
+}
 
-    pub(crate) fn bounds_to_int4range(value: I32Bounds) -> Int4range {
+impl TryFrom<Tsrange> for NaiveDateTimeBounds {
+    type Error = String;
+
+    fn try_from(value: Tsrange) -> Result<Self, Self::Error> {
+        fn to_bounds(v: Tsbound) -> Result<Bound<chrono::NaiveDateTime>, String> {
+            match v {
+                Tsbound::Included(v) => Ok(Bound::Included(v.try_into()?)),
+                Tsbound::Excluded(v) => Ok(Bound::Excluded(v.try_into()?)),
+                Tsbound::Unbounded => Ok(Bound::Unbounded),
+            }
+        }
+        Ok((to_bounds(value.start)?, to_bounds(value.end)?))
+    }
+}
+
+impl TryFrom<Tstzrange> for DateTimeBounds {
+    type Error = String;
+
+    fn try_from(value: Tstzrange) -> Result<Self, Self::Error> {
+        fn to_bounds(v: Tstzbound) -> Result<Bound<chrono::DateTime<chrono::Utc>>, String> {
+            match v {
+                Tstzbound::Included(v) => Ok(Bound::Included(v.try_into()?)),
+                Tstzbound::Excluded(v) => Ok(Bound::Excluded(v.try_into()?)),
+                Tstzbound::Unbounded => Ok(Bound::Unbounded),
+            }
+        }
+        Ok((to_bounds(value.start)?, to_bounds(value.end)?))
+    }
+}
+
+impl From<I32Bounds> for Int4range {
+    fn from(value: I32Bounds) -> Self {
         fn to_bounds(v: Bound<i32>) -> Int4bound {
             match v {
                 Bound::Included(v) => Int4bound::Included(v),
@@ -782,13 +903,15 @@ pub(crate) mod postgres_utils {
                 Bound::Unbounded => Int4bound::Unbounded,
             }
         }
-        Int4range {
+        Self {
             start: to_bounds(value.0),
             end: to_bounds(value.1),
         }
     }
+}
 
-    pub(crate) fn bounds_to_int8range(value: I64Bounds) -> Int8range {
+impl From<I64Bounds> for Int8range {
+    fn from(value: I64Bounds) -> Self {
         fn to_bounds(v: Bound<i64>) -> Int8bound {
             match v {
                 Bound::Included(v) => Int8bound::Included(v),
@@ -796,13 +919,15 @@ pub(crate) mod postgres_utils {
                 Bound::Unbounded => Int8bound::Unbounded,
             }
         }
-        Int8range {
+        Self {
             start: to_bounds(value.0),
             end: to_bounds(value.1),
         }
     }
+}
 
-    pub(crate) fn bounds_to_numrange(value: BigDecimalBounds) -> Numrange {
+impl From<BigDecimalBounds> for Numrange {
+    fn from(value: BigDecimalBounds) -> Self {
         fn to_bounds(v: Bound<BigDecimal>) -> Numbound {
             match v {
                 Bound::Included(v) => Numbound::Included(v.to_string()),
@@ -810,143 +935,57 @@ pub(crate) mod postgres_utils {
                 Bound::Unbounded => Numbound::Unbounded,
             }
         }
-        Numrange {
+        Self {
             start: to_bounds(value.0),
             end: to_bounds(value.1),
         }
     }
+}
 
-    pub(crate) fn bounds_to_tsrange(value: NaiveDateTimeBounds) -> Tsrange {
-        fn to_bounds(v: Bound<chrono::NaiveDateTime>) -> Tsbound {
-            match v {
-                Bound::Included(v) => Tsbound::Included(naivedatetime_to_timestamp(v)),
-                Bound::Excluded(v) => Tsbound::Excluded(naivedatetime_to_timestamp(v)),
-                Bound::Unbounded => Tsbound::Unbounded,
-            }
-        }
-        Tsrange {
-            start: to_bounds(value.0),
-            end: to_bounds(value.1),
-        }
-    }
-
-    pub(crate) fn bounds_to_tstzrange(value: DateTimeBounds) -> Tstzrange {
+impl From<DateTimeBounds> for Tstzrange {
+    fn from(value: DateTimeBounds) -> Self {
         fn to_bounds(v: Bound<chrono::DateTime<chrono::Utc>>) -> Tstzbound {
             match v {
-                Bound::Included(v) => Tstzbound::Included(datetime_to_timestamptz(v)),
-                Bound::Excluded(v) => Tstzbound::Excluded(datetime_to_timestamptz(v)),
+                Bound::Included(v) => Tstzbound::Included(v.into()),
+                Bound::Excluded(v) => Tstzbound::Excluded(v.into()),
                 Bound::Unbounded => Tstzbound::Unbounded,
             }
         }
-        Tstzrange {
+        Self {
             start: to_bounds(value.0),
             end: to_bounds(value.1),
         }
     }
+}
 
-    pub(crate) fn bounds_to_daterange(value: NaiveDateBounds) -> Daterange {
+impl From<NaiveDateTimeBounds> for Tsrange {
+    fn from(value: NaiveDateTimeBounds) -> Self {
+        fn to_bounds(v: Bound<chrono::NaiveDateTime>) -> Tsbound {
+            match v {
+                Bound::Included(v) => Tsbound::Included(v.into()),
+                Bound::Excluded(v) => Tsbound::Excluded(v.into()),
+                Bound::Unbounded => Tsbound::Unbounded,
+            }
+        }
+        Self {
+            start: to_bounds(value.0),
+            end: to_bounds(value.1),
+        }
+    }
+}
+
+impl From<NaiveDateBounds> for Daterange {
+    fn from(value: NaiveDateBounds) -> Self {
         fn to_bounds(v: Bound<chrono::NaiveDate>) -> Datebound {
             match v {
-                Bound::Included(v) => Datebound::Included(naivedate_to_date(v)),
-                Bound::Excluded(v) => Datebound::Excluded(naivedate_to_date(v)),
+                Bound::Included(v) => Datebound::Included(v.into()),
+                Bound::Excluded(v) => Datebound::Excluded(v.into()),
                 Bound::Unbounded => Datebound::Unbounded,
             }
         }
-        Daterange {
+        Self {
             start: to_bounds(value.0),
             end: to_bounds(value.1),
         }
-    }
-
-    pub(crate) fn time_to_nativetime(value: Time) -> Result<chrono::NaiveTime, String> {
-        let time = chrono::NaiveTime::from_hms_nano_opt(
-            value.hour as u32,
-            value.minute as u32,
-            value.second as u32,
-            value.nanosecond,
-        )
-        .ok_or("Time value is not valid")?;
-        Ok(time)
-    }
-
-    pub(crate) fn timetz_to_nativetime_and_offset(
-        value: Timetz,
-    ) -> Result<(chrono::NaiveTime, chrono::FixedOffset), String> {
-        let time = time_to_nativetime(value.time)?;
-        let offset = chrono::offset::FixedOffset::west_opt(value.offset)
-            .ok_or("Offset value is not valid")?;
-        Ok((time, offset))
-    }
-
-    pub(crate) fn date_to_nativedate(value: Date) -> Result<chrono::NaiveDate, String> {
-        let date = chrono::naive::NaiveDate::from_ymd_opt(
-            value.year,
-            value.month as u32,
-            value.day as u32,
-        )
-        .ok_or("Date value is not valid")?;
-        Ok(date)
-    }
-
-    pub(crate) fn timestamp_to_naivedatetime(
-        value: Timestamp,
-    ) -> Result<chrono::NaiveDateTime, String> {
-        let date = date_to_nativedate(value.date)?;
-        let time = time_to_nativetime(value.time)?;
-        Ok(chrono::naive::NaiveDateTime::new(date, time))
-    }
-
-    pub(crate) fn timestamptz_to_datetime(
-        value: Timestamptz,
-    ) -> Result<chrono::DateTime<chrono::Utc>, String> {
-        let datetime = timestamp_to_naivedatetime(value.timestamp)?;
-        let offset = chrono::offset::FixedOffset::west_opt(value.offset)
-            .ok_or("Offset value is not valid")?;
-        let datetime = datetime
-            .checked_add_offset(offset)
-            .ok_or("Offset value is not valid")?;
-        Ok(datetime.and_utc())
-    }
-
-    pub(crate) fn naivetime_and_offset_to_time(
-        v: chrono::NaiveTime,
-        o: chrono::FixedOffset,
-    ) -> Timetz {
-        let time = naivetime_to_time(v);
-        let offset = o.local_minus_utc();
-        Timetz { time, offset }
-    }
-
-    pub(crate) fn naivetime_to_time(v: chrono::NaiveTime) -> Time {
-        let hour = v.hour() as u8;
-        let minute = v.minute() as u8;
-        let second = v.second() as u8;
-        let nanosecond = v.nanosecond();
-        Time {
-            hour,
-            minute,
-            second,
-            nanosecond,
-        }
-    }
-
-    pub(crate) fn naivedate_to_date(v: chrono::NaiveDate) -> Date {
-        let year = v.year();
-        let month = v.month() as u8;
-        let day = v.day() as u8;
-        Date { year, month, day }
-    }
-
-    pub(crate) fn naivedatetime_to_timestamp(v: chrono::NaiveDateTime) -> Timestamp {
-        let date = naivedate_to_date(v.date());
-        let time = naivetime_to_time(v.time());
-        Timestamp { date, time }
-    }
-
-    pub(crate) fn datetime_to_timestamptz(v: chrono::DateTime<chrono::Utc>) -> Timestamptz {
-        let timestamp = naivedatetime_to_timestamp(v.naive_utc());
-
-        let offset = v.offset().fix().local_minus_utc();
-        Timestamptz { timestamp, offset }
     }
 }
