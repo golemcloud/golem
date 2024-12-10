@@ -10,12 +10,12 @@ description = "Parser for Golem's Rib language"
 [dependencies]
 golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
 golem-wasm-ast = { path = "../wasm-ast", version = "0.0.0" }
+golem-wasm-rpc = { path = "../wasm-rpc", version = "0.0.0", default-features = false, features = ["host"] }
 
 async-trait = { workspace = true }
 bigdecimal = {workspace = true }
 bincode = { workspace = true }
 combine = { workspace = true }
-golem-wasm-rpc = { workspace = true }
 poem-openapi = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true }

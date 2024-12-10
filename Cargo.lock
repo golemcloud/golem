@@ -3795,7 +3795,7 @@ dependencies = [
  "bytes 1.9.0",
  "cargo_metadata",
  "futures-core",
- "golem-wasm-ast 0.0.0",
+ "golem-wasm-ast",
  "golem-wasm-rpc",
  "prost 0.12.6",
  "prost-types 0.12.6",
@@ -3834,7 +3834,7 @@ dependencies = [
  "golem-examples",
  "golem-rib",
  "golem-test-framework",
- "golem-wasm-ast 0.0.0",
+ "golem-wasm-ast",
  "golem-wasm-rpc",
  "golem-wasm-rpc-stubgen",
  "h2 0.3.26",
@@ -3894,7 +3894,7 @@ dependencies = [
  "futures-core",
  "golem-common",
  "golem-openapi-client-generator",
- "golem-wasm-ast 0.0.0",
+ "golem-wasm-ast",
  "golem-wasm-rpc",
  "http 1.2.0",
  "relative-path",
@@ -3926,7 +3926,7 @@ dependencies = [
  "git-version",
  "golem-api-grpc",
  "golem-rib",
- "golem-wasm-ast 0.0.0",
+ "golem-wasm-ast",
  "golem-wasm-rpc",
  "http 0.2.12",
  "humantime-serde",
@@ -4004,7 +4004,7 @@ dependencies = [
  "golem-component-service-base",
  "golem-rib",
  "golem-service-base",
- "golem-wasm-ast 0.0.0",
+ "golem-wasm-ast",
  "golem-wasm-rpc",
  "http 0.2.12",
  "humantime-serde",
@@ -4052,7 +4052,7 @@ dependencies = [
  "golem-common",
  "golem-rib",
  "golem-service-base",
- "golem-wasm-ast 0.0.0",
+ "golem-wasm-ast",
  "http 0.2.12",
  "http 1.2.0",
  "poem",
@@ -4129,7 +4129,7 @@ dependencies = [
  "bincode",
  "combine",
  "golem-api-grpc",
- "golem-wasm-ast 0.0.0",
+ "golem-wasm-ast",
  "golem-wasm-rpc",
  "poem-openapi",
  "semver",
@@ -4162,7 +4162,7 @@ dependencies = [
  "golem-api-grpc",
  "golem-common",
  "golem-test-framework",
- "golem-wasm-ast 0.0.0",
+ "golem-wasm-ast",
  "golem-wasm-rpc",
  "hex",
  "http 0.2.12",
@@ -4258,7 +4258,7 @@ dependencies = [
  "golem-api-grpc",
  "golem-common",
  "golem-service-base",
- "golem-wasm-ast 0.0.0",
+ "golem-wasm-ast",
  "golem-wasm-rpc",
  "itertools 0.13.0",
  "k8s-openapi",
@@ -4308,30 +4308,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "golem-wasm-ast"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ec69d83cae3a2586f05ff3f1ff58ad88b2f402271d1663fe4938288cbd07346"
-dependencies = [
- "bincode",
- "leb128",
- "mappable-rc",
- "poem-openapi",
- "prost 0.12.6",
- "prost-build 0.12.6",
- "serde 1.0.215",
- "serde_json",
- "wasm-encoder 0.207.0",
- "wasm-metadata 0.207.0",
- "wasm-wave",
- "wasmparser 0.207.0",
-]
-
-[[package]]
 name = "golem-wasm-rpc"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9cc001e774dbe67b555f9049df141a2523c525eb30f1438a1cb1a1ff3217d60a"
+version = "0.0.0"
 dependencies = [
  "arbitrary",
  "async-recursion",
@@ -4340,12 +4318,15 @@ dependencies = [
  "bincode",
  "cargo_metadata",
  "git-version",
- "golem-wasm-ast 1.1.0",
+ "golem-wasm-ast",
  "poem-openapi",
+ "proptest",
+ "proptest-arbitrary-interop",
  "prost 0.12.6",
  "prost-build 0.12.6",
  "serde 1.0.215",
  "serde_json",
+ "test-r 1.1.0",
  "uuid",
  "wasm-wave",
  "wasmtime",
@@ -4355,9 +4336,7 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm-rpc-stubgen"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6ccd883751a917f3d5e9b6f1d1dc35284e322bcd90d1805f43eae95feac5f66"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "assert2",
@@ -4370,7 +4349,7 @@ dependencies = [
  "dir-diff",
  "fs_extra",
  "glob",
- "golem-wasm-ast 1.1.0",
+ "golem-wasm-ast",
  "golem-wasm-rpc",
  "heck 0.5.0",
  "id-arena",
@@ -4390,6 +4369,7 @@ dependencies = [
  "shlex",
  "syn 2.0.90",
  "tempfile",
+ "test-r 1.1.0",
  "tokio",
  "toml 0.8.19",
  "wac-graph",
@@ -4476,7 +4456,7 @@ dependencies = [
  "golem-rib",
  "golem-service-base",
  "golem-test-framework",
- "golem-wasm-ast 0.0.0",
+ "golem-wasm-ast",
  "golem-wasm-rpc",
  "golem-wit",
  "hex",
@@ -4547,7 +4527,7 @@ dependencies = [
  "golem-common",
  "golem-rib",
  "golem-service-base",
- "golem-wasm-ast 0.0.0",
+ "golem-wasm-ast",
  "golem-wasm-rpc",
  "golem-worker-service-base",
  "http 0.2.12",
@@ -4605,7 +4585,7 @@ dependencies = [
  "golem-common",
  "golem-rib",
  "golem-service-base",
- "golem-wasm-ast 0.0.0",
+ "golem-wasm-ast",
  "golem-wasm-rpc",
  "http 0.2.12",
  "http 1.2.0",
@@ -7704,6 +7684,16 @@ dependencies = [
  "rusty-fork",
  "tempfile",
  "unarray",
+]
+
+[[package]]
+name = "proptest-arbitrary-interop"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a1981e49bd2432249da8b0e11e5557099a8e74690d6b94e721f7dc0bb7f3555f"
+dependencies = [
+ "arbitrary",
+ "proptest",
 ]
 
 [[package]]

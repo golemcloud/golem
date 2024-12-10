@@ -22,7 +22,7 @@ golem-common = { path = "../golem-common", version = "0.0.0" }
 golem-rib = { path = "../golem-rib", version = "0.0.0" }
 golem-service-base = { path = "../golem-service-base", version = "0.0.0" }
 golem-wasm-ast = { path = "../wasm-ast", version = "0.0.0" }
-golem-wasm-rpc = { workspace = true }
+golem-wasm-rpc = { path = "../wasm-rpc", version = "0.0.0", default-features = false, features = ["host"] }
 
 anyhow = { workspace = true }
 async-fs = { workspace = true }

@@ -13,9 +13,9 @@ harness = false
 
 [dependencies]
 golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
-golem-wasm-ast = { path = "../wasm-ast", version = "0.0.0" }
-golem-wasm-rpc = { workspace = true }
 golem-rib = { path = "../golem-rib", version = "0.0.0" }
+golem-wasm-ast = { path = "../wasm-ast", version = "0.0.0" }
+golem-wasm-rpc = { path = "../wasm-rpc", version = "0.0.0", default-features = false, features = ["host"] }
 
 anyhow = { workspace = true }
 async-trait = { workspace = true }

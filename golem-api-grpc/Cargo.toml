@@ -12,12 +12,12 @@ harness = false
 
 [dependencies]
 golem-wasm-ast = { path = "../wasm-ast", version = "0.0.0" }
+golem-wasm-rpc = { path = "../wasm-rpc", version = "0.0.0", default-features = false, features = ["host"] }
 
 async-trait = { workspace = true }
 bincode = { workspace = true }
 bytes = { workspace = true }
 futures-core = { workspace = true }
-golem-wasm-rpc = { workspace = true }
 prost = { workspace = true }
 prost-types = { workspace = true }
 serde = { workspace = true }
