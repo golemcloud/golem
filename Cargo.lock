@@ -11300,6 +11300,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasm-rpc-stubgen-tests-integration"
+version = "0.0.0"
+dependencies = [
+ "assert2",
+ "fs_extra",
+ "golem-wasm-ast",
+ "golem-wasm-rpc-stubgen",
+ "tempfile",
+ "test-r 1.1.0",
+ "tokio",
+]
+
+[[package]]
 name = "wasm-streams"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

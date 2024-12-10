@@ -21,7 +21,8 @@ members = [
     "golem",
     "wasm-ast",
     "wasm-rpc",
-    "wasm-rpc-stubgen"
+    "wasm-rpc-stubgen",
+    "wasm-rpc-stubgen/tests-integration"
 ]
 
 exclude = [
@@ -66,9 +67,6 @@ exclude = [
     "test-components/write-stderr",
     "test-components/write-stdout",
 ]
-
-[profile.dev]
-panic = "abort"
 
 [workspace.dependencies]
 anyhow = "1.0.79"
