@@ -12,7 +12,6 @@ default = ["app-command"]
 app-command = []
 
 [lib]
-name = "golem_wasm_rpc_stubgen"
 path = "src/lib.rs"
 harness = false
 

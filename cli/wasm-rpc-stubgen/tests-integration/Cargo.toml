@@ -8,7 +8,6 @@ repository = "https://github.com/golemcloud/wasm-rpc"
 description = "Golem WASM RPC stub generator - integration tests"
 
 [lib]
-name = "wasm_rpc_stubgen_tests_integration"
 path = "src/lib.rs"
 harness = false
 
@@ -25,9 +24,9 @@ name = "stub_wasm"
 harness = false
 
 [dependencies]
-assert2  = { workspace = true}
+assert2 = { workspace = true }
 fs_extra = { workspace = true }
-golem-wasm-ast = { workspace = true }
+golem-wasm-ast = { path = "../../wasm-ast", version = "0.0.0" }
 golem-wasm-rpc-stubgen = { path = "../../wasm-rpc-stubgen", version = "0.0.0" }
 tempfile = { workspace = true }
 tokio = { workspace = true }
