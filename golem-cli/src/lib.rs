@@ -43,7 +43,6 @@ pub mod init;
 pub mod model;
 pub mod oss;
 pub mod service;
-pub mod stubgen;
 
 #[cfg(test)]
 test_r::enable!();

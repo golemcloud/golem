@@ -1,0 +1,17 @@
+// Test WIT covering two components, A and B, referencing each other.
+// Same as direct-circular-b, but uses the same world name as A (`a`)
+
+package test:b;
+
+
+interface api-b {
+  enum typ-b {
+    x, y, z
+  }
+
+  func-b: func() -> typ-b;
+}
+
+world a {
+  export api-b;
+}

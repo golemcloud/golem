@@ -28,7 +28,6 @@ use crate::examples;
 use crate::init::{init_profile, CliKind, DummyProfileAuth};
 use crate::model::{ComponentUriArg, GolemError, GolemResult};
 use crate::oss::model::OssContext;
-use crate::stubgen::handle_stubgen;
 use api_definition::ApiDefinitionSubcommand;
 use api_deployment::ApiDeploymentSubcommand;
 use clap::{self, Command, Subcommand};
@@ -86,7 +85,7 @@ impl<Ctx> CliCommand<Ctx> for EmptyCommand {
 }
 
 /// convenience function to get both the clap::Command and the parsed struct in one pass
-pub fn command_and_parsed<T: clap::Parser>() -> (clap::Command, T) {
+pub fn command_and_parsed<T: clap::Parser>() -> (Command, T) {
     let mut command = T::command();
 
     let mut matches = command.clone().get_matches();
@@ -107,12 +106,6 @@ pub enum StaticSharedCommand {
         #[command(flatten)]
         command: diagnose::cli::Command,
     },
-    /// [DEPRECATED, use the app command] WASM RPC stub generator
-    #[cfg(feature = "stubgen")]
-    Stubgen {
-        #[command(subcommand)]
-        subcommand: golem_wasm_rpc_stubgen::Command,
-    },
     /// Create a new Golem component from built-in examples
     #[command(flatten)]
     Examples(golem_examples::cli::Command),
@@ -125,8 +118,6 @@ impl<Ctx> CliCommand<Ctx> for StaticSharedCommand {
                 diagnose(command);
                 Ok(GolemResult::Str("".to_string()))
             }
-            #[cfg(feature = "stubgen")]
-            StaticSharedCommand::Stubgen { subcommand } => handle_stubgen(subcommand).await,
             StaticSharedCommand::Examples(golem_examples::cli::Command::ListExamples {
                 min_tier,
                 language,
@@ -155,7 +146,6 @@ pub enum SharedCommand<
     ProfileAdd: clap::Args,
 > {
     /// Build components with application manifests
-    #[cfg(feature = "stubgen")]
     #[group(skip)]
     App {
         #[clap(flatten)]

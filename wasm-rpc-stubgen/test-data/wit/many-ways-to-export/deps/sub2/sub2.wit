@@ -1,0 +1,12 @@
+package test:sub2;
+
+// intentionally same interface name and function as in sub.wit
+interface iface4 {
+  func5: func();
+}
+
+interface iface10 {
+    use test:sub/iface5.{rec1};
+
+    func10: func() -> rec1;
+}
