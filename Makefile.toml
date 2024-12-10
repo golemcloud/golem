@@ -256,6 +256,7 @@ cargo test --package golem-component-service-base --test tests -- --nocapture --
 cargo test --package golem-worker-service-base --test services_tests -- --nocapture --report-time $JUNIT_OPTS
 cargo test --package golem-worker-service-base --test api_gateway_end_to_end_tests -- --nocapture --report-time $JUNIT_OPTS
 cargo test --package golem-service-base --test integration -- --nocapture --report-time $JUNIT_OPTS
+cargo test --package wasm-rpc-stubgen-tests-integration --tests -- --test-threads=1 --report-time $JUNIT_OPTS
 '''
 
 [tasks.sharding-tests]
@@ -373,6 +374,9 @@ args = ["-v", "./target/golem-service.yaml", "./openapi/golem-service.yaml"]
 description = "Publishes packages to crates.io"
 dependencies = [
     "build-release",
+    "publish-golem-wasm-ast",
+    "publish-golem-wasm-rpc",
+    "publish-golem-wasm-rpc-stubgen",
     "publish-golem-api-grpc",
     "publish-golem-rib",
     "publish-golem-common",
@@ -408,6 +412,39 @@ foreach ($file in $cargoFiles)
     Set-Content $file.PSPath
 }
 '''
+
+[tasks.publish-golem-wasm-ast]
+description = "Publishes golem-wasm-ast package to crates.io"
+command = "cargo"
+args = [
+    "publish",
+    "-p",
+    "golem-wasm-ast",
+    "--all-features",
+    "--allow-dirty"
+]
+
+[tasks.publish-golem-wasm-rpc]
+description = "Publishes golem-wasm-rpc package to crates.io"
+command = "cargo"
+args = [
+    "publish",
+    "-p",
+    "golem-wasm-rpc",
+    "--all-features",
+    "--allow-dirty",
+]
+
+[tasks.publish-golem-wasm-rpc-stubgen]
+description = "Publishes golem-wasm-rpc-stubgen package to crates.io"
+command = "cargo"
+args = [
+    "publish",
+    "-p",
+    "golem-wasm-rpc-stubgen",
+    "--all-features",
+    "--allow-dirty",
+]
 
 [tasks.publish-golem-client]
 description = "Publishes golem-client package to crates.io"
