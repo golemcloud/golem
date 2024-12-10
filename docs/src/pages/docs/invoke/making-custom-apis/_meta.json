@@ -3,7 +3,6 @@
   "register-api-definition": "Register API definition",
   "deploy-api-definition": "Deploy API definition",
   "try-out-deployed-api": "Invoke the deployed API",
-  "trouble-shooting": "Trouble Shooting",
   "update-api-deployment": "Update API definitions and deployments",
   "authentication": "Make APIs Secure",
   "cors": "Setting up CORS",
@@ -11,5 +10,6 @@
   "import-openapi-spec": "Import OpenAPI Spec as API Definition",
   "external-api-gateways": "Integrating with external API Gateways",
   "component-constraints": "Constraints on Component updates after API deployment",
-  "spec-inference": "Automatic API Spec Inference"
+  "spec-inference": "Automatic API Spec Inference",
+  "trouble-shooting": "Trouble Shooting"
 }
