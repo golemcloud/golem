@@ -32,7 +32,7 @@ const config: DocsThemeConfig = {
   chat: {
     link: "https://discord.gg/UjXeH8uG4x",
   },
-  docsRepositoryBase: "https://github.com/golemcloud/docs/blob/master",
+  docsRepositoryBase: "https://github.com/golemcloud/docs/blob/main",
   footer: {
     component: <Footer />,
   },
