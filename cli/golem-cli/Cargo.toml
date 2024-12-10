@@ -28,7 +28,7 @@ golem-common = { path = "../golem-common", version = "0.0.0" }
 golem-rib = { path = "../golem-rib", version = "0.0.0" }
 golem-wasm-ast = { path = "../wasm-ast", version = "0.0.0" }
 golem-wasm-rpc = { path = "../wasm-rpc", version = "0.0.0", default-features = false, features = ["host"] }
-golem-wasm-rpc-stubgen = { path = "../wasm-rpc-stubgen", version = "0.0.0", default-features = false, optional = true }
+golem-wasm-rpc-stubgen = { path = "../wasm-rpc-stubgen", version = "0.0.0" }
 
 anyhow.workspace = true
 assert2 = { workspace = true }
@@ -101,7 +101,3 @@ tokio-postgres = { workspace = true }
 tonic = { workspace = true }
 tonic-health = { workspace = true }
 strip-ansi-escapes = "0.2.0"
-
-[features]
-default = ["stubgen"]
-stubgen = ["dep:golem-wasm-rpc-stubgen"]

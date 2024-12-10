@@ -32,7 +32,7 @@ use crate::model::app::{AppBuildStep, ComponentPropertiesExtensions};
 use crate::stub::{StubConfig, StubDefinition};
 use crate::wit_generate::UpdateCargoToml;
 use anyhow::Context;
-use clap::{Parser, Subcommand};
+use clap::Subcommand;
 use colored::Colorize;
 use itertools::Itertools;
 use std::collections::HashSet;
@@ -43,29 +43,6 @@ use tempfile::TempDir;
 
 #[cfg(test)]
 test_r::enable!();
-
-#[derive(Parser, Debug)]
-#[command(name = "wasm-rpc-stubgen", version)]
-pub enum Command {
-    /// [DEPRECATED] Generate a Rust RPC stub crate for a WASM component
-    Generate(GenerateArgs),
-    /// [DEPRECATED] Build an RPC stub for a WASM component
-    Build(BuildArgs),
-    /// [DEPRECATED] Adds a generated stub as a dependency to another WASM component
-    AddStubDependency(AddStubDependencyArgs),
-    /// [DEPRECATED] Compose a WASM component with a generated stub WASM
-    Compose(ComposeArgs),
-    /// [DEPRECATED] Initializes a Golem-specific cargo-make configuration in a Cargo workspace for automatically
-    /// generating stubs and composing results.
-    InitializeWorkspace(InitializeWorkspaceArgs),
-    /// Build components with application manifests
-    #[cfg(feature = "app-command")]
-    #[group(skip)]
-    App {
-        #[clap(flatten)]
-        command: App,
-    },
-}
 
 /// Generate a Rust RPC stub crate for a WASM component
 ///
