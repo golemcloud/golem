@@ -104,6 +104,20 @@ fn init_caller(name: &str) -> TempDir {
 }
 
 fn compile_rust(path: &Path) {
+    // TODO: just for CI debug
+    std::process::Command::new("sh")
+        .arg("-c")
+        .arg("which cargo-component")
+        .current_dir(path)
+        .status()
+        .unwrap();
+    std::process::Command::new("sh")
+        .arg("-c")
+        .arg("which cargo")
+        .current_dir(path)
+        .status()
+        .unwrap();
+
     let status = std::process::Command::new("cargo")
         .arg("component")
         .arg("build")
