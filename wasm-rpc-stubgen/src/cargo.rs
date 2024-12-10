@@ -296,7 +296,7 @@ pub fn add_cargo_package_component_deps(
 
                 log_warn_action(
                     "Updating",
-                    format!("Cargo.toml at {:?}", cargo_toml_path.log_color_highlight()),
+                    format!("Cargo.toml at {}", cargo_toml_path.log_color_highlight()),
                 );
                 fs::write(cargo_toml_path, cargo_toml)?;
             }
