@@ -388,6 +388,9 @@ jobs:
         with:
           redis-version: latest
           auto-start: false
+      - uses: cargo-bins/cargo-binstall@main
+      - name: Install cargo-component
+        run: cargo binstall --no-confirm cargo-component@0.13.2
       - name: Integration tests
         env:
           QUIET: true
