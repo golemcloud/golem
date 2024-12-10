@@ -18,7 +18,8 @@ members = [
     "golem-worker-service-base",
     "golem-worker-service",
     "integration-tests",
-    "golem"
+    "golem",
+    "wasm-ast"
 ]
 
 exclude = [
@@ -106,7 +107,6 @@ futures = "0.3"
 futures-core = "0.3.29"
 futures-util = "0.3.29"
 git-version = "0.3.9"
-golem-wasm-ast = "1.1.0"
 golem-wasm-rpc = { version = "1.1.0", default-features = false, features = [
     "host",
 ] }

@@ -14,7 +14,7 @@ harness = false
 
 [dependencies]
 golem-common = { path = "../golem-common", version = "0.0.0" }
-golem-wasm-ast = { workspace = true }
+golem-wasm-ast = { path = "../wasm-ast", version = "0.0.0" }
 golem-wasm-rpc = { workspace = true }
 
 async-trait = { workspace = true }

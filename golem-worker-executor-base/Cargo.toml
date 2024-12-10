@@ -21,7 +21,7 @@ golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
 golem-common = { path = "../golem-common", version = "0.0.0" }
 golem-rib = { path = "../golem-rib", version = "0.0.0" }
 golem-service-base = { path = "../golem-service-base", version = "0.0.0" }
-golem-wasm-ast = { workspace = true }
+golem-wasm-ast = { path = "../wasm-ast", version = "0.0.0" }
 golem-wasm-rpc = { workspace = true }
 
 anyhow = { workspace = true }
@@ -99,7 +99,6 @@ golem-test-framework = { path = "../golem-test-framework", version = "0.0.0" }
 assert2 = { workspace = true }
 console-subscriber = { workspace = true }
 goldenfile = "1.7.1"
-golem-wasm-ast = { workspace = true }
 once_cell = { workspace = true }
 proptest = { workspace = true }
 rand = { workspace = true }

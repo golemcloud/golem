@@ -26,6 +26,7 @@ harness = false
 golem-client = { path = "../golem-client", version = "0.0.0" }
 golem-common = { path = "../golem-common", version = "0.0.0" }
 golem-rib = { path = "../golem-rib", version = "0.0.0" }
+golem-wasm-ast = { workspace = true }
 
 anyhow.workspace = true
 assert2 = { workspace = true }
@@ -43,7 +44,6 @@ dirs = "5.0.1"
 futures-util = { workspace = true }
 glob = "0.3.1"
 golem-examples = "1.1.0"
-golem-wasm-ast = { workspace = true }
 golem-wasm-rpc = { workspace = true }
 golem-wasm-rpc-stubgen = { version = "1.1.0", optional = true, default-features = false }
 h2 = "0.3.24"
