@@ -1,0 +1,83 @@
+[package]
+name = "golem-wasm-ast"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+homepage = "https://golem.cloud"
+repository = "https://github.com/golemcloud/golem-wasm-ast/"
+description = "WASM AST"
+
+[dependencies]
+bincode = { version = "2.0.0-rc.3", optional = true }
+leb128 = { version = "0.2.5", optional = true }
+mappable-rc = "0.1.1"
+poem-openapi = { version = "5.0", optional = true }
+prost = { version = "0.12", optional = true }
+serde = { version = "1.0", optional = true, features = ["derive"] }
+serde_json = { version = "1.0", optional = true }
+wasmparser = { version = "0.207.0", optional = true }
+wasm-encoder = { version = "0.207.0", optional = true }
+wasm-metadata = { version = "0.207.0", optional = true }
+wasm-wave = { version = "=0.6.0", optional = true }
+
+[dev-dependencies]
+colored-diff = "0.2.3"
+pretty_assertions = "1.4.0"
+test-r = { version = "0.0.3", default-features = false }
+wasmprinter = "0.207.0"
+
+[build-dependencies]
+prost-build = "0.12.6"
+
+[features]
+default = ["parser", "writer", "component", "metadata", "analysis", "wave", "json", "bincode", "poem_openapi", "protobuf"]
+
+# Support building up the WASM AST by parsing a binary WASM module or component using the wasmparser library
+parser = ["dep:wasmparser", "dep:leb128"]
+
+# Support writing out a binary WASM module or component using the wasm-encoder library
+writer = ["dep:wasm-encoder"]
+
+# Support for the WASM component model
+component = []
+
+# Support for extracting producer and other metadata from a binary WASM module or component using the wasm-metadata library
+metadata = ["dep:wasm-metadata"]
+
+# Enables some higher level analysis features built on top of the WASM AST
+analysis = ["component"]
+
+# Wave format representation
+wave = ["dep:wasm-wave"]
+
+# Bincode serialization for analysis output
+bincode = ["dep:bincode"]
+
+# Serde JSON serialization for analysis output
+json = ["dep:serde", "dep:serde_json"]
+
+# poem-openapi instances for analysis output
+poem_openapi = ["json", "dep:poem-openapi"]
+
+# Protobuf representation of analysed types
+protobuf = ["dep:prost"]
+
+[lib]
+path = "src/lib.rs"
+harness = false
+
+[[test]]
+name = "exports"
+harness = false
+
+[[test]]
+name = "mems"
+harness = false
+
+[[test]]
+name = "metadata"
+harness = false
+
+[[test]]
+name = "roundtrip"
+harness = false
