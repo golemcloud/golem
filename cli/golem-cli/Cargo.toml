@@ -37,8 +37,8 @@ async_zip = { workspace = true, features = ["tokio", "tokio-fs", "deflate"] }
 base64 = "0.22.1"
 chrono = { workspace = true }
 clap = { workspace = true }
-clap-verbosity-flag = "2.1.1"
-clap_complete = { version = "4.5.13" }
+clap-verbosity-flag = "3.0.1"
+clap_complete = { version = "4.5.38" }
 cli-table = { workspace = true }
 colored = "2.1.0"
 derive_more = { workspace = true }
@@ -46,17 +46,17 @@ dirs = "5.0.1"
 futures-util = { workspace = true }
 glob = "0.3.1"
 golem-examples = "1.1.0"
-h2 = "0.3.24"
+h2 = "0.4.7"
 http = { workspace = true }
 humansize = { workspace = true }
 hyper = { workspace = true }
-indoc = "2.0.4"
+indoc = "2.0.5"
 inquire = "0.7.5"
 iso8601 = "0.6.1"
 itertools = { workspace = true }
 lenient_bool = "0.1.1"
-log = { version = "0.4.22" }
-native-tls = "0.2.11"
+log = { workspace = true }
+native-tls = "0.2.12"
 openapiv3 = { workspace = true }
 phf = { workspace = true }
 rand = { workspace = true }
@@ -72,11 +72,11 @@ testcontainers-modules = { workspace = true }
 textwrap = "0.16.1"
 tokio = { workspace = true }
 tokio-stream = { workspace = true, features = ["fs"] }
-tokio-tungstenite = { version = "0.20.1", features = ["native-tls"] }
-tower = "0.4.13"
+tokio-tungstenite = { version = "0.24.0", features = ["native-tls"] }
+tower = "0.5.1"
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-tungstenite = "0.20.1"
+tungstenite = "0.24.0"
 url = { workspace = true }
 uuid = { workspace = true }
 version-compare = "=0.0.11"
@@ -86,9 +86,9 @@ wasm-wave = { workspace = true }
 [dev-dependencies]
 golem-test-framework = { path = "../golem-test-framework", version = "0.0.0" }
 
-async-recursion = "1.0.5"
-env_logger = "0.11.1"
-log = "0.4.20"
+async-recursion = { workspace = true }
+env_logger = "0.11.5"
+log = "0.4.22"
 postgres = { workspace = true }
 rand = { workspace = true }
 redis = { workspace = true }

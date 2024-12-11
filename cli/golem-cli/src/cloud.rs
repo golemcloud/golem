@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use chrono::{DateTime, Utc};
-use derive_more::{Display, FromStr, Into};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display, Formatter};
 use uuid::Uuid;
@@ -43,12 +42,14 @@ pub struct CloudAuthenticationConfigData {
     pub expires_at: DateTime<Utc>,
 }
 
-#[derive(Clone, PartialEq, Eq, Debug, Display, FromStr, Serialize, Deserialize)]
+#[derive(
+    Clone, PartialEq, Eq, Debug, derive_more::Display, derive_more::FromStr, Serialize, Deserialize,
+)]
 pub struct AccountId {
     pub id: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Into, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, derive_more::Into, Serialize, Deserialize)]
 pub struct ProjectId(pub Uuid);
 
 impl Display for ProjectId {
