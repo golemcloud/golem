@@ -200,7 +200,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
 
         let reflection_service = tonic_reflection::server::Builder::configure()
             .register_encoded_file_descriptor_set(proto::FILE_DESCRIPTOR_SET)
-            .build()?;
+            .build_v1()?;
 
         let http_port = golem_service_base::observability::start_health_and_metrics_server(
             golem_config.http_addr()?,

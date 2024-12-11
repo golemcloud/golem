@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::error::GolemError;
-use crate::grpc::{authorised_grpc_request, UriBackConversion};
+use crate::grpc::authorised_grpc_request;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
@@ -157,7 +157,7 @@ impl RemoteWorkerProxy {
                         .send_compressed(CompressionEncoding::Gzip)
                         .accept_compressed(CompressionEncoding::Gzip)
                 },
-                endpoint.as_http_02(),
+                endpoint,
                 Default::default(), // TODO
             ),
             access_token,

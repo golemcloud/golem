@@ -852,7 +852,7 @@ fn create_from_type(val: &Value, typ: &Type) -> Result<TypeAnnotatedValue, Vec<S
                 let handle = TypedHandle {
                     uri: uri.value.clone(),
                     resource_id: *resource_id,
-                    typ: Some(typ_handle.clone()),
+                    typ: Some(*typ_handle),
                 };
                 Ok(TypeAnnotatedValue::Handle(handle))
             }

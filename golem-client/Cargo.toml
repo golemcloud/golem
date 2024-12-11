@@ -34,4 +34,4 @@ test-r = { workspace = true }
 
 [build-dependencies]
 golem-openapi-client-generator = "0.0.12"
-relative-path = "1.9.2"
+relative-path = "1.9.3"

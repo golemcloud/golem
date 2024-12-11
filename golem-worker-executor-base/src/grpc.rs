@@ -2398,7 +2398,7 @@ impl CanStartWorker for golem::workerexecutor::v1::ListDirectoryRequest {
     }
 
     fn account_limits(&self) -> Option<GrpcResourceLimits> {
-        self.account_limits.clone()
+        self.account_limits
     }
 
     fn worker_id(&self) -> Result<common_model::TargetWorkerId, GolemError> {
@@ -2432,7 +2432,7 @@ impl CanStartWorker for golem::workerexecutor::v1::GetFileContentsRequest {
     }
 
     fn account_limits(&self) -> Option<GrpcResourceLimits> {
-        self.account_limits.clone()
+        self.account_limits
     }
 
     fn worker_id(&self) -> Result<common_model::TargetWorkerId, GolemError> {
@@ -2466,7 +2466,7 @@ impl CanStartWorker for golem::workerexecutor::v1::InvokeWorkerRequest {
     }
 
     fn account_limits(&self) -> Option<GrpcResourceLimits> {
-        self.account_limits.clone()
+        self.account_limits
     }
 
     fn worker_id(&self) -> Result<common_model::TargetWorkerId, GolemError> {
@@ -2520,7 +2520,7 @@ impl CanStartWorker for golem::workerexecutor::v1::InvokeAndAwaitWorkerRequest {
     }
 
     fn account_limits(&self) -> Option<GrpcResourceLimits> {
-        self.account_limits.clone()
+        self.account_limits
     }
 
     fn worker_id(&self) -> Result<common_model::TargetWorkerId, GolemError> {
@@ -2561,16 +2561,6 @@ impl GrpcInvokeRequest for golem::workerexecutor::v1::InvokeAndAwaitWorkerReques
 
     fn name(&self) -> String {
         self.name.clone()
-    }
-}
-
-pub trait UriBackConversion {
-    fn as_http_02(&self) -> http_02::Uri;
-}
-
-impl UriBackConversion for http::Uri {
-    fn as_http_02(&self) -> http_02::Uri {
-        self.to_string().parse().unwrap()
     }
 }
 

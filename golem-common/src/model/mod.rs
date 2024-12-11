@@ -26,7 +26,6 @@ use bincode::enc::write::Writer;
 use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
-use derive_more::FromStr;
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::shardmanager::{
     Pod as GrpcPod, RoutingTable as GrpcRoutingTable, RoutingTableEntry as GrpcRoutingTableEntry,
@@ -727,15 +726,6 @@ impl Pod {
             .build()
             .expect("Failed to build URI")
     }
-
-    pub fn uri_02(&self) -> http_02::Uri {
-        http_02::Uri::builder()
-            .scheme("http")
-            .authority(format!("{}:{}", self.host, self.port).as_str())
-            .path_and_query("/")
-            .build()
-            .expect("Failed to build URI")
-    }
 }
 
 impl From<GrpcPod> for Pod {
@@ -1379,7 +1369,7 @@ pub struct TimestampedWorkerInvocation {
     Debug,
     PartialOrd,
     Ord,
-    FromStr,
+    derive_more::FromStr,
     Eq,
     Hash,
     PartialEq,
@@ -2490,7 +2480,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::LogEvent> for WorkerEvent {
                 }
                 golem_api_grpc::proto::golem::worker::log_event::Event::Log(event) => {
                     Ok(WorkerEvent::Log {
-                        timestamp: event.timestamp.clone().ok_or("Missing timestamp")?.into(),
+                        timestamp: event.timestamp.ok_or("Missing timestamp")?.into(),
                         level: event.level().into(),
                         context: event.context,
                         message: event.message,

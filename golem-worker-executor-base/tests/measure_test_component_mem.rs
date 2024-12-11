@@ -15,7 +15,7 @@ use rand::thread_rng;
 use std::collections::BTreeMap;
 use std::fmt::Write;
 use std::path::Path;
-use sysinfo::{Pid, System};
+use sysinfo::{Pid, ProcessesToUpdate, System};
 use tracing::{error, info};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -117,7 +117,7 @@ async fn measure_component(
 
     for _idx in 0..2 {
         let pid = Pid::from_u32(std::process::id());
-        system.refresh_process(pid);
+        system.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
         let process = system.process(pid).unwrap();
         let before_memory = process.memory();
         let before_vmemory = process.virtual_memory();
@@ -127,7 +127,7 @@ async fn measure_component(
             .await
             .unwrap();
 
-        system.refresh_process(pid);
+        system.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
         let process = system.process(pid).unwrap();
         let after_memory = process.memory();
         let after_vmemory = process.virtual_memory();

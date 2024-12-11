@@ -3,7 +3,6 @@ use crate::model::{
 };
 use crate::repo::RowMeta;
 use async_trait::async_trait;
-use http_02::Uri;
 use poem_openapi::types::{
     ParseError, ParseFromJSON, ParseFromParameter, ParseResult, ToJSON, Type,
 };
@@ -456,16 +455,6 @@ impl TryFrom<golem_api_grpc::proto::golem::component::ComponentTransformerDefini
             validate_url: value.validate_url,
             transform_url: value.transform_url,
         })
-    }
-}
-
-impl ComponentTransformerDefinition {
-    pub fn validate_url(&self) -> &Uri {
-        todo!()
-    }
-
-    pub fn transform_url(&self) -> &Uri {
-        todo!()
     }
 }
 

@@ -16,7 +16,16 @@
 macro_rules! newtype_uuid {
     ($name:ident, $proto_type:path) => {
         #[derive(
-            Clone, Debug, PartialOrd, Ord, FromStr, Eq, Hash, PartialEq, Serialize, Deserialize,
+            Clone,
+            Debug,
+            PartialOrd,
+            Ord,
+            derive_more::FromStr,
+            Eq,
+            Hash,
+            PartialEq,
+            Serialize,
+            Deserialize,
         )]
         #[serde(transparent)]
         pub struct $name(pub Uuid);

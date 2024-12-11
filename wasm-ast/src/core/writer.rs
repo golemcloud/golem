@@ -47,7 +47,7 @@ impl From<&FuncType> for wasm_encoder::TypeSection {
 }
 
 fn add_to_type_section(section: &mut wasm_encoder::TypeSection, value: &FuncType) {
-    section.function(
+    section.ty().function(
         value.input.values.iter().map(|v| v.into()),
         value.output.values.iter().map(|v| v.into()),
     );
@@ -89,8 +89,8 @@ fn add_to_code_section<T: RetainsInstructions>(
 impl From<&RefType> for wasm_encoder::HeapType {
     fn from(value: &RefType) -> Self {
         match value {
-            RefType::FuncRef => wasm_encoder::HeapType::Func,
-            RefType::ExternRef => wasm_encoder::HeapType::Extern,
+            RefType::ExternRef => wasm_encoder::HeapType::EXTERN,
+            RefType::FuncRef => wasm_encoder::HeapType::FUNC,
         }
     }
 }
@@ -122,6 +122,7 @@ impl From<&TableType> for wasm_encoder::TableType {
             table64: false, // 64 bit tables are not supported yet
             minimum: value.limits.min,
             maximum: value.limits.max,
+            shared: false, // shard-everything proposal is not supported yet
         }
     }
 }
@@ -240,7 +241,7 @@ fn add_to_elem_section<T: RetainsInstructions>(
                 })
                 .cloned()
                 .collect();
-            let elements = wasm_encoder::Elements::Functions(&func_indices);
+            let elements = wasm_encoder::Elements::Functions(Cow::Owned(func_indices));
             match &value.mode {
                 ElemMode::Passive => section.passive(elements),
                 ElemMode::Active { table_idx, offset } => section.active(
@@ -264,8 +265,10 @@ fn add_to_elem_section<T: RetainsInstructions>(
                     (&Expr { instrs }).try_into()
                 })
                 .collect::<Result<Vec<wasm_encoder::ConstExpr>, String>>()?;
-            let elements =
-                wasm_encoder::Elements::Expressions(wasm_encoder::RefType::EXTERNREF, &init);
+            let elements = wasm_encoder::Elements::Expressions(
+                wasm_encoder::RefType::EXTERNREF,
+                Cow::Owned(init),
+            );
             match &value.mode {
                 ElemMode::Passive => section.passive(elements),
                 ElemMode::Active { table_idx, offset } => section.active(
@@ -1569,8 +1572,8 @@ fn encode_instr<F: InstructionTarget>(instr: &Instr, target: &mut F) -> Result<(
         Instr::Call(func_idx) => target.emit(wasm_encoder::Instruction::Call(*func_idx)),
         Instr::CallIndirect(table_idx, type_idx) => {
             target.emit(wasm_encoder::Instruction::CallIndirect {
-                table: *table_idx,
-                ty: *type_idx,
+                table_index: *table_idx,
+                type_index: *type_idx,
             })
         }
     }

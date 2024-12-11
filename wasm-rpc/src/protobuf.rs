@@ -334,7 +334,7 @@ impl TryFrom<&type_annotated_value::TypeAnnotatedValue> for Type {
                 })))
             }
             type_annotated_value::TypeAnnotatedValue::Handle(TypedHandle { typ, .. }) => {
-                if let Some(typ) = typ.clone() {
+                if let Some(typ) = *typ {
                     Ok(r#type::Type::Handle(typ))
                 } else {
                     Err("Missing type for Handle".to_string())

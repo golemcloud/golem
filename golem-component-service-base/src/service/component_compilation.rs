@@ -19,6 +19,7 @@ use golem_api_grpc::proto::golem::componentcompilation::v1::{
 };
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::ComponentId;
+use http::Uri;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 
@@ -32,7 +33,7 @@ pub struct ComponentCompilationServiceDefault {
 }
 
 impl ComponentCompilationServiceDefault {
-    pub fn new(uri: http_02::Uri) -> Self {
+    pub fn new(uri: Uri) -> Self {
         let client = GrpcClient::new(
             "component-compilation-service",
             |channel| {

@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::error::GolemError;
-use crate::grpc::{authorised_grpc_request, is_grpc_retriable, GrpcError, UriBackConversion};
+use crate::grpc::{authorised_grpc_request, is_grpc_retriable, GrpcError};
 use crate::metrics::component::record_compilation_time;
 use crate::services::compiled_component;
 use crate::services::compiled_component::CompiledComponentService;
@@ -167,7 +167,7 @@ impl ComponentServiceGrpc {
                         .send_compressed(CompressionEncoding::Gzip)
                         .accept_compressed(CompressionEncoding::Gzip)
                 },
-                endpoint.as_http_02(),
+                endpoint,
                 GrpcClientConfig {
                     retries_on_unavailable: retry_config.clone(),
                     ..Default::default() // TODO
@@ -476,9 +476,7 @@ async fn get_metadata_via_grpc(
                     memories: component
                         .metadata
                         .as_ref()
-                        .map(|metadata| {
-                            metadata.memories.iter().map(|m| m.clone().into()).collect()
-                        })
+                        .map(|metadata| metadata.memories.iter().map(|m| (*m).into()).collect())
                         .unwrap_or_default(),
                     exports: component
                         .metadata

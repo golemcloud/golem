@@ -50,7 +50,7 @@ pub async fn start_grpc_server(
 
     let reflection_service = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(proto::FILE_DESCRIPTOR_SET)
-        .build()
+        .build_v1()
         .unwrap();
 
     join_set.spawn(

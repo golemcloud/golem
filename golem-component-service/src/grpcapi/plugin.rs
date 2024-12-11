@@ -43,8 +43,7 @@ impl PluginGrpcApi {
     ) -> Result<Vec<PluginDefinition>, ComponentError> {
         let plugins = match &request.scope {
             Some(scope) => {
-                let scope = scope
-                    .clone()
+                let scope = (*scope)
                     .try_into()
                     .map_err(|err| bad_request_error(&format!("Invalid plugin scope: {err}")))?;
 

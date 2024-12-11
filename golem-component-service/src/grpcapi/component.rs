@@ -87,8 +87,7 @@ impl ComponentGrpcApi {
         source: &Option<golem_api_grpc::proto::golem::component::ComponentId>,
     ) -> Result<ComponentId, ComponentError> {
         match source {
-            Some(id) => id
-                .clone()
+            Some(id) => (*id)
                 .try_into()
                 .map_err(|err| bad_request_error(&format!("Invalid component id: {err}"))),
             None => Err(bad_request_error("Missing component id")),
@@ -331,7 +330,6 @@ impl ComponentGrpcApi {
 
         let installation_id = request
             .installation_id
-            .clone()
             .and_then(|id| id.try_into().ok())
             .ok_or_else(|| bad_request_error("Missing installation id"))?;
 
@@ -360,7 +358,6 @@ impl ComponentGrpcApi {
 
         let installation_id = request
             .installation_id
-            .clone()
             .and_then(|id| id.try_into().ok())
             .ok_or_else(|| bad_request_error("Missing installation id"))?;
 
@@ -575,8 +572,7 @@ impl ComponentService for ComponentGrpcApi {
 
         let record = recorded_grpc_api_request!(
             "update_component",
-            component_id =
-                proto_component_id_string(&header.as_ref().and_then(|r| r.component_id.clone()))
+            component_id = proto_component_id_string(&header.as_ref().and_then(|r| r.component_id))
         );
 
         let result = match header {

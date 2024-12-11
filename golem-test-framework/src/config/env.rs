@@ -416,7 +416,7 @@ impl EnvBasedTestDependencies {
         let redis = Self::make_redis(config.clone()).await;
         {
             let mut connection = redis.get_connection(0);
-            redis::cmd("FLUSHALL").execute(&mut connection);
+            redis::cmd("FLUSHALL").exec(&mut connection).unwrap();
         }
 
         let rdb_and_component_service_join = {

@@ -12,14 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use http_02::{Response, StatusCode};
+use axum::body::Body;
+use axum::response::IntoResponse;
+use axum::routing::get;
+use axum::Router;
+use http::Response;
 use prometheus::{Encoder, Registry, TextEncoder};
 use tokio::net::{TcpListener, ToSocketAddrs};
 use tokio::task::JoinSet;
-use tokio_stream::wrappers::TcpListenerStream;
 use tracing::{info, Instrument};
-use warp::hyper::Body;
-use warp::Filter;
 
 pub async fn start_health_and_metrics_server(
     addr: impl ToSocketAddrs,
@@ -27,23 +28,19 @@ pub async fn start_health_and_metrics_server(
     body_message: &'static str,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) -> Result<u16, anyhow::Error> {
-    let healthcheck = warp::path!("healthcheck").map(move || {
-        Response::builder()
-            .status(StatusCode::OK)
-            .body(Body::from(body_message))
-            .unwrap()
-    });
+    let app = Router::new()
+        .route("/healthcheck", get(move || async move { body_message }))
+        .route(
+            "/metrics",
+            get(|| async move { prometheus_metrics(registry.clone()) }),
+        );
 
     let listener = TcpListener::bind(addr).await?;
     let local_addr = listener.local_addr()?;
 
-    let metrics = warp::path!("metrics").map(move || prometheus_metrics(registry.clone()));
-
     join_set.spawn(
         async move {
-            warp::serve(healthcheck.or(metrics))
-                .run_incoming(TcpListenerStream::new(listener))
-                .await;
+            axum::serve(listener, app).await?;
             Ok(())
         }
         .in_current_span(),
@@ -54,7 +51,7 @@ pub async fn start_health_and_metrics_server(
     Ok(local_addr.port())
 }
 
-fn prometheus_metrics(registry: Registry) -> Response<Body> {
+fn prometheus_metrics(registry: Registry) -> impl IntoResponse {
     let encoder = TextEncoder::new();
     let mut buffer = Vec::new();
 
