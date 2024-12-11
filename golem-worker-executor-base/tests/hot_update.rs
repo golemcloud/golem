@@ -18,7 +18,8 @@ use crate::{common, LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
 use async_mutex::Mutex;
 use axum::routing::post;
-use axum::{Json, Router};
+use axum::Router;
+use bytes::Bytes;
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::Value;
 use http::StatusCode;
@@ -73,12 +74,13 @@ impl TestHttpServer {
         let handle = spawn(async move {
             let route = Router::new().route(
                 "/f1",
-                post(move |body: Json<u64>| async move {
-                    debug!("f1: {}", body.0);
+                post(move |body: Bytes| async move {
+                    let body: u64 = String::from_utf8(body.to_vec()).unwrap().parse().unwrap();
+                    debug!("f1: {}", body);
 
                     let mut guard = f1_blocker_clone.lock().await;
                     if let Some(blocker) = &*guard {
-                        if blocker.value == body.0 {
+                        if blocker.value == body {
                             let F1Blocker {
                                 reached, resume, ..
                             } = guard.take().unwrap();
