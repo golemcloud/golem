@@ -209,7 +209,7 @@ async fn shopping_cart_example(
         .invoke_and_await(&worker_id, "golem:it/api.{checkout}", vec![])
         .await;
 
-    save_recovery_golden_file(&executor, "shopping_cart_example", &worker_id).await;
+    save_recovery_golden_file(&executor, &context, "shopping_cart_example", &worker_id).await;
     drop(executor);
 
     check!(
@@ -1612,7 +1612,7 @@ async fn long_running_poll_loop_works_as_expected(
 
     let http_server = tokio::spawn(async move {
         let route = Router::new().route(
-            "poll",
+            "/poll",
             get(move || async move {
                 let body = response_clone.lock().unwrap();
                 body.clone()
@@ -1680,7 +1680,7 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
 
     let http_server = tokio::spawn(async move {
         let route = Router::new().route(
-            "poll",
+            "/poll",
             get(move || async move {
                 let body = response_clone.lock().unwrap();
                 body.clone()
@@ -1807,7 +1807,7 @@ async fn long_running_poll_loop_connection_breaks_on_interrupt(
 
     let http_server = tokio::spawn(async move {
         let route = Router::new().route(
-            "poll",
+            "/poll",
             get(move || async move {
                 let body = response_clone.lock().unwrap();
                 body.clone()
@@ -1888,7 +1888,7 @@ async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_wor
 
     let http_server = tokio::spawn(async move {
         let route = Router::new().route(
-            "poll",
+            "/poll",
             get(move || async move {
                 let body = response_clone.lock().unwrap();
                 body.clone()
@@ -1959,7 +1959,7 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume(
 
     let http_server = tokio::spawn(async move {
         let route = Router::new().route(
-            "poll",
+            "/poll",
             get(move || async move {
                 let body = response_clone.lock().unwrap();
                 body.clone()
@@ -2061,7 +2061,7 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt(
 
     let http_server = tokio::spawn(async move {
         let route = Router::new().route(
-            "poll",
+            "/poll",
             get(move || async move {
                 let body = response_clone.lock().unwrap();
                 body.clone()
@@ -2568,7 +2568,7 @@ async fn invocation_queue_is_persistent(
 
     let http_server = tokio::spawn(async move {
         let route = Router::new().route(
-            "poll",
+            "/poll",
             get(move || async move {
                 let body = response_clone.lock().unwrap();
                 body.clone()
