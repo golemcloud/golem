@@ -491,7 +491,9 @@ impl From<crate::services::rdbms::postgres::types::DbValuePrimitive> for DbValue
             crate::services::rdbms::postgres::types::DbValuePrimitive::CustomEnum(v) => {
                 Self::CustomEnum(v)
             }
-            crate::services::rdbms::postgres::types::DbValuePrimitive::CustomComposite(_) => todo!(),
+            crate::services::rdbms::postgres::types::DbValuePrimitive::CustomComposite(_) => {
+                todo!()
+            }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Null => Self::Null,
         }
     }
@@ -615,7 +617,9 @@ impl From<crate::services::rdbms::postgres::types::DbColumnTypePrimitive>
             crate::services::rdbms::postgres::types::DbColumnTypePrimitive::CustomEnum(v) => {
                 Self::CustomEnum(v)
             }
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::CustomComposite(v) => todo!()
+            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::CustomComposite(v) => {
+                todo!()
+            }
         }
     }
 }

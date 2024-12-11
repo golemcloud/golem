@@ -53,12 +53,11 @@ pub(crate) mod sqlx_rdbms {
     use bigdecimal::BigDecimal;
     use futures_util::stream::BoxStream;
     use serde_json::json;
-    use sqlx::database::HasArguments;
     use sqlx::postgres::types::{Oid, PgInterval, PgMoney, PgRange, PgTimeTz};
     use sqlx::postgres::{PgConnectOptions, PgTypeKind};
     use sqlx::types::mac_address::MacAddress;
     use sqlx::types::BitVec;
-    use sqlx::{Column, ConnectOptions, Pool, Row, TypeInfo};
+    use sqlx::{Column, ConnectOptions, Pool, Row, TypeInfo, ValueRef};
     use std::net::IpAddr;
     use std::ops::Bound;
     use std::sync::Arc;
@@ -194,7 +193,7 @@ pub(crate) mod sqlx_rdbms {
             DbValuePrimitive::Money(v) => Ok(query.bind(PgMoney(v))),
             DbValuePrimitive::Oid(v) => Ok(query.bind(Oid(v))),
             DbValuePrimitive::CustomEnum(v) => Ok(query.bind(PgEnum(v))),
-            DbValuePrimitive::CustomComposite(_) => todo!(),
+            DbValuePrimitive::CustomComposite((n, vs)) => Ok(query.bind(PgCompositeValue(n, vs))),
             DbValuePrimitive::Null => Ok(query.bind(PgNull {})),
         }
     }
@@ -586,7 +585,14 @@ pub(crate) mod sqlx_rdbms {
                     Ok(query.bind(values))
                 }
                 DbValuePrimitive::CustomComposite(_) => {
-                    todo!()
+                    let values: Vec<_> = get_plain_values(values, |v| {
+                        if let DbValuePrimitive::CustomComposite(v) = v {
+                            Some(PgCompositeValue(v.0, v.1))
+                        } else {
+                            None
+                        }
+                    })?;
+                    Ok(query.bind(PgCompositeValues(values)))
                 }
                 DbValuePrimitive::Null => Err(format!(
                     "Array param element '{}' with index 0 is not supported",
@@ -800,8 +806,9 @@ pub(crate) mod sqlx_rdbms {
                 let v: Option<PgEnum> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::primitive_from(v.map(|v| DbValuePrimitive::CustomEnum(v.0)))
             }
-            DbColumnTypePrimitive::CustomComposite(_)=> {
-                todo!()
+            DbColumnTypePrimitive::CustomComposite(_) => {
+                let v: Option<PgCompositeValue> = row.try_get(index).map_err(|e| e.to_string())?;
+                DbValue::primitive_from(v.map(|v| DbValuePrimitive::CustomComposite((v.0, v.1))))
             }
         };
         Ok(value)
@@ -977,7 +984,11 @@ pub(crate) mod sqlx_rdbms {
                 DbValue::array_from(vs, |v| DbValuePrimitive::CustomEnum(v.0))
             }
             DbColumnTypePrimitive::CustomComposite(_) => {
-                todo!()
+                let vs: Option<PgCompositeValues> =
+                    row.try_get(index).map_err(|e| e.to_string())?;
+                DbValue::array_from(vs.map(|v| v.0), |v| {
+                    DbValuePrimitive::CustomComposite((v.0, v.1))
+                })
             }
         };
         Ok(value)
@@ -1018,22 +1029,16 @@ pub(crate) mod sqlx_rdbms {
             pg_type_name::INT2 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Int2)),
             pg_type_name::INT4 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Int4)),
             pg_type_name::INT8 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Int8)),
-            pg_type_name::NUMERIC => {
-                Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Numeric))
-            }
+            pg_type_name::NUMERIC => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Numeric)),
             pg_type_name::FLOAT4 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Float4)),
             pg_type_name::FLOAT8 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Float8)),
             pg_type_name::UUID => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Uuid)),
             pg_type_name::TEXT => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Text)),
-            pg_type_name::VARCHAR => {
-                Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Varchar))
-            }
+            pg_type_name::VARCHAR => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Varchar)),
             pg_type_name::BPCHAR => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Bpchar)),
             pg_type_name::JSON => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Json)),
             pg_type_name::JSONB => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Jsonb)),
-            pg_type_name::JSONPATH => {
-                Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Jsonpath))
-            }
+            pg_type_name::JSONPATH => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Jsonpath)),
             pg_type_name::XML => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Xml)),
             pg_type_name::TIMESTAMP => {
                 Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Timestamp))
@@ -1044,15 +1049,11 @@ pub(crate) mod sqlx_rdbms {
             pg_type_name::DATE => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Date)),
             pg_type_name::TIME => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Time)),
             pg_type_name::TIMETZ => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Timetz)),
-            pg_type_name::INTERVAL => {
-                Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Interval))
-            }
+            pg_type_name::INTERVAL => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Interval)),
             pg_type_name::BYTEA => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Bytea)),
             pg_type_name::INET => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Inet)),
             pg_type_name::CIDR => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Cidr)),
-            pg_type_name::MACADDR => {
-                Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Macaddr))
-            }
+            pg_type_name::MACADDR => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Macaddr)),
             pg_type_name::BIT => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Bit)),
             pg_type_name::VARBIT => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Varbit)),
             pg_type_name::OID => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Oid)),
@@ -1063,42 +1064,26 @@ pub(crate) mod sqlx_rdbms {
             pg_type_name::INT8RANGE => {
                 Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Int8range))
             }
-            pg_type_name::NUMRANGE => {
-                Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Numrange))
-            }
-            pg_type_name::TSRANGE => {
-                Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Tsrange))
-            }
+            pg_type_name::NUMRANGE => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Numrange)),
+            pg_type_name::TSRANGE => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Tsrange)),
             pg_type_name::TSTZRANGE => {
                 Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Tstzrange))
             }
             pg_type_name::DATERANGE => {
                 Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Daterange))
             }
-            pg_type_name::CHAR_ARRAY => {
-                Ok(DbColumnType::Array(DbColumnTypePrimitive::Character))
-            }
+            pg_type_name::CHAR_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Character)),
             pg_type_name::BOOL_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Boolean)),
             pg_type_name::INT2_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Int2)),
             pg_type_name::INT4_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Int4)),
             pg_type_name::INT8_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Int8)),
-            pg_type_name::NUMERIC_ARRAY => {
-                Ok(DbColumnType::Array(DbColumnTypePrimitive::Numeric))
-            }
-            pg_type_name::FLOAT4_ARRAY => {
-                Ok(DbColumnType::Array(DbColumnTypePrimitive::Float4))
-            }
-            pg_type_name::FLOAT8_ARRAY => {
-                Ok(DbColumnType::Array(DbColumnTypePrimitive::Float8))
-            }
+            pg_type_name::NUMERIC_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Numeric)),
+            pg_type_name::FLOAT4_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Float4)),
+            pg_type_name::FLOAT8_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Float8)),
             pg_type_name::UUID_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Uuid)),
             pg_type_name::TEXT_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Text)),
-            pg_type_name::VARCHAR_ARRAY => {
-                Ok(DbColumnType::Array(DbColumnTypePrimitive::Varchar))
-            }
-            pg_type_name::BPCHAR_ARRAY => {
-                Ok(DbColumnType::Array(DbColumnTypePrimitive::Bpchar))
-            }
+            pg_type_name::VARCHAR_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Varchar)),
+            pg_type_name::BPCHAR_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Bpchar)),
             pg_type_name::JSON_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Json)),
             pg_type_name::JSONB_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Jsonb)),
             pg_type_name::JSONPATH_ARRAY => {
@@ -1113,22 +1098,16 @@ pub(crate) mod sqlx_rdbms {
             }
             pg_type_name::DATE_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Date)),
             pg_type_name::TIME_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Time)),
-            pg_type_name::TIMETZ_ARRAY => {
-                Ok(DbColumnType::Array(DbColumnTypePrimitive::Timetz))
-            }
+            pg_type_name::TIMETZ_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Timetz)),
             pg_type_name::INTERVAL_ARRAY => {
                 Ok(DbColumnType::Array(DbColumnTypePrimitive::Interval))
             }
             pg_type_name::BYTEA_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Bytea)),
             pg_type_name::INET_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Inet)),
             pg_type_name::CIDR_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Cidr)),
-            pg_type_name::MACADDR_ARRAY => {
-                Ok(DbColumnType::Array(DbColumnTypePrimitive::Macaddr))
-            }
+            pg_type_name::MACADDR_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Macaddr)),
             pg_type_name::BIT_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Bit)),
-            pg_type_name::VARBIT_ARRAY => {
-                Ok(DbColumnType::Array(DbColumnTypePrimitive::Varbit))
-            }
+            pg_type_name::VARBIT_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Varbit)),
             pg_type_name::OID_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Oid)),
             pg_type_name::MONEY_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Money)),
             pg_type_name::INT4RANGE_ARRAY => {
@@ -1140,9 +1119,7 @@ pub(crate) mod sqlx_rdbms {
             pg_type_name::NUMRANGE_ARRAY => {
                 Ok(DbColumnType::Array(DbColumnTypePrimitive::Numrange))
             }
-            pg_type_name::TSRANGE_ARRAY => {
-                Ok(DbColumnType::Array(DbColumnTypePrimitive::Tsrange))
-            }
+            pg_type_name::TSRANGE_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Tsrange)),
             pg_type_name::TSTZRANGE_ARRAY => {
                 Ok(DbColumnType::Array(DbColumnTypePrimitive::Tstzrange))
             }
@@ -1159,27 +1136,48 @@ pub(crate) mod sqlx_rdbms {
                     )))
                 }
                 PgTypeKind::Composite(vs) => {
-                    let mut attributes = Vec::with_capacity(vs.len());
-                    for (n, t) in vs.iter() {
-                        let t = get_db_column_type(t)?;
-                        let n = n.to_string();
-                        attributes.push((n, t));
-                    }
-
+                    let attributes = get_db_column_type_attributes(vs.to_vec())?;
                     Ok(DbColumnType::Primitive(
-                        DbColumnTypePrimitive::CustomComposite(attributes),
+                        DbColumnTypePrimitive::CustomComposite((
+                            type_info.name().to_string(),
+                            attributes,
+                        )),
                     ))
-                },
+                }
+                PgTypeKind::Array(element)
+                    if matches!(element.kind(), PgTypeKind::Composite(_)) =>
+                {
+                    let v = get_db_column_type(element)?;
+                    Ok(v.to_array())
+                }
 
                 _ => Err(format!("Column type '{}' is not supported", type_name))?,
             },
         }
     }
 
+    fn get_db_column_type_attributes(
+        attributes: Vec<(String, sqlx::postgres::PgTypeInfo)>,
+    ) -> Result<Vec<(String, DbColumnType)>, String> {
+        let mut result = Vec::with_capacity(attributes.len());
+        for (n, t) in attributes.iter() {
+            let t = get_db_column_type(t)?;
+            let n = n.to_string();
+            result.push((n, t));
+        }
+
+        Ok(result)
+    }
+
     fn get_db_type_name(type_info: &sqlx::postgres::PgTypeInfo) -> String {
         match type_info.kind() {
-            PgTypeKind::Enum(_) => type_info.name().to_string(),
-            PgTypeKind::Array(element) if matches!(element.kind(), PgTypeKind::Enum(_)) => {
+            PgTypeKind::Enum(_) | PgTypeKind::Composite(_) => type_info.name().to_string(),
+            PgTypeKind::Array(element)
+                if matches!(
+                    element.kind(),
+                    PgTypeKind::Enum(_) | PgTypeKind::Composite(_)
+                ) =>
+            {
                 format!("{}[]", element.name())
             }
             PgTypeKind::Array(element) => {
@@ -1235,8 +1233,8 @@ pub(crate) mod sqlx_rdbms {
     impl<'r> sqlx::Encode<'r, sqlx::Postgres> for PgEnum {
         fn encode_by_ref(
             &self,
-            buf: &mut <sqlx::Postgres as HasArguments<'r>>::ArgumentBuffer,
-        ) -> sqlx::encode::IsNull {
+            buf: &mut sqlx::postgres::PgArgumentBuffer,
+        ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
             <String as sqlx::Encode<sqlx::Postgres>>::encode_by_ref(&self.0, buf)
         }
     }
@@ -1276,12 +1274,11 @@ pub(crate) mod sqlx_rdbms {
     impl<'r> sqlx::Encode<'r, sqlx::Postgres> for PgJsonPath {
         fn encode_by_ref(
             &self,
-            buf: &mut <sqlx::Postgres as HasArguments<'r>>::ArgumentBuffer,
-        ) -> sqlx::encode::IsNull {
+            buf: &mut sqlx::postgres::PgArgumentBuffer,
+        ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
             buf.push(1);
-            serde_json::to_writer(&mut **buf, &json!(self.0))
-                .expect("failed to serialize to JSON for encoding on transmission to the database");
-            sqlx::encode::IsNull::No
+            serde_json::to_writer(&mut **buf, &json!(self.0))?;
+            Ok(sqlx::encode::IsNull::No)
         }
     }
 
@@ -1290,9 +1287,9 @@ pub(crate) mod sqlx_rdbms {
     impl<'r> sqlx::Encode<'r, sqlx::Postgres> for PgNull {
         fn encode_by_ref(
             &self,
-            _buf: &mut <sqlx::Postgres as HasArguments<'r>>::ArgumentBuffer,
-        ) -> sqlx::encode::IsNull {
-            sqlx::encode::IsNull::Yes
+            _buf: &mut sqlx::postgres::PgArgumentBuffer,
+        ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
+            Ok(sqlx::encode::IsNull::Yes)
         }
     }
 
@@ -1338,16 +1335,16 @@ pub(crate) mod sqlx_rdbms {
     impl<'r> sqlx::Encode<'r, sqlx::Postgres> for PgXml {
         fn encode_by_ref(
             &self,
-            buf: &mut <sqlx::Postgres as HasArguments<'r>>::ArgumentBuffer,
-        ) -> sqlx::encode::IsNull {
+            buf: &mut sqlx::postgres::PgArgumentBuffer,
+        ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
             <String as sqlx::Encode<sqlx::Postgres>>::encode_by_ref(&self.0, buf)
         }
     }
 
     // //https://github.com/launchbadge/sqlx/blob/42ce24dab87aad98f041cafb35cf9a7d5b2b09a7/tests/postgres/postgres.rs#L1241-L1281
-    struct PgValuesRecord(Vec<DbValue>);
+    struct PgCompositeValue(String, Vec<DbValue>);
 
-    impl sqlx::Type<sqlx::Postgres> for PgValuesRecord {
+    impl sqlx::Type<sqlx::Postgres> for PgCompositeValue {
         fn type_info() -> sqlx::postgres::PgTypeInfo {
             sqlx::postgres::PgTypeInfo::with_oid(Oid(2249)) // pseudo composite type
         }
@@ -1357,54 +1354,150 @@ pub(crate) mod sqlx_rdbms {
         }
     }
 
-
-    impl sqlx::Encode<'_, sqlx::Postgres> for PgValuesRecord {
+    impl sqlx::Encode<'_, sqlx::Postgres> for PgCompositeValue {
         fn encode_by_ref(
             &self,
             buf: &mut sqlx::postgres::PgArgumentBuffer,
-        ) -> sqlx::encode::IsNull {
+        ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
             let mut encoder = sqlx::postgres::types::PgRecordEncoder::new(buf);
 
-            for v in self.0.iter() {
+            for v in self.1.iter() {
                 match v {
-                    DbValue::Primitive(v) => {
-                        match v {
-                            DbValuePrimitive::Text(v) => {
-                                encoder.encode(v);
-                            },
-                            DbValuePrimitive::Uuid(v) => {
-                                encoder.encode(v);
-                            }
-                            _ =>
-                            {
-                                panic!("primitive value ({}) is not supported", v);
-                            }
+                    DbValue::Primitive(v) => match v {
+                        DbValuePrimitive::Text(v) => {
+                            encoder.encode(v)?;
                         }
-
-                    }
+                        DbValuePrimitive::Uuid(v) => {
+                            encoder.encode(v)?;
+                        }
+                        DbValuePrimitive::Boolean(v) => {
+                            encoder.encode(v)?;
+                        }
+                        DbValuePrimitive::Int4(v) => {
+                            encoder.encode(v)?;
+                        }
+                        DbValuePrimitive::Numeric(v) => {
+                            encoder.encode(v)?;
+                        }
+                        _ => {
+                            Err(format!("primitive value ({}) is not supported", v))?;
+                        }
+                    },
                     DbValue::Array(_) => {
-                        panic!("array value ({}) is not supported", v);
+                        Err(format!("array value ({}) is not supported", v))?;
                     }
                 }
-
             }
             encoder.finish();
-            sqlx::encode::IsNull::No
+            Ok(sqlx::encode::IsNull::No)
+        }
+
+        fn produces(&self) -> Option<sqlx::postgres::PgTypeInfo> {
+            Some(sqlx::postgres::PgTypeInfo::with_name(self.0.clone().leak()))
         }
     }
-    //
-    // impl<'r> sqlx::Decode<'r, sqlx::Postgres> for PgValuesRecord {
-    //     fn decode(
-    //         value: sqlx::postgres::PgValueRef<'r>,
-    //     ) -> Result<Self, Box<dyn std::error::Error + 'static + Send + Sync>> {
-    //         let mut decoder = sqlx::postgres::types::PgRecordDecoder::new(value)?;
-    //
-    //         let year = decoder.try_decode::<i32>()?;
-    //         let month = decoder.try_decode::<MonthId>()?;
-    //
-    //         Ok(Self { year, month })
-    //     }
-    // }
+
+    fn get_composite_value(
+        type_name: String,
+        attributes: Vec<(String, DbColumnType)>,
+        value: sqlx::postgres::PgValueRef,
+    ) -> Result<PgCompositeValue, String> {
+        let mut decoder =
+            sqlx::postgres::types::PgRecordDecoder::new(value).map_err(|e| e.to_string())?;
+        let mut values: Vec<DbValue> = Vec::with_capacity(attributes.len());
+        for (_, v) in attributes {
+            match v {
+                DbColumnType::Primitive(v) => match v {
+                    DbColumnTypePrimitive::Text => {
+                        let v = decoder.try_decode::<String>().map_err(|e| e.to_string())?;
+                        values.push(DbValue::Primitive(DbValuePrimitive::Text(v)));
+                    }
+                    DbColumnTypePrimitive::Uuid => {
+                        let v = decoder.try_decode::<Uuid>().map_err(|e| e.to_string())?;
+                        values.push(DbValue::Primitive(DbValuePrimitive::Uuid(v)));
+                    }
+                    DbColumnTypePrimitive::Boolean => {
+                        let v = decoder.try_decode::<bool>().map_err(|e| e.to_string())?;
+                        values.push(DbValue::Primitive(DbValuePrimitive::Boolean(v)));
+                    }
+                    DbColumnTypePrimitive::Int4 => {
+                        let v = decoder.try_decode::<i32>().map_err(|e| e.to_string())?;
+                        values.push(DbValue::Primitive(DbValuePrimitive::Int4(v)));
+                    }
+                    DbColumnTypePrimitive::Numeric => {
+                        let v = decoder
+                            .try_decode::<BigDecimal>()
+                            .map_err(|e| e.to_string())?;
+                        values.push(DbValue::Primitive(DbValuePrimitive::Numeric(v)));
+                    }
+                    _ => {
+                        Err(format!("primitive value ({}) is not supported", v))?;
+                    }
+                },
+                DbColumnType::Array(_) => {
+                    Err(format!("array value ({}) is not supported", v))?;
+                }
+            }
+        }
+
+        Ok(PgCompositeValue(type_name, values))
+    }
+
+    impl<'r> sqlx::Decode<'r, sqlx::Postgres> for PgCompositeValue {
+        fn decode(
+            value: sqlx::postgres::PgValueRef<'r>,
+        ) -> Result<Self, Box<dyn std::error::Error + 'static + Send + Sync>> {
+            let type_info = value.type_info();
+            if let PgTypeKind::Composite(vs) = type_info.kind() {
+                let attributes = get_db_column_type_attributes(vs.to_vec())?;
+                let value = get_composite_value(type_info.name().to_string(), attributes, value)?;
+                Ok(value)
+            } else {
+                Err(format!("type ({}) is not supported", type_info.name()).into())
+            }
+        }
+    }
+
+    struct PgCompositeValues(Vec<PgCompositeValue>);
+
+    impl sqlx::Type<sqlx::Postgres> for PgCompositeValues {
+        fn type_info() -> sqlx::postgres::PgTypeInfo {
+            sqlx::postgres::PgTypeInfo::with_oid(Oid(2277)) // pseudo array type
+        }
+
+        fn compatible(ty: &sqlx::postgres::PgTypeInfo) -> bool {
+            matches!(ty.kind(), PgTypeKind::Array(ty) if <PgCompositeValue as sqlx::types::Type<sqlx::Postgres>>::compatible(ty))
+        }
+    }
+
+    impl<'r> sqlx::Encode<'r, sqlx::Postgres> for PgCompositeValues {
+        fn encode_by_ref(
+            &self,
+            buf: &mut sqlx::postgres::PgArgumentBuffer,
+        ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
+            <Vec<PgCompositeValue> as sqlx::Encode<sqlx::Postgres>>::encode_by_ref(&self.0, buf)
+        }
+
+        fn produces(&self) -> Option<sqlx::postgres::PgTypeInfo> {
+            if self.0.is_empty() {
+                None
+            } else {
+                let first = &self.0[0];
+                let name = format!("_{}", first.0);
+                Some(sqlx::postgres::PgTypeInfo::with_name(name.leak()))
+            }
+        }
+    }
+
+    impl<'r> sqlx::Decode<'r, sqlx::Postgres> for PgCompositeValues {
+        fn decode(
+            value: sqlx::postgres::PgValueRef<'r>,
+        ) -> Result<Self, Box<dyn std::error::Error + 'static + Send + Sync>> {
+            Ok(Self(<Vec<PgCompositeValue> as sqlx::Decode<
+                sqlx::Postgres,
+            >>::decode(value)?))
+        }
+    }
 
     /// https://www.postgresql.org/docs/current/datatype.html
     /// https://github.com/postgres/postgres/blob/master/src/include/catalog/pg_type.dat
@@ -1557,7 +1650,7 @@ pub mod types {
         Daterange,
         Money,
         CustomEnum(String),
-        CustomComposite(Vec<(String, DbColumnType)>),
+        CustomComposite((String, Vec<(String, DbColumnType)>)),
         Oid,
     }
 
@@ -1601,7 +1694,12 @@ pub mod types {
                 DbColumnTypePrimitive::Oid => write!(f, "oid"),
                 DbColumnTypePrimitive::CustomEnum(v) => write!(f, "custom enum: {}", v),
                 DbColumnTypePrimitive::CustomComposite(v) => {
-                    write!(f, "custom composite: {}", v.iter().map(|v| format!("{}: {}", v.0, v.1)).format(", "))
+                    write!(
+                        f,
+                        "custom composite: {} ({})",
+                        v.0,
+                        v.1.iter().map(|v| format!("{} {}", v.0, v.1)).format(", ")
+                    )
                 }
                 DbColumnTypePrimitive::Money => write!(f, "money"),
             }
@@ -1612,6 +1710,16 @@ pub mod types {
     pub enum DbColumnType {
         Primitive(DbColumnTypePrimitive),
         Array(DbColumnTypePrimitive),
+    }
+
+    impl DbColumnType {
+        pub(crate) fn to_array(self) -> DbColumnType {
+            if let DbColumnType::Primitive(v) = self {
+                DbColumnType::Array(v)
+            } else {
+                self
+            }
+        }
     }
 
     impl Display for DbColumnType {
@@ -1666,7 +1774,7 @@ pub mod types {
         Daterange((Bound<chrono::NaiveDate>, Bound<chrono::NaiveDate>)),
         Money(i64),
         CustomEnum(String),
-        CustomComposite(Vec<(String, DbValue)>),
+        CustomComposite((String, Vec<DbValue>)),
         Oid(u32),
         Null,
     }
@@ -1712,7 +1820,7 @@ pub mod types {
                 DbValuePrimitive::Money(v) => write!(f, "{}", v),
                 DbValuePrimitive::CustomEnum(v) => write!(f, "{}", v),
                 DbValuePrimitive::CustomComposite(v) => {
-                    write!(f, "{}", v.iter().map(|v| format!("{}: {}", v.0, v.1)).format(", "))
+                    write!(f, "{} ({})", v.0, v.1.iter().format(", "))
                 }
                 DbValuePrimitive::Null => write!(f, "NULL"),
             }

@@ -23,7 +23,6 @@ use futures_util::stream::BoxStream;
 use futures_util::StreamExt;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::WorkerId;
-use sqlx::database::HasArguments;
 use sqlx::{Database, Pool, Row};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
@@ -402,5 +401,5 @@ pub(crate) trait QueryParamsBinder<'q, T: RdbmsType, DB: Database> {
     fn bind_params(
         self,
         params: Vec<T::DbValue>,
-    ) -> Result<sqlx::query::Query<'q, DB, <DB as HasArguments<'q>>::Arguments>, Error>;
+    ) -> Result<sqlx::query::Query<'q, DB, <DB as Database>::Arguments<'q>>, Error>;
 }

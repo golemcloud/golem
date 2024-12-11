@@ -99,6 +99,24 @@ async fn postgres_execute_test_create_insert_select(
     )
     .await;
 
+    let create_custom_type_statement = r#"
+            CREATE TYPE inventory_item AS (
+                product_id      uuid,
+                name            text,
+                supplier_id     INT4,
+                price           numeric
+            );
+        "#;
+
+    rdbms_execute_test(
+        rdbms.clone(),
+        &db_address,
+        create_custom_type_statement,
+        vec![],
+        None,
+    )
+    .await;
+
     let create_table_statement = r#"
             CREATE TABLE data_types (
                 id VARCHAR(25) PRIMARY KEY,
@@ -139,7 +157,8 @@ async fn postgres_execute_test_create_insert_select(
                 money_col MONEY,
                 jsonpath_col JSONPATH,
                 tsvector_col TSVECTOR,
-                tsquery_col TSQUERY
+                tsquery_col TSQUERY,
+                inventory_item_col inventory_item
             );
         "#;
 
@@ -184,14 +203,15 @@ async fn postgres_execute_test_create_insert_select(
             money_col,
             jsonpath_col,
             tsvector_col,
-            tsquery_col
+            tsquery_col,
+            inventory_item_col
             )
             VALUES
             (
                 $1, $2::test_enum, $3, $4, $5, $6, $7, $8, $9,
                 $10, $11, $12, $13, $14, $15, $16, $17, $18, $19,
                 $20, $21, $22, $23, $24, $25, $26, $27, $28, $29,
-                $30, $31, $32, $33, $34, $35, $36, $37, $38::tsvector, $39::tsquery
+                $30, $31, $32, $33, $34, $35, $36, $37, $38::tsvector, $39::tsquery, $40
             );
         "#;
 
@@ -361,9 +381,28 @@ async fn postgres_execute_test_create_insert_select(
                 postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Text(
                     "'fat' & 'rat' & !'cat'".to_string(),
                 )),
+                postgres_types::DbValue::Primitive(
+                    postgres_types::DbValuePrimitive::CustomComposite((
+                        "inventory_item".to_string(),
+                        vec![
+                            postgres_types::DbValue::Primitive(
+                                postgres_types::DbValuePrimitive::Uuid(Uuid::new_v4()),
+                            ),
+                            postgres_types::DbValue::Primitive(
+                                postgres_types::DbValuePrimitive::Text("text".to_string()),
+                            ),
+                            postgres_types::DbValue::Primitive(
+                                postgres_types::DbValuePrimitive::Int4(i as i32),
+                            ),
+                            postgres_types::DbValue::Primitive(
+                                postgres_types::DbValuePrimitive::Numeric(BigDecimal::from(111)),
+                            ),
+                        ],
+                    )),
+                ),
             ]);
         } else {
-            for _ in 0..38 {
+            for _ in 0..39 {
                 params.push(postgres_types::DbValue::Primitive(
                     postgres_types::DbValuePrimitive::Null,
                 ));
@@ -695,6 +734,42 @@ async fn postgres_execute_test_create_insert_select(
             ),
             db_type_name: "TEXT".to_string(),
         },
+        postgres_types::DbColumn {
+            name: "inventory_item_col".to_string(),
+            ordinal: 39,
+            db_type: postgres_types::DbColumnType::Primitive(
+                postgres_types::DbColumnTypePrimitive::CustomComposite((
+                    "inventory_item".to_string(),
+                    vec![
+                        (
+                            "product_id".to_string(),
+                            postgres_types::DbColumnType::Primitive(
+                                postgres_types::DbColumnTypePrimitive::Uuid,
+                            ),
+                        ),
+                        (
+                            "name".to_string(),
+                            postgres_types::DbColumnType::Primitive(
+                                postgres_types::DbColumnTypePrimitive::Text,
+                            ),
+                        ),
+                        (
+                            "supplier_id".to_string(),
+                            postgres_types::DbColumnType::Primitive(
+                                postgres_types::DbColumnTypePrimitive::Int4,
+                            ),
+                        ),
+                        (
+                            "price".to_string(),
+                            postgres_types::DbColumnType::Primitive(
+                                postgres_types::DbColumnTypePrimitive::Numeric,
+                            ),
+                        ),
+                    ],
+                )),
+            ),
+            db_type_name: "inventory_item".to_string(),
+        },
     ];
 
     let select_statement = r#"
@@ -737,7 +812,8 @@ async fn postgres_execute_test_create_insert_select(
             money_col,
             jsonpath_col,
             tsvector_col::text,
-            tsquery_col::text
+            tsquery_col::text,
+            inventory_item_col
            FROM data_types ORDER BY id ASC;
         "#;
 
@@ -777,6 +853,24 @@ async fn postgres_execute_test_create_insert_select_array(
         rdbms.clone(),
         &db_address,
         create_enum_statement,
+        vec![],
+        None,
+    )
+    .await;
+
+    let create_custom_type_statement = r#"
+            CREATE TYPE a_inventory_item AS (
+                product_id      uuid,
+                name            text,
+                supplier_id     INT4,
+                price           numeric
+            );
+        "#;
+
+    rdbms_execute_test(
+        rdbms.clone(),
+        &db_address,
+        create_custom_type_statement,
         vec![],
         None,
     )
@@ -822,7 +916,8 @@ async fn postgres_execute_test_create_insert_select_array(
                 money_col MONEY[],
                 jsonpath_col JSONPATH[],
                 tsvector_col TSVECTOR[],
-                tsquery_col TSQUERY[]
+                tsquery_col TSQUERY[],
+                inventory_item_col a_inventory_item[]
             );
         "#;
 
@@ -867,14 +962,15 @@ async fn postgres_execute_test_create_insert_select_array(
             money_col,
             jsonpath_col,
             tsvector_col,
-            tsquery_col
+            tsquery_col,
+            inventory_item_col
             )
             VALUES
             (
                 $1, $2::a_test_enum[], $3, $4, $5, $6, $7, $8, $9,
                 $10, $11, $12, $13, $14, $15, $16, $17, $18, $19,
                 $20, $21, $22, $23, $24, $25, $26, $27, $28, $29,
-                $30, $31, $32, $33, $34, $35, $36, $37, $38::tsvector[], $39::tsquery[]
+                $30, $31, $32, $33, $34, $35, $36, $37, $38::tsvector[], $39::tsquery[], $40
             );
         "#;
 
@@ -1054,9 +1150,28 @@ async fn postgres_execute_test_create_insert_select_array(
                 postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Text(
                     "'fat' & 'rat' & !'cat'".to_string(),
                 )]),
+                postgres_types::DbValue::Array(vec![
+                    postgres_types::DbValuePrimitive::CustomComposite((
+                        "a_inventory_item".to_string(),
+                        vec![
+                            postgres_types::DbValue::Primitive(
+                                postgres_types::DbValuePrimitive::Uuid(Uuid::new_v4()),
+                            ),
+                            postgres_types::DbValue::Primitive(
+                                postgres_types::DbValuePrimitive::Text("text".to_string()),
+                            ),
+                            postgres_types::DbValue::Primitive(
+                                postgres_types::DbValuePrimitive::Int4(i as i32),
+                            ),
+                            postgres_types::DbValue::Primitive(
+                                postgres_types::DbValuePrimitive::Numeric(BigDecimal::from(111)),
+                            ),
+                        ],
+                    )),
+                ]),
             ]);
         } else {
-            for _ in 0..38 {
+            for _ in 0..39 {
                 params.push(postgres_types::DbValue::Array(vec![]));
             }
         }
@@ -1386,6 +1501,42 @@ async fn postgres_execute_test_create_insert_select_array(
             ),
             db_type_name: "TEXT[]".to_string(),
         },
+        postgres_types::DbColumn {
+            name: "inventory_item_col".to_string(),
+            ordinal: 39,
+            db_type: postgres_types::DbColumnType::Array(
+                postgres_types::DbColumnTypePrimitive::CustomComposite((
+                    "a_inventory_item".to_string(),
+                    vec![
+                        (
+                            "product_id".to_string(),
+                            postgres_types::DbColumnType::Primitive(
+                                postgres_types::DbColumnTypePrimitive::Uuid,
+                            ),
+                        ),
+                        (
+                            "name".to_string(),
+                            postgres_types::DbColumnType::Primitive(
+                                postgres_types::DbColumnTypePrimitive::Text,
+                            ),
+                        ),
+                        (
+                            "supplier_id".to_string(),
+                            postgres_types::DbColumnType::Primitive(
+                                postgres_types::DbColumnTypePrimitive::Int4,
+                            ),
+                        ),
+                        (
+                            "price".to_string(),
+                            postgres_types::DbColumnType::Primitive(
+                                postgres_types::DbColumnTypePrimitive::Numeric,
+                            ),
+                        ),
+                    ],
+                )),
+            ),
+            db_type_name: "a_inventory_item[]".to_string(),
+        },
     ];
 
     let select_statement = r#"
@@ -1428,7 +1579,8 @@ async fn postgres_execute_test_create_insert_select_array(
             money_col,
             jsonpath_col,
             tsvector_col::text[],
-            tsquery_col::text[]
+            tsquery_col::text[],
+            inventory_item_col
            FROM array_data_types ORDER BY id ASC;
         "#;
 
