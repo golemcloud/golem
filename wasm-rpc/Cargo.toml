@@ -44,17 +44,20 @@ cargo_metadata = "0.19.1"
 
 [features]
 default = ["host"]
+host-bindings = [
+    "wasmtime"
+]
 host = [
     "dep:async-trait",
     "arbitrary",
     "bincode",
+    "host-bindings",
     "json",
     "poem_openapi",
     "protobuf",
     "serde",
     "text",
-    "typeinfo",
-    "wasmtime",
+    "typeinfo"
 ]
 arbitrary = ["dep:arbitrary"]
 bincode = ["dep:bincode", "golem-wasm-ast/bincode"]
@@ -71,15 +74,13 @@ poem_openapi = [
     "typeinfo",
     "golem-wasm-ast/poem_openapi",
 ]
-protobuf = ["dep:bincode", "dep:serde", "dep:prost"]
+protobuf = ["dep:bincode", "dep:serde", "dep:prost", "golem-wasm-ast/protobuf"]
 serde = ["dep:serde"]
 stub = []
-text = ["wasmtime", "dep:wasm-wave", "golem-wasm-ast/wave"]
+text = ["typeinfo", "dep:wasm-wave", "golem-wasm-ast/wave"]
 typeinfo = [
     "dep:golem-wasm-ast",
     "golem-wasm-ast/analysis",
-    "golem-wasm-ast/protobuf",
-    "protobuf",
 ]
 wasmtime = [
     "dep:wasmtime",

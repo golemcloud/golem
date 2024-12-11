@@ -14,7 +14,6 @@
 
 use crate::call_type::CallType;
 use crate::DynamicParsedFunctionName;
-use golem_api_grpc::proto::golem::rib::registry_key::KeyType;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_ast::analysis::{AnalysedExport, TypeVariant};
 use std::collections::{HashMap, HashSet};
@@ -287,54 +286,6 @@ impl RegistryKey {
     }
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::rib::RegistryKey> for RegistryKey {
-    type Error = String;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::rib::RegistryKey,
-    ) -> Result<Self, Self::Error> {
-        let key_type = value.key_type.ok_or("key type missing")?;
-
-        let registry_key = match key_type {
-            KeyType::FunctionName(string) => RegistryKey::FunctionName(string.name),
-            KeyType::FunctionNameWithInterface(function_with_interface) => {
-                let interface_name = function_with_interface.interface_name.clone();
-                let function_name = function_with_interface.function_name;
-
-                RegistryKey::FunctionNameWithInterface {
-                    interface_name,
-                    function_name,
-                }
-            }
-        };
-
-        Ok(registry_key)
-    }
-}
-
-impl From<RegistryKey> for golem_api_grpc::proto::golem::rib::RegistryKey {
-    fn from(value: RegistryKey) -> Self {
-        match value {
-            RegistryKey::FunctionName(str) => golem_api_grpc::proto::golem::rib::RegistryKey {
-                key_type: Some(KeyType::FunctionName(
-                    golem_api_grpc::proto::golem::rib::FunctionName { name: str },
-                )),
-            },
-            RegistryKey::FunctionNameWithInterface {
-                function_name,
-                interface_name,
-            } => golem_api_grpc::proto::golem::rib::RegistryKey {
-                key_type: Some(KeyType::FunctionNameWithInterface(
-                    golem_api_grpc::proto::golem::rib::FunctionNameWithInterface {
-                        interface_name,
-                        function_name,
-                    },
-                )),
-            },
-        }
-    }
-}
-
 #[derive(PartialEq, Clone, Debug)]
 pub enum RegistryValue {
     Value(AnalysedType),
@@ -455,6 +406,61 @@ mod internal {
             AnalysedType::S8(_) => {}
             AnalysedType::Bool(_) => {}
             AnalysedType::Handle(_) => {}
+        }
+    }
+}
+
+#[cfg(feature = "protobuf")]
+mod protobuf {
+
+    use golem_api_grpc::proto::golem::rib::registry_key::KeyType;
+    use crate::RegistryKey;
+
+    impl TryFrom<golem_api_grpc::proto::golem::rib::RegistryKey> for RegistryKey {
+        type Error = String;
+
+        fn try_from(
+            value: golem_api_grpc::proto::golem::rib::RegistryKey,
+        ) -> Result<Self, Self::Error> {
+            let key_type = value.key_type.ok_or("key type missing")?;
+
+            let registry_key = match key_type {
+                KeyType::FunctionName(string) => RegistryKey::FunctionName(string.name),
+                KeyType::FunctionNameWithInterface(function_with_interface) => {
+                    let interface_name = function_with_interface.interface_name.clone();
+                    let function_name = function_with_interface.function_name;
+
+                    RegistryKey::FunctionNameWithInterface {
+                        interface_name,
+                        function_name,
+                    }
+                }
+            };
+
+            Ok(registry_key)
+        }
+    }
+
+    impl From<RegistryKey> for golem_api_grpc::proto::golem::rib::RegistryKey {
+        fn from(value: RegistryKey) -> Self {
+            match value {
+                RegistryKey::FunctionName(str) => golem_api_grpc::proto::golem::rib::RegistryKey {
+                    key_type: Some(KeyType::FunctionName(
+                        golem_api_grpc::proto::golem::rib::FunctionName { name: str },
+                    )),
+                },
+                RegistryKey::FunctionNameWithInterface {
+                    function_name,
+                    interface_name,
+                } => golem_api_grpc::proto::golem::rib::RegistryKey {
+                    key_type: Some(KeyType::FunctionNameWithInterface(
+                        golem_api_grpc::proto::golem::rib::FunctionNameWithInterface {
+                            interface_name,
+                            function_name,
+                        },
+                    )),
+                },
+            }
         }
     }
 }

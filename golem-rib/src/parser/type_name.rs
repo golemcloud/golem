@@ -23,12 +23,6 @@ use combine::{attempt, between, sep_by, Parser};
 use combine::{parser, ParseError};
 use golem_wasm_ast::analysis::{AnalysedType, TypeResult};
 
-use golem_api_grpc::proto::golem::rib::type_name::Kind as InnerTypeName;
-use golem_api_grpc::proto::golem::rib::{
-    BasicTypeName, EnumType, FlagType, KeyValue, ListType, OptionType, RecordType, ResultType,
-    TupleType, TypeName as ProtoTypeName, VariantCase, VariantType,
-};
-
 use crate::parser::errors::RibParseError;
 use crate::InferredType;
 
@@ -148,158 +142,6 @@ impl Display for TypeName {
                 }
                 write!(f, ">")
             }
-        }
-    }
-}
-
-impl From<TypeName> for ProtoTypeName {
-    fn from(value: TypeName) -> Self {
-        let inner = match value {
-            TypeName::Bool => InnerTypeName::BasicType(BasicTypeName::Bool as i32),
-            TypeName::S8 => InnerTypeName::BasicType(BasicTypeName::S8 as i32),
-            TypeName::U8 => InnerTypeName::BasicType(BasicTypeName::U8 as i32),
-            TypeName::S16 => InnerTypeName::BasicType(BasicTypeName::S16 as i32),
-            TypeName::U16 => InnerTypeName::BasicType(BasicTypeName::U16 as i32),
-            TypeName::S32 => InnerTypeName::BasicType(BasicTypeName::S32 as i32),
-            TypeName::U32 => InnerTypeName::BasicType(BasicTypeName::U32 as i32),
-            TypeName::S64 => InnerTypeName::BasicType(BasicTypeName::S64 as i32),
-            TypeName::U64 => InnerTypeName::BasicType(BasicTypeName::U64 as i32),
-            TypeName::F32 => InnerTypeName::BasicType(BasicTypeName::F32 as i32),
-            TypeName::F64 => InnerTypeName::BasicType(BasicTypeName::F64 as i32),
-            TypeName::Chr => InnerTypeName::BasicType(BasicTypeName::Chr as i32),
-            TypeName::Str => InnerTypeName::BasicType(BasicTypeName::Str as i32),
-            TypeName::List(inner_type) => InnerTypeName::ListType(Box::new(ListType {
-                inner_type: Some(Box::new(inner_type.deref().clone().into())),
-            })),
-            TypeName::Tuple(inner_types) => InnerTypeName::TupleType(TupleType {
-                types: inner_types.into_iter().map(|t| t.into()).collect(),
-            }),
-            TypeName::Option(type_name) => InnerTypeName::OptionType(Box::new(OptionType {
-                inner_type: Some(Box::new(type_name.deref().clone().into())),
-            })),
-            TypeName::Result { ok, error } => InnerTypeName::ResultType(Box::new(ResultType {
-                ok_type: ok.map(|ok| Box::new(ok.deref().clone().into())),
-                err_type: error.map(|error| Box::new(error.deref().clone().into())),
-            })),
-            TypeName::Record(fields) => InnerTypeName::RecordType(RecordType {
-                fields: fields
-                    .into_iter()
-                    .map(|(field, typ)| KeyValue {
-                        key: field,
-                        value: Some(typ.deref().clone().into()),
-                    })
-                    .collect(),
-            }),
-            TypeName::Flags(flags) => InnerTypeName::FlagType(FlagType {
-                flags: flags.into_iter().collect(),
-            }),
-            TypeName::Enum(cases) => InnerTypeName::EnumType(EnumType {
-                cases: cases.into_iter().collect(),
-            }),
-            TypeName::Variant { cases } => InnerTypeName::VariantType(VariantType {
-                cases: cases
-                    .into_iter()
-                    .map(|(case, typ)| VariantCase {
-                        case_name: case,
-                        variant_arg: typ.map(|x| x.deref().clone().into()),
-                    })
-                    .collect(),
-            }),
-        };
-
-        ProtoTypeName { kind: Some(inner) }
-    }
-}
-
-impl TryFrom<ProtoTypeName> for TypeName {
-    type Error = String;
-
-    fn try_from(value: ProtoTypeName) -> Result<Self, Self::Error> {
-        match value.kind {
-            Some(inner) => match inner {
-                InnerTypeName::BasicType(value) => match BasicTypeName::try_from(value) {
-                    Ok(BasicTypeName::Bool) => Ok(TypeName::Bool),
-                    Ok(BasicTypeName::S8) => Ok(TypeName::S8),
-                    Ok(BasicTypeName::U8) => Ok(TypeName::U8),
-                    Ok(BasicTypeName::S16) => Ok(TypeName::S16),
-                    Ok(BasicTypeName::U16) => Ok(TypeName::U16),
-                    Ok(BasicTypeName::S32) => Ok(TypeName::S32),
-                    Ok(BasicTypeName::U32) => Ok(TypeName::U32),
-                    Ok(BasicTypeName::S64) => Ok(TypeName::S64),
-                    Ok(BasicTypeName::U64) => Ok(TypeName::U64),
-                    Ok(BasicTypeName::F32) => Ok(TypeName::F32),
-                    Ok(BasicTypeName::F64) => Ok(TypeName::F64),
-                    Ok(BasicTypeName::Chr) => Ok(TypeName::Chr),
-                    Ok(BasicTypeName::Str) => Ok(TypeName::Str),
-                    _ => Err(format!("Unknown basic type: {:?}", value)),
-                },
-                InnerTypeName::ListType(inner_type) => {
-                    let proto_list_type = inner_type
-                        .inner_type
-                        .ok_or("No inner type for list provided")?;
-                    let list_type = proto_list_type.deref().clone().try_into()?;
-                    Ok(TypeName::List(Box::new(list_type)))
-                }
-                InnerTypeName::TupleType(inner_types) => {
-                    let tuple_type = inner_types
-                        .types
-                        .into_iter()
-                        .map(|t| t.try_into())
-                        .collect::<Result<Vec<TypeName>, String>>()?;
-                    Ok(TypeName::Tuple(tuple_type))
-                }
-                InnerTypeName::OptionType(type_name) => {
-                    let proto_option_type = type_name
-                        .inner_type
-                        .ok_or("No inner type for option provided")?;
-                    let option_type = proto_option_type.deref().clone().try_into()?;
-                    Ok(TypeName::Option(Box::new(option_type)))
-                }
-                InnerTypeName::ResultType(result_type) => {
-                    let ok = result_type
-                        .ok_type
-                        .map(|ok| ok.deref().clone().try_into())
-                        .transpose()?;
-                    let error = result_type
-                        .err_type
-                        .map(|error| error.deref().clone().try_into())
-                        .transpose()?;
-                    Ok(TypeName::Result {
-                        ok: ok.map(Box::new),
-                        error: error.map(Box::new),
-                    })
-                }
-                InnerTypeName::RecordType(fields) => {
-                    let record_type = fields
-                        .fields
-                        .into_iter()
-                        .map(|key_value| {
-                            key_value
-                                .value
-                                .ok_or("Field type missing")?
-                                .try_into()
-                                .map(|typ| (key_value.key, Box::new(typ)))
-                        })
-                        .collect::<Result<Vec<(String, Box<TypeName>)>, String>>()?;
-                    Ok(TypeName::Record(record_type))
-                }
-                InnerTypeName::FlagType(flag_type) => Ok(TypeName::Flags(flag_type.flags)),
-                InnerTypeName::EnumType(enum_type) => Ok(TypeName::Enum(enum_type.cases)),
-                InnerTypeName::VariantType(variant_type) => {
-                    let mut cases = vec![];
-                    for variant_case in variant_type.cases {
-                        let case = variant_case.case_name;
-                        let typ = match variant_case.variant_arg {
-                            Some(typ) => Some(Box::new(TypeName::try_from(typ)?)),
-                            None => None,
-                        };
-                        cases.push((case, typ));
-                    }
-
-                    Ok(TypeName::Variant { cases })
-                }
-            },
-            None => Err("No type kind provided".to_string()),
         }
     }
 }
@@ -559,6 +401,170 @@ parser! {
      where [Input: combine::Stream<Token = char>, RibParseError: Into<<Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError>,]
     {
        parse_type_name_()
+    }
+}
+
+#[cfg(feature = "protobuf")]
+mod protobuf {
+    use golem_api_grpc::proto::golem::rib::type_name::Kind as InnerTypeName;
+    use golem_api_grpc::proto::golem::rib::{
+        BasicTypeName, EnumType, FlagType, KeyValue, ListType, OptionType, RecordType, ResultType,
+        TupleType, TypeName as ProtoTypeName, VariantCase, VariantType,
+    };
+    use std::ops::Deref;
+
+    use crate::TypeName;
+
+    impl From<TypeName> for ProtoTypeName {
+        fn from(value: TypeName) -> Self {
+            let inner = match value {
+                TypeName::Bool => InnerTypeName::BasicType(BasicTypeName::Bool as i32),
+                TypeName::S8 => InnerTypeName::BasicType(BasicTypeName::S8 as i32),
+                TypeName::U8 => InnerTypeName::BasicType(BasicTypeName::U8 as i32),
+                TypeName::S16 => InnerTypeName::BasicType(BasicTypeName::S16 as i32),
+                TypeName::U16 => InnerTypeName::BasicType(BasicTypeName::U16 as i32),
+                TypeName::S32 => InnerTypeName::BasicType(BasicTypeName::S32 as i32),
+                TypeName::U32 => InnerTypeName::BasicType(BasicTypeName::U32 as i32),
+                TypeName::S64 => InnerTypeName::BasicType(BasicTypeName::S64 as i32),
+                TypeName::U64 => InnerTypeName::BasicType(BasicTypeName::U64 as i32),
+                TypeName::F32 => InnerTypeName::BasicType(BasicTypeName::F32 as i32),
+                TypeName::F64 => InnerTypeName::BasicType(BasicTypeName::F64 as i32),
+                TypeName::Chr => InnerTypeName::BasicType(BasicTypeName::Chr as i32),
+                TypeName::Str => InnerTypeName::BasicType(BasicTypeName::Str as i32),
+                TypeName::List(inner_type) => InnerTypeName::ListType(Box::new(ListType {
+                    inner_type: Some(Box::new(inner_type.deref().clone().into())),
+                })),
+                TypeName::Tuple(inner_types) => InnerTypeName::TupleType(TupleType {
+                    types: inner_types.into_iter().map(|t| t.into()).collect(),
+                }),
+                TypeName::Option(type_name) => InnerTypeName::OptionType(Box::new(OptionType {
+                    inner_type: Some(Box::new(type_name.deref().clone().into())),
+                })),
+                TypeName::Result { ok, error } => InnerTypeName::ResultType(Box::new(ResultType {
+                    ok_type: ok.map(|ok| Box::new(ok.deref().clone().into())),
+                    err_type: error.map(|error| Box::new(error.deref().clone().into())),
+                })),
+                TypeName::Record(fields) => InnerTypeName::RecordType(RecordType {
+                    fields: fields
+                        .into_iter()
+                        .map(|(field, typ)| KeyValue {
+                            key: field,
+                            value: Some(typ.deref().clone().into()),
+                        })
+                        .collect(),
+                }),
+                TypeName::Flags(flags) => InnerTypeName::FlagType(FlagType {
+                    flags: flags.into_iter().collect(),
+                }),
+                TypeName::Enum(cases) => InnerTypeName::EnumType(EnumType {
+                    cases: cases.into_iter().collect(),
+                }),
+                TypeName::Variant { cases } => InnerTypeName::VariantType(VariantType {
+                    cases: cases
+                        .into_iter()
+                        .map(|(case, typ)| VariantCase {
+                            case_name: case,
+                            variant_arg: typ.map(|x| x.deref().clone().into()),
+                        })
+                        .collect(),
+                }),
+            };
+
+            ProtoTypeName { kind: Some(inner) }
+        }
+    }
+
+    impl TryFrom<ProtoTypeName> for TypeName {
+        type Error = String;
+
+        fn try_from(value: ProtoTypeName) -> Result<Self, Self::Error> {
+            match value.kind {
+                Some(inner) => match inner {
+                    InnerTypeName::BasicType(value) => match BasicTypeName::try_from(value) {
+                        Ok(BasicTypeName::Bool) => Ok(TypeName::Bool),
+                        Ok(BasicTypeName::S8) => Ok(TypeName::S8),
+                        Ok(BasicTypeName::U8) => Ok(TypeName::U8),
+                        Ok(BasicTypeName::S16) => Ok(TypeName::S16),
+                        Ok(BasicTypeName::U16) => Ok(TypeName::U16),
+                        Ok(BasicTypeName::S32) => Ok(TypeName::S32),
+                        Ok(BasicTypeName::U32) => Ok(TypeName::U32),
+                        Ok(BasicTypeName::S64) => Ok(TypeName::S64),
+                        Ok(BasicTypeName::U64) => Ok(TypeName::U64),
+                        Ok(BasicTypeName::F32) => Ok(TypeName::F32),
+                        Ok(BasicTypeName::F64) => Ok(TypeName::F64),
+                        Ok(BasicTypeName::Chr) => Ok(TypeName::Chr),
+                        Ok(BasicTypeName::Str) => Ok(TypeName::Str),
+                        _ => Err(format!("Unknown basic type: {:?}", value)),
+                    },
+                    InnerTypeName::ListType(inner_type) => {
+                        let proto_list_type = inner_type
+                            .inner_type
+                            .ok_or("No inner type for list provided")?;
+                        let list_type = proto_list_type.deref().clone().try_into()?;
+                        Ok(TypeName::List(Box::new(list_type)))
+                    }
+                    InnerTypeName::TupleType(inner_types) => {
+                        let tuple_type = inner_types
+                            .types
+                            .into_iter()
+                            .map(|t| t.try_into())
+                            .collect::<Result<Vec<TypeName>, String>>()?;
+                        Ok(TypeName::Tuple(tuple_type))
+                    }
+                    InnerTypeName::OptionType(type_name) => {
+                        let proto_option_type = type_name
+                            .inner_type
+                            .ok_or("No inner type for option provided")?;
+                        let option_type = proto_option_type.deref().clone().try_into()?;
+                        Ok(TypeName::Option(Box::new(option_type)))
+                    }
+                    InnerTypeName::ResultType(result_type) => {
+                        let ok = result_type
+                            .ok_type
+                            .map(|ok| ok.deref().clone().try_into())
+                            .transpose()?;
+                        let error = result_type
+                            .err_type
+                            .map(|error| error.deref().clone().try_into())
+                            .transpose()?;
+                        Ok(TypeName::Result {
+                            ok: ok.map(Box::new),
+                            error: error.map(Box::new),
+                        })
+                    }
+                    InnerTypeName::RecordType(fields) => {
+                        let record_type = fields
+                            .fields
+                            .into_iter()
+                            .map(|key_value| {
+                                key_value
+                                    .value
+                                    .ok_or("Field type missing")?
+                                    .try_into()
+                                    .map(|typ| (key_value.key, Box::new(typ)))
+                            })
+                            .collect::<Result<Vec<(String, Box<TypeName>)>, String>>()?;
+                        Ok(TypeName::Record(record_type))
+                    }
+                    InnerTypeName::FlagType(flag_type) => Ok(TypeName::Flags(flag_type.flags)),
+                    InnerTypeName::EnumType(enum_type) => Ok(TypeName::Enum(enum_type.cases)),
+                    InnerTypeName::VariantType(variant_type) => {
+                        let mut cases = vec![];
+                        for variant_case in variant_type.cases {
+                            let case = variant_case.case_name;
+                            let typ = match variant_case.variant_arg {
+                                Some(typ) => Some(Box::new(TypeName::try_from(typ)?)),
+                                None => None,
+                            };
+                            cases.push((case, typ));
+                        }
+
+                        Ok(TypeName::Variant { cases })
+                    }
+                },
+                None => Err("No type kind provided".to_string()),
+            }
+        }
     }
 }
 

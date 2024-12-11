@@ -2336,7 +2336,7 @@ mod comprehensive_test {
             wasm_wave_str: &str,
         ) -> TypeAnnotatedValue {
             let result =
-                golem_wasm_rpc::type_annotated_value_from_str(analysed_type, wasm_wave_str);
+                golem_wasm_rpc::parse_type_annotated_value(analysed_type, wasm_wave_str);
 
             match result {
                 Ok(value) => value,
@@ -2350,7 +2350,7 @@ mod comprehensive_test {
         pub(crate) fn convert_type_annotated_value_to_str(
             type_annotated_value: &TypeAnnotatedValue,
         ) -> String {
-            golem_wasm_rpc::type_annotated_value_to_string(type_annotated_value).unwrap()
+            golem_wasm_rpc::print_type_annotated_value(type_annotated_value).unwrap()
         }
 
         pub(crate) fn get_function_component_metadata(
