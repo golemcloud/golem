@@ -251,12 +251,11 @@ description = "Runs integration tests only"
 dependencies = ["build-bins"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 script = '''
-#cargo test --package integration-tests --test integration -- --nocapture --report-time $JUNIT_OPTS
-#cargo test --package golem-component-service-base --test tests -- --nocapture --report-time $JUNIT_OPTS
-#cargo test --package golem-worker-service-base --test services_tests -- --nocapture --report-time $JUNIT_OPTS
-#cargo test --package golem-worker-service-base --test api_gateway_end_to_end_tests -- --nocapture --report-time $JUNIT_OPTS
-#cargo test --package golem-service-base --test integration -- --nocapture --report-time $JUNIT_OPTS
-which cargo-component
+cargo test --package integration-tests --test integration -- --nocapture --report-time $JUNIT_OPTS
+cargo test --package golem-component-service-base --test tests -- --nocapture --report-time $JUNIT_OPTS
+cargo test --package golem-worker-service-base --test services_tests -- --nocapture --report-time $JUNIT_OPTS
+cargo test --package golem-worker-service-base --test api_gateway_end_to_end_tests -- --nocapture --report-time $JUNIT_OPTS
+cargo test --package golem-service-base --test integration -- --nocapture --report-time $JUNIT_OPTS
 cargo test --package wasm-rpc-stubgen-tests-integration --tests -- --nocapture --test-threads=1 --report-time
 '''
 # $JUNIT_OPTS temporarily removed from wasm-rpc-stubgen-tests-integration to help debugging on CI

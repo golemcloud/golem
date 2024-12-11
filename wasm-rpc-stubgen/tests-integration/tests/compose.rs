@@ -33,18 +33,6 @@ test_r::enable!();
 
 #[test]
 async fn compose_with_single_stub() {
-    // TODO: just for CI debug
-    std::process::Command::new("sh")
-        .arg("-c")
-        .arg("which cargo-component")
-        .status()
-        .unwrap();
-    std::process::Command::new("sh")
-        .arg("-c")
-        .arg("which cargo")
-        .status()
-        .unwrap();
-
     let (_source_dir, stub_dir, stub_wasm) = init_stub("all-wit-types").await;
     let caller_dir = init_caller("caller-no-dep-importstub");
 
