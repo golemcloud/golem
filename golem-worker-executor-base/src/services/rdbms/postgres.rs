@@ -194,6 +194,7 @@ pub(crate) mod sqlx_rdbms {
             DbValuePrimitive::Money(v) => Ok(query.bind(PgMoney(v))),
             DbValuePrimitive::Oid(v) => Ok(query.bind(Oid(v))),
             DbValuePrimitive::CustomEnum(v) => Ok(query.bind(PgEnum(v))),
+            DbValuePrimitive::CustomComposite(_) => todo!(),
             DbValuePrimitive::Null => Ok(query.bind(PgNull {})),
         }
     }
@@ -584,6 +585,9 @@ pub(crate) mod sqlx_rdbms {
                     })?;
                     Ok(query.bind(values))
                 }
+                DbValuePrimitive::CustomComposite(_) => {
+                    todo!()
+                }
                 DbValuePrimitive::Null => Err(format!(
                     "Array param element '{}' with index 0 is not supported",
                     first
@@ -796,6 +800,9 @@ pub(crate) mod sqlx_rdbms {
                 let v: Option<PgEnum> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::primitive_from(v.map(|v| DbValuePrimitive::CustomEnum(v.0)))
             }
+            DbColumnTypePrimitive::CustomComposite(_)=> {
+                todo!()
+            }
         };
         Ok(value)
     }
@@ -969,6 +976,9 @@ pub(crate) mod sqlx_rdbms {
                 let vs: Option<Vec<PgEnum>> = row.try_get(index).map_err(|e| e.to_string())?;
                 DbValue::array_from(vs, |v| DbValuePrimitive::CustomEnum(v.0))
             }
+            DbColumnTypePrimitive::CustomComposite(_) => {
+                todo!()
+            }
         };
         Ok(value)
     }
@@ -994,158 +1004,175 @@ pub(crate) mod sqlx_rdbms {
         type Error = String;
 
         fn try_from(value: &sqlx::postgres::PgTypeInfo) -> Result<Self, Self::Error> {
-            let type_name = get_db_type_name(value);
-            let type_kind: &PgTypeKind = value.kind();
+            get_db_column_type(value)
+        }
+    }
 
-            match type_name.as_str() {
-                pg_type_name::BOOL => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Boolean)),
-                pg_type_name::CHAR => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Character)),
-                pg_type_name::INT2 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Int2)),
-                pg_type_name::INT4 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Int4)),
-                pg_type_name::INT8 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Int8)),
-                pg_type_name::NUMERIC => {
-                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Numeric))
-                }
-                pg_type_name::FLOAT4 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Float4)),
-                pg_type_name::FLOAT8 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Float8)),
-                pg_type_name::UUID => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Uuid)),
-                pg_type_name::TEXT => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Text)),
-                pg_type_name::VARCHAR => {
-                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Varchar))
-                }
-                pg_type_name::BPCHAR => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Bpchar)),
-                pg_type_name::JSON => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Json)),
-                pg_type_name::JSONB => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Jsonb)),
-                pg_type_name::JSONPATH => {
-                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Jsonpath))
-                }
-                pg_type_name::XML => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Xml)),
-                pg_type_name::TIMESTAMP => {
-                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Timestamp))
-                }
-                pg_type_name::TIMESTAMPTZ => {
-                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Timestamptz))
-                }
-                pg_type_name::DATE => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Date)),
-                pg_type_name::TIME => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Time)),
-                pg_type_name::TIMETZ => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Timetz)),
-                pg_type_name::INTERVAL => {
-                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Interval))
-                }
-                pg_type_name::BYTEA => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Bytea)),
-                pg_type_name::INET => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Inet)),
-                pg_type_name::CIDR => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Cidr)),
-                pg_type_name::MACADDR => {
-                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Macaddr))
-                }
-                pg_type_name::BIT => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Bit)),
-                pg_type_name::VARBIT => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Varbit)),
-                pg_type_name::OID => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Oid)),
-                pg_type_name::MONEY => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Money)),
-                pg_type_name::INT4RANGE => {
-                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Int4range))
-                }
-                pg_type_name::INT8RANGE => {
-                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Int8range))
-                }
-                pg_type_name::NUMRANGE => {
-                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Numrange))
-                }
-                pg_type_name::TSRANGE => {
-                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Tsrange))
-                }
-                pg_type_name::TSTZRANGE => {
-                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Tstzrange))
-                }
-                pg_type_name::DATERANGE => {
-                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Daterange))
-                }
-                pg_type_name::CHAR_ARRAY => {
-                    Ok(DbColumnType::Array(DbColumnTypePrimitive::Character))
-                }
-                pg_type_name::BOOL_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Boolean)),
-                pg_type_name::INT2_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Int2)),
-                pg_type_name::INT4_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Int4)),
-                pg_type_name::INT8_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Int8)),
-                pg_type_name::NUMERIC_ARRAY => {
-                    Ok(DbColumnType::Array(DbColumnTypePrimitive::Numeric))
-                }
-                pg_type_name::FLOAT4_ARRAY => {
-                    Ok(DbColumnType::Array(DbColumnTypePrimitive::Float4))
-                }
-                pg_type_name::FLOAT8_ARRAY => {
-                    Ok(DbColumnType::Array(DbColumnTypePrimitive::Float8))
-                }
-                pg_type_name::UUID_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Uuid)),
-                pg_type_name::TEXT_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Text)),
-                pg_type_name::VARCHAR_ARRAY => {
-                    Ok(DbColumnType::Array(DbColumnTypePrimitive::Varchar))
-                }
-                pg_type_name::BPCHAR_ARRAY => {
-                    Ok(DbColumnType::Array(DbColumnTypePrimitive::Bpchar))
-                }
-                pg_type_name::JSON_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Json)),
-                pg_type_name::JSONB_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Jsonb)),
-                pg_type_name::JSONPATH_ARRAY => {
-                    Ok(DbColumnType::Array(DbColumnTypePrimitive::Jsonpath))
-                }
-                pg_type_name::XML_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Xml)),
-                pg_type_name::TIMESTAMP_ARRAY => {
-                    Ok(DbColumnType::Array(DbColumnTypePrimitive::Timestamp))
-                }
-                pg_type_name::TIMESTAMPTZ_ARRAY => {
-                    Ok(DbColumnType::Array(DbColumnTypePrimitive::Timestamptz))
-                }
-                pg_type_name::DATE_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Date)),
-                pg_type_name::TIME_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Time)),
-                pg_type_name::TIMETZ_ARRAY => {
-                    Ok(DbColumnType::Array(DbColumnTypePrimitive::Timetz))
-                }
-                pg_type_name::INTERVAL_ARRAY => {
-                    Ok(DbColumnType::Array(DbColumnTypePrimitive::Interval))
-                }
-                pg_type_name::BYTEA_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Bytea)),
-                pg_type_name::INET_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Inet)),
-                pg_type_name::CIDR_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Cidr)),
-                pg_type_name::MACADDR_ARRAY => {
-                    Ok(DbColumnType::Array(DbColumnTypePrimitive::Macaddr))
-                }
-                pg_type_name::BIT_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Bit)),
-                pg_type_name::VARBIT_ARRAY => {
-                    Ok(DbColumnType::Array(DbColumnTypePrimitive::Varbit))
-                }
-                pg_type_name::OID_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Oid)),
-                pg_type_name::MONEY_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Money)),
-                pg_type_name::INT4RANGE_ARRAY => {
-                    Ok(DbColumnType::Array(DbColumnTypePrimitive::Int4range))
-                }
-                pg_type_name::INT8RANGE_ARRAY => {
-                    Ok(DbColumnType::Array(DbColumnTypePrimitive::Int8range))
-                }
-                pg_type_name::NUMRANGE_ARRAY => {
-                    Ok(DbColumnType::Array(DbColumnTypePrimitive::Numrange))
-                }
-                pg_type_name::TSRANGE_ARRAY => {
-                    Ok(DbColumnType::Array(DbColumnTypePrimitive::Tsrange))
-                }
-                pg_type_name::TSTZRANGE_ARRAY => {
-                    Ok(DbColumnType::Array(DbColumnTypePrimitive::Tstzrange))
-                }
-                pg_type_name::DATERANGE_ARRAY => {
-                    Ok(DbColumnType::Array(DbColumnTypePrimitive::Daterange))
-                }
-                _ => match type_kind {
-                    PgTypeKind::Enum(_) => Ok(DbColumnType::Primitive(
-                        DbColumnTypePrimitive::CustomEnum(value.name().to_string()),
-                    )),
-                    PgTypeKind::Array(element) if matches!(element.kind(), PgTypeKind::Enum(_)) => {
-                        Ok(DbColumnType::Array(DbColumnTypePrimitive::CustomEnum(
-                            element.name().to_string(),
-                        )))
-                    }
-                    _ => Err(format!("Column type '{}' is not supported", type_name))?,
-                },
+    fn get_db_column_type(type_info: &sqlx::postgres::PgTypeInfo) -> Result<DbColumnType, String> {
+        let type_name = get_db_type_name(type_info);
+        let type_kind: &PgTypeKind = type_info.kind();
+
+        match type_name.as_str() {
+            pg_type_name::BOOL => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Boolean)),
+            pg_type_name::CHAR => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Character)),
+            pg_type_name::INT2 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Int2)),
+            pg_type_name::INT4 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Int4)),
+            pg_type_name::INT8 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Int8)),
+            pg_type_name::NUMERIC => {
+                Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Numeric))
             }
+            pg_type_name::FLOAT4 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Float4)),
+            pg_type_name::FLOAT8 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Float8)),
+            pg_type_name::UUID => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Uuid)),
+            pg_type_name::TEXT => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Text)),
+            pg_type_name::VARCHAR => {
+                Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Varchar))
+            }
+            pg_type_name::BPCHAR => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Bpchar)),
+            pg_type_name::JSON => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Json)),
+            pg_type_name::JSONB => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Jsonb)),
+            pg_type_name::JSONPATH => {
+                Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Jsonpath))
+            }
+            pg_type_name::XML => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Xml)),
+            pg_type_name::TIMESTAMP => {
+                Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Timestamp))
+            }
+            pg_type_name::TIMESTAMPTZ => {
+                Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Timestamptz))
+            }
+            pg_type_name::DATE => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Date)),
+            pg_type_name::TIME => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Time)),
+            pg_type_name::TIMETZ => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Timetz)),
+            pg_type_name::INTERVAL => {
+                Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Interval))
+            }
+            pg_type_name::BYTEA => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Bytea)),
+            pg_type_name::INET => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Inet)),
+            pg_type_name::CIDR => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Cidr)),
+            pg_type_name::MACADDR => {
+                Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Macaddr))
+            }
+            pg_type_name::BIT => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Bit)),
+            pg_type_name::VARBIT => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Varbit)),
+            pg_type_name::OID => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Oid)),
+            pg_type_name::MONEY => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Money)),
+            pg_type_name::INT4RANGE => {
+                Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Int4range))
+            }
+            pg_type_name::INT8RANGE => {
+                Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Int8range))
+            }
+            pg_type_name::NUMRANGE => {
+                Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Numrange))
+            }
+            pg_type_name::TSRANGE => {
+                Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Tsrange))
+            }
+            pg_type_name::TSTZRANGE => {
+                Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Tstzrange))
+            }
+            pg_type_name::DATERANGE => {
+                Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Daterange))
+            }
+            pg_type_name::CHAR_ARRAY => {
+                Ok(DbColumnType::Array(DbColumnTypePrimitive::Character))
+            }
+            pg_type_name::BOOL_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Boolean)),
+            pg_type_name::INT2_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Int2)),
+            pg_type_name::INT4_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Int4)),
+            pg_type_name::INT8_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Int8)),
+            pg_type_name::NUMERIC_ARRAY => {
+                Ok(DbColumnType::Array(DbColumnTypePrimitive::Numeric))
+            }
+            pg_type_name::FLOAT4_ARRAY => {
+                Ok(DbColumnType::Array(DbColumnTypePrimitive::Float4))
+            }
+            pg_type_name::FLOAT8_ARRAY => {
+                Ok(DbColumnType::Array(DbColumnTypePrimitive::Float8))
+            }
+            pg_type_name::UUID_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Uuid)),
+            pg_type_name::TEXT_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Text)),
+            pg_type_name::VARCHAR_ARRAY => {
+                Ok(DbColumnType::Array(DbColumnTypePrimitive::Varchar))
+            }
+            pg_type_name::BPCHAR_ARRAY => {
+                Ok(DbColumnType::Array(DbColumnTypePrimitive::Bpchar))
+            }
+            pg_type_name::JSON_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Json)),
+            pg_type_name::JSONB_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Jsonb)),
+            pg_type_name::JSONPATH_ARRAY => {
+                Ok(DbColumnType::Array(DbColumnTypePrimitive::Jsonpath))
+            }
+            pg_type_name::XML_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Xml)),
+            pg_type_name::TIMESTAMP_ARRAY => {
+                Ok(DbColumnType::Array(DbColumnTypePrimitive::Timestamp))
+            }
+            pg_type_name::TIMESTAMPTZ_ARRAY => {
+                Ok(DbColumnType::Array(DbColumnTypePrimitive::Timestamptz))
+            }
+            pg_type_name::DATE_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Date)),
+            pg_type_name::TIME_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Time)),
+            pg_type_name::TIMETZ_ARRAY => {
+                Ok(DbColumnType::Array(DbColumnTypePrimitive::Timetz))
+            }
+            pg_type_name::INTERVAL_ARRAY => {
+                Ok(DbColumnType::Array(DbColumnTypePrimitive::Interval))
+            }
+            pg_type_name::BYTEA_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Bytea)),
+            pg_type_name::INET_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Inet)),
+            pg_type_name::CIDR_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Cidr)),
+            pg_type_name::MACADDR_ARRAY => {
+                Ok(DbColumnType::Array(DbColumnTypePrimitive::Macaddr))
+            }
+            pg_type_name::BIT_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Bit)),
+            pg_type_name::VARBIT_ARRAY => {
+                Ok(DbColumnType::Array(DbColumnTypePrimitive::Varbit))
+            }
+            pg_type_name::OID_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Oid)),
+            pg_type_name::MONEY_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Money)),
+            pg_type_name::INT4RANGE_ARRAY => {
+                Ok(DbColumnType::Array(DbColumnTypePrimitive::Int4range))
+            }
+            pg_type_name::INT8RANGE_ARRAY => {
+                Ok(DbColumnType::Array(DbColumnTypePrimitive::Int8range))
+            }
+            pg_type_name::NUMRANGE_ARRAY => {
+                Ok(DbColumnType::Array(DbColumnTypePrimitive::Numrange))
+            }
+            pg_type_name::TSRANGE_ARRAY => {
+                Ok(DbColumnType::Array(DbColumnTypePrimitive::Tsrange))
+            }
+            pg_type_name::TSTZRANGE_ARRAY => {
+                Ok(DbColumnType::Array(DbColumnTypePrimitive::Tstzrange))
+            }
+            pg_type_name::DATERANGE_ARRAY => {
+                Ok(DbColumnType::Array(DbColumnTypePrimitive::Daterange))
+            }
+            _ => match type_kind {
+                PgTypeKind::Enum(_) => Ok(DbColumnType::Primitive(
+                    DbColumnTypePrimitive::CustomEnum(type_info.name().to_string()),
+                )),
+                PgTypeKind::Array(element) if matches!(element.kind(), PgTypeKind::Enum(_)) => {
+                    Ok(DbColumnType::Array(DbColumnTypePrimitive::CustomEnum(
+                        element.name().to_string(),
+                    )))
+                }
+                PgTypeKind::Composite(vs) => {
+                    let mut attributes = Vec::with_capacity(vs.len());
+                    for (n, t) in vs.iter() {
+                        let t = get_db_column_type(t)?;
+                        let n = n.to_string();
+                        attributes.push((n, t));
+                    }
+
+                    Ok(DbColumnType::Primitive(
+                        DbColumnTypePrimitive::CustomComposite(attributes),
+                    ))
+                },
+
+                _ => Err(format!("Column type '{}' is not supported", type_name))?,
+            },
         }
     }
 
@@ -1317,6 +1344,68 @@ pub(crate) mod sqlx_rdbms {
         }
     }
 
+    // //https://github.com/launchbadge/sqlx/blob/42ce24dab87aad98f041cafb35cf9a7d5b2b09a7/tests/postgres/postgres.rs#L1241-L1281
+    struct PgValuesRecord(Vec<DbValue>);
+
+    impl sqlx::Type<sqlx::Postgres> for PgValuesRecord {
+        fn type_info() -> sqlx::postgres::PgTypeInfo {
+            sqlx::postgres::PgTypeInfo::with_oid(Oid(2249)) // pseudo composite type
+        }
+
+        fn compatible(ty: &sqlx::postgres::PgTypeInfo) -> bool {
+            matches!(ty.kind(), PgTypeKind::Composite(_))
+        }
+    }
+
+
+    impl sqlx::Encode<'_, sqlx::Postgres> for PgValuesRecord {
+        fn encode_by_ref(
+            &self,
+            buf: &mut sqlx::postgres::PgArgumentBuffer,
+        ) -> sqlx::encode::IsNull {
+            let mut encoder = sqlx::postgres::types::PgRecordEncoder::new(buf);
+
+            for v in self.0.iter() {
+                match v {
+                    DbValue::Primitive(v) => {
+                        match v {
+                            DbValuePrimitive::Text(v) => {
+                                encoder.encode(v);
+                            },
+                            DbValuePrimitive::Uuid(v) => {
+                                encoder.encode(v);
+                            }
+                            _ =>
+                            {
+                                panic!("primitive value ({}) is not supported", v);
+                            }
+                        }
+
+                    }
+                    DbValue::Array(_) => {
+                        panic!("array value ({}) is not supported", v);
+                    }
+                }
+
+            }
+            encoder.finish();
+            sqlx::encode::IsNull::No
+        }
+    }
+    //
+    // impl<'r> sqlx::Decode<'r, sqlx::Postgres> for PgValuesRecord {
+    //     fn decode(
+    //         value: sqlx::postgres::PgValueRef<'r>,
+    //     ) -> Result<Self, Box<dyn std::error::Error + 'static + Send + Sync>> {
+    //         let mut decoder = sqlx::postgres::types::PgRecordDecoder::new(value)?;
+    //
+    //         let year = decoder.try_decode::<i32>()?;
+    //         let month = decoder.try_decode::<MonthId>()?;
+    //
+    //         Ok(Self { year, month })
+    //     }
+    // }
+
     /// https://www.postgresql.org/docs/current/datatype.html
     /// https://github.com/postgres/postgres/blob/master/src/include/catalog/pg_type.dat
     /// sqlx::postgres::type_info::PgType is not publicly accessible.
@@ -1468,6 +1557,7 @@ pub mod types {
         Daterange,
         Money,
         CustomEnum(String),
+        CustomComposite(Vec<(String, DbColumnType)>),
         Oid,
     }
 
@@ -1509,7 +1599,10 @@ pub mod types {
                 DbColumnTypePrimitive::Tstzrange => write!(f, "tstzrange"),
                 DbColumnTypePrimitive::Daterange => write!(f, "daterange"),
                 DbColumnTypePrimitive::Oid => write!(f, "oid"),
-                DbColumnTypePrimitive::CustomEnum(v) => write!(f, "custom {}", v),
+                DbColumnTypePrimitive::CustomEnum(v) => write!(f, "custom enum: {}", v),
+                DbColumnTypePrimitive::CustomComposite(v) => {
+                    write!(f, "custom composite: {}", v.iter().map(|v| format!("{}: {}", v.0, v.1)).format(", "))
+                }
                 DbColumnTypePrimitive::Money => write!(f, "money"),
             }
         }
@@ -1573,6 +1666,7 @@ pub mod types {
         Daterange((Bound<chrono::NaiveDate>, Bound<chrono::NaiveDate>)),
         Money(i64),
         CustomEnum(String),
+        CustomComposite(Vec<(String, DbValue)>),
         Oid(u32),
         Null,
     }
@@ -1617,6 +1711,9 @@ pub mod types {
                 DbValuePrimitive::Oid(v) => write!(f, "{}", v),
                 DbValuePrimitive::Money(v) => write!(f, "{}", v),
                 DbValuePrimitive::CustomEnum(v) => write!(f, "{}", v),
+                DbValuePrimitive::CustomComposite(v) => {
+                    write!(f, "{}", v.iter().map(|v| format!("{}: {}", v.0, v.1)).format(", "))
+                }
                 DbValuePrimitive::Null => write!(f, "NULL"),
             }
         }
