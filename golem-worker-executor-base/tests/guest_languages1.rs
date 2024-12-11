@@ -167,7 +167,7 @@ async fn tinygo_http_client(
 
     let http_server = tokio::spawn(async move {
         let route = Router::new().route(
-            "post-example",
+            "/post-example",
             post(|headers, body| request_handler(captured_body_clone, headers, body)),
         );
 
