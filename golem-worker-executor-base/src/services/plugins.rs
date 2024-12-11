@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::error::GolemError;
-use crate::grpc::{authorised_grpc_request, UriBackConversion};
+use crate::grpc::authorised_grpc_request;
 use crate::services::golem_config::PluginServiceConfig;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
@@ -284,7 +284,7 @@ impl DefaultGrpcPlugins {
                         .send_compressed(CompressionEncoding::Gzip)
                         .accept_compressed(CompressionEncoding::Gzip)
                 },
-                endpoint.as_http_02(),
+                endpoint.clone(),
                 GrpcClientConfig {
                     retries_on_unavailable: retry_config.clone(),
                     ..Default::default() // TODO
@@ -297,7 +297,7 @@ impl DefaultGrpcPlugins {
                         .send_compressed(CompressionEncoding::Gzip)
                         .accept_compressed(CompressionEncoding::Gzip)
                 },
-                endpoint.as_http_02(),
+                endpoint,
                 GrpcClientConfig {
                     retries_on_unavailable: retry_config.clone(),
                     ..Default::default()

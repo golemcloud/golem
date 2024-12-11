@@ -23,6 +23,7 @@ async-fs = { workspace = true }
 async-hash = { workspace = true }
 async-trait = { workspace = true }
 async_zip = { workspace = true, features = ["tokio", "tokio-fs", "deflate"] }
+axum = { workspace = true }
 aws-config = { workspace = true }
 aws-sdk-s3 = { workspace = true }
 bigdecimal = { workspace = true }
@@ -34,7 +35,6 @@ dashmap = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true }
 http = { workspace = true }
-http_02 = { workspace = true }
 humantime-serde = { workspace = true }
 hyper = { workspace = true }
 lazy_static = { workspace = true}
@@ -67,7 +67,6 @@ tracing = { workspace = true }
 tracing-futures = { version = "0.2.5", features = ["futures-03"] }
 url = { workspace = true }
 uuid = { workspace = true }
-warp = { workspace = true }
 wasmtime = { workspace = true }
 
 [dev-dependencies]

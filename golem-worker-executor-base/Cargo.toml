@@ -52,7 +52,6 @@ gethostname = "0.4.3"
 golem-wit = { version = "=1.1.0" }
 hex = { workspace = true }
 http = { workspace = true }
-http_02 = { workspace = true }
 http-body = "1.0.0"                                 # keep in sync with wasmtime
 humansize = { workspace = true }
 humantime-serde = { workspace = true }
@@ -85,7 +84,6 @@ tonic-reflection = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
-warp = { workspace = true }
 wasmtime = { workspace = true }
 wasmtime-wasi = { workspace = true }
 wasmtime-wasi-http = { workspace = true }
@@ -97,6 +95,7 @@ sqlx = { workspace = true }
 golem-test-framework = { path = "../golem-test-framework", version = "0.0.0" }
 
 assert2 = { workspace = true }
+axum = { workspace = true }
 console-subscriber = { workspace = true }
 goldenfile = "1.7.1"
 once_cell = { workspace = true }
@@ -108,7 +107,6 @@ testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 test-r = { workspace = true }
 tracing-subscriber = { workspace = true }
-warp = { workspace = true }
 
 [build-dependencies]
 cargo_metadata = "0.18.1"

@@ -727,15 +727,6 @@ impl Pod {
             .build()
             .expect("Failed to build URI")
     }
-
-    pub fn uri_02(&self) -> http_02::Uri {
-        http_02::Uri::builder()
-            .scheme("http")
-            .authority(format!("{}:{}", self.host, self.port).as_str())
-            .path_and_query("/")
-            .build()
-            .expect("Failed to build URI")
-    }
 }
 
 impl From<GrpcPod> for Pod {
@@ -2490,7 +2481,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::LogEvent> for WorkerEvent {
                 }
                 golem_api_grpc::proto::golem::worker::log_event::Event::Log(event) => {
                     Ok(WorkerEvent::Log {
-                        timestamp: event.timestamp.clone().ok_or("Missing timestamp")?.into(),
+                        timestamp: event.timestamp.ok_or("Missing timestamp")?.into(),
                         level: event.level().into(),
                         context: event.context,
                         message: event.message,

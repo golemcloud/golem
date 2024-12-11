@@ -17,6 +17,9 @@ use test_r::{inherit_test_dep, test};
 use crate::common::{start, TestContext};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
+use axum::extract::Path;
+use axum::routing::{delete, get, post};
+use axum::Router;
 use bytes::Bytes;
 use golem_common::model::{IdempotencyKey, TargetWorkerId};
 use golem_test_framework::dsl::{
@@ -24,15 +27,12 @@ use golem_test_framework::dsl::{
     TestDslUnsafe,
 };
 use golem_wasm_rpc::Value;
-use http_02::{Response, StatusCode};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 use tokio::task::JoinHandle;
-use tonic::transport::Body;
 use tracing::{debug, instrument};
-use warp::Filter;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -59,62 +59,53 @@ impl TestHttpServer {
         let events_clone3 = events.clone();
         let handle = tokio::spawn(async move {
             let call_count_per_step = Arc::new(Mutex::new(HashMap::<u64, u64>::new()));
-            let route = warp::path("step")
-                .and(warp::path::param())
-                .and(warp::get())
-                .map(move |step: u64| {
-                    let mut steps = call_count_per_step.lock().unwrap();
-                    let step_count = steps.entry(step).and_modify(|e| *e += 1).or_insert(0);
+            let route = Router::new()
+                .route(
+                    "/step/:step",
+                    get(move |step: Path<u64>| async move {
+                        let step = step.0;
+                        let mut steps = call_count_per_step.lock().unwrap();
+                        let step_count = steps.entry(step).and_modify(|e| *e += 1).or_insert(0);
 
-                    debug!("step: {step} occurrence {step_count}");
-                    if log_steps {
-                        events_clone.lock().unwrap().push(format!("=> {step}"));
-                    }
+                        debug!("step: {} occurrence {step_count}", step);
+                        if log_steps {
+                            events_clone.lock().unwrap().push(format!("=> {step}"));
+                        }
 
-                    match step_count {
-                        n if *n < fail_per_step(step) => Response::builder()
-                            .status(StatusCode::OK)
-                            .body(Body::from("true"))
-                            .unwrap(),
-                        _ => Response::builder()
-                            .status(StatusCode::OK)
-                            .body(Body::from("false"))
-                            .unwrap(),
-                    }
-                })
-                .or(warp::path("step")
-                    .and(warp::path::param())
-                    .and(warp::delete())
-                    .map(move |step: u64| {
+                        match step_count {
+                            n if *n < fail_per_step(step) => "true",
+                            _ => "false",
+                        }
+                    }),
+                )
+                .route(
+                    "/step/:step",
+                    delete(move |step: Path<u64>| async move {
+                        let step = step.0;
                         debug!("step: undo {step}");
                         if log_steps {
                             events_clone2.lock().unwrap().push(format!("<= {step}"));
                         }
-                        Response::builder()
-                            .status(StatusCode::OK)
-                            .body(Body::from("false"))
-                            .unwrap()
-                    }))
-                .or(warp::path("side-effect")
-                    .and(warp::post())
-                    .and(warp::body::bytes())
-                    .map(move |body: Bytes| {
+                        "false"
+                    }),
+                )
+                .route(
+                    "/side-effect",
+                    post(move |body: Bytes| async move {
                         let body = String::from_utf8(body.to_vec()).unwrap();
                         debug!("received POST message: {body}");
                         events_clone3.lock().unwrap().push(body.clone());
-                        Response::builder()
-                            .status(StatusCode::OK)
-                            .body("OK")
-                            .unwrap()
-                    }));
-
-            warp::serve(route)
-                .run(
-                    format!("0.0.0.0:{}", host_http_port)
-                        .parse::<SocketAddr>()
-                        .unwrap(),
-                )
-                .await;
+                        "OK"
+                    }),
+                );
+            let listener = tokio::net::TcpListener::bind(
+                format!("0.0.0.0:{}", host_http_port)
+                    .parse::<SocketAddr>()
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+            axum::serve(listener, route).await.unwrap();
         });
         Self { handle, events }
     }

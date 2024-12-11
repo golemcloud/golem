@@ -25,7 +25,6 @@ use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 
 use crate::error::GolemError;
-use crate::grpc::UriBackConversion;
 use crate::services::golem_config::{ShardManagerServiceConfig, ShardManagerServiceGrpcConfig};
 
 /// Service providing access to the shard manager service
@@ -59,7 +58,7 @@ impl ShardManagerServiceGrpc {
                     .send_compressed(CompressionEncoding::Gzip)
                     .accept_compressed(CompressionEncoding::Gzip)
             },
-            config.uri().as_http_02(),
+            config.uri(),
             GrpcClientConfig {
                 retries_on_unavailable: config.retries.clone(),
                 ..Default::default()

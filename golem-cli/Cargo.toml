@@ -55,7 +55,7 @@ inquire = "0.7.5"
 iso8601 = "0.6.1"
 itertools = { workspace = true }
 lenient_bool = "0.1.1"
-log = { version = "0.4.22" }
+log = { workspace = true }
 native-tls = "0.2.11"
 openapiv3 = { workspace = true }
 phf = { workspace = true }
@@ -86,7 +86,7 @@ wasm-wave = { workspace = true }
 [dev-dependencies]
 golem-test-framework = { path = "../golem-test-framework", version = "0.0.0" }
 
-async-recursion = "1.0.5"
+async-recursion = { workspace = true }
 env_logger = "0.11.1"
 log = "0.4.20"
 postgres = { workspace = true }

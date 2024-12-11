@@ -226,7 +226,7 @@ pub async fn run(
 
     let reflection_service = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(proto::FILE_DESCRIPTOR_SET)
-        .build()?;
+        .build_v1()?;
 
     info!("Golem Shard Manager starting up...");
 

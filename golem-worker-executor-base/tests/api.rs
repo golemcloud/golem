@@ -14,6 +14,27 @@
 
 use test_r::{inherit_test_dep, test};
 
+use crate::common::{start, TestContext, TestWorkerExecutor};
+use crate::compatibility::worker_recovery::save_recovery_golden_file;
+use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
+use assert2::check;
+use axum::routing::get;
+use axum::Router;
+use golem_api_grpc::proto::golem::worker::v1::{worker_execution_error, ComponentParseFailed};
+use golem_api_grpc::proto::golem::workerexecutor::v1::CompletePromiseRequest;
+use golem_common::model::oplog::{IndexedResourceKey, OplogIndex, WorkerResourceId};
+use golem_common::model::{
+    AccountId, ComponentId, FilterComparator, IdempotencyKey, PromiseId, ScanCursor,
+    StringFilterComparator, TargetWorkerId, Timestamp, WorkerFilter, WorkerId, WorkerMetadata,
+    WorkerResourceDescription, WorkerStatus,
+};
+use golem_test_framework::config::TestDependencies;
+use golem_test_framework::dsl::{
+    drain_connection, is_worker_execution_error, stdout_event_matching, stdout_events,
+    worker_error_message, TestDslUnsafe,
+};
+use golem_wasm_rpc::Value;
+use redis::Commands;
 use std::collections::HashMap;
 use std::env;
 use std::io::Write;
@@ -22,33 +43,8 @@ use std::os::unix::fs::FileExt;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-
-use assert2::check;
-use http_02::{Response, StatusCode};
-use redis::Commands;
-
-use golem_api_grpc::proto::golem::worker::v1::{worker_execution_error, ComponentParseFailed};
-use golem_api_grpc::proto::golem::workerexecutor::v1::CompletePromiseRequest;
-use golem_common::model::{
-    AccountId, ComponentId, FilterComparator, IdempotencyKey, PromiseId, ScanCursor,
-    StringFilterComparator, TargetWorkerId, Timestamp, WorkerFilter, WorkerId, WorkerMetadata,
-    WorkerResourceDescription, WorkerStatus,
-};
-use golem_wasm_rpc::Value;
-
-use crate::common::{start, TestContext, TestWorkerExecutor};
-use crate::compatibility::worker_recovery::save_recovery_golden_file;
-use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
-use golem_common::model::oplog::{IndexedResourceKey, OplogIndex, WorkerResourceId};
-use golem_test_framework::config::TestDependencies;
-use golem_test_framework::dsl::{
-    drain_connection, is_worker_execution_error, stdout_event_matching, stdout_events,
-    worker_error_message, TestDslUnsafe,
-};
 use tokio::time::sleep;
-use tonic::transport::Body;
 use tracing::{debug, info};
-use warp::Filter;
 use wasmtime_wasi::runtime::spawn;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -1615,21 +1611,22 @@ async fn long_running_poll_loop_works_as_expected(
     let host_http_port = context.host_http_port();
 
     let http_server = tokio::spawn(async move {
-        let route = warp::path::path("poll").and(warp::get()).map(move || {
-            let body = response_clone.lock().unwrap();
-            Response::builder()
-                .status(StatusCode::OK)
-                .body(Body::from(body.clone()))
-                .unwrap()
-        });
+        let route = Router::new().route(
+            "poll",
+            get(move || async move {
+                let body = response_clone.lock().unwrap();
+                body.clone()
+            }),
+        );
 
-        warp::serve(route)
-            .run(
-                format!("0.0.0.0:{}", host_http_port)
-                    .parse::<SocketAddr>()
-                    .unwrap(),
-            )
-            .await;
+        let listener = tokio::net::TcpListener::bind(
+            format!("0.0.0.0:{}", host_http_port)
+                .parse::<SocketAddr>()
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        axum::serve(listener, route).await.unwrap();
     });
 
     let component_id = executor.store_component("http-client-2").await;
@@ -1682,21 +1679,22 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
     let host_http_port = context.host_http_port();
 
     let http_server = tokio::spawn(async move {
-        let route = warp::path::path("poll").and(warp::get()).map(move || {
-            let body = response_clone.lock().unwrap();
-            Response::builder()
-                .status(StatusCode::OK)
-                .body(Body::from(body.clone()))
-                .unwrap()
-        });
+        let route = Router::new().route(
+            "poll",
+            get(move || async move {
+                let body = response_clone.lock().unwrap();
+                body.clone()
+            }),
+        );
 
-        warp::serve(route)
-            .run(
-                format!("0.0.0.0:{}", host_http_port)
-                    .parse::<SocketAddr>()
-                    .unwrap(),
-            )
-            .await;
+        let listener = tokio::net::TcpListener::bind(
+            format!("0.0.0.0:{}", host_http_port)
+                .parse::<SocketAddr>()
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        axum::serve(listener, route).await.unwrap();
     });
 
     let component_id = executor.store_component("http-client-2").await;
@@ -1808,21 +1806,22 @@ async fn long_running_poll_loop_connection_breaks_on_interrupt(
     let host_http_port = context.host_http_port();
 
     let http_server = tokio::spawn(async move {
-        let route = warp::path::path("poll").and(warp::get()).map(move || {
-            let body = response_clone.lock().unwrap();
-            Response::builder()
-                .status(StatusCode::OK)
-                .body(Body::from(body.clone()))
-                .unwrap()
-        });
+        let route = Router::new().route(
+            "poll",
+            get(move || async move {
+                let body = response_clone.lock().unwrap();
+                body.clone()
+            }),
+        );
 
-        warp::serve(route)
-            .run(
-                format!("0.0.0.0:{}", host_http_port)
-                    .parse::<SocketAddr>()
-                    .unwrap(),
-            )
-            .await;
+        let listener = tokio::net::TcpListener::bind(
+            format!("0.0.0.0:{}", host_http_port)
+                .parse::<SocketAddr>()
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        axum::serve(listener, route).await.unwrap();
     });
 
     let component_id = executor.store_component("http-client-2").await;
@@ -1888,21 +1887,22 @@ async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_wor
     let host_http_port = context.host_http_port();
 
     let http_server = tokio::spawn(async move {
-        let route = warp::path::path("poll").and(warp::get()).map(move || {
-            let body = response_clone.lock().unwrap();
-            Response::builder()
-                .status(StatusCode::OK)
-                .body(Body::from(body.clone()))
-                .unwrap()
-        });
+        let route = Router::new().route(
+            "poll",
+            get(move || async move {
+                let body = response_clone.lock().unwrap();
+                body.clone()
+            }),
+        );
 
-        warp::serve(route)
-            .run(
-                format!("0.0.0.0:{}", host_http_port)
-                    .parse::<SocketAddr>()
-                    .unwrap(),
-            )
-            .await;
+        let listener = tokio::net::TcpListener::bind(
+            format!("0.0.0.0:{}", host_http_port)
+                .parse::<SocketAddr>()
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        axum::serve(listener, route).await.unwrap();
     });
 
     let component_id = executor.store_component("http-client-2").await;
@@ -1958,21 +1958,22 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume(
     let host_http_port = context.host_http_port();
 
     let http_server = tokio::spawn(async move {
-        let route = warp::path::path("poll").and(warp::get()).map(move || {
-            let body = response_clone.lock().unwrap();
-            Response::builder()
-                .status(StatusCode::OK)
-                .body(Body::from(body.clone()))
-                .unwrap()
-        });
+        let route = Router::new().route(
+            "poll",
+            get(move || async move {
+                let body = response_clone.lock().unwrap();
+                body.clone()
+            }),
+        );
 
-        warp::serve(route)
-            .run(
-                format!("0.0.0.0:{}", host_http_port)
-                    .parse::<SocketAddr>()
-                    .unwrap(),
-            )
-            .await;
+        let listener = tokio::net::TcpListener::bind(
+            format!("0.0.0.0:{}", host_http_port)
+                .parse::<SocketAddr>()
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        axum::serve(listener, route).await.unwrap();
     });
 
     let component_id = executor.store_component("http-client-2").await;
@@ -2059,21 +2060,22 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt(
     let host_http_port = context.host_http_port();
 
     let http_server = tokio::spawn(async move {
-        let route = warp::path::path("poll").and(warp::get()).map(move || {
-            let body = response_clone.lock().unwrap();
-            Response::builder()
-                .status(StatusCode::OK)
-                .body(Body::from(body.clone()))
-                .unwrap()
-        });
+        let route = Router::new().route(
+            "poll",
+            get(move || async move {
+                let body = response_clone.lock().unwrap();
+                body.clone()
+            }),
+        );
 
-        warp::serve(route)
-            .run(
-                format!("0.0.0.0:{}", host_http_port)
-                    .parse::<SocketAddr>()
-                    .unwrap(),
-            )
-            .await;
+        let listener = tokio::net::TcpListener::bind(
+            format!("0.0.0.0:{}", host_http_port)
+                .parse::<SocketAddr>()
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        axum::serve(listener, route).await.unwrap();
     });
 
     let component_id = executor.store_component("http-client-2").await;
@@ -2565,21 +2567,22 @@ async fn invocation_queue_is_persistent(
     let host_http_port = context.host_http_port();
 
     let http_server = tokio::spawn(async move {
-        let route = warp::path::path("poll").and(warp::get()).map(move || {
-            let body = response_clone.lock().unwrap();
-            Response::builder()
-                .status(StatusCode::OK)
-                .body(Body::from(body.clone()))
-                .unwrap()
-        });
+        let route = Router::new().route(
+            "poll",
+            get(move || async move {
+                let body = response_clone.lock().unwrap();
+                body.clone()
+            }),
+        );
 
-        warp::serve(route)
-            .run(
-                format!("0.0.0.0:{}", host_http_port)
-                    .parse::<SocketAddr>()
-                    .unwrap(),
-            )
-            .await;
+        let listener = tokio::net::TcpListener::bind(
+            format!("0.0.0.0:{}", host_http_port)
+                .parse::<SocketAddr>()
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        axum::serve(listener, route).await.unwrap();
     });
 
     let component_id = executor.store_component("http-client-2").await;

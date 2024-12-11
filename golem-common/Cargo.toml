@@ -30,8 +30,8 @@ figment = { workspace = true }
 fred = { workspace = true }
 futures-core = { workspace = true }
 git-version = { workspace = true }
+http = { workspace = true }
 humantime-serde = { workspace = true }
-http_02 = { workspace = true }
 iso8601-timestamp = { workspace = true }
 itertools = { workspace = true }
 lazy_static = { workspace = true }
@@ -57,7 +57,6 @@ tracing-serde = { workspace = true }
 typed-path = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
-wasm-wave = { workspace = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }

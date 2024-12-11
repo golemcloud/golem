@@ -25,7 +25,6 @@ figment = { workspace = true }
 futures = { workspace = true }
 futures-util = "0.3.30"
 http = { workspace = true }
-http_02 = { workspace = true }
 lazy_static.workspace = true
 prometheus = { workspace = true }
 serde = { workspace = true }

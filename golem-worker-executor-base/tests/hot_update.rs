@@ -17,18 +17,18 @@ use test_r::{inherit_test_dep, test};
 use crate::{common, LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
 use async_mutex::Mutex;
+use axum::routing::post;
+use axum::{Json, Router};
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::Value;
-use http_02::{Response, StatusCode};
+use http::StatusCode;
 use log::info;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::spawn;
 use tokio::task::JoinHandle;
-use tonic::transport::Body;
 use tracing::debug;
-use warp::Filter;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -71,42 +71,37 @@ impl TestHttpServer {
         let f1_blocker = Arc::new(Mutex::new(None::<F1Blocker>));
         let f1_blocker_clone = f1_blocker.clone();
         let handle = spawn(async move {
-            let route = warp::path("f1")
-                .and(warp::body::json())
-                .and(warp::post())
-                .then(move |body: u64| {
-                    let f1_blocker_clone = f1_blocker_clone.clone();
-                    async move {
-                        debug!("f1: {body}");
+            let route = Router::new().route(
+                "/f1",
+                post(move |body: Json<u64>| async move {
+                    debug!("f1: {}", body.0);
 
-                        let mut guard = f1_blocker_clone.lock().await;
-                        if let Some(blocker) = &*guard {
-                            if blocker.value == body {
-                                let F1Blocker {
-                                    reached, resume, ..
-                                } = guard.take().unwrap();
-                                debug!("Reached f1 blocking point");
-                                reached.send(()).unwrap();
-                                debug!("Awaiting resume at f1 blocking point");
-                                resume.await.unwrap();
-                                debug!("Resuming from f1 blocking point");
-                            }
+                    let mut guard = f1_blocker_clone.lock().await;
+                    if let Some(blocker) = &*guard {
+                        if blocker.value == body.0 {
+                            let F1Blocker {
+                                reached, resume, ..
+                            } = guard.take().unwrap();
+                            debug!("Reached f1 blocking point");
+                            reached.send(()).unwrap();
+                            debug!("Awaiting resume at f1 blocking point");
+                            resume.await.unwrap();
+                            debug!("Resuming from f1 blocking point");
                         }
-
-                        Response::builder()
-                            .status(StatusCode::OK)
-                            .body(Body::empty())
-                            .unwrap()
                     }
-                });
 
-            warp::serve(route)
-                .run(
-                    format!("0.0.0.0:{}", host_http_port)
-                        .parse::<SocketAddr>()
-                        .unwrap(),
-                )
-                .await;
+                    StatusCode::OK
+                }),
+            );
+
+            let listener = tokio::net::TcpListener::bind(
+                format!("0.0.0.0:{}", host_http_port)
+                    .parse::<SocketAddr>()
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+            axum::serve(listener, route).await.unwrap();
         });
         Self { handle, f1_blocker }
     }

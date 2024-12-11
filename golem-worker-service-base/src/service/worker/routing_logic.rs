@@ -118,7 +118,7 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for WorkerId {
                 Some(
                     context
                         .worker_executor_clients()
-                        .call(description, pod.uri_02(), f)
+                        .call(description, pod.uri(), f)
                         .await
                         .map_err(|err| {
                             CallWorkerExecutorErrorWithContext::failed_to_connect_to_pod(
@@ -214,7 +214,7 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for RandomExecutor {
                 Some(
                     context
                         .worker_executor_clients()
-                        .call(description, pod.uri_02(), f)
+                        .call(description, pod.uri(), f)
                         .await
                         .map_err(|status| {
                             CallWorkerExecutorErrorWithContext::failed_to_connect_to_pod(
@@ -275,7 +275,7 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for AllExecutors {
                     let description = description.clone();
                     async move {
                         worker_executor_clients
-                            .call(description, pod.uri_02(), f)
+                            .call(description, pod.uri(), f)
                             .await
                             .map_err(|err| (err, pod))
                     }
@@ -529,8 +529,8 @@ impl<'a> RetryState<'a> {
             Some(delay) => {
                 info!(
                     invalidated,
-                    error = format!("{error:?}"),
-                    pod = format!("{:?}", pod.as_ref().map(|p| p.uri_02())),
+                    ?error,
+                    ?pod,
                     delay_ms = delay.as_millis(),
                     "Call on executor - retry"
                 );
@@ -575,7 +575,7 @@ impl<'a> RetryState<'a> {
 }
 
 fn format_pod(pod: &Option<Pod>) -> String {
-    format!("{:?}", pod.as_ref().map(|p| p.uri_02()))
+    format!("{:?}", pod.as_ref().map(|p| p.uri()))
 }
 
 struct RetrySpan {
