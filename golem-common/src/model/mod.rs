@@ -26,7 +26,6 @@ use bincode::enc::write::Writer;
 use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
-use derive_more::FromStr;
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::shardmanager::{
     Pod as GrpcPod, RoutingTable as GrpcRoutingTable, RoutingTableEntry as GrpcRoutingTableEntry,
@@ -1370,7 +1369,7 @@ pub struct TimestampedWorkerInvocation {
     Debug,
     PartialOrd,
     Ord,
-    FromStr,
+    derive_more::FromStr,
     Eq,
     Hash,
     PartialEq,

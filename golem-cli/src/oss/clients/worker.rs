@@ -309,6 +309,7 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
             .push("connect");
 
         let mut request = url
+            .to_string()
             .into_client_request()
             .map_err(|e| GolemError(format!("Can't create request: {e}")))?;
         let headers = request.headers_mut();

@@ -112,12 +112,12 @@ impl TryFrom<&CoreType> for wasm_encoder::CoreTypeSection {
 }
 
 fn add_to_core_type_encoder(
-    encoder: wasm_encoder::CoreTypeEncoder,
+    encoder: wasm_encoder::ComponentCoreTypeEncoder,
     value: &CoreType,
 ) -> Result<(), String> {
     match value {
         CoreType::Function(func_type) => {
-            encoder.function(
+            encoder.core().function(
                 func_type
                     .input
                     .values

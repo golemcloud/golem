@@ -15,7 +15,6 @@
 use crate::cloud::CloudAuthenticationConfig;
 use crate::init::CliKind;
 use crate::model::{Format, GolemError, HasFormatConfig};
-use derive_more::FromStr;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -45,7 +44,9 @@ pub struct Config {
     pub active_cloud_profile: Option<ProfileName>,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, FromStr)]
+#[derive(
+    Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, derive_more::FromStr,
+)]
 pub struct ProfileName(pub String);
 
 impl Display for ProfileName {

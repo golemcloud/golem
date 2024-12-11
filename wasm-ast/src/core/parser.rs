@@ -205,24 +205,12 @@ impl TryFrom<wasmparser::HeapType> for RefType {
     type Error = String;
 
     fn try_from(value: wasmparser::HeapType) -> Result<Self, Self::Error> {
-        match value {
-            wasmparser::HeapType::Concrete(_) => Err("GC proposal is not supported".to_string()),
-            wasmparser::HeapType::Func => Ok(RefType::FuncRef),
-            wasmparser::HeapType::Extern => Ok(RefType::ExternRef),
-            wasmparser::HeapType::Any => Err("GC proposal is not supported".to_string()),
-            wasmparser::HeapType::None => Err("GC proposal is not supported".to_string()),
-            wasmparser::HeapType::NoExtern => Err("GC proposal is not supported".to_string()),
-            wasmparser::HeapType::NoFunc => Err("GC proposal is not supported".to_string()),
-            wasmparser::HeapType::Eq => Err("GC proposal is not supported".to_string()),
-            wasmparser::HeapType::Struct => Err("GC proposal is not supported".to_string()),
-            wasmparser::HeapType::Array => Err("GC proposal is not supported".to_string()),
-            wasmparser::HeapType::I31 => Err("GC proposal is not supported".to_string()),
-            wasmparser::HeapType::Exn => {
-                Err("Exception handling proposal is not supported".to_string())
-            }
-            wasmparser::HeapType::NoExn => {
-                Err("Exception handling proposal is not supported".to_string())
-            }
+        if value == wasmparser::HeapType::EXTERN {
+            Ok(RefType::ExternRef)
+        } else if value == wasmparser::HeapType::FUNC {
+            Ok(RefType::FuncRef)
+        } else {
+            Err("GC proposal is not supported".to_string())
         }
     }
 }
@@ -1688,6 +1676,139 @@ impl TryFrom<OperatorsReader<'_>> for Expr {
                 Operator::GlobalAtomicSet { .. } => {
                     return Err("Shared Everything Threads proposal is not supported".to_string());
                 }
+                Operator::GlobalAtomicRmwAdd { .. } => {
+                    return Err("Shared Everything Threads proposal is not supported".to_string());
+                }
+                Operator::GlobalAtomicRmwSub { .. } => {
+                    return Err("Shared Everything Threads proposal is not supported".to_string());
+                }
+                Operator::GlobalAtomicRmwAnd { .. } => {
+                    return Err("Shared Everything Threads proposal is not supported".to_string());
+                }
+                Operator::GlobalAtomicRmwOr { .. } => {
+                    return Err("Shared Everything Threads proposal is not supported".to_string());
+                }
+                Operator::GlobalAtomicRmwXor { .. } => {
+                    return Err("Shared Everything Threads proposal is not supported".to_string());
+                }
+                Operator::GlobalAtomicRmwXchg { .. } => {
+                    return Err("Shared Everything Threads proposal is not supported".to_string());
+                }
+                Operator::GlobalAtomicRmwCmpxchg { .. } => {
+                    return Err("Shared Everything Threads proposal is not supported".to_string());
+                }
+                Operator::TableAtomicGet { .. } => {
+                    return Err("Shared Everything Threads proposal is not supported".to_string());
+                }
+                Operator::TableAtomicSet { .. } => {
+                    return Err("Shared Everything Threads proposal is not supported".to_string());
+                }
+                Operator::TableAtomicRmwXchg { .. } => {
+                    return Err("Shared Everything Threads proposal is not supported".to_string());
+                }
+                Operator::TableAtomicRmwCmpxchg { .. } => {
+                    return Err("Shared Everything Threads proposal is not supported".to_string());
+                }
+                Operator::StructAtomicGet { .. } => {
+                    return Err("Shared Everything Threads proposal is not supported".to_string());
+                }
+                Operator::StructAtomicGetS { .. } => {
+                    return Err("Shared Everything Threads proposal is not supported".to_string());
+                }
+                Operator::StructAtomicGetU { .. } => {
+                    return Err("Shared Everything Threads proposal is not supported".to_string());
+                }
+                Operator::StructAtomicSet { .. } => {
+                    return Err("Shared Everything Threads proposal is not supported".to_string());
+                }
+                Operator::StructAtomicRmwAdd { .. } => {
+                    return Err("Shared Everything Threads proposal is not supported".to_string());
+                }
+                Operator::StructAtomicRmwSub { .. } => {
+                    return Err("Shared Everything Threads proposal is not supported".to_string());
+                }
+                Operator::StructAtomicRmwAnd { .. } => {
+                    return Err("Shared Everything Threads proposal is not supported".to_string());
+                }
+                Operator::StructAtomicRmwOr { .. } => {
+                    return Err("Shared Everything Threads proposal is not supported".to_string());
+                }
+                Operator::StructAtomicRmwXor { .. } => {
+                    return Err("Shared Everything Threads proposal is not supported".to_string());
+                }
+                Operator::StructAtomicRmwXchg { .. } => {
+                    return Err("Shared Everything Threads proposal is not supported".to_string());
+                }
+                Operator::StructAtomicRmwCmpxchg { .. } => {
+                    return Err("Shared Everything Threads proposal is not supported".to_string());
+                }
+                Operator::ArrayAtomicGet { .. } => {
+                    return Err("Shared Everything Threads proposal is not supported".to_string());
+                }
+                Operator::ArrayAtomicGetS { .. } => {
+                    return Err("Shared Everything Threads proposal is not supported".to_string());
+                }
+                Operator::ArrayAtomicGetU { .. } => {
+                    return Err("Shared Everything Threads proposal is not supported".to_string());
+                }
+                Operator::ArrayAtomicSet { .. } => {
+                    return Err("Shared Everything Threads proposal is not supported".to_string());
+                }
+                Operator::ArrayAtomicRmwAdd { .. } => {
+                    return Err("Shared Everything Threads proposal is not supported".to_string());
+                }
+                Operator::ArrayAtomicRmwSub { .. } => {
+                    return Err("Shared Everything Threads proposal is not supported".to_string());
+                }
+                Operator::ArrayAtomicRmwAnd { .. } => {
+                    return Err("Shared Everything Threads proposal is not supported".to_string());
+                }
+                Operator::ArrayAtomicRmwOr { .. } => {
+                    return Err("Shared Everything Threads proposal is not supported".to_string());
+                }
+                Operator::ArrayAtomicRmwXor { .. } => {
+                    return Err("Shared Everything Threads proposal is not supported".to_string());
+                }
+                Operator::ArrayAtomicRmwXchg { .. } => {
+                    return Err("Shared Everything Threads proposal is not supported".to_string());
+                }
+                Operator::ArrayAtomicRmwCmpxchg { .. } => {
+                    return Err("Shared Everything Threads proposal is not supported".to_string());
+                }
+                Operator::RefI31Shared => {
+                    return Err("Shared Everything Threads proposal is not supported".to_string());
+                }
+                Operator::ContNew { .. } => {
+                    return Err("Task Switching proposal is not supported".to_string());
+                }
+                Operator::ContBind { .. } => {
+                    return Err("Task Switching proposal is not supported".to_string());
+                }
+                Operator::Suspend { .. } => {
+                    return Err("Task Switching proposal is not supported".to_string());
+                }
+                Operator::Resume { .. } => {
+                    return Err("Task Switching proposal is not supported".to_string());
+                }
+                Operator::ResumeThrow { .. } => {
+                    return Err("Task Switching proposal is not supported".to_string());
+                }
+                Operator::Switch { .. } => {
+                    return Err("Task Switching proposal is not supported".to_string());
+                }
+                Operator::I64Add128 => {
+                    return Err("Wide Arithmetic proposal is not supported".to_string());
+                }
+                Operator::I64Sub128 => {
+                    return Err("Wide Arithmetic proposal is not supported".to_string());
+                }
+                Operator::I64MulWideS => {
+                    return Err("Wide Arithmetic proposal is not supported".to_string());
+                }
+                Operator::I64MulWideU => {
+                    return Err("Wide Arithmetic proposal is not supported".to_string());
+                }
+                _ => return Err(format!("Unexpected operator: {:?}", op)),
             };
 
             if let Some(instr) = instr {
@@ -1818,6 +1939,7 @@ where
                     return Err("Unexpected component export section in core module".to_string()),
                 Payload::UnknownSection { .. } =>
                     return Err("Unexpected unknown section in core module".to_string()),
+                _ => return Err("Unexpected payload in core module".to_string()),
             }
         }
         Ok(Sections::from_flat(sections))

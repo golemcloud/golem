@@ -26,7 +26,6 @@ use crate::service::gateway::api_definition::ApiDefinitionError;
 use crate::service::gateway::api_definition_validator::ValidationErrors;
 use crate::service::gateway::security_scheme::SecuritySchemeService;
 use bincode::{Decode, Encode};
-use derive_more::Display;
 use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
 use golem_api_grpc::proto::golem::apidefinition::HttpRoute;
 use golem_service_base::model::{Component, VersionedComponentId};
@@ -257,7 +256,17 @@ impl<Namespace: Clone> CompiledHttpApiDefinition<Namespace> {
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Display, Encode, Decode, Enum,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    derive_more::Display,
+    Encode,
+    Decode,
+    Enum,
 )]
 pub enum MethodPattern {
     Get,
