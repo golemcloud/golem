@@ -23,7 +23,7 @@ async-trait = { workspace = true }
 console-subscriber = { workspace = true }
 figment = { workspace = true }
 futures = { workspace = true }
-futures-util = "0.3.30"
+futures-util = "0.3.31"
 http = { workspace = true }
 lazy_static.workspace = true
 prometheus = { workspace = true }

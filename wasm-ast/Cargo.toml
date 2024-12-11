@@ -15,16 +15,16 @@ poem-openapi = { workspace = true, optional = true }
 prost = { workspace = true, optional = true }
 serde = { workspace = true, optional = true, features = ["derive"] }
 serde_json = { workspace = true, optional = true }
-wasmparser = { version = "0.207.0", optional = true }
-wasm-encoder = { version = "0.207.0", optional = true }
-wasm-metadata = { version = "0.207.0", optional = true }
+wasmparser = { version = "0.221.2", optional = true }
+wasm-encoder = { version = "0.221.2", optional = true }
+wasm-metadata = { version = "0.221.2", optional = true }
 wasm-wave = { workspace = true, optional = true }
 
 [dev-dependencies]
 colored-diff = "0.2.3"
-pretty_assertions = "1.4.0"
+pretty_assertions = "1.4.1"
 test-r = { workspace = true }
-wasmprinter = "0.207.0"
+wasmprinter = "0.221.2"
 
 [build-dependencies]
 prost-build = "0.13.4"

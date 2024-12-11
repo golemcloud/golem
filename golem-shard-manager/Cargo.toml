@@ -47,7 +47,7 @@ tracing-subscriber = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
-tracing-test = "0.2.4"
+tracing-test = "0.2.5"
 test-r = { workspace = true }
 
 [features]

@@ -69,66 +69,66 @@ exclude = [
 ]
 
 [workspace.dependencies]
-anyhow = "1.0.79"
-assert2 = "0.3.11"
-async-fs = "2.1.0"
+anyhow = "1.0.94"
+assert2 = "0.3.15"
+async-fs = "2.1.2"
 async-hash = "0.5.4"
 async-recursion = "1.1.1"
-async-trait = "0.1.77"
+async-trait = "0.1.83"
 async_zip = "0.0.17"
-aws-config = "1.1.3"
-aws-sdk-s3 = "1.13.0"
+aws-config = "1.5.10"
+aws-sdk-s3 = "1.65.0"
 axum = { version = "0.7.9", features = ["multipart"] }
-bigdecimal = "0.4.5"
+bigdecimal = "0.4.7"
 bincode = { version = "2.0.0-rc.3", features = ["serde"] }
-bytes = "1.5.0"
-cap-std = "3.0.0" # keep in sync with wasmtime
-chrono = { version = "0.4.32", features = ["serde"] }
-clap = { version = "4.5.4", features = [
+bytes = "1.9.0"
+cap-std = "=3.0.0" # keep in sync with wasmtime
+chrono = { version = "0.4.39", features = ["serde"] }
+clap = { version = "4.5.23", features = [
     "derive",
     "suggestions",
     "color",
     "help",
 ] }
-cli-table = "0.4.7"
+cli-table = "0.4.9"
 combine = "4.6.7"
 conditional-trait-gen = "0.4.1"
 console-subscriber = "0.4.1"
-ctor = "0.2.6"
-dashmap = "5.5.3"
-derive_more = "0.99.17"
+ctor = "0.2.9"
+dashmap = "6.1.0"
+derive_more = "1.0.0"
 drop-stream = "0.3.2"
-figment = { version = "0.10.14", features = ["toml", "env"] }
-fred = { version = "9.0.3", features = [
+figment = { version = "0.10.19", features = ["toml", "env"] }
+fred = { version = "10.0.1", features = [
     "metrics",
     "serde-json",
     "partial-tracing",
 ] }
 fs_extra = "1.3.0"
 futures = "0.3"
-futures-core = "0.3.29"
-futures-util = "0.3.29"
+futures-core = "0.3.31"
+futures-util = "0.3.31"
 git-version = "0.3.9"
 hex = "0.4.3"
-http = "1.0.0" # keep in sync with wasmtime
+http = "1.2.0" # keep in sync with wasmtime
 humansize = "2.1.3"
 humantime-serde = "1.1.1"
-hyper = { version = "1.0.1", features = ["full"] } # keep in sync with wasmtime
-iso8601-timestamp = "0.2.16"
+hyper = { version = "1.5.1", features = ["full"] } # keep in sync with wasmtime
+iso8601-timestamp = "0.3.2"
 itertools = "0.13.0"
-k8s-openapi = { version = "0.22.0", features = ["earliest"] }
-kube = { version = "0.92.0", features = ["runtime", "derive"] }
-kube-derive = "0.92.0"
-lazy_static = "1.4.0"
+k8s-openapi = { version = "0.23.0", features = ["earliest"] }
+kube = { version = "0.97.0", features = ["runtime", "derive"] }
+kube-derive = "0.97.0"
+lazy_static = "1.5.0"
 log = "0.4.22"
 nom = "7.1.3"
 num-traits = "0.2.19"
-once_cell = "1.19.0"
+once_cell = "1.20.2"
 openapiv3 = "2.0.0"
 openidconnect = "3.5.0"
-opentelemetry = "0.24.0"
-opentelemetry-prometheus = "0.17.0"
-opentelemetry_sdk = "0.24.1"
+opentelemetry = "0.27.1"
+opentelemetry-prometheus = "0.27.0"
+opentelemetry_sdk = "0.27.1"
 phf = { version = "0.11.2", features = ["macros"] }
 poem-openapi = { version = "5.1.4", features = [
     "swagger-ui",
@@ -140,29 +140,29 @@ poem-openapi = { version = "5.1.4", features = [
     "websocket",
 ] }
 poem = { version = "3.1.5", features = ["prometheus", "opentelemetry", "test"] }
-postgres = "0.19.7"
-prometheus = { version = "0.13.3", features = ["process"] }
-proptest = "1.4.0"
+postgres = "0.19.9"
+prometheus = { version = "0.13.4", features = ["process"] }
+proptest = "1.5.0"
 prost = "0.13.4"
 prost-types = "0.13.4"
-redis = { version = "0.25.2", features = ["default", "tokio-comp"] }
-regex = "1.10.3"
+redis = { version = "0.27.6", features = ["default", "tokio-comp"] }
+regex = "1.11.1"
 reqwest = { version = "0.12.9", features = [
     "gzip",
     "json",
     "multipart",
     "stream",
 ] }
-rustls = { version = "0.23.10" }
+rustls = { version = "0.23.19" }
 rand = "0.8.5"
 semver = "1.0.23"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["raw_value"] }
-serde_yaml = { version = "0.9.33 " }
+serde_yaml = { version = "0.9.34" }
 sha2 = "0.10.8"
 sozu-command-lib = { version = "1.0.5", default-features = false }
 sozu-lib = { version = "1.0.5", default-features = false }
-sqlx = { version = "0.7", features = [
+sqlx = { version = "0.8", features = [
     "runtime-tokio",
     "sqlite",
     "postgres",
@@ -170,19 +170,19 @@ sqlx = { version = "0.7", features = [
     "migrate",
     "chrono",
 ] }
-strum = "0.26.1"
-strum_macros = "0.26.1"
+strum = "0.26.3"
+strum_macros = "0.26.4"
 tap = "1.0.1"
-tempfile = "3.9.0"
+tempfile = "3.14.0"
 testcontainers = { version = "0.23.1" }
-testcontainers-modules = { version = "0.11.2", features = [
+testcontainers-modules = { version = "0.11.4", features = [
     "postgres",
     "redis",
     "minio",
 ] }
 test-r = { version = "1.1.0", default-features = true }
-thiserror = "1.0.56"
-tokio = { version = "1.0", features = [
+thiserror = "2.0.6"
+tokio = { version = "1.42", features = [
     "macros",
     "rt-multi-thread",
     "sync",
@@ -191,32 +191,32 @@ tokio = { version = "1.0", features = [
     "tracing",
     "process",
 ] }
-tokio-postgres = "0.7.10"
-tokio-rustls = { version = "0.26.0" }
+tokio-postgres = "0.7.12"
+tokio-rustls = { version = "0.26.1" }
 tokio-stream = { version = "0.1", features = ["sync"] }
-tokio-util = "0.7.10"
-toml = "0.8.14"
+tokio-util = "0.7.13"
+toml = "0.8.19"
 tonic = { version = "0.12.3", features = ["gzip"] }
 tonic-reflection = "0.12.3"
 tonic-health = "0.12.3"
-tracing = { version = "0.1.40", features = ["log"] }
-tracing-opentelemetry = "0.25.0"
-tracing-serde = "0.1.3"
-tracing-subscriber = { version = "0.3.18", features = [
+tracing = { version = "0.1.41", features = ["log"] }
+tracing-opentelemetry = "0.28.0"
+tracing-serde = "0.2.0"
+tracing-subscriber = { version = "0.3.19", features = [
     "env-filter",
     "fmt",
     "std",
     "json",
 ] }
 tracing-test = "0.2.5"
-typed-path = "0.9.3"
-url = "2.5.0"
-uuid = { version = "1.7.0", features = ["serde", "v4", "v5"] }
+typed-path = "0.10.0"
+url = "2.5.4"
+uuid = { version = "1.11.0", features = ["serde", "v4", "v5"] }
 wasm-wave = "=0.6.0"
 wasmtime = { version = "=21.0.1", features = ["component-model"] }
 wasmtime-wasi = { version = "=21.0.1" }
 wasmtime-wasi-http = { version = "=21.0.1" }
-webpki-roots = { version = "0.26.0" }
+webpki-roots = { version = "0.26.7" }
 xdg = "2.5.2"
 
 [patch.crates-io]

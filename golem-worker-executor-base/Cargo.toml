@@ -33,45 +33,45 @@ async-trait = { workspace = true }
 aws-config = { workspace = true }
 aws-sdk-s3 = { workspace = true }
 bincode = { workspace = true }
-bitflags = "2.4.2"
+bitflags = "2.6.0"
 bytes = { workspace = true }
-cap-fs-ext = "3.0.0"                                # keep in sync with wasmtime
+cap-fs-ext = "3.4.2"                                # keep in sync with wasmtime
 cap-std = { workspace = true }
-cap-time-ext = "3.0.0"                              # keep in sync with wasmtime
+cap-time-ext = "3.4.2"                              # keep in sync with wasmtime
 chrono = { workspace = true }
 dashmap = { workspace = true }
 drop-stream = { workspace = true }
 evicting_cache_map = "0.4.0"
 figment = { workspace = true }
-flume = "0.11.0"
+flume = "0.11.1"
 fred = { workspace = true }
-fs-set-times = "0.20.1"
+fs-set-times = "0.20.2"
 futures = { workspace = true }
 futures-util = { workspace = true }
-gethostname = "0.4.3"
+gethostname = "0.5.0"
 golem-wit = { version = "=1.1.0" }
 hex = { workspace = true }
 http = { workspace = true }
-http-body = "1.0.0"                                 # keep in sync with wasmtime
+http-body = "1.0.1"                                 # keep in sync with wasmtime
 humansize = { workspace = true }
 humantime-serde = { workspace = true }
 hyper = { workspace = true }
-io-extras = "0.18.0"
+io-extras = "0.18.4"
 iso8601-timestamp = { workspace = true }
 itertools = { workspace = true }
 lazy_static = { workspace = true }
-log = "0.4.20"
+log = "0.4.22"
 md5 = "0.7.0"
-metrohash = "1.0.6"
-nonempty-collections = "0.2.5"
+metrohash = "1.0.7"
+nonempty-collections = "0.2.9"
 prometheus = { workspace = true }
 prost = { workspace = true }
 rand = { workspace = true }
-ringbuf = "0.4.1"
+ringbuf = "0.4.7"
 rustls = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-sysinfo = "0.30.12"
+sysinfo = "0.33.0"
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
@@ -87,7 +87,7 @@ uuid = { workspace = true }
 wasmtime = { workspace = true }
 wasmtime-wasi = { workspace = true }
 wasmtime-wasi-http = { workspace = true }
-windows-sys = "0.52.0"
+windows-sys = "0.59.0"
 zstd = "0.13"
 sqlx = { workspace = true }
 
@@ -97,7 +97,7 @@ golem-test-framework = { path = "../golem-test-framework", version = "0.0.0" }
 assert2 = { workspace = true }
 axum = { workspace = true }
 console-subscriber = { workspace = true }
-goldenfile = "1.7.1"
+goldenfile = "1.7.3"
 once_cell = { workspace = true }
 proptest = { workspace = true }
 rand = { workspace = true }
@@ -109,7 +109,7 @@ test-r = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [build-dependencies]
-cargo_metadata = "0.18.1"
+cargo_metadata = "0.19.1"
 
 [[test]]
 name = "integration"
