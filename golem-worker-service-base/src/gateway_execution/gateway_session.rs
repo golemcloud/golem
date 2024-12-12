@@ -19,11 +19,11 @@ use bytes::Bytes;
 use fred::interfaces::RedisResult;
 use golem_common::redis::RedisPool;
 use golem_common::SafeDisplay;
+use golem_service_base::storage::sqlite::SqlitePool;
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::Arc;
 use tracing::error;
-use golem_service_base::storage::sqlite::SqlitePool;
 
 #[async_trait]
 pub trait GatewaySession {
@@ -205,7 +205,6 @@ impl GatewaySession for RedisGatewaySession {
     }
 }
 
-
 #[derive(Debug)]
 pub struct SqliteGatewaySession {
     pool: SqlitePool,
@@ -219,8 +218,9 @@ impl SqliteGatewaySession {
     }
 
     async fn init(&self) -> Result<(), String> {
-        self.pool.execute(sqlx::query(
-            r#"
+        self.pool
+            .execute(sqlx::query(
+                r#"
                   CREATE TABLE IF NOT EXISTS session_storage (
                     session_id TEXT NOT NULL,
                     data_key TEXT NOT NULL,
@@ -229,9 +229,8 @@ impl SqliteGatewaySession {
                     PRIMARY KEY (session_id, data_key)
                   );
                 "#,
-        ))
+            ))
             .await?;
-
 
         Ok(())
     }
@@ -241,9 +240,8 @@ impl SqliteGatewaySession {
     }
 
     async fn cleanup_expired(&self) -> Result<(), String> {
-        let query =
-            sqlx::query("DELETE FROM gateway_session WHERE expiry_time < ?;")
-                .bind(Self::current_time());
+        let query = sqlx::query("DELETE FROM gateway_session WHERE expiry_time < ?;")
+            .bind(Self::current_time());
 
         self.pool
             .with("gateway_session", "cleanup_expired")

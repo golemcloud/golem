@@ -48,7 +48,7 @@ pub struct WorkerServiceBaseConfig {
 #[serde(tag = "type", content = "config")]
 pub enum GatewaySessionStorageConfig {
     Redis(RedisConfig),
-    Sqlite(DbSqliteConfig)
+    Sqlite(DbSqliteConfig),
 }
 
 impl Default for GatewaySessionStorageConfig {
