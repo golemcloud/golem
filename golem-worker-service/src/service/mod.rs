@@ -29,7 +29,7 @@ use golem_worker_service_base::gateway_api_definition::http::{
 };
 
 use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
-use golem_worker_service_base::app_config::{KeyValueStorageConfig, WorkerServiceBaseConfig};
+use golem_worker_service_base::app_config::{GatewaySessionStorageConfig, WorkerServiceBaseConfig};
 
 use golem_worker_service_base::gateway_execution::api_definition_lookup::{
     ApiDefinitionsLookup, HttpApiDefinitionLookup,
@@ -143,7 +143,7 @@ impl Services {
         ));
 
         let gateway_session_store = match &config.gateway_session_storage {
-            KeyValueStorageConfig::Redis(redis_config) => {
+            GatewaySessionStorageConfig::Redis(redis_config) => {
                 let redis = RedisPool::configured(redis_config)
                     .await
                     .map_err(|e| e.to_string())?;

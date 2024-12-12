@@ -33,7 +33,7 @@ use golem_service_base::service::routing_table::RoutingTableConfig;
 pub struct WorkerServiceBaseConfig {
     pub environment: String,
     pub tracing: TracingConfig,
-    pub gateway_session_storage: KeyValueStorageConfig,
+    pub gateway_session_storage: GatewaySessionStorageConfig,
     pub db: DbConfig,
     pub component_service: ComponentServiceConfig,
     pub port: u16,
@@ -46,17 +46,18 @@ pub struct WorkerServiceBaseConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
-pub enum KeyValueStorageConfig {
+pub enum GatewaySessionStorageConfig {
     Redis(RedisConfig),
+    Sqlite(DbSqliteConfig)
 }
 
-impl Default for KeyValueStorageConfig {
+impl Default for GatewaySessionStorageConfig {
     fn default() -> Self {
         Self::default_redis()
     }
 }
 
-impl KeyValueStorageConfig {
+impl GatewaySessionStorageConfig {
     pub fn default_redis() -> Self {
         Self::Redis(RedisConfig::default())
     }
@@ -76,7 +77,7 @@ impl Default for WorkerServiceBaseConfig {
                 database: "../data/golem_worker.sqlite".to_string(),
                 max_connections: 10,
             }),
-            gateway_session_storage: KeyValueStorageConfig::default_redis(),
+            gateway_session_storage: GatewaySessionStorageConfig::default_redis(),
             component_service: ComponentServiceConfig::default(),
             tracing: TracingConfig::local_dev("worker-service"),
             port: 9005,
