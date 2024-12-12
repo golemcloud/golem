@@ -19,7 +19,7 @@ use bytes::Bytes;
 use fred::interfaces::RedisResult;
 use golem_common::redis::RedisPool;
 use golem_common::SafeDisplay;
-use golem_service_base::storage::sqlite::SqlitePool;
+use golem_service_base::storage::sqlite::{DBValue, SqlitePool};
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::Arc;
@@ -131,16 +131,33 @@ pub struct SessionData {
 #[derive(Clone)]
 pub struct RedisGatewaySession {
     redis: RedisPool,
-    expire: i64,
+    expiration: RedisGatewaySessionExpiration,
 }
 
 impl RedisGatewaySession {
-    pub fn new(redis: RedisPool, expire: i64) -> Self {
-        Self { redis, expire }
+    pub fn new(redis: RedisPool, expiration: RedisGatewaySessionExpiration) -> Self {
+        Self { redis, expiration }
     }
 
     pub fn redis_key(session_id: &SessionId) -> String {
         format!("gateway_session:{}", session_id.0)
+    }
+}
+
+#[derive(Clone)]
+pub struct RedisGatewaySessionExpiration {
+    pub session_expiry: Duration,
+}
+
+impl RedisGatewaySessionExpiration {
+    pub fn new(session_expiry: Duration) -> Self {
+        Self { session_expiry }
+    }
+}
+
+impl Default for RedisGatewaySessionExpiration {
+    fn default() -> Self {
+        Self::new(Duration::from_secs(60 * 60))
     }
 }
 
@@ -171,7 +188,7 @@ impl GatewaySession for RedisGatewaySession {
 
         self.redis
             .with("gateway_session", "insert")
-            .expire(Self::redis_key(&session_id), self.expire)
+            .expire(Self::redis_key(&session_id), self.expire_duration.as_secs() as i64)
             .await
             .map_err(|e| {
                 error!("Failed to set expiry on session data in Redis: {}", e);
@@ -208,39 +225,67 @@ impl GatewaySession for RedisGatewaySession {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SqliteGatewaySession {
     pool: SqlitePool,
-    session_expiry: i64,
-    cleanup_interval: Duration,
+    expiration: SqliteGatewaySessionExpiration,
+}
+
+#[derive(Debug, Clone)]
+pub struct SqliteGatewaySessionExpiration {
+    pub session_expiry: Duration,
+    pub cleanup_interval: Duration,
+}
+
+impl SqliteGatewaySessionExpiration {
+    pub fn new(session_expiry: Duration, cleanup_interval: Duration) -> Self {
+        Self::new(session_expiry, cleanup_interval)
+    }
+}
+
+impl Default for SqliteGatewaySessionExpiration {
+    fn default() -> Self {
+        Self {
+            session_expiry: Duration::from_secs(60 * 60),
+            cleanup_interval: Duration::from_secs(60),
+        }
+    }
 }
 
 impl SqliteGatewaySession {
-    pub async fn new(pool: SqlitePool, session_expiry: i64, cleanup_interval: Duration) -> Result<Self, String> {
-        let result = Self { pool, session_expiry, cleanup_interval };
+    pub async fn new(
+        pool: SqlitePool,
+        expiration: SqliteGatewaySessionExpiration,
+    ) -> Result<Self, String> {
+        let result = Arc::new(Self {
+            pool,
+            expiration,
+        });
 
         result.init().await?;
 
+        let cloned_result = result.clone(); // Clone the Arc for the task.
+
         task::spawn(async move {
-            let mut cleanup_interval = interval(cleanup_interval);
+            let mut cleanup_interval = interval(cloned_result.expiration.cleanup_interval);
+
             loop {
                 cleanup_interval.tick().await;
 
-                if let Err(e) = Self::cleanup_expired(&result.pool).await {
+                if let Err(e) = Self::cleanup_expired(cloned_result.pool.clone()).await {
                     error!("Failed to clean up expired sessions: {}", e);
                 }
             }
         });
 
-
-        Ok(result)
+        Ok(Arc::try_unwrap(result).unwrap_or_else(|_| unreachable!()))
     }
 
     async fn init(&self) -> Result<(), String> {
         self.pool
             .execute(sqlx::query(
                 r#"
-                  CREATE TABLE IF NOT EXISTS session_storage (
+                  CREATE TABLE IF NOT EXISTS gateway_session (
                     session_id TEXT NOT NULL,
                     data_key TEXT NOT NULL,
                     data_value BLOB NOT NULL,
@@ -258,14 +303,80 @@ impl SqliteGatewaySession {
         chrono::Utc::now().timestamp()
     }
 
-    async fn cleanup_expired(pool: &SqlitePool) -> Result<(), String> {
+    async fn cleanup_expired(pool: SqlitePool) -> Result<(), String> {
         let query = sqlx::query("DELETE FROM gateway_session WHERE expiry_time < ?;")
             .bind(Self::current_time());
 
-        pool
-            .with("gateway_session", "cleanup_expired")
+        pool.with("gateway_session", "cleanup_expired")
             .execute(query)
             .await
             .map(|_| ())
+    }
+}
+
+#[async_trait]
+impl GatewaySession for SqliteGatewaySession {
+    async fn insert(
+        &self,
+        session_id: SessionId,
+        data_key: DataKey,
+        data_value: DataValue,
+    ) -> Result<(), GatewaySessionError> {
+        let expiry_time = Self::current_time() + self.expiration.session_expiry.as_secs() as i64;
+
+        let serialized_value: &[u8] = &golem_common::serialization::serialize(&data_value)
+            .map_err(|e| GatewaySessionError::InternalError(e.to_string()))?;
+
+        let result = self.pool
+            .execute(sqlx::query(
+                r#"
+                  INSERT INTO gateway_session (session_id, data_key, data_value, expiry_time)
+                  VALUES (?, ?, ?, ?);
+                "#,
+            )
+                .bind(session_id.0)
+                .bind(data_key.0)
+                .bind(&serialized_value)
+                .bind(expiry_time)
+            )
+            .await;
+
+        result.map_err(|e| {
+            error!("Failed to insert session data into SQLite: {}", e);
+            GatewaySessionError::InternalError(e.to_string())
+        })?;
+
+        Ok(())
+    }
+
+    async fn get(
+        &self,
+        session_id: &SessionId,
+        data_key: &DataKey,
+    ) -> Result<DataValue, GatewaySessionError> {
+
+        let query = sqlx::query_as("SELECT data_value FROM gateway_session WHERE session_id = ? AND data_key = ?;")
+            .bind(&session_id.0)
+            .bind(&data_key.0);
+
+        let result = self.pool
+            .with("gateway_sesssion", "get")
+            .fetch_optional_as::<DBValue, _>(query)
+            .await
+            .map(|r| r.map(|op| op.into_bytes()))
+            .map_err(|e| GatewaySessionError::InternalError(e.to_string()))?;
+
+        match result {
+            Some(row) => {
+                let data_value = golem_common::serialization::deserialize(&row)
+                    .map_err(|e| GatewaySessionError::InternalError(e.to_string()))?;
+
+                Ok(data_value)
+            }
+            None => Err(GatewaySessionError::MissingValue {
+                session_id: session_id.clone(),
+                data_key: data_key.clone(),
+            }),
+        }
     }
 }
