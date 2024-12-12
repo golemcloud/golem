@@ -161,8 +161,6 @@ pub struct DetailsParameter {
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
 pub struct PublicRetryConfig {
     pub max_attempts: u32,
     #[serde(with = "humantime_serde")]
@@ -209,8 +207,6 @@ impl IntoValue for PublicRetryConfig {
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
 pub struct ExportedFunctionParameters {
     pub idempotency_key: IdempotencyKey,
     pub full_function_name: String,
@@ -1463,8 +1459,6 @@ impl IntoValue for PublicOplogEntry {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
 pub struct OplogCursor {
     pub next_oplog_index: u64,
     pub current_component_version: u64,
