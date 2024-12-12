@@ -236,7 +236,7 @@ pub async fn test_gateway_session_with_sqlite_expired() {
     let data_key = DataKey::nonce();
     let session_id = SessionId("test1".to_string());
 
-    let _ = session_store
+    session_store
         .insert(session_id.clone(), data_key.clone(), data_value)
         .await
         .expect("Insert to session failed");
