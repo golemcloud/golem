@@ -223,6 +223,17 @@ fn worker_service_config(
                 .to_string(),
             max_connections: 32,
         }),
+        gateway_session_storage:
+            golem_worker_service_base::app_config::GatewaySessionStorageConfig::Sqlite(
+                DbSqliteConfig {
+                    database: args
+                        .data_dir
+                        .join("gateway-sessions.db")
+                        .to_string_lossy()
+                        .to_string(),
+                    max_connections: 32,
+                },
+            ),
         blob_storage: blob_storage_config(args),
         component_service: golem_worker_service_base::app_config::ComponentServiceConfig {
             host: "127.0.0.1".to_string(),
