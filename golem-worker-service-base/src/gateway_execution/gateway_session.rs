@@ -23,6 +23,9 @@ use golem_service_base::storage::sqlite::SqlitePool;
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::task;
+use tokio::time::interval;
 use tracing::error;
 
 #[async_trait]
@@ -208,12 +211,28 @@ impl GatewaySession for RedisGatewaySession {
 #[derive(Debug)]
 pub struct SqliteGatewaySession {
     pool: SqlitePool,
+    session_expiry: i64,
+    cleanup_interval: Duration,
 }
 
 impl SqliteGatewaySession {
-    pub async fn new(pool: SqlitePool) -> Result<Self, String> {
-        let result = Self { pool };
+    pub async fn new(pool: SqlitePool, session_expiry: i64, cleanup_interval: Duration) -> Result<Self, String> {
+        let result = Self { pool, session_expiry, cleanup_interval };
+
         result.init().await?;
+
+        task::spawn(async move {
+            let mut cleanup_interval = interval(cleanup_interval);
+            loop {
+                cleanup_interval.tick().await;
+
+                if let Err(e) = Self::cleanup_expired(&result.pool).await {
+                    error!("Failed to clean up expired sessions: {}", e);
+                }
+            }
+        });
+
+
         Ok(result)
     }
 
@@ -239,11 +258,11 @@ impl SqliteGatewaySession {
         chrono::Utc::now().timestamp()
     }
 
-    async fn cleanup_expired(&self) -> Result<(), String> {
+    async fn cleanup_expired(pool: &SqlitePool) -> Result<(), String> {
         let query = sqlx::query("DELETE FROM gateway_session WHERE expiry_time < ?;")
             .bind(Self::current_time());
 
-        self.pool
+        pool
             .with("gateway_session", "cleanup_expired")
             .execute(query)
             .await
