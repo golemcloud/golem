@@ -52,7 +52,10 @@ use golem_common::config::RetryConfig;
 use golem_common::config::DbConfig;
 use golem_common::redis::RedisPool;
 use golem_service_base::db;
-use golem_worker_service_base::gateway_execution::gateway_session::{GatewaySession, RedisGatewaySession, RedisGatewaySessionExpiration, SqliteGatewaySession, SqliteGatewaySessionExpiration};
+use golem_worker_service_base::gateway_execution::gateway_session::{
+    GatewaySession, RedisGatewaySession, RedisGatewaySessionExpiration, SqliteGatewaySession,
+    SqliteGatewaySessionExpiration,
+};
 use golem_worker_service_base::gateway_request::http_request::InputHttpRequest;
 use golem_worker_service_base::gateway_security::DefaultIdentityProvider;
 use golem_worker_service_base::repo::security_scheme::{DbSecuritySchemeRepo, SecuritySchemeRepo};
@@ -157,11 +160,9 @@ impl Services {
                         .await
                         .map_err(|e| e.to_string())?;
 
-                    let gateway_session_with_sqlite = SqliteGatewaySession::new(
-                        pool,
-                        SqliteGatewaySessionExpiration::default(),
-                    )
-                    .await?;
+                    let gateway_session_with_sqlite =
+                        SqliteGatewaySession::new(pool, SqliteGatewaySessionExpiration::default())
+                            .await?;
 
                     Arc::new(gateway_session_with_sqlite)
                 }
