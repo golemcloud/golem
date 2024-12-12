@@ -17,6 +17,7 @@ use crate::CoercedNumericValue;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 use std::fmt;
+use std::ops::Deref;
 
 // A result of a function can be unit, which is not representable using type_annotated_value
 // A result can be a type_annotated_value
@@ -121,7 +122,65 @@ impl RibInterpreterStackValue {
 
     pub fn unwrap(&self) -> Option<ValueAndType> {
         match self {
-            RibInterpreterStackValue::Val(val) => Some(val.clone()),
+            RibInterpreterStackValue::Val(val) => {
+                match (val.value.clone(), val.typ.clone()) {
+                    (Value::Option(option), AnalysedType::Option(option_type)) => {
+                        Some(ValueAndType {
+                            value: option.unwrap().deref().clone(),
+                            typ: option_type.inner.deref().clone(),
+                        })
+                    }
+
+                    (Value::Result(result), AnalysedType::Result(result_type)) => match result {
+                        Ok(Some(ok)) => Some(ValueAndType {
+                            value: ok.deref().clone(),
+                            typ: result_type.ok.unwrap().deref().clone(),
+                        }),
+
+                        Err(Some(err)) => Some(ValueAndType {
+                            value: err.deref().clone(),
+                            typ: result_type.err.unwrap().deref().clone(),
+                        }),
+                        _ => None,
+                    },
+
+                    (
+                        Value::Variant {
+                            case_value,
+                            case_idx,
+                        },
+                        AnalysedType::Variant(variant_type),
+                    ) => Some(ValueAndType {
+                        value: case_value.unwrap().deref().clone(),
+                        typ: variant_type.cases[case_idx as usize].clone().typ.unwrap(),
+                    }),
+
+                    _ => None,
+                }
+
+                // match val.value {
+                //     Va:Option(option) => option
+                //         .value
+                //         .as_deref()
+                //         .and_then(|x| x.type_annotated_value.clone()),
+                //     TypeAnnotatedValue::Result(result) => {
+                //         let result = match &result.result_value {
+                //             Some(ResultValue::OkValue(ok)) => Some(ok.clone()),
+                //             Some(ResultValue::ErrorValue(err)) => Some(err.clone()),
+                //             None => None,
+                //         };
+                //
+                //         // GRPC wrapper
+                //         result.and_then(|x| x.type_annotated_value)
+                //     }
+                //
+                //     TypeAnnotatedValue::Variant(variant) => variant
+                //         .case_value
+                //         .as_deref()
+                //         .and_then(|x| x.type_annotated_value.clone()),
+                //     _ => None,
+                // }
+            }
             RibInterpreterStackValue::Unit => None,
             RibInterpreterStackValue::Iterator(_) => None,
             RibInterpreterStackValue::Sink(_, _) => None,

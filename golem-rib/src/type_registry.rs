@@ -413,8 +413,8 @@ mod internal {
 #[cfg(feature = "protobuf")]
 mod protobuf {
 
-    use golem_api_grpc::proto::golem::rib::registry_key::KeyType;
     use crate::RegistryKey;
+    use golem_api_grpc::proto::golem::rib::registry_key::KeyType;
 
     impl TryFrom<golem_api_grpc::proto::golem::rib::RegistryKey> for RegistryKey {
         type Error = String;

@@ -3,7 +3,7 @@ use golem_wasm_ast::analysis::AnalysedType;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature="poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 pub struct RibOutputTypeInfo {
     pub analysed_type: AnalysedType,
 }

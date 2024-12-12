@@ -30,8 +30,10 @@ pub struct CompilerOutput {
 
 #[cfg(feature = "protobuf")]
 mod protobuf {
+    use crate::{
+        CompilerOutput, RibByteCode, RibInputTypeInfo, RibOutputTypeInfo, WorkerFunctionsInRib,
+    };
     use golem_api_grpc::proto::golem::rib::CompilerOutput as ProtoCompilerOutput;
-    use crate::{CompilerOutput, RibByteCode, RibInputTypeInfo, RibOutputTypeInfo, WorkerFunctionsInRib};
 
     impl TryFrom<ProtoCompilerOutput> for CompilerOutput {
         type Error = String;
