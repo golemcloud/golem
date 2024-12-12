@@ -197,7 +197,7 @@ impl InterpreterStack {
             .iter()
             .position(|case| case.name == variant_name)
             .unwrap() as u32; // TODO: return error
-        let case_value = optional_variant_value.map(|value| Box::new(value));
+        let case_value = optional_variant_value.map(Box::new);
         self.push_val(ValueAndType::new(
             Value::Variant {
                 case_idx,
@@ -212,7 +212,7 @@ impl InterpreterStack {
         self.push_val(ValueAndType::new(
             Value::Enum(idx),
             AnalysedType::Enum(TypeEnum {
-                cases: cases.into_iter().map(|x| x.into()).collect(),
+                cases: cases.into_iter().collect(),
             }),
         ));
     }

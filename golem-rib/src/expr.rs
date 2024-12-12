@@ -798,9 +798,9 @@ impl Number {
             AnalysedType::U32(_) => self.value.to_u32().map(|v| v.into_value_and_type()),
             AnalysedType::S32(_) => self.value.to_i32().map(|v| v.into_value_and_type()),
             AnalysedType::S64(_) => self.value.to_i64().map(|v| v.into_value_and_type()),
-            AnalysedType::U8(_) => self.value.to_u32().map(|v| v.into_value_and_type()),
+            AnalysedType::U8(_) => self.value.to_u8().map(|v| v.into_value_and_type()),
             AnalysedType::S8(_) => self.value.to_i32().map(|v| v.into_value_and_type()),
-            AnalysedType::U16(_) => self.value.to_u32().map(|v| v.into_value_and_type()),
+            AnalysedType::U16(_) => self.value.to_u16().map(|v| v.into_value_and_type()),
             AnalysedType::S16(_) => self.value.to_i32().map(|v| v.into_value_and_type()),
             _ => None,
         }

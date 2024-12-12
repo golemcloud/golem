@@ -2045,11 +2045,11 @@ mod comprehensive_test {
         use crate::interpreter::rib_interpreter::Interpreter;
         use crate::interpreter::tests::comprehensive_test::{mock_data, test_utils};
         use crate::{RibFunctionInvoke, RibInput};
+        use golem_wasm_ast::analysis::analysed_type::tuple;
         use golem_wasm_ast::analysis::{AnalysedType, TypeStr};
+        use golem_wasm_rpc::{Value, ValueAndType};
         use std::collections::HashMap;
         use std::sync::Arc;
-        use golem_wasm_ast::analysis::analysed_type::tuple;
-        use golem_wasm_rpc::{Value, ValueAndType};
 
         pub(crate) fn interpreter() -> Interpreter {
             let functions_and_results: Vec<(&str, Option<ValueAndType>)> = vec![
@@ -2254,7 +2254,10 @@ mod comprehensive_test {
 
                     async move {
                         if let Some(value) = value {
-                            Ok(ValueAndType::new(Value::Tuple(vec![value.value]), tuple(vec![value.typ])))
+                            Ok(ValueAndType::new(
+                                Value::Tuple(vec![value.value]),
+                                tuple(vec![value.typ]),
+                            ))
                         } else {
                             // Representing Unit
                             Ok(ValueAndType::new(Value::Tuple(vec![]), tuple(vec![])))

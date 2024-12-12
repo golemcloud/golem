@@ -17,6 +17,7 @@ use crate::CoercedNumericValue;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 use std::fmt;
+use std::ops::Deref;
 
 // A result of a function can be unit, which is not representable using type_annotated_value
 // A result can be a type_annotated_value
@@ -121,7 +122,55 @@ impl RibInterpreterStackValue {
 
     pub fn unwrap(&self) -> Option<ValueAndType> {
         match self {
-            RibInterpreterStackValue::Val(val) => Some(val.clone()),
+            RibInterpreterStackValue::Val(val) => match (val.value.clone(), val.typ.clone()) {
+                (Value::Option(Some(option)), AnalysedType::Option(option_type)) => {
+                    let inner_value = option.deref().clone();
+                    let inner_type = option_type.inner.deref().clone();
+                    Some(ValueAndType {
+                        value: inner_value,
+                        typ: inner_type,
+                    })
+                }
+
+                (Value::Result(Ok(Some(ok))), AnalysedType::Result(result_type)) => {
+                    let ok_value = ok.deref().clone();
+                    let ok_type = result_type.ok.as_ref()?.deref().clone();
+                    Some(ValueAndType {
+                        value: ok_value,
+                        typ: ok_type,
+                    })
+                }
+
+                (Value::Result(Err(Some(err))), AnalysedType::Result(result_type)) => {
+                    let err_value = err.deref().clone();
+                    let err_type = result_type.err.as_ref()?.deref().clone();
+                    Some(ValueAndType {
+                        value: err_value,
+                        typ: err_type,
+                    })
+                }
+
+                (
+                    Value::Variant {
+                        case_value: Some(case_value),
+                        case_idx,
+                    },
+                    AnalysedType::Variant(variant_type),
+                ) => {
+                    let case_type = variant_type
+                        .cases
+                        .get(case_idx as usize)?
+                        .typ
+                        .as_ref()?
+                        .clone();
+                    Some(ValueAndType {
+                        value: case_value.deref().clone(),
+                        typ: case_type,
+                    })
+                }
+
+                _ => None,
+            },
             RibInterpreterStackValue::Unit => None,
             RibInterpreterStackValue::Iterator(_) => None,
             RibInterpreterStackValue::Sink(_, _) => None,

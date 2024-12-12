@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
 use golem_wasm_rpc::ValueAndType;
+use std::collections::HashMap;
 
 // Acts as the structure to hold the global input values
 #[derive(Debug, Default, Clone)]
