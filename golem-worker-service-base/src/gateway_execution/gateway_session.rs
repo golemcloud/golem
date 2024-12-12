@@ -24,9 +24,10 @@ use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::Arc;
 use std::time::Duration;
+use sqlx::Row;
 use tokio::task;
 use tokio::time::interval;
-use tracing::error;
+use tracing::{error, info};
 
 #[async_trait]
 pub trait GatewaySession {
@@ -188,7 +189,7 @@ impl GatewaySession for RedisGatewaySession {
 
         self.redis
             .with("gateway_session", "insert")
-            .expire(Self::redis_key(&session_id), self.expire_duration.as_secs() as i64)
+            .expire(Self::redis_key(&session_id), self.expiration.session_expiry.as_secs() as i64)
             .await
             .map_err(|e| {
                 error!("Failed to set expiry on session data in Redis: {}", e);
@@ -239,16 +240,16 @@ pub struct SqliteGatewaySessionExpiration {
 
 impl SqliteGatewaySessionExpiration {
     pub fn new(session_expiry: Duration, cleanup_interval: Duration) -> Self {
-        Self::new(session_expiry, cleanup_interval)
+        Self {
+            session_expiry,
+            cleanup_interval,
+        }
     }
 }
 
 impl Default for SqliteGatewaySessionExpiration {
     fn default() -> Self {
-        Self {
-            session_expiry: Duration::from_secs(60 * 60),
-            cleanup_interval: Duration::from_secs(60),
-        }
+        Self::new(Duration::from_secs(60 * 60), Duration::from_secs(60))
     }
 }
 
@@ -257,28 +258,19 @@ impl SqliteGatewaySession {
         pool: SqlitePool,
         expiration: SqliteGatewaySessionExpiration,
     ) -> Result<Self, String> {
-        let result = Arc::new(Self {
+        let result = Self {
             pool,
             expiration,
-        });
+        };
 
         result.init().await?;
 
-        let cloned_result = result.clone(); // Clone the Arc for the task.
+        let cloned_session =
+            result.clone();
 
-        task::spawn(async move {
-            let mut cleanup_interval = interval(cloned_result.expiration.cleanup_interval);
+        Self::spawn_expiration_task(cloned_session.expiration.cleanup_interval, cloned_session.pool).await;
 
-            loop {
-                cleanup_interval.tick().await;
-
-                if let Err(e) = Self::cleanup_expired(cloned_result.pool.clone()).await {
-                    error!("Failed to clean up expired sessions: {}", e);
-                }
-            }
-        });
-
-        Ok(Arc::try_unwrap(result).unwrap_or_else(|_| unreachable!()))
+        Ok(result)
     }
 
     async fn init(&self) -> Result<(), String> {
@@ -296,11 +288,30 @@ impl SqliteGatewaySession {
             ))
             .await?;
 
+        info!("Initialized gateway session SQLite table");
+
         Ok(())
     }
 
     fn current_time() -> i64 {
         chrono::Utc::now().timestamp()
+    }
+
+    pub async fn spawn_expiration_task(
+        cleanup_internal: Duration,
+        db_pool: SqlitePool
+    ) {
+        task::spawn(async move {
+            let mut cleanup_interval = interval(cleanup_internal);
+
+            loop {
+                cleanup_interval.tick().await;
+
+                if let Err(e) = Self::cleanup_expired(db_pool.clone()).await {
+                    error!("Failed to clean up expired sessions: {}", e);
+                }
+            }
+        });
     }
 
     async fn cleanup_expired(pool: SqlitePool) -> Result<(), String> {
@@ -355,19 +366,20 @@ impl GatewaySession for SqliteGatewaySession {
         data_key: &DataKey,
     ) -> Result<DataValue, GatewaySessionError> {
 
-        let query = sqlx::query_as("SELECT data_value FROM gateway_session WHERE session_id = ? AND data_key = ?;")
+        let query = sqlx::query("SELECT data_value FROM gateway_session WHERE session_id = ? AND data_key = ?;")
             .bind(&session_id.0)
             .bind(&data_key.0);
 
         let result = self.pool
             .with("gateway_sesssion", "get")
-            .fetch_optional_as::<DBValue, _>(query)
+            .fetch_optional(query)
             .await
-            .map(|r| r.map(|op| op.into_bytes()))
             .map_err(|e| GatewaySessionError::InternalError(e.to_string()))?;
 
         match result {
             Some(row) => {
+                let row = row.get::<Vec<u8>, _>(0);
+
                 let data_value = golem_common::serialization::deserialize(&row)
                     .map_err(|e| GatewaySessionError::InternalError(e.to_string()))?;
 

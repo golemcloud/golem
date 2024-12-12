@@ -74,6 +74,7 @@ use testcontainers::{ContainerAsync, ImageExt};
 use testcontainers_modules::postgres::Postgres;
 use testcontainers_modules::redis::Redis;
 use uuid::Uuid;
+use golem_service_base::storage::sqlite::SqlitePool;
 
 test_r::enable!();
 
@@ -185,13 +186,6 @@ pub async fn test_gateway_session_with_sqlite() {
         max_connections: 10,
     };
 
-    db::sqlite_migrate(
-        &db_config,
-        MigrationsDir::new("../golem-worker-service/db/migration".into()).sqlite_migrations(),
-    )
-    .await
-    .unwrap();
-
     let db_pool = db::create_sqlite_pool(&db_config).await.unwrap();
 
     let data_value = DataValue(serde_json::Value::String(
@@ -204,7 +198,7 @@ pub async fn test_gateway_session_with_sqlite() {
         data_value.clone(),
         Duration::from_secs(60 * 60),
         Duration::from_millis(1),
-        db_pool.clone().into(),
+        db_pool.clone()
     )
     .await
     .expect("Expecting a value for longer expiry");
@@ -279,15 +273,16 @@ async fn insert_and_get_session_with_sqlite(
     sqlite_cleanup_interval: Duration,
     db_pool: sqlx::SqlitePool,
 ) -> Result<DataValue, GatewaySessionError> {
-    let session_store = Arc::new(SqliteGatewaySession::new(
-        db_pool.clone().into(),
+    let sqlite_session = SqliteGatewaySession::new(
+        SqlitePool::new(db_pool).await.map_err(|err| GatewaySessionError::InternalError(err.to_string()))?,
         SqliteGatewaySessionExpiration::new(session_expiry, sqlite_cleanup_interval),
-    ));
+    ).await.map_err(|err| GatewaySessionError::InternalError(err.to_string()))?;
+
+    let session_store = Arc::new(sqlite_session);
 
     session_store
         .insert(session_id.clone(), data_key.clone(), data_value)
-        .await
-        .unwrap();
+        .await?;
 
     session_store.get(&session_id, &data_key).await
 }
