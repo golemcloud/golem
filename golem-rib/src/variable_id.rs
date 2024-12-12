@@ -143,11 +143,11 @@ impl Display for VariableId {
     }
 }
 #[derive(Hash, Eq, Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
-pub struct Id(u32);
+pub struct Id(pub(crate) u32);
 
 #[cfg(feature = "protobuf")]
 mod protobuf {
-    use crate::VariableId;
+    use crate::{Id, VariableId};
     use golem_api_grpc::proto::golem::rib::VariableId as ProtoVariableId;
 
     impl TryFrom<ProtoVariableId> for VariableId {

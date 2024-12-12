@@ -75,14 +75,16 @@ mod protobuf {
         }
     }
 
-    impl From<RibByteCode> for ProtoRibByteCode {
-        fn from(value: RibByteCode) -> Self {
+    impl TryFrom<RibByteCode> for ProtoRibByteCode {
+        type Error = String;
+
+        fn try_from(value: RibByteCode) -> Result<Self, Self::Error> {
             let mut instructions = Vec::new();
             for instruction in value.instructions {
-                instructions.push(instruction.into());
+                instructions.push(instruction.try_into()?);
             }
 
-            ProtoRibByteCode { instructions }
+            Ok(ProtoRibByteCode { instructions })
         }
     }
 }

@@ -235,42 +235,41 @@ mod protobuf {
                 FunctionReferenceType::RawResourceMethod { resource, method } => golem_api_grpc::proto::golem::rib::FunctionReferenceType {
                     r#type: Some(golem_api_grpc::proto::golem::rib::function_reference_type::Type::RawResourceMethod(golem_api_grpc::proto::golem::rib::RawResourceMethod {
                         resource_name: resource,
-                        method_name: method
+                        method_name: method,
                     }))
                 },
                 FunctionReferenceType::RawResourceStaticMethod { resource, method } => golem_api_grpc::proto::golem::rib::FunctionReferenceType {
                     r#type: Some(golem_api_grpc::proto::golem::rib::function_reference_type::Type::RawResourceStaticMethod(golem_api_grpc::proto::golem::rib::RawResourceStaticMethod {
                         resource_name: resource,
-                        method_name: method
+                        method_name: method,
                     }))
                 },
                 FunctionReferenceType::IndexedResourceConstructor { resource, arg_size } => golem_api_grpc::proto::golem::rib::FunctionReferenceType {
                     r#type: Some(golem_api_grpc::proto::golem::rib::function_reference_type::Type::IndexedResourceConstructor(golem_api_grpc::proto::golem::rib::IndexedResourceConstructor {
                         resource_name: resource,
-                        arg_size: arg_size as u32
+                        arg_size: arg_size as u32,
                     }))
                 },
                 FunctionReferenceType::IndexedResourceMethod { resource, arg_size, method } => golem_api_grpc::proto::golem::rib::FunctionReferenceType {
                     r#type: Some(golem_api_grpc::proto::golem::rib::function_reference_type::Type::IndexedResourceMethod(golem_api_grpc::proto::golem::rib::IndexedResourceMethod {
                         resource_name: resource,
                         arg_size: arg_size as u32,
-                        method_name: method
+                        method_name: method,
                     }))
                 },
                 FunctionReferenceType::IndexedResourceStaticMethod { resource, arg_size, method } => golem_api_grpc::proto::golem::rib::FunctionReferenceType {
                     r#type: Some(golem_api_grpc::proto::golem::rib::function_reference_type::Type::IndexedResourceStaticMethod(golem_api_grpc::proto::golem::rib::IndexedResourceStaticMethod {
                         resource_name: resource,
                         arg_size: arg_size as u32,
-                        method_name: method
+                        method_name: method,
                     }))
                 },
                 FunctionReferenceType::IndexedResourceDrop { resource, arg_size } => golem_api_grpc::proto::golem::rib::FunctionReferenceType {
                     r#type: Some(golem_api_grpc::proto::golem::rib::function_reference_type::Type::IndexedResourceDrop(golem_api_grpc::proto::golem::rib::IndexedResourceDrop {
                         resource_name: resource,
-                        arg_size: arg_size as u32
+                        arg_size: arg_size as u32,
                     }))
                 }
-
             }
         }
     }
@@ -481,12 +480,16 @@ mod protobuf {
         }
     }
 
-    impl From<RibIR> for ProtoRibIR {
-        fn from(value: RibIR) -> Self {
+    impl TryFrom<RibIR> for ProtoRibIR {
+        type Error = String;
+
+        fn try_from(value: RibIR) -> Result<Self, Self::Error> {
             let instruction = match value {
                 RibIR::PushLit(value) => {
                     Instruction::PushLit(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
-                        type_annotated_value: Some(value.into()),
+                        type_annotated_value: Some(
+                            value.try_into().map_err(|errs: Vec<String>| errs.join(", "))?,
+                        ),
                     })
                 }
                 RibIR::And => Instruction::And(And {}),
@@ -574,7 +577,9 @@ mod protobuf {
                 RibIR::Throw(msg) => Instruction::Throw(msg),
                 RibIR::PushFlag(flag) => {
                     Instruction::PushFlag(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
-                        type_annotated_value: Some(flag.into()),
+                        type_annotated_value: Some(
+                            flag.try_into().map_err(|errs: Vec<String>| errs.join(", "))?,
+                        ),
                     })
                 }
                 RibIR::GetTag => Instruction::GetTag(GetTag {}),
@@ -616,9 +621,9 @@ mod protobuf {
                 }
             };
 
-            ProtoRibIR {
+            Ok(ProtoRibIR {
                 instruction: Some(instruction),
-            }
+            })
         }
     }
 }

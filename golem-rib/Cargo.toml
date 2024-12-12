@@ -8,8 +8,7 @@ repository = "https://github.com/golemcloud/golem"
 description = "Parser for Golem's Rib language"
 
 [features]
-#default = ["protobuf", "poem"]
-default = []
+default = ["json_in_errors", "protobuf", "poem"]
 json_in_errors = ["protobuf", "golem-wasm-rpc/json"]
 protobuf = ["dep:golem-api-grpc", "golem-wasm-ast/protobuf", "golem-wasm-rpc/protobuf"]
 poem = ["dep:poem-openapi", "golem-wasm-ast/poem_openapi", "golem-wasm-ast/poem_openapi"]

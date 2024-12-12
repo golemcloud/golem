@@ -16,11 +16,8 @@ use crate::call_type::CallType;
 use crate::parser::block::block;
 use crate::parser::type_name::TypeName;
 use crate::type_registry::FunctionTypeRegistry;
-use crate::{
-    from_string, text, type_checker, type_inference, DynamicParsedFunctionName, InferredType,
-    VariableId,
-};
-use bigdecimal::{BigDecimal, ToPrimitive};
+use crate::{from_string, text, type_checker, type_inference, DynamicParsedFunctionName, InferredType, ParsedFunctionName, VariableId};
+use bigdecimal::{BigDecimal, FromPrimitive, ToPrimitive};
 use combine::parser::char::spaces;
 use combine::stream::position;
 use combine::Parser;
@@ -32,6 +29,7 @@ use serde_json::Value;
 use std::collections::VecDeque;
 use std::fmt::Display;
 use std::ops::Deref;
+use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
