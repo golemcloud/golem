@@ -57,7 +57,7 @@ pub(crate) mod sqlx_rdbms {
     use sqlx::postgres::{PgConnectOptions, PgTypeKind};
     use sqlx::types::mac_address::MacAddress;
     use sqlx::types::BitVec;
-    use sqlx::{Column, ConnectOptions, Pool, Row, TypeInfo, ValueRef};
+    use sqlx::{Column, ConnectOptions, Decode, Encode, Pool, Row, Type, TypeInfo, ValueRef};
     use std::net::IpAddr;
     use std::ops::Bound;
     use std::sync::Arc;
@@ -129,81 +129,82 @@ pub(crate) mod sqlx_rdbms {
         ) -> Result<sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>, Error>
         {
             for param in params {
-                self = bind_value(self, param).map_err(Error::QueryParameterFailure)?;
+                set_value(&mut self, param).map_err(Error::QueryParameterFailure)?;
             }
             Ok(self)
         }
     }
 
-    fn bind_value(
-        query: sqlx::query::Query<sqlx::Postgres, sqlx::postgres::PgArguments>,
-        value: DbValue,
-    ) -> Result<sqlx::query::Query<sqlx::Postgres, sqlx::postgres::PgArguments>, String> {
+    fn set_value<'a, S: PgValueSetter<'a>>(setter: &mut S, value: DbValue) -> Result<(), String> {
         match value {
-            DbValue::Primitive(v) => bind_value_primitive(query, v),
-            DbValue::Array(vs) => bind_value_array(query, vs),
+            DbValue::Primitive(v) => set_value_primitive(setter, v),
+            DbValue::Array(vs) => set_value_array(setter, vs),
         }
     }
 
-    fn bind_value_primitive(
-        query: sqlx::query::Query<sqlx::Postgres, sqlx::postgres::PgArguments>,
+    fn set_value_primitive<'a, S: PgValueSetter<'a>>(
+        setter: &mut S,
         value: DbValuePrimitive,
-    ) -> Result<sqlx::query::Query<sqlx::Postgres, sqlx::postgres::PgArguments>, String> {
+    ) -> Result<(), String> {
         match value {
-            DbValuePrimitive::Character(v) => Ok(query.bind(v)),
-            DbValuePrimitive::Int2(v) => Ok(query.bind(v)),
-            DbValuePrimitive::Int4(v) => Ok(query.bind(v)),
-            DbValuePrimitive::Int8(v) => Ok(query.bind(v)),
-            DbValuePrimitive::Float4(v) => Ok(query.bind(v)),
-            DbValuePrimitive::Float8(v) => Ok(query.bind(v)),
-            DbValuePrimitive::Numeric(v) => Ok(query.bind(v)),
-            DbValuePrimitive::Boolean(v) => Ok(query.bind(v)),
-            DbValuePrimitive::Text(v) => Ok(query.bind(v)),
-            DbValuePrimitive::Varchar(v) => Ok(query.bind(v)),
-            DbValuePrimitive::Bpchar(v) => Ok(query.bind(v)),
-            DbValuePrimitive::Bytea(v) => Ok(query.bind(v)),
-            DbValuePrimitive::Uuid(v) => Ok(query.bind(v)),
-            DbValuePrimitive::Json(v) => Ok(query.bind(v)),
-            DbValuePrimitive::Jsonb(v) => Ok(query.bind(v)),
-            DbValuePrimitive::Jsonpath(v) => Ok(query.bind(PgJsonPath(v))),
-            DbValuePrimitive::Xml(v) => Ok(query.bind(PgXml(v))),
-            DbValuePrimitive::Timestamp(v) => Ok(query.bind(v)),
-            DbValuePrimitive::Timestamptz(v) => Ok(query.bind(v)),
-            DbValuePrimitive::Time(v) => Ok(query.bind(v)),
-            DbValuePrimitive::Timetz((time, offset)) => Ok(query.bind(PgTimeTz { time, offset })),
-            DbValuePrimitive::Date(v) => Ok(query.bind(v)),
+            DbValuePrimitive::Character(v) => setter.try_set_value(v),
+            DbValuePrimitive::Int2(v) => setter.try_set_value(v),
+            DbValuePrimitive::Int4(v) => setter.try_set_value(v),
+            DbValuePrimitive::Int8(v) => setter.try_set_value(v),
+            DbValuePrimitive::Float4(v) => setter.try_set_value(v),
+            DbValuePrimitive::Float8(v) => setter.try_set_value(v),
+            DbValuePrimitive::Numeric(v) => setter.try_set_value(v),
+            DbValuePrimitive::Boolean(v) => setter.try_set_value(v),
+            DbValuePrimitive::Text(v) => setter.try_set_value(v),
+            DbValuePrimitive::Varchar(v) => setter.try_set_value(v),
+            DbValuePrimitive::Bpchar(v) => setter.try_set_value(v),
+            DbValuePrimitive::Bytea(v) => setter.try_set_value(v),
+            DbValuePrimitive::Uuid(v) => setter.try_set_value(v),
+            DbValuePrimitive::Json(v) => setter.try_set_value(v),
+            DbValuePrimitive::Jsonb(v) => setter.try_set_value(v),
+            DbValuePrimitive::Jsonpath(v) => setter.try_set_value(PgJsonPath(v)),
+            DbValuePrimitive::Xml(v) => setter.try_set_value(PgXml(v)),
+            DbValuePrimitive::Timestamp(v) => setter.try_set_value(v),
+            DbValuePrimitive::Timestamptz(v) => setter.try_set_value(v),
+            DbValuePrimitive::Time(v) => setter.try_set_value(v),
+            DbValuePrimitive::Timetz((time, offset)) => {
+                setter.try_set_value(PgTimeTz { time, offset })
+            }
+            DbValuePrimitive::Date(v) => setter.try_set_value(v),
             DbValuePrimitive::Interval((months, days, microseconds)) => {
-                Ok(query.bind(PgInterval {
+                setter.try_set_value(PgInterval {
                     months,
                     days,
                     microseconds,
-                }))
+                })
             }
-            DbValuePrimitive::Inet(v) => Ok(query.bind(v)),
-            DbValuePrimitive::Cidr(v) => Ok(query.bind(v)),
-            DbValuePrimitive::Macaddr(v) => Ok(query.bind(v)),
-            DbValuePrimitive::Bit(v) => Ok(query.bind(v)),
-            DbValuePrimitive::Varbit(v) => Ok(query.bind(v)),
-            DbValuePrimitive::Int4range(v) => Ok(query.bind(PgRange::from(v))),
-            DbValuePrimitive::Int8range(v) => Ok(query.bind(PgRange::from(v))),
-            DbValuePrimitive::Numrange(v) => Ok(query.bind(PgRange::from(v))),
-            DbValuePrimitive::Tsrange(v) => Ok(query.bind(PgRange::from(v))),
-            DbValuePrimitive::Tstzrange(v) => Ok(query.bind(PgRange::from(v))),
-            DbValuePrimitive::Daterange(v) => Ok(query.bind(PgRange::from(v))),
-            DbValuePrimitive::Money(v) => Ok(query.bind(PgMoney(v))),
-            DbValuePrimitive::Oid(v) => Ok(query.bind(Oid(v))),
-            DbValuePrimitive::CustomEnum(v) => Ok(query.bind(PgEnum(v))),
-            DbValuePrimitive::CustomComposite((n, vs)) => Ok(query.bind(PgCompositeValue(n, vs))),
-            DbValuePrimitive::Null => Ok(query.bind(PgNull {})),
+            DbValuePrimitive::Inet(v) => setter.try_set_value(v),
+            DbValuePrimitive::Cidr(v) => setter.try_set_value(v),
+            DbValuePrimitive::Macaddr(v) => setter.try_set_value(v),
+            DbValuePrimitive::Bit(v) => setter.try_set_value(v),
+            DbValuePrimitive::Varbit(v) => setter.try_set_value(v),
+            DbValuePrimitive::Int4range(v) => setter.try_set_value(PgRange::from(v)),
+            DbValuePrimitive::Int8range(v) => setter.try_set_value(PgRange::from(v)),
+            DbValuePrimitive::Numrange(v) => setter.try_set_value(PgRange::from(v)),
+            DbValuePrimitive::Tsrange(v) => setter.try_set_value(PgRange::from(v)),
+            DbValuePrimitive::Tstzrange(v) => setter.try_set_value(PgRange::from(v)),
+            DbValuePrimitive::Daterange(v) => setter.try_set_value(PgRange::from(v)),
+            DbValuePrimitive::Money(v) => setter.try_set_value(PgMoney(v)),
+            DbValuePrimitive::Oid(v) => setter.try_set_value(Oid(v)),
+            DbValuePrimitive::CustomEnum(v) => setter.try_set_value(PgEnum(v)),
+            DbValuePrimitive::CustomComposite((n, vs)) => {
+                setter.try_set_value(PgCompositeValue(n, vs))
+            }
+            DbValuePrimitive::Null => setter.try_set_value(PgNull {}),
         }
     }
 
-    fn bind_value_array(
-        query: sqlx::query::Query<sqlx::Postgres, sqlx::postgres::PgArguments>,
+    fn set_value_array<'a, S: PgValueSetter<'a>>(
+        setter: &mut S,
         values: Vec<DbValuePrimitive>,
-    ) -> Result<sqlx::query::Query<sqlx::Postgres, sqlx::postgres::PgArguments>, String> {
+    ) -> Result<(), String> {
         if values.is_empty() {
-            Ok(query.bind(PgNull {}))
+            setter.try_set_value(PgNull {})
         } else {
             let first = &values[0];
             match first {
@@ -215,7 +216,7 @@ pub(crate) mod sqlx_rdbms {
                             None
                         }
                     })?;
-                    Ok(query.bind(values))
+                    setter.try_set_value(values)
                 }
                 DbValuePrimitive::Int2(_) => {
                     let values: Vec<i16> = get_plain_values(values, |v| {
@@ -225,7 +226,7 @@ pub(crate) mod sqlx_rdbms {
                             None
                         }
                     })?;
-                    Ok(query.bind(values))
+                    setter.try_set_value(values)
                 }
                 DbValuePrimitive::Int4(_) => {
                     let values: Vec<i32> = get_plain_values(values, |v| {
@@ -235,7 +236,7 @@ pub(crate) mod sqlx_rdbms {
                             None
                         }
                     })?;
-                    Ok(query.bind(values))
+                    setter.try_set_value(values)
                 }
                 DbValuePrimitive::Int8(_) => {
                     let values: Vec<i64> = get_plain_values(values, |v| {
@@ -245,7 +246,7 @@ pub(crate) mod sqlx_rdbms {
                             None
                         }
                     })?;
-                    Ok(query.bind(values))
+                    setter.try_set_value(values)
                 }
                 DbValuePrimitive::Numeric(_) => {
                     let values: Vec<BigDecimal> = get_plain_values(values, |v| {
@@ -255,7 +256,7 @@ pub(crate) mod sqlx_rdbms {
                             None
                         }
                     })?;
-                    Ok(query.bind(values))
+                    setter.try_set_value(values)
                 }
                 DbValuePrimitive::Float4(_) => {
                     let values: Vec<f32> = get_plain_values(values, |v| {
@@ -265,7 +266,7 @@ pub(crate) mod sqlx_rdbms {
                             None
                         }
                     })?;
-                    Ok(query.bind(values))
+                    setter.try_set_value(values)
                 }
 
                 DbValuePrimitive::Float8(_) => {
@@ -276,7 +277,7 @@ pub(crate) mod sqlx_rdbms {
                             None
                         }
                     })?;
-                    Ok(query.bind(values))
+                    setter.try_set_value(values)
                 }
                 DbValuePrimitive::Boolean(_) => {
                     let values: Vec<bool> = get_plain_values(values, |v| {
@@ -286,7 +287,7 @@ pub(crate) mod sqlx_rdbms {
                             None
                         }
                     })?;
-                    Ok(query.bind(values))
+                    setter.try_set_value(values)
                 }
                 DbValuePrimitive::Text(_) => {
                     let values: Vec<String> = get_plain_values(values, |v| {
@@ -296,7 +297,7 @@ pub(crate) mod sqlx_rdbms {
                             None
                         }
                     })?;
-                    Ok(query.bind(values))
+                    setter.try_set_value(values)
                 }
                 DbValuePrimitive::Varchar(_) => {
                     let values: Vec<String> = get_plain_values(values, |v| {
@@ -306,7 +307,7 @@ pub(crate) mod sqlx_rdbms {
                             None
                         }
                     })?;
-                    Ok(query.bind(values))
+                    setter.try_set_value(values)
                 }
                 DbValuePrimitive::Bpchar(_) => {
                     let values: Vec<String> = get_plain_values(values, |v| {
@@ -316,7 +317,7 @@ pub(crate) mod sqlx_rdbms {
                             None
                         }
                     })?;
-                    Ok(query.bind(values))
+                    setter.try_set_value(values)
                 }
                 DbValuePrimitive::Bytea(_) => {
                     let values: Vec<Vec<u8>> = get_plain_values(values, |v| {
@@ -326,7 +327,7 @@ pub(crate) mod sqlx_rdbms {
                             None
                         }
                     })?;
-                    Ok(query.bind(values))
+                    setter.try_set_value(values)
                 }
                 DbValuePrimitive::Uuid(_) => {
                     let values: Vec<Uuid> = get_plain_values(values, |v| {
@@ -336,7 +337,7 @@ pub(crate) mod sqlx_rdbms {
                             None
                         }
                     })?;
-                    Ok(query.bind(values))
+                    setter.try_set_value(values)
                 }
                 DbValuePrimitive::Json(_) => {
                     let values: Vec<serde_json::Value> = get_plain_values(values, |v| {
@@ -346,7 +347,7 @@ pub(crate) mod sqlx_rdbms {
                             None
                         }
                     })?;
-                    Ok(query.bind(values))
+                    setter.try_set_value(values)
                 }
                 DbValuePrimitive::Jsonb(_) => {
                     let values: Vec<serde_json::Value> = get_plain_values(values, |v| {
@@ -356,7 +357,7 @@ pub(crate) mod sqlx_rdbms {
                             None
                         }
                     })?;
-                    Ok(query.bind(values))
+                    setter.try_set_value(values)
                 }
                 DbValuePrimitive::Jsonpath(_) => {
                     let values: Vec<PgJsonPath> = get_plain_values(values, |v| {
@@ -366,7 +367,7 @@ pub(crate) mod sqlx_rdbms {
                             None
                         }
                     })?;
-                    Ok(query.bind(values))
+                    setter.try_set_value(values)
                 }
                 DbValuePrimitive::Xml(_) => {
                     let values: Vec<PgXml> = get_plain_values(values, |v| {
@@ -376,7 +377,7 @@ pub(crate) mod sqlx_rdbms {
                             None
                         }
                     })?;
-                    Ok(query.bind(values))
+                    setter.try_set_value(values)
                 }
                 DbValuePrimitive::Timestamptz(_) => {
                     let values: Vec<_> = get_plain_values(values, |v| {
@@ -386,7 +387,7 @@ pub(crate) mod sqlx_rdbms {
                             None
                         }
                     })?;
-                    Ok(query.bind(values))
+                    setter.try_set_value(values)
                 }
                 DbValuePrimitive::Timestamp(_) => {
                     let values: Vec<_> = get_plain_values(values, |v| {
@@ -396,7 +397,7 @@ pub(crate) mod sqlx_rdbms {
                             None
                         }
                     })?;
-                    Ok(query.bind(values))
+                    setter.try_set_value(values)
                 }
                 DbValuePrimitive::Date(_) => {
                     let values: Vec<_> = get_plain_values(values, |v| {
@@ -406,7 +407,7 @@ pub(crate) mod sqlx_rdbms {
                             None
                         }
                     })?;
-                    Ok(query.bind(values))
+                    setter.try_set_value(values)
                 }
                 DbValuePrimitive::Time(_) => {
                     let values: Vec<_> = get_plain_values(values, |v| {
@@ -416,7 +417,7 @@ pub(crate) mod sqlx_rdbms {
                             None
                         }
                     })?;
-                    Ok(query.bind(values))
+                    setter.try_set_value(values)
                 }
                 DbValuePrimitive::Timetz(_) => {
                     let values: Vec<_> = get_plain_values(values, |v| {
@@ -426,7 +427,7 @@ pub(crate) mod sqlx_rdbms {
                             None
                         }
                     })?;
-                    Ok(query.bind(values))
+                    setter.try_set_value(values)
                 }
                 DbValuePrimitive::Interval(_) => {
                     let values: Vec<_> = get_plain_values(values, |v| {
@@ -440,7 +441,7 @@ pub(crate) mod sqlx_rdbms {
                             None
                         }
                     })?;
-                    Ok(query.bind(values))
+                    setter.try_set_value(values)
                 }
                 DbValuePrimitive::Inet(_) => {
                     let values: Vec<IpAddr> = get_plain_values(values, |v| {
@@ -450,7 +451,7 @@ pub(crate) mod sqlx_rdbms {
                             None
                         }
                     })?;
-                    Ok(query.bind(values))
+                    setter.try_set_value(values)
                 }
                 DbValuePrimitive::Cidr(_) => {
                     let values: Vec<IpAddr> = get_plain_values(values, |v| {
@@ -460,7 +461,7 @@ pub(crate) mod sqlx_rdbms {
                             None
                         }
                     })?;
-                    Ok(query.bind(values))
+                    setter.try_set_value(values)
                 }
                 DbValuePrimitive::Macaddr(_) => {
                     let values: Vec<MacAddress> = get_plain_values(values, |v| {
@@ -470,7 +471,7 @@ pub(crate) mod sqlx_rdbms {
                             None
                         }
                     })?;
-                    Ok(query.bind(values))
+                    setter.try_set_value(values)
                 }
                 DbValuePrimitive::Bit(_) => {
                     let values: Vec<BitVec> = get_plain_values(values, |v| {
@@ -480,7 +481,7 @@ pub(crate) mod sqlx_rdbms {
                             None
                         }
                     })?;
-                    Ok(query.bind(values))
+                    setter.try_set_value(values)
                 }
                 DbValuePrimitive::Varbit(_) => {
                     let values: Vec<BitVec> = get_plain_values(values, |v| {
@@ -490,7 +491,7 @@ pub(crate) mod sqlx_rdbms {
                             None
                         }
                     })?;
-                    Ok(query.bind(values))
+                    setter.try_set_value(values)
                 }
                 DbValuePrimitive::Int4range(_) => {
                     let values: Vec<PgRange<i32>> = get_plain_values(values, |v| {
@@ -500,7 +501,7 @@ pub(crate) mod sqlx_rdbms {
                             None
                         }
                     })?;
-                    Ok(query.bind(values))
+                    setter.try_set_value(values)
                 }
                 DbValuePrimitive::Int8range(_) => {
                     let values: Vec<PgRange<i64>> = get_plain_values(values, |v| {
@@ -510,7 +511,7 @@ pub(crate) mod sqlx_rdbms {
                             None
                         }
                     })?;
-                    Ok(query.bind(values))
+                    setter.try_set_value(values)
                 }
                 DbValuePrimitive::Numrange(_) => {
                     let values: Vec<PgRange<BigDecimal>> = get_plain_values(values, |v| {
@@ -520,7 +521,7 @@ pub(crate) mod sqlx_rdbms {
                             None
                         }
                     })?;
-                    Ok(query.bind(values))
+                    setter.try_set_value(values)
                 }
                 DbValuePrimitive::Tsrange(_) => {
                     let values: Vec<PgRange<chrono::NaiveDateTime>> =
@@ -531,7 +532,7 @@ pub(crate) mod sqlx_rdbms {
                                 None
                             }
                         })?;
-                    Ok(query.bind(values))
+                    setter.try_set_value(values)
                 }
                 DbValuePrimitive::Tstzrange(_) => {
                     let values: Vec<PgRange<chrono::DateTime<chrono::Utc>>> =
@@ -542,7 +543,7 @@ pub(crate) mod sqlx_rdbms {
                                 None
                             }
                         })?;
-                    Ok(query.bind(values))
+                    setter.try_set_value(values)
                 }
                 DbValuePrimitive::Daterange(_) => {
                     let values: Vec<PgRange<chrono::NaiveDate>> = get_plain_values(values, |v| {
@@ -552,7 +553,7 @@ pub(crate) mod sqlx_rdbms {
                             None
                         }
                     })?;
-                    Ok(query.bind(values))
+                    setter.try_set_value(values)
                 }
                 DbValuePrimitive::Oid(_) => {
                     let values: Vec<_> = get_plain_values(values, |v| {
@@ -562,7 +563,7 @@ pub(crate) mod sqlx_rdbms {
                             None
                         }
                     })?;
-                    Ok(query.bind(values))
+                    setter.try_set_value(values)
                 }
                 DbValuePrimitive::Money(_) => {
                     let values: Vec<_> = get_plain_values(values, |v| {
@@ -572,7 +573,7 @@ pub(crate) mod sqlx_rdbms {
                             None
                         }
                     })?;
-                    Ok(query.bind(values))
+                    setter.try_set_value(values)
                 }
                 DbValuePrimitive::CustomEnum(_) => {
                     let values: Vec<_> = get_plain_values(values, |v| {
@@ -582,7 +583,7 @@ pub(crate) mod sqlx_rdbms {
                             None
                         }
                     })?;
-                    Ok(query.bind(values))
+                    setter.try_set_value(values)
                 }
                 DbValuePrimitive::CustomComposite(_) => {
                     let values: Vec<_> = get_plain_values(values, |v| {
@@ -592,7 +593,7 @@ pub(crate) mod sqlx_rdbms {
                             None
                         }
                     })?;
-                    Ok(query.bind(PgCompositeValues(values)))
+                    setter.try_set_value(PgCompositeValues(values))
                 }
                 DbValuePrimitive::Null => Err(format!(
                     "Array param element '{}' with index 0 is not supported",
@@ -628,364 +629,352 @@ pub(crate) mod sqlx_rdbms {
             let count = value.len();
             let mut values = Vec::with_capacity(count);
             for index in 0..count {
-                values.push(get_db_value(index, value)?);
+                values.push(get_column_db_value(index, value)?);
             }
             Ok(DbRow { values })
         }
     }
 
-    fn get_db_value(index: usize, row: &sqlx::postgres::PgRow) -> Result<DbValue, String> {
+    fn get_column_db_value(index: usize, row: &sqlx::postgres::PgRow) -> Result<DbValue, String> {
         let column = &row.columns()[index];
         let db_type: DbColumnType = column.type_info().try_into()?;
+        let mut getter = PgRowColumnValueGetter::new(index, row);
+        get_db_value(&db_type, &mut getter)
+    }
+
+    fn get_db_value<G: PgValueGetter>(
+        db_type: &DbColumnType,
+        getter: &mut G,
+    ) -> Result<DbValue, String> {
         match db_type {
-            DbColumnType::Primitive(t) => get_db_value_primitive(index, t, row),
-            DbColumnType::Array(t) => get_db_value_array(index, t, row),
+            DbColumnType::Primitive(t) => get_db_value_primitive(t, getter),
+            DbColumnType::Array(t) => get_db_value_array(t, getter),
         }
     }
 
-    fn get_db_value_primitive(
-        index: usize,
-        db_type: DbColumnTypePrimitive,
-        row: &sqlx::postgres::PgRow,
+    fn get_db_value_primitive<G: PgValueGetter>(
+        db_type: &DbColumnTypePrimitive,
+        getter: &mut G,
     ) -> Result<DbValue, String> {
         let value = match db_type {
             DbColumnTypePrimitive::Boolean => {
-                let v: Option<bool> = row.try_get(index).map_err(|e| e.to_string())?;
+                let v: Option<bool> = getter.try_get_value()?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Boolean))
             }
             DbColumnTypePrimitive::Character => {
-                let v: Option<i8> = row.try_get(index).map_err(|e| e.to_string())?;
+                let v: Option<i8> = getter.try_get_value()?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Character))
             }
             DbColumnTypePrimitive::Int2 => {
-                let v: Option<i16> = row.try_get(index).map_err(|e| e.to_string())?;
+                let v: Option<i16> = getter.try_get_value()?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Int2))
             }
             DbColumnTypePrimitive::Int4 => {
-                let v: Option<i32> = row.try_get(index).map_err(|e| e.to_string())?;
+                let v: Option<i32> = getter.try_get_value()?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Int4))
             }
             DbColumnTypePrimitive::Int8 => {
-                let v: Option<i64> = row.try_get(index).map_err(|e| e.to_string())?;
+                let v: Option<i64> = getter.try_get_value()?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Int8))
             }
             DbColumnTypePrimitive::Float4 => {
-                let v: Option<f32> = row.try_get(index).map_err(|e| e.to_string())?;
+                let v: Option<f32> = getter.try_get_value()?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Float4))
             }
             DbColumnTypePrimitive::Float8 => {
-                let v: Option<f64> = row.try_get(index).map_err(|e| e.to_string())?;
+                let v: Option<f64> = getter.try_get_value()?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Float8))
             }
             DbColumnTypePrimitive::Numeric => {
-                let v: Option<BigDecimal> = row.try_get(index).map_err(|e| e.to_string())?;
+                let v: Option<BigDecimal> = getter.try_get_value()?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Numeric))
             }
             DbColumnTypePrimitive::Text => {
-                let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
+                let v: Option<String> = getter.try_get_value()?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Text))
             }
             DbColumnTypePrimitive::Varchar => {
-                let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
+                let v: Option<String> = getter.try_get_value()?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Varchar))
             }
             DbColumnTypePrimitive::Bpchar => {
-                let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
+                let v: Option<String> = getter.try_get_value()?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Bpchar))
             }
             DbColumnTypePrimitive::Json => {
-                let v: Option<serde_json::Value> = row.try_get(index).map_err(|e| e.to_string())?;
+                let v: Option<serde_json::Value> = getter.try_get_value()?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Json))
             }
             DbColumnTypePrimitive::Jsonb => {
-                let v: Option<serde_json::Value> = row.try_get(index).map_err(|e| e.to_string())?;
+                let v: Option<serde_json::Value> = getter.try_get_value()?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Jsonb))
             }
             DbColumnTypePrimitive::Jsonpath => {
-                let v: Option<PgJsonPath> = row.try_get(index).map_err(|e| e.to_string())?;
+                let v: Option<PgJsonPath> = getter.try_get_value()?;
                 DbValue::primitive_from(v.map(|v| DbValuePrimitive::Jsonpath(v.into())))
             }
             DbColumnTypePrimitive::Xml => {
-                let v: Option<PgXml> = row.try_get(index).map_err(|e| e.to_string())?;
+                let v: Option<PgXml> = getter.try_get_value()?;
                 DbValue::primitive_from(v.map(|v| DbValuePrimitive::Xml(v.0)))
             }
             DbColumnTypePrimitive::Bytea => {
-                let v: Option<Vec<u8>> = row.try_get(index).map_err(|e| e.to_string())?;
+                let v: Option<Vec<u8>> = getter.try_get_value()?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Bytea))
             }
             DbColumnTypePrimitive::Uuid => {
-                let v: Option<Uuid> = row.try_get(index).map_err(|e| e.to_string())?;
+                let v: Option<Uuid> = getter.try_get_value()?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Uuid))
             }
             DbColumnTypePrimitive::Interval => {
-                let v: Option<PgInterval> = row.try_get(index).map_err(|e| e.to_string())?;
+                let v: Option<PgInterval> = getter.try_get_value()?;
                 DbValue::primitive_from(
                     v.map(|v| DbValuePrimitive::Interval((v.months, v.days, v.microseconds))),
                 )
             }
             DbColumnTypePrimitive::Timestamp => {
-                let v: Option<chrono::NaiveDateTime> =
-                    row.try_get(index).map_err(|e| e.to_string())?;
+                let v: Option<chrono::NaiveDateTime> = getter.try_get_value()?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Timestamp))
             }
             DbColumnTypePrimitive::Timestamptz => {
-                let v: Option<chrono::DateTime<chrono::Utc>> =
-                    row.try_get(index).map_err(|e| e.to_string())?;
+                let v: Option<chrono::DateTime<chrono::Utc>> = getter.try_get_value()?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Timestamptz))
             }
             DbColumnTypePrimitive::Date => {
-                let v: Option<chrono::NaiveDate> = row.try_get(index).map_err(|e| e.to_string())?;
+                let v: Option<chrono::NaiveDate> = getter.try_get_value()?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Date))
             }
             DbColumnTypePrimitive::Time => {
-                let v: Option<chrono::NaiveTime> = row.try_get(index).map_err(|e| e.to_string())?;
+                let v: Option<chrono::NaiveTime> = getter.try_get_value()?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Time))
             }
             DbColumnTypePrimitive::Timetz => {
                 let v: Option<PgTimeTz<chrono::NaiveTime, chrono::FixedOffset>> =
-                    row.try_get(index).map_err(|e| e.to_string())?;
+                    getter.try_get_value()?;
                 DbValue::primitive_from(v.map(|v| DbValuePrimitive::Timetz((v.time, v.offset))))
             }
             DbColumnTypePrimitive::Inet => {
-                let v: Option<IpAddr> = row.try_get(index).map_err(|e| e.to_string())?;
+                let v: Option<IpAddr> = getter.try_get_value()?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Inet))
             }
             DbColumnTypePrimitive::Cidr => {
-                let v: Option<IpAddr> = row.try_get(index).map_err(|e| e.to_string())?;
+                let v: Option<IpAddr> = getter.try_get_value()?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Cidr))
             }
             DbColumnTypePrimitive::Macaddr => {
-                let v: Option<MacAddress> = row.try_get(index).map_err(|e| e.to_string())?;
+                let v: Option<MacAddress> = getter.try_get_value()?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Macaddr))
             }
             DbColumnTypePrimitive::Bit => {
-                let v: Option<BitVec> = row.try_get(index).map_err(|e| e.to_string())?;
+                let v: Option<BitVec> = getter.try_get_value()?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Bit))
             }
             DbColumnTypePrimitive::Varbit => {
-                let v: Option<BitVec> = row.try_get(index).map_err(|e| e.to_string())?;
+                let v: Option<BitVec> = getter.try_get_value()?;
                 DbValue::primitive_from(v.map(DbValuePrimitive::Varbit))
             }
             DbColumnTypePrimitive::Int4range => {
-                let v: Option<PgRange<i32>> = row.try_get(index).map_err(|e| e.to_string())?;
+                let v: Option<PgRange<i32>> = getter.try_get_value()?;
                 DbValue::primitive_from(v.map(|v| DbValuePrimitive::Int4range(get_bounds(v))))
             }
             DbColumnTypePrimitive::Int8range => {
-                let v: Option<PgRange<i64>> = row.try_get(index).map_err(|e| e.to_string())?;
+                let v: Option<PgRange<i64>> = getter.try_get_value()?;
                 DbValue::primitive_from(v.map(|v| DbValuePrimitive::Int8range(get_bounds(v))))
             }
             DbColumnTypePrimitive::Numrange => {
-                let v: Option<PgRange<BigDecimal>> =
-                    row.try_get(index).map_err(|e| e.to_string())?;
+                let v: Option<PgRange<BigDecimal>> = getter.try_get_value()?;
                 DbValue::primitive_from(v.map(|v| DbValuePrimitive::Numrange(get_bounds(v))))
             }
             DbColumnTypePrimitive::Tsrange => {
-                let v: Option<PgRange<chrono::NaiveDateTime>> =
-                    row.try_get(index).map_err(|e| e.to_string())?;
+                let v: Option<PgRange<chrono::NaiveDateTime>> = getter.try_get_value()?;
                 DbValue::primitive_from(v.map(|v| DbValuePrimitive::Tsrange(get_bounds(v))))
             }
             DbColumnTypePrimitive::Tstzrange => {
-                let v: Option<PgRange<chrono::DateTime<chrono::Utc>>> =
-                    row.try_get(index).map_err(|e| e.to_string())?;
+                let v: Option<PgRange<chrono::DateTime<chrono::Utc>>> = getter.try_get_value()?;
                 DbValue::primitive_from(v.map(|v| DbValuePrimitive::Tstzrange(get_bounds(v))))
             }
             DbColumnTypePrimitive::Daterange => {
-                let v: Option<PgRange<chrono::NaiveDate>> =
-                    row.try_get(index).map_err(|e| e.to_string())?;
+                let v: Option<PgRange<chrono::NaiveDate>> = getter.try_get_value()?;
                 DbValue::primitive_from(v.map(|v| DbValuePrimitive::Daterange(get_bounds(v))))
             }
             DbColumnTypePrimitive::Oid => {
-                let v: Option<Oid> = row.try_get(index).map_err(|e| e.to_string())?;
+                let v: Option<Oid> = getter.try_get_value()?;
                 DbValue::primitive_from(v.map(|v| DbValuePrimitive::Oid(v.0)))
             }
             DbColumnTypePrimitive::Money => {
-                let v: Option<PgMoney> = row.try_get(index).map_err(|e| e.to_string())?;
+                let v: Option<PgMoney> = getter.try_get_value()?;
                 DbValue::primitive_from(v.map(|v| DbValuePrimitive::Money(v.0)))
             }
             DbColumnTypePrimitive::CustomEnum(_) => {
-                let v: Option<PgEnum> = row.try_get(index).map_err(|e| e.to_string())?;
+                let v: Option<PgEnum> = getter.try_get_value()?;
                 DbValue::primitive_from(v.map(|v| DbValuePrimitive::CustomEnum(v.0)))
             }
             DbColumnTypePrimitive::CustomComposite(_) => {
-                let v: Option<PgCompositeValue> = row.try_get(index).map_err(|e| e.to_string())?;
+                let v: Option<PgCompositeValue> = getter.try_get_value()?;
                 DbValue::primitive_from(v.map(|v| DbValuePrimitive::CustomComposite((v.0, v.1))))
             }
         };
         Ok(value)
     }
 
-    fn get_db_value_array(
-        index: usize,
-        db_type: DbColumnTypePrimitive,
-        row: &sqlx::postgres::PgRow,
+    fn get_db_value_array<G: PgValueGetter>(
+        db_type: &DbColumnTypePrimitive,
+        getter: &mut G,
     ) -> Result<DbValue, String> {
         let value = match db_type {
             DbColumnTypePrimitive::Boolean => {
-                let vs: Option<Vec<bool>> = row.try_get(index).map_err(|e| e.to_string())?;
+                let vs: Option<Vec<bool>> = getter.try_get_value()?;
                 DbValue::array_from(vs, DbValuePrimitive::Boolean)
             }
             DbColumnTypePrimitive::Character => {
-                let vs: Option<Vec<i8>> = row.try_get(index).map_err(|e| e.to_string())?;
+                let vs: Option<Vec<i8>> = getter.try_get_value()?;
                 DbValue::array_from(vs, DbValuePrimitive::Character)
             }
             DbColumnTypePrimitive::Int2 => {
-                let vs: Option<Vec<i16>> = row.try_get(index).map_err(|e| e.to_string())?;
+                let vs: Option<Vec<i16>> = getter.try_get_value()?;
                 DbValue::array_from(vs, DbValuePrimitive::Int2)
             }
             DbColumnTypePrimitive::Int4 => {
-                let vs: Option<Vec<i32>> = row.try_get(index).map_err(|e| e.to_string())?;
+                let vs: Option<Vec<i32>> = getter.try_get_value()?;
                 DbValue::array_from(vs, DbValuePrimitive::Int4)
             }
             DbColumnTypePrimitive::Int8 => {
-                let vs: Option<Vec<i64>> = row.try_get(index).map_err(|e| e.to_string())?;
+                let vs: Option<Vec<i64>> = getter.try_get_value()?;
                 DbValue::array_from(vs, DbValuePrimitive::Int8)
             }
             DbColumnTypePrimitive::Float4 => {
-                let vs: Option<Vec<f32>> = row.try_get(index).map_err(|e| e.to_string())?;
+                let vs: Option<Vec<f32>> = getter.try_get_value()?;
                 DbValue::array_from(vs, DbValuePrimitive::Float4)
             }
             DbColumnTypePrimitive::Float8 => {
-                let vs: Option<Vec<f64>> = row.try_get(index).map_err(|e| e.to_string())?;
+                let vs: Option<Vec<f64>> = getter.try_get_value()?;
                 DbValue::array_from(vs, DbValuePrimitive::Float8)
             }
             DbColumnTypePrimitive::Numeric => {
-                let vs: Option<Vec<BigDecimal>> = row.try_get(index).map_err(|e| e.to_string())?;
+                let vs: Option<Vec<BigDecimal>> = getter.try_get_value()?;
                 DbValue::array_from(vs, DbValuePrimitive::Numeric)
             }
             DbColumnTypePrimitive::Text => {
-                let vs: Option<Vec<String>> = row.try_get(index).map_err(|e| e.to_string())?;
+                let vs: Option<Vec<String>> = getter.try_get_value()?;
                 DbValue::array_from(vs, DbValuePrimitive::Text)
             }
             DbColumnTypePrimitive::Varchar => {
-                let vs: Option<Vec<String>> = row.try_get(index).map_err(|e| e.to_string())?;
+                let vs: Option<Vec<String>> = getter.try_get_value()?;
                 DbValue::array_from(vs, DbValuePrimitive::Varchar)
             }
             DbColumnTypePrimitive::Bpchar => {
-                let vs: Option<Vec<String>> = row.try_get(index).map_err(|e| e.to_string())?;
+                let vs: Option<Vec<String>> = getter.try_get_value()?;
                 DbValue::array_from(vs, DbValuePrimitive::Bpchar)
             }
             DbColumnTypePrimitive::Json => {
-                let vs: Option<Vec<serde_json::Value>> =
-                    row.try_get(index).map_err(|e| e.to_string())?;
+                let vs: Option<Vec<serde_json::Value>> = getter.try_get_value()?;
                 DbValue::array_from(vs, DbValuePrimitive::Json)
             }
             DbColumnTypePrimitive::Jsonb => {
-                let vs: Option<Vec<serde_json::Value>> =
-                    row.try_get(index).map_err(|e| e.to_string())?;
+                let vs: Option<Vec<serde_json::Value>> = getter.try_get_value()?;
                 DbValue::array_from(vs, DbValuePrimitive::Jsonb)
             }
             DbColumnTypePrimitive::Jsonpath => {
-                let vs: Option<Vec<PgJsonPath>> = row.try_get(index).map_err(|e| e.to_string())?;
+                let vs: Option<Vec<PgJsonPath>> = getter.try_get_value()?;
                 DbValue::array_from(vs, |v| DbValuePrimitive::Jsonpath(v.into()))
             }
             DbColumnTypePrimitive::Xml => {
-                let vs: Option<Vec<PgXml>> = row.try_get(index).map_err(|e| e.to_string())?;
+                let vs: Option<Vec<PgXml>> = getter.try_get_value()?;
                 DbValue::array_from(vs, |v| DbValuePrimitive::Xml(v.0))
             }
             DbColumnTypePrimitive::Bytea => {
-                let vs: Option<Vec<Vec<u8>>> = row.try_get(index).map_err(|e| e.to_string())?;
+                let vs: Option<Vec<Vec<u8>>> = getter.try_get_value()?;
                 DbValue::array_from(vs, DbValuePrimitive::Bytea)
             }
             DbColumnTypePrimitive::Uuid => {
-                let vs: Option<Vec<Uuid>> = row.try_get(index).map_err(|e| e.to_string())?;
+                let vs: Option<Vec<Uuid>> = getter.try_get_value()?;
                 DbValue::array_from(vs, DbValuePrimitive::Uuid)
             }
             DbColumnTypePrimitive::Interval => {
-                let vs: Option<Vec<PgInterval>> = row.try_get(index).map_err(|e| e.to_string())?;
+                let vs: Option<Vec<PgInterval>> = getter.try_get_value()?;
                 DbValue::array_from(vs, |v| {
                     DbValuePrimitive::Interval((v.months, v.days, v.microseconds))
                 })
             }
             DbColumnTypePrimitive::Timestamp => {
-                let vs: Option<Vec<chrono::NaiveDateTime>> =
-                    row.try_get(index).map_err(|e| e.to_string())?;
+                let vs: Option<Vec<chrono::NaiveDateTime>> = getter.try_get_value()?;
                 DbValue::array_from(vs, DbValuePrimitive::Timestamp)
             }
             DbColumnTypePrimitive::Timestamptz => {
-                let vs: Option<Vec<chrono::DateTime<chrono::Utc>>> =
-                    row.try_get(index).map_err(|e| e.to_string())?;
+                let vs: Option<Vec<chrono::DateTime<chrono::Utc>>> = getter.try_get_value()?;
                 DbValue::array_from(vs, DbValuePrimitive::Timestamptz)
             }
             DbColumnTypePrimitive::Date => {
-                let vs: Option<Vec<chrono::NaiveDate>> =
-                    row.try_get(index).map_err(|e| e.to_string())?;
+                let vs: Option<Vec<chrono::NaiveDate>> = getter.try_get_value()?;
                 DbValue::array_from(vs, DbValuePrimitive::Date)
             }
             DbColumnTypePrimitive::Time => {
-                let vs: Option<Vec<chrono::NaiveTime>> =
-                    row.try_get(index).map_err(|e| e.to_string())?;
+                let vs: Option<Vec<chrono::NaiveTime>> = getter.try_get_value()?;
                 DbValue::array_from(vs, DbValuePrimitive::Time)
             }
             DbColumnTypePrimitive::Timetz => {
                 let vs: Option<Vec<PgTimeTz<chrono::NaiveTime, chrono::FixedOffset>>> =
-                    row.try_get(index).map_err(|e| e.to_string())?;
+                    getter.try_get_value()?;
                 DbValue::array_from(vs, |v| DbValuePrimitive::Timetz((v.time, v.offset)))
             }
             DbColumnTypePrimitive::Inet => {
-                let vs: Option<Vec<IpAddr>> = row.try_get(index).map_err(|e| e.to_string())?;
+                let vs: Option<Vec<IpAddr>> = getter.try_get_value()?;
                 DbValue::array_from(vs, DbValuePrimitive::Inet)
             }
             DbColumnTypePrimitive::Cidr => {
-                let vs: Option<Vec<IpAddr>> = row.try_get(index).map_err(|e| e.to_string())?;
+                let vs: Option<Vec<IpAddr>> = getter.try_get_value()?;
                 DbValue::array_from(vs, DbValuePrimitive::Cidr)
             }
             DbColumnTypePrimitive::Macaddr => {
-                let vs: Option<Vec<MacAddress>> = row.try_get(index).map_err(|e| e.to_string())?;
+                let vs: Option<Vec<MacAddress>> = getter.try_get_value()?;
                 DbValue::array_from(vs, DbValuePrimitive::Macaddr)
             }
             DbColumnTypePrimitive::Bit => {
-                let vs: Option<Vec<BitVec>> = row.try_get(index).map_err(|e| e.to_string())?;
+                let vs: Option<Vec<BitVec>> = getter.try_get_value()?;
                 DbValue::array_from(vs, DbValuePrimitive::Bit)
             }
             DbColumnTypePrimitive::Varbit => {
-                let vs: Option<Vec<BitVec>> = row.try_get(index).map_err(|e| e.to_string())?;
+                let vs: Option<Vec<BitVec>> = getter.try_get_value()?;
                 DbValue::array_from(vs, DbValuePrimitive::Varbit)
             }
             DbColumnTypePrimitive::Int4range => {
-                let vs: Option<Vec<PgRange<i32>>> =
-                    row.try_get(index).map_err(|e| e.to_string())?;
+                let vs: Option<Vec<PgRange<i32>>> = getter.try_get_value()?;
                 DbValue::array_from(vs, |v| DbValuePrimitive::Int4range(get_bounds(v)))
             }
             DbColumnTypePrimitive::Int8range => {
-                let vs: Option<Vec<PgRange<i64>>> =
-                    row.try_get(index).map_err(|e| e.to_string())?;
+                let vs: Option<Vec<PgRange<i64>>> = getter.try_get_value()?;
                 DbValue::array_from(vs, |v| DbValuePrimitive::Int8range(get_bounds(v)))
             }
             DbColumnTypePrimitive::Numrange => {
-                let vs: Option<Vec<PgRange<BigDecimal>>> =
-                    row.try_get(index).map_err(|e| e.to_string())?;
+                let vs: Option<Vec<PgRange<BigDecimal>>> = getter.try_get_value()?;
                 DbValue::array_from(vs, |v| DbValuePrimitive::Numrange(get_bounds(v)))
             }
             DbColumnTypePrimitive::Tsrange => {
-                let vs: Option<Vec<PgRange<chrono::NaiveDateTime>>> =
-                    row.try_get(index).map_err(|e| e.to_string())?;
+                let vs: Option<Vec<PgRange<chrono::NaiveDateTime>>> = getter.try_get_value()?;
                 DbValue::array_from(vs, |v| DbValuePrimitive::Tsrange(get_bounds(v)))
             }
             DbColumnTypePrimitive::Tstzrange => {
                 let vs: Option<Vec<PgRange<chrono::DateTime<chrono::Utc>>>> =
-                    row.try_get(index).map_err(|e| e.to_string())?;
+                    getter.try_get_value()?;
                 DbValue::array_from(vs, |v| DbValuePrimitive::Tstzrange(get_bounds(v)))
             }
             DbColumnTypePrimitive::Daterange => {
-                let vs: Option<Vec<PgRange<chrono::NaiveDate>>> =
-                    row.try_get(index).map_err(|e| e.to_string())?;
+                let vs: Option<Vec<PgRange<chrono::NaiveDate>>> = getter.try_get_value()?;
                 DbValue::array_from(vs, |v| DbValuePrimitive::Daterange(get_bounds(v)))
             }
             DbColumnTypePrimitive::Money => {
-                let vs: Option<Vec<PgMoney>> = row.try_get(index).map_err(|e| e.to_string())?;
+                let vs: Option<Vec<PgMoney>> = getter.try_get_value()?;
                 DbValue::array_from(vs, |v| DbValuePrimitive::Money(v.0))
             }
             DbColumnTypePrimitive::Oid => {
-                let vs: Option<Vec<Oid>> = row.try_get(index).map_err(|e| e.to_string())?;
+                let vs: Option<Vec<Oid>> = getter.try_get_value()?;
                 DbValue::array_from(vs, |v| DbValuePrimitive::Oid(v.0))
             }
             DbColumnTypePrimitive::CustomEnum(_) => {
-                let vs: Option<Vec<PgEnum>> = row.try_get(index).map_err(|e| e.to_string())?;
+                let vs: Option<Vec<PgEnum>> = getter.try_get_value()?;
                 DbValue::array_from(vs, |v| DbValuePrimitive::CustomEnum(v.0))
             }
             DbColumnTypePrimitive::CustomComposite(_) => {
-                let vs: Option<PgCompositeValues> =
-                    row.try_get(index).map_err(|e| e.to_string())?;
+                let vs: Option<PgCompositeValues> = getter.try_get_value()?;
                 DbValue::array_from(vs.map(|v| v.0), |v| {
                     DbValuePrimitive::CustomComposite((v.0, v.1))
                 })
@@ -1191,6 +1180,66 @@ pub(crate) mod sqlx_rdbms {
         (range.start, range.end)
     }
 
+    trait PgValueGetter {
+        fn try_get_value<T>(&mut self) -> Result<T, String>
+        where
+            T: for<'a> Decode<'a, sqlx::Postgres> + Type<sqlx::Postgres>;
+    }
+
+    trait PgValueSetter<'a> {
+        fn try_set_value<T>(&mut self, value: T) -> Result<(), String>
+        where
+            T: 'a + Encode<'a, sqlx::Postgres> + Type<sqlx::Postgres>;
+    }
+
+    impl<'a> PgValueSetter<'a> for sqlx::query::Query<'a, sqlx::Postgres, sqlx::postgres::PgArguments> {
+        fn try_set_value<T>(&mut self, value: T) -> Result<(), String>
+        where
+            T: 'a + Encode<'a, sqlx::Postgres> + Type<sqlx::Postgres>,
+        {
+            self.try_bind(value).map_err(|e| e.to_string())
+        }
+    }
+
+    impl<'a> PgValueSetter<'a> for sqlx::postgres::types::PgRecordEncoder<'a> {
+        fn try_set_value<T>(&mut self, value: T) -> Result<(), String>
+        where
+            T: 'a + Encode<'a, sqlx::Postgres> + Type<sqlx::Postgres>,
+        {
+            let _ = self.encode(value).map_err(|e| e.to_string());
+            Ok(())
+        }
+    }
+
+    impl PgValueGetter for sqlx::postgres::types::PgRecordDecoder<'_> {
+        fn try_get_value<T>(&mut self) -> Result<T, String>
+        where
+            T: for<'a> Decode<'a, sqlx::Postgres> + Type<sqlx::Postgres>,
+        {
+            self.try_decode::<T>().map_err(|e| e.to_string())
+        }
+    }
+
+    struct PgRowColumnValueGetter<'r> {
+        index: usize,
+        row: &'r sqlx::postgres::PgRow,
+    }
+
+    impl<'r> PgRowColumnValueGetter<'r> {
+        fn new(index: usize, row: &'r sqlx::postgres::PgRow) -> Self {
+            Self { index, row }
+        }
+    }
+
+    impl PgValueGetter for PgRowColumnValueGetter<'_> {
+        fn try_get_value<T>(&mut self) -> Result<T, String>
+        where
+            T: for<'a> Decode<'a, sqlx::Postgres> + Type<sqlx::Postgres>,
+        {
+            self.row.try_get(self.index).map_err(|e| e.to_string())
+        }
+    }
+
     struct PgEnum(String);
 
     impl From<PgEnum> for String {
@@ -1230,7 +1279,7 @@ pub(crate) mod sqlx_rdbms {
         }
     }
 
-    impl<'r> sqlx::Encode<'r, sqlx::Postgres> for PgEnum {
+    impl sqlx::Encode<'_, sqlx::Postgres> for PgEnum {
         fn encode_by_ref(
             &self,
             buf: &mut sqlx::postgres::PgArgumentBuffer,
@@ -1265,13 +1314,12 @@ pub(crate) mod sqlx_rdbms {
         ) -> Result<Self, Box<dyn std::error::Error + 'static + Send + Sync>> {
             let mut buf = value.as_bytes()?;
             buf = &buf[1..];
-            let v: String =
-                serde_json::from_slice(buf).map_err(Into::<sqlx::error::BoxDynError>::into)?;
+            let v: String = serde_json::from_slice(buf)?;
             Ok(PgJsonPath(v))
         }
     }
 
-    impl<'r> sqlx::Encode<'r, sqlx::Postgres> for PgJsonPath {
+    impl sqlx::Encode<'_, sqlx::Postgres> for PgJsonPath {
         fn encode_by_ref(
             &self,
             buf: &mut sqlx::postgres::PgArgumentBuffer,
@@ -1284,7 +1332,7 @@ pub(crate) mod sqlx_rdbms {
 
     struct PgNull;
 
-    impl<'r> sqlx::Encode<'r, sqlx::Postgres> for PgNull {
+    impl sqlx::Encode<'_, sqlx::Postgres> for PgNull {
         fn encode_by_ref(
             &self,
             _buf: &mut sqlx::postgres::PgArgumentBuffer,
@@ -1332,7 +1380,7 @@ pub(crate) mod sqlx_rdbms {
         }
     }
 
-    impl<'r> sqlx::Encode<'r, sqlx::Postgres> for PgXml {
+    impl sqlx::Encode<'_, sqlx::Postgres> for PgXml {
         fn encode_by_ref(
             &self,
             buf: &mut sqlx::postgres::PgArgumentBuffer,
@@ -1360,33 +1408,8 @@ pub(crate) mod sqlx_rdbms {
             buf: &mut sqlx::postgres::PgArgumentBuffer,
         ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
             let mut encoder = sqlx::postgres::types::PgRecordEncoder::new(buf);
-
             for v in self.1.iter() {
-                match v {
-                    DbValue::Primitive(v) => match v {
-                        DbValuePrimitive::Text(v) => {
-                            encoder.encode(v)?;
-                        }
-                        DbValuePrimitive::Uuid(v) => {
-                            encoder.encode(v)?;
-                        }
-                        DbValuePrimitive::Boolean(v) => {
-                            encoder.encode(v)?;
-                        }
-                        DbValuePrimitive::Int4(v) => {
-                            encoder.encode(v)?;
-                        }
-                        DbValuePrimitive::Numeric(v) => {
-                            encoder.encode(v)?;
-                        }
-                        _ => {
-                            Err(format!("primitive value ({}) is not supported", v))?;
-                        }
-                    },
-                    DbValue::Array(_) => {
-                        Err(format!("array value ({}) is not supported", v))?;
-                    }
-                }
+                set_value(&mut encoder, v.clone())?;
             }
             encoder.finish();
             Ok(sqlx::encode::IsNull::No)
@@ -1405,41 +1428,10 @@ pub(crate) mod sqlx_rdbms {
         let mut decoder =
             sqlx::postgres::types::PgRecordDecoder::new(value).map_err(|e| e.to_string())?;
         let mut values: Vec<DbValue> = Vec::with_capacity(attributes.len());
-        for (_, v) in attributes {
-            match v {
-                DbColumnType::Primitive(v) => match v {
-                    DbColumnTypePrimitive::Text => {
-                        let v = decoder.try_decode::<String>().map_err(|e| e.to_string())?;
-                        values.push(DbValue::Primitive(DbValuePrimitive::Text(v)));
-                    }
-                    DbColumnTypePrimitive::Uuid => {
-                        let v = decoder.try_decode::<Uuid>().map_err(|e| e.to_string())?;
-                        values.push(DbValue::Primitive(DbValuePrimitive::Uuid(v)));
-                    }
-                    DbColumnTypePrimitive::Boolean => {
-                        let v = decoder.try_decode::<bool>().map_err(|e| e.to_string())?;
-                        values.push(DbValue::Primitive(DbValuePrimitive::Boolean(v)));
-                    }
-                    DbColumnTypePrimitive::Int4 => {
-                        let v = decoder.try_decode::<i32>().map_err(|e| e.to_string())?;
-                        values.push(DbValue::Primitive(DbValuePrimitive::Int4(v)));
-                    }
-                    DbColumnTypePrimitive::Numeric => {
-                        let v = decoder
-                            .try_decode::<BigDecimal>()
-                            .map_err(|e| e.to_string())?;
-                        values.push(DbValue::Primitive(DbValuePrimitive::Numeric(v)));
-                    }
-                    _ => {
-                        Err(format!("primitive value ({}) is not supported", v))?;
-                    }
-                },
-                DbColumnType::Array(_) => {
-                    Err(format!("array value ({}) is not supported", v))?;
-                }
-            }
+        for (_, db_column_type) in attributes {
+            let db_value = get_db_value(&db_column_type, &mut decoder)?;
+            values.push(db_value);
         }
-
         Ok(PgCompositeValue(type_name, values))
     }
 
@@ -1453,7 +1445,7 @@ pub(crate) mod sqlx_rdbms {
                 let value = get_composite_value(type_info.name().to_string(), attributes, value)?;
                 Ok(value)
             } else {
-                Err(format!("type ({}) is not supported", type_info.name()).into())
+                Err(format!("Type '{}' is not supported", type_info.name()).into())
             }
         }
     }
@@ -1470,7 +1462,7 @@ pub(crate) mod sqlx_rdbms {
         }
     }
 
-    impl<'r> sqlx::Encode<'r, sqlx::Postgres> for PgCompositeValues {
+    impl sqlx::Encode<'_, sqlx::Postgres> for PgCompositeValues {
         fn encode_by_ref(
             &self,
             buf: &mut sqlx::postgres::PgArgumentBuffer,
