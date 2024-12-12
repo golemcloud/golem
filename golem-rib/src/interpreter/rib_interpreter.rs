@@ -1491,12 +1491,14 @@ mod interpreter_tests {
 
             let compiled = compiler::compile(&expr, &vec![]).unwrap();
 
+
             let result = interpreter
                 .run(compiled.byte_code)
                 .await
                 .unwrap()
                 .get_val()
                 .unwrap();
+
 
             assert_eq!(result, 0u8.into_value_and_type());
         }
