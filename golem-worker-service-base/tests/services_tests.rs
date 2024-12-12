@@ -42,13 +42,15 @@ use golem_worker_service_base::service::gateway::http_api_definition_validator::
 use chrono::Utc;
 use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_common::redis::RedisPool;
+use golem_service_base::storage::sqlite::SqlitePool;
 use golem_wasm_ast::analysis::analysed_type::str;
 use golem_worker_service_base::api;
 use golem_worker_service_base::gateway_api_deployment::{
     ApiDeploymentRequest, ApiSite, ApiSiteString,
 };
 use golem_worker_service_base::gateway_execution::gateway_session::{
-    DataKey, DataValue, GatewaySession, GatewaySessionError, RedisGatewaySession, SessionId,
+    DataKey, DataValue, GatewaySession, GatewaySessionError, RedisGatewaySession,
+    RedisGatewaySessionExpiration, SessionId, SqliteGatewaySession, SqliteGatewaySessionExpiration,
 };
 use golem_worker_service_base::gateway_security::{
     AuthorizationUrl, DefaultIdentityProvider, GolemIdentityProviderMetadata, IdentityProvider,
@@ -70,6 +72,7 @@ use openidconnect::{
     TokenUrl, UserInfoUrl,
 };
 use std::sync::Arc;
+use std::time::Duration;
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, ImageExt};
 use testcontainers_modules::postgres::Postgres;
@@ -178,7 +181,80 @@ pub async fn test_with_postgres_db() {
 }
 
 #[test]
-pub async fn test_gateway_session_expiry() {
+pub async fn test_gateway_session_with_sqlite() {
+    let db = SqliteDb::default();
+    let db_config = DbSqliteConfig {
+        database: db.db_path.clone(),
+        max_connections: 10,
+    };
+
+    let db_pool = db::create_sqlite_pool(&db_config).await.unwrap();
+
+    let data_value = DataValue(serde_json::Value::String(
+        Nonce::new_random().secret().to_string(),
+    ));
+
+    let value = insert_and_get_session_with_sqlite(
+        SessionId("test1".to_string()),
+        DataKey::nonce(),
+        data_value.clone(),
+        db_pool.clone(),
+    )
+    .await
+    .expect("Expecting a value for longer expiry");
+
+    assert_eq!(value, data_value.clone());
+}
+
+#[test]
+pub async fn test_gateway_session_with_sqlite_expired() {
+    let db = SqliteDb::default();
+    let db_config = DbSqliteConfig {
+        database: db.db_path.clone(),
+        max_connections: 10,
+    };
+
+    let db_pool = db::create_sqlite_pool(&db_config).await.unwrap();
+
+    let data_value = DataValue(serde_json::Value::String(
+        Nonce::new_random().secret().to_string(),
+    ));
+
+    let expiration =
+        SqliteGatewaySessionExpiration::new(Duration::from_secs(1), Duration::from_secs(1));
+
+    let pool = SqlitePool::new(db_pool)
+        .await
+        .expect("Failed to create sqlite pool");
+
+    let sqlite_session = SqliteGatewaySession::new(pool.clone(), expiration.clone())
+        .await
+        .expect("Failed to create sqlite session");
+
+    let session_store = Arc::new(sqlite_session);
+
+    let data_key = DataKey::nonce();
+    let session_id = SessionId("test1".to_string());
+
+    session_store
+        .insert(session_id.clone(), data_key.clone(), data_value)
+        .await
+        .expect("Insert to session failed");
+
+    SqliteGatewaySession::cleanup_expired(pool, SqliteGatewaySession::current_time() + 10)
+        .await
+        .expect("Failed to cleanup expired sessions");
+
+    let result = session_store.get(&session_id, &data_key).await;
+
+    assert!(matches!(
+        result,
+        Err(GatewaySessionError::MissingValue { .. })
+    ));
+}
+
+#[test]
+pub async fn test_gateway_session_redis() {
     let (redis_config, _container) = start_docker_redis().await;
 
     let redis = RedisPool::configured(&redis_config).await.unwrap();
@@ -225,13 +301,37 @@ async fn insert_and_get_with_redis(
 ) -> Result<DataValue, GatewaySessionError> {
     let session_store = Arc::new(RedisGatewaySession::new(
         redis.clone(),
-        redis_expiry_in_seconds as i64,
+        RedisGatewaySessionExpiration::new(Duration::from_secs(redis_expiry_in_seconds)),
     ));
 
     session_store
         .insert(session_id.clone(), data_key.clone(), data_value)
         .await
         .unwrap();
+
+    session_store.get(&session_id, &data_key).await
+}
+
+async fn insert_and_get_session_with_sqlite(
+    session_id: SessionId,
+    data_key: DataKey,
+    data_value: DataValue,
+    db_pool: sqlx::SqlitePool,
+) -> Result<DataValue, GatewaySessionError> {
+    let sqlite_session = SqliteGatewaySession::new(
+        SqlitePool::new(db_pool)
+            .await
+            .map_err(|err| GatewaySessionError::InternalError(err.to_string()))?,
+        SqliteGatewaySessionExpiration::default(),
+    )
+    .await
+    .map_err(|err| GatewaySessionError::InternalError(err.to_string()))?;
+
+    let session_store = Arc::new(sqlite_session);
+
+    session_store
+        .insert(session_id.clone(), data_key.clone(), data_value)
+        .await?;
 
     session_store.get(&session_id, &data_key).await
 }
