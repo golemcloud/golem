@@ -249,14 +249,14 @@ impl WasmValue for ValueAndType {
 
     fn unwrap_u8(&self) -> u8 {
         match self.value {
-            Value::U8(val) => val as u8,
+            Value::U8(val) => val,
             _ => panic!("Expected u8, found {:?}", self),
         }
     }
 
     fn unwrap_u16(&self) -> u16 {
         match self.value {
-            Value::U16(val) => val as u16,
+            Value::U16(val) => val,
             _ => panic!("Expected u16, found {:?}", self),
         }
     }
@@ -362,9 +362,9 @@ impl WasmValue for ValueAndType {
                         value: *v.clone(),
                         typ: typ
                             .as_ref()
-                            .expect(&format!(
-                                "No type information for non-unit variant case {case_name}"
-                            ))
+                            .unwrap_or_else(|| {
+                                panic!("No type information for non-unit variant case {case_name}")
+                            })
                             .clone(),
                     })
                 });
@@ -460,7 +460,7 @@ mod tests {
 
         let s = print_value_and_type(&typed_value).unwrap();
         let round_trip_value: ValueAndType = parse_value_and_type(&typ, &s).unwrap();
-        let result: Value = Value::try_from(round_trip_value).unwrap();
+        let result: Value = Value::from(round_trip_value);
         assert_eq!(value, result);
     }
 

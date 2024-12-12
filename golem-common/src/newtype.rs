@@ -102,7 +102,9 @@ macro_rules! newtype_uuid {
             }
 
             fn schema_ref() -> poem_openapi::registry::MetaSchemaRef {
-                poem_openapi::registry::MetaSchemaRef::Inline(Box::new(poem_openapi::registry::MetaSchema::new_with_format("string", "uuid")))
+                poem_openapi::registry::MetaSchemaRef::Inline(Box::new(
+                    poem_openapi::registry::MetaSchema::new_with_format("string", "uuid"),
+                ))
             }
 
             fn as_raw_value(&self) -> Option<&Self::RawValueType> {
@@ -125,7 +127,9 @@ macro_rules! newtype_uuid {
 
         #[cfg(feature = "poem")]
         impl poem_openapi::types::ParseFromJSON for $name {
-            fn parse_from_json(value: Option<serde_json::Value>) -> poem_openapi::types::ParseResult<Self> {
+            fn parse_from_json(
+                value: Option<serde_json::Value>,
+            ) -> poem_openapi::types::ParseResult<Self> {
                 match value {
                     Some(serde_json::Value::String(s)) => Ok(Self(Uuid::from_str(&s)?)),
                     _ => Err(poem_openapi::types::ParseError::<$name>::custom(format!(

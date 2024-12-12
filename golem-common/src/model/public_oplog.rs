@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::RetryConfig;
 use crate::model::lucene::{LeafQuery, Query};
 use crate::model::oplog::{LogLevel, OplogIndex, WorkerResourceId, WrappedFunctionType};
 use crate::model::plugin::PluginInstallation;
 use crate::model::regions::OplogRegion;
+use crate::model::RetryConfig;
 use crate::model::{
     AccountId, ComponentVersion, Empty, IdempotencyKey, PluginInstallationId, Timestamp, WorkerId,
 };
@@ -2449,17 +2449,28 @@ mod protobuf {
 mod tests {
     use test_r::test;
 
+    use crate::model::public_oplog::{
+        ChangeRetryPolicyParameters, CreateParameters, DescribeResourceParameters,
+        EndRegionParameters, ErrorParameters, ExportedFunctionCompletedParameters,
+        ExportedFunctionInvokedParameters, ExportedFunctionParameters, FailedUpdateParameters,
+        GrowMemoryParameters, ImportedFunctionInvokedParameters, JumpParameters, LogParameters,
+        PendingUpdateParameters, PendingWorkerInvocationParameters, PluginInstallationDescription,
+        PublicOplogEntry, PublicRetryConfig, PublicUpdateDescription, PublicWorkerInvocation,
+        PublicWrappedFunctionType, ResourceParameters, SnapshotBasedUpdateParameters,
+        SuccessfulUpdateParameters, TimestampParameter,
+    };
+    use crate::model::{
+        AccountId, ComponentId, Empty, IdempotencyKey, PluginInstallationId, Timestamp, WorkerId,
+    };
     use std::collections::{BTreeMap, BTreeSet};
-    use crate::model::{AccountId, ComponentId, Empty, IdempotencyKey, PluginInstallationId, Timestamp, WorkerId};
     use uuid::Uuid;
-    use crate::model::public_oplog::{ChangeRetryPolicyParameters, CreateParameters, DescribeResourceParameters, EndRegionParameters, ErrorParameters, ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters, ExportedFunctionParameters, FailedUpdateParameters, GrowMemoryParameters, ImportedFunctionInvokedParameters, JumpParameters, LogParameters, PendingUpdateParameters, PendingWorkerInvocationParameters, PluginInstallationDescription, PublicOplogEntry, PublicRetryConfig, PublicUpdateDescription, PublicWorkerInvocation, PublicWrappedFunctionType, ResourceParameters, SnapshotBasedUpdateParameters, SuccessfulUpdateParameters, TimestampParameter};
 
-    #[cfg(feature = "poem")]
-    use poem_openapi::types::ToJSON;
-    use golem_wasm_ast::analysis::analysed_type::{field, list, r#enum, record, s16, str, u64};
-    use golem_wasm_rpc::{Value, ValueAndType};
     use crate::model::oplog::{LogLevel, OplogIndex, WorkerResourceId};
     use crate::model::regions::OplogRegion;
+    use golem_wasm_ast::analysis::analysed_type::{field, list, r#enum, record, s16, str, u64};
+    use golem_wasm_rpc::{Value, ValueAndType};
+    #[cfg(feature = "poem")]
+    use poem_openapi::types::ToJSON;
 
     fn rounded_ts(ts: Timestamp) -> Timestamp {
         Timestamp::from(ts.to_millis())

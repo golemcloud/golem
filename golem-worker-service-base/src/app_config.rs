@@ -21,8 +21,9 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 use uuid::Uuid;
 
-use golem_common::config::{ConfigExample, HasConfigExamples, RedisConfig, RetryConfig};
+use golem_common::config::{ConfigExample, HasConfigExamples, RedisConfig};
 use golem_common::config::{DbConfig, DbSqliteConfig};
+use golem_common::model::RetryConfig;
 use golem_common::tracing::TracingConfig;
 use golem_service_base::service::routing_table::RoutingTableConfig;
 

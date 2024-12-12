@@ -58,7 +58,6 @@ pub use durability::*;
 use futures::future::try_join_all;
 use futures_util::TryFutureExt;
 use futures_util::TryStreamExt;
-use golem_common::config::RetryConfig;
 use golem_common::model::component::ComponentOwner;
 use golem_common::model::oplog::{
     IndexedResourceKey, LogLevel, OplogEntry, OplogIndex, UpdateDescription, WorkerError,
@@ -66,6 +65,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::plugin::{PluginOwner, PluginScope};
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
+use golem_common::model::RetryConfig;
 use golem_common::model::{exports, PluginInstallationId};
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,

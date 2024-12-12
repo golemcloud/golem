@@ -26,6 +26,17 @@ pub struct ValueAndType {
     pub typ: AnalysedType,
 }
 
+#[cfg(feature = "text")]
+impl std::fmt::Display for ValueAndType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            crate::text::print_value_and_type(self).unwrap_or("<unprintable>".to_string())
+        )
+    }
+}
+
 impl ValueAndType {
     pub fn new(value: Value, typ: AnalysedType) -> Self {
         Self { value, typ }

@@ -47,7 +47,7 @@ use golem_worker_service_base::service::worker::WorkerServiceDefault;
 
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_common::client::{GrpcClientConfig, MultiTargetGrpcClient};
-use golem_common::config::RetryConfig;
+use golem_common::model::RetryConfig;
 
 use golem_common::config::DbConfig;
 use golem_common::redis::RedisPool;

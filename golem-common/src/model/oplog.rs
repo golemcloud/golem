@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::RetryConfig;
 use crate::model::regions::OplogRegion;
+use crate::model::RetryConfig;
 use crate::model::{
     AccountId, ComponentVersion, IdempotencyKey, PluginInstallationId, Timestamp, WorkerId,
     WorkerInvocation,
@@ -199,18 +199,7 @@ impl<'de> BorrowDecode<'de> for PayloadId {
 }
 
 #[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialOrd,
-    Ord,
-    PartialEq,
-    Eq,
-    Hash,
-    Encode,
-    Decode,
-    Serialize,
-    Deserialize,
+    Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash, Encode, Decode, Serialize, Deserialize,
 )]
 #[cfg_attr(feature = "poem", derive(poem_openapi::NewType))]
 pub struct WorkerResourceId(pub u64);

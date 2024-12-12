@@ -30,6 +30,7 @@ use golem_wasm_ast::analysis::analysed_type::{
 };
 use golem_wasm_ast::analysis::{analysed_type, AnalysedType};
 use golem_wasm_rpc::IntoValue;
+use http::Uri;
 use rand::prelude::IteratorRandom;
 use serde::de::Unexpected;
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
@@ -39,7 +40,6 @@ use std::fmt::{Display, Formatter};
 use std::ops::Add;
 use std::str::FromStr;
 use std::time::{Duration, SystemTime};
-use http::Uri;
 use typed_path::Utf8UnixPathBuf;
 use uuid::{uuid, Uuid};
 
@@ -70,8 +70,11 @@ pub trait PoemTypeRequirements:
 pub trait PoemTypeRequirements {}
 
 #[cfg(feature = "poem")]
-impl<T: poem_openapi::types::Type + poem_openapi::types::ParseFromJSON + poem_openapi::types::ToJSON>
-    PoemTypeRequirements for T
+impl<
+        T: poem_openapi::types::Type
+            + poem_openapi::types::ParseFromJSON
+            + poem_openapi::types::ToJSON,
+    > PoemTypeRequirements for T
 {
 }
 
@@ -2242,8 +2245,7 @@ mod tests {
     use crate::model::oplog::OplogIndex;
 
     use crate::model::{
-        AccountId, ComponentFilePath, ComponentFilePermissions, ComponentId, Empty,
-        FilterComparator, IdempotencyKey, InitialComponentFile, InitialComponentFileKey, ShardId,
+        AccountId, ComponentFilePath, ComponentId, FilterComparator, IdempotencyKey, ShardId,
         StringFilterComparator, TargetWorkerId, Timestamp, WorkerFilter, WorkerId, WorkerMetadata,
         WorkerStatus, WorkerStatusRecord,
     };
@@ -2579,5 +2581,4 @@ mod tests {
         let path = ComponentFilePath::from_abs_str("a/b/c");
         assert!(path.is_err());
     }
-
 }

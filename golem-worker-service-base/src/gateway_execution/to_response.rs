@@ -215,9 +215,14 @@ mod internal {
                     let headers =
                         get_response_headers_or_default(rib_result).map_err(EvaluationError)?;
 
-                    let body = rib_result
+                    let tav: TypeAnnotatedValue = rib_result
+                        .clone()
+                        .try_into()
+                        .map_err(|errs: Vec<String>| EvaluationError(errs.join(", ")))?;
+
+                    let body = tav
                         .get_optional(&Path::from_key("body"))
-                        .unwrap_or(rib_result.clone());
+                        .unwrap_or(tav.clone());
 
                     Ok(IntermediateHttpResponse {
                         body: Some(body),
@@ -282,9 +287,6 @@ mod internal {
 #[cfg(test)]
 mod test {
     use async_trait::async_trait;
-    use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-    use golem_wasm_rpc::protobuf::Type;
-    use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, TypedRecord};
     use std::sync::Arc;
     use test_r::test;
 
@@ -293,50 +295,43 @@ mod test {
         DataKey, DataValue, GatewaySession, GatewaySessionError, SessionId,
     };
     use crate::gateway_execution::to_response::ToHttpResponse;
+    use golem_wasm_ast::analysis::analysed_type::record;
+    use golem_wasm_ast::analysis::NameTypePair;
+    use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
     use http::header::CONTENT_TYPE;
     use http::StatusCode;
     use rib::RibResult;
 
-    fn create_record(values: Vec<(String, TypeAnnotatedValue)>) -> TypeAnnotatedValue {
-        let mut name_type_pairs = vec![];
-        let mut name_value_pairs = vec![];
+    fn create_record(values: Vec<(String, ValueAndType)>) -> ValueAndType {
+        let mut fields = vec![];
+        let mut field_values = vec![];
 
-        for (key, value) in values.iter() {
-            let typ = Type::try_from(value).unwrap();
-            name_type_pairs.push(NameTypePair {
-                name: key.to_string(),
-                typ: Some(typ),
+        for (key, vnt) in values {
+            fields.push(NameTypePair {
+                name: key,
+                typ: vnt.typ,
             });
-
-            name_value_pairs.push(NameValuePair {
-                name: key.to_string(),
-                value: Some(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
-                    type_annotated_value: Some(value.clone()),
-                }),
-            });
+            field_values.push(vnt.value);
         }
 
-        TypeAnnotatedValue::Record(TypedRecord {
-            typ: name_type_pairs,
-            value: name_value_pairs,
-        })
+        ValueAndType {
+            value: Value::Record(field_values),
+            typ: record(fields),
+        }
     }
 
     #[test]
     async fn test_evaluation_result_to_response_with_http_specifics() {
         let record = create_record(vec![
-            ("status".to_string(), TypeAnnotatedValue::U16(400)),
+            ("status".to_string(), 400u16.into_value_and_type()),
             (
                 "headers".to_string(),
                 create_record(vec![(
                     "Content-Type".to_string(),
-                    TypeAnnotatedValue::Str("application/json".to_string()),
+                    "application/json".into_value_and_type(),
                 )]),
             ),
-            (
-                "body".to_string(),
-                TypeAnnotatedValue::Str("Hello".to_string()),
-            ),
+            ("body".to_string(), "Hello".into_value_and_type()),
         ]);
 
         let evaluation_result: RibResult = RibResult::Val(record);
@@ -367,8 +362,7 @@ mod test {
 
     #[test]
     async fn test_evaluation_result_to_response_with_no_http_specifics() {
-        let evaluation_result: RibResult =
-            RibResult::Val(TypeAnnotatedValue::Str("Healthy".to_string()));
+        let evaluation_result: RibResult = RibResult::Val("Healthy".into_value_and_type());
 
         let session_store: Arc<dyn GatewaySession + Send + Sync> = Arc::new(TestSessionStore);
 

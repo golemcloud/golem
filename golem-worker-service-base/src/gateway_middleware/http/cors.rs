@@ -142,18 +142,8 @@ impl HttpCors {
 
         let mut cors = HttpCors::default();
 
-        for name_value in record {
-            let key = &name_value.name;
-            let value = name_value
-                .value
-                .as_ref()
-                .ok_or("Missing value in type_annotated_value record")?
-                .type_annotated_value
-                .as_ref()
-                .ok_or(format!(
-                    "Unable to fetch value for key {} in type_annotated_value",
-                    key
-                ))?
+        for (key, value) in record {
+            let value = value
                 .get_literal()
                 .ok_or(format!(
                     "Invalid value for key {} in CORS preflight response",
@@ -161,7 +151,7 @@ impl HttpCors {
                 ))?
                 .as_string();
 
-            internal::set_cors_field(&mut cors, key, &value)?;
+            internal::set_cors_field(&mut cors, &key, &value)?;
         }
 
         Ok(cors)

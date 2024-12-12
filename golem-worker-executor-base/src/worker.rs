@@ -41,12 +41,12 @@ use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 use anyhow::anyhow;
 use drop_stream::DropStream;
 use futures::channel::oneshot;
-use golem_common::config::RetryConfig;
 use golem_common::model::oplog::{
     OplogEntry, OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerError,
     WorkerResourceId,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
+use golem_common::model::RetryConfig;
 use golem_common::model::{
     exports, ComponentFilePath, ComponentType, PluginInstallationId, WorkerStatusRecordExtensions,
 };

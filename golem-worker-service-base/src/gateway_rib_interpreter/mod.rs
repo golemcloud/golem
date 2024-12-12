@@ -21,6 +21,7 @@ use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
 use golem_common::model::{ComponentId, IdempotencyKey};
 use golem_common::SafeDisplay;
+use golem_wasm_rpc::ValueAndType;
 use rib::{RibByteCode, RibFunctionInvoke, RibInput, RibResult};
 
 use crate::gateway_execution::{GatewayResolvedWorkerRequest, GatewayWorkerRequestExecutor};
@@ -97,7 +98,7 @@ impl<Namespace: Clone + Send + Sync + 'static> WorkerServiceRibInterpreter<Names
             let idempotency_key = idempotency_key.clone();
             let worker_name = worker_name.map(|s| s.to_string()).clone();
 
-            move |function_name: String, parameters: Vec<TypeAnnotatedValue>| {
+            move |function_name: String, parameters: Vec<ValueAndType>| {
                 let component_id = component_id.clone();
                 let worker_name = worker_name.clone();
                 let idempotency_key = idempotency_key.clone();
@@ -105,20 +106,30 @@ impl<Namespace: Clone + Send + Sync + 'static> WorkerServiceRibInterpreter<Names
                 let namespace = namespace.clone();
 
                 async move {
+                    // input ValueAndType => TypeAnnotatedValue
+                    let function_params: Vec<TypeAnnotatedValue> = parameters
+                        .into_iter()
+                        .map(|p| p.try_into())
+                        .collect::<Result<Vec<_>, _>>()
+                        .map_err(|errs: Vec<String>| errs.join(", "))?;
+
                     let worker_request = GatewayResolvedWorkerRequest {
                         component_id,
                         worker_name,
                         function_name,
-                        function_params: parameters,
+                        function_params,
                         idempotency_key,
                         namespace,
                     };
 
-                    executor
+                    let tav = executor
                         .execute(worker_request)
                         .await
                         .map(|v| v.result)
-                        .map_err(|e| e.to_string())
+                        .map_err(|e| e.to_string())?;
+
+                    // Output TypeAnnotatedValue => ValueAndType
+                    tav.try_into()
                 }
                 .boxed()
             }

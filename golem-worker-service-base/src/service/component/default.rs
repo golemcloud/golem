@@ -24,9 +24,9 @@ use golem_api_grpc::proto::golem::component::v1::{
 use golem_api_grpc::proto::golem::component::ComponentConstraints;
 use golem_api_grpc::proto::golem::component::FunctionConstraintCollection as FunctionConstraintCollectionProto;
 use golem_common::client::{GrpcClient, GrpcClientConfig};
-use golem_common::config::RetryConfig;
 use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_common::model::ComponentId;
+use golem_common::model::RetryConfig;
 use golem_common::retries::with_retries;
 use golem_service_base::model::Component;
 use http::Uri;

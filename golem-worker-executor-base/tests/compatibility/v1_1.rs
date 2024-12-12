@@ -17,10 +17,10 @@ use test_r::test;
 
 use crate::compatibility::v1::backward_compatible;
 use goldenfile::Mint;
-use golem_common::config::RetryConfig;
 use golem_common::model::oplog::{
     IndexedResourceKey, OplogEntry, OplogIndex, OplogPayload, WorkerResourceId, WrappedFunctionType,
 };
+use golem_common::model::RetryConfig;
 use golem_common::model::{
     AccountId, ComponentId, IdempotencyKey, PluginInstallationId, Timestamp,
     TimestampedWorkerInvocation, WorkerId, WorkerInvocation, WorkerResourceDescription,

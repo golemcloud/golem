@@ -488,7 +488,9 @@ mod protobuf {
                 RibIR::PushLit(value) => {
                     Instruction::PushLit(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
                         type_annotated_value: Some(
-                            value.try_into().map_err(|errs: Vec<String>| errs.join(", "))?,
+                            value
+                                .try_into()
+                                .map_err(|errs: Vec<String>| errs.join(", "))?,
                         ),
                     })
                 }
@@ -578,7 +580,8 @@ mod protobuf {
                 RibIR::PushFlag(flag) => {
                     Instruction::PushFlag(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
                         type_annotated_value: Some(
-                            flag.try_into().map_err(|errs: Vec<String>| errs.join(", "))?,
+                            flag.try_into()
+                                .map_err(|errs: Vec<String>| errs.join(", "))?,
                         ),
                     })
                 }
