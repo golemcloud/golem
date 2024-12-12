@@ -42,7 +42,8 @@ impl Display for PostgresType {
 pub(crate) mod sqlx_rdbms {
     use crate::services::golem_config::{RdbmsConfig, RdbmsPoolConfig};
     use crate::services::rdbms::postgres::types::{
-        DbColumn, DbColumnType, DbColumnTypePrimitive, DbValue, DbValuePrimitive,
+        Composite, CompositeType, DbColumn, DbColumnType, DbColumnTypePrimitive, DbValue,
+        DbValuePrimitive, DomainType, Enum, EnumType, Interval, Range, TimeTz,
     };
     use crate::services::rdbms::postgres::{PostgresType, POSTGRES};
     use crate::services::rdbms::sqlx_common::{
@@ -57,7 +58,7 @@ pub(crate) mod sqlx_rdbms {
     use sqlx::postgres::{PgConnectOptions, PgTypeKind};
     use sqlx::types::mac_address::MacAddress;
     use sqlx::types::BitVec;
-    use sqlx::{Column, ConnectOptions, Decode, Encode, Pool, Row, Type, TypeInfo, ValueRef};
+    use sqlx::{Column, ConnectOptions, Pool, Row, Type, TypeInfo, ValueRef};
     use std::net::IpAddr;
     use std::ops::Bound;
     use std::sync::Arc;
@@ -167,17 +168,9 @@ pub(crate) mod sqlx_rdbms {
             DbValuePrimitive::Timestamp(v) => setter.try_set_value(v),
             DbValuePrimitive::Timestamptz(v) => setter.try_set_value(v),
             DbValuePrimitive::Time(v) => setter.try_set_value(v),
-            DbValuePrimitive::Timetz((time, offset)) => {
-                setter.try_set_value(PgTimeTz { time, offset })
-            }
+            DbValuePrimitive::Timetz(v) => setter.try_set_value(PgTimeTz::from(v)),
             DbValuePrimitive::Date(v) => setter.try_set_value(v),
-            DbValuePrimitive::Interval((months, days, microseconds)) => {
-                setter.try_set_value(PgInterval {
-                    months,
-                    days,
-                    microseconds,
-                })
-            }
+            DbValuePrimitive::Interval(v) => setter.try_set_value(PgInterval::from(v)),
             DbValuePrimitive::Inet(v) => setter.try_set_value(v),
             DbValuePrimitive::Cidr(v) => setter.try_set_value(v),
             DbValuePrimitive::Macaddr(v) => setter.try_set_value(v),
@@ -191,10 +184,9 @@ pub(crate) mod sqlx_rdbms {
             DbValuePrimitive::Daterange(v) => setter.try_set_value(PgRange::from(v)),
             DbValuePrimitive::Money(v) => setter.try_set_value(PgMoney(v)),
             DbValuePrimitive::Oid(v) => setter.try_set_value(Oid(v)),
-            DbValuePrimitive::CustomEnum(v) => setter.try_set_value(PgEnum(v)),
-            DbValuePrimitive::CustomComposite((n, vs)) => {
-                setter.try_set_value(PgCompositeValue(n, vs))
-            }
+            DbValuePrimitive::Enum(v) => setter.try_set_value(v),
+            DbValuePrimitive::Composite(v) => setter.try_set_value(v),
+            DbValuePrimitive::Domain(_) => todo!(),
             DbValuePrimitive::Null => setter.try_set_value(PgNull {}),
         }
     }
@@ -420,9 +412,9 @@ pub(crate) mod sqlx_rdbms {
                     setter.try_set_value(values)
                 }
                 DbValuePrimitive::Timetz(_) => {
-                    let values: Vec<_> = get_plain_values(values, |v| {
-                        if let DbValuePrimitive::Timetz((time, offset)) = v {
-                            Some(PgTimeTz { time, offset })
+                    let values: Vec<PgTimeTz> = get_plain_values(values, |v| {
+                        if let DbValuePrimitive::Timetz(v) = v {
+                            Some(v.into())
                         } else {
                             None
                         }
@@ -430,13 +422,9 @@ pub(crate) mod sqlx_rdbms {
                     setter.try_set_value(values)
                 }
                 DbValuePrimitive::Interval(_) => {
-                    let values: Vec<_> = get_plain_values(values, |v| {
-                        if let DbValuePrimitive::Interval((months, days, microseconds)) = v {
-                            Some(PgInterval {
-                                months,
-                                days,
-                                microseconds,
-                            })
+                    let values: Vec<PgInterval> = get_plain_values(values, |v| {
+                        if let DbValuePrimitive::Interval(v) = v {
+                            Some(v.into())
                         } else {
                             None
                         }
@@ -575,25 +563,28 @@ pub(crate) mod sqlx_rdbms {
                     })?;
                     setter.try_set_value(values)
                 }
-                DbValuePrimitive::CustomEnum(_) => {
+                DbValuePrimitive::Enum(_) => {
                     let values: Vec<_> = get_plain_values(values, |v| {
-                        if let DbValuePrimitive::CustomEnum(v) = v {
-                            Some(PgEnum(v))
+                        if let DbValuePrimitive::Enum(v) = v {
+                            Some(v)
                         } else {
                             None
                         }
                     })?;
-                    setter.try_set_value(values)
+                    setter.try_set_value(PgEnums(values))
                 }
-                DbValuePrimitive::CustomComposite(_) => {
+                DbValuePrimitive::Composite(_) => {
                     let values: Vec<_> = get_plain_values(values, |v| {
-                        if let DbValuePrimitive::CustomComposite(v) = v {
-                            Some(PgCompositeValue(v.0, v.1))
+                        if let DbValuePrimitive::Composite(v) = v {
+                            Some(v)
                         } else {
                             None
                         }
                     })?;
-                    setter.try_set_value(PgCompositeValues(values))
+                    setter.try_set_value(PgComposites(values))
+                }
+                DbValuePrimitive::Domain(_) => {
+                    todo!()
                 }
                 DbValuePrimitive::Null => Err(format!(
                     "Array param element '{}' with index 0 is not supported",
@@ -727,9 +718,7 @@ pub(crate) mod sqlx_rdbms {
             }
             DbColumnTypePrimitive::Interval => {
                 let v: Option<PgInterval> = getter.try_get_value()?;
-                DbValue::primitive_from(
-                    v.map(|v| DbValuePrimitive::Interval((v.months, v.days, v.microseconds))),
-                )
+                DbValue::primitive_from(v.map(|v| DbValuePrimitive::Interval(v.into())))
             }
             DbColumnTypePrimitive::Timestamp => {
                 let v: Option<chrono::NaiveDateTime> = getter.try_get_value()?;
@@ -750,7 +739,7 @@ pub(crate) mod sqlx_rdbms {
             DbColumnTypePrimitive::Timetz => {
                 let v: Option<PgTimeTz<chrono::NaiveTime, chrono::FixedOffset>> =
                     getter.try_get_value()?;
-                DbValue::primitive_from(v.map(|v| DbValuePrimitive::Timetz((v.time, v.offset))))
+                DbValue::primitive_from(v.map(|v| DbValuePrimitive::Timetz(v.into())))
             }
             DbColumnTypePrimitive::Inet => {
                 let v: Option<IpAddr> = getter.try_get_value()?;
@@ -774,27 +763,27 @@ pub(crate) mod sqlx_rdbms {
             }
             DbColumnTypePrimitive::Int4range => {
                 let v: Option<PgRange<i32>> = getter.try_get_value()?;
-                DbValue::primitive_from(v.map(|v| DbValuePrimitive::Int4range(get_bounds(v))))
+                DbValue::primitive_from(v.map(|v| DbValuePrimitive::Int4range(v.into())))
             }
             DbColumnTypePrimitive::Int8range => {
                 let v: Option<PgRange<i64>> = getter.try_get_value()?;
-                DbValue::primitive_from(v.map(|v| DbValuePrimitive::Int8range(get_bounds(v))))
+                DbValue::primitive_from(v.map(|v| DbValuePrimitive::Int8range(v.into())))
             }
             DbColumnTypePrimitive::Numrange => {
                 let v: Option<PgRange<BigDecimal>> = getter.try_get_value()?;
-                DbValue::primitive_from(v.map(|v| DbValuePrimitive::Numrange(get_bounds(v))))
+                DbValue::primitive_from(v.map(|v| DbValuePrimitive::Numrange(v.into())))
             }
             DbColumnTypePrimitive::Tsrange => {
                 let v: Option<PgRange<chrono::NaiveDateTime>> = getter.try_get_value()?;
-                DbValue::primitive_from(v.map(|v| DbValuePrimitive::Tsrange(get_bounds(v))))
+                DbValue::primitive_from(v.map(|v| DbValuePrimitive::Tsrange(v.into())))
             }
             DbColumnTypePrimitive::Tstzrange => {
                 let v: Option<PgRange<chrono::DateTime<chrono::Utc>>> = getter.try_get_value()?;
-                DbValue::primitive_from(v.map(|v| DbValuePrimitive::Tstzrange(get_bounds(v))))
+                DbValue::primitive_from(v.map(|v| DbValuePrimitive::Tstzrange(v.into())))
             }
             DbColumnTypePrimitive::Daterange => {
                 let v: Option<PgRange<chrono::NaiveDate>> = getter.try_get_value()?;
-                DbValue::primitive_from(v.map(|v| DbValuePrimitive::Daterange(get_bounds(v))))
+                DbValue::primitive_from(v.map(|v| DbValuePrimitive::Daterange(v.into())))
             }
             DbColumnTypePrimitive::Oid => {
                 let v: Option<Oid> = getter.try_get_value()?;
@@ -804,13 +793,16 @@ pub(crate) mod sqlx_rdbms {
                 let v: Option<PgMoney> = getter.try_get_value()?;
                 DbValue::primitive_from(v.map(|v| DbValuePrimitive::Money(v.0)))
             }
-            DbColumnTypePrimitive::CustomEnum(_) => {
-                let v: Option<PgEnum> = getter.try_get_value()?;
-                DbValue::primitive_from(v.map(|v| DbValuePrimitive::CustomEnum(v.0)))
+            DbColumnTypePrimitive::Enum(_) => {
+                let v: Option<Enum> = getter.try_get_value()?;
+                DbValue::primitive_from(v.map(DbValuePrimitive::Enum))
             }
-            DbColumnTypePrimitive::CustomComposite(_) => {
-                let v: Option<PgCompositeValue> = getter.try_get_value()?;
-                DbValue::primitive_from(v.map(|v| DbValuePrimitive::CustomComposite((v.0, v.1))))
+            DbColumnTypePrimitive::Composite(_) => {
+                let v: Option<Composite> = getter.try_get_value()?;
+                DbValue::primitive_from(v.map(DbValuePrimitive::Composite))
+            }
+            DbColumnTypePrimitive::Domain(_) => {
+                todo!()
             }
         };
         Ok(value)
@@ -891,9 +883,7 @@ pub(crate) mod sqlx_rdbms {
             }
             DbColumnTypePrimitive::Interval => {
                 let vs: Option<Vec<PgInterval>> = getter.try_get_value()?;
-                DbValue::array_from(vs, |v| {
-                    DbValuePrimitive::Interval((v.months, v.days, v.microseconds))
-                })
+                DbValue::array_from(vs, |v| DbValuePrimitive::Interval(v.into()))
             }
             DbColumnTypePrimitive::Timestamp => {
                 let vs: Option<Vec<chrono::NaiveDateTime>> = getter.try_get_value()?;
@@ -914,7 +904,7 @@ pub(crate) mod sqlx_rdbms {
             DbColumnTypePrimitive::Timetz => {
                 let vs: Option<Vec<PgTimeTz<chrono::NaiveTime, chrono::FixedOffset>>> =
                     getter.try_get_value()?;
-                DbValue::array_from(vs, |v| DbValuePrimitive::Timetz((v.time, v.offset)))
+                DbValue::array_from(vs, |v| DbValuePrimitive::Timetz(v.into()))
             }
             DbColumnTypePrimitive::Inet => {
                 let vs: Option<Vec<IpAddr>> = getter.try_get_value()?;
@@ -938,28 +928,28 @@ pub(crate) mod sqlx_rdbms {
             }
             DbColumnTypePrimitive::Int4range => {
                 let vs: Option<Vec<PgRange<i32>>> = getter.try_get_value()?;
-                DbValue::array_from(vs, |v| DbValuePrimitive::Int4range(get_bounds(v)))
+                DbValue::array_from(vs, |v| DbValuePrimitive::Int4range(v.into()))
             }
             DbColumnTypePrimitive::Int8range => {
                 let vs: Option<Vec<PgRange<i64>>> = getter.try_get_value()?;
-                DbValue::array_from(vs, |v| DbValuePrimitive::Int8range(get_bounds(v)))
+                DbValue::array_from(vs, |v| DbValuePrimitive::Int8range(v.into()))
             }
             DbColumnTypePrimitive::Numrange => {
                 let vs: Option<Vec<PgRange<BigDecimal>>> = getter.try_get_value()?;
-                DbValue::array_from(vs, |v| DbValuePrimitive::Numrange(get_bounds(v)))
+                DbValue::array_from(vs, |v| DbValuePrimitive::Numrange(v.into()))
             }
             DbColumnTypePrimitive::Tsrange => {
                 let vs: Option<Vec<PgRange<chrono::NaiveDateTime>>> = getter.try_get_value()?;
-                DbValue::array_from(vs, |v| DbValuePrimitive::Tsrange(get_bounds(v)))
+                DbValue::array_from(vs, |v| DbValuePrimitive::Tsrange(v.into()))
             }
             DbColumnTypePrimitive::Tstzrange => {
                 let vs: Option<Vec<PgRange<chrono::DateTime<chrono::Utc>>>> =
                     getter.try_get_value()?;
-                DbValue::array_from(vs, |v| DbValuePrimitive::Tstzrange(get_bounds(v)))
+                DbValue::array_from(vs, |v| DbValuePrimitive::Tstzrange(v.into()))
             }
             DbColumnTypePrimitive::Daterange => {
                 let vs: Option<Vec<PgRange<chrono::NaiveDate>>> = getter.try_get_value()?;
-                DbValue::array_from(vs, |v| DbValuePrimitive::Daterange(get_bounds(v)))
+                DbValue::array_from(vs, |v| DbValuePrimitive::Daterange(v.into()))
             }
             DbColumnTypePrimitive::Money => {
                 let vs: Option<Vec<PgMoney>> = getter.try_get_value()?;
@@ -969,15 +959,16 @@ pub(crate) mod sqlx_rdbms {
                 let vs: Option<Vec<Oid>> = getter.try_get_value()?;
                 DbValue::array_from(vs, |v| DbValuePrimitive::Oid(v.0))
             }
-            DbColumnTypePrimitive::CustomEnum(_) => {
-                let vs: Option<Vec<PgEnum>> = getter.try_get_value()?;
-                DbValue::array_from(vs, |v| DbValuePrimitive::CustomEnum(v.0))
+            DbColumnTypePrimitive::Enum(_) => {
+                let vs: Option<PgEnums> = getter.try_get_value()?;
+                DbValue::array_from(vs.map(|v| v.0), DbValuePrimitive::Enum)
             }
-            DbColumnTypePrimitive::CustomComposite(_) => {
-                let vs: Option<PgCompositeValues> = getter.try_get_value()?;
-                DbValue::array_from(vs.map(|v| v.0), |v| {
-                    DbValuePrimitive::CustomComposite((v.0, v.1))
-                })
+            DbColumnTypePrimitive::Composite(_) => {
+                let vs: Option<PgComposites> = getter.try_get_value()?;
+                DbValue::array_from(vs.map(|v| v.0), DbValuePrimitive::Composite)
+            }
+            DbColumnTypePrimitive::Domain(_) => {
+                todo!()
             }
         };
         Ok(value)
@@ -1116,30 +1107,30 @@ pub(crate) mod sqlx_rdbms {
                 Ok(DbColumnType::Array(DbColumnTypePrimitive::Daterange))
             }
             _ => match type_kind {
-                PgTypeKind::Enum(_) => Ok(DbColumnType::Primitive(
-                    DbColumnTypePrimitive::CustomEnum(type_info.name().to_string()),
-                )),
-                PgTypeKind::Array(element) if matches!(element.kind(), PgTypeKind::Enum(_)) => {
-                    Ok(DbColumnType::Array(DbColumnTypePrimitive::CustomEnum(
-                        element.name().to_string(),
-                    )))
-                }
+                PgTypeKind::Enum(_) => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Enum(
+                    EnumType::new(type_name),
+                ))),
                 PgTypeKind::Composite(vs) => {
                     let attributes = get_db_column_type_attributes(vs.to_vec())?;
-                    Ok(DbColumnType::Primitive(
-                        DbColumnTypePrimitive::CustomComposite((
-                            type_info.name().to_string(),
-                            attributes,
-                        )),
-                    ))
+                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Composite(
+                        CompositeType::new(type_name, attributes),
+                    )))
+                }
+                PgTypeKind::Domain(t) => {
+                    let base_type = get_db_column_type(t)?;
+                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Domain(
+                        DomainType::new(type_name, base_type),
+                    )))
                 }
                 PgTypeKind::Array(element)
-                    if matches!(element.kind(), PgTypeKind::Composite(_)) =>
+                    if matches!(
+                        element.kind(),
+                        PgTypeKind::Enum(_) | PgTypeKind::Domain(_) | PgTypeKind::Composite(_)
+                    ) =>
                 {
-                    let v = get_db_column_type(element)?;
-                    Ok(v.to_array())
+                    let column_type = get_db_column_type(element)?;
+                    Ok(column_type.into_array())
                 }
-
                 _ => Err(format!("Column type '{}' is not supported", type_name))?,
             },
         }
@@ -1160,11 +1151,13 @@ pub(crate) mod sqlx_rdbms {
 
     fn get_db_type_name(type_info: &sqlx::postgres::PgTypeInfo) -> String {
         match type_info.kind() {
-            PgTypeKind::Enum(_) | PgTypeKind::Composite(_) => type_info.name().to_string(),
+            PgTypeKind::Enum(_) | PgTypeKind::Composite(_) | PgTypeKind::Domain(_) => {
+                type_info.name().to_string()
+            }
             PgTypeKind::Array(element)
                 if matches!(
                     element.kind(),
-                    PgTypeKind::Enum(_) | PgTypeKind::Composite(_)
+                    PgTypeKind::Enum(_) | PgTypeKind::Composite(_) | PgTypeKind::Domain(_)
                 ) =>
             {
                 format!("{}[]", element.name())
@@ -1176,26 +1169,78 @@ pub(crate) mod sqlx_rdbms {
         }
     }
 
-    fn get_bounds<T>(range: PgRange<T>) -> (Bound<T>, Bound<T>) {
-        (range.start, range.end)
+    impl<T> From<Range<T>> for PgRange<T> {
+        fn from(range: Range<T>) -> Self {
+            PgRange {
+                start: range.start,
+                end: range.end,
+            }
+        }
+    }
+
+    impl<T> From<PgRange<T>> for Range<T> {
+        fn from(range: PgRange<T>) -> Self {
+            Range {
+                start: range.start,
+                end: range.end,
+            }
+        }
+    }
+
+    impl From<PgInterval> for Interval {
+        fn from(interval: PgInterval) -> Self {
+            Self {
+                months: interval.months,
+                days: interval.days,
+                microseconds: interval.microseconds,
+            }
+        }
+    }
+
+    impl From<Interval> for PgInterval {
+        fn from(interval: Interval) -> Self {
+            Self {
+                months: interval.months,
+                days: interval.days,
+                microseconds: interval.microseconds,
+            }
+        }
+    }
+
+    impl From<PgTimeTz> for TimeTz {
+        fn from(value: PgTimeTz) -> Self {
+            Self {
+                time: value.time,
+                offset: value.offset,
+            }
+        }
+    }
+
+    impl From<TimeTz> for PgTimeTz {
+        fn from(value: TimeTz) -> Self {
+            Self {
+                time: value.time,
+                offset: value.offset,
+            }
+        }
     }
 
     trait PgValueGetter {
         fn try_get_value<T>(&mut self) -> Result<T, String>
         where
-            T: for<'a> Decode<'a, sqlx::Postgres> + Type<sqlx::Postgres>;
+            T: for<'a> sqlx::Decode<'a, sqlx::Postgres> + Type<sqlx::Postgres>;
     }
 
     trait PgValueSetter<'a> {
         fn try_set_value<T>(&mut self, value: T) -> Result<(), String>
         where
-            T: 'a + Encode<'a, sqlx::Postgres> + Type<sqlx::Postgres>;
+            T: 'a + sqlx::Encode<'a, sqlx::Postgres> + Type<sqlx::Postgres>;
     }
 
     impl<'a> PgValueSetter<'a> for sqlx::query::Query<'a, sqlx::Postgres, sqlx::postgres::PgArguments> {
         fn try_set_value<T>(&mut self, value: T) -> Result<(), String>
         where
-            T: 'a + Encode<'a, sqlx::Postgres> + Type<sqlx::Postgres>,
+            T: 'a + sqlx::Encode<'a, sqlx::Postgres> + Type<sqlx::Postgres>,
         {
             self.try_bind(value).map_err(|e| e.to_string())
         }
@@ -1204,7 +1249,7 @@ pub(crate) mod sqlx_rdbms {
     impl<'a> PgValueSetter<'a> for sqlx::postgres::types::PgRecordEncoder<'a> {
         fn try_set_value<T>(&mut self, value: T) -> Result<(), String>
         where
-            T: 'a + Encode<'a, sqlx::Postgres> + Type<sqlx::Postgres>,
+            T: 'a + sqlx::Encode<'a, sqlx::Postgres> + Type<sqlx::Postgres>,
         {
             let _ = self.encode(value).map_err(|e| e.to_string());
             Ok(())
@@ -1214,7 +1259,7 @@ pub(crate) mod sqlx_rdbms {
     impl PgValueGetter for sqlx::postgres::types::PgRecordDecoder<'_> {
         fn try_get_value<T>(&mut self) -> Result<T, String>
         where
-            T: for<'a> Decode<'a, sqlx::Postgres> + Type<sqlx::Postgres>,
+            T: for<'a> sqlx::Decode<'a, sqlx::Postgres> + Type<sqlx::Postgres>,
         {
             self.try_decode::<T>().map_err(|e| e.to_string())
         }
@@ -1234,24 +1279,15 @@ pub(crate) mod sqlx_rdbms {
     impl PgValueGetter for PgRowColumnValueGetter<'_> {
         fn try_get_value<T>(&mut self) -> Result<T, String>
         where
-            T: for<'a> Decode<'a, sqlx::Postgres> + Type<sqlx::Postgres>,
+            T: for<'a> sqlx::Decode<'a, sqlx::Postgres> + Type<sqlx::Postgres>,
         {
             self.row.try_get(self.index).map_err(|e| e.to_string())
         }
     }
 
-    struct PgEnum(String);
-
-    impl From<PgEnum> for String {
-        fn from(value: PgEnum) -> Self {
-            value.0
-        }
-    }
-
-    impl sqlx::types::Type<sqlx::Postgres> for PgEnum {
+    impl sqlx::types::Type<sqlx::Postgres> for Enum {
         fn type_info() -> sqlx::postgres::PgTypeInfo {
             <&str as sqlx::types::Type<sqlx::Postgres>>::type_info()
-            // sqlx::postgres::PgTypeInfo::with_oid(Oid(3500)) // anyenum
         }
 
         fn compatible(ty: &sqlx::postgres::PgTypeInfo) -> bool {
@@ -1259,32 +1295,83 @@ pub(crate) mod sqlx_rdbms {
         }
     }
 
-    impl sqlx::postgres::PgHasArrayType for PgEnum {
-        fn array_type_info() -> sqlx::postgres::PgTypeInfo {
-            <&str as sqlx::postgres::PgHasArrayType>::array_type_info()
-        }
+    // impl sqlx::postgres::PgHasArrayType for Enum {
+    //     fn array_type_info() -> sqlx::postgres::PgTypeInfo {
+    //         <&str as sqlx::postgres::PgHasArrayType>::array_type_info()
+    //     }
+    //
+    //     fn array_compatible(ty: &sqlx::postgres::PgTypeInfo) -> bool {
+    //         matches!(ty.kind(), PgTypeKind::Array(ty) if <Enum as sqlx::types::Type<sqlx::Postgres>>::compatible(ty))
+    //     }
+    // }
 
-        fn array_compatible(ty: &sqlx::postgres::PgTypeInfo) -> bool {
-            matches!(ty.kind(), PgTypeKind::Array(ty) if <PgEnum as sqlx::types::Type<sqlx::Postgres>>::compatible(ty))
-        }
-    }
-
-    impl<'r> sqlx::Decode<'r, sqlx::Postgres> for PgEnum {
+    impl<'r> sqlx::Decode<'r, sqlx::Postgres> for Enum {
         fn decode(
             value: sqlx::postgres::PgValueRef<'r>,
         ) -> Result<Self, Box<dyn std::error::Error + 'static + Send + Sync>> {
-            Ok(Self(<String as sqlx::Decode<sqlx::Postgres>>::decode(
-                value,
-            )?))
+            let type_info = &value.type_info();
+            let name = type_info.name().to_string();
+            if matches!(type_info.kind(), PgTypeKind::Enum(_)) {
+                let v = <String as sqlx::Decode<sqlx::Postgres>>::decode(value)?;
+                Ok(Enum::new(name, v))
+            } else {
+                Err(format!("Type '{}' is not supported", name).into())
+            }
         }
     }
 
-    impl sqlx::Encode<'_, sqlx::Postgres> for PgEnum {
+    impl sqlx::Encode<'_, sqlx::Postgres> for Enum {
         fn encode_by_ref(
             &self,
             buf: &mut sqlx::postgres::PgArgumentBuffer,
         ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
-            <String as sqlx::Encode<sqlx::Postgres>>::encode_by_ref(&self.0, buf)
+            <String as sqlx::Encode<sqlx::Postgres>>::encode_by_ref(&self.value, buf)
+        }
+
+        fn produces(&self) -> Option<sqlx::postgres::PgTypeInfo> {
+            Some(sqlx::postgres::PgTypeInfo::with_name(
+                self.name.clone().leak(),
+            ))
+        }
+    }
+
+    struct PgEnums(Vec<Enum>);
+
+    impl sqlx::Type<sqlx::Postgres> for PgEnums {
+        fn type_info() -> sqlx::postgres::PgTypeInfo {
+            sqlx::postgres::PgTypeInfo::with_oid(Oid(2277))
+        }
+
+        fn compatible(ty: &sqlx::postgres::PgTypeInfo) -> bool {
+            matches!(ty.kind(), PgTypeKind::Array(ty) if <Enum as sqlx::types::Type<sqlx::Postgres>>::compatible(ty))
+        }
+    }
+
+    impl sqlx::Encode<'_, sqlx::Postgres> for PgEnums {
+        fn encode_by_ref(
+            &self,
+            buf: &mut sqlx::postgres::PgArgumentBuffer,
+        ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
+            <Vec<Enum> as sqlx::Encode<sqlx::Postgres>>::encode_by_ref(&self.0, buf)
+        }
+
+        fn produces(&self) -> Option<sqlx::postgres::PgTypeInfo> {
+            if self.0.is_empty() {
+                None
+            } else {
+                let first = &self.0[0];
+                let name = format!("_{}", first.name);
+                Some(sqlx::postgres::PgTypeInfo::with_name(name.leak()))
+            }
+        }
+    }
+
+    impl<'r> sqlx::Decode<'r, sqlx::Postgres> for PgEnums {
+        fn decode(
+            value: sqlx::postgres::PgValueRef<'r>,
+        ) -> Result<Self, Box<dyn std::error::Error + 'static + Send + Sync>> {
+            let value = <Vec<Enum> as sqlx::Decode<sqlx::Postgres>>::decode(value)?;
+            Ok(Self(value))
         }
     }
 
@@ -1390,9 +1477,8 @@ pub(crate) mod sqlx_rdbms {
     }
 
     // //https://github.com/launchbadge/sqlx/blob/42ce24dab87aad98f041cafb35cf9a7d5b2b09a7/tests/postgres/postgres.rs#L1241-L1281
-    struct PgCompositeValue(String, Vec<DbValue>);
 
-    impl sqlx::Type<sqlx::Postgres> for PgCompositeValue {
+    impl sqlx::Type<sqlx::Postgres> for Composite {
         fn type_info() -> sqlx::postgres::PgTypeInfo {
             sqlx::postgres::PgTypeInfo::with_oid(Oid(2249)) // pseudo composite type
         }
@@ -1402,13 +1488,13 @@ pub(crate) mod sqlx_rdbms {
         }
     }
 
-    impl sqlx::Encode<'_, sqlx::Postgres> for PgCompositeValue {
+    impl sqlx::Encode<'_, sqlx::Postgres> for Composite {
         fn encode_by_ref(
             &self,
             buf: &mut sqlx::postgres::PgArgumentBuffer,
         ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
             let mut encoder = sqlx::postgres::types::PgRecordEncoder::new(buf);
-            for v in self.1.iter() {
+            for v in self.values.iter() {
                 set_value(&mut encoder, v.clone())?;
             }
             encoder.finish();
@@ -1416,7 +1502,9 @@ pub(crate) mod sqlx_rdbms {
         }
 
         fn produces(&self) -> Option<sqlx::postgres::PgTypeInfo> {
-            Some(sqlx::postgres::PgTypeInfo::with_name(self.0.clone().leak()))
+            Some(sqlx::postgres::PgTypeInfo::with_name(
+                self.name.clone().leak(),
+            ))
         }
     }
 
@@ -1424,7 +1512,7 @@ pub(crate) mod sqlx_rdbms {
         type_name: String,
         attributes: Vec<(String, DbColumnType)>,
         value: sqlx::postgres::PgValueRef,
-    ) -> Result<PgCompositeValue, String> {
+    ) -> Result<Composite, String> {
         let mut decoder =
             sqlx::postgres::types::PgRecordDecoder::new(value).map_err(|e| e.to_string())?;
         let mut values: Vec<DbValue> = Vec::with_capacity(attributes.len());
@@ -1432,10 +1520,10 @@ pub(crate) mod sqlx_rdbms {
             let db_value = get_db_value(&db_column_type, &mut decoder)?;
             values.push(db_value);
         }
-        Ok(PgCompositeValue(type_name, values))
+        Ok(Composite::new(type_name, values))
     }
 
-    impl<'r> sqlx::Decode<'r, sqlx::Postgres> for PgCompositeValue {
+    impl<'r> sqlx::Decode<'r, sqlx::Postgres> for Composite {
         fn decode(
             value: sqlx::postgres::PgValueRef<'r>,
         ) -> Result<Self, Box<dyn std::error::Error + 'static + Send + Sync>> {
@@ -1450,24 +1538,24 @@ pub(crate) mod sqlx_rdbms {
         }
     }
 
-    struct PgCompositeValues(Vec<PgCompositeValue>);
+    struct PgComposites(Vec<Composite>);
 
-    impl sqlx::Type<sqlx::Postgres> for PgCompositeValues {
+    impl sqlx::Type<sqlx::Postgres> for PgComposites {
         fn type_info() -> sqlx::postgres::PgTypeInfo {
             sqlx::postgres::PgTypeInfo::with_oid(Oid(2277)) // pseudo array type
         }
 
         fn compatible(ty: &sqlx::postgres::PgTypeInfo) -> bool {
-            matches!(ty.kind(), PgTypeKind::Array(ty) if <PgCompositeValue as sqlx::types::Type<sqlx::Postgres>>::compatible(ty))
+            matches!(ty.kind(), PgTypeKind::Array(ty) if <Composite as sqlx::types::Type<sqlx::Postgres>>::compatible(ty))
         }
     }
 
-    impl sqlx::Encode<'_, sqlx::Postgres> for PgCompositeValues {
+    impl sqlx::Encode<'_, sqlx::Postgres> for PgComposites {
         fn encode_by_ref(
             &self,
             buf: &mut sqlx::postgres::PgArgumentBuffer,
         ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
-            <Vec<PgCompositeValue> as sqlx::Encode<sqlx::Postgres>>::encode_by_ref(&self.0, buf)
+            <Vec<Composite> as sqlx::Encode<sqlx::Postgres>>::encode_by_ref(&self.0, buf)
         }
 
         fn produces(&self) -> Option<sqlx::postgres::PgTypeInfo> {
@@ -1475,19 +1563,18 @@ pub(crate) mod sqlx_rdbms {
                 None
             } else {
                 let first = &self.0[0];
-                let name = format!("_{}", first.0);
+                let name = format!("_{}", first.name);
                 Some(sqlx::postgres::PgTypeInfo::with_name(name.leak()))
             }
         }
     }
 
-    impl<'r> sqlx::Decode<'r, sqlx::Postgres> for PgCompositeValues {
+    impl<'r> sqlx::Decode<'r, sqlx::Postgres> for PgComposites {
         fn decode(
             value: sqlx::postgres::PgValueRef<'r>,
         ) -> Result<Self, Box<dyn std::error::Error + 'static + Send + Sync>> {
-            Ok(Self(<Vec<PgCompositeValue> as sqlx::Decode<
-                sqlx::Postgres,
-            >>::decode(value)?))
+            let value = <Vec<Composite> as sqlx::Decode<sqlx::Postgres>>::decode(value)?;
+            Ok(Self(value))
         }
     }
 
@@ -1605,6 +1692,122 @@ pub mod types {
     use uuid::Uuid;
 
     #[derive(Clone, Debug, Eq, PartialEq)]
+    pub struct EnumType {
+        pub name: String,
+    }
+    impl EnumType {
+        pub fn new(name: String) -> Self {
+            EnumType { name }
+        }
+    }
+
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    pub struct CompositeType {
+        pub name: String,
+        pub attributes: Vec<(String, DbColumnType)>,
+    }
+
+    impl CompositeType {
+        pub fn new(name: String, attributes: Vec<(String, DbColumnType)>) -> Self {
+            CompositeType { name, attributes }
+        }
+    }
+
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    pub struct DomainType {
+        pub name: String,
+        pub base_type: Box<DbColumnType>,
+    }
+
+    impl DomainType {
+        pub fn new(name: String, base_type: DbColumnType) -> Self {
+            DomainType {
+                name,
+                base_type: Box::new(base_type),
+            }
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct Range<T> {
+        pub start: Bound<T>,
+        pub end: Bound<T>,
+    }
+
+    impl<T> Range<T> {
+        pub fn new(start: Bound<T>, end: Bound<T>) -> Self {
+            Range { start, end }
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct Interval {
+        pub months: i32,
+        pub days: i32,
+        pub microseconds: i64,
+    }
+
+    impl Interval {
+        pub fn new(months: i32, days: i32, microseconds: i64) -> Self {
+            Interval {
+                months,
+                days,
+                microseconds,
+            }
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct TimeTz {
+        pub time: chrono::NaiveTime,
+        pub offset: chrono::FixedOffset,
+    }
+
+    impl TimeTz {
+        pub fn new(time: chrono::NaiveTime, offset: chrono::FixedOffset) -> Self {
+            TimeTz { time, offset }
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct Enum {
+        pub name: String,
+        pub value: String,
+    }
+
+    impl Enum {
+        pub fn new(name: String, value: String) -> Self {
+            Enum { name, value }
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct Composite {
+        pub name: String,
+        pub values: Vec<DbValue>,
+    }
+    impl Composite {
+        pub fn new(name: String, values: Vec<DbValue>) -> Self {
+            Composite { name, values }
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct Domain {
+        pub name: String,
+        pub value: Box<DbValue>,
+    }
+
+    impl Domain {
+        pub fn new(name: String, value: DbValue) -> Self {
+            Domain {
+                name,
+                value: Box::new(value),
+            }
+        }
+    }
+
+    #[derive(Clone, Debug, Eq, PartialEq)]
     pub enum DbColumnTypePrimitive {
         Character,
         Int2,
@@ -1641,8 +1844,9 @@ pub mod types {
         Tstzrange,
         Daterange,
         Money,
-        CustomEnum(String),
-        CustomComposite((String, Vec<(String, DbColumnType)>)),
+        Enum(EnumType),
+        Composite(CompositeType),
+        Domain(DomainType),
         Oid,
     }
 
@@ -1684,14 +1888,20 @@ pub mod types {
                 DbColumnTypePrimitive::Tstzrange => write!(f, "tstzrange"),
                 DbColumnTypePrimitive::Daterange => write!(f, "daterange"),
                 DbColumnTypePrimitive::Oid => write!(f, "oid"),
-                DbColumnTypePrimitive::CustomEnum(v) => write!(f, "custom enum: {}", v),
-                DbColumnTypePrimitive::CustomComposite(v) => {
+                DbColumnTypePrimitive::Enum(v) => write!(f, "enum: {}", v.name),
+                DbColumnTypePrimitive::Composite(v) => {
                     write!(
                         f,
-                        "custom composite: {} ({})",
-                        v.0,
-                        v.1.iter().map(|v| format!("{} {}", v.0, v.1)).format(", ")
+                        "composite: {} ({})",
+                        v.name,
+                        v.attributes
+                            .iter()
+                            .map(|v| format!("{} {}", v.0, v.1))
+                            .format(", ")
                     )
+                }
+                DbColumnTypePrimitive::Domain(v) => {
+                    write!(f, "domain: {} ({})", v.name, v.base_type)
                 }
                 DbColumnTypePrimitive::Money => write!(f, "money"),
             }
@@ -1705,7 +1915,7 @@ pub mod types {
     }
 
     impl DbColumnType {
-        pub(crate) fn to_array(self) -> DbColumnType {
+        pub(crate) fn into_array(self) -> DbColumnType {
             if let DbColumnType::Primitive(v) = self {
                 DbColumnType::Array(v)
             } else {
@@ -1737,8 +1947,8 @@ pub mod types {
         Timestamptz(chrono::DateTime<chrono::Utc>),
         Date(chrono::NaiveDate),
         Time(chrono::NaiveTime),
-        Timetz((chrono::NaiveTime, chrono::FixedOffset)),
-        Interval((i32, i32, i64)),
+        Timetz(TimeTz),
+        Interval(Interval),
         Text(String),
         Varchar(String),
         Bpchar(String),
@@ -1753,20 +1963,16 @@ pub mod types {
         Macaddr(MacAddress),
         Bit(BitVec),
         Varbit(BitVec),
-        Int4range((Bound<i32>, Bound<i32>)),
-        Int8range((Bound<i64>, Bound<i64>)),
-        Numrange((Bound<BigDecimal>, Bound<BigDecimal>)),
-        Tsrange((Bound<chrono::NaiveDateTime>, Bound<chrono::NaiveDateTime>)),
-        Tstzrange(
-            (
-                Bound<chrono::DateTime<chrono::Utc>>,
-                Bound<chrono::DateTime<chrono::Utc>>,
-            ),
-        ),
-        Daterange((Bound<chrono::NaiveDate>, Bound<chrono::NaiveDate>)),
+        Int4range(Range<i32>),
+        Int8range(Range<i64>),
+        Numrange(Range<BigDecimal>),
+        Tsrange(Range<chrono::NaiveDateTime>),
+        Tstzrange(Range<chrono::DateTime<chrono::Utc>>),
+        Daterange(Range<chrono::NaiveDate>),
         Money(i64),
-        CustomEnum(String),
-        CustomComposite((String, Vec<DbValue>)),
+        Enum(Enum),
+        Composite(Composite),
+        Domain(Domain),
         Oid(u32),
         Null,
     }
@@ -1786,8 +1992,10 @@ pub mod types {
                 DbValuePrimitive::Timestamptz(v) => write!(f, "{}", v),
                 DbValuePrimitive::Date(v) => write!(f, "{}", v),
                 DbValuePrimitive::Time(v) => write!(f, "{}", v),
-                DbValuePrimitive::Timetz(v) => write!(f, "{} {}", v.0, v.1),
-                DbValuePrimitive::Interval(v) => write!(f, "{}m{}d{}ms", v.0, v.1, v.2),
+                DbValuePrimitive::Timetz(v) => write!(f, "{} {}", v.time, v.offset),
+                DbValuePrimitive::Interval(v) => {
+                    write!(f, "{}m{}d{}ms", v.months, v.days, v.microseconds)
+                }
                 DbValuePrimitive::Text(v) => write!(f, "{}", v),
                 DbValuePrimitive::Varchar(v) => write!(f, "{}", v),
                 DbValuePrimitive::Bpchar(v) => write!(f, "{}", v),
@@ -1802,18 +2010,19 @@ pub mod types {
                 DbValuePrimitive::Macaddr(v) => write!(f, "{}", v),
                 DbValuePrimitive::Bit(v) => write!(f, "{:?}", v),
                 DbValuePrimitive::Varbit(v) => write!(f, "{:?}", v),
-                DbValuePrimitive::Int4range(v) => write!(f, "{:?}, {:?}", v.0, v.1),
-                DbValuePrimitive::Int8range(v) => write!(f, "{:?}, {:?}", v.0, v.1),
-                DbValuePrimitive::Numrange(v) => write!(f, "{:?}, {:?}", v.0, v.1),
-                DbValuePrimitive::Tsrange(v) => write!(f, "{:?}, {:?}", v.0, v.1),
-                DbValuePrimitive::Tstzrange(v) => write!(f, "{:?}, {:?}", v.0, v.1),
-                DbValuePrimitive::Daterange(v) => write!(f, "{:?}, {:?}", v.0, v.1),
+                DbValuePrimitive::Int4range(v) => write!(f, "{:?}, {:?}", v.start, v.end),
+                DbValuePrimitive::Int8range(v) => write!(f, "{:?}, {:?}", v.start, v.end),
+                DbValuePrimitive::Numrange(v) => write!(f, "{:?}, {:?}", v.start, v.end),
+                DbValuePrimitive::Tsrange(v) => write!(f, "{:?}, {:?}", v.start, v.end),
+                DbValuePrimitive::Tstzrange(v) => write!(f, "{:?}, {:?}", v.start, v.end),
+                DbValuePrimitive::Daterange(v) => write!(f, "{:?}, {:?}", v.start, v.end),
                 DbValuePrimitive::Oid(v) => write!(f, "{}", v),
                 DbValuePrimitive::Money(v) => write!(f, "{}", v),
-                DbValuePrimitive::CustomEnum(v) => write!(f, "{}", v),
-                DbValuePrimitive::CustomComposite(v) => {
-                    write!(f, "{} ({})", v.0, v.1.iter().format(", "))
+                DbValuePrimitive::Enum(v) => write!(f, "{} ({})", v.name, v.value),
+                DbValuePrimitive::Composite(v) => {
+                    write!(f, "{} ({})", v.name, v.values.iter().format(", "))
                 }
+                DbValuePrimitive::Domain(v) => write!(f, "{} ({})", v.name, v.value),
                 DbValuePrimitive::Null => write!(f, "NULL"),
             }
         }

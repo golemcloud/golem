@@ -336,7 +336,7 @@ impl TryFrom<DbValuePrimitive> for crate::services::rdbms::postgres::types::DbVa
                 let value = v.try_into()?;
                 Ok(Self::Date(value))
             }
-            DbValuePrimitive::Interval(v) => Ok(Self::Interval((v.months, v.days, v.microseconds))),
+            DbValuePrimitive::Interval(v) => Ok(Self::Interval(v.into())),
             DbValuePrimitive::Text(s) => Ok(Self::Text(s)),
             DbValuePrimitive::Varchar(s) => Ok(Self::Varchar(s)),
             DbValuePrimitive::Bpchar(s) => Ok(Self::Bpchar(s)),
@@ -382,7 +382,7 @@ impl TryFrom<DbValuePrimitive> for crate::services::rdbms::postgres::types::DbVa
                 Ok(Self::Daterange(v))
             }
             DbValuePrimitive::Money(v) => Ok(Self::Money(v)),
-            DbValuePrimitive::CustomEnum(v) => Ok(Self::CustomEnum(v)),
+            DbValuePrimitive::CustomEnum(v) => todo!(),
             DbValuePrimitive::Null => Ok(Self::Null),
         }
     }
@@ -420,15 +420,9 @@ impl From<crate::services::rdbms::postgres::types::DbValuePrimitive> for DbValue
             crate::services::rdbms::postgres::types::DbValuePrimitive::Date(v) => {
                 Self::Date(v.into())
             }
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Interval((
-                months,
-                days,
-                microseconds,
-            )) => Self::Interval(Interval {
-                months,
-                days,
-                microseconds,
-            }),
+            crate::services::rdbms::postgres::types::DbValuePrimitive::Interval(v) => {
+                Self::Interval(v.into())
+            }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Text(s) => Self::Text(s),
             crate::services::rdbms::postgres::types::DbValuePrimitive::Varchar(s) => {
                 Self::Varchar(s)
@@ -488,10 +482,13 @@ impl From<crate::services::rdbms::postgres::types::DbValuePrimitive> for DbValue
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Oid(v) => Self::Oid(v),
             crate::services::rdbms::postgres::types::DbValuePrimitive::Money(v) => Self::Money(v),
-            crate::services::rdbms::postgres::types::DbValuePrimitive::CustomEnum(v) => {
-                Self::CustomEnum(v)
+            crate::services::rdbms::postgres::types::DbValuePrimitive::Enum(v) => {
+                todo!()
             }
-            crate::services::rdbms::postgres::types::DbValuePrimitive::CustomComposite(_) => {
+            crate::services::rdbms::postgres::types::DbValuePrimitive::Composite(_) => {
+                todo!()
+            }
+            crate::services::rdbms::postgres::types::DbValuePrimitive::Domain(_) => {
                 todo!()
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Null => Self::Null,
@@ -614,10 +611,13 @@ impl From<crate::services::rdbms::postgres::types::DbColumnTypePrimitive>
             }
             crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Uuid => Self::Uuid,
             crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Money => Self::Money,
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::CustomEnum(v) => {
-                Self::CustomEnum(v)
+            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Enum(v) => {
+                todo!()
             }
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::CustomComposite(v) => {
+            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Composite(v) => {
+                todo!()
+            }
+            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Domain(v) => {
                 todo!()
             }
         }
@@ -703,14 +703,24 @@ impl TryFrom<Time> for chrono::NaiveTime {
     }
 }
 
-impl TryFrom<Timetz> for (chrono::NaiveTime, chrono::FixedOffset) {
+impl TryFrom<Timetz> for crate::services::rdbms::postgres::types::TimeTz {
     type Error = String;
 
     fn try_from(value: Timetz) -> Result<Self, Self::Error> {
         let time = value.time.try_into()?;
         let offset = chrono::offset::FixedOffset::west_opt(value.offset)
             .ok_or("Offset value is not valid")?;
-        Ok((time, offset))
+        Ok(Self { time, offset })
+    }
+}
+
+impl From<Interval> for crate::services::rdbms::postgres::types::Interval {
+    fn from(v: Interval) -> Self {
+        Self {
+            months: v.months,
+            days: v.days,
+            microseconds: v.microseconds,
+        }
     }
 }
 
@@ -767,11 +777,21 @@ impl From<chrono::NaiveTime> for Time {
     }
 }
 
-impl From<(chrono::NaiveTime, chrono::FixedOffset)> for Timetz {
-    fn from(v: (chrono::NaiveTime, chrono::FixedOffset)) -> Self {
-        let time = v.0.into();
-        let offset = v.1.local_minus_utc();
+impl From<crate::services::rdbms::postgres::types::TimeTz> for Timetz {
+    fn from(v: crate::services::rdbms::postgres::types::TimeTz) -> Self {
+        let time = v.time.into();
+        let offset = v.offset.local_minus_utc();
         Timetz { time, offset }
+    }
+}
+
+impl From<crate::services::rdbms::postgres::types::Interval> for Interval {
+    fn from(v: crate::services::rdbms::postgres::types::Interval) -> Self {
+        Self {
+            months: v.months,
+            days: v.days,
+            microseconds: v.microseconds,
+        }
     }
 }
 
@@ -800,15 +820,12 @@ impl From<chrono::DateTime<chrono::Utc>> for Timestamptz {
     }
 }
 
-type NaiveDateTimeBounds = (Bound<chrono::NaiveDateTime>, Bound<chrono::NaiveDateTime>);
-type DateTimeBounds = (
-    Bound<chrono::DateTime<chrono::Utc>>,
-    Bound<chrono::DateTime<chrono::Utc>>,
-);
-type NaiveDateBounds = (Bound<chrono::NaiveDate>, Bound<chrono::NaiveDate>);
-type I32Bounds = (Bound<i32>, Bound<i32>);
-type I64Bounds = (Bound<i64>, Bound<i64>);
-type BigDecimalBounds = (Bound<BigDecimal>, Bound<BigDecimal>);
+type NaiveDateTimeBounds = crate::services::rdbms::postgres::types::Range<chrono::NaiveDateTime>;
+type NaiveDateBounds = crate::services::rdbms::postgres::types::Range<chrono::NaiveDate>;
+type DateTimeBounds = crate::services::rdbms::postgres::types::Range<chrono::DateTime<chrono::Utc>>;
+type I32Bounds = crate::services::rdbms::postgres::types::Range<i32>;
+type I64Bounds = crate::services::rdbms::postgres::types::Range<i64>;
+type BigDecimalBounds = crate::services::rdbms::postgres::types::Range<BigDecimal>;
 
 impl From<Int4range> for I32Bounds {
     fn from(value: Int4range) -> Self {
@@ -819,7 +836,10 @@ impl From<Int4range> for I32Bounds {
                 Int4bound::Unbounded => Bound::Unbounded,
             }
         }
-        (to_bounds(value.start), to_bounds(value.end))
+        Self {
+            start: to_bounds(value.start),
+            end: to_bounds(value.end),
+        }
     }
 }
 
@@ -832,7 +852,10 @@ impl From<Int8range> for I64Bounds {
                 Int8bound::Unbounded => Bound::Unbounded,
             }
         }
-        (to_bounds(value.start), to_bounds(value.end))
+        Self {
+            start: to_bounds(value.start),
+            end: to_bounds(value.end),
+        }
     }
 }
 
@@ -851,7 +874,10 @@ impl TryFrom<Numrange> for BigDecimalBounds {
                 Numbound::Unbounded => Ok(Bound::Unbounded),
             }
         }
-        Ok((to_bounds(value.start)?, to_bounds(value.end)?))
+        Ok(Self {
+            start: to_bounds(value.start)?,
+            end: to_bounds(value.end)?,
+        })
     }
 }
 
@@ -866,7 +892,10 @@ impl TryFrom<Daterange> for NaiveDateBounds {
                 Datebound::Unbounded => Ok(Bound::Unbounded),
             }
         }
-        Ok((to_bounds(value.start)?, to_bounds(value.end)?))
+        Ok(Self {
+            start: to_bounds(value.start)?,
+            end: to_bounds(value.end)?,
+        })
     }
 }
 
@@ -881,7 +910,10 @@ impl TryFrom<Tsrange> for NaiveDateTimeBounds {
                 Tsbound::Unbounded => Ok(Bound::Unbounded),
             }
         }
-        Ok((to_bounds(value.start)?, to_bounds(value.end)?))
+        Ok(Self {
+            start: to_bounds(value.start)?,
+            end: to_bounds(value.end)?,
+        })
     }
 }
 
@@ -896,7 +928,10 @@ impl TryFrom<Tstzrange> for DateTimeBounds {
                 Tstzbound::Unbounded => Ok(Bound::Unbounded),
             }
         }
-        Ok((to_bounds(value.start)?, to_bounds(value.end)?))
+        Ok(Self {
+            start: to_bounds(value.start)?,
+            end: to_bounds(value.end)?,
+        })
     }
 }
 
@@ -910,8 +945,8 @@ impl From<I32Bounds> for Int4range {
             }
         }
         Self {
-            start: to_bounds(value.0),
-            end: to_bounds(value.1),
+            start: to_bounds(value.start),
+            end: to_bounds(value.end),
         }
     }
 }
@@ -926,8 +961,8 @@ impl From<I64Bounds> for Int8range {
             }
         }
         Self {
-            start: to_bounds(value.0),
-            end: to_bounds(value.1),
+            start: to_bounds(value.start),
+            end: to_bounds(value.end),
         }
     }
 }
@@ -942,8 +977,8 @@ impl From<BigDecimalBounds> for Numrange {
             }
         }
         Self {
-            start: to_bounds(value.0),
-            end: to_bounds(value.1),
+            start: to_bounds(value.start),
+            end: to_bounds(value.end),
         }
     }
 }
@@ -958,8 +993,8 @@ impl From<DateTimeBounds> for Tstzrange {
             }
         }
         Self {
-            start: to_bounds(value.0),
-            end: to_bounds(value.1),
+            start: to_bounds(value.start),
+            end: to_bounds(value.end),
         }
     }
 }
@@ -974,8 +1009,8 @@ impl From<NaiveDateTimeBounds> for Tsrange {
             }
         }
         Self {
-            start: to_bounds(value.0),
-            end: to_bounds(value.1),
+            start: to_bounds(value.start),
+            end: to_bounds(value.end),
         }
     }
 }
@@ -990,8 +1025,8 @@ impl From<NaiveDateBounds> for Daterange {
             }
         }
         Self {
-            start: to_bounds(value.0),
-            end: to_bounds(value.1),
+            start: to_bounds(value.start),
+            end: to_bounds(value.end),
         }
     }
 }

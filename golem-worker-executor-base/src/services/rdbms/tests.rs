@@ -208,7 +208,7 @@ async fn postgres_execute_test_create_insert_select(
             )
             VALUES
             (
-                $1, $2::test_enum, $3, $4, $5, $6, $7, $8, $9,
+                $1, $2, $3, $4, $5, $6, $7, $8, $9,
                 $10, $11, $12, $13, $14, $15, $16, $17, $18, $19,
                 $20, $21, $22, $23, $24, $25, $26, $27, $28, $29,
                 $30, $31, $32, $33, $34, $35, $36, $37, $38::tsvector, $39::tsquery, $40
@@ -234,7 +234,7 @@ async fn postgres_execute_test_create_insert_select(
         )];
 
         if i % 2 == 0 {
-            let tstzbounds = (
+            let tstzbounds = postgres_types::Range::new(
                 Bound::Included(chrono::DateTime::from_naive_utc_and_offset(
                     chrono::NaiveDateTime::new(
                         chrono::NaiveDate::from_ymd_opt(2023, 3, 2 + i as u32).unwrap(),
@@ -250,7 +250,7 @@ async fn postgres_execute_test_create_insert_select(
                     chrono::Utc,
                 )),
             );
-            let tsbounds = (
+            let tsbounds = postgres_types::Range::new(
                 Bound::Included(chrono::NaiveDateTime::new(
                     chrono::NaiveDate::from_ymd_opt(2022, 2, 2 + i as u32).unwrap(),
                     chrono::NaiveTime::from_hms_opt(16, 50, 30).unwrap(),
@@ -262,8 +262,8 @@ async fn postgres_execute_test_create_insert_select(
             );
 
             params.append(&mut vec![
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::CustomEnum(
-                    "regular".to_string(),
+                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Enum(
+                    postgres_types::Enum::new("test_enum".to_string(), "regular".to_string()),
                 )),
                 postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Character(2)),
                 postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Int2(1)),
@@ -305,13 +305,15 @@ async fn postgres_execute_test_create_insert_select(
                 postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Time(
                     chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
                 )),
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Timetz((
-                    chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-                    chrono::Utc.fix(),
-                ))),
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Interval((
-                    10, 20, 30,
-                ))),
+                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Timetz(
+                    postgres_types::TimeTz::new(
+                        chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+                        chrono::Utc.fix(),
+                    ),
+                )),
+                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Interval(
+                    postgres_types::Interval::new(10, 20, 30),
+                )),
                 postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Bytea(
                     "bytea".as_bytes().to_vec(),
                 )),
@@ -347,30 +349,32 @@ async fn postgres_execute_test_create_insert_select(
                     "<foo>{}</foo>",
                     i
                 ))),
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Int4range((
-                    Bound::Included(1),
-                    Bound::Excluded(4),
-                ))),
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Int8range((
-                    Bound::Included(1),
-                    Bound::Unbounded,
-                ))),
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Numrange((
-                    Bound::Included(BigDecimal::from(11)),
-                    Bound::Excluded(BigDecimal::from(221)),
-                ))),
+                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Int4range(
+                    postgres_types::Range::new(Bound::Included(1), Bound::Excluded(4)),
+                )),
+                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Int8range(
+                    postgres_types::Range::new(Bound::Included(1), Bound::Unbounded),
+                )),
+                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Numrange(
+                    postgres_types::Range::new(
+                        Bound::Included(BigDecimal::from(11)),
+                        Bound::Excluded(BigDecimal::from(221)),
+                    ),
+                )),
                 postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Tsrange(
                     tsbounds,
                 )),
                 postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Tstzrange(
                     tstzbounds,
                 )),
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Daterange((
-                    Bound::Included(
-                        chrono::NaiveDate::from_ymd_opt(2023 + i as i32, 2, 3).unwrap(),
+                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Daterange(
+                    postgres_types::Range::new(
+                        Bound::Included(
+                            chrono::NaiveDate::from_ymd_opt(2023 + i as i32, 2, 3).unwrap(),
+                        ),
+                        Bound::Unbounded,
                     ),
-                    Bound::Unbounded,
-                ))),
+                )),
                 postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Money(12345)),
                 postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Jsonpath(
                     "$.id".to_string(),
@@ -381,8 +385,8 @@ async fn postgres_execute_test_create_insert_select(
                 postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Text(
                     "'fat' & 'rat' & !'cat'".to_string(),
                 )),
-                postgres_types::DbValue::Primitive(
-                    postgres_types::DbValuePrimitive::CustomComposite((
+                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Composite(
+                    postgres_types::Composite::new(
                         "inventory_item".to_string(),
                         vec![
                             postgres_types::DbValue::Primitive(
@@ -398,8 +402,8 @@ async fn postgres_execute_test_create_insert_select(
                                 postgres_types::DbValuePrimitive::Numeric(BigDecimal::from(111)),
                             ),
                         ],
-                    )),
-                ),
+                    ),
+                )),
             ]);
         } else {
             for _ in 0..39 {
@@ -434,7 +438,9 @@ async fn postgres_execute_test_create_insert_select(
             name: "enum_col".to_string(),
             ordinal: 1,
             db_type: postgres_types::DbColumnType::Primitive(
-                postgres_types::DbColumnTypePrimitive::CustomEnum("test_enum".to_string()),
+                postgres_types::DbColumnTypePrimitive::Enum(postgres_types::EnumType::new(
+                    "test_enum".to_string(),
+                )),
             ),
             db_type_name: "test_enum".to_string(),
         },
@@ -738,35 +744,37 @@ async fn postgres_execute_test_create_insert_select(
             name: "inventory_item_col".to_string(),
             ordinal: 39,
             db_type: postgres_types::DbColumnType::Primitive(
-                postgres_types::DbColumnTypePrimitive::CustomComposite((
-                    "inventory_item".to_string(),
-                    vec![
-                        (
-                            "product_id".to_string(),
-                            postgres_types::DbColumnType::Primitive(
-                                postgres_types::DbColumnTypePrimitive::Uuid,
+                postgres_types::DbColumnTypePrimitive::Composite(
+                    postgres_types::CompositeType::new(
+                        "inventory_item".to_string(),
+                        vec![
+                            (
+                                "product_id".to_string(),
+                                postgres_types::DbColumnType::Primitive(
+                                    postgres_types::DbColumnTypePrimitive::Uuid,
+                                ),
                             ),
-                        ),
-                        (
-                            "name".to_string(),
-                            postgres_types::DbColumnType::Primitive(
-                                postgres_types::DbColumnTypePrimitive::Text,
+                            (
+                                "name".to_string(),
+                                postgres_types::DbColumnType::Primitive(
+                                    postgres_types::DbColumnTypePrimitive::Text,
+                                ),
                             ),
-                        ),
-                        (
-                            "supplier_id".to_string(),
-                            postgres_types::DbColumnType::Primitive(
-                                postgres_types::DbColumnTypePrimitive::Int4,
+                            (
+                                "supplier_id".to_string(),
+                                postgres_types::DbColumnType::Primitive(
+                                    postgres_types::DbColumnTypePrimitive::Int4,
+                                ),
                             ),
-                        ),
-                        (
-                            "price".to_string(),
-                            postgres_types::DbColumnType::Primitive(
-                                postgres_types::DbColumnTypePrimitive::Numeric,
+                            (
+                                "price".to_string(),
+                                postgres_types::DbColumnType::Primitive(
+                                    postgres_types::DbColumnTypePrimitive::Numeric,
+                                ),
                             ),
-                        ),
-                    ],
-                )),
+                        ],
+                    ),
+                ),
             ),
             db_type_name: "inventory_item".to_string(),
         },
@@ -967,7 +975,7 @@ async fn postgres_execute_test_create_insert_select_array(
             )
             VALUES
             (
-                $1, $2::a_test_enum[], $3, $4, $5, $6, $7, $8, $9,
+                $1, $2, $3, $4, $5, $6, $7, $8, $9,
                 $10, $11, $12, $13, $14, $15, $16, $17, $18, $19,
                 $20, $21, $22, $23, $24, $25, $26, $27, $28, $29,
                 $30, $31, $32, $33, $34, $35, $36, $37, $38::tsvector[], $39::tsquery[], $40
@@ -993,7 +1001,7 @@ async fn postgres_execute_test_create_insert_select_array(
         )];
 
         if i % 2 == 0 {
-            let tstzbounds = (
+            let tstzbounds = postgres_types::Range::new(
                 Bound::Included(chrono::DateTime::from_naive_utc_and_offset(
                     chrono::NaiveDateTime::new(
                         chrono::NaiveDate::from_ymd_opt(2023, 3, 2 + i as u32).unwrap(),
@@ -1009,7 +1017,7 @@ async fn postgres_execute_test_create_insert_select_array(
                     chrono::Utc,
                 )),
             );
-            let tsbounds = (
+            let tsbounds = postgres_types::Range::new(
                 Bound::Included(chrono::NaiveDateTime::new(
                     chrono::NaiveDate::from_ymd_opt(2022, 2, 2 + i as u32).unwrap(),
                     chrono::NaiveTime::from_hms_opt(16, 50, 30).unwrap(),
@@ -1022,8 +1030,14 @@ async fn postgres_execute_test_create_insert_select_array(
 
             params.append(&mut vec![
                 postgres_types::DbValue::Array(vec![
-                    postgres_types::DbValuePrimitive::CustomEnum("second".to_string()),
-                    postgres_types::DbValuePrimitive::CustomEnum("third".to_string()),
+                    postgres_types::DbValuePrimitive::Enum(postgres_types::Enum::new(
+                        "a_test_enum".to_string(),
+                        "second".to_string(),
+                    )),
+                    postgres_types::DbValuePrimitive::Enum(postgres_types::Enum::new(
+                        "a_test_enum".to_string(),
+                        "third".to_string(),
+                    )),
                 ]),
                 postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Character(
                     2,
@@ -1071,13 +1085,15 @@ async fn postgres_execute_test_create_insert_select_array(
                 postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Time(
                     chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
                 )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Timetz((
-                    chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-                    chrono::Utc.fix(),
-                ))]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Interval((
-                    10, 20, 30,
-                ))]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Timetz(
+                    postgres_types::TimeTz::new(
+                        chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+                        chrono::Utc.fix(),
+                    ),
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Interval(
+                    postgres_types::Interval::new(10, 20, 30),
+                )]),
                 postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Bytea(
                     "bytea".as_bytes().to_vec(),
                 )]),
@@ -1117,15 +1133,17 @@ async fn postgres_execute_test_create_insert_select_array(
                     format!("<foo>{}</foo>", i),
                 )]),
                 postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Int4range(
-                    (Bound::Included(1), Bound::Excluded(4)),
+                    postgres_types::Range::new(Bound::Included(1), Bound::Excluded(4)),
                 )]),
                 postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Int8range(
-                    (Bound::Included(1), Bound::Unbounded),
+                    postgres_types::Range::new(Bound::Included(1), Bound::Unbounded),
                 )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Numrange((
-                    Bound::Included(BigDecimal::from(11)),
-                    Bound::Excluded(BigDecimal::from(221)),
-                ))]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Numrange(
+                    postgres_types::Range::new(
+                        Bound::Included(BigDecimal::from(11)),
+                        Bound::Excluded(BigDecimal::from(221)),
+                    ),
+                )]),
                 postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Tsrange(
                     tsbounds,
                 )]),
@@ -1133,7 +1151,7 @@ async fn postgres_execute_test_create_insert_select_array(
                     tstzbounds,
                 )]),
                 postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Daterange(
-                    (
+                    postgres_types::Range::new(
                         Bound::Included(
                             chrono::NaiveDate::from_ymd_opt(2023 + i as i32, 2, 3).unwrap(),
                         ),
@@ -1150,8 +1168,8 @@ async fn postgres_execute_test_create_insert_select_array(
                 postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Text(
                     "'fat' & 'rat' & !'cat'".to_string(),
                 )]),
-                postgres_types::DbValue::Array(vec![
-                    postgres_types::DbValuePrimitive::CustomComposite((
+                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Composite(
+                    postgres_types::Composite::new(
                         "a_inventory_item".to_string(),
                         vec![
                             postgres_types::DbValue::Primitive(
@@ -1167,8 +1185,8 @@ async fn postgres_execute_test_create_insert_select_array(
                                 postgres_types::DbValuePrimitive::Numeric(BigDecimal::from(111)),
                             ),
                         ],
-                    )),
-                ]),
+                    ),
+                )]),
             ]);
         } else {
             for _ in 0..39 {
@@ -1201,7 +1219,9 @@ async fn postgres_execute_test_create_insert_select_array(
             name: "enum_col".to_string(),
             ordinal: 1,
             db_type: postgres_types::DbColumnType::Array(
-                postgres_types::DbColumnTypePrimitive::CustomEnum("a_test_enum".to_string()),
+                postgres_types::DbColumnTypePrimitive::Enum(postgres_types::EnumType::new(
+                    "a_test_enum".to_string(),
+                )),
             ),
             db_type_name: "a_test_enum[]".to_string(),
         },
@@ -1505,35 +1525,37 @@ async fn postgres_execute_test_create_insert_select_array(
             name: "inventory_item_col".to_string(),
             ordinal: 39,
             db_type: postgres_types::DbColumnType::Array(
-                postgres_types::DbColumnTypePrimitive::CustomComposite((
-                    "a_inventory_item".to_string(),
-                    vec![
-                        (
-                            "product_id".to_string(),
-                            postgres_types::DbColumnType::Primitive(
-                                postgres_types::DbColumnTypePrimitive::Uuid,
+                postgres_types::DbColumnTypePrimitive::Composite(
+                    postgres_types::CompositeType::new(
+                        "a_inventory_item".to_string(),
+                        vec![
+                            (
+                                "product_id".to_string(),
+                                postgres_types::DbColumnType::Primitive(
+                                    postgres_types::DbColumnTypePrimitive::Uuid,
+                                ),
                             ),
-                        ),
-                        (
-                            "name".to_string(),
-                            postgres_types::DbColumnType::Primitive(
-                                postgres_types::DbColumnTypePrimitive::Text,
+                            (
+                                "name".to_string(),
+                                postgres_types::DbColumnType::Primitive(
+                                    postgres_types::DbColumnTypePrimitive::Text,
+                                ),
                             ),
-                        ),
-                        (
-                            "supplier_id".to_string(),
-                            postgres_types::DbColumnType::Primitive(
-                                postgres_types::DbColumnTypePrimitive::Int4,
+                            (
+                                "supplier_id".to_string(),
+                                postgres_types::DbColumnType::Primitive(
+                                    postgres_types::DbColumnTypePrimitive::Int4,
+                                ),
                             ),
-                        ),
-                        (
-                            "price".to_string(),
-                            postgres_types::DbColumnType::Primitive(
-                                postgres_types::DbColumnTypePrimitive::Numeric,
+                            (
+                                "price".to_string(),
+                                postgres_types::DbColumnType::Primitive(
+                                    postgres_types::DbColumnTypePrimitive::Numeric,
+                                ),
                             ),
-                        ),
-                    ],
-                )),
+                        ],
+                    ),
+                ),
             ),
             db_type_name: "a_inventory_item[]".to_string(),
         },
