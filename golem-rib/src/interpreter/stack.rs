@@ -38,7 +38,12 @@ impl InterpreterStack {
 
     // Initialise a record in the stack
     pub fn create_record(&mut self, fields: Vec<NameTypePair>) {
-        self.push_val(ValueAndType::new(Value::Record(vec![]), record(fields)));
+        self.push_val(ValueAndType::new(
+            Value::Record(
+                vec![Value::Tuple(vec![]); fields.len()], // pre-initializing with () values, to be replaced later by UpdateRecord instructions
+            ),
+            record(fields),
+        ));
     }
 
     pub fn pop(&mut self) -> Option<RibInterpreterStackValue> {
@@ -92,7 +97,7 @@ impl InterpreterStack {
             .iter()
             .map(|type_value| {
                 type_value.get_literal().ok_or(format!(
-                    "Internal Error: Failed to convert last {} in the stack to literals",
+                    "Internal Error: Failed to convert last {} in the stack to literals {type_value:?}",
                     n
                 ))
             })

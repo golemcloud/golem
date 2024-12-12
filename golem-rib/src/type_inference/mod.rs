@@ -1769,7 +1769,6 @@ mod type_inference_tests {
         use crate::type_inference::type_inference_tests::internal;
         use crate::{Expr, FunctionTypeRegistry, InferredType, Number, VariableId};
         use golem_wasm_ast::analysis::analysed_type::{list, option, str};
-        use golem_wasm_ast::analysis::AnalysedType;
 
         #[test]
         fn test_record_type_inference() {
@@ -1925,14 +1924,14 @@ mod type_inference_tests {
                 ),
             ]);
 
-            let worker_response = internal::create_none(Some(&str()));
+            let worker_response = internal::create_none(&str());
 
             let request_type = internal::get_analysed_type_record(vec![(
                 "body".to_string(),
                 request_body_type.clone(),
             )]);
 
-            let return_type = option(AnalysedType::try_from(&worker_response).unwrap());
+            let return_type = option(worker_response.typ);
 
             let component_metadata =
                 internal::get_analysed_exports("foo", vec![request_type.clone()], return_type);
@@ -2204,14 +2203,13 @@ mod type_inference_tests {
             ArmPattern, Expr, FunctionTypeRegistry, InferredType, MatchArm, MatchIdentifier,
             ParsedFunctionSite, VariableId,
         };
-        use golem_wasm_ast::analysis::analysed_type::u64;
+        use golem_wasm_ast::analysis::analysed_type::{option, u64};
         use golem_wasm_ast::analysis::TypeVariant;
         use golem_wasm_ast::analysis::{
             AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
             AnalysedType, NameOptionTypePair, NameTypePair, TypeEnum, TypeRecord, TypeU32,
         };
-        use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-        use golem_wasm_rpc::protobuf::TypedOption;
+        use golem_wasm_rpc::{Value, ValueAndType};
 
         pub(crate) fn get_function_type_registry() -> FunctionTypeRegistry {
             let metadata = vec![
@@ -2271,11 +2269,8 @@ mod type_inference_tests {
             AnalysedType::Record(record)
         }
 
-        pub(crate) fn create_none(typ: Option<&AnalysedType>) -> TypeAnnotatedValue {
-            TypeAnnotatedValue::Option(Box::new(TypedOption {
-                value: None,
-                typ: typ.map(|t| t.into()),
-            }))
+        pub(crate) fn create_none(typ: &AnalysedType) -> ValueAndType {
+            ValueAndType::new(Value::Option(None), option(typ.clone()))
         }
 
         pub(crate) fn get_analysed_exports(

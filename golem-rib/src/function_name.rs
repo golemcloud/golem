@@ -1730,7 +1730,7 @@ mod function_name_tests {
             ])])
             .expect("Resource params parsing failed")
             .expect("Resource params not found");
-        let nums = if let Value::Record(nums) = &args[0] {
+        let nums = if let Value::Record(nums) = &args[0].value {
             nums.clone()
         } else {
             panic!("Expected record")

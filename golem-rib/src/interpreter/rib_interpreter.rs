@@ -278,7 +278,7 @@ mod internal {
     use golem_wasm_rpc::{print_value_and_type, IntoValueAndType, Value, ValueAndType};
 
     use crate::interpreter::instruction_cursor::RibByteCodeCursor;
-    use golem_wasm_ast::analysis::analysed_type::{field, record, str, tuple};
+    use golem_wasm_ast::analysis::analysed_type::{str, tuple};
     use std::ops::Deref;
     use std::sync::Arc;
 
@@ -523,17 +523,27 @@ mod internal {
     ) -> Result<(), String> {
         let (current_record_fields, record_type) = interpreter_stack.try_pop_record()?;
 
+        let idx = record_type
+            .fields
+            .iter()
+            .position(|pair| pair.name == field_name)
+            .ok_or(format!(
+                "Invalid field name {field_name}, should be one of {}",
+                record_type
+                    .fields
+                    .iter()
+                    .map(|pair| pair.name.clone())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))?;
         let value = interpreter_stack.try_pop_val()?;
 
         let mut fields = current_record_fields;
-        let mut field_types = record_type.fields;
-
-        fields.push(value.value);
-        field_types.push(field(&field_name, value.typ));
+        fields[idx] = value.value;
 
         interpreter_stack.push_val(ValueAndType {
             value: Value::Record(fields),
-            typ: record(field_types),
+            typ: AnalysedType::Record(record_type),
         });
         Ok(())
     }
@@ -1146,19 +1156,18 @@ mod interpreter_tests {
     use super::*;
     use crate::{InstructionId, VariableId};
     use golem_wasm_ast::analysis::analysed_type::{field, list, record, s32};
-    use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-    use golem_wasm_rpc::protobuf::{NameValuePair, TypedList, TypedRecord};
+    use golem_wasm_rpc::{IntoValue, IntoValueAndType, Value, ValueAndType};
 
     #[test]
     async fn test_interpreter_for_literal() {
         let mut interpreter = Interpreter::default();
 
         let instructions = RibByteCode {
-            instructions: vec![RibIR::PushLit(TypeAnnotatedValue::S32(1))],
+            instructions: vec![RibIR::PushLit(1i32.into_value_and_type())],
         };
 
         let result = interpreter.run(instructions).await.unwrap();
-        assert_eq!(result.get_val().unwrap(), TypeAnnotatedValue::S32(1));
+        assert_eq!(result.get_val().unwrap(), 1i32.into_value_and_type());
     }
 
     #[test]
@@ -1167,8 +1176,8 @@ mod interpreter_tests {
 
         let instructions = RibByteCode {
             instructions: vec![
-                RibIR::PushLit(TypeAnnotatedValue::S32(1)),
-                RibIR::PushLit(TypeAnnotatedValue::U32(1)),
+                RibIR::PushLit(1i32.into_value_and_type()),
+                RibIR::PushLit(1u32.into_value_and_type()),
                 RibIR::EqualTo,
             ],
         };
@@ -1183,8 +1192,8 @@ mod interpreter_tests {
 
         let instructions = RibByteCode {
             instructions: vec![
-                RibIR::PushLit(TypeAnnotatedValue::S32(1)),
-                RibIR::PushLit(TypeAnnotatedValue::U32(2)),
+                RibIR::PushLit(1i32.into_value_and_type()),
+                RibIR::PushLit(2u32.into_value_and_type()),
                 RibIR::GreaterThan,
             ],
         };
@@ -1199,8 +1208,8 @@ mod interpreter_tests {
 
         let instructions = RibByteCode {
             instructions: vec![
-                RibIR::PushLit(TypeAnnotatedValue::S32(2)),
-                RibIR::PushLit(TypeAnnotatedValue::U32(1)),
+                RibIR::PushLit(2i32.into_value_and_type()),
+                RibIR::PushLit(1u32.into_value_and_type()),
                 RibIR::LessThan,
             ],
         };
@@ -1215,8 +1224,8 @@ mod interpreter_tests {
 
         let instructions = RibByteCode {
             instructions: vec![
-                RibIR::PushLit(TypeAnnotatedValue::S32(2)),
-                RibIR::PushLit(TypeAnnotatedValue::U32(3)),
+                RibIR::PushLit(2i32.into_value_and_type()),
+                RibIR::PushLit(3u32.into_value_and_type()),
                 RibIR::GreaterThanOrEqualTo,
             ],
         };
@@ -1231,8 +1240,8 @@ mod interpreter_tests {
 
         let instructions = RibByteCode {
             instructions: vec![
-                RibIR::PushLit(TypeAnnotatedValue::S32(2)), // rhs
-                RibIR::PushLit(TypeAnnotatedValue::S32(1)), // lhs
+                RibIR::PushLit(2i32.into_value_and_type()), // rhs
+                RibIR::PushLit(1i32.into_value_and_type()), // lhs
                 RibIR::LessThanOrEqualTo,
             ],
         };
@@ -1247,14 +1256,14 @@ mod interpreter_tests {
 
         let instructions = RibByteCode {
             instructions: vec![
-                RibIR::PushLit(TypeAnnotatedValue::S32(1)),
+                RibIR::PushLit(1i32.into_value_and_type()),
                 RibIR::AssignVar(VariableId::local_with_no_id("x")),
                 RibIR::LoadVar(VariableId::local_with_no_id("x")),
             ],
         };
 
         let result = interpreter.run(instructions).await.unwrap();
-        assert_eq!(result.get_val().unwrap(), TypeAnnotatedValue::S32(1));
+        assert_eq!(result.get_val().unwrap(), 1i32.into_value_and_type());
     }
 
     #[test]
@@ -1264,7 +1273,7 @@ mod interpreter_tests {
         let instructions = RibByteCode {
             instructions: vec![
                 RibIR::Jump(InstructionId::init()),
-                RibIR::PushLit(TypeAnnotatedValue::S32(1)),
+                RibIR::PushLit(1i32.into_value_and_type()),
                 RibIR::Label(InstructionId::init()),
             ],
         };
@@ -1281,9 +1290,9 @@ mod interpreter_tests {
 
         let instructions = RibByteCode {
             instructions: vec![
-                RibIR::PushLit(TypeAnnotatedValue::Bool(false)),
+                RibIR::PushLit(false.into_value_and_type()),
                 RibIR::JumpIfFalse(id.clone()),
-                RibIR::PushLit(TypeAnnotatedValue::S32(1)),
+                RibIR::PushLit(1i32.into_value_and_type()),
                 RibIR::Label(id),
             ],
         };
@@ -1298,8 +1307,8 @@ mod interpreter_tests {
 
         let instructions = RibByteCode {
             instructions: vec![
-                RibIR::PushLit(TypeAnnotatedValue::S32(2)),
-                RibIR::PushLit(TypeAnnotatedValue::S32(1)),
+                RibIR::PushLit(2i32.into_value_and_type()),
+                RibIR::PushLit(1i32.into_value_and_type()),
                 RibIR::CreateAndPushRecord(record(vec![field("x", s32()), field("y", s32())])),
                 RibIR::UpdateRecord("x".to_string()),
                 RibIR::UpdateRecord("y".to_string()),
@@ -1307,32 +1316,11 @@ mod interpreter_tests {
         };
 
         let result = interpreter.run(instructions).await.unwrap();
-        let expected = TypeAnnotatedValue::Record(TypedRecord {
-            value: vec![
-                NameValuePair {
-                    name: "x".to_string(),
-                    value: Some(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
-                        type_annotated_value: Some(TypeAnnotatedValue::S32(1)),
-                    }),
-                },
-                NameValuePair {
-                    name: "y".to_string(),
-                    value: Some(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
-                        type_annotated_value: Some(TypeAnnotatedValue::S32(2)),
-                    }),
-                },
-            ],
-            typ: vec![
-                golem_wasm_ast::analysis::protobuf::NameTypePair {
-                    name: "x".to_string(),
-                    typ: Some(golem_wasm_ast::analysis::protobuf::Type::from(&s32())),
-                },
-                golem_wasm_ast::analysis::protobuf::NameTypePair {
-                    name: "y".to_string(),
-                    typ: Some(golem_wasm_ast::analysis::protobuf::Type::from(&s32())),
-                },
-            ],
-        });
+        let expected = ValueAndType::new(
+            Value::Record(vec![1i32.into_value(), 2i32.into_value()]),
+            record(vec![field("x", s32()), field("y", s32())]),
+        );
+
         assert_eq!(result.get_val().unwrap(), expected);
     }
 
@@ -1342,24 +1330,17 @@ mod interpreter_tests {
 
         let instructions = RibByteCode {
             instructions: vec![
-                RibIR::PushLit(TypeAnnotatedValue::S32(2)),
-                RibIR::PushLit(TypeAnnotatedValue::S32(1)),
+                RibIR::PushLit(2i32.into_value_and_type()),
+                RibIR::PushLit(1i32.into_value_and_type()),
                 RibIR::PushList(list(s32()), 2),
             ],
         };
 
         let result = interpreter.run(instructions).await.unwrap();
-        let expected = TypeAnnotatedValue::List(TypedList {
-            values: vec![
-                golem_wasm_rpc::protobuf::TypeAnnotatedValue {
-                    type_annotated_value: Some(TypeAnnotatedValue::S32(1)),
-                },
-                golem_wasm_rpc::protobuf::TypeAnnotatedValue {
-                    type_annotated_value: Some(TypeAnnotatedValue::S32(2)),
-                },
-            ],
-            typ: Some(golem_wasm_ast::analysis::protobuf::Type::from(&s32())),
-        });
+        let expected = ValueAndType::new(
+            Value::List(vec![1i32.into_value(), 2i32.into_value()]),
+            list(s32()),
+        );
         assert_eq!(result.get_val().unwrap(), expected);
     }
 
@@ -1369,8 +1350,8 @@ mod interpreter_tests {
 
         let instructions = RibByteCode {
             instructions: vec![
-                RibIR::PushLit(TypeAnnotatedValue::S32(1)),
-                RibIR::PushLit(TypeAnnotatedValue::S32(2)),
+                RibIR::PushLit(1i32.into_value_and_type()),
+                RibIR::PushLit(2i32.into_value_and_type()),
                 RibIR::CreateAndPushRecord(record(vec![field("x", s32())])),
                 RibIR::UpdateRecord("x".to_string()),
                 RibIR::SelectField("x".to_string()),
@@ -1378,7 +1359,7 @@ mod interpreter_tests {
         };
 
         let result = interpreter.run(instructions).await.unwrap();
-        assert_eq!(result.get_val().unwrap(), TypeAnnotatedValue::S32(2));
+        assert_eq!(result.get_val().unwrap(), 2i32.into_value_and_type());
     }
 
     #[test]
@@ -1387,23 +1368,22 @@ mod interpreter_tests {
 
         let instructions = RibByteCode {
             instructions: vec![
-                RibIR::PushLit(TypeAnnotatedValue::S32(1)),
-                RibIR::PushLit(TypeAnnotatedValue::S32(2)),
+                RibIR::PushLit(1i32.into_value_and_type()),
+                RibIR::PushLit(2i32.into_value_and_type()),
                 RibIR::PushList(list(s32()), 2),
                 RibIR::SelectIndex(0),
             ],
         };
 
         let result = interpreter.run(instructions).await.unwrap();
-        assert_eq!(result.get_val().unwrap(), TypeAnnotatedValue::S32(2));
+        assert_eq!(result.get_val().unwrap(), 2i32.into_value_and_type());
     }
 
     mod list_reduce_interpreter_tests {
-        use test_r::test;
-
         use crate::interpreter::rib_interpreter::Interpreter;
         use crate::{compiler, Expr};
-        use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+        use golem_wasm_rpc::IntoValueAndType;
+        use test_r::test;
 
         #[test]
         async fn test_list_reduce() {
@@ -1429,7 +1409,7 @@ mod interpreter_tests {
                 .get_val()
                 .unwrap();
 
-            assert_eq!(result, TypeAnnotatedValue::U8(3));
+            assert_eq!(result, 3u8.into_value_and_type());
         }
 
         #[test]
@@ -1462,7 +1442,7 @@ mod interpreter_tests {
                 .get_val()
                 .unwrap();
 
-            assert_eq!(result, TypeAnnotatedValue::Str("foo, bar".to_string()));
+            assert_eq!(result, "foo, bar".into_value_and_type());
         }
 
         #[test]
@@ -1491,7 +1471,7 @@ mod interpreter_tests {
                 .get_val()
                 .unwrap();
 
-            assert_eq!(result, TypeAnnotatedValue::Str("foo, bar".to_string()));
+            assert_eq!(result, "foo, bar".into_value_and_type());
         }
 
         #[test]
@@ -1518,7 +1498,7 @@ mod interpreter_tests {
                 .get_val()
                 .unwrap();
 
-            assert_eq!(result, TypeAnnotatedValue::U8(0));
+            assert_eq!(result, 0u8.into_value_and_type());
         }
     }
 
@@ -1553,10 +1533,10 @@ mod interpreter_tests {
                 .unwrap();
 
             let expected = r#"["foo", "bar"]"#;
-            let expected_type_annotated_value =
-                golem_wasm_rpc::parse_type_annotated_value(&list(str()), expected).unwrap();
+            let expected_value =
+                golem_wasm_rpc::parse_value_and_type(&list(str()), expected).unwrap();
 
-            assert_eq!(result, expected_type_annotated_value);
+            assert_eq!(result, expected_value);
         }
 
         #[test]
@@ -1585,7 +1565,7 @@ mod interpreter_tests {
 
             let expected = r#"[]"#;
             let expected_type_annotated_value =
-                golem_wasm_rpc::parse_type_annotated_value(&list(str()), expected).unwrap();
+                golem_wasm_rpc::parse_value_and_type(&list(str()), expected).unwrap();
 
             assert_eq!(result, expected_type_annotated_value);
         }
@@ -1598,7 +1578,7 @@ mod interpreter_tests {
         use crate::interpreter::rib_interpreter::Interpreter;
         use crate::{compiler, Expr, FunctionTypeRegistry};
         use golem_wasm_ast::analysis::analysed_type::{field, record, str, tuple, u16, u64};
-        use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+        use golem_wasm_rpc::IntoValueAndType;
 
         #[test]
         async fn test_pattern_match_on_option_nested() {
@@ -1620,7 +1600,7 @@ mod interpreter_tests {
             let compiled = compiler::compile(&expr, &vec![]).unwrap();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
 
-            assert_eq!(result.get_val().unwrap(), TypeAnnotatedValue::U64(0));
+            assert_eq!(result.get_val().unwrap(), 0u64.into_value_and_type());
         }
 
         #[test]
@@ -1640,10 +1620,7 @@ mod interpreter_tests {
             let compiled = compiler::compile(&expr, &vec![]).unwrap();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
 
-            assert_eq!(
-                result.get_val().unwrap(),
-                TypeAnnotatedValue::Str("1 foo bar".to_string())
-            );
+            assert_eq!(result.get_val().unwrap(), "1 foo bar".into_value_and_type());
         }
 
         #[test]
@@ -1665,10 +1642,7 @@ mod interpreter_tests {
             let compiled = compiler::compile(&expr, &vec![]).unwrap();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
 
-            assert_eq!(
-                result.get_val().unwrap(),
-                TypeAnnotatedValue::Str("1 foo bar".to_string())
-            );
+            assert_eq!(result.get_val().unwrap(), "1 foo bar".into_value_and_type());
         }
 
         #[test]
@@ -1688,10 +1662,7 @@ mod interpreter_tests {
             let compiled = compiler::compile(&expr, &vec![]).unwrap();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
 
-            assert_eq!(
-                result.get_val().unwrap(),
-                TypeAnnotatedValue::Str("1 bar".to_string())
-            );
+            assert_eq!(result.get_val().unwrap(), "1 bar".into_value_and_type());
         }
 
         #[test]
@@ -1721,7 +1692,7 @@ mod interpreter_tests {
 
             assert_eq!(
                 result.get_val().unwrap(),
-                TypeAnnotatedValue::Str("foo 100 1 bar jak validate prod dev test".to_string())
+                "foo 100 1 bar jak validate prod dev test".into_value_and_type()
             );
         }
 
@@ -1751,7 +1722,7 @@ mod interpreter_tests {
 
             assert_eq!(
                 result.get_val().unwrap(),
-                TypeAnnotatedValue::Str("dev 1 bar jak baz".to_string())
+                "dev 1 bar jak baz".into_value_and_type()
             );
         }
 
@@ -1760,11 +1731,9 @@ mod interpreter_tests {
             let input_analysed_type = internal::get_analysed_type_record();
             let output_analysed_type = internal::get_analysed_type_result();
 
-            let result_value =
-                internal::get_type_annotated_value(&output_analysed_type, r#"ok(1)"#);
+            let result_value = internal::get_value_and_type(&output_analysed_type, r#"ok(1)"#);
 
-            let mut interpreter =
-                internal::static_test_interpreter(&output_analysed_type, &result_value);
+            let mut interpreter = internal::static_test_interpreter(&result_value);
 
             let analysed_exports = internal::get_component_metadata(
                 "my-worker-function",
@@ -1786,7 +1755,7 @@ mod interpreter_tests {
             let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
 
-            let expected = internal::get_type_annotated_value(
+            let expected = internal::get_value_and_type(
                 &record(vec![field("body", u64()), field("status", u16())]),
                 r#"{body: 1, status: 200}"#,
             );
@@ -1800,10 +1769,9 @@ mod interpreter_tests {
             let output_analysed_type = internal::get_analysed_type_result();
 
             let result_value =
-                internal::get_type_annotated_value(&output_analysed_type, r#"err("failed")"#);
+                internal::get_value_and_type(&output_analysed_type, r#"err("failed")"#);
 
-            let mut interpreter =
-                internal::static_test_interpreter(&output_analysed_type, &result_value);
+            let mut interpreter = internal::static_test_interpreter(&result_value);
 
             let analysed_exports = internal::get_component_metadata(
                 "my-worker-function",
@@ -1825,10 +1793,8 @@ mod interpreter_tests {
             let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
 
-            let expected = internal::get_type_annotated_value(
-                &tuple(vec![str(), str()]),
-                r#"("failed", "bar")"#,
-            );
+            let expected =
+                internal::get_value_and_type(&tuple(vec![str(), str()]), r#"("failed", "bar")"#);
 
             assert_eq!(result.get_val().unwrap(), expected);
         }
@@ -1843,7 +1809,7 @@ mod interpreter_tests {
         use golem_wasm_ast::analysis::analysed_type::{
             case, f32, field, list, record, str, u32, variant,
         };
-        use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+        use golem_wasm_rpc::IntoValueAndType;
 
         #[test]
         async fn test_interpreter_with_indexed_resource_drop() {
@@ -1861,10 +1827,7 @@ mod interpreter_tests {
             let mut rib_interpreter = Interpreter::default();
             let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
-            assert_eq!(
-                result.get_val().unwrap(),
-                TypeAnnotatedValue::Str("success".to_string())
-            );
+            assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
         }
 
         #[test]
@@ -1882,7 +1845,7 @@ mod interpreter_tests {
                 case("success", record(vec![field("order-id", str())])),
             ]);
 
-            let result_value = internal::get_type_annotated_value(
+            let result_value = internal::get_value_and_type(
                 &result_type,
                 r#"
           success({order-id: "foo"})
@@ -1893,7 +1856,7 @@ mod interpreter_tests {
                 internal::get_shopping_cart_metadata_with_cart_resource_with_parameters();
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
-            let mut rib_executor = internal::static_test_interpreter(&result_type, &result_value);
+            let mut rib_executor = internal::static_test_interpreter(&result_value);
             let result = rib_executor.run(compiled.byte_code).await.unwrap();
 
             assert_eq!(result.get_val().unwrap(), result_value);
@@ -1916,7 +1879,7 @@ mod interpreter_tests {
                 field("quantity", u32()),
             ]));
 
-            let result_value = internal::get_type_annotated_value(
+            let result_value = internal::get_value_and_type(
                 &result_type,
                 r#"
             [{product-id: "foo", name: "bar", price: 100.0, quantity: 1}, {product-id: "bar", name: "baz", price: 200.0, quantity: 2}]
@@ -1927,13 +1890,10 @@ mod interpreter_tests {
                 internal::get_shopping_cart_metadata_with_cart_resource_with_parameters();
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
-            let mut rib_executor = internal::static_test_interpreter(&result_type, &result_value);
+            let mut rib_executor = internal::static_test_interpreter(&result_value);
             let result = rib_executor.run(compiled.byte_code).await.unwrap();
 
-            assert_eq!(
-                result.get_val().unwrap(),
-                TypeAnnotatedValue::Str("foo".to_string())
-            );
+            assert_eq!(result.get_val().unwrap(), "foo".into_value_and_type());
         }
 
         #[test]
@@ -1958,7 +1918,7 @@ mod interpreter_tests {
 
             assert_eq!(
                 result.get_val().unwrap(),
-                TypeAnnotatedValue::Str("successfully updated".to_string())
+                "successfully updated".into_value_and_type()
             );
         }
 
@@ -1985,7 +1945,7 @@ mod interpreter_tests {
 
             assert_eq!(
                 result.get_val().unwrap(),
-                TypeAnnotatedValue::Str("successfully added".to_string())
+                "successfully added".into_value_and_type()
             );
         }
 
@@ -2011,7 +1971,7 @@ mod interpreter_tests {
 
             assert_eq!(
                 result.get_val().unwrap(),
-                TypeAnnotatedValue::Str("successfully added".to_string())
+                "successfully added".into_value_and_type()
             );
         }
 
@@ -2031,7 +1991,7 @@ mod interpreter_tests {
                 field("quantity", u32()),
             ]));
 
-            let result_value = internal::get_type_annotated_value(
+            let result_value = internal::get_value_and_type(
                 &result_type,
                 r#"
             [{product-id: "foo", name: "bar", price: 100.0, quantity: 1}, {product-id: "bar", name: "baz", price: 200.0, quantity: 2}]
@@ -2041,13 +2001,10 @@ mod interpreter_tests {
             let component_metadata = internal::get_shopping_cart_metadata_with_cart_raw_resource();
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
-            let mut rib_executor = internal::static_test_interpreter(&result_type, &result_value);
+            let mut rib_executor = internal::static_test_interpreter(&result_value);
             let result = rib_executor.run(compiled.byte_code).await.unwrap();
 
-            assert_eq!(
-                result.get_val().unwrap(),
-                TypeAnnotatedValue::Str("foo".to_string())
-            );
+            assert_eq!(result.get_val().unwrap(), "foo".into_value_and_type());
         }
 
         #[test]
@@ -2070,7 +2027,7 @@ mod interpreter_tests {
 
             assert_eq!(
                 result.get_val().unwrap(),
-                TypeAnnotatedValue::Str("successfully updated".to_string())
+                "successfully updated".into_value_and_type()
             );
         }
 
@@ -2088,7 +2045,7 @@ mod interpreter_tests {
                 case("success", record(vec![field("order-id", str())])),
             ]);
 
-            let result_value = internal::get_type_annotated_value(
+            let result_value = internal::get_value_and_type(
                 &result_type,
                 r#"
           success({order-id: "foo"})
@@ -2098,7 +2055,7 @@ mod interpreter_tests {
             let component_metadata = internal::get_shopping_cart_metadata_with_cart_raw_resource();
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
-            let mut rib_executor = internal::static_test_interpreter(&result_type, &result_value);
+            let mut rib_executor = internal::static_test_interpreter(&result_value);
             let result = rib_executor.run(compiled.byte_code).await.unwrap();
 
             assert_eq!(result.get_val().unwrap(), result_value);
@@ -2118,10 +2075,7 @@ mod interpreter_tests {
             let mut rib_interpreter = Interpreter::default();
             let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
-            assert_eq!(
-                result.get_val().unwrap(),
-                TypeAnnotatedValue::Str("success".to_string())
-            );
+            assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
         }
     }
 
@@ -2136,8 +2090,7 @@ mod interpreter_tests {
             AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
             AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysedType,
         };
-        use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-        use golem_wasm_rpc::protobuf::TypedTuple;
+        use golem_wasm_rpc::{Value, ValueAndType};
         use std::sync::Arc;
 
         pub(crate) fn get_analysed_type_variant() -> AnalysedType {
@@ -2355,46 +2308,33 @@ mod interpreter_tests {
             vec![instance]
         }
 
-        pub(crate) fn get_type_annotated_value(
+        pub(crate) fn get_value_and_type(
             analysed_type: &AnalysedType,
             wasm_wave_str: &str,
-        ) -> TypeAnnotatedValue {
-            golem_wasm_rpc::parse_type_annotated_value(analysed_type, wasm_wave_str).unwrap()
+        ) -> ValueAndType {
+            golem_wasm_rpc::parse_value_and_type(analysed_type, wasm_wave_str).unwrap()
         }
 
-        pub(crate) fn static_test_interpreter(
-            result_type: &AnalysedType,
-            result_value: &TypeAnnotatedValue,
-        ) -> Interpreter {
+        pub(crate) fn static_test_interpreter(result_value: &ValueAndType) -> Interpreter {
             Interpreter {
                 input: RibInput::default(),
-                invoke: static_worker_invoke(result_type, result_value),
+                invoke: static_worker_invoke(result_value),
             }
         }
 
-        fn static_worker_invoke(
-            result_type: &AnalysedType,
-            value: &TypeAnnotatedValue,
-        ) -> RibFunctionInvoke {
-            let analysed_type = result_type.clone();
+        fn static_worker_invoke(value: &ValueAndType) -> RibFunctionInvoke {
             let value = value.clone();
 
             Arc::new(move |_, _| {
                 Box::pin({
-                    let analysed_type = analysed_type.clone();
                     let value = value.clone();
 
                     async move {
-                        let analysed_type = analysed_type.clone();
                         let value = value.clone();
-                        Ok(TypeAnnotatedValue::Tuple(TypedTuple {
-                            typ: vec![golem_wasm_ast::analysis::protobuf::Type::from(
-                                &analysed_type,
-                            )],
-                            value: vec![golem_wasm_rpc::protobuf::TypeAnnotatedValue {
-                                type_annotated_value: Some(value.clone()),
-                            }],
-                        }))
+                        Ok(ValueAndType::new(
+                            Value::Tuple(vec![value.value]),
+                            tuple(vec![value.typ]),
+                        ))
                     }
                 })
             })
