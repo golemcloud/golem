@@ -25,10 +25,9 @@ use crate::internal::get_preflight_from_response;
 use crate::security::TestIdentityProvider;
 use chrono::{DateTime, Utc};
 use golem_common::model::IdempotencyKey;
-use golem_worker_service_base::gateway_api_deployment::ApiSiteString;
 use golem_worker_service_base::gateway_execution::auth_call_back_binding_handler::DefaultAuthCallBack;
 use golem_worker_service_base::gateway_execution::gateway_binding_resolver::{
-    DefaultGatewayBindingResolver, ErrorOrRedirect, GatewayBindingResolver,
+    DefaultGatewayBindingResolver, GatewayBindingResolver,
 };
 use golem_worker_service_base::gateway_execution::gateway_http_input_executor::{
     DefaultGatewayInputExecutor, GatewayHttpInputExecutor,
@@ -38,13 +37,11 @@ use golem_worker_service_base::gateway_execution::gateway_session::{
 };
 use golem_worker_service_base::gateway_middleware::HttpCors;
 use golem_worker_service_base::gateway_request::http_request::{ApiInputPath, InputHttpRequest};
-use golem_worker_service_base::gateway_request::request_details::GatewayRequestDetails;
 use golem_worker_service_base::gateway_security::{
-    Provider, SecurityScheme, SecuritySchemeIdentifier,
+    IdentityProvider, Provider, SecurityScheme, SecuritySchemeIdentifier,
 };
 use golem_worker_service_base::{api, gateway_api_definition};
 use http::header::LOCATION;
-use http::uri::Scheme;
 use http::{HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use poem::{Request, Response};
@@ -60,7 +57,7 @@ use url::Url;
 // Example: RibResult has an instance of `ToResponse<TestResponse>`.
 // The tests skips validation and transformations done at the service side.
 async fn execute(
-    api_request: poem::Request,
+    api_request: Request,
     api_specification: &HttpApiDefinition,
     session_store: &GatewaySessionStore,
     test_identity_provider: &TestIdentityProvider,
@@ -508,7 +505,8 @@ async fn test_api_def_with_security_for_valid_input() {
 
     let response_mapping = r#"
       let response = golem:it/api.{get-cart-contents}("a", "b");
-      { body: response }
+      let email: string = request.auth.email;
+      { body: response, headers: {email: email} }
     "#;
 
     let identity_provider = TestIdentityProvider::get_provider_with_valid_id_token();
@@ -1162,11 +1160,14 @@ async fn test_api_def_for_valid_input_with_idempotency_key_in_header() {
 
         let input_http_request = InputHttpRequest::from_request(api_request).await.unwrap();
 
+        let identity_provider: Arc<dyn IdentityProvider + Sync + Send> =
+            Arc::new(TestIdentityProvider::default());
+
         // Resolve the API definition binding from input
         let resolver = DefaultGatewayBindingResolver::new(
             input_http_request,
-            internal::get_session_store(),
-            Arc::new(TestIdentityProvider::default()),
+            &internal::get_session_store(),
+            &identity_provider,
         );
 
         let resolved_route = resolver
@@ -1194,7 +1195,7 @@ fn get_gateway_request(
     query_path: Option<&str>,
     headers: &HeaderMap,
     req_body: serde_json::Value,
-) -> poem::Request {
+) -> Request {
     let full_uri = match query_path {
         Some(query) => format!("{}?{}", base_path.trim_end_matches('/'), query),
         None => base_path.to_string(),
@@ -1231,7 +1232,7 @@ fn get_preflight_gateway_request(
     query_path: Option<&str>,
     headers: &HeaderMap,
     req_body: Value,
-) -> poem::Request {
+) -> Request {
     let full_uri = match query_path {
         Some(query) => format!("{}?{}", base_path.trim_end_matches('/'), query),
         None => base_path.to_string(),
@@ -1244,7 +1245,7 @@ fn get_preflight_gateway_request(
         .build()
         .unwrap();
 
-    let mut request: poem::Request = poem::Request::builder()
+    let mut request: Request = Request::builder()
         .method(Method::OPTIONS)
         .uri(uri)
         .body(req_body.to_string());
@@ -2100,7 +2101,6 @@ pub mod security {
     use std::str::FromStr;
     use std::sync::Arc;
 
-    use golem_worker_service_base::gateway_request::http_request::InputHttpRequest;
     use tokio::sync::Mutex;
 
     // These keys are used over the default JwkKeySet of the actual client
@@ -2444,7 +2444,7 @@ nUhg4edJVHjqxYyoQT+YSPLlHl6AkLZt9/n1NJ+bft0=
         )
         .unwrap();
 
-        let request = poem::Request::builder()
+        let request = Request::builder()
             .method(Method::GET)
             .uri(uri)
             .header("host", redirect_host)
@@ -2666,7 +2666,7 @@ nUhg4edJVHjqxYyoQT+YSPLlHl6AkLZt9/n1NJ+bft0=
         )]))
     }
 
-    pub async fn create_request_from_redirect(headers: &HeaderMap) -> poem::Request {
+    pub async fn create_request_from_redirect(headers: &HeaderMap) -> Request {
         let cookies = extract_cookies_from_redirect(headers);
 
         let cookie_header = cookies

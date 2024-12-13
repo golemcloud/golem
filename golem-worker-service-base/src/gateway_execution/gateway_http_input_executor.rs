@@ -28,9 +28,7 @@ use crate::gateway_execution::to_response::ToHttpResponse;
 use crate::gateway_execution::to_response_failure::ToHttpResponseFromSafeDisplay;
 use crate::gateway_request::http_request::InputHttpRequest;
 use crate::gateway_rib_interpreter::{EvaluationError, WorkerServiceRibInterpreter};
-use crate::gateway_security::{
-    DefaultIdentityProvider, IdentityProvider, SecuritySchemeWithProviderMetadata,
-};
+use crate::gateway_security::{IdentityProvider, SecuritySchemeWithProviderMetadata};
 use async_trait::async_trait;
 use golem_common::SafeDisplay;
 use http::StatusCode;
@@ -268,7 +266,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
             .await;
 
         authorisation_result
-            .to_response(&http_request, &self.gateway_session_store)
+            .to_response(http_request, &self.gateway_session_store)
             .await
     }
 }
@@ -301,8 +299,8 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
 
                 let resolver = DefaultGatewayBindingResolver::new(
                     input_http_request,
-                    Arc::clone(&self.gateway_session_store),
-                    Arc::new(DefaultIdentityProvider),
+                    &self.gateway_session_store,
+                    &self.identity_provider,
                 );
 
                 match resolver
