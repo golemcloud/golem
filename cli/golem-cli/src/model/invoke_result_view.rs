@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_wasm_rpc::{protobuf, type_annotated_value_to_string};
+use golem_wasm_rpc::{print_type_annotated_value, protobuf};
 use serde::{Deserialize, Serialize};
 use serde_json::value::Value;
 use tracing::{debug, info};
@@ -94,7 +94,7 @@ impl InvokeResultView {
     fn try_wave_format(
         parsed: protobuf::type_annotated_value::TypeAnnotatedValue,
     ) -> Result<String, GolemError> {
-        match type_annotated_value_to_string(&parsed) {
+        match print_type_annotated_value(&parsed) {
             Ok(res) => Ok(res),
             Err(err) => {
                 info!("Failed to format parsed value as wave: {err:?}");
@@ -122,7 +122,7 @@ mod tests {
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::protobuf::TypeAnnotatedValue as RootTypeAnnotatedValue;
     use golem_wasm_rpc::protobuf::TypedTuple;
-    use golem_wasm_rpc::{TypeAnnotatedValueConstructors, Uri};
+    use golem_wasm_rpc::TypeAnnotatedValueConstructors;
     use uuid::Uuid;
 
     use golem_client::model::{
@@ -195,9 +195,7 @@ mod tests {
     fn fallback_to_json() {
         let res = parse(
             vec![golem_wasm_rpc::Value::Handle {
-                uri: Uri {
-                    value: "".to_string(),
-                },
+                uri: "".to_string(),
                 resource_id: 1,
             }],
             vec![handle(AnalysedResourceId(1), AnalysedResourceMode::Owned)],
