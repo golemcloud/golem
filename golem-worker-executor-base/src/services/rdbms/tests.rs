@@ -427,7 +427,7 @@ async fn postgres_execute_test_create_insert_select(
                             1 + i as i32,
                         )),
                     ),
-                ))
+                )),
             ]);
         } else {
             for _ in 0..40 {
@@ -451,7 +451,7 @@ async fn postgres_execute_test_create_insert_select(
             .map(|v| match v {
                 postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Domain(v)) => {
                     *v.value
-                },
+                }
                 _ => v,
             })
             .collect();
@@ -812,19 +812,6 @@ async fn postgres_execute_test_create_insert_select(
             ),
             db_type_name: "inventory_item".to_string(),
         },
-        // postgres_types::DbColumn {
-        //     name: "posint4_col".to_string(),
-        //     ordinal: 40,
-        //     db_type: postgres_types::DbColumnType::Primitive(
-        //         postgres_types::DbColumnTypePrimitive::Domain(postgres_types::DomainType::new(
-        //             "posint4".to_string(),
-        //             postgres_types::DbColumnType::Primitive(
-        //                 postgres_types::DbColumnTypePrimitive::Int4,
-        //             ),
-        //         )),
-        //     ),
-        //     db_type_name: "posint4".to_string(),
-        // },
         postgres_types::DbColumn {
             name: "posint4_col".to_string(),
             ordinal: 40,
@@ -1277,22 +1264,18 @@ async fn postgres_execute_test_create_insert_select_array(
                     )),
                 ]),
                 postgres_types::DbValue::Array(vec![
-                    postgres_types::DbValuePrimitive::Domain(
-                        postgres_types::Domain::new(
-                            "posint8".to_string(),
-                            postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Int8(
-                                1 + i as i64,
-                            )),
-                        ),
-                    ),
-                    postgres_types::DbValuePrimitive::Domain(
-                        postgres_types::Domain::new(
-                            "posint8".to_string(),
-                            postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Int8(
-                                2 + i as i64,
-                            )),
-                        ),
-                    ),
+                    postgres_types::DbValuePrimitive::Domain(postgres_types::Domain::new(
+                        "posint8".to_string(),
+                        postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Int8(
+                            1 + i as i64,
+                        )),
+                    )),
+                    postgres_types::DbValuePrimitive::Domain(postgres_types::Domain::new(
+                        "posint8".to_string(),
+                        postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Int8(
+                            2 + i as i64,
+                        )),
+                    )),
                 ]),
             ]);
         } else {

@@ -941,9 +941,6 @@ fn get_db_value_array<G: PgValueGetter>(
             DbValue::array_from(vs.map(|v| v.0), DbValuePrimitive::Composite)
         }
         DbColumnTypePrimitive::Domain(v) => {
-            // println!("domain array- {}: ({})", v.name, v.base_type);
-            // let base_type: DbColumnType = *v.base_type.clone();
-            // get_db_value(&base_type.into_array(), getter)?
             let vs: Option<PgDomains> = getter.try_get_value()?;
             DbValue::array_from(vs.map(|v| v.0), DbValuePrimitive::Domain)
         }
@@ -1061,62 +1058,29 @@ fn get_db_column_type(type_info: &sqlx::postgres::PgTypeInfo) -> Result<DbColumn
             PgTypeKind::Enum(_) => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Enum(
                 EnumType::new(type_name),
             ))),
-            PgTypeKind::Composite(vs) => {
-                let attributes = get_db_column_type_attributes(vs.to_vec())?;
+            PgTypeKind::Composite(attributes) => {
+                let attributes = get_db_column_type_attributes(attributes.to_vec())?;
                 Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Composite(
                     CompositeType::new(type_name, attributes),
                 )))
             }
-            PgTypeKind::Domain(t) => {
-                let base_type = get_db_column_type(t)?;
+            PgTypeKind::Domain(base_type) => {
+                let base_type = get_db_column_type(base_type)?;
                 Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Domain(
                     DomainType::new(type_name, base_type),
                 )))
             }
-            PgTypeKind::Array(element)
+            PgTypeKind::Array(element_type)
                 if matches!(
-                    element.kind(),
+                    element_type.kind(),
                     PgTypeKind::Enum(_) | PgTypeKind::Domain(_) | PgTypeKind::Composite(_)
                 ) =>
             {
-                let column_type = get_db_column_type(element)?;
+                let column_type = get_db_column_type(element_type)?;
                 Ok(column_type.into_array())
             }
             _ => Err(format!("Column type '{}' is not supported", type_name))?,
         },
-    }
-}
-
-fn get_db_column_type_attributes(
-    attributes: Vec<(String, sqlx::postgres::PgTypeInfo)>,
-) -> Result<Vec<(String, DbColumnType)>, String> {
-    let mut result = Vec::with_capacity(attributes.len());
-    for (n, t) in attributes.iter() {
-        let t = get_db_column_type(t)?;
-        let n = n.to_string();
-        result.push((n, t));
-    }
-
-    Ok(result)
-}
-
-fn get_db_type_name(type_info: &sqlx::postgres::PgTypeInfo) -> String {
-    match type_info.kind() {
-        PgTypeKind::Enum(_) | PgTypeKind::Composite(_) | PgTypeKind::Domain(_) => {
-            type_info.name().to_string()
-        }
-        PgTypeKind::Array(element)
-            if matches!(
-                element.kind(),
-                PgTypeKind::Enum(_) | PgTypeKind::Composite(_) | PgTypeKind::Domain(_)
-            ) =>
-        {
-            format!("{}[]", element.name())
-        }
-        PgTypeKind::Array(element) => {
-            format!("{}[]", element.name().to_uppercase())
-        }
-        _ => type_info.name().to_uppercase(),
     }
 }
 
@@ -1607,6 +1571,39 @@ fn get_array_pg_type_info<T: NamedType>(values: &[T]) -> Option<sqlx::postgres::
         let first = &values[0];
         let name = format!("_{}", first.name());
         Some(sqlx::postgres::PgTypeInfo::with_name(name.leak()))
+    }
+}
+
+fn get_db_column_type_attributes(
+    attributes: Vec<(String, sqlx::postgres::PgTypeInfo)>,
+) -> Result<Vec<(String, DbColumnType)>, String> {
+    let mut result = Vec::with_capacity(attributes.len());
+    for (n, t) in attributes.iter() {
+        let t = get_db_column_type(t)?;
+        let n = n.to_string();
+        result.push((n, t));
+    }
+
+    Ok(result)
+}
+
+fn get_db_type_name(type_info: &sqlx::postgres::PgTypeInfo) -> String {
+    match type_info.kind() {
+        PgTypeKind::Enum(_) | PgTypeKind::Composite(_) | PgTypeKind::Domain(_) => {
+            type_info.name().to_string()
+        }
+        PgTypeKind::Array(element_type)
+            if matches!(
+                element_type.kind(),
+                PgTypeKind::Enum(_) | PgTypeKind::Composite(_) | PgTypeKind::Domain(_)
+            ) =>
+        {
+            format!("{}[]", element_type.name())
+        }
+        PgTypeKind::Array(element_type) => {
+            format!("{}[]", element_type.name().to_uppercase())
+        }
+        _ => type_info.name().to_uppercase(),
     }
 }
 

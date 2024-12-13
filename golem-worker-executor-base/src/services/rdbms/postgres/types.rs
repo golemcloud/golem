@@ -61,10 +61,15 @@ impl CompositeType {
 }
 impl Display for CompositeType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}({})", self.name, self.attributes
-            .iter()
-            .map(|v| format!("{} {}", v.0, v.1))
-            .format(", "))
+        write!(
+            f,
+            "{}({})",
+            self.name,
+            self.attributes
+                .iter()
+                .map(|v| format!("{} {}", v.0, v.1))
+                .format(", ")
+        )
     }
 }
 
@@ -113,7 +118,7 @@ impl<T> Range<T> {
     }
 }
 
-impl <T: Debug> Display for Range<T> {
+impl<T: Debug> Display for Range<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?} {:?}", self.start, self.end)
     }
@@ -136,7 +141,7 @@ impl Interval {
     }
 }
 
-impl Display for Interval{
+impl Display for Interval {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}m {}d {}ms", self.months, self.days, self.microseconds)
     }
@@ -197,10 +202,12 @@ impl Composite {
 
 impl Display for Composite {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}({})", self.name, self.values
-            .iter()
-            .map(|v| format!("{}", v))
-            .format(", "))
+        write!(
+            f,
+            "{}({})",
+            self.name,
+            self.values.iter().map(|v| format!("{}", v)).format(", ")
+        )
     }
 }
 
