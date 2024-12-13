@@ -26,11 +26,11 @@ test_r::enable!();
 pub mod bincode;
 
 /// A builder interface for WitValue instances
-#[cfg(feature = "host-bindings")]
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
 mod builder;
 
 /// Extension methods for extracting values from WitValue instances
-#[cfg(feature = "host-bindings")]
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
 mod extractor;
 
 /// Conversion to and from JSON, in the presence of golem-wasm-ast generated type information
@@ -67,11 +67,11 @@ mod version;
 #[cfg(feature = "wasmtime")]
 pub mod wasmtime;
 
-#[cfg(feature = "host-bindings")]
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
 use crate::builder::WitValueBuilder;
-#[cfg(feature = "host-bindings")]
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
 pub use builder::{NodeBuilder, WitValueBuilderExtensions};
-#[cfg(feature = "host-bindings")]
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
 pub use extractor::{WitNodePointer, WitValueExtractor};
 
 #[cfg(not(feature = "host-bindings"))]
@@ -196,7 +196,7 @@ pub enum Value {
     },
 }
 
-#[cfg(feature = "host-bindings")]
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
 impl From<Value> for WitValue {
     fn from(value: Value) -> Self {
         let mut builder = WitValueBuilder::new();
@@ -205,7 +205,7 @@ impl From<Value> for WitValue {
     }
 }
 
-#[cfg(feature = "host-bindings")]
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
 impl PartialEq for WitValue {
     fn eq(&self, other: &Self) -> bool {
         let a: Value = self.clone().into();
@@ -214,7 +214,7 @@ impl PartialEq for WitValue {
     }
 }
 
-#[cfg(feature = "host-bindings")]
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
 fn build_wit_value(value: Value, builder: &mut WitValueBuilder) -> NodeIndex {
     match value {
         Value::Bool(value) => builder.add_bool(value),
@@ -334,7 +334,7 @@ impl Value {
     }
 }
 
-#[cfg(feature = "host-bindings")]
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
 impl From<WitValue> for Value {
     fn from(value: WitValue) -> Self {
         assert!(!value.nodes.is_empty());
@@ -342,7 +342,7 @@ impl From<WitValue> for Value {
     }
 }
 
-#[cfg(feature = "host-bindings")]
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
 fn build_tree(node: &WitNode, nodes: &[WitNode]) -> Value {
     match node {
         WitNode::RecordValue(field_indices) => {
