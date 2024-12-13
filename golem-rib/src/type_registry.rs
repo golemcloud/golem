@@ -219,8 +219,9 @@ impl RegistryKey {
     }
 
     // A parsed function name (the one that gets invoked with a worker) can correspond
-    // to multiple registry keys. This is mainly because a function may have a constructor component
-    // along with the method name. Otherwise it's only 1 key that correspond to the Fqn.
+    // to multiple registry keys. For example: this is mainly because a function can have a constructor component
+    // along with the method name (2 registry keys correspond to this 1 function).
+    // Otherwise it's only 1 key that correspond to the Fqn always.
     pub fn registry_keys_of_function(
         function_name: &DynamicParsedFunctionName,
     ) -> Vec<RegistryKey> {
@@ -234,7 +235,8 @@ impl RegistryKey {
     }
 
     // To obtain the registry key that correspond to the FQN of the function
-    // Not that it doesn't provide the registry key corresponding to the constructor of a resource
+    // Note that, it will not provide the registry key corresponding to the constructor of a resource
+    // if the function was part of a resource
     pub fn fqn_registry_key(function: &DynamicParsedFunctionName) -> RegistryKey {
         let resource_method_name_in_metadata = function.function_name_with_prefix_identifiers();
 

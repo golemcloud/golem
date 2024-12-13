@@ -109,7 +109,7 @@ impl<Namespace: Clone + Send + Sync + 'static> WorkerServiceRibInterpreter<Names
                     // input ValueAndType => TypeAnnotatedValue
                     let function_params: Vec<TypeAnnotatedValue> = parameters
                         .into_iter()
-                        .map(|p| p.try_into())
+                        .map(TypeAnnotatedValue::try_from)
                         .collect::<Result<Vec<_>, _>>()
                         .map_err(|errs: Vec<String>| errs.join(", "))?;
 
@@ -128,7 +128,6 @@ impl<Namespace: Clone + Send + Sync + 'static> WorkerServiceRibInterpreter<Names
                         .map(|v| v.result)
                         .map_err(|e| e.to_string())?;
 
-                    // Output TypeAnnotatedValue => ValueAndType
                     tav.try_into()
                 }
                 .boxed()
