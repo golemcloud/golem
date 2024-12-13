@@ -140,43 +140,41 @@ fn create_from_type(val: &Value, typ: &Type) -> Result<TypeAnnotatedValue, Vec<S
             _ => Err(vec!["Unexpected type; expected an Option type.".to_string()]),
         },
 
-        Value::Tuple(values) => {
-            match &typ.r#type {
-                Some(golem_wasm_ast::analysis::protobuf::r#type::Type::Tuple(typ_tuple)) => {
-                    if values.len() != typ_tuple.elems.len() {
-                        return Err(vec![format!(
-                            "Tuple has unexpected number of elements: {} vs {}",
-                            values.len(),
-                            typ_tuple.elems.len(),
-                        )]);
-                    }
+        Value::Tuple(values) => match &typ.r#type {
+            Some(golem_wasm_ast::analysis::protobuf::r#type::Type::Tuple(typ_tuple)) => {
+                if values.len() != typ_tuple.elems.len() {
+                    return Err(vec![format!(
+                        "Tuple has unexpected number of elements: {} vs {}",
+                        values.len(),
+                        typ_tuple.elems.len(),
+                    )]);
+                }
 
-                    let mut errors = vec![];
-                    let mut results = vec![];
+                let mut errors = vec![];
+                let mut results = vec![];
 
-                    for (value, tpe) in values.iter().zip(&typ_tuple.elems) {
-                        match create_from_type(value, tpe) {
-                            Ok(result) => results.push(result),
-                            Err(errs) => errors.extend(errs),
-                        }
-                    }
-
-                    if errors.is_empty() {
-                        Ok(TypeAnnotatedValue::Tuple(TypedTuple {
-                            typ: typ_tuple.elems.clone(),
-                            value: results
-                                .into_iter()
-                                .map(|v| RootTypeAnnotatedValue {
-                                    type_annotated_value: Some(v),
-                                })
-                                .collect(),
-                        }))
-                    } else {
-                        Err(errors)
+                for (value, tpe) in values.iter().zip(&typ_tuple.elems) {
+                    match create_from_type(value, tpe) {
+                        Ok(result) => results.push(result),
+                        Err(errs) => errors.extend(errs),
                     }
                 }
-                _ => Err(vec!["Unexpected type; expected a Tuple type.".to_string()]),
+
+                if errors.is_empty() {
+                    Ok(TypeAnnotatedValue::Tuple(TypedTuple {
+                        typ: typ_tuple.elems.clone(),
+                        value: results
+                            .into_iter()
+                            .map(|v| RootTypeAnnotatedValue {
+                                type_annotated_value: Some(v),
+                            })
+                            .collect(),
+                    }))
+                } else {
+                    Err(errors)
+                }
             }
+            _ => Err(vec!["Unexpected type; expected a Tuple type.".to_string()]),
         },
 
         Value::List(values) => match &typ.r#type {
