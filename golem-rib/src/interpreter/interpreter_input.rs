@@ -12,17 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::ValueAndType;
 use std::collections::HashMap;
 
 // Acts as the structure to hold the global input values
 #[derive(Debug, Default, Clone)]
 pub struct RibInput {
-    pub input: HashMap<String, TypeAnnotatedValue>,
+    pub input: HashMap<String, ValueAndType>,
 }
 
 impl RibInput {
-    pub fn new(input: HashMap<String, TypeAnnotatedValue>) -> RibInput {
+    pub fn new(input: HashMap<String, ValueAndType>) -> RibInput {
         RibInput { input }
     }
 

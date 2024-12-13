@@ -25,8 +25,9 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use golem_common::config::{
-    ConfigExample, ConfigLoader, DbSqliteConfig, HasConfigExamples, RedisConfig, RetryConfig,
+    ConfigExample, ConfigLoader, DbSqliteConfig, HasConfigExamples, RedisConfig,
 };
+use golem_common::model::RetryConfig;
 use golem_common::tracing::TracingConfig;
 
 /// The shared global Golem configuration

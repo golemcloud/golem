@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::component::*;
-use crate::core::{ExportDesc, RetainsInstructions};
+use crate::core::{Data, ExportDesc, RetainsInstructions};
 
 impl From<&InstantiationArgRef> for wasm_encoder::ModuleArg {
     fn from(value: &InstantiationArgRef) -> Self {

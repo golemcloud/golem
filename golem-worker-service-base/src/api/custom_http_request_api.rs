@@ -17,42 +17,25 @@ use std::sync::Arc;
 
 use crate::gateway_api_definition::http::CompiledHttpApiDefinition;
 use crate::gateway_execution::api_definition_lookup::ApiDefinitionsLookup;
-use crate::gateway_execution::file_server_binding_handler::FileServerBindingHandler;
-use crate::gateway_rib_interpreter::DefaultRibInterpreter;
-use futures_util::FutureExt;
-use golem_common::SafeDisplay;
-use poem::http::StatusCode;
-use poem::{Body, Endpoint, Request, Response};
-use tracing::error;
-
-use crate::gateway_binding::{
-    DefaultGatewayBindingResolver, ErrorOrRedirect, GatewayBindingResolver, GatewayRequestDetails,
-};
 use crate::gateway_execution::auth_call_back_binding_handler::DefaultAuthCallBack;
+use crate::gateway_execution::file_server_binding_handler::FileServerBindingHandler;
 use crate::gateway_execution::gateway_http_input_executor::{
-    DefaultGatewayInputExecutor, GatewayHttpInput, GatewayHttpInputExecutor,
+    DefaultGatewayInputExecutor, GatewayHttpInputExecutor,
 };
-use crate::gateway_execution::gateway_session::{GatewaySession, GatewaySessionStore};
+use crate::gateway_execution::gateway_session::GatewaySession;
 use crate::gateway_execution::GatewayWorkerRequestExecutor;
 use crate::gateway_request::http_request::InputHttpRequest;
+use crate::gateway_rib_interpreter::DefaultRibInterpreter;
 use crate::gateway_security::DefaultIdentityProvider;
+use futures_util::FutureExt;
+use poem::{Endpoint, Request, Response};
 
-// Executes custom request with the help of worker_request_executor and definition_service
-// This is a common API projects can make use of, similar to healthcheck service
-pub struct CustomHttpRequestApi<Namespace> {
-    pub api_definition_lookup_service: Arc<
-        dyn ApiDefinitionsLookup<
-                InputHttpRequest,
-                ApiDefinition = CompiledHttpApiDefinition<Namespace>,
-            > + Sync
-            + Send,
-    >,
-    pub gateway_http_input_executor: Arc<dyn GatewayHttpInputExecutor<Namespace> + Sync + Send>,
-    pub gateway_session_store: GatewaySessionStore,
+pub struct CustomHttpRequestApi {
+    pub gateway_http_input_executor: Arc<dyn GatewayHttpInputExecutor + Sync + Send>,
 }
 
-impl<Namespace: Clone + Send + Sync + 'static> CustomHttpRequestApi<Namespace> {
-    pub fn new(
+impl CustomHttpRequestApi {
+    pub fn new<Namespace: Clone + Send + Sync + 'static>(
         worker_request_executor_service: Arc<
             dyn GatewayWorkerRequestExecutor<Namespace> + Sync + Send,
         >,
@@ -72,88 +55,28 @@ impl<Namespace: Clone + Send + Sync + 'static> CustomHttpRequestApi<Namespace> {
 
         let auth_call_back_binding_handler = Arc::new(DefaultAuthCallBack);
 
-        let gateway_binding_executor = Arc::new(DefaultGatewayInputExecutor {
+        let gateway_http_input_executor = Arc::new(DefaultGatewayInputExecutor {
             evaluator,
             file_server_binding_handler,
             auth_call_back_binding_handler,
+            api_definition_lookup_service,
+            gateway_session_store,
+            identity_provider: Arc::new(DefaultIdentityProvider),
         });
 
         Self {
-            api_definition_lookup_service,
-            gateway_http_input_executor: gateway_binding_executor,
-            gateway_session_store,
+            gateway_http_input_executor,
         }
     }
 
     pub async fn execute(&self, request: Request) -> Response {
-        let input_http_request_result = InputHttpRequest::from_request(request).await;
-
-        match input_http_request_result {
-            Ok(input_http_request) => {
-                let possible_api_definitions = match self
-                    .api_definition_lookup_service
-                    .get(&input_http_request)
-                    .await
-                {
-                    Ok(api_defs) => api_defs,
-                    Err(api_defs_lookup_error) => {
-                        error!(
-                            "API request host: {} - error: {}",
-                            input_http_request.host, api_defs_lookup_error
-                        );
-                        return Response::builder()
-                            .status(StatusCode::INTERNAL_SERVER_ERROR)
-                            .body(Body::from_string("Internal error".to_string()));
-                    }
-                };
-
-                let resolver = DefaultGatewayBindingResolver::new(
-                    input_http_request,
-                    Arc::clone(&self.gateway_session_store),
-                    Arc::new(DefaultIdentityProvider),
-                );
-
-                match resolver
-                    .resolve_gateway_binding(possible_api_definitions)
-                    .await
-                {
-                    Ok(resolved_gateway_binding) => {
-                        let GatewayRequestDetails::Http(request) =
-                            resolved_gateway_binding.request_details;
-
-                        let input = GatewayHttpInput::new(
-                            &request,
-                            resolved_gateway_binding.resolved_binding,
-                            Arc::clone(&self.gateway_session_store),
-                            Arc::new(DefaultIdentityProvider),
-                        );
-
-                        let response: Response = self
-                            .gateway_http_input_executor
-                            .execute_binding(&input)
-                            .await;
-
-                        response
-                    }
-
-                    Err(ErrorOrRedirect::Error(error)) => {
-                        error!(
-                            "Failed to resolve the API definition; error: {}",
-                            error.to_safe_string()
-                        );
-
-                        error.to_http_response()
-                    }
-
-                    Err(ErrorOrRedirect::Redirect(response)) => response,
-                }
-            }
-            Err(response) => response.into(),
-        }
+        self.gateway_http_input_executor
+            .execute_http_request(request)
+            .await
     }
 }
 
-impl<Namespace: Clone + Send + Sync + 'static> Endpoint for CustomHttpRequestApi<Namespace> {
+impl Endpoint for CustomHttpRequestApi {
     type Output = Response;
 
     fn call(&self, req: Request) -> impl Future<Output = poem::Result<Self::Output>> + Send {

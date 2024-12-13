@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use golem_common::config::RetryConfig;
+use golem_common::model::RetryConfig;
 use golem_common::retries::with_retriable_errors;
 
 use crate::error::HealthCheckError;
@@ -104,7 +104,7 @@ pub mod kubernetes {
     use k8s_openapi::api::core::v1::{Pod, PodStatus};
     use kube::{Api, Client};
 
-    use golem_common::config::RetryConfig;
+    use golem_common::model::RetryConfig;
 
     use crate::healthcheck::{health_check_with_retries, HealthCheck, HealthCheckError};
 

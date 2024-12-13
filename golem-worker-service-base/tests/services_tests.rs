@@ -16,8 +16,8 @@ use golem_service_base::migration::{Migrations, MigrationsDir};
 use test_r::test;
 
 use async_trait::async_trait;
-use golem_common::config::{DbPostgresConfig, DbSqliteConfig, RedisConfig, RetryConfig};
-use golem_common::model::ComponentId;
+use golem_common::config::{DbPostgresConfig, DbSqliteConfig, RedisConfig};
+use golem_common::model::{ComponentId, RetryConfig};
 use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
 use golem_service_base::db;
 use golem_service_base::model::Component;

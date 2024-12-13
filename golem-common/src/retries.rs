@@ -18,10 +18,10 @@ use std::pin::Pin;
 use std::time::{Duration, Instant};
 use tracing::{error, info, warn, Level};
 
-use crate::config::RetryConfig;
 use crate::metrics::external_calls::{
     record_external_call_failure, record_external_call_retry, record_external_call_success,
 };
+use crate::model::RetryConfig;
 use crate::retriable_error::IsRetriableError;
 
 /// Returns the delay to be waited before the next retry attempt.
@@ -221,7 +221,7 @@ where
 mod tests {
     use test_r::test;
 
-    use crate::config::RetryConfig;
+    use crate::model::RetryConfig;
     use std::time::Duration;
 
     #[test]

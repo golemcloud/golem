@@ -78,14 +78,14 @@ impl TryFrom<GatewayBindingCompiled>
                 Ok(internal::to_gateway_binding_compiled_proto(
                     worker_binding,
                     GatewayBindingType::Default,
-                ))
+                )?)
             }
 
             GatewayBindingCompiled::FileServer(worker_binding) => {
                 Ok(internal::to_gateway_binding_compiled_proto(
                     worker_binding,
                     GatewayBindingType::FileServer,
-                ))
+                )?)
             }
 
             GatewayBindingCompiled::Static(static_binding) => {
@@ -239,7 +239,7 @@ mod internal {
     pub(crate) fn to_gateway_binding_compiled_proto(
         worker_binding: WorkerBindingCompiled,
         binding_type: GatewayBindingType,
-    ) -> golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding {
+    ) -> Result<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding, String> {
         let component = Some(worker_binding.component_id.into());
         let worker_name = worker_binding
             .worker_name_compiled
@@ -248,7 +248,8 @@ mod internal {
         let compiled_worker_name_expr = worker_binding
             .worker_name_compiled
             .clone()
-            .map(|w| w.compiled_worker_name.into());
+            .map(|w| w.compiled_worker_name.try_into())
+            .transpose()?;
         let worker_name_rib_input = worker_binding
             .worker_name_compiled
             .map(|w| w.rib_input_type_info.into());
@@ -256,7 +257,7 @@ mod internal {
             match worker_binding.idempotency_key_compiled {
                 Some(x) => (
                     Some(x.idempotency_key.into()),
-                    Some(x.compiled_idempotency_key.into()),
+                    Some(x.compiled_idempotency_key.try_into()?),
                     Some(x.rib_input.into()),
                 ),
                 None => (None, None, None),
@@ -272,7 +273,7 @@ mod internal {
             worker_binding
                 .response_compiled
                 .response_mapping_compiled
-                .into(),
+                .try_into()?,
         );
         let response_rib_input = Some(worker_binding.response_compiled.rib_input.into());
         let response_rib_output = worker_binding
@@ -291,21 +292,23 @@ mod internal {
             GatewayBindingType::CorsPreflight => 2,
         };
 
-        golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding {
-            component,
-            worker_name,
-            compiled_worker_name_expr,
-            worker_name_rib_input,
-            idempotency_key,
-            compiled_idempotency_key_expr,
-            idempotency_key_rib_input,
-            response,
-            compiled_response_expr,
-            response_rib_input,
-            worker_functions_in_response,
-            binding_type: Some(binding_type),
-            static_binding: None,
-            response_rib_output,
-        }
+        Ok(
+            golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding {
+                component,
+                worker_name,
+                compiled_worker_name_expr,
+                worker_name_rib_input,
+                idempotency_key,
+                compiled_idempotency_key_expr,
+                idempotency_key_rib_input,
+                response,
+                compiled_response_expr,
+                response_rib_input,
+                worker_functions_in_response,
+                binding_type: Some(binding_type),
+                static_binding: None,
+                response_rib_output,
+            },
+        )
     }
 }

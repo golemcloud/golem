@@ -26,7 +26,6 @@ use bytes::Bytes;
 use futures::TryStreamExt;
 use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component::v1::component_error;
-use golem_common::config::RetryConfig;
 use golem_common::model::component::ComponentOwner;
 use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_common::model::component_metadata::{ComponentMetadata, ComponentProcessingError};
@@ -35,6 +34,7 @@ use golem_common::model::plugin::{
     PluginInstallationUpdate, PluginScope, PluginTypeSpecificDefinition,
 };
 use golem_common::model::ComponentVersion;
+use golem_common::model::RetryConfig;
 use golem_common::model::{AccountId, PluginInstallationId};
 use golem_common::model::{
     ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentType, InitialComponentFile,

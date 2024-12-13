@@ -3944,7 +3944,6 @@ dependencies = [
  "derive_more 1.0.0",
  "figment",
  "fred",
- "futures-core",
  "git-version",
  "golem-api-grpc",
  "golem-rib",
@@ -4142,7 +4141,6 @@ dependencies = [
 name = "golem-rib"
 version = "0.0.0"
 dependencies = [
- "async-trait",
  "bigdecimal",
  "bincode",
  "combine",
@@ -4154,8 +4152,6 @@ dependencies = [
  "serde 1.0.216",
  "serde_json",
  "test-r",
- "tokio",
- "wasm-wave",
 ]
 
 [[package]]

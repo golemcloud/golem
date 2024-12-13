@@ -24,11 +24,11 @@ use golem_api_grpc::proto::golem::component::v1::{
 };
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::client::{GrpcClient, GrpcClientConfig};
-use golem_common::config::RetryConfig;
 use golem_common::model::plugin::{
     DefaultPluginOwner, DefaultPluginScope, PluginDefinition, PluginInstallation, PluginOwner,
     PluginScope,
 };
+use golem_common::model::RetryConfig;
 use golem_common::model::{AccountId, ComponentId, ComponentVersion, PluginInstallationId};
 use http::Uri;
 use std::sync::Arc;

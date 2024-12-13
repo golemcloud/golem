@@ -19,7 +19,8 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::Path;
 use uuid::Uuid;
 
-use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples, RetryConfig};
+use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples};
+use golem_common::model::RetryConfig;
 use golem_common::tracing::TracingConfig;
 use golem_service_base::config::BlobStorageConfig;
 use golem_worker_executor_base::services::golem_config::CompiledComponentServiceConfig;

@@ -207,13 +207,13 @@ pub struct DefaultGatewayBindingResolver {
 impl DefaultGatewayBindingResolver {
     pub fn new(
         input: InputHttpRequest,
-        gateway_session_store: GatewaySessionStore,
-        identity_provider: Arc<dyn IdentityProvider + Sync + Send>,
+        gateway_session_store: &GatewaySessionStore,
+        identity_provider: &Arc<dyn IdentityProvider + Sync + Send>,
     ) -> Self {
         DefaultGatewayBindingResolver {
             input,
-            gateway_session_store,
-            identity_provider,
+            gateway_session_store: Arc::clone(gateway_session_store),
+            identity_provider: Arc::clone(identity_provider),
         }
     }
 }
