@@ -422,7 +422,8 @@ args = [
     "-p",
     "golem-wasm-ast",
     "--all-features",
-    "--allow-dirty"
+    "--allow-dirty",
+    "--no-verify",
 ]
 
 [tasks.publish-golem-wasm-rpc]
@@ -434,6 +435,7 @@ args = [
     "golem-wasm-rpc",
     "--all-features",
     "--allow-dirty",
+    "--no-verify",
 ]
 
 [tasks.publish-golem-wasm-rpc-stubgen]
@@ -445,6 +447,7 @@ args = [
     "golem-wasm-rpc-stubgen",
     "--all-features",
     "--allow-dirty",
+    "--no-verify",
 ]
 
 [tasks.publish-golem-client]
