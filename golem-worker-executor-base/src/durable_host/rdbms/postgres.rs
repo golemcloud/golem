@@ -16,9 +16,9 @@ use crate::durable_host::DurableWorkerCtx;
 use crate::metrics::wasm::record_host_function_call;
 use crate::preview2::wasi::rdbms::postgres::{
     Date, Datebound, Daterange, DbColumn, DbColumnType, DbColumnTypePrimitive, DbRow, DbValue,
-    DbValuePrimitive, Error, Host, HostDbConnection, HostDbResultSet, Int4bound, Int4range,
-    Int8bound, Int8range, Interval, IpAddress, MacAddress, Numbound, Numrange, Time, Timestamp,
-    Timestamptz, Timetz, Tsbound, Tsrange, Tstzbound, Tstzrange, Uuid,
+    DbValuePrimitive, Enumeration, Error, Host, HostDbConnection, HostDbResultSet, Int4bound,
+    Int4range, Int8bound, Int8range, Interval, IpAddress, MacAddress, Numbound, Numrange, Time,
+    Timestamp, Timestamptz, Timetz, Tsbound, Tsrange, Tstzbound, Tstzrange, Uuid,
 };
 use crate::services::rdbms::postgres::PostgresType;
 use crate::services::rdbms::RdbmsPoolKey;
@@ -382,7 +382,7 @@ impl TryFrom<DbValuePrimitive> for crate::services::rdbms::postgres::types::DbVa
                 Ok(Self::Daterange(v))
             }
             DbValuePrimitive::Money(v) => Ok(Self::Money(v)),
-            DbValuePrimitive::CustomEnum(v) => todo!(),
+            DbValuePrimitive::Enumeration(v) => Ok(Self::Enum(v.into())),
             DbValuePrimitive::Null => Ok(Self::Null),
         }
     }
@@ -483,7 +483,7 @@ impl From<crate::services::rdbms::postgres::types::DbValuePrimitive> for DbValue
             crate::services::rdbms::postgres::types::DbValuePrimitive::Oid(v) => Self::Oid(v),
             crate::services::rdbms::postgres::types::DbValuePrimitive::Money(v) => Self::Money(v),
             crate::services::rdbms::postgres::types::DbValuePrimitive::Enum(v) => {
-                todo!()
+                Self::Enumeration(v.into())
             }
             crate::services::rdbms::postgres::types::DbValuePrimitive::Composite(_) => {
                 todo!()
@@ -612,7 +612,7 @@ impl From<crate::services::rdbms::postgres::types::DbColumnTypePrimitive>
             crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Uuid => Self::Uuid,
             crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Money => Self::Money,
             crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Enum(v) => {
-                todo!()
+                Self::Enumeration(v.name)
             }
             crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Composite(v) => {
                 todo!()
@@ -724,6 +724,15 @@ impl From<Interval> for crate::services::rdbms::postgres::types::Interval {
     }
 }
 
+impl From<Enumeration> for crate::services::rdbms::postgres::types::Enum {
+    fn from(v: Enumeration) -> Self {
+        Self {
+            name: v.name,
+            value: v.value,
+        }
+    }
+}
+
 impl TryFrom<Date> for chrono::NaiveDate {
     type Error = String;
 
@@ -791,6 +800,15 @@ impl From<crate::services::rdbms::postgres::types::Interval> for Interval {
             months: v.months,
             days: v.days,
             microseconds: v.microseconds,
+        }
+    }
+}
+
+impl From<crate::services::rdbms::postgres::types::Enum> for Enumeration {
+    fn from(v: crate::services::rdbms::postgres::types::Enum) -> Self {
+        Self {
+            name: v.name,
+            value: v.value,
         }
     }
 }

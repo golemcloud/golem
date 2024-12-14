@@ -123,6 +123,11 @@ interface postgres {
    end: datebound
   }
 
+  record enumeration {
+    name: string,
+    value: string
+  }
+
   variant db-column-type-primitive {
     character,
     int2,
@@ -160,7 +165,7 @@ interface postgres {
     daterange,
     money,
     oid,
-    custom-enum(string)
+    enumeration(string)
     //     point,
     //     line,
     //     lseg,
@@ -215,7 +220,7 @@ interface postgres {
     daterange(daterange),
     money(s64),
     oid(u32),
-    custom-enum(string),
+    enumeration(enumeration),
     null
   }
 

@@ -138,7 +138,10 @@ async fn rdbms_postgres_create_insert_select(
                        "values":[
                           {
                              "primitive":{
-                                "uuid": vec![user_id.0, user_id.1]
+                                "uuid":  {
+                                   "high-bits": user_id.0,
+                                   "low-bits": user_id.1
+                                }
                              }
                           },
                           {
