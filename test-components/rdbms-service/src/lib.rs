@@ -2,7 +2,7 @@ mod bindings;
 
 use crate::bindings::exports::golem::it::api::*;
 use crate::bindings::wasi::rdbms::postgres::{DbConnection as PostgresDbConnection};
-use crate::bindings::wasi::rdbms::postgres::{DbValue as PostgresDbValue, DbValuePrimitive as PostgresDbValuePrimitive, DbRow as PostgresDbRow};
+use crate::bindings::wasi::rdbms::postgres::{DbValue as PostgresDbValue, DbValueNode as PostgresDbValueNode, DbRow as PostgresDbRow};
 use crate::bindings::wasi::rdbms::mysql::{DbConnection as MysqlDbConnection};
 use crate::bindings::wasi::rdbms::mysql::{DbValue as MysqlDbValue, DbRow as MysqlDbRow};
 
@@ -31,7 +31,12 @@ impl Guest for Component {
 
         println!("postgres execute - address: {}, statement: {}, params: {:?}", address, statement, params);
 
-        let params = params.iter().map(|v| PostgresDbValue::Primitive(PostgresDbValuePrimitive::Text(v.clone()))).collect::<Vec<PostgresDbValue>>();
+        let params = params.iter().map(|v| {
+            let node = PostgresDbValueNode::Text(v.clone());
+            PostgresDbValue {
+                nodes: vec![node],
+            }
+        }).collect::<Vec<PostgresDbValue>>();
 
         let result = connection.execute(&statement, &params).map_err(|e| e.to_string());
 
@@ -47,7 +52,12 @@ impl Guest for Component {
 
         println!("postgres query - address: {}, statement: {}, params: {:?}", address, statement, params);
 
-        let params = params.iter().map(|v| PostgresDbValue::Primitive(PostgresDbValuePrimitive::Text(v.clone()))).collect::<Vec<PostgresDbValue>>();
+        let params = params.iter().map(|v| {
+            let node = PostgresDbValueNode::Text(v.clone());
+            PostgresDbValue {
+                nodes: vec![node],
+            }
+        }).collect::<Vec<PostgresDbValue>>();
 
         let result_set = connection.query(&statement, &params).map_err(|e| e.to_string())?;
 

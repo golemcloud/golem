@@ -245,9 +245,8 @@ async fn postgres_execute_test_create_insert_select(
     let mut rows: Vec<DbRow<postgres_types::DbValue>> = Vec::with_capacity(count);
 
     for i in 0..count {
-        let mut params: Vec<postgres_types::DbValue> = vec![postgres_types::DbValue::Primitive(
-            postgres_types::DbValuePrimitive::Varchar(format!("{:03}", i)),
-        )];
+        let mut params: Vec<postgres_types::DbValue> =
+            vec![postgres_types::DbValue::Varchar(format!("{:03}", i))];
 
         if i % 2 == 0 {
             let tstzbounds = postgres_types::Range::new(
@@ -278,162 +277,100 @@ async fn postgres_execute_test_create_insert_select(
             );
 
             params.append(&mut vec![
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Enum(
-                    postgres_types::Enum::new("test_enum".to_string(), "regular".to_string()),
+                postgres_types::DbValue::Enum(postgres_types::Enum::new(
+                    "test_enum".to_string(),
+                    "regular".to_string(),
                 )),
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Character(2)),
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Int2(1)),
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Int4(2)),
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Int8(3)),
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Float4(4.0)),
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Float8(5.0)),
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Numeric(
-                    BigDecimal::from(48888),
-                )),
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Boolean(true)),
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Text(
-                    "text".to_string(),
-                )),
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Varchar(
-                    "varchar".to_string(),
-                )),
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Bpchar(
-                    "0123456789".to_string(),
-                )),
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Timestamp(
-                    chrono::NaiveDateTime::new(
-                        chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
-                        chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-                    ),
-                )),
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Timestamptz(
-                    chrono::DateTime::from_naive_utc_and_offset(
-                        chrono::NaiveDateTime::new(
-                            chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
-                            chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-                        ),
-                        chrono::Utc,
-                    ),
-                )),
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Date(
+                postgres_types::DbValue::Character(2),
+                postgres_types::DbValue::Int2(1),
+                postgres_types::DbValue::Int4(2),
+                postgres_types::DbValue::Int8(3),
+                postgres_types::DbValue::Float4(4.0),
+                postgres_types::DbValue::Float8(5.0),
+                postgres_types::DbValue::Numeric(BigDecimal::from(48888)),
+                postgres_types::DbValue::Boolean(true),
+                postgres_types::DbValue::Text("text".to_string()),
+                postgres_types::DbValue::Varchar("varchar".to_string()),
+                postgres_types::DbValue::Bpchar("0123456789".to_string()),
+                postgres_types::DbValue::Timestamp(chrono::NaiveDateTime::new(
                     chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
-                )),
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Time(
                     chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
                 )),
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Timetz(
-                    postgres_types::TimeTz::new(
+                postgres_types::DbValue::Timestamptz(chrono::DateTime::from_naive_utc_and_offset(
+                    chrono::NaiveDateTime::new(
+                        chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
                         chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-                        chrono::Utc.fix(),
                     ),
+                    chrono::Utc,
                 )),
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Interval(
-                    postgres_types::Interval::new(10, 20, 30),
+                postgres_types::DbValue::Date(chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap()),
+                postgres_types::DbValue::Time(chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap()),
+                postgres_types::DbValue::Timetz(postgres_types::TimeTz::new(
+                    chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+                    chrono::Utc.fix(),
                 )),
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Bytea(
-                    "bytea".as_bytes().to_vec(),
-                )),
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Uuid(
-                    Uuid::new_v4(),
-                )),
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Json(json!(
+                postgres_types::DbValue::Interval(postgres_types::Interval::new(10, 20, 30)),
+                postgres_types::DbValue::Bytea("bytea".as_bytes().to_vec()),
+                postgres_types::DbValue::Uuid(Uuid::new_v4()),
+                postgres_types::DbValue::Json(json!(
                        {
                           "id": i
                        }
-                ))),
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Jsonb(json!(
+                )),
+                postgres_types::DbValue::Jsonb(json!(
                        {
                           "index": i
                        }
-                ))),
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Inet(
-                    IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
                 )),
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Cidr(
-                    IpAddr::V4(Ipv4Addr::new(198, 168, 0, i as u8)),
+                postgres_types::DbValue::Inet(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))),
+                postgres_types::DbValue::Cidr(IpAddr::V4(Ipv4Addr::new(198, 168, 0, i as u8))),
+                postgres_types::DbValue::Macaddr(MacAddress::new([0, 1, 2, 3, 4, i as u8])),
+                postgres_types::DbValue::Bit(BitVec::from_iter(vec![true, false, true])),
+                postgres_types::DbValue::Varbit(BitVec::from_iter(vec![true, false, false])),
+                postgres_types::DbValue::Xml(format!("<foo>{}</foo>", i)),
+                postgres_types::DbValue::Int4range(postgres_types::Range::new(
+                    Bound::Included(1),
+                    Bound::Excluded(4),
                 )),
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Macaddr(
-                    MacAddress::new([0, 1, 2, 3, 4, i as u8]),
+                postgres_types::DbValue::Int8range(postgres_types::Range::new(
+                    Bound::Included(1),
+                    Bound::Unbounded,
                 )),
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Bit(
-                    BitVec::from_iter(vec![true, false, true]),
+                postgres_types::DbValue::Numrange(postgres_types::Range::new(
+                    Bound::Included(BigDecimal::from(11)),
+                    Bound::Excluded(BigDecimal::from(221)),
                 )),
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Varbit(
-                    BitVec::from_iter(vec![true, false, false]),
-                )),
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Xml(format!(
-                    "<foo>{}</foo>",
-                    i
-                ))),
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Int4range(
-                    postgres_types::Range::new(Bound::Included(1), Bound::Excluded(4)),
-                )),
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Int8range(
-                    postgres_types::Range::new(Bound::Included(1), Bound::Unbounded),
-                )),
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Numrange(
-                    postgres_types::Range::new(
-                        Bound::Included(BigDecimal::from(11)),
-                        Bound::Excluded(BigDecimal::from(221)),
+                postgres_types::DbValue::Tsrange(tsbounds),
+                postgres_types::DbValue::Tstzrange(tstzbounds),
+                postgres_types::DbValue::Daterange(postgres_types::Range::new(
+                    Bound::Included(
+                        chrono::NaiveDate::from_ymd_opt(2023 + i as i32, 2, 3).unwrap(),
                     ),
+                    Bound::Unbounded,
                 )),
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Tsrange(
-                    tsbounds,
-                )),
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Tstzrange(
-                    tstzbounds,
-                )),
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Daterange(
-                    postgres_types::Range::new(
-                        Bound::Included(
-                            chrono::NaiveDate::from_ymd_opt(2023 + i as i32, 2, 3).unwrap(),
-                        ),
-                        Bound::Unbounded,
-                    ),
-                )),
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Money(12345)),
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Jsonpath(
-                    "$.id".to_string(),
-                )),
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Text(
+                postgres_types::DbValue::Money(12345),
+                postgres_types::DbValue::Jsonpath("$.id".to_string()),
+                postgres_types::DbValue::Text(
                     "'a' 'and' 'ate' 'cat' 'fat' 'mat' 'on' 'rat' 'sat'".to_string(),
+                ),
+                postgres_types::DbValue::Text("'fat' & 'rat' & !'cat'".to_string()),
+                postgres_types::DbValue::Composite(postgres_types::Composite::new(
+                    "inventory_item".to_string(),
+                    vec![
+                        postgres_types::DbValue::Uuid(Uuid::new_v4()),
+                        postgres_types::DbValue::Text("text".to_string()),
+                        postgres_types::DbValue::Int4(i as i32),
+                        postgres_types::DbValue::Numeric(BigDecimal::from(111)),
+                    ],
                 )),
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Text(
-                    "'fat' & 'rat' & !'cat'".to_string(),
-                )),
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Composite(
-                    postgres_types::Composite::new(
-                        "inventory_item".to_string(),
-                        vec![
-                            postgres_types::DbValue::Primitive(
-                                postgres_types::DbValuePrimitive::Uuid(Uuid::new_v4()),
-                            ),
-                            postgres_types::DbValue::Primitive(
-                                postgres_types::DbValuePrimitive::Text("text".to_string()),
-                            ),
-                            postgres_types::DbValue::Primitive(
-                                postgres_types::DbValuePrimitive::Int4(i as i32),
-                            ),
-                            postgres_types::DbValue::Primitive(
-                                postgres_types::DbValuePrimitive::Numeric(BigDecimal::from(111)),
-                            ),
-                        ],
-                    ),
-                )),
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Domain(
-                    postgres_types::Domain::new(
-                        "posint4".to_string(),
-                        postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Int4(
-                            1 + i as i32,
-                        )),
-                    ),
+                postgres_types::DbValue::Domain(postgres_types::Domain::new(
+                    "posint4".to_string(),
+                    postgres_types::DbValue::Int4(1 + i as i32),
                 )),
             ]);
         } else {
             for _ in 0..40 {
-                params.push(postgres_types::DbValue::Primitive(
-                    postgres_types::DbValuePrimitive::Null,
-                ));
+                params.push(postgres_types::DbValue::Null);
             }
         }
 
@@ -449,9 +386,7 @@ async fn postgres_execute_test_create_insert_select(
         let values = params
             .into_iter()
             .map(|v| match v {
-                postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Domain(v)) => {
-                    *v.value
-                }
+                postgres_types::DbValue::Domain(v) => *v.value,
                 _ => v,
             })
             .collect();
@@ -463,361 +398,260 @@ async fn postgres_execute_test_create_insert_select(
         postgres_types::DbColumn {
             name: "id".to_string(),
             ordinal: 0,
-            db_type: postgres_types::DbColumnType::Primitive(
-                postgres_types::DbColumnTypePrimitive::Varchar,
-            ),
+            db_type: postgres_types::DbColumnType::Varchar,
             db_type_name: "VARCHAR".to_string(),
         },
         postgres_types::DbColumn {
             name: "enum_col".to_string(),
             ordinal: 1,
-            db_type: postgres_types::DbColumnType::Primitive(
-                postgres_types::DbColumnTypePrimitive::Enum(postgres_types::EnumType::new(
-                    "test_enum".to_string(),
-                )),
-            ),
+            db_type: postgres_types::DbColumnType::Enum(postgres_types::EnumType::new(
+                "test_enum".to_string(),
+            )),
             db_type_name: "test_enum".to_string(),
         },
         postgres_types::DbColumn {
             name: "char_col".to_string(),
             ordinal: 2,
-            db_type: postgres_types::DbColumnType::Primitive(
-                postgres_types::DbColumnTypePrimitive::Character,
-            ),
+            db_type: postgres_types::DbColumnType::Character,
             db_type_name: "\"CHAR\"".to_string(),
         },
         postgres_types::DbColumn {
             name: "int2_col".to_string(),
             ordinal: 3,
-            db_type: postgres_types::DbColumnType::Primitive(
-                postgres_types::DbColumnTypePrimitive::Int2,
-            ),
+            db_type: postgres_types::DbColumnType::Int2,
             db_type_name: "INT2".to_string(),
         },
         postgres_types::DbColumn {
             name: "int4_col".to_string(),
             ordinal: 4,
-            db_type: postgres_types::DbColumnType::Primitive(
-                postgres_types::DbColumnTypePrimitive::Int4,
-            ),
+            db_type: postgres_types::DbColumnType::Int4,
             db_type_name: "INT4".to_string(),
         },
         postgres_types::DbColumn {
             name: "int8_col".to_string(),
             ordinal: 5,
-            db_type: postgres_types::DbColumnType::Primitive(
-                postgres_types::DbColumnTypePrimitive::Int8,
-            ),
+            db_type: postgres_types::DbColumnType::Int8,
             db_type_name: "INT8".to_string(),
         },
         postgres_types::DbColumn {
             name: "float4_col".to_string(),
             ordinal: 6,
-            db_type: postgres_types::DbColumnType::Primitive(
-                postgres_types::DbColumnTypePrimitive::Float4,
-            ),
+            db_type: postgres_types::DbColumnType::Float4,
             db_type_name: "FLOAT4".to_string(),
         },
         postgres_types::DbColumn {
             name: "float8_col".to_string(),
             ordinal: 7,
-            db_type: postgres_types::DbColumnType::Primitive(
-                postgres_types::DbColumnTypePrimitive::Float8,
-            ),
+            db_type: postgres_types::DbColumnType::Float8,
             db_type_name: "FLOAT8".to_string(),
         },
         postgres_types::DbColumn {
             name: "numeric_col".to_string(),
             ordinal: 8,
-            db_type: postgres_types::DbColumnType::Primitive(
-                postgres_types::DbColumnTypePrimitive::Numeric,
-            ),
+            db_type: postgres_types::DbColumnType::Numeric,
             db_type_name: "NUMERIC".to_string(),
         },
         postgres_types::DbColumn {
             name: "boolean_col".to_string(),
             ordinal: 9,
-            db_type: postgres_types::DbColumnType::Primitive(
-                postgres_types::DbColumnTypePrimitive::Boolean,
-            ),
+            db_type: postgres_types::DbColumnType::Boolean,
             db_type_name: "BOOL".to_string(),
         },
         postgres_types::DbColumn {
             name: "text_col".to_string(),
             ordinal: 10,
-            db_type: postgres_types::DbColumnType::Primitive(
-                postgres_types::DbColumnTypePrimitive::Text,
-            ),
+            db_type: postgres_types::DbColumnType::Text,
             db_type_name: "TEXT".to_string(),
         },
         postgres_types::DbColumn {
             name: "varchar_col".to_string(),
             ordinal: 11,
-            db_type: postgres_types::DbColumnType::Primitive(
-                postgres_types::DbColumnTypePrimitive::Varchar,
-            ),
+            db_type: postgres_types::DbColumnType::Varchar,
             db_type_name: "VARCHAR".to_string(),
         },
         postgres_types::DbColumn {
             name: "bpchar_col".to_string(),
             ordinal: 12,
-            db_type: postgres_types::DbColumnType::Primitive(
-                postgres_types::DbColumnTypePrimitive::Bpchar,
-            ),
+            db_type: postgres_types::DbColumnType::Bpchar,
             db_type_name: "CHAR".to_string(),
         },
         postgres_types::DbColumn {
             name: "timestamp_col".to_string(),
             ordinal: 13,
-            db_type: postgres_types::DbColumnType::Primitive(
-                postgres_types::DbColumnTypePrimitive::Timestamp,
-            ),
+            db_type: postgres_types::DbColumnType::Timestamp,
             db_type_name: "TIMESTAMP".to_string(),
         },
         postgres_types::DbColumn {
             name: "timestamptz_col".to_string(),
             ordinal: 14,
-            db_type: postgres_types::DbColumnType::Primitive(
-                postgres_types::DbColumnTypePrimitive::Timestamptz,
-            ),
+            db_type: postgres_types::DbColumnType::Timestamptz,
             db_type_name: "TIMESTAMPTZ".to_string(),
         },
         postgres_types::DbColumn {
             name: "date_col".to_string(),
             ordinal: 15,
-            db_type: postgres_types::DbColumnType::Primitive(
-                postgres_types::DbColumnTypePrimitive::Date,
-            ),
+            db_type: postgres_types::DbColumnType::Date,
             db_type_name: "DATE".to_string(),
         },
         postgres_types::DbColumn {
             name: "time_col".to_string(),
             ordinal: 16,
-            db_type: postgres_types::DbColumnType::Primitive(
-                postgres_types::DbColumnTypePrimitive::Time,
-            ),
+            db_type: postgres_types::DbColumnType::Time,
             db_type_name: "TIME".to_string(),
         },
         postgres_types::DbColumn {
             name: "timetz_col".to_string(),
             ordinal: 17,
-            db_type: postgres_types::DbColumnType::Primitive(
-                postgres_types::DbColumnTypePrimitive::Timetz,
-            ),
+            db_type: postgres_types::DbColumnType::Timetz,
             db_type_name: "TIMETZ".to_string(),
         },
         postgres_types::DbColumn {
             name: "interval_col".to_string(),
             ordinal: 18,
-            db_type: postgres_types::DbColumnType::Primitive(
-                postgres_types::DbColumnTypePrimitive::Interval,
-            ),
+            db_type: postgres_types::DbColumnType::Interval,
             db_type_name: "INTERVAL".to_string(),
         },
         postgres_types::DbColumn {
             name: "bytea_col".to_string(),
             ordinal: 19,
-            db_type: postgres_types::DbColumnType::Primitive(
-                postgres_types::DbColumnTypePrimitive::Bytea,
-            ),
+            db_type: postgres_types::DbColumnType::Bytea,
             db_type_name: "BYTEA".to_string(),
         },
         postgres_types::DbColumn {
             name: "uuid_col".to_string(),
             ordinal: 20,
-            db_type: postgres_types::DbColumnType::Primitive(
-                postgres_types::DbColumnTypePrimitive::Uuid,
-            ),
+            db_type: postgres_types::DbColumnType::Uuid,
             db_type_name: "UUID".to_string(),
         },
         postgres_types::DbColumn {
             name: "json_col".to_string(),
             ordinal: 21,
-            db_type: postgres_types::DbColumnType::Primitive(
-                postgres_types::DbColumnTypePrimitive::Json,
-            ),
+            db_type: postgres_types::DbColumnType::Json,
             db_type_name: "JSON".to_string(),
         },
         postgres_types::DbColumn {
             name: "jsonb_col".to_string(),
             ordinal: 22,
-            db_type: postgres_types::DbColumnType::Primitive(
-                postgres_types::DbColumnTypePrimitive::Jsonb,
-            ),
+            db_type: postgres_types::DbColumnType::Jsonb,
             db_type_name: "JSONB".to_string(),
         },
         postgres_types::DbColumn {
             name: "inet_col".to_string(),
             ordinal: 23,
-            db_type: postgres_types::DbColumnType::Primitive(
-                postgres_types::DbColumnTypePrimitive::Inet,
-            ),
+            db_type: postgres_types::DbColumnType::Inet,
             db_type_name: "INET".to_string(),
         },
         postgres_types::DbColumn {
             name: "cidr_col".to_string(),
             ordinal: 24,
-            db_type: postgres_types::DbColumnType::Primitive(
-                postgres_types::DbColumnTypePrimitive::Cidr,
-            ),
+            db_type: postgres_types::DbColumnType::Cidr,
             db_type_name: "CIDR".to_string(),
         },
         postgres_types::DbColumn {
             name: "macaddr_col".to_string(),
             ordinal: 25,
-            db_type: postgres_types::DbColumnType::Primitive(
-                postgres_types::DbColumnTypePrimitive::Macaddr,
-            ),
+            db_type: postgres_types::DbColumnType::Macaddr,
             db_type_name: "MACADDR".to_string(),
         },
         postgres_types::DbColumn {
             name: "bit_col".to_string(),
             ordinal: 26,
-            db_type: postgres_types::DbColumnType::Primitive(
-                postgres_types::DbColumnTypePrimitive::Bit,
-            ),
+            db_type: postgres_types::DbColumnType::Bit,
             db_type_name: "BIT".to_string(),
         },
         postgres_types::DbColumn {
             name: "varbit_col".to_string(),
             ordinal: 27,
-            db_type: postgres_types::DbColumnType::Primitive(
-                postgres_types::DbColumnTypePrimitive::Varbit,
-            ),
+            db_type: postgres_types::DbColumnType::Varbit,
             db_type_name: "VARBIT".to_string(),
         },
         postgres_types::DbColumn {
             name: "xml_col".to_string(),
             ordinal: 28,
-            db_type: postgres_types::DbColumnType::Primitive(
-                postgres_types::DbColumnTypePrimitive::Xml,
-            ),
+            db_type: postgres_types::DbColumnType::Xml,
             db_type_name: "XML".to_string(),
         },
         postgres_types::DbColumn {
             name: "int4range_col".to_string(),
             ordinal: 29,
-            db_type: postgres_types::DbColumnType::Primitive(
-                postgres_types::DbColumnTypePrimitive::Int4range,
-            ),
+            db_type: postgres_types::DbColumnType::Int4range,
             db_type_name: "INT4RANGE".to_string(),
         },
         postgres_types::DbColumn {
             name: "int8range_col".to_string(),
             ordinal: 30,
-            db_type: postgres_types::DbColumnType::Primitive(
-                postgres_types::DbColumnTypePrimitive::Int8range,
-            ),
+            db_type: postgres_types::DbColumnType::Int8range,
             db_type_name: "INT8RANGE".to_string(),
         },
         postgres_types::DbColumn {
             name: "numrange_col".to_string(),
             ordinal: 31,
-            db_type: postgres_types::DbColumnType::Primitive(
-                postgres_types::DbColumnTypePrimitive::Numrange,
-            ),
+            db_type: postgres_types::DbColumnType::Numrange,
             db_type_name: "NUMRANGE".to_string(),
         },
         postgres_types::DbColumn {
             name: "tsrange_col".to_string(),
             ordinal: 32,
-            db_type: postgres_types::DbColumnType::Primitive(
-                postgres_types::DbColumnTypePrimitive::Tsrange,
-            ),
+            db_type: postgres_types::DbColumnType::Tsrange,
             db_type_name: "TSRANGE".to_string(),
         },
         postgres_types::DbColumn {
             name: "tstzrange_col".to_string(),
             ordinal: 33,
-            db_type: postgres_types::DbColumnType::Primitive(
-                postgres_types::DbColumnTypePrimitive::Tstzrange,
-            ),
+            db_type: postgres_types::DbColumnType::Tstzrange,
             db_type_name: "TSTZRANGE".to_string(),
         },
         postgres_types::DbColumn {
             name: "daterange_col".to_string(),
             ordinal: 34,
-            db_type: postgres_types::DbColumnType::Primitive(
-                postgres_types::DbColumnTypePrimitive::Daterange,
-            ),
+            db_type: postgres_types::DbColumnType::Daterange,
             db_type_name: "DATERANGE".to_string(),
         },
         postgres_types::DbColumn {
             name: "money_col".to_string(),
             ordinal: 35,
-            db_type: postgres_types::DbColumnType::Primitive(
-                postgres_types::DbColumnTypePrimitive::Money,
-            ),
+            db_type: postgres_types::DbColumnType::Money,
             db_type_name: "MONEY".to_string(),
         },
         postgres_types::DbColumn {
             name: "jsonpath_col".to_string(),
             ordinal: 36,
-            db_type: postgres_types::DbColumnType::Primitive(
-                postgres_types::DbColumnTypePrimitive::Jsonpath,
-            ),
+            db_type: postgres_types::DbColumnType::Jsonpath,
             db_type_name: "JSONPATH".to_string(),
         },
         postgres_types::DbColumn {
             name: "tsvector_col".to_string(),
             ordinal: 37,
-            db_type: postgres_types::DbColumnType::Primitive(
-                postgres_types::DbColumnTypePrimitive::Text,
-            ),
+            db_type: postgres_types::DbColumnType::Text,
             db_type_name: "TEXT".to_string(),
         },
         postgres_types::DbColumn {
             name: "tsquery_col".to_string(),
             ordinal: 38,
-            db_type: postgres_types::DbColumnType::Primitive(
-                postgres_types::DbColumnTypePrimitive::Text,
-            ),
+            db_type: postgres_types::DbColumnType::Text,
             db_type_name: "TEXT".to_string(),
         },
         postgres_types::DbColumn {
             name: "inventory_item_col".to_string(),
             ordinal: 39,
-            db_type: postgres_types::DbColumnType::Primitive(
-                postgres_types::DbColumnTypePrimitive::Composite(
-                    postgres_types::CompositeType::new(
-                        "inventory_item".to_string(),
-                        vec![
-                            (
-                                "product_id".to_string(),
-                                postgres_types::DbColumnType::Primitive(
-                                    postgres_types::DbColumnTypePrimitive::Uuid,
-                                ),
-                            ),
-                            (
-                                "name".to_string(),
-                                postgres_types::DbColumnType::Primitive(
-                                    postgres_types::DbColumnTypePrimitive::Text,
-                                ),
-                            ),
-                            (
-                                "supplier_id".to_string(),
-                                postgres_types::DbColumnType::Primitive(
-                                    postgres_types::DbColumnTypePrimitive::Int4,
-                                ),
-                            ),
-                            (
-                                "price".to_string(),
-                                postgres_types::DbColumnType::Primitive(
-                                    postgres_types::DbColumnTypePrimitive::Numeric,
-                                ),
-                            ),
-                        ],
+            db_type: postgres_types::DbColumnType::Composite(postgres_types::CompositeType::new(
+                "inventory_item".to_string(),
+                vec![
+                    ("product_id".to_string(), postgres_types::DbColumnType::Uuid),
+                    ("name".to_string(), postgres_types::DbColumnType::Text),
+                    (
+                        "supplier_id".to_string(),
+                        postgres_types::DbColumnType::Int4,
                     ),
-                ),
-            ),
+                    ("price".to_string(), postgres_types::DbColumnType::Numeric),
+                ],
+            )),
             db_type_name: "inventory_item".to_string(),
         },
         postgres_types::DbColumn {
             name: "posint4_col".to_string(),
             ordinal: 40,
-            db_type: postgres_types::DbColumnType::Primitive(
-                postgres_types::DbColumnTypePrimitive::Int4,
-            ),
+            db_type: postgres_types::DbColumnType::Int4,
             db_type_name: "INT4".to_string(),
         },
     ];
@@ -1055,9 +889,8 @@ async fn postgres_execute_test_create_insert_select_array(
     let mut rows: Vec<DbRow<postgres_types::DbValue>> = Vec::with_capacity(count);
 
     for i in 0..count {
-        let mut params: Vec<postgres_types::DbValue> = vec![postgres_types::DbValue::Primitive(
-            postgres_types::DbValuePrimitive::Varchar(format!("{:03}", i)),
-        )];
+        let mut params: Vec<postgres_types::DbValue> =
+            vec![postgres_types::DbValue::Varchar(format!("{:03}", i))];
 
         if i % 2 == 0 {
             let tstzbounds = postgres_types::Range::new(
@@ -1089,127 +922,114 @@ async fn postgres_execute_test_create_insert_select_array(
 
             params.append(&mut vec![
                 postgres_types::DbValue::Array(vec![
-                    postgres_types::DbValuePrimitive::Enum(postgres_types::Enum::new(
+                    postgres_types::DbValue::Enum(postgres_types::Enum::new(
                         "a_test_enum".to_string(),
                         "second".to_string(),
                     )),
-                    postgres_types::DbValuePrimitive::Enum(postgres_types::Enum::new(
+                    postgres_types::DbValue::Enum(postgres_types::Enum::new(
                         "a_test_enum".to_string(),
                         "third".to_string(),
                     )),
                 ]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Character(
-                    2,
-                )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Int2(1)]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Int4(2)]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Int8(3)]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Float4(4.0)]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Float8(5.0)]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Numeric(
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Character(2)]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Int2(1)]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Int4(2)]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Int8(3)]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Float4(4.0)]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Float8(5.0)]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Numeric(
                     BigDecimal::from(48888),
                 )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Boolean(
-                    true,
-                )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Text(
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Boolean(true)]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Text(
                     "text".to_string(),
                 )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Varchar(
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Varchar(
                     "varchar".to_string(),
                 )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Bpchar(
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Bpchar(
                     "0123456789".to_string(),
                 )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Timestamp(
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Timestamp(
                     chrono::NaiveDateTime::new(
                         chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
                         chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
                     ),
                 )]),
-                postgres_types::DbValue::Array(vec![
-                    postgres_types::DbValuePrimitive::Timestamptz(
-                        chrono::DateTime::from_naive_utc_and_offset(
-                            chrono::NaiveDateTime::new(
-                                chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
-                                chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-                            ),
-                            chrono::Utc,
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Timestamptz(
+                    chrono::DateTime::from_naive_utc_and_offset(
+                        chrono::NaiveDateTime::new(
+                            chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+                            chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
                         ),
+                        chrono::Utc,
                     ),
-                ]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Date(
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Date(
                     chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
                 )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Time(
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Time(
                     chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
                 )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Timetz(
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Timetz(
                     postgres_types::TimeTz::new(
                         chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
                         chrono::Utc.fix(),
                     ),
                 )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Interval(
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Interval(
                     postgres_types::Interval::new(10, 20, 30),
                 )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Bytea(
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Bytea(
                     "bytea".as_bytes().to_vec(),
                 )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Uuid(
-                    Uuid::new_v4(),
-                )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Json(
-                    json!(
-                           {
-                              "id": i
-                           }
-                    ),
-                )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Jsonb(
-                    json!(
-                           {
-                              "index": i
-                           }
-                    ),
-                )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Inet(
-                    IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
-                )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Cidr(
-                    IpAddr::V4(Ipv4Addr::new(198, 168, 0, i as u8)),
-                )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Macaddr(
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Uuid(Uuid::new_v4())]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Json(json!(
+                       {
+                          "id": i
+                       }
+                ))]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Jsonb(json!(
+                       {
+                          "index": i
+                       }
+                ))]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Inet(IpAddr::V4(
+                    Ipv4Addr::new(127, 0, 0, 1),
+                ))]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Cidr(IpAddr::V4(
+                    Ipv4Addr::new(198, 168, 0, i as u8),
+                ))]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Macaddr(
                     MacAddress::new([0, 1, 2, 3, 4, i as u8]),
                 )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Bit(
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Bit(
                     BitVec::from_iter(vec![true, false, true]),
                 )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Varbit(
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Varbit(
                     BitVec::from_iter(vec![true, false, false]),
                 )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Xml(
-                    format!("<foo>{}</foo>", i),
-                )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Int4range(
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Xml(format!(
+                    "<foo>{}</foo>",
+                    i
+                ))]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Int4range(
                     postgres_types::Range::new(Bound::Included(1), Bound::Excluded(4)),
                 )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Int8range(
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Int8range(
                     postgres_types::Range::new(Bound::Included(1), Bound::Unbounded),
                 )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Numrange(
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Numrange(
                     postgres_types::Range::new(
                         Bound::Included(BigDecimal::from(11)),
                         Bound::Excluded(BigDecimal::from(221)),
                     ),
                 )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Tsrange(
-                    tsbounds,
-                )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Tstzrange(
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Tsrange(tsbounds)]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Tstzrange(
                     tstzbounds,
                 )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Daterange(
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Daterange(
                     postgres_types::Range::new(
                         Bound::Included(
                             chrono::NaiveDate::from_ymd_opt(2023 + i as i32, 2, 3).unwrap(),
@@ -1217,64 +1037,44 @@ async fn postgres_execute_test_create_insert_select_array(
                         Bound::Unbounded,
                     ),
                 )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Money(1234)]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Jsonpath(
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Money(1234)]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Jsonpath(
                     "$.user.addresses[0].city".to_string(),
                 )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Text(
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Text(
                     "'a' 'and' 'ate' 'cat' 'fat' 'mat' 'on' 'rat' 'sat'".to_string(),
                 )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValuePrimitive::Text(
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Text(
                     "'fat' & 'rat' & !'cat'".to_string(),
                 )]),
                 postgres_types::DbValue::Array(vec![
-                    postgres_types::DbValuePrimitive::Composite(postgres_types::Composite::new(
+                    postgres_types::DbValue::Composite(postgres_types::Composite::new(
                         "a_inventory_item".to_string(),
                         vec![
-                            postgres_types::DbValue::Primitive(
-                                postgres_types::DbValuePrimitive::Uuid(Uuid::new_v4()),
-                            ),
-                            postgres_types::DbValue::Primitive(
-                                postgres_types::DbValuePrimitive::Text("text".to_string()),
-                            ),
-                            postgres_types::DbValue::Primitive(
-                                postgres_types::DbValuePrimitive::Int4(i as i32),
-                            ),
-                            postgres_types::DbValue::Primitive(
-                                postgres_types::DbValuePrimitive::Numeric(BigDecimal::from(111)),
-                            ),
+                            postgres_types::DbValue::Uuid(Uuid::new_v4()),
+                            postgres_types::DbValue::Text("text".to_string()),
+                            postgres_types::DbValue::Int4(i as i32),
+                            postgres_types::DbValue::Numeric(BigDecimal::from(111)),
                         ],
                     )),
-                    postgres_types::DbValuePrimitive::Composite(postgres_types::Composite::new(
+                    postgres_types::DbValue::Composite(postgres_types::Composite::new(
                         "a_inventory_item".to_string(),
                         vec![
-                            postgres_types::DbValue::Primitive(
-                                postgres_types::DbValuePrimitive::Uuid(Uuid::new_v4()),
-                            ),
-                            postgres_types::DbValue::Primitive(
-                                postgres_types::DbValuePrimitive::Text("text".to_string()),
-                            ),
-                            postgres_types::DbValue::Primitive(
-                                postgres_types::DbValuePrimitive::Int4(2 + i as i32),
-                            ),
-                            postgres_types::DbValue::Primitive(
-                                postgres_types::DbValuePrimitive::Numeric(BigDecimal::from(111)),
-                            ),
+                            postgres_types::DbValue::Uuid(Uuid::new_v4()),
+                            postgres_types::DbValue::Text("text".to_string()),
+                            postgres_types::DbValue::Int4(2 + i as i32),
+                            postgres_types::DbValue::Numeric(BigDecimal::from(111)),
                         ],
                     )),
                 ]),
                 postgres_types::DbValue::Array(vec![
-                    postgres_types::DbValuePrimitive::Domain(postgres_types::Domain::new(
+                    postgres_types::DbValue::Domain(postgres_types::Domain::new(
                         "posint8".to_string(),
-                        postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Int8(
-                            1 + i as i64,
-                        )),
+                        postgres_types::DbValue::Int8(1 + i as i64),
                     )),
-                    postgres_types::DbValuePrimitive::Domain(postgres_types::Domain::new(
+                    postgres_types::DbValue::Domain(postgres_types::Domain::new(
                         "posint8".to_string(),
-                        postgres_types::DbValue::Primitive(postgres_types::DbValuePrimitive::Int8(
-                            2 + i as i64,
-                        )),
+                        postgres_types::DbValue::Int8(2 + i as i64),
                     )),
                 ]),
             ]);
@@ -1300,366 +1100,287 @@ async fn postgres_execute_test_create_insert_select_array(
         postgres_types::DbColumn {
             name: "id".to_string(),
             ordinal: 0,
-            db_type: postgres_types::DbColumnType::Primitive(
-                postgres_types::DbColumnTypePrimitive::Varchar,
-            ),
+            db_type: postgres_types::DbColumnType::Varchar,
             db_type_name: "VARCHAR".to_string(),
         },
         postgres_types::DbColumn {
             name: "enum_col".to_string(),
             ordinal: 1,
-            db_type: postgres_types::DbColumnType::Array(
-                postgres_types::DbColumnTypePrimitive::Enum(postgres_types::EnumType::new(
-                    "a_test_enum".to_string(),
-                )),
-            ),
+            db_type: postgres_types::DbColumnType::new_array(postgres_types::DbColumnType::Enum(
+                postgres_types::EnumType::new("a_test_enum".to_string()),
+            )),
             db_type_name: "a_test_enum[]".to_string(),
         },
         postgres_types::DbColumn {
             name: "char_col".to_string(),
             ordinal: 2,
-            db_type: postgres_types::DbColumnType::Array(
-                postgres_types::DbColumnTypePrimitive::Character,
+            db_type: postgres_types::DbColumnType::new_array(
+                postgres_types::DbColumnType::Character,
             ),
             db_type_name: "\"CHAR\"[]".to_string(),
         },
         postgres_types::DbColumn {
             name: "int2_col".to_string(),
             ordinal: 3,
-            db_type: postgres_types::DbColumnType::Array(
-                postgres_types::DbColumnTypePrimitive::Int2,
-            ),
+            db_type: postgres_types::DbColumnType::new_array(postgres_types::DbColumnType::Int2),
             db_type_name: "INT2[]".to_string(),
         },
         postgres_types::DbColumn {
             name: "int4_col".to_string(),
             ordinal: 4,
-            db_type: postgres_types::DbColumnType::Array(
-                postgres_types::DbColumnTypePrimitive::Int4,
-            ),
+            db_type: postgres_types::DbColumnType::new_array(postgres_types::DbColumnType::Int4),
             db_type_name: "INT4[]".to_string(),
         },
         postgres_types::DbColumn {
             name: "int8_col".to_string(),
             ordinal: 5,
-            db_type: postgres_types::DbColumnType::Array(
-                postgres_types::DbColumnTypePrimitive::Int8,
-            ),
+            db_type: postgres_types::DbColumnType::new_array(postgres_types::DbColumnType::Int8),
             db_type_name: "INT8[]".to_string(),
         },
         postgres_types::DbColumn {
             name: "float4_col".to_string(),
             ordinal: 6,
-            db_type: postgres_types::DbColumnType::Array(
-                postgres_types::DbColumnTypePrimitive::Float4,
-            ),
+            db_type: postgres_types::DbColumnType::new_array(postgres_types::DbColumnType::Float4),
             db_type_name: "FLOAT4[]".to_string(),
         },
         postgres_types::DbColumn {
             name: "float8_col".to_string(),
             ordinal: 7,
-            db_type: postgres_types::DbColumnType::Array(
-                postgres_types::DbColumnTypePrimitive::Float8,
-            ),
+            db_type: postgres_types::DbColumnType::new_array(postgres_types::DbColumnType::Float8),
             db_type_name: "FLOAT8[]".to_string(),
         },
         postgres_types::DbColumn {
             name: "numeric_col".to_string(),
             ordinal: 8,
-            db_type: postgres_types::DbColumnType::Array(
-                postgres_types::DbColumnTypePrimitive::Numeric,
-            ),
+            db_type: postgres_types::DbColumnType::new_array(postgres_types::DbColumnType::Numeric),
             db_type_name: "NUMERIC[]".to_string(),
         },
         postgres_types::DbColumn {
             name: "boolean_col".to_string(),
             ordinal: 9,
-            db_type: postgres_types::DbColumnType::Array(
-                postgres_types::DbColumnTypePrimitive::Boolean,
-            ),
+            db_type: postgres_types::DbColumnType::new_array(postgres_types::DbColumnType::Boolean),
             db_type_name: "BOOL[]".to_string(),
         },
         postgres_types::DbColumn {
             name: "text_col".to_string(),
             ordinal: 10,
-            db_type: postgres_types::DbColumnType::Array(
-                postgres_types::DbColumnTypePrimitive::Text,
-            ),
+            db_type: postgres_types::DbColumnType::new_array(postgres_types::DbColumnType::Text),
             db_type_name: "TEXT[]".to_string(),
         },
         postgres_types::DbColumn {
             name: "varchar_col".to_string(),
             ordinal: 11,
-            db_type: postgres_types::DbColumnType::Array(
-                postgres_types::DbColumnTypePrimitive::Varchar,
-            ),
+            db_type: postgres_types::DbColumnType::new_array(postgres_types::DbColumnType::Varchar),
             db_type_name: "VARCHAR[]".to_string(),
         },
         postgres_types::DbColumn {
             name: "bpchar_col".to_string(),
             ordinal: 12,
-            db_type: postgres_types::DbColumnType::Array(
-                postgres_types::DbColumnTypePrimitive::Bpchar,
-            ),
+            db_type: postgres_types::DbColumnType::new_array(postgres_types::DbColumnType::Bpchar),
             db_type_name: "CHAR[]".to_string(),
         },
         postgres_types::DbColumn {
             name: "timestamp_col".to_string(),
             ordinal: 13,
-            db_type: postgres_types::DbColumnType::Array(
-                postgres_types::DbColumnTypePrimitive::Timestamp,
+            db_type: postgres_types::DbColumnType::new_array(
+                postgres_types::DbColumnType::Timestamp,
             ),
             db_type_name: "TIMESTAMP[]".to_string(),
         },
         postgres_types::DbColumn {
             name: "timestamptz_col".to_string(),
             ordinal: 14,
-            db_type: postgres_types::DbColumnType::Array(
-                postgres_types::DbColumnTypePrimitive::Timestamptz,
+            db_type: postgres_types::DbColumnType::new_array(
+                postgres_types::DbColumnType::Timestamptz,
             ),
             db_type_name: "TIMESTAMPTZ[]".to_string(),
         },
         postgres_types::DbColumn {
             name: "date_col".to_string(),
             ordinal: 15,
-            db_type: postgres_types::DbColumnType::Array(
-                postgres_types::DbColumnTypePrimitive::Date,
-            ),
+            db_type: postgres_types::DbColumnType::new_array(postgres_types::DbColumnType::Date),
             db_type_name: "DATE[]".to_string(),
         },
         postgres_types::DbColumn {
             name: "time_col".to_string(),
             ordinal: 16,
-            db_type: postgres_types::DbColumnType::Array(
-                postgres_types::DbColumnTypePrimitive::Time,
-            ),
+            db_type: postgres_types::DbColumnType::new_array(postgres_types::DbColumnType::Time),
             db_type_name: "TIME[]".to_string(),
         },
         postgres_types::DbColumn {
             name: "timetz_col".to_string(),
             ordinal: 17,
-            db_type: postgres_types::DbColumnType::Array(
-                postgres_types::DbColumnTypePrimitive::Timetz,
-            ),
+            db_type: postgres_types::DbColumnType::new_array(postgres_types::DbColumnType::Timetz),
             db_type_name: "TIMETZ[]".to_string(),
         },
         postgres_types::DbColumn {
             name: "interval_col".to_string(),
             ordinal: 18,
-            db_type: postgres_types::DbColumnType::Array(
-                postgres_types::DbColumnTypePrimitive::Interval,
+            db_type: postgres_types::DbColumnType::new_array(
+                postgres_types::DbColumnType::Interval,
             ),
             db_type_name: "INTERVAL[]".to_string(),
         },
         postgres_types::DbColumn {
             name: "bytea_col".to_string(),
             ordinal: 19,
-            db_type: postgres_types::DbColumnType::Array(
-                postgres_types::DbColumnTypePrimitive::Bytea,
-            ),
+            db_type: postgres_types::DbColumnType::new_array(postgres_types::DbColumnType::Bytea),
             db_type_name: "BYTEA[]".to_string(),
         },
         postgres_types::DbColumn {
             name: "uuid_col".to_string(),
             ordinal: 20,
-            db_type: postgres_types::DbColumnType::Array(
-                postgres_types::DbColumnTypePrimitive::Uuid,
-            ),
+            db_type: postgres_types::DbColumnType::new_array(postgres_types::DbColumnType::Uuid),
             db_type_name: "UUID[]".to_string(),
         },
         postgres_types::DbColumn {
             name: "json_col".to_string(),
             ordinal: 21,
-            db_type: postgres_types::DbColumnType::Array(
-                postgres_types::DbColumnTypePrimitive::Json,
-            ),
+            db_type: postgres_types::DbColumnType::new_array(postgres_types::DbColumnType::Json),
             db_type_name: "JSON[]".to_string(),
         },
         postgres_types::DbColumn {
             name: "jsonb_col".to_string(),
             ordinal: 22,
-            db_type: postgres_types::DbColumnType::Array(
-                postgres_types::DbColumnTypePrimitive::Jsonb,
-            ),
+            db_type: postgres_types::DbColumnType::new_array(postgres_types::DbColumnType::Jsonb),
             db_type_name: "JSONB[]".to_string(),
         },
         postgres_types::DbColumn {
             name: "inet_col".to_string(),
             ordinal: 23,
-            db_type: postgres_types::DbColumnType::Array(
-                postgres_types::DbColumnTypePrimitive::Inet,
-            ),
+            db_type: postgres_types::DbColumnType::new_array(postgres_types::DbColumnType::Inet),
             db_type_name: "INET[]".to_string(),
         },
         postgres_types::DbColumn {
             name: "cidr_col".to_string(),
             ordinal: 24,
-            db_type: postgres_types::DbColumnType::Array(
-                postgres_types::DbColumnTypePrimitive::Cidr,
-            ),
+            db_type: postgres_types::DbColumnType::new_array(postgres_types::DbColumnType::Cidr),
             db_type_name: "CIDR[]".to_string(),
         },
         postgres_types::DbColumn {
             name: "macaddr_col".to_string(),
             ordinal: 25,
-            db_type: postgres_types::DbColumnType::Array(
-                postgres_types::DbColumnTypePrimitive::Macaddr,
-            ),
+            db_type: postgres_types::DbColumnType::new_array(postgres_types::DbColumnType::Macaddr),
             db_type_name: "MACADDR[]".to_string(),
         },
         postgres_types::DbColumn {
             name: "bit_col".to_string(),
             ordinal: 26,
-            db_type: postgres_types::DbColumnType::Array(
-                postgres_types::DbColumnTypePrimitive::Bit,
-            ),
+            db_type: postgres_types::DbColumnType::new_array(postgres_types::DbColumnType::Bit),
             db_type_name: "BIT[]".to_string(),
         },
         postgres_types::DbColumn {
             name: "varbit_col".to_string(),
             ordinal: 27,
-            db_type: postgres_types::DbColumnType::Array(
-                postgres_types::DbColumnTypePrimitive::Varbit,
-            ),
+            db_type: postgres_types::DbColumnType::new_array(postgres_types::DbColumnType::Varbit),
             db_type_name: "VARBIT[]".to_string(),
         },
         postgres_types::DbColumn {
             name: "xml_col".to_string(),
             ordinal: 28,
-            db_type: postgres_types::DbColumnType::Array(
-                postgres_types::DbColumnTypePrimitive::Xml,
-            ),
+            db_type: postgres_types::DbColumnType::new_array(postgres_types::DbColumnType::Xml),
             db_type_name: "XML[]".to_string(),
         },
         postgres_types::DbColumn {
             name: "int4range_col".to_string(),
             ordinal: 29,
-            db_type: postgres_types::DbColumnType::Array(
-                postgres_types::DbColumnTypePrimitive::Int4range,
+            db_type: postgres_types::DbColumnType::new_array(
+                postgres_types::DbColumnType::Int4range,
             ),
             db_type_name: "INT4RANGE[]".to_string(),
         },
         postgres_types::DbColumn {
             name: "int8range_col".to_string(),
             ordinal: 30,
-            db_type: postgres_types::DbColumnType::Array(
-                postgres_types::DbColumnTypePrimitive::Int8range,
+            db_type: postgres_types::DbColumnType::new_array(
+                postgres_types::DbColumnType::Int8range,
             ),
             db_type_name: "INT8RANGE[]".to_string(),
         },
         postgres_types::DbColumn {
             name: "numrange_col".to_string(),
             ordinal: 31,
-            db_type: postgres_types::DbColumnType::Array(
-                postgres_types::DbColumnTypePrimitive::Numrange,
+            db_type: postgres_types::DbColumnType::new_array(
+                postgres_types::DbColumnType::Numrange,
             ),
             db_type_name: "NUMRANGE[]".to_string(),
         },
         postgres_types::DbColumn {
             name: "tsrange_col".to_string(),
             ordinal: 32,
-            db_type: postgres_types::DbColumnType::Array(
-                postgres_types::DbColumnTypePrimitive::Tsrange,
-            ),
+            db_type: postgres_types::DbColumnType::new_array(postgres_types::DbColumnType::Tsrange),
             db_type_name: "TSRANGE[]".to_string(),
         },
         postgres_types::DbColumn {
             name: "tstzrange_col".to_string(),
             ordinal: 33,
-            db_type: postgres_types::DbColumnType::Array(
-                postgres_types::DbColumnTypePrimitive::Tstzrange,
+            db_type: postgres_types::DbColumnType::new_array(
+                postgres_types::DbColumnType::Tstzrange,
             ),
             db_type_name: "TSTZRANGE[]".to_string(),
         },
         postgres_types::DbColumn {
             name: "daterange_col".to_string(),
             ordinal: 34,
-            db_type: postgres_types::DbColumnType::Array(
-                postgres_types::DbColumnTypePrimitive::Daterange,
+            db_type: postgres_types::DbColumnType::new_array(
+                postgres_types::DbColumnType::Daterange,
             ),
             db_type_name: "DATERANGE[]".to_string(),
         },
         postgres_types::DbColumn {
             name: "money_col".to_string(),
             ordinal: 35,
-            db_type: postgres_types::DbColumnType::Array(
-                postgres_types::DbColumnTypePrimitive::Money,
-            ),
+            db_type: postgres_types::DbColumnType::new_array(postgres_types::DbColumnType::Money),
             db_type_name: "MONEY[]".to_string(),
         },
         postgres_types::DbColumn {
             name: "jsonpath_col".to_string(),
             ordinal: 36,
-            db_type: postgres_types::DbColumnType::Array(
-                postgres_types::DbColumnTypePrimitive::Jsonpath,
+            db_type: postgres_types::DbColumnType::new_array(
+                postgres_types::DbColumnType::Jsonpath,
             ),
             db_type_name: "JSONPATH[]".to_string(),
         },
         postgres_types::DbColumn {
             name: "tsvector_col".to_string(),
             ordinal: 37,
-            db_type: postgres_types::DbColumnType::Array(
-                postgres_types::DbColumnTypePrimitive::Text,
-            ),
+            db_type: postgres_types::DbColumnType::new_array(postgres_types::DbColumnType::Text),
             db_type_name: "TEXT[]".to_string(),
         },
         postgres_types::DbColumn {
             name: "tsquery_col".to_string(),
             ordinal: 38,
-            db_type: postgres_types::DbColumnType::Array(
-                postgres_types::DbColumnTypePrimitive::Text,
-            ),
+            db_type: postgres_types::DbColumnType::new_array(postgres_types::DbColumnType::Text),
             db_type_name: "TEXT[]".to_string(),
         },
         postgres_types::DbColumn {
             name: "inventory_item_col".to_string(),
             ordinal: 39,
-            db_type: postgres_types::DbColumnType::Array(
-                postgres_types::DbColumnTypePrimitive::Composite(
-                    postgres_types::CompositeType::new(
-                        "a_inventory_item".to_string(),
-                        vec![
-                            (
-                                "product_id".to_string(),
-                                postgres_types::DbColumnType::Primitive(
-                                    postgres_types::DbColumnTypePrimitive::Uuid,
-                                ),
-                            ),
-                            (
-                                "name".to_string(),
-                                postgres_types::DbColumnType::Primitive(
-                                    postgres_types::DbColumnTypePrimitive::Text,
-                                ),
-                            ),
-                            (
-                                "supplier_id".to_string(),
-                                postgres_types::DbColumnType::Primitive(
-                                    postgres_types::DbColumnTypePrimitive::Int4,
-                                ),
-                            ),
-                            (
-                                "price".to_string(),
-                                postgres_types::DbColumnType::Primitive(
-                                    postgres_types::DbColumnTypePrimitive::Numeric,
-                                ),
-                            ),
-                        ],
-                    ),
-                ),
+            db_type: postgres_types::DbColumnType::new_array(
+                postgres_types::DbColumnType::Composite(postgres_types::CompositeType::new(
+                    "a_inventory_item".to_string(),
+                    vec![
+                        ("product_id".to_string(), postgres_types::DbColumnType::Uuid),
+                        ("name".to_string(), postgres_types::DbColumnType::Text),
+                        (
+                            "supplier_id".to_string(),
+                            postgres_types::DbColumnType::Int4,
+                        ),
+                        ("price".to_string(), postgres_types::DbColumnType::Numeric),
+                    ],
+                )),
             ),
             db_type_name: "a_inventory_item[]".to_string(),
         },
         postgres_types::DbColumn {
             name: "posint8_col".to_string(),
             ordinal: 40,
-            db_type: postgres_types::DbColumnType::Array(
-                postgres_types::DbColumnTypePrimitive::Domain(postgres_types::DomainType::new(
+            db_type: postgres_types::DbColumnType::new_array(postgres_types::DbColumnType::Domain(
+                postgres_types::DomainType::new(
                     "posint8".to_string(),
-                    postgres_types::DbColumnType::Primitive(
-                        postgres_types::DbColumnTypePrimitive::Int8,
-                    ),
-                )),
-            ),
+                    postgres_types::DbColumnType::Int8,
+                ),
+            )),
             db_type_name: "posint8[]".to_string(),
         },
     ];
@@ -2429,8 +2150,8 @@ async fn postgres_query_err_test(
         &db_address,
         "SELECT 1",
         vec![postgres_types::DbValue::Array(vec![
-            postgres_types::DbValuePrimitive::Text("tag1".to_string()),
-            postgres_types::DbValuePrimitive::Int8(0),
+            postgres_types::DbValue::Text("tag1".to_string()),
+            postgres_types::DbValue::Int8(0),
         ])],
         Error::QueryParameterFailure(
             "Array element '0' with index 1 has different type than expected".to_string(),
@@ -2463,8 +2184,8 @@ async fn postgres_execute_err_test(
         &db_address,
         "SELECT 1",
         vec![postgres_types::DbValue::Array(vec![
-            postgres_types::DbValuePrimitive::Text("tag1".to_string()),
-            postgres_types::DbValuePrimitive::Int8(0),
+            postgres_types::DbValue::Text("tag1".to_string()),
+            postgres_types::DbValue::Int8(0),
         ])],
         Error::QueryParameterFailure(
             "Array element '0' with index 1 has different type than expected".to_string(),

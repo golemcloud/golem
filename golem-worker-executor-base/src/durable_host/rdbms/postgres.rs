@@ -15,10 +15,10 @@
 use crate::durable_host::DurableWorkerCtx;
 use crate::metrics::wasm::record_host_function_call;
 use crate::preview2::wasi::rdbms::postgres::{
-    Date, Datebound, Daterange, DbColumn, DbColumnType, DbColumnTypePrimitive, DbRow, DbValue,
-    DbValuePrimitive, Enumeration, Error, Host, HostDbConnection, HostDbResultSet, Int4bound,
-    Int4range, Int8bound, Int8range, Interval, IpAddress, MacAddress, Numbound, Numrange, Time,
-    Timestamp, Timestamptz, Timetz, Tsbound, Tsrange, Tstzbound, Tstzrange, Uuid,
+    Date, Datebound, Daterange, DbColumn, DbColumnType, DbRow, DbValue, Enumeration, Error, Host,
+    HostDbConnection, HostDbResultSet, Int4bound, Int4range, Int8bound, Int8range, Interval,
+    IpAddress, MacAddress, Numbound, Numrange, Time, Timestamp, Timestamptz, Timetz, Tsbound,
+    Tsrange, Tstzbound, Tstzrange, Uuid,
 };
 use crate::services::rdbms::postgres::PostgresType;
 use crate::services::rdbms::RdbmsPoolKey;
@@ -206,7 +206,6 @@ impl<Ctx: WorkerCtx> HostDbConnection for &mut DurableWorkerCtx<Ctx> {
     }
 
     fn drop(&mut self, rep: Resource<PostgresDbConnection>) -> anyhow::Result<()> {
-        // (*self).drop(rep)
         HostDbConnection::drop(*self, rep)
     }
 }
@@ -296,235 +295,204 @@ impl<Ctx: WorkerCtx> HostDbResultSet for &mut DurableWorkerCtx<Ctx> {
         &mut self,
         rep: Resource<crate::durable_host::rdbms::postgres::DbResultSetEntry>,
     ) -> anyhow::Result<()> {
-        // (*self).drop(rep)
         HostDbResultSet::drop(*self, rep)
-    }
-}
-
-impl TryFrom<DbValuePrimitive> for crate::services::rdbms::postgres::types::DbValuePrimitive {
-    type Error = String;
-    fn try_from(value: DbValuePrimitive) -> Result<Self, Self::Error> {
-        match value {
-            DbValuePrimitive::Character(v) => Ok(Self::Character(v)),
-            DbValuePrimitive::Int2(i) => Ok(Self::Int2(i)),
-            DbValuePrimitive::Int4(i) => Ok(Self::Int4(i)),
-            DbValuePrimitive::Int8(i) => Ok(Self::Int8(i)),
-            DbValuePrimitive::Numeric(s) => {
-                let v = bigdecimal::BigDecimal::from_str(&s).map_err(|e| e.to_string())?;
-                Ok(Self::Numeric(v))
-            }
-            DbValuePrimitive::Float4(f) => Ok(Self::Float4(f)),
-            DbValuePrimitive::Float8(f) => Ok(Self::Float8(f)),
-            DbValuePrimitive::Boolean(b) => Ok(Self::Boolean(b)),
-            DbValuePrimitive::Timestamp(v) => {
-                let value = v.try_into()?;
-                Ok(Self::Timestamp(value))
-            }
-            DbValuePrimitive::Timestamptz(v) => {
-                let value = v.try_into()?;
-                Ok(Self::Timestamptz(value))
-            }
-            DbValuePrimitive::Time(v) => {
-                let value = v.try_into()?;
-                Ok(Self::Time(value))
-            }
-            DbValuePrimitive::Timetz(v) => {
-                let value = v.try_into()?;
-                Ok(Self::Timetz(value))
-            }
-            DbValuePrimitive::Date(v) => {
-                let value = v.try_into()?;
-                Ok(Self::Date(value))
-            }
-            DbValuePrimitive::Interval(v) => Ok(Self::Interval(v.into())),
-            DbValuePrimitive::Text(s) => Ok(Self::Text(s)),
-            DbValuePrimitive::Varchar(s) => Ok(Self::Varchar(s)),
-            DbValuePrimitive::Bpchar(s) => Ok(Self::Bpchar(s)),
-            DbValuePrimitive::Bytea(u) => Ok(Self::Bytea(u)),
-            DbValuePrimitive::Json(v) => {
-                let v: serde_json::Value = serde_json::from_str(&v).map_err(|e| e.to_string())?;
-                Ok(Self::Json(v))
-            }
-            DbValuePrimitive::Jsonb(v) => {
-                let v: serde_json::Value = serde_json::from_str(&v).map_err(|e| e.to_string())?;
-                Ok(Self::Jsonb(v))
-            }
-            DbValuePrimitive::Jsonpath(s) => Ok(Self::Jsonpath(s)),
-            DbValuePrimitive::Xml(s) => Ok(Self::Xml(s)),
-            DbValuePrimitive::Uuid(v) => Ok(Self::Uuid(uuid::Uuid::from_u64_pair(
-                v.high_bits,
-                v.low_bits,
-            ))),
-            DbValuePrimitive::Bit(v) => Ok(Self::Bit(BitVec::from_iter(v))),
-            DbValuePrimitive::Varbit(v) => Ok(Self::Varbit(BitVec::from_iter(v))),
-            DbValuePrimitive::Oid(v) => Ok(Self::Oid(v)),
-            DbValuePrimitive::Inet(v) => Ok(Self::Inet(v.into())),
-            DbValuePrimitive::Cidr(v) => Ok(Self::Cidr(v.into())),
-            DbValuePrimitive::Macaddr(v) => Ok(Self::Macaddr(
-                sqlx::types::mac_address::MacAddress::new(v.octets.into()),
-            )),
-            DbValuePrimitive::Int4range(v) => Ok(Self::Int4range(v.into())),
-            DbValuePrimitive::Int8range(v) => Ok(Self::Int8range(v.into())),
-            DbValuePrimitive::Numrange(v) => {
-                let v = v.try_into()?;
-                Ok(Self::Numrange(v))
-            }
-            DbValuePrimitive::Tsrange(v) => {
-                let v = v.try_into()?;
-                Ok(Self::Tsrange(v))
-            }
-            DbValuePrimitive::Tstzrange(v) => {
-                let v = v.try_into()?;
-                Ok(Self::Tstzrange(v))
-            }
-            DbValuePrimitive::Daterange(v) => {
-                let v = v.try_into()?;
-                Ok(Self::Daterange(v))
-            }
-            DbValuePrimitive::Money(v) => Ok(Self::Money(v)),
-            DbValuePrimitive::Enumeration(v) => Ok(Self::Enum(v.into())),
-            DbValuePrimitive::Null => Ok(Self::Null),
-        }
-    }
-}
-
-impl From<crate::services::rdbms::postgres::types::DbValuePrimitive> for DbValuePrimitive {
-    fn from(value: crate::services::rdbms::postgres::types::DbValuePrimitive) -> Self {
-        match value {
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Character(s) => {
-                Self::Character(s)
-            }
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Int2(i) => Self::Int2(i),
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Int4(i) => Self::Int4(i),
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Int8(i) => Self::Int8(i),
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Numeric(s) => {
-                Self::Numeric(s.to_string())
-            }
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Float4(f) => Self::Float4(f),
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Float8(f) => Self::Float8(f),
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Boolean(b) => {
-                Self::Boolean(b)
-            }
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Timestamp(v) => {
-                Self::Timestamp(v.into())
-            }
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Timestamptz(v) => {
-                Self::Timestamptz(v.into())
-            }
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Time(v) => {
-                Self::Time(v.into())
-            }
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Timetz(v) => {
-                Self::Timetz(v.into())
-            }
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Date(v) => {
-                Self::Date(v.into())
-            }
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Interval(v) => {
-                Self::Interval(v.into())
-            }
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Text(s) => Self::Text(s),
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Varchar(s) => {
-                Self::Varchar(s)
-            }
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Bpchar(s) => Self::Bpchar(s),
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Bytea(u) => Self::Bytea(u),
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Json(s) => {
-                Self::Json(s.to_string())
-            }
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Jsonb(s) => {
-                Self::Jsonb(s.to_string())
-            }
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Jsonpath(s) => {
-                Self::Jsonpath(s)
-            }
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Xml(s) => Self::Xml(s),
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Uuid(uuid) => {
-                let (high_bits, low_bits) = uuid.as_u64_pair();
-                Self::Uuid(Uuid {
-                    high_bits,
-                    low_bits,
-                })
-            }
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Bit(v) => {
-                Self::Bit(v.iter().collect())
-            }
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Varbit(v) => {
-                Self::Varbit(v.iter().collect())
-            }
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Inet(v) => {
-                Self::Inet(v.into())
-            }
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Cidr(v) => {
-                Self::Cidr(v.into())
-            }
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Macaddr(v) => {
-                let v = v.bytes();
-                DbValuePrimitive::Macaddr(MacAddress { octets: v.into() })
-            }
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Tsrange(v) => {
-                Self::Tsrange(v.into())
-            }
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Tstzrange(v) => {
-                Self::Tstzrange(v.into())
-            }
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Daterange(v) => {
-                Self::Daterange(v.into())
-            }
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Int4range(v) => {
-                Self::Int4range(v.into())
-            }
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Int8range(v) => {
-                Self::Int8range(v.into())
-            }
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Numrange(v) => {
-                Self::Numrange(v.into())
-            }
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Oid(v) => Self::Oid(v),
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Money(v) => Self::Money(v),
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Enum(v) => {
-                Self::Enumeration(v.into())
-            }
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Composite(_) => {
-                todo!()
-            }
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Domain(_) => {
-                todo!()
-            }
-            crate::services::rdbms::postgres::types::DbValuePrimitive::Null => Self::Null,
-        }
     }
 }
 
 impl TryFrom<DbValue> for crate::services::rdbms::postgres::types::DbValue {
     type Error = String;
     fn try_from(value: DbValue) -> Result<Self, Self::Error> {
-        match value {
-            DbValue::Primitive(p) => {
-                let v = p.try_into()?;
-                Ok(Self::Primitive(v))
-            }
-            DbValue::Array(vs) => {
-                let vs = vs
-                    .into_iter()
-                    .map(|v| v.try_into())
-                    .collect::<Result<Vec<_>, String>>()?;
-                Ok(Self::Array(vs))
-            }
-        }
+        // match value {
+        //     DbValuePrimitive::Character(v) => Ok(Self::Character(v)),
+        //     DbValuePrimitive::Int2(i) => Ok(Self::Int2(i)),
+        //     DbValuePrimitive::Int4(i) => Ok(Self::Int4(i)),
+        //     DbValuePrimitive::Int8(i) => Ok(Self::Int8(i)),
+        //     DbValuePrimitive::Numeric(s) => {
+        //         let v = bigdecimal::BigDecimal::from_str(&s).map_err(|e| e.to_string())?;
+        //         Ok(Self::Numeric(v))
+        //     }
+        //     DbValuePrimitive::Float4(f) => Ok(Self::Float4(f)),
+        //     DbValuePrimitive::Float8(f) => Ok(Self::Float8(f)),
+        //     DbValuePrimitive::Boolean(b) => Ok(Self::Boolean(b)),
+        //     DbValuePrimitive::Timestamp(v) => {
+        //         let value = v.try_into()?;
+        //         Ok(Self::Timestamp(value))
+        //     }
+        //     DbValuePrimitive::Timestamptz(v) => {
+        //         let value = v.try_into()?;
+        //         Ok(Self::Timestamptz(value))
+        //     }
+        //     DbValuePrimitive::Time(v) => {
+        //         let value = v.try_into()?;
+        //         Ok(Self::Time(value))
+        //     }
+        //     DbValuePrimitive::Timetz(v) => {
+        //         let value = v.try_into()?;
+        //         Ok(Self::Timetz(value))
+        //     }
+        //     DbValuePrimitive::Date(v) => {
+        //         let value = v.try_into()?;
+        //         Ok(Self::Date(value))
+        //     }
+        //     DbValuePrimitive::Interval(v) => Ok(Self::Interval(v.into())),
+        //     DbValuePrimitive::Text(s) => Ok(Self::Text(s)),
+        //     DbValuePrimitive::Varchar(s) => Ok(Self::Varchar(s)),
+        //     DbValuePrimitive::Bpchar(s) => Ok(Self::Bpchar(s)),
+        //     DbValuePrimitive::Bytea(u) => Ok(Self::Bytea(u)),
+        //     DbValuePrimitive::Json(v) => {
+        //         let v: serde_json::Value = serde_json::from_str(&v).map_err(|e| e.to_string())?;
+        //         Ok(Self::Json(v))
+        //     }
+        //     DbValuePrimitive::Jsonb(v) => {
+        //         let v: serde_json::Value = serde_json::from_str(&v).map_err(|e| e.to_string())?;
+        //         Ok(Self::Jsonb(v))
+        //     }
+        //     DbValuePrimitive::Jsonpath(s) => Ok(Self::Jsonpath(s)),
+        //     DbValuePrimitive::Xml(s) => Ok(Self::Xml(s)),
+        //     DbValuePrimitive::Uuid(v) => Ok(Self::Uuid(uuid::Uuid::from_u64_pair(
+        //         v.high_bits,
+        //         v.low_bits,
+        //     ))),
+        //     DbValuePrimitive::Bit(v) => Ok(Self::Bit(BitVec::from_iter(v))),
+        //     DbValuePrimitive::Varbit(v) => Ok(Self::Varbit(BitVec::from_iter(v))),
+        //     DbValuePrimitive::Oid(v) => Ok(Self::Oid(v)),
+        //     DbValuePrimitive::Inet(v) => Ok(Self::Inet(v.into())),
+        //     DbValuePrimitive::Cidr(v) => Ok(Self::Cidr(v.into())),
+        //     DbValuePrimitive::Macaddr(v) => Ok(Self::Macaddr(
+        //         sqlx::types::mac_address::MacAddress::new(v.octets.into()),
+        //     )),
+        //     DbValuePrimitive::Int4range(v) => Ok(Self::Int4range(v.into())),
+        //     DbValuePrimitive::Int8range(v) => Ok(Self::Int8range(v.into())),
+        //     DbValuePrimitive::Numrange(v) => {
+        //         let v = v.try_into()?;
+        //         Ok(Self::Numrange(v))
+        //     }
+        //     DbValuePrimitive::Tsrange(v) => {
+        //         let v = v.try_into()?;
+        //         Ok(Self::Tsrange(v))
+        //     }
+        //     DbValuePrimitive::Tstzrange(v) => {
+        //         let v = v.try_into()?;
+        //         Ok(Self::Tstzrange(v))
+        //     }
+        //     DbValuePrimitive::Daterange(v) => {
+        //         let v = v.try_into()?;
+        //         Ok(Self::Daterange(v))
+        //     }
+        //     DbValuePrimitive::Money(v) => Ok(Self::Money(v)),
+        //     DbValuePrimitive::Enumeration(v) => Ok(Self::Enum(v.into())),
+        //     DbValuePrimitive::Null => Ok(Self::Null),
+        // }
+        todo!()
     }
 }
 
 impl From<crate::services::rdbms::postgres::types::DbValue> for DbValue {
     fn from(value: crate::services::rdbms::postgres::types::DbValue) -> Self {
-        match value {
-            crate::services::rdbms::postgres::types::DbValue::Primitive(p) => {
-                Self::Primitive(p.into())
-            }
-            crate::services::rdbms::postgres::types::DbValue::Array(vs) => {
-                Self::Array(vs.into_iter().map(|v| v.into()).collect())
-            }
-        }
+        // match value {
+        //     crate::services::rdbms::postgres::types::DbValue::Character(s) => {
+        //         Self::Character(s)
+        //     }
+        //     crate::services::rdbms::postgres::types::DbValue::Int2(i) => Self::Int2(i),
+        //     crate::services::rdbms::postgres::types::DbValue::Int4(i) => Self::Int4(i),
+        //     crate::services::rdbms::postgres::types::DbValue::Int8(i) => Self::Int8(i),
+        //     crate::services::rdbms::postgres::types::DbValue::Numeric(s) => {
+        //         Self::Numeric(s.to_string())
+        //     }
+        //     crate::services::rdbms::postgres::types::DbValue::Float4(f) => Self::Float4(f),
+        //     crate::services::rdbms::postgres::types::DbValue::Float8(f) => Self::Float8(f),
+        //     crate::services::rdbms::postgres::types::DbValue::Boolean(b) => {
+        //         Self::Boolean(b)
+        //     }
+        //     crate::services::rdbms::postgres::types::DbValue::Timestamp(v) => {
+        //         Self::Timestamp(v.into())
+        //     }
+        //     crate::services::rdbms::postgres::types::DbValue::Timestamptz(v) => {
+        //         Self::Timestamptz(v.into())
+        //     }
+        //     crate::services::rdbms::postgres::types::DbValue::Time(v) => {
+        //         Self::Time(v.into())
+        //     }
+        //     crate::services::rdbms::postgres::types::DbValue::Timetz(v) => {
+        //         Self::Timetz(v.into())
+        //     }
+        //     crate::services::rdbms::postgres::types::DbValue::Date(v) => {
+        //         Self::Date(v.into())
+        //     }
+        //     crate::services::rdbms::postgres::types::DbValue::Interval(v) => {
+        //         Self::Interval(v.into())
+        //     }
+        //     crate::services::rdbms::postgres::types::DbValue::Text(s) => Self::Text(s),
+        //     crate::services::rdbms::postgres::types::DbValue::Varchar(s) => {
+        //         Self::Varchar(s)
+        //     }
+        //     crate::services::rdbms::postgres::types::DbValue::Bpchar(s) => Self::Bpchar(s),
+        //     crate::services::rdbms::postgres::types::DbValue::Bytea(u) => Self::Bytea(u),
+        //     crate::services::rdbms::postgres::types::DbValue::Json(s) => {
+        //         Self::Json(s.to_string())
+        //     }
+        //     crate::services::rdbms::postgres::types::DbValue::Jsonb(s) => {
+        //         Self::Jsonb(s.to_string())
+        //     }
+        //     crate::services::rdbms::postgres::types::DbValue::Jsonpath(s) => {
+        //         Self::Jsonpath(s)
+        //     }
+        //     crate::services::rdbms::postgres::types::DbValue::Xml(s) => Self::Xml(s),
+        //     crate::services::rdbms::postgres::types::DbValue::Uuid(uuid) => {
+        //         let (high_bits, low_bits) = uuid.as_u64_pair();
+        //         Self::Uuid(Uuid {
+        //             high_bits,
+        //             low_bits,
+        //         })
+        //     }
+        //     crate::services::rdbms::postgres::types::DbValue::Bit(v) => {
+        //         Self::Bit(v.iter().collect())
+        //     }
+        //     crate::services::rdbms::postgres::types::DbValue::Varbit(v) => {
+        //         Self::Varbit(v.iter().collect())
+        //     }
+        //     crate::services::rdbms::postgres::types::DbValue::Inet(v) => {
+        //         Self::Inet(v.into())
+        //     }
+        //     crate::services::rdbms::postgres::types::DbValue::Cidr(v) => {
+        //         Self::Cidr(v.into())
+        //     }
+        //     crate::services::rdbms::postgres::types::DbValue::Macaddr(v) => {
+        //         let v = v.bytes();
+        //         DbValuePrimitive::Macaddr(MacAddress { octets: v.into() })
+        //     }
+        //     crate::services::rdbms::postgres::types::DbValue::Tsrange(v) => {
+        //         Self::Tsrange(v.into())
+        //     }
+        //     crate::services::rdbms::postgres::types::DbValue::Tstzrange(v) => {
+        //         Self::Tstzrange(v.into())
+        //     }
+        //     crate::services::rdbms::postgres::types::DbValue::Daterange(v) => {
+        //         Self::Daterange(v.into())
+        //     }
+        //     crate::services::rdbms::postgres::types::DbValue::Int4range(v) => {
+        //         Self::Int4range(v.into())
+        //     }
+        //     crate::services::rdbms::postgres::types::DbValue::Int8range(v) => {
+        //         Self::Int8range(v.into())
+        //     }
+        //     crate::services::rdbms::postgres::types::DbValue::Numrange(v) => {
+        //         Self::Numrange(v.into())
+        //     }
+        //     crate::services::rdbms::postgres::types::DbValue::Oid(v) => Self::Oid(v),
+        //     crate::services::rdbms::postgres::types::DbValue::Money(v) => Self::Money(v),
+        //     crate::services::rdbms::postgres::types::DbValue::Enum(v) => {
+        //         Self::Enumeration(v.into())
+        //     }
+        //     crate::services::rdbms::postgres::types::DbValue::Composite(_) => {
+        //         todo!()
+        //     }
+        //     crate::services::rdbms::postgres::types::DbValue::Domain(_) => {
+        //         todo!()
+        //     }
+        //     crate::services::rdbms::postgres::types::DbValue::Null => Self::Null,
+        // }
+        todo!()
     }
 }
 
@@ -540,100 +508,86 @@ impl From<crate::services::rdbms::DbRow<crate::services::rdbms::postgres::types:
     }
 }
 
-impl From<crate::services::rdbms::postgres::types::DbColumnTypePrimitive>
-    for DbColumnTypePrimitive
-{
-    fn from(value: crate::services::rdbms::postgres::types::DbColumnTypePrimitive) -> Self {
-        match value {
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Character => {
-                Self::Character
-            }
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Int2 => Self::Int2,
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Int4 => Self::Int4,
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Int8 => Self::Int8,
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Numeric => {
-                Self::Numeric
-            }
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Float4 => Self::Float4,
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Float8 => Self::Float8,
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Boolean => {
-                Self::Boolean
-            }
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Timestamp => {
-                Self::Timestamp
-            }
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Timestamptz => {
-                Self::Timestamptz
-            }
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Interval => {
-                Self::Interval
-            }
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Time => Self::Time,
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Timetz => Self::Timetz,
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Date => Self::Date,
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Text => Self::Text,
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Varchar => {
-                Self::Varchar
-            }
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Bpchar => Self::Bpchar,
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Bytea => Self::Bytea,
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Jsonb => Self::Jsonb,
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Json => Self::Json,
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Jsonpath => {
-                Self::Jsonpath
-            }
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Xml => Self::Xml,
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Bit => Self::Bit,
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Varbit => Self::Varbit,
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Oid => Self::Oid,
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Inet => Self::Inet,
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Cidr => Self::Cidr,
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Macaddr => {
-                Self::Macaddr
-            }
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Int4range => {
-                Self::Int4range
-            }
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Int8range => {
-                Self::Int8range
-            }
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Numrange => {
-                Self::Numrange
-            }
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Tsrange => {
-                Self::Tsrange
-            }
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Tstzrange => {
-                Self::Tstzrange
-            }
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Daterange => {
-                Self::Daterange
-            }
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Uuid => Self::Uuid,
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Money => Self::Money,
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Enum(v) => {
-                Self::Enumeration(v.name)
-            }
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Composite(v) => {
-                todo!()
-            }
-            crate::services::rdbms::postgres::types::DbColumnTypePrimitive::Domain(v) => {
-                todo!()
-            }
-        }
-    }
-}
-
 impl From<crate::services::rdbms::postgres::types::DbColumnType> for DbColumnType {
     fn from(value: crate::services::rdbms::postgres::types::DbColumnType) -> Self {
-        match value {
-            crate::services::rdbms::postgres::types::DbColumnType::Primitive(p) => {
-                Self::Primitive(p.into())
-            }
-            crate::services::rdbms::postgres::types::DbColumnType::Array(p) => {
-                Self::Array(p.into())
-            }
-        }
+        // match value {
+        //     crate::services::rdbms::postgres::types::DbColumnType::Character => {
+        //         Self::Character
+        //     }
+        //     crate::services::rdbms::postgres::types::DbColumnType::Int2 => Self::Int2,
+        //     crate::services::rdbms::postgres::types::DbColumnType::Int4 => Self::Int4,
+        //     crate::services::rdbms::postgres::types::DbColumnType::Int8 => Self::Int8,
+        //     crate::services::rdbms::postgres::types::DbColumnType::Numeric => {
+        //         Self::Numeric
+        //     }
+        //     crate::services::rdbms::postgres::types::DbColumnType::Float4 => Self::Float4,
+        //     crate::services::rdbms::postgres::types::DbColumnType::Float8 => Self::Float8,
+        //     crate::services::rdbms::postgres::types::DbColumnType::Boolean => {
+        //         Self::Boolean
+        //     }
+        //     crate::services::rdbms::postgres::types::DbColumnType::Timestamp => {
+        //         Self::Timestamp
+        //     }
+        //     crate::services::rdbms::postgres::types::DbColumnType::Timestamptz => {
+        //         Self::Timestamptz
+        //     }
+        //     crate::services::rdbms::postgres::types::DbColumnType::Interval => {
+        //         Self::Interval
+        //     }
+        //     crate::services::rdbms::postgres::types::DbColumnType::Time => Self::Time,
+        //     crate::services::rdbms::postgres::types::DbColumnType::Timetz => Self::Timetz,
+        //     crate::services::rdbms::postgres::types::DbColumnType::Date => Self::Date,
+        //     crate::services::rdbms::postgres::types::DbColumnType::Text => Self::Text,
+        //     crate::services::rdbms::postgres::types::DbColumnType::Varchar => {
+        //         Self::Varchar
+        //     }
+        //     crate::services::rdbms::postgres::types::DbColumnType::Bpchar => Self::Bpchar,
+        //     crate::services::rdbms::postgres::types::DbColumnType::Bytea => Self::Bytea,
+        //     crate::services::rdbms::postgres::types::DbColumnType::Jsonb => Self::Jsonb,
+        //     crate::services::rdbms::postgres::types::DbColumnType::Json => Self::Json,
+        //     crate::services::rdbms::postgres::types::DbColumnType::Jsonpath => {
+        //         Self::Jsonpath
+        //     }
+        //     crate::services::rdbms::postgres::types::DbColumnType::Xml => Self::Xml,
+        //     crate::services::rdbms::postgres::types::DbColumnType::Bit => Self::Bit,
+        //     crate::services::rdbms::postgres::types::DbColumnType::Varbit => Self::Varbit,
+        //     crate::services::rdbms::postgres::types::DbColumnType::Oid => Self::Oid,
+        //     crate::services::rdbms::postgres::types::DbColumnType::Inet => Self::Inet,
+        //     crate::services::rdbms::postgres::types::DbColumnType::Cidr => Self::Cidr,
+        //     crate::services::rdbms::postgres::types::DbColumnType::Macaddr => {
+        //         Self::Macaddr
+        //     }
+        //     crate::services::rdbms::postgres::types::DbColumnType::Int4range => {
+        //         Self::Int4range
+        //     }
+        //     crate::services::rdbms::postgres::types::DbColumnType::Int8range => {
+        //         Self::Int8range
+        //     }
+        //     crate::services::rdbms::postgres::types::DbColumnType::Numrange => {
+        //         Self::Numrange
+        //     }
+        //     crate::services::rdbms::postgres::types::DbColumnType::Tsrange => {
+        //         Self::Tsrange
+        //     }
+        //     crate::services::rdbms::postgres::types::DbColumnType::Tstzrange => {
+        //         Self::Tstzrange
+        //     }
+        //     crate::services::rdbms::postgres::types::DbColumnType::Daterange => {
+        //         Self::Daterange
+        //     }
+        //     crate::services::rdbms::postgres::types::DbColumnType::Uuid => Self::Uuid,
+        //     crate::services::rdbms::postgres::types::DbColumnType::Money => Self::Money,
+        //     crate::services::rdbms::postgres::types::DbColumnType::Enum(v) => {
+        //         Self::Enumeration(v.name)
+        //     }
+        //     crate::services::rdbms::postgres::types::DbColumnType::Composite(v) => {
+        //         todo!()
+        //     }
+        //     crate::services::rdbms::postgres::types::DbColumnType::Domain(v) => {
+        //         todo!()
+        //     }
+        // }
+        todo!()
     }
 }
 

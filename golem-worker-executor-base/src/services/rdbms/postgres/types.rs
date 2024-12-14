@@ -182,6 +182,7 @@ impl NamedType for Enum {
         self.name.clone()
     }
 }
+
 impl Display for Enum {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}({})", self.name, self.value)
@@ -245,7 +246,7 @@ impl Display for Domain {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum DbColumnTypePrimitive {
+pub enum DbColumnType {
     Character,
     Int2,
     Int4,
@@ -281,89 +282,82 @@ pub enum DbColumnTypePrimitive {
     Tstzrange,
     Daterange,
     Money,
+    Oid,
     Enum(EnumType),
     Composite(CompositeType),
     Domain(DomainType),
-    Oid,
-}
-
-impl Display for DbColumnTypePrimitive {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            DbColumnTypePrimitive::Character => write!(f, "char"),
-            DbColumnTypePrimitive::Int2 => write!(f, "int2"),
-            DbColumnTypePrimitive::Int4 => write!(f, "int4"),
-            DbColumnTypePrimitive::Int8 => write!(f, "int8"),
-            DbColumnTypePrimitive::Float4 => write!(f, "float4"),
-            DbColumnTypePrimitive::Float8 => write!(f, "float8"),
-            DbColumnTypePrimitive::Numeric => write!(f, "numeric"),
-            DbColumnTypePrimitive::Boolean => write!(f, "boolean"),
-            DbColumnTypePrimitive::Timestamp => write!(f, "timestamp"),
-            DbColumnTypePrimitive::Date => write!(f, "date"),
-            DbColumnTypePrimitive::Time => write!(f, "time"),
-            DbColumnTypePrimitive::Timestamptz => write!(f, "timestamptz"),
-            DbColumnTypePrimitive::Timetz => write!(f, "timetz"),
-            DbColumnTypePrimitive::Interval => write!(f, "interval"),
-            DbColumnTypePrimitive::Text => write!(f, "text"),
-            DbColumnTypePrimitive::Varchar => write!(f, "varchar"),
-            DbColumnTypePrimitive::Bpchar => write!(f, "bpchar"),
-            DbColumnTypePrimitive::Bytea => write!(f, "bytea"),
-            DbColumnTypePrimitive::Json => write!(f, "json"),
-            DbColumnTypePrimitive::Jsonb => write!(f, "jsonb"),
-            DbColumnTypePrimitive::Jsonpath => write!(f, "jsonpath"),
-            DbColumnTypePrimitive::Xml => write!(f, "xml"),
-            DbColumnTypePrimitive::Uuid => write!(f, "uuid"),
-            DbColumnTypePrimitive::Inet => write!(f, "inet"),
-            DbColumnTypePrimitive::Cidr => write!(f, "cidr"),
-            DbColumnTypePrimitive::Macaddr => write!(f, "macaddr"),
-            DbColumnTypePrimitive::Bit => write!(f, "bit"),
-            DbColumnTypePrimitive::Varbit => write!(f, "varbit"),
-            DbColumnTypePrimitive::Int4range => write!(f, "int4range"),
-            DbColumnTypePrimitive::Int8range => write!(f, "int8range"),
-            DbColumnTypePrimitive::Numrange => write!(f, "numrange"),
-            DbColumnTypePrimitive::Tsrange => write!(f, "tsrange"),
-            DbColumnTypePrimitive::Tstzrange => write!(f, "tstzrange"),
-            DbColumnTypePrimitive::Daterange => write!(f, "daterange"),
-            DbColumnTypePrimitive::Oid => write!(f, "oid"),
-            DbColumnTypePrimitive::Enum(v) => write!(f, "enum: {}", v),
-            DbColumnTypePrimitive::Composite(v) => {
-                write!(f, "composite: {}", v)
-            }
-            DbColumnTypePrimitive::Domain(v) => {
-                write!(f, "domain: {}", v)
-            }
-            DbColumnTypePrimitive::Money => write!(f, "money"),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum DbColumnType {
-    Primitive(DbColumnTypePrimitive),
-    Array(DbColumnTypePrimitive),
+    Array(Box<DbColumnType>),
 }
 
 impl DbColumnType {
     pub(crate) fn into_array(self) -> DbColumnType {
-        if let DbColumnType::Primitive(v) = self {
-            DbColumnType::Array(v)
-        } else {
+        if let DbColumnType::Array(_) = self {
             self
+        } else {
+            DbColumnType::Array(Box::new(self))
         }
+    }
+
+    pub(crate) fn new_array(value: DbColumnType) -> DbColumnType {
+        DbColumnType::Array(Box::new(value))
     }
 }
 
 impl Display for DbColumnType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            DbColumnType::Primitive(v) => write!(f, "{}", v),
-            DbColumnType::Array(v) => write!(f, "{}[]", v),
+            DbColumnType::Character => write!(f, "char"),
+            DbColumnType::Int2 => write!(f, "int2"),
+            DbColumnType::Int4 => write!(f, "int4"),
+            DbColumnType::Int8 => write!(f, "int8"),
+            DbColumnType::Float4 => write!(f, "float4"),
+            DbColumnType::Float8 => write!(f, "float8"),
+            DbColumnType::Numeric => write!(f, "numeric"),
+            DbColumnType::Boolean => write!(f, "boolean"),
+            DbColumnType::Timestamp => write!(f, "timestamp"),
+            DbColumnType::Date => write!(f, "date"),
+            DbColumnType::Time => write!(f, "time"),
+            DbColumnType::Timestamptz => write!(f, "timestamptz"),
+            DbColumnType::Timetz => write!(f, "timetz"),
+            DbColumnType::Interval => write!(f, "interval"),
+            DbColumnType::Text => write!(f, "text"),
+            DbColumnType::Varchar => write!(f, "varchar"),
+            DbColumnType::Bpchar => write!(f, "bpchar"),
+            DbColumnType::Bytea => write!(f, "bytea"),
+            DbColumnType::Json => write!(f, "json"),
+            DbColumnType::Jsonb => write!(f, "jsonb"),
+            DbColumnType::Jsonpath => write!(f, "jsonpath"),
+            DbColumnType::Xml => write!(f, "xml"),
+            DbColumnType::Uuid => write!(f, "uuid"),
+            DbColumnType::Inet => write!(f, "inet"),
+            DbColumnType::Cidr => write!(f, "cidr"),
+            DbColumnType::Macaddr => write!(f, "macaddr"),
+            DbColumnType::Bit => write!(f, "bit"),
+            DbColumnType::Varbit => write!(f, "varbit"),
+            DbColumnType::Int4range => write!(f, "int4range"),
+            DbColumnType::Int8range => write!(f, "int8range"),
+            DbColumnType::Numrange => write!(f, "numrange"),
+            DbColumnType::Tsrange => write!(f, "tsrange"),
+            DbColumnType::Tstzrange => write!(f, "tstzrange"),
+            DbColumnType::Daterange => write!(f, "daterange"),
+            DbColumnType::Oid => write!(f, "oid"),
+            DbColumnType::Enum(v) => write!(f, "enum: {}", v),
+            DbColumnType::Composite(v) => {
+                write!(f, "composite: {}", v)
+            }
+            DbColumnType::Domain(v) => {
+                write!(f, "domain: {}", v)
+            }
+            DbColumnType::Array(v) => {
+                write!(f, "{}[]", v)
+            }
+            DbColumnType::Money => write!(f, "money"),
         }
     }
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum DbValuePrimitive {
+pub enum DbValue {
     Character(i8),
     Int2(i16),
     Int4(i32),
@@ -399,87 +393,74 @@ pub enum DbValuePrimitive {
     Tstzrange(Range<chrono::DateTime<chrono::Utc>>),
     Daterange(Range<chrono::NaiveDate>),
     Money(i64),
+    Oid(u32),
     Enum(Enum),
     Composite(Composite),
     Domain(Domain),
-    Oid(u32),
+    Array(Vec<DbValue>),
     Null,
 }
 
-impl Display for DbValuePrimitive {
+impl Display for DbValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            DbValuePrimitive::Character(v) => write!(f, "{}", v),
-            DbValuePrimitive::Int2(v) => write!(f, "{}", v),
-            DbValuePrimitive::Int4(v) => write!(f, "{}", v),
-            DbValuePrimitive::Int8(v) => write!(f, "{}", v),
-            DbValuePrimitive::Float4(v) => write!(f, "{}", v),
-            DbValuePrimitive::Float8(v) => write!(f, "{}", v),
-            DbValuePrimitive::Numeric(v) => write!(f, "{}", v),
-            DbValuePrimitive::Boolean(v) => write!(f, "{}", v),
-            DbValuePrimitive::Timestamp(v) => write!(f, "{}", v),
-            DbValuePrimitive::Timestamptz(v) => write!(f, "{}", v),
-            DbValuePrimitive::Date(v) => write!(f, "{}", v),
-            DbValuePrimitive::Time(v) => write!(f, "{}", v),
-            DbValuePrimitive::Timetz(v) => write!(f, "{}", v),
-            DbValuePrimitive::Interval(v) => write!(f, "{}", v),
-            DbValuePrimitive::Text(v) => write!(f, "{}", v),
-            DbValuePrimitive::Varchar(v) => write!(f, "{}", v),
-            DbValuePrimitive::Bpchar(v) => write!(f, "{}", v),
-            DbValuePrimitive::Bytea(v) => write!(f, "{:?}", v),
-            DbValuePrimitive::Json(v) => write!(f, "{}", v),
-            DbValuePrimitive::Jsonb(v) => write!(f, "{}", v),
-            DbValuePrimitive::Jsonpath(v) => write!(f, "{}", v),
-            DbValuePrimitive::Xml(v) => write!(f, "{}", v),
-            DbValuePrimitive::Uuid(v) => write!(f, "{}", v),
-            DbValuePrimitive::Inet(v) => write!(f, "{}", v),
-            DbValuePrimitive::Cidr(v) => write!(f, "{}", v),
-            DbValuePrimitive::Macaddr(v) => write!(f, "{}", v),
-            DbValuePrimitive::Bit(v) => write!(f, "{:?}", v),
-            DbValuePrimitive::Varbit(v) => write!(f, "{:?}", v),
-            DbValuePrimitive::Int4range(v) => write!(f, "{}", v),
-            DbValuePrimitive::Int8range(v) => write!(f, "{}", v),
-            DbValuePrimitive::Numrange(v) => write!(f, "{}", v),
-            DbValuePrimitive::Tsrange(v) => write!(f, "{}", v),
-            DbValuePrimitive::Tstzrange(v) => write!(f, "{}", v),
-            DbValuePrimitive::Daterange(v) => write!(f, "{}", v),
-            DbValuePrimitive::Oid(v) => write!(f, "{}", v),
-            DbValuePrimitive::Money(v) => write!(f, "{}", v),
-            DbValuePrimitive::Enum(v) => write!(f, "{}", v),
-            DbValuePrimitive::Composite(v) => write!(f, "{}", v),
-            DbValuePrimitive::Domain(v) => write!(f, "{}", v),
-            DbValuePrimitive::Null => write!(f, "NULL"),
+            DbValue::Character(v) => write!(f, "{}", v),
+            DbValue::Int2(v) => write!(f, "{}", v),
+            DbValue::Int4(v) => write!(f, "{}", v),
+            DbValue::Int8(v) => write!(f, "{}", v),
+            DbValue::Float4(v) => write!(f, "{}", v),
+            DbValue::Float8(v) => write!(f, "{}", v),
+            DbValue::Numeric(v) => write!(f, "{}", v),
+            DbValue::Boolean(v) => write!(f, "{}", v),
+            DbValue::Timestamp(v) => write!(f, "{}", v),
+            DbValue::Timestamptz(v) => write!(f, "{}", v),
+            DbValue::Date(v) => write!(f, "{}", v),
+            DbValue::Time(v) => write!(f, "{}", v),
+            DbValue::Timetz(v) => write!(f, "{}", v),
+            DbValue::Interval(v) => write!(f, "{}", v),
+            DbValue::Text(v) => write!(f, "{}", v),
+            DbValue::Varchar(v) => write!(f, "{}", v),
+            DbValue::Bpchar(v) => write!(f, "{}", v),
+            DbValue::Bytea(v) => write!(f, "{:?}", v),
+            DbValue::Json(v) => write!(f, "{}", v),
+            DbValue::Jsonb(v) => write!(f, "{}", v),
+            DbValue::Jsonpath(v) => write!(f, "{}", v),
+            DbValue::Xml(v) => write!(f, "{}", v),
+            DbValue::Uuid(v) => write!(f, "{}", v),
+            DbValue::Inet(v) => write!(f, "{}", v),
+            DbValue::Cidr(v) => write!(f, "{}", v),
+            DbValue::Macaddr(v) => write!(f, "{}", v),
+            DbValue::Bit(v) => write!(f, "{:?}", v),
+            DbValue::Varbit(v) => write!(f, "{:?}", v),
+            DbValue::Int4range(v) => write!(f, "{}", v),
+            DbValue::Int8range(v) => write!(f, "{}", v),
+            DbValue::Numrange(v) => write!(f, "{}", v),
+            DbValue::Tsrange(v) => write!(f, "{}", v),
+            DbValue::Tstzrange(v) => write!(f, "{}", v),
+            DbValue::Daterange(v) => write!(f, "{}", v),
+            DbValue::Oid(v) => write!(f, "{}", v),
+            DbValue::Money(v) => write!(f, "{}", v),
+            DbValue::Enum(v) => write!(f, "{}", v),
+            DbValue::Composite(v) => write!(f, "{}", v),
+            DbValue::Domain(v) => write!(f, "{}", v),
+            DbValue::Array(v) => write!(f, "[{}]", v.iter().format(", ")),
+            DbValue::Null => write!(f, "NULL"),
         }
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub enum DbValue {
-    Primitive(DbValuePrimitive),
-    Array(Vec<DbValuePrimitive>),
-}
-
 impl DbValue {
-    pub(crate) fn array_from<T>(value: Option<Vec<T>>, f: impl Fn(T) -> DbValuePrimitive) -> Self {
+    pub(crate) fn array_from<T>(value: Option<Vec<T>>, f: impl Fn(T) -> DbValue) -> Self {
         match value {
             Some(v) => DbValue::Array(v.into_iter().map(f).collect()),
             None => DbValue::Array(vec![]),
         }
     }
 
-    pub(crate) fn primitive_from(value: Option<DbValuePrimitive>) -> Self {
+    pub(crate) fn primitive_from(value: Option<DbValue>) -> Self {
         match value {
-            Some(v) => DbValue::Primitive(v),
-            None => DbValue::Primitive(DbValuePrimitive::Null),
-        }
-    }
-}
-
-impl Display for DbValue {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            DbValue::Primitive(v) => write!(f, "{}", v),
-            DbValue::Array(v) => write!(f, "[{}]", v.iter().format(", ")),
+            Some(v) => v,
+            None => DbValue::Null,
         }
     }
 }
