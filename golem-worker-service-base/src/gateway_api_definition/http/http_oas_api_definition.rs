@@ -31,10 +31,20 @@ impl OpenApiHttpApiDefinitionRequest {
             GOLEM_API_DEFINITION_ID_EXTENSION,
         )?);
 
+        info!(
+            "goinf inside to_http_api_definition_request open_api {},  api_definition_id {}",
+            open_api, api_definition_id
+        );
+
         let api_definition_version = ApiVersion(get_root_extension_str(
             open_api,
             GOLEM_API_DEFINITION_VERSION,
         )?);
+
+        info!(
+            "goinf inside to_http_api_definition_request api_definition_version {}",
+            api_definition_version
+        );
 
         let security = get_global_security(open_api);
 
@@ -219,6 +229,10 @@ mod internal {
 
         let method = method_res?;
 
+        info!(
+            "goinf inside get_route_from_path_item method {}",
+            method
+        );
         let security = method_operation
             .security
             .clone()
@@ -237,15 +251,25 @@ mod internal {
             // TO keep backward compatibility with the old extension
             .get(GOLEM_WORKER_GATEWAY_EXTENSION_LEGACY)
             .or(method_operation.extensions.get(GOLEM_API_GATEWAY_BINDING));
+        info!(
+            "goinf inside get_route_from_path_item worker_gateway_info_optional {}",
+            worker_gateway_info_optional
+        );
 
         match worker_gateway_info_optional {
             Some(worker_gateway_info) => {
                 let binding_type = get_binding_type(worker_gateway_info)?;
-
+                info!(
+                    "goinf inside get_route_from_path_item binding_type {}",
+                    binding_type
+                );
                 match (&binding_type, &method) {
                     (GatewayBindingType::CorsPreflight, MethodPattern::Options) => {
                         let binding = get_cors_static_binding(worker_gateway_info)?;
-
+                        info!(
+                            "goinf inside get_route_from_path_item binding in  options {}",
+                            binding
+                        );
                         Ok(RouteRequest {
                             method,
                             path: path_pattern.clone(),
@@ -257,7 +281,10 @@ mod internal {
 
                     (GatewayBindingType::Default, _) => {
                         let binding = get_gateway_binding(worker_gateway_info)?;
-
+                        info!(
+                            "goinf inside get_route_from_path_item binding in default {}",
+                            binding
+                        );
                         Ok(RouteRequest {
                             path: path_pattern.clone(),
                             method,
@@ -267,8 +294,11 @@ mod internal {
                         })
                     }
                     (GatewayBindingType::FileServer, _) => {
-                        let binding = get_gateway_binding(worker_gateway_info)?;
-
+                        let binding: WorkerBinding = get_gateway_binding(worker_gateway_info)?;
+                        info!(
+                            "goinf inside get_route_from_path_item binding in FileServer {}",
+                            binding
+                        );
                         Ok(RouteRequest {
                             path: path_pattern.clone(),
                             method,
@@ -278,12 +308,18 @@ mod internal {
                         })
                     }
                     (GatewayBindingType::CorsPreflight, method) => {
+                        info!(
+                            "goinf inside get_route_from_path_item binding entering the error"                        );
                         Err(format!("cors-preflight binding type is supported only for 'options' method, but found method '{}'", method))
                     }
                 }
             }
 
             None => {
+                info!(
+                    "goinf inside get_route_from_path_item method none block {}",
+                    method
+                );
                 if method == MethodPattern::Options {
                     let binding = StaticBinding::from_http_cors(HttpCors::default());
 

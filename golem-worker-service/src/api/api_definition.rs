@@ -41,7 +41,10 @@ impl RegisterApiDefinitionApi {
         payload: JsonOrYaml<OpenApiHttpApiDefinitionRequest>,
     ) -> Result<Json<HttpApiDefinitionResponseData>, ApiEndpointError> {
         let record = recorded_http_api_request!("import_open_api",);
-
+        info!(
+            "goinf inside create_or_update_open_api {}",
+            record
+        );
         let response = {
             let definition = payload.0.to_http_api_definition_request().map_err(|e| {
                 error!("Invalid Spec {}", e);
