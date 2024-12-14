@@ -108,9 +108,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
     /// Allows customizing the `ActiveWorkers` service.
     fn create_active_workers(&self, golem_config: &GolemConfig) -> Arc<ActiveWorkers<Ctx>>;
 
-    fn run_grpc_server(&self) -> bool {
-        true
-    }
+    fn run_grpc_server(&self) -> bool;
 
     #[allow(clippy::type_complexity)]
     fn create_plugins(
@@ -197,6 +195,8 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             ISizeFormatter::new(worker_memory, BINARY)
         );
 
+        let addr = golem_config.grpc_addr()?;
+
         if self.run_grpc_server() {
             let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
             health_reporter
@@ -207,19 +207,17 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
                 .register_encoded_file_descriptor_set(proto::FILE_DESCRIPTOR_SET)
                 .build_v1()?;
 
-            let addr = golem_config.grpc_addr()?;
-
             let listener = TcpListener::bind(addr).await?;
             let grpc_port = listener.local_addr()?.port();
 
             let worker_executor =
-                create_worker_executor_grpc_api::<Ctx>(
+                create_worker_executor_grpc_api::<Ctx, Self>(
                     golem_config.clone(),
                     self,
                     runtime.clone(),
                     join_set,
                     grpc_port,
-                ).await;
+                ).await?;
 
             let service = WorkerExecutorServer::new(worker_executor)
                 .accept_compressed(CompressionEncoding::Gzip)
@@ -255,14 +253,14 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
 
         Ok(RunDetails {
             http_port,
-            grpc_port,
+            grpc_port: addr.port(),
         })
     }
 }
 
-async fn create_worker_executor_grpc_api<Ctx: WorkerCtx>(
+async fn create_worker_executor_grpc_api<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Sized>(
     golem_config: GolemConfig,
-    bootstrap: impl Bootstrap<Ctx>,
+    bootstrap: &A,
     runtime: Handle,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
     grpc_port: u16,

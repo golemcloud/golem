@@ -67,6 +67,10 @@ impl Bootstrap<Context> for ServerBootstrap {
         Arc::new(ActiveWorkers::<Context>::new(&golem_config.memory))
     }
 
+    fn run_grpc_server(&self) -> bool {
+        true
+    }
+
     fn create_plugins(
         &self,
         golem_config: &GolemConfig,
