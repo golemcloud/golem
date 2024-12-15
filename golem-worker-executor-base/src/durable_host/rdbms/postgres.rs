@@ -893,24 +893,35 @@ pub(crate) mod postgres_utils {
 
     struct DbValueBuilder {
         nodes: Vec<DbValueNode>,
+        offset: NodeIndex,
     }
 
     impl DbValueBuilder {
         fn new() -> Self {
-            Self { nodes: Vec::new() }
+            Self::new_with_offset(0)
+        }
+
+        fn new_with_offset(offset: NodeIndex) -> Self {
+            Self {
+                nodes: Vec::new(),
+                offset,
+            }
+        }
+
+        fn add_nodes(&mut self, node: DbValueNode, child_nodes: Vec<DbValueNode>) -> NodeIndex {
+            let index = self.add_node(node);
+            self.nodes.extend(child_nodes);
+            index
         }
 
         fn add_node(&mut self, node: DbValueNode) -> NodeIndex {
             self.nodes.push(node);
-            self.nodes.len() as NodeIndex - 1
+            self.nodes.len() as NodeIndex - 1 + self.offset
         }
 
-        fn update_node<F>(&mut self, index: NodeIndex, mut f: F) -> NodeIndex
-        where
-            F: FnMut(&mut DbValueNode),
-        {
-            f(&mut self.nodes[index as usize]);
-            index
+        fn child_builder(&self) -> DbValueBuilder {
+            let offset = self.nodes.len() as NodeIndex + 1 + self.offset;
+            DbValueBuilder::new_with_offset(offset)
         }
 
         fn add(&mut self, value: postgres_types::DbValue) -> NodeIndex {
@@ -990,48 +1001,39 @@ pub(crate) mod postgres_utils {
                     self.add_node(DbValueNode::Enumeration(v.into()))
                 }
                 postgres_types::DbValue::Composite(v) => {
-                    let node_index = self.add_node(DbValueNode::Composite(Composite {
-                        name: v.name,
-                        values: vec![],
-                    }));
+                    let mut child_builder = self.child_builder();
                     let mut values: Vec<NodeIndex> = Vec::with_capacity(v.values.len());
                     for v in v.values {
-                        let i = self.add(v);
+                        let i = child_builder.add(v);
                         values.push(i);
                     }
-                    self.update_node(node_index, |v| match v {
-                        DbValueNode::Composite(v) => {
-                            v.values = values.clone();
-                        }
-                        _ => (),
-                    })
+                    self.add_nodes(
+                        DbValueNode::Composite(Composite {
+                            name: v.name,
+                            values,
+                        }),
+                        child_builder.nodes,
+                    )
                 }
                 postgres_types::DbValue::Domain(v) => {
-                    let node_index = self.add_node(DbValueNode::Domain(Domain {
-                        name: v.name,
-                        value: NodeIndex::MAX,
-                    }));
-                    let value_node_index = self.add(*v.value);
-                    self.update_node(node_index, |v| match v {
-                        DbValueNode::Domain(v) => {
-                            v.value = value_node_index;
-                        }
-                        _ => (),
-                    })
+                    let mut child_builder = self.child_builder();
+                    let value_node_index = child_builder.add(*v.value);
+                    self.add_nodes(
+                        DbValueNode::Domain(Domain {
+                            name: v.name,
+                            value: value_node_index,
+                        }),
+                        child_builder.nodes,
+                    )
                 }
                 postgres_types::DbValue::Array(vs) => {
-                    let node_index = self.add_node(DbValueNode::Array(vec![]));
+                    let mut child_builder = self.child_builder();
                     let mut values: Vec<NodeIndex> = Vec::with_capacity(vs.len());
                     for v in vs {
-                        let i = self.add(v);
+                        let i = child_builder.add(v);
                         values.push(i);
                     }
-                    self.update_node(node_index, |v| match v {
-                        DbValueNode::Array(vs) => {
-                            vs.extend(values.clone());
-                        }
-                        _ => (),
-                    })
+                    self.add_nodes(DbValueNode::Array(values), child_builder.nodes)
                 }
                 postgres_types::DbValue::Null => self.add_node(DbValueNode::Null),
             }
@@ -1039,6 +1041,87 @@ pub(crate) mod postgres_utils {
 
         fn build(self) -> DbValue {
             DbValue { nodes: self.nodes }
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn to_db_column_type(
+        value: DbColumnType,
+    ) -> Result<postgres_types::DbColumnType, String> {
+        make_db_column_type(0, &value.nodes)
+    }
+
+    fn make_db_column_type(
+        index: NodeIndex,
+        nodes: &[DbColumnTypeNode],
+    ) -> Result<postgres_types::DbColumnType, String> {
+        if index as usize >= nodes.len() {
+            Err(format!("Index ({}) out of range", index))
+        } else {
+            let node = &nodes[index as usize];
+            match node {
+                DbColumnTypeNode::Character => Ok(postgres_types::DbColumnType::Character),
+                DbColumnTypeNode::Int2 => Ok(postgres_types::DbColumnType::Int2),
+                DbColumnTypeNode::Int4 => Ok(postgres_types::DbColumnType::Int4),
+                DbColumnTypeNode::Int8 => Ok(postgres_types::DbColumnType::Int8),
+                DbColumnTypeNode::Numeric => Ok(postgres_types::DbColumnType::Numeric),
+                DbColumnTypeNode::Float4 => Ok(postgres_types::DbColumnType::Float4),
+                DbColumnTypeNode::Float8 => Ok(postgres_types::DbColumnType::Float8),
+                DbColumnTypeNode::Boolean => Ok(postgres_types::DbColumnType::Boolean),
+                DbColumnTypeNode::Timestamp => Ok(postgres_types::DbColumnType::Timestamp),
+                DbColumnTypeNode::Timestamptz => Ok(postgres_types::DbColumnType::Timestamptz),
+                DbColumnTypeNode::Time => Ok(postgres_types::DbColumnType::Time),
+                DbColumnTypeNode::Timetz => Ok(postgres_types::DbColumnType::Timetz),
+                DbColumnTypeNode::Date => Ok(postgres_types::DbColumnType::Date),
+                DbColumnTypeNode::Interval => Ok(postgres_types::DbColumnType::Interval),
+                DbColumnTypeNode::Bytea => Ok(postgres_types::DbColumnType::Bytea),
+                DbColumnTypeNode::Text => Ok(postgres_types::DbColumnType::Text),
+                DbColumnTypeNode::Varchar => Ok(postgres_types::DbColumnType::Varchar),
+                DbColumnTypeNode::Bpchar => Ok(postgres_types::DbColumnType::Bpchar),
+                DbColumnTypeNode::Json => Ok(postgres_types::DbColumnType::Json),
+                DbColumnTypeNode::Jsonb => Ok(postgres_types::DbColumnType::Jsonb),
+                DbColumnTypeNode::Jsonpath => Ok(postgres_types::DbColumnType::Jsonpath),
+                DbColumnTypeNode::Uuid => Ok(postgres_types::DbColumnType::Uuid),
+                DbColumnTypeNode::Xml => Ok(postgres_types::DbColumnType::Xml),
+                DbColumnTypeNode::Bit => Ok(postgres_types::DbColumnType::Bit),
+                DbColumnTypeNode::Varbit => Ok(postgres_types::DbColumnType::Varbit),
+                DbColumnTypeNode::Inet => Ok(postgres_types::DbColumnType::Inet),
+                DbColumnTypeNode::Cidr => Ok(postgres_types::DbColumnType::Cidr),
+                DbColumnTypeNode::Macaddr => Ok(postgres_types::DbColumnType::Macaddr),
+                DbColumnTypeNode::Tsrange => Ok(postgres_types::DbColumnType::Tsrange),
+                DbColumnTypeNode::Tstzrange => Ok(postgres_types::DbColumnType::Tstzrange),
+                DbColumnTypeNode::Daterange => Ok(postgres_types::DbColumnType::Daterange),
+                DbColumnTypeNode::Int4range => Ok(postgres_types::DbColumnType::Int4range),
+                DbColumnTypeNode::Int8range => Ok(postgres_types::DbColumnType::Int8range),
+                DbColumnTypeNode::Numrange => Ok(postgres_types::DbColumnType::Numrange),
+                DbColumnTypeNode::Oid => Ok(postgres_types::DbColumnType::Oid),
+                DbColumnTypeNode::Money => Ok(postgres_types::DbColumnType::Money),
+                DbColumnTypeNode::Enumeration(v) => {
+                    Ok(postgres_types::DbColumnType::Enum(v.clone().into()))
+                }
+                DbColumnTypeNode::Composite(v) => {
+                    let mut attributes: Vec<(String, postgres_types::DbColumnType)> =
+                        Vec::with_capacity(v.attributes.len());
+                    for (n, i) in v.attributes.iter() {
+                        let v = make_db_column_type(*i, nodes)?;
+                        attributes.push((n.clone(), v));
+                    }
+
+                    Ok(postgres_types::DbColumnType::Composite(
+                        postgres_types::CompositeType::new(v.name.clone(), attributes),
+                    ))
+                }
+                DbColumnTypeNode::Domain(v) => {
+                    let t = make_db_column_type(v.base_type, nodes)?;
+                    Ok(postgres_types::DbColumnType::Domain(
+                        postgres_types::DomainType::new(v.name.clone(), t),
+                    ))
+                }
+                DbColumnTypeNode::Array(v) => {
+                    let t = make_db_column_type(*v, nodes)?;
+                    Ok(postgres_types::DbColumnType::Array(Box::new(t)))
+                }
+            }
         }
     }
 
@@ -1050,24 +1133,39 @@ pub(crate) mod postgres_utils {
 
     struct DbColumnTypeBuilder {
         nodes: Vec<DbColumnTypeNode>,
+        offset: NodeIndex,
     }
 
     impl DbColumnTypeBuilder {
         fn new() -> Self {
-            Self { nodes: Vec::new() }
+            Self::new_with_offset(0)
+        }
+
+        fn new_with_offset(offset: NodeIndex) -> Self {
+            Self {
+                nodes: Vec::new(),
+                offset,
+            }
+        }
+
+        fn add_nodes(
+            &mut self,
+            node: DbColumnTypeNode,
+            child_nodes: Vec<DbColumnTypeNode>,
+        ) -> NodeIndex {
+            let index = self.add_node(node);
+            self.nodes.extend(child_nodes);
+            index
         }
 
         fn add_node(&mut self, node: DbColumnTypeNode) -> NodeIndex {
             self.nodes.push(node);
-            self.nodes.len() as NodeIndex - 1
+            self.nodes.len() as NodeIndex - 1 + self.offset
         }
 
-        fn update_node<F>(&mut self, index: NodeIndex, mut f: F) -> NodeIndex
-        where
-            F: FnMut(&mut DbColumnTypeNode),
-        {
-            f(&mut self.nodes[index as usize]);
-            index
+        fn child_builder(&self) -> DbColumnTypeBuilder {
+            let offset = self.nodes.len() as NodeIndex + 1 + self.offset;
+            DbColumnTypeBuilder::new_with_offset(offset)
         }
 
         fn add(&mut self, value: postgres_types::DbColumnType) -> NodeIndex {
@@ -1126,53 +1224,186 @@ pub(crate) mod postgres_utils {
                     self.add_node(DbColumnTypeNode::Enumeration(v.into()))
                 }
                 postgres_types::DbColumnType::Composite(v) => {
-                    let node_index = self.add_node(DbColumnTypeNode::Composite(CompositeType {
-                        name: v.name,
-                        attributes: vec![],
-                    }));
                     let mut attributes: Vec<(String, NodeIndex)> =
                         Vec::with_capacity(v.attributes.len());
+                    let mut child_builder = self.child_builder();
                     for (n, v) in v.attributes {
-                        let i = self.add(v);
+                        let i = child_builder.add(v);
                         attributes.push((n, i));
                     }
-                    self.update_node(node_index, |v| match v {
-                        DbColumnTypeNode::Composite(v) => {
-                            v.attributes = attributes.clone();
-                        }
-                        _ => (),
-                    })
+                    self.add_nodes(
+                        DbColumnTypeNode::Composite(CompositeType {
+                            name: v.name,
+                            attributes,
+                        }),
+                        child_builder.nodes,
+                    )
                 }
                 postgres_types::DbColumnType::Domain(v) => {
-                    let node_index = self.add_node(DbColumnTypeNode::Domain(DomainType {
-                        name: v.name,
-                        base_type: NodeIndex::MAX,
-                    }));
-
-                    let value_node_index = self.add(*v.base_type);
-
-                    self.update_node(node_index, |v| match v {
-                        DbColumnTypeNode::Domain(v) => {
-                            v.base_type = value_node_index;
-                        }
-                        _ => (),
-                    })
+                    let mut child_builder = self.child_builder();
+                    let value_node_index = child_builder.add(*v.base_type);
+                    self.add_nodes(
+                        DbColumnTypeNode::Domain(DomainType {
+                            name: v.name,
+                            base_type: value_node_index,
+                        }),
+                        child_builder.nodes,
+                    )
                 }
                 postgres_types::DbColumnType::Array(v) => {
-                    let node_index = self.add_node(DbColumnTypeNode::Array(NodeIndex::MAX));
-                    let value_node_index = self.add(*v);
-                    self.update_node(node_index, |v| match v {
-                        DbColumnTypeNode::Array(v) => {
-                            *v = value_node_index;
-                        }
-                        _ => (),
-                    })
+                    let mut child_builder = self.child_builder();
+                    let value_node_index = child_builder.add(*v);
+                    self.add_nodes(
+                        DbColumnTypeNode::Array(value_node_index),
+                        child_builder.nodes,
+                    )
                 }
             }
         }
 
         fn build(self) -> DbColumnType {
             DbColumnType { nodes: self.nodes }
+        }
+    }
+
+    #[cfg(test)]
+    pub mod tests {
+        use crate::durable_host::rdbms::postgres::postgres_utils;
+        use crate::services::rdbms::postgres::types as postgres_types;
+        use assert2::check;
+        use test_r::test;
+
+        fn check_db_value(value: postgres_types::DbValue) {
+            let wit = postgres_utils::from_db_value(value.clone());
+
+            // println!("wit {:?}", wit);
+            let value2 = postgres_utils::to_db_value(wit).unwrap();
+
+            check!(value == value2);
+        }
+
+        #[test]
+        fn test_db_values_conversions() {
+            let value = postgres_types::DbValue::Array(vec![
+                postgres_types::DbValue::Varchar("tag1".to_string()),
+                postgres_types::DbValue::Varchar("tag2".to_string()),
+            ]);
+
+            check_db_value(value);
+
+            let value = postgres_types::DbValue::Domain(postgres_types::Domain::new(
+                "ddd".to_string(),
+                postgres_types::DbValue::Varchar("tag2".to_string()),
+            ));
+
+            check_db_value(value);
+
+            let value = postgres_types::DbValue::Array(vec![
+                postgres_types::DbValue::Domain(postgres_types::Domain::new(
+                    "ddd".to_string(),
+                    postgres_types::DbValue::Varchar("v1".to_string()),
+                )),
+                postgres_types::DbValue::Domain(postgres_types::Domain::new(
+                    "ddd".to_string(),
+                    postgres_types::DbValue::Varchar("v2".to_string()),
+                )),
+            ]);
+
+            check_db_value(value);
+
+            let value = postgres_types::DbValue::Array(vec![
+                postgres_types::DbValue::Composite(postgres_types::Composite::new(
+                    "ccc".to_string(),
+                    vec![
+                        postgres_types::DbValue::Varchar("v1".to_string()),
+                        postgres_types::DbValue::Int2(1),
+                        postgres_types::DbValue::Array(vec![postgres_types::DbValue::Domain(
+                            postgres_types::Domain::new(
+                                "ddd".to_string(),
+                                postgres_types::DbValue::Varchar("v11".to_string()),
+                            ),
+                        )]),
+                    ],
+                )),
+                postgres_types::DbValue::Composite(postgres_types::Composite::new(
+                    "ccc".to_string(),
+                    vec![
+                        postgres_types::DbValue::Varchar("v2".to_string()),
+                        postgres_types::DbValue::Int2(2),
+                        postgres_types::DbValue::Array(vec![
+                            postgres_types::DbValue::Domain(postgres_types::Domain::new(
+                                "ddd".to_string(),
+                                postgres_types::DbValue::Varchar("v21".to_string()),
+                            )),
+                            postgres_types::DbValue::Domain(postgres_types::Domain::new(
+                                "ddd".to_string(),
+                                postgres_types::DbValue::Varchar("v22".to_string()),
+                            )),
+                        ]),
+                    ],
+                )),
+                postgres_types::DbValue::Composite(postgres_types::Composite::new(
+                    "ccc".to_string(),
+                    vec![
+                        postgres_types::DbValue::Varchar("v3".to_string()),
+                        postgres_types::DbValue::Int2(3),
+                        postgres_types::DbValue::Array(vec![
+                            postgres_types::DbValue::Domain(postgres_types::Domain::new(
+                                "ddd".to_string(),
+                                postgres_types::DbValue::Varchar("v31".to_string()),
+                            )),
+                            postgres_types::DbValue::Domain(postgres_types::Domain::new(
+                                "ddd".to_string(),
+                                postgres_types::DbValue::Varchar("v32".to_string()),
+                            )),
+                            postgres_types::DbValue::Domain(postgres_types::Domain::new(
+                                "ddd".to_string(),
+                                postgres_types::DbValue::Varchar("v33".to_string()),
+                            )),
+                        ]),
+                    ],
+                )),
+            ]);
+
+            check_db_value(value);
+        }
+
+        fn check_db_column_type(value: postgres_types::DbColumnType) {
+            let wit = postgres_utils::from_db_column_type(value.clone());
+
+            // println!("wit {:?}", wit);
+            let value2 = postgres_utils::to_db_column_type(wit).unwrap();
+
+            check!(value == value2);
+        }
+
+        #[test]
+        fn test_db_column_types_conversions() {
+            let value =
+                postgres_types::DbColumnType::Composite(postgres_types::CompositeType::new(
+                    "inventory_item".to_string(),
+                    vec![
+                        ("product_id".to_string(), postgres_types::DbColumnType::Uuid),
+                        ("name".to_string(), postgres_types::DbColumnType::Text),
+                        (
+                            "supplier_id".to_string(),
+                            postgres_types::DbColumnType::Int4,
+                        ),
+                        ("price".to_string(), postgres_types::DbColumnType::Numeric),
+                    ],
+                ));
+            check_db_column_type(value.clone());
+
+            check_db_column_type(value.clone().into_array());
+
+            let value = postgres_types::DbColumnType::Domain(postgres_types::DomainType::new(
+                "posint8".to_string(),
+                postgres_types::DbColumnType::Int8,
+            ));
+
+            check_db_column_type(value.clone());
+
+            check_db_column_type(value.clone().into_array());
         }
     }
 }
