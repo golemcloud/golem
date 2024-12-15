@@ -297,10 +297,6 @@ impl DbColumnType {
             DbColumnType::Array(Box::new(self))
         }
     }
-
-    pub(crate) fn new_array(value: DbColumnType) -> DbColumnType {
-        DbColumnType::Array(Box::new(value))
-    }
 }
 
 impl Display for DbColumnType {
@@ -458,10 +454,7 @@ impl DbValue {
     }
 
     pub(crate) fn primitive_from(value: Option<DbValue>) -> Self {
-        match value {
-            Some(v) => v,
-            None => DbValue::Null,
-        }
+        value.unwrap_or(DbValue::Null)
     }
 }
 
