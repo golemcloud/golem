@@ -1,14 +1,9 @@
-use crate::log::LogColorize;
+use crate::model::app::app_builder::build_application;
 use crate::model::app_raw;
 use crate::model::template::Template;
 use crate::naming::wit::package_dep_dir_name_from_parser;
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use crate::{fs, naming};
-use heck::{
-    ToKebabCase, ToLowerCamelCase, ToPascalCase, ToShoutyKebabCase, ToShoutySnakeCase, ToSnakeCase,
-    ToTitleCase, ToTrainCase, ToUpperCamelCase,
-};
-use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Formatter;
@@ -155,666 +150,7 @@ pub struct Application<CPE: ComponentPropertiesExtensions> {
 
 impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
     pub fn from_raw_apps(apps: Vec<app_raw::ApplicationWithSource>) -> ValidatedResult<Self> {
-        let mut validation = ValidationBuilder::new();
-
-        let mut include = Vec::<String>::new();
-        let mut include_sources = Vec::<PathBuf>::new();
-
-        let mut temp_dir: Option<String> = None;
-        let mut temp_dir_sources = Vec::<PathBuf>::new();
-
-        let mut wit_deps = Vec::<String>::new();
-        let mut wit_deps_sources = Vec::<PathBuf>::new();
-
-        let mut templates = HashMap::<TemplateName, app_raw::ComponentTemplate>::new();
-        let mut template_sources = HashMap::<TemplateName, Vec<PathBuf>>::new();
-
-        let mut dependencies = BTreeMap::<ComponentName, BTreeSet<ComponentName>>::new();
-        let mut dependency_sources =
-            HashMap::<ComponentName, HashMap<ComponentName, Vec<PathBuf>>>::new();
-
-        let mut components = HashMap::<ComponentName, (PathBuf, app_raw::Component)>::new();
-        let mut component_sources = HashMap::<ComponentName, Vec<PathBuf>>::new();
-
-        for app in apps {
-            validation.push_context("source", app.source.to_string_lossy().to_string());
-
-            if let Some(dir) = app.application.temp_dir {
-                temp_dir_sources.push(app.source.to_path_buf());
-                if temp_dir.is_none() {
-                    temp_dir = Some(dir);
-                }
-            }
-
-            if !app.application.includes.is_empty() {
-                include_sources.push(app.source.to_path_buf());
-                if include.is_empty() {
-                    include = app.application.includes;
-                }
-            }
-
-            if !app.application.wit_deps.is_empty() {
-                wit_deps_sources.push(app.source.to_path_buf());
-                if wit_deps.is_empty() {
-                    wit_deps = app.application.wit_deps; // TODO: resolve from source?
-                }
-            }
-
-            for (template_name, template) in app.application.templates {
-                validation.push_context("template", template_name.clone());
-
-                let mut invalid_template = false;
-                if template.profiles.is_empty() {
-                    if template.default_profile.is_some() {
-                        validation.add_error(format!(
-                            "When {} is not defined then {} should not be defined",
-                            "profiles".log_color_highlight(),
-                            "defaultProfile".log_color_highlight()
-                        ));
-                        invalid_template = true;
-                    }
-                } else {
-                    let defined_property_names =
-                        template.component_properties.defined_property_names();
-                    if !defined_property_names.is_empty() {
-                        for property_name in defined_property_names {
-                            validation.add_error(format!(
-                                "When {} is defined then {} should not be defined",
-                                "profiles".log_color_highlight(),
-                                property_name.log_color_highlight()
-                            ));
-                            invalid_template = true;
-                        }
-                    }
-
-                    if template.default_profile.is_none() {
-                        validation.add_error(format!(
-                            "When {} is defined then {} is mandatory",
-                            "profiles".log_color_highlight(),
-                            "defaultProfile".log_color_highlight()
-                        ));
-                        invalid_template = true;
-                    }
-                }
-
-                let template_name = TemplateName::from(template_name);
-                if template_sources.contains_key(&template_name) {
-                    template_sources
-                        .get_mut(&template_name)
-                        .unwrap()
-                        .push(app.source.to_path_buf());
-                } else {
-                    template_sources.insert(template_name.clone(), vec![app.source.to_path_buf()]);
-                }
-                if !templates.contains_key(&template_name) && !invalid_template {
-                    templates.insert(template_name, template);
-                }
-
-                validation.pop_context();
-            }
-
-            for (component_name, component) in app.application.components {
-                let component_name = ComponentName::from(component_name);
-
-                if !component_sources.contains_key(&component_name) {
-                    component_sources.insert(component_name.clone(), Vec::new());
-                }
-                component_sources
-                    .get_mut(&component_name)
-                    .unwrap()
-                    .push(app.source.to_path_buf());
-
-                components.insert(component_name, (app.source.to_path_buf(), component));
-            }
-
-            for (component_name, component_dependencies) in app.application.dependencies {
-                let component_name = ComponentName::from(component_name);
-                validation.push_context("component", component_name.to_string());
-
-                for dependency in component_dependencies {
-                    if dependency.type_ == "wasm-rpc" {
-                        match dependency.target {
-                            Some(target) => {
-                                let target_component_name = ComponentName::from(target);
-
-                                if !dependencies.contains_key(&component_name) {
-                                    dependencies.insert(component_name.clone(), BTreeSet::new());
-                                }
-                                dependencies
-                                    .get_mut(&component_name)
-                                    .unwrap()
-                                    .insert(target_component_name.clone());
-
-                                if !dependency_sources.contains_key(&component_name) {
-                                    dependency_sources
-                                        .insert(component_name.clone(), HashMap::new());
-                                }
-                                let dependency_sources =
-                                    dependency_sources.get_mut(&component_name).unwrap();
-                                if !dependency_sources.contains_key(&target_component_name) {
-                                    dependency_sources
-                                        .insert(target_component_name.clone(), Vec::new());
-                                }
-                                dependency_sources
-                                    .get_mut(&target_component_name)
-                                    .unwrap()
-                                    .push(app.source.to_path_buf());
-                            }
-                            None => validation.add_error(format!(
-                                "Missing {} field for component wasm-rpc dependency",
-                                "target".log_color_error_highlight()
-                            )),
-                        }
-                    } else {
-                        validation.add_error(format!(
-                            "Unknown component dependency type: {}",
-                            dependency.type_.log_color_error_highlight()
-                        ));
-                    }
-                }
-
-                validation.pop_context();
-            }
-
-            validation.pop_context();
-        }
-
-        for (property_name, sources) in [
-            ("include", include_sources),
-            ("tempDir", temp_dir_sources),
-            ("witDeps", wit_deps_sources),
-        ] {
-            if sources.len() > 1 {
-                validation.add_error(format!(
-                    "Property {} is defined in multiple sources: {}",
-                    property_name.log_color_highlight(),
-                    sources
-                        .into_iter()
-                        .map(|s| s.log_color_highlight())
-                        .join(", ")
-                ))
-            }
-        }
-
-        let non_unique_templates = template_sources
-            .into_iter()
-            .filter(|(_, sources)| sources.len() > 1);
-
-        validation.add_errors(non_unique_templates, |(template_name, sources)| {
-            Some((
-                vec![],
-                format!(
-                    "Template {} defined multiple times in sources: {}",
-                    template_name.as_str().log_color_highlight(),
-                    sources
-                        .into_iter()
-                        .map(|s| s.log_color_highlight())
-                        .join(", ")
-                ),
-            ))
-        });
-
-        let non_unique_components = component_sources
-            .into_iter()
-            .filter(|(_, sources)| sources.len() > 1);
-
-        validation.add_errors(non_unique_components, |(template_name, sources)| {
-            Some((
-                vec![],
-                format!(
-                    "Component {} defined multiple times in sources: {}",
-                    template_name.as_str().log_color_highlight(),
-                    sources
-                        .into_iter()
-                        .map(|s| s.log_color_highlight())
-                        .join(", ")
-                ),
-            ))
-        });
-
-        for (component_name, dependency_sources) in dependency_sources {
-            for (target_component_name, dependency_sources) in dependency_sources {
-                if dependency_sources.len() > 1 {
-                    validation.push_context("component", component_name.to_string());
-                    validation.push_context("target", target_component_name.to_string());
-
-                    validation.add_warn(format!(
-                        "WASM-RPC dependency is defined multiple times, sources: {}",
-                        dependency_sources
-                            .into_iter()
-                            .map(|s| s.log_color_highlight())
-                            .join(", ")
-                    ));
-
-                    validation.pop_context();
-                    validation.pop_context();
-                }
-            }
-        }
-
-        let components = {
-            let template_env = Self::template_env();
-
-            let mut resolved_components = BTreeMap::<ComponentName, Component<CPE>>::new();
-            for (component_name, (source, mut component)) in components {
-                validation.push_context("source", source.to_string_lossy().to_string());
-                validation.push_context("component", component_name.to_string());
-
-                let template_with_name = match component.template {
-                    Some(template_name) => {
-                        let template_name = TemplateName::from(template_name);
-                        match templates.get(&template_name) {
-                            Some(template) => Some(Some((template_name, template))),
-                            None => {
-                                validation.add_error(format!(
-                                    "Component references unknown template: {}",
-                                    template_name.as_str().log_color_error_highlight()
-                                ));
-                                None
-                            }
-                        }
-                    }
-                    None => Some(None),
-                };
-
-                if let Some(template_with_name) = template_with_name {
-                    let component_properties = match template_with_name {
-                        Some((template_name, template)) => {
-                            let mut incompatible_overrides = false;
-
-                            let defined_property_names =
-                                component.component_properties.defined_property_names();
-
-                            if !template.profiles.is_empty() && !defined_property_names.is_empty() {
-                                incompatible_overrides = true;
-                                for property_name in defined_property_names {
-                                    validation.add_error(
-                                        format!(
-                                            "Property {} cannot be used, as the component uses a template with profiles",
-                                            property_name.log_color_highlight()
-                                        )
-                                    );
-                                }
-                            }
-
-                            for profile_name in component.profiles.keys() {
-                                if !template.profiles.contains_key(profile_name) {
-                                    incompatible_overrides = true;
-                                    validation.add_error(
-                                        format!(
-                                            "Profile {} cannot be used, as the component uses template {} with the following profiles: {}",
-                                            profile_name.log_color_highlight(),
-                                            template_name.as_str().log_color_highlight(),
-                                            template.profiles.keys().map(|s| s.log_color_highlight()).join(", ")
-                                        )
-                                    );
-                                }
-                            }
-
-                            if incompatible_overrides {
-                                None
-                            } else {
-                                let template_context = minijinja::context! { componentName => component_name.as_str() };
-
-                                if template.profiles.is_empty() {
-                                    let rendered_template_properties =
-                                        ComponentProperties::from_raw_template(
-                                            &template_env,
-                                            &template_context,
-                                            &template.component_properties,
-                                        );
-
-                                    match rendered_template_properties {
-                                        Ok(rendered_template_properties) => {
-                                            match rendered_template_properties.merge_with_overrides(
-                                                &source,
-                                                &mut validation,
-                                                component.component_properties,
-                                            ) {
-                                                Ok((Some(properties), any_template_overrides)) => {
-                                                    Some(ResolvedComponentProperties::Properties {
-                                                        template_name: Some(template_name),
-                                                        any_template_overrides,
-                                                        properties,
-                                                    })
-                                                }
-                                                Ok((None, _any_template_overrides)) => None,
-                                                Err(err) => {
-                                                    validation.add_error(format!(
-                                                        "Failed to override template {}, error: {}",
-                                                        template_name
-                                                            .as_str()
-                                                            .log_color_highlight(),
-                                                        err.to_string().log_color_error_highlight()
-                                                    ));
-                                                    None
-                                                }
-                                            }
-                                        }
-                                        Err(err) => {
-                                            validation.add_error(format!(
-                                                "Failed to render template {}, error: {}",
-                                                template_name.as_str().log_color_highlight(),
-                                                err.to_string().log_color_error_highlight()
-                                            ));
-                                            None
-                                        }
-                                    }
-                                } else {
-                                    let mut any_template_overrides =
-                                        HashMap::<ProfileName, bool>::new();
-                                    let mut profiles =
-                                        HashMap::<ProfileName, ComponentProperties<CPE>>::new();
-                                    let mut any_template_error = false;
-
-                                    for (profile_name, template_component_properties) in
-                                        &template.profiles
-                                    {
-                                        let rendered_template_properties =
-                                            ComponentProperties::from_raw_template(
-                                                &template_env,
-                                                &template_context,
-                                                template_component_properties,
-                                            );
-                                        match rendered_template_properties {
-                                            Ok(rendered_template_properties) => {
-                                                let properties_with_overrides = {
-                                                    if let Some(component_properties) =
-                                                        component.profiles.remove(profile_name)
-                                                    {
-                                                        rendered_template_properties
-                                                            .merge_with_overrides(
-                                                                &source,
-                                                                &mut validation,
-                                                                component_properties,
-                                                            )
-                                                    } else {
-                                                        Ok((
-                                                            Some(rendered_template_properties),
-                                                            false,
-                                                        ))
-                                                    }
-                                                };
-
-                                                match properties_with_overrides {
-                                                    Ok((Some(properties), any_overrides)) => {
-                                                        any_template_overrides.insert(
-                                                            profile_name.clone().into(),
-                                                            any_overrides,
-                                                        );
-                                                        profiles.insert(
-                                                            profile_name.clone().into(),
-                                                            properties,
-                                                        );
-                                                    }
-                                                    Ok((None, _any_template_overrides)) => {
-                                                        any_template_error = true;
-                                                    }
-                                                    Err(err) => {
-                                                        validation.add_error(format!(
-                                                            "Failed to override template {}, error: {}",
-                                                            template_name
-                                                                .as_str()
-                                                                .log_color_highlight(),
-                                                            err.to_string().log_color_error_highlight()
-                                                        ));
-                                                        any_template_error = true;
-                                                    }
-                                                }
-                                            }
-                                            Err(err) => {
-                                                validation.add_error(format!(
-                                                    "Failed to render template {}, error: {}",
-                                                    template_name.as_str().log_color_highlight(),
-                                                    err.to_string().log_color_error_highlight()
-                                                ));
-                                                any_template_error = true
-                                            }
-                                        }
-                                    }
-
-                                    (!any_template_error).then(|| {
-                                        ResolvedComponentProperties::Profiles {
-                                            template_name: Some(template_name),
-                                            any_template_overrides,
-                                            default_profile: template
-                                                .default_profile
-                                                .clone()
-                                                .expect("Missing template default profile")
-                                                .into(),
-                                            profiles,
-                                        }
-                                    })
-                                }
-                            }
-                        }
-                        None => {
-                            if component.profiles.is_empty() {
-                                if component.default_profile.is_some() {
-                                    validation.add_error(format!(
-                                        "When {} is not defined then {} should not be defined",
-                                        "profiles".log_color_highlight(),
-                                        "defaultProfile".log_color_highlight()
-                                    ));
-                                    None
-                                } else {
-                                    let properties = ComponentProperties::<CPE>::from_raw(
-                                        component.component_properties,
-                                    );
-
-                                    match properties {
-                                        Ok(properties) => {
-                                            Some(ResolvedComponentProperties::Properties {
-                                                template_name: None,
-                                                any_template_overrides: false,
-                                                properties,
-                                            })
-                                        }
-                                        Err(err) => {
-                                            validation.add_error(format!("{:?}", err));
-                                            None
-                                        }
-                                    }
-                                }
-                            } else if component.default_profile.is_none() {
-                                validation.add_error(format!(
-                                    "When {} is defined then {} is mandatory",
-                                    "profiles".log_color_highlight(),
-                                    "defaultProfile".log_color_highlight()
-                                ));
-                                None
-                            } else {
-                                Some(ResolvedComponentProperties::Profiles {
-                                    template_name: None,
-                                    any_template_overrides: component
-                                        .profiles
-                                        .keys()
-                                        .map(|profile_name| {
-                                            (ProfileName::from(profile_name.clone()), false)
-                                        })
-                                        .collect(),
-                                    default_profile: component.default_profile.unwrap().into(),
-                                    profiles: component
-                                        .profiles
-                                        .into_iter()
-                                        .filter_map(|(profile_name, properties)| {
-                                            match ComponentProperties::<CPE>::from_raw(properties) {
-                                                Ok(properties) => Some((
-                                                    ProfileName::from(profile_name),
-                                                    properties,
-                                                )),
-                                                Err(err) => {
-                                                    validation.add_error(format!("{:?}", err));
-                                                    None
-                                                }
-                                            }
-                                        })
-                                        .collect(),
-                                })
-                            }
-                        }
-                    };
-
-                    if let Some(mut properties) = component_properties {
-                        fn validate_properties_and_convert_extensions<
-                            CPE: ComponentPropertiesExtensions,
-                        >(
-                            source: &Path,
-                            validation: &mut ValidationBuilder,
-                            properties: &mut ComponentProperties<CPE>,
-                        ) -> bool {
-                            let mut any_error = false;
-
-                            for (name, value) in [
-                                ("sourceWit", &properties.source_wit),
-                                ("generatedWit", &properties.generated_wit),
-                                ("componentWasm", &properties.component_wasm),
-                            ] {
-                                if value.is_empty() {
-                                    validation.add_error(format!(
-                                        "Property {} is empty or undefined",
-                                        name.log_color_highlight()
-                                    ));
-                                    any_error = true;
-                                }
-                            }
-
-                            let reserved_commands = BTreeSet::from(["build", "clean"]);
-
-                            for custom_command in properties.custom_commands.keys() {
-                                if reserved_commands.contains(custom_command.as_str()) {
-                                    validation.add_error(format!("Cannot use {} as custom command name, reserved command names: {}",
-                                                                 custom_command.log_color_error_highlight(),
-                                                                 reserved_commands.iter().map(|s| s.log_color_highlight()).join(", ")
-                                    ));
-                                }
-                            }
-
-                            properties.extensions = CPE::convert_and_validate(
-                                source,
-                                validation,
-                                properties.extensions_raw.take().unwrap(),
-                            );
-                            any_error |= properties.extensions.is_none();
-
-                            any_error
-                        }
-
-                        let any_error: bool = match &mut properties {
-                            ResolvedComponentProperties::Properties {
-                                template_name,
-                                any_template_overrides,
-                                properties,
-                            } => {
-                                template_name.iter().for_each(|template_name| {
-                                    validation.push_context("template", template_name.to_string());
-                                    validation.push_context(
-                                        "overrides",
-                                        any_template_overrides.to_string(),
-                                    );
-                                });
-
-                                let any_error = validate_properties_and_convert_extensions(
-                                    &source,
-                                    &mut validation,
-                                    properties,
-                                );
-
-                                if template_name.is_some() {
-                                    validation.pop_context();
-                                    validation.pop_context();
-                                }
-
-                                any_error
-                            }
-                            ResolvedComponentProperties::Profiles {
-                                template_name,
-                                any_template_overrides,
-                                profiles,
-                                ..
-                            } => {
-                                template_name.iter().for_each(|template_name| {
-                                    validation.push_context("template", template_name.to_string());
-                                });
-
-                                let mut any_error = false;
-
-                                for (profile_name, properties) in profiles {
-                                    validation.push_context("profile", profile_name.to_string());
-                                    let any_template_overrides =
-                                        any_template_overrides.get(profile_name);
-                                    any_template_overrides.iter().for_each(
-                                        |any_template_overrides| {
-                                            validation.push_context(
-                                                "overrides",
-                                                any_template_overrides.to_string(),
-                                            );
-                                        },
-                                    );
-
-                                    any_error |= validate_properties_and_convert_extensions(
-                                        &source,
-                                        &mut validation,
-                                        properties,
-                                    );
-
-                                    if any_template_overrides.is_some() {
-                                        validation.pop_context();
-                                    }
-                                    validation.pop_context();
-                                }
-
-                                if template_name.is_some() {
-                                    validation.pop_context();
-                                }
-
-                                any_error
-                            }
-                        };
-
-                        if !any_error {
-                            resolved_components
-                                .insert(component_name.clone(), Component { source, properties });
-                        }
-                    }
-                }
-
-                validation.pop_context();
-                validation.pop_context();
-            }
-
-            resolved_components
-        };
-
-        validation.build(Self {
-            temp_dir,
-            wit_deps,
-            components,
-            dependencies,
-            no_dependencies: BTreeSet::new(),
-        })
-    }
-
-    fn template_env<'a>() -> minijinja::Environment<'a> {
-        let mut env = minijinja::Environment::new();
-
-        env.add_filter("to_snake_case", |str: &str| str.to_snake_case());
-
-        env.add_filter("to_kebab_case", |str: &str| str.to_kebab_case());
-        env.add_filter("to_lower_camel_case", |str: &str| str.to_lower_camel_case());
-        env.add_filter("to_pascal_case", |str: &str| str.to_pascal_case());
-        env.add_filter("to_shouty_kebab_case", |str: &str| {
-            str.to_shouty_kebab_case()
-        });
-        env.add_filter("to_shouty_snake_case", |str: &str| {
-            str.to_shouty_snake_case()
-        });
-        env.add_filter("to_snake_case", |str: &str| str.to_snake_case());
-        env.add_filter("to_title_case", |str: &str| str.to_title_case());
-        env.add_filter("to_train_case", |str: &str| str.to_train_case());
-        env.add_filter("to_upper_camel_case", |str: &str| str.to_upper_camel_case());
-
-        env
+        build_application(apps)
     }
 
     pub fn component_names(&self) -> impl Iterator<Item = &ComponentName> {
@@ -1104,13 +440,15 @@ pub struct ComponentProperties<CPE: ComponentPropertiesExtensions> {
     pub custom_commands: HashMap<String, Vec<app_raw::ExternalCommand>>,
     pub clean: Vec<String>,
 
-    // TODO: clean up: move extensions_raw to a temporary var and make extensions non optional
-    pub extensions_raw: Option<CPE::Raw>,
-    pub extensions: Option<CPE>,
+    pub extensions: CPE,
 }
 
 impl<CPE: ComponentPropertiesExtensions> ComponentProperties<CPE> {
-    fn from_raw(raw: app_raw::ComponentProperties) -> anyhow::Result<Self> {
+    fn from_raw(
+        source: &Path,
+        validation: &mut ValidationBuilder,
+        raw: app_raw::ComponentProperties,
+    ) -> anyhow::Result<Self> {
         Ok(Self {
             source_wit: raw.source_wit.unwrap_or_default(),
             generated_wit: raw.generated_wit.unwrap_or_default(),
@@ -1119,19 +457,31 @@ impl<CPE: ComponentPropertiesExtensions> ComponentProperties<CPE> {
             build: raw.build,
             custom_commands: raw.custom_commands,
             clean: raw.clean,
-            extensions_raw: Some(CPE::raw_from_serde_json(serde_json::Value::Object(
-                raw.extensions,
-            ))?),
-            extensions: None,
+            extensions: {
+                (!raw.extensions.is_empty())
+                    .then_some(CPE::raw_from_serde_json(serde_json::Value::Object(
+                        raw.extensions,
+                    ))?)
+                    .and_then(|raw_extensions| {
+                        CPE::convert_and_validate(source, validation, raw_extensions)
+                    })
+                    .unwrap_or_default()
+            },
         })
     }
 
     fn from_raw_template<C: Serialize>(
-        env: &minijinja::Environment,
-        ctx: &C,
+        source: &Path,
+        validation: &mut ValidationBuilder,
+        template_env: &minijinja::Environment,
+        template_ctx: &C,
         template_properties: &app_raw::ComponentProperties,
     ) -> anyhow::Result<Self> {
-        ComponentProperties::from_raw(template_properties.render(env, ctx)?)
+        ComponentProperties::from_raw(
+            source,
+            validation,
+            template_properties.render(template_env, template_ctx)?,
+        )
     }
 
     fn merge_with_overrides(
@@ -1139,7 +489,7 @@ impl<CPE: ComponentPropertiesExtensions> ComponentProperties<CPE> {
         source: &Path,
         validation: &mut ValidationBuilder,
         overrides: app_raw::ComponentProperties,
-    ) -> anyhow::Result<(Option<Self>, bool)> {
+    ) -> anyhow::Result<Option<(Self, bool)>> {
         let mut any_overrides = false;
 
         if let Some(source_wit) = overrides.source_wit {
@@ -1175,35 +525,28 @@ impl<CPE: ComponentPropertiesExtensions> ComponentProperties<CPE> {
                 .insert(custom_command_name, custom_command);
         }
 
-        let any_extension_error = {
+        let extension_valid = {
             if !overrides.extensions.is_empty() {
                 let extensions_override =
                     CPE::raw_from_serde_json(serde_json::Value::Object(overrides.extensions))?;
-                let (extensions, any_extension_overrides) = self
-                    .extensions
-                    .take()
-                    .unwrap_or_default()
-                    .merge_wit_overrides(source, validation, extensions_override)?;
-
-                any_overrides |= any_overrides || any_extension_overrides;
-
-                match extensions {
-                    Some(extensions) => {
-                        self.extensions = Some(extensions);
-                        false
+                match std::mem::take(&mut self.extensions).merge_wit_overrides(
+                    source,
+                    validation,
+                    extensions_override,
+                )? {
+                    Some((extensions, any_extension_overrides)) => {
+                        any_overrides |= any_overrides || any_extension_overrides;
+                        self.extensions = extensions;
+                        true
                     }
-                    None => true,
+                    None => false,
                 }
             } else {
-                false
+                true
             }
         };
 
-        if any_extension_error {
-            Ok((None, false))
-        } else {
-            Ok((Some(self), any_overrides))
-        }
+        Ok(extension_valid.then_some((self, any_overrides)))
     }
 }
 
@@ -1223,7 +566,7 @@ pub trait ComponentPropertiesExtensions: Sized + Debug + Clone + Default {
         source: &Path,
         validation: &mut ValidationBuilder,
         overrides: Self::Raw,
-    ) -> serde_json::Result<(Option<Self>, bool)>;
+    ) -> serde_json::Result<Option<(Self, bool)>>;
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1253,8 +596,8 @@ impl ComponentPropertiesExtensions for ComponentPropertiesExtensionsNone {
         _source: &Path,
         _validation: &mut ValidationBuilder,
         _overrides: Self::Raw,
-    ) -> serde_json::Result<(Option<Self>, bool)> {
-        Ok((Some(self), false))
+    ) -> serde_json::Result<Option<(Self, bool)>> {
+        Ok(Some((self, false)))
     }
 }
 
@@ -1284,7 +627,758 @@ impl ComponentPropertiesExtensions for ComponentPropertiesExtensionsAny {
         _source: &Path,
         _validation: &mut ValidationBuilder,
         _overrides: Self::Raw,
-    ) -> serde_json::Result<(Option<Self>, bool)> {
-        Ok((Some(self), false))
+    ) -> serde_json::Result<Option<(Self, bool)>> {
+        Ok(Some((self, false)))
+    }
+}
+
+mod app_builder {
+    use crate::log::LogColorize;
+    use crate::model::app::{
+        Application, Component, ComponentName, ComponentProperties, ComponentPropertiesExtensions,
+        ProfileName, ResolvedComponentProperties, TemplateName,
+    };
+    use crate::model::app_raw;
+    use crate::validation::{ValidatedResult, ValidationBuilder};
+    use heck::{
+        ToKebabCase, ToLowerCamelCase, ToPascalCase, ToShoutyKebabCase, ToShoutySnakeCase,
+        ToSnakeCase, ToTitleCase, ToTrainCase, ToUpperCamelCase,
+    };
+    use itertools::Itertools;
+    use serde::Serialize;
+    use std::collections::{BTreeMap, BTreeSet, HashMap};
+    use std::path::{Path, PathBuf};
+
+    pub fn build_application<CPE: ComponentPropertiesExtensions>(
+        apps: Vec<app_raw::ApplicationWithSource>,
+    ) -> ValidatedResult<Application<CPE>> {
+        AppBuilder::build(apps)
+    }
+
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    enum UniqueSourceCheckedEntityKey {
+        Include,
+        TempDir,
+        WitDeps,
+        Template(TemplateName),
+        WasmRpcDependency((ComponentName, ComponentName)),
+        Component(ComponentName),
+    }
+
+    impl UniqueSourceCheckedEntityKey {
+        fn entity_kind(&self) -> &'static str {
+            let property = "Property";
+            match self {
+                UniqueSourceCheckedEntityKey::Include => property,
+                UniqueSourceCheckedEntityKey::TempDir => property,
+                UniqueSourceCheckedEntityKey::WitDeps => property,
+                UniqueSourceCheckedEntityKey::Template(_) => "Template",
+                UniqueSourceCheckedEntityKey::WasmRpcDependency(_) => "WASM RPC dependency",
+                UniqueSourceCheckedEntityKey::Component(_) => "Component",
+            }
+        }
+
+        fn entity_name(self) -> String {
+            match self {
+                UniqueSourceCheckedEntityKey::Include => {
+                    "include".log_color_highlight().to_string()
+                }
+                UniqueSourceCheckedEntityKey::TempDir => {
+                    "tempDir".log_color_highlight().to_string()
+                }
+                UniqueSourceCheckedEntityKey::WitDeps => {
+                    "witDeps".log_color_highlight().to_string()
+                }
+                UniqueSourceCheckedEntityKey::Template(template_name) => {
+                    template_name.as_str().log_color_highlight().to_string()
+                }
+                UniqueSourceCheckedEntityKey::WasmRpcDependency((
+                    component_name,
+                    target_component_name,
+                )) => {
+                    format!(
+                        "{} - {}",
+                        component_name.as_str().log_color_highlight(),
+                        target_component_name.as_str().log_color_highlight()
+                    )
+                }
+                UniqueSourceCheckedEntityKey::Component(component_name) => {
+                    component_name.as_str().log_color_highlight().to_string()
+                }
+            }
+        }
+    }
+
+    #[derive(Default)]
+    struct AppBuilder<CPE: ComponentPropertiesExtensions> {
+        include: Vec<String>,
+        temp_dir: Option<String>,
+        wit_deps: Vec<String>,
+
+        templates: HashMap<TemplateName, app_raw::ComponentTemplate>,
+        dependencies: BTreeMap<ComponentName, BTreeSet<ComponentName>>,
+
+        raw_components: HashMap<ComponentName, (PathBuf, app_raw::Component)>,
+
+        entity_sources: HashMap<UniqueSourceCheckedEntityKey, Vec<PathBuf>>,
+
+        resolved_components: BTreeMap<ComponentName, Component<CPE>>,
+    }
+
+    impl<CPE: ComponentPropertiesExtensions> AppBuilder<CPE> {
+        fn build(apps: Vec<app_raw::ApplicationWithSource>) -> ValidatedResult<Application<CPE>> {
+            let mut builder = Self::default();
+            let mut validation = ValidationBuilder::default();
+
+            builder.add_raw_apps(&mut validation, apps);
+            builder.validate_unique_sources(&mut validation);
+            builder.resolve_components(&mut validation);
+
+            validation.build(Application {
+                temp_dir: builder.temp_dir,
+                wit_deps: builder.wit_deps,
+                components: builder.resolved_components,
+                dependencies: builder.dependencies,
+                no_dependencies: BTreeSet::new(),
+            })
+        }
+
+        fn add_entity_source(&mut self, key: UniqueSourceCheckedEntityKey, source: &Path) -> bool {
+            let sources = self.entity_sources.entry(key).or_insert_with(Vec::new);
+            let is_first = sources.is_empty();
+            sources.push(source.to_path_buf());
+            is_first
+        }
+
+        fn add_raw_apps(
+            &mut self,
+            validation: &mut ValidationBuilder,
+            apps: Vec<app_raw::ApplicationWithSource>,
+        ) {
+            for app in apps {
+                self.add_raw_app(validation, app);
+            }
+        }
+
+        fn add_raw_app(
+            &mut self,
+            validation: &mut ValidationBuilder,
+            app: app_raw::ApplicationWithSource,
+        ) {
+            validation.with_context(
+                vec![("source", app.source.to_string_lossy().to_string())],
+                |validation| {
+                    if let Some(dir) = app.application.temp_dir {
+                        self.add_entity_source(UniqueSourceCheckedEntityKey::TempDir, &app.source);
+                        if self.temp_dir.is_none() {
+                            self.temp_dir = Some(dir);
+                        }
+                    }
+
+                    if !app.application.includes.is_empty() {
+                        self.add_entity_source(UniqueSourceCheckedEntityKey::Include, &app.source);
+                        if self.include.is_empty() {
+                            self.include = app.application.includes;
+                        }
+                    }
+
+                    if !app.application.wit_deps.is_empty() {
+                        self.add_entity_source(UniqueSourceCheckedEntityKey::WitDeps, &app.source);
+                        if self.wit_deps.is_empty() {
+                            self.wit_deps = app.application.wit_deps; // TODO: resolve from source?
+                        }
+                    }
+
+                    for (template_name, template) in app.application.templates {
+                        self.add_raw_template(validation, &app.source, template_name, template);
+                    }
+
+                    for (component_name, component) in app.application.components {
+                        let component_name = ComponentName::from(component_name);
+                        let unique_key =
+                            UniqueSourceCheckedEntityKey::Component(component_name.clone());
+                        if self.add_entity_source(unique_key, &app.source) {
+                            self.raw_components
+                                .insert(component_name, (app.source.to_path_buf(), component));
+                        }
+                    }
+
+                    for (component_name, component_dependencies) in app.application.dependencies {
+                        self.add_component_dependencies(
+                            validation,
+                            &app.source,
+                            component_name,
+                            component_dependencies,
+                        );
+                    }
+                },
+            );
+        }
+
+        fn add_raw_template(
+            &mut self,
+            validation: &mut ValidationBuilder,
+            source: &Path,
+            template_name: String,
+            template: app_raw::ComponentTemplate,
+        ) {
+            let valid =
+                validation.with_context(vec![("template", template_name.clone())], |validation| {
+                    if template.profiles.is_empty() {
+                        if template.default_profile.is_some() {
+                            validation.add_error(format!(
+                                "When {} is not defined then {} should not be defined",
+                                "profiles".log_color_highlight(),
+                                "defaultProfile".log_color_highlight()
+                            ));
+                        }
+                    } else {
+                        let defined_property_names =
+                            template.component_properties.defined_property_names();
+                        if !defined_property_names.is_empty() {
+                            for property_name in defined_property_names {
+                                validation.add_error(format!(
+                                    "When {} is defined then {} should not be defined",
+                                    "profiles".log_color_highlight(),
+                                    property_name.log_color_highlight()
+                                ));
+                            }
+                        }
+
+                        if template.default_profile.is_none() {
+                            validation.add_error(format!(
+                                "When {} is defined then {} is mandatory",
+                                "profiles".log_color_highlight(),
+                                "defaultProfile".log_color_highlight()
+                            ));
+                        }
+                    }
+                });
+
+            let template_name = TemplateName::from(template_name);
+            if self.add_entity_source(
+                UniqueSourceCheckedEntityKey::Template(template_name.clone()),
+                source,
+            ) && valid
+            {
+                self.templates.insert(template_name, template);
+            }
+        }
+
+        fn add_component_dependencies(
+            &mut self,
+            validation: &mut ValidationBuilder,
+            source: &Path,
+            component_name: String,
+            component_dependencies: Vec<app_raw::Dependency>,
+        ) {
+            validation.with_context(vec![("component", component_name.clone())], |validation| {
+                for dependency in component_dependencies {
+                    if dependency.type_ == "wasm-rpc" {
+                        match dependency.target {
+                            Some(target_name) => {
+                                let unique_key = UniqueSourceCheckedEntityKey::WasmRpcDependency((
+                                    component_name.clone().into(),
+                                    target_name.clone().into(),
+                                ));
+                                if self.add_entity_source(unique_key, source) {
+                                    self.dependencies
+                                        .entry(component_name.clone().into())
+                                        .or_default()
+                                        .insert(target_name.into());
+                                }
+                            }
+                            None => validation.add_error(format!(
+                                "Missing {} field for component wasm-rpc dependency",
+                                "target".log_color_error_highlight()
+                            )),
+                        }
+                    } else {
+                        validation.add_error(format!(
+                            "Unknown component dependency type: {}",
+                            dependency.type_.log_color_error_highlight()
+                        ));
+                    }
+                }
+            });
+        }
+
+        fn validate_unique_sources(&mut self, validation: &mut ValidationBuilder) {
+            let entity_sources = std::mem::take(&mut self.entity_sources);
+            entity_sources
+                .into_iter()
+                .filter(|(_, sources)| sources.len() > 1)
+                .for_each(|(key, sources)| {
+                    validation.add_error(format!(
+                        "{} {} is defined in multiple sources: {}",
+                        key.entity_kind(),
+                        key.entity_name(),
+                        sources
+                            .into_iter()
+                            .map(|s| s.log_color_highlight())
+                            .join(", ")
+                    ))
+                })
+        }
+
+        fn template_env<'a>() -> minijinja::Environment<'a> {
+            let mut env = minijinja::Environment::new();
+
+            env.add_filter("to_snake_case", |str: &str| str.to_snake_case());
+
+            env.add_filter("to_kebab_case", |str: &str| str.to_kebab_case());
+            env.add_filter("to_lower_camel_case", |str: &str| str.to_lower_camel_case());
+            env.add_filter("to_pascal_case", |str: &str| str.to_pascal_case());
+            env.add_filter("to_shouty_kebab_case", |str: &str| {
+                str.to_shouty_kebab_case()
+            });
+            env.add_filter("to_shouty_snake_case", |str: &str| {
+                str.to_shouty_snake_case()
+            });
+            env.add_filter("to_snake_case", |str: &str| str.to_snake_case());
+            env.add_filter("to_title_case", |str: &str| str.to_title_case());
+            env.add_filter("to_train_case", |str: &str| str.to_train_case());
+            env.add_filter("to_upper_camel_case", |str: &str| str.to_upper_camel_case());
+
+            env
+        }
+
+        fn template_context(component_name: &ComponentName) -> impl Serialize {
+            minijinja::context! {
+                componentName => component_name.as_str(),
+                component_name => component_name.as_str()
+            }
+        }
+
+        fn resolve_components(&mut self, validation: &mut ValidationBuilder) {
+            let template_env = Self::template_env();
+
+            let components = std::mem::take(&mut self.raw_components);
+
+            for (component_name, (source, component)) in components {
+                self.resolve_component(
+                    validation,
+                    &template_env,
+                    source,
+                    component_name,
+                    component,
+                );
+            }
+        }
+
+        fn resolve_component(
+            &mut self,
+            validation: &mut ValidationBuilder,
+            template_env: &minijinja::Environment,
+            source: PathBuf,
+            component_name: ComponentName,
+            component: app_raw::Component,
+        ) {
+            validation.with_context(
+                vec![
+                    ("source", source.to_string_lossy().to_string()),
+                    ("component", component_name.to_string()),
+                ],
+                |validation| {
+                    let properties = match &component.template {
+                        Some(template_name) => {
+                            let template_name = TemplateName::from(template_name.clone());
+                            match self.templates.get_mut(&template_name) {
+                                Some(template) => Self::resolve_templated_component_properties(
+                                    validation,
+                                    template_env,
+                                    &source,
+                                    template_name,
+                                    template,
+                                    component_name.clone(),
+                                    component,
+                                ),
+                                None => {
+                                    validation.add_error(format!(
+                                        "Component references unknown template: {}",
+                                        template_name.as_str().log_color_error_highlight()
+                                    ));
+                                    None
+                                }
+                            }
+                        }
+                        None => Self::resolve_directly_defined_component_properties(
+                            validation, &source, component,
+                        ),
+                    };
+                    if let Some(properties) = properties {
+                        self.resolved_components
+                            .insert(component_name, Component { source, properties });
+                    }
+                },
+            );
+        }
+
+        fn resolve_templated_component_properties(
+            validation: &mut ValidationBuilder,
+            template_env: &minijinja::Environment,
+            source: &Path,
+            template_name: TemplateName,
+            template: &mut app_raw::ComponentTemplate,
+            component_name: ComponentName,
+            component: app_raw::Component,
+        ) -> Option<ResolvedComponentProperties<CPE>> {
+            let (properties, _) = validation.with_context_returning(
+                vec![("template", template_name.to_string())],
+                |validation| {
+                    let overrides_compatible = validation.with_context(vec![], |validation| {
+                        let defined_property_names = component.component_properties.defined_property_names();
+
+                        if !template.profiles.is_empty() && !defined_property_names.is_empty() {
+                            for property_name in defined_property_names {
+                                validation.add_error(
+                                    format!(
+                                        "Property {} cannot be used, as the component uses a template with profiles",
+                                        property_name.log_color_highlight()
+                                    )
+                                );
+                            }
+                        }
+
+                        for profile_name in component.profiles.keys() {
+                            if !template.profiles.contains_key(profile_name) {
+                                validation.add_error(
+                                    format!(
+                                        "Profile {} cannot be used, as the component uses template {} with the following profiles: {}",
+                                        profile_name.log_color_highlight(),
+                                        template_name.as_str().log_color_highlight(),
+                                        template.profiles.keys().map(|s| s.log_color_highlight()).join(", ")
+                                    )
+                                );
+                            }
+                        }
+
+                        if let Some(default_profile) = &component.default_profile {
+                            if !template.profiles.contains_key(default_profile) {
+                                validation.add_error(
+                                    format!(
+                                        "Default profile override {} cannot be used, as the component uses template {} with the following profiles: {}",
+                                        default_profile.log_color_highlight(),
+                                        template_name.as_str().log_color_highlight(),
+                                        template.profiles.keys().map(|s| s.log_color_highlight()).join(", ")
+                                    )
+                                );
+                            }
+                        }
+                    });
+
+                    overrides_compatible.then(|| {
+                        if template.profiles.is_empty() {
+                            Self::resolve_templated_non_profiled_component_properties(
+                                validation,
+                                source,
+                                template_env,
+                                template_name,
+                                template,
+                                component_name,
+                                component.component_properties,
+                            )
+                        } else {
+                            Self::resolve_templated_profiled_component_properties(
+                                validation,
+                                source,
+                                template_env,
+                                template_name,
+                                template,
+                                component_name,
+                                component.profiles,
+                                component.default_profile,
+                            )
+                        }
+                    }).flatten()
+                },
+            );
+
+            properties
+        }
+
+        fn resolve_templated_non_profiled_component_properties(
+            validation: &mut ValidationBuilder,
+            source: &Path,
+            template_env: &minijinja::Environment,
+            template_name: TemplateName,
+            template: &app_raw::ComponentTemplate,
+            component_name: ComponentName,
+            component_properties: app_raw::ComponentProperties,
+        ) -> Option<ResolvedComponentProperties<CPE>> {
+            Self::convert_and_validate_templated_component_properties(
+                validation,
+                source,
+                template_env,
+                &template_name,
+                &template.component_properties,
+                &component_name,
+                Some(component_properties),
+            )
+            .map(|(properties, any_template_overrides)| {
+                ResolvedComponentProperties::Properties {
+                    template_name: Some(template_name),
+                    any_template_overrides,
+                    properties,
+                }
+            })
+        }
+
+        fn resolve_templated_profiled_component_properties(
+            validation: &mut ValidationBuilder,
+            source: &Path,
+            template_env: &minijinja::Environment,
+            template_name: TemplateName,
+            template: &app_raw::ComponentTemplate,
+            component_name: ComponentName,
+            mut profiles: HashMap<String, app_raw::ComponentProperties>,
+            default_profile: Option<String>,
+        ) -> Option<ResolvedComponentProperties<CPE>> {
+            let ((profiles, any_template_overrides), valid) =
+                validation.with_context_returning(vec![], |validation| {
+                    let mut resolved_overrides = HashMap::<ProfileName, bool>::new();
+                    let mut resolved_profiles =
+                        HashMap::<ProfileName, ComponentProperties<CPE>>::new();
+
+                    for (profile_name, template_component_properties) in &template.profiles {
+                        validation.with_context(
+                            vec![("profile", profile_name.to_string())],
+                            |validation| {
+                                let component_properties = profiles.remove(profile_name);
+                                Self::convert_and_validate_templated_component_properties(
+                                    validation,
+                                    source,
+                                    template_env,
+                                    &template_name,
+                                    template_component_properties,
+                                    &component_name,
+                                    component_properties,
+                                )
+                                .into_iter()
+                                .for_each(
+                                    |(component_properties, any_template_overrides)| {
+                                        resolved_overrides.insert(
+                                            profile_name.clone().into(),
+                                            any_template_overrides,
+                                        );
+                                        resolved_profiles.insert(
+                                            profile_name.clone().into(),
+                                            component_properties,
+                                        );
+                                    },
+                                );
+                            },
+                        );
+                    }
+
+                    (resolved_profiles, resolved_overrides)
+                });
+
+            valid.then(|| ResolvedComponentProperties::Profiles {
+                template_name: Some(template_name),
+                any_template_overrides,
+                default_profile: default_profile
+                    .or(template.default_profile.clone())
+                    .clone()
+                    .expect("Missing template default profile")
+                    .into(),
+                profiles,
+            })
+        }
+
+        fn resolve_directly_defined_component_properties(
+            validation: &mut ValidationBuilder,
+            source: &Path,
+            component: app_raw::Component,
+        ) -> Option<ResolvedComponentProperties<CPE>> {
+            if component.profiles.is_empty() {
+                Self::resolve_directly_defined_non_profiled_component_properties(
+                    validation, source, component,
+                )
+            } else {
+                Self::resolve_directly_defined_profiled_component_properties(
+                    validation, source, component,
+                )
+            }
+        }
+
+        fn resolve_directly_defined_profiled_component_properties(
+            validation: &mut ValidationBuilder,
+            source: &Path,
+            component: app_raw::Component,
+        ) -> Option<ResolvedComponentProperties<CPE>> {
+            let valid =
+                validation.with_context(vec![], |validation| match &component.default_profile {
+                    Some(default_profile) => {
+                        if !component.profiles.contains_key(default_profile) {
+                            validation.add_error(format!(
+                                "Default profile {} not found in available profiles: {}",
+                                default_profile.log_color_highlight(),
+                                component
+                                    .profiles
+                                    .keys()
+                                    .map(|s| s.log_color_highlight())
+                                    .join(", ")
+                            ));
+                        }
+                    }
+                    None => {
+                        validation.add_error(format!(
+                            "When {} is defined then {} is mandatory",
+                            "profiles".log_color_highlight(),
+                            "defaultProfile".log_color_highlight()
+                        ));
+                    }
+                });
+
+            valid.then(|| ResolvedComponentProperties::Profiles {
+                template_name: None,
+                any_template_overrides: Default::default(),
+                default_profile: component.default_profile.map(ProfileName::from).unwrap(),
+                profiles: {
+                    component
+                        .profiles
+                        .into_iter()
+                        .filter_map(|(profile_name, properties)| {
+                            let (properties, _) = validation.with_context_returning(
+                                vec![("profile", profile_name.to_string())],
+                                |validation| {
+                                    Self::convert_and_validate_component_properties(
+                                        validation, source, properties,
+                                    )
+                                },
+                            );
+                            properties
+                                .map(|properties| (ProfileName::from(profile_name), properties))
+                        })
+                        .collect()
+                },
+            })
+        }
+
+        fn resolve_directly_defined_non_profiled_component_properties(
+            validation: &mut ValidationBuilder,
+            source: &Path,
+            component: app_raw::Component,
+        ) -> Option<ResolvedComponentProperties<CPE>> {
+            let valid = validation.with_context(vec![], |validation| {
+                if component.default_profile.is_some() {
+                    validation.add_error(format!(
+                        "When {} is not defined then {} should not be defined",
+                        "profiles".log_color_highlight(),
+                        "defaultProfile".log_color_highlight()
+                    ));
+                }
+            });
+
+            valid
+                .then(|| {
+                    Self::convert_and_validate_component_properties(
+                        validation,
+                        source,
+                        component.component_properties,
+                    )
+                })
+                .flatten()
+                .map(|properties| ResolvedComponentProperties::Properties {
+                    template_name: None,
+                    any_template_overrides: false,
+                    properties,
+                })
+        }
+
+        fn convert_and_validate_templated_component_properties(
+            validation: &mut ValidationBuilder,
+            source: &Path,
+            template_env: &minijinja::Environment,
+            template_name: &TemplateName,
+            template_properties: &app_raw::ComponentProperties,
+            component_name: &ComponentName,
+            component_properties: Option<app_raw::ComponentProperties>,
+        ) -> Option<(ComponentProperties<CPE>, bool)> {
+            ComponentProperties::<CPE>::from_raw_template(
+                source,
+                validation,
+                template_env,
+                &Self::template_context(component_name),
+                template_properties,
+            )
+            .inspect_err(|err| {
+                validation.add_error(format!(
+                    "Failed to render template {}, error: {}",
+                    template_name.as_str().log_color_highlight(),
+                    err.to_string().log_color_error_highlight()
+                ))
+            })
+            .ok()
+            .and_then(|rendered_template_properties| match component_properties {
+                Some(component_properties) => rendered_template_properties
+                    .merge_with_overrides(source, validation, component_properties)
+                    .inspect_err(|err| {
+                        validation.add_error(format!(
+                            "Failed to override template {}, error: {}",
+                            template_name.as_str().log_color_highlight(),
+                            err.to_string().log_color_error_highlight()
+                        ))
+                    })
+                    .ok()
+                    .flatten(),
+                None => Some((rendered_template_properties, false)),
+            })
+            .inspect(|(properties, _)| {
+                Self::validate_resolved_component_properties(validation, properties)
+            })
+        }
+
+        fn convert_and_validate_component_properties(
+            validation: &mut ValidationBuilder,
+            source: &Path,
+            component_properties: app_raw::ComponentProperties,
+        ) -> Option<ComponentProperties<CPE>> {
+            ComponentProperties::<CPE>::from_raw(source, validation, component_properties)
+                .inspect_err(|err| {
+                    validation.add_error(format!(
+                        "Failed to parse component, error: {}",
+                        err.to_string().log_color_error_highlight()
+                    ))
+                })
+                .ok()
+                .inspect(|properties| {
+                    Self::validate_resolved_component_properties(validation, properties)
+                })
+        }
+
+        fn validate_resolved_component_properties(
+            validation: &mut ValidationBuilder,
+            properties: &ComponentProperties<CPE>,
+        ) {
+            for (name, value) in [
+                ("sourceWit", &properties.source_wit),
+                ("generatedWit", &properties.generated_wit),
+                ("componentWasm", &properties.component_wasm),
+            ] {
+                if value.is_empty() {
+                    validation.add_error(format!(
+                        "Property {} is empty or undefined",
+                        name.log_color_highlight()
+                    ));
+                }
+            }
+
+            let reserved_commands = BTreeSet::from(["build", "clean"]);
+
+            for custom_command in properties.custom_commands.keys() {
+                if reserved_commands.contains(custom_command.as_str()) {
+                    validation.add_error(format!(
+                        "Cannot use {} as custom command name, reserved command names: {}",
+                        custom_command.log_color_error_highlight(),
+                        reserved_commands
+                            .iter()
+                            .map(|s| s.log_color_highlight())
+                            .join(", ")
+                    ));
+                }
+            }
+        }
     }
 }

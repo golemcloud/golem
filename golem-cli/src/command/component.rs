@@ -557,7 +557,7 @@ impl ApplicationComponentContext {
         let component_properties = app_ctx
             .application
             .component_properties(&name, build_profile.as_ref());
-        let extensions = component_properties.extensions.as_ref().unwrap().clone();
+        let extensions = component_properties.extensions.clone();
 
         Ok(ApplicationComponentContext {
             build_profile,
