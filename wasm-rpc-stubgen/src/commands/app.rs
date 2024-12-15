@@ -1413,6 +1413,14 @@ fn execute_external_command<CPE: ComponentPropertiesExtensions>(
         ),
     );
 
+    if !command.rmdirs.is_empty() {
+        let _ident = LogIndent::new();
+        for dir in &command.rmdirs {
+            let dir = build_dir.join(dir);
+            delete_path("directory", &dir)?;
+        }
+    }
+
     if !command.mkdirs.is_empty() {
         let _ident = LogIndent::new();
         for dir in &command.mkdirs {
