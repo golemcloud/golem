@@ -200,7 +200,7 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
     }
 
     pub fn task_result_marker_dir(&self) -> PathBuf {
-        self.temp_dir().join("task_results")
+        self.temp_dir().join("task-results")
     }
 
     fn component(&self, component_name: &ComponentName) -> &Component<CPE> {
