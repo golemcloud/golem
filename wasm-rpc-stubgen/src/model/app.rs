@@ -744,7 +744,7 @@ mod app_builder {
         }
 
         fn add_entity_source(&mut self, key: UniqueSourceCheckedEntityKey, source: &Path) -> bool {
-            let sources = self.entity_sources.entry(key).or_insert_with(Vec::new);
+            let sources = self.entity_sources.entry(key).or_default();
             let is_first = sources.is_empty();
             sources.push(source.to_path_buf());
             is_first
