@@ -22,7 +22,8 @@ members = [
     "wasm-ast",
     "wasm-rpc",
     "wasm-rpc-stubgen",
-    "wasm-rpc-stubgen/tests-integration"
+    "wasm-rpc-stubgen/tests-integration",
+    "golem-ui-service"
 ]
 
 exclude = [
