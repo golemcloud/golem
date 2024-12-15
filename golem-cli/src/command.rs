@@ -18,6 +18,7 @@ pub mod api_security;
 pub mod component;
 pub mod plugin;
 pub mod profile;
+pub mod ui;
 pub mod worker;
 
 use crate::command::api_security::ApiSecuritySchemeSubcommand;
@@ -36,6 +37,7 @@ use golem_common::uri::oss::uri::ComponentUri;
 use golem_wasm_rpc_stubgen::App;
 use plugin::PluginSubcommand;
 use profile::{ProfileSubCommand, UniversalProfileAdd};
+use ui::UiCommand;
 use std::future::Future;
 use std::path::PathBuf;
 use worker::WorkerSubcommand;
@@ -210,6 +212,10 @@ pub enum SharedCommand<
         #[arg(long = "generate", value_enum)]
         generator: clap_complete::Shell,
     },
+
+    /// Open web console
+    #[command()]
+    Ui(UiCommand),
 }
 
 /// Context before the user has initialized the profile.

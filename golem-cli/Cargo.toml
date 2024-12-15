@@ -29,6 +29,7 @@ golem-rib = { path = "../golem-rib", version = "0.0.0", default-features = false
 golem-wasm-ast = { path = "../wasm-ast", version = "0.0.0", default-features = false, features = ["analysis"] }
 golem-wasm-rpc = { path = "../wasm-rpc", version = "0.0.0", default-features = false }
 golem-wasm-rpc-stubgen = { path = "../wasm-rpc-stubgen", version = "0.0.0" }
+golem-ui-service  = { path = "../golem-ui-service", version = "0.0.0" }
 
 anyhow.workspace = true
 assert2 = { workspace = true }

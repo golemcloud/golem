@@ -3955,6 +3955,7 @@ dependencies = [
  "golem-examples",
  "golem-rib",
  "golem-test-framework",
+ "golem-ui-service",
  "golem-wasm-ast",
  "golem-wasm-rpc",
  "golem-wasm-rpc-stubgen",
