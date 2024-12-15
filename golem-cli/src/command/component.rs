@@ -327,6 +327,7 @@ impl<
                 let project_id = projects.resolve_id_or_default(project_ref).await?;
 
                 let ctx = ApplicationComponentContext::new(
+                    format,
                     app,
                     build_profile.map(|profile| profile.into()),
                     &component_name.0,
@@ -398,6 +399,7 @@ impl<
                 let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
 
                 let ctx = ApplicationComponentContext::new(
+                    format,
                     app,
                     build_profile.map(|profile| profile.into()),
                     &component_name,
@@ -505,6 +507,7 @@ impl<
 }
 
 fn app_ctx(
+    format: Format,
     sources: Vec<PathBuf>,
     component_names: Vec<String>,
     build_profile: Option<app::ProfileName>,
@@ -533,7 +536,11 @@ fn app_ctx(
         profile: build_profile,
         offline: false,
         extensions: PhantomData::<GolemComponentExtensions>,
-        log_output: Output::None,
+        log_output: match format {
+            Format::Json => Output::None,
+            Format::Yaml => Output::None,
+            Format::Text => Output::Stdout,
+        },
         steps_filter: HashSet::new(),
     })?)
 }
@@ -551,11 +558,17 @@ struct ApplicationComponentContext {
 
 impl ApplicationComponentContext {
     fn new(
+        format: Format,
         sources: Vec<PathBuf>,
         build_profile: Option<app::ProfileName>,
         component_name: &str,
     ) -> Result<Self, GolemError> {
-        let app_ctx = app_ctx(sources, vec![component_name.into()], build_profile.clone())?;
+        let app_ctx = app_ctx(
+            format,
+            sources,
+            vec![component_name.into()],
+            build_profile.clone(),
+        )?;
         let name = app::ComponentName::from(component_name.to_string());
 
         if !app_ctx.application.component_names().contains(&name) {
