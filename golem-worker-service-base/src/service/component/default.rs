@@ -14,7 +14,6 @@
 
 use crate::service::component::ComponentServiceError;
 use crate::service::with_metadata;
-use crate::UriBackConversion;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
 use golem_api_grpc::proto::golem::component::v1::{
@@ -25,9 +24,9 @@ use golem_api_grpc::proto::golem::component::v1::{
 use golem_api_grpc::proto::golem::component::ComponentConstraints;
 use golem_api_grpc::proto::golem::component::FunctionConstraintCollection as FunctionConstraintCollectionProto;
 use golem_common::client::{GrpcClient, GrpcClientConfig};
-use golem_common::config::RetryConfig;
 use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_common::model::ComponentId;
+use golem_common::model::RetryConfig;
 use golem_common::retries::with_retries;
 use golem_service_base::model::Component;
 use http::Uri;
@@ -75,7 +74,7 @@ impl RemoteComponentService {
                         .send_compressed(CompressionEncoding::Gzip)
                         .accept_compressed(CompressionEncoding::Gzip)
                 },
-                uri.as_http_02(),
+                uri,
                 GrpcClientConfig {
                     retries_on_unavailable: retry_config.clone(),
                     ..Default::default() // TODO

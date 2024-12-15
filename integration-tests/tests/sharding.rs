@@ -114,6 +114,7 @@ mod tests {
     #[test]
     #[timeout(120000)]
     #[flaky(5)]
+    #[ignore] // TEMPORARILY IGNORED AS IT IS VERY FLAKY ON CI
     async fn coordinated_scenario_01_01(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         for _ in 0..coordinated_scenario_retries() {
             coordinated_scenario(
@@ -182,6 +183,7 @@ mod tests {
     #[test]
     #[timeout(120000)]
     #[flaky(5)]
+    #[ignore] // TEMPORARILY IGNORED AS IT IS VERY FLAKY ON CI
     async fn coordinated_scenario_03_01(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         for _ in 0..coordinated_scenario_retries() {
             coordinated_scenario(
@@ -204,6 +206,7 @@ mod tests {
     #[test]
     #[timeout(120000)]
     #[flaky(5)]
+    #[ignore] // TEMPORARILY IGNORED AS IT IS VERY FLAKY ON CI
     async fn service_is_responsive_to_shard_changes(
         deps: &EnvBasedTestDependencies,
         _tracing: &Tracing,

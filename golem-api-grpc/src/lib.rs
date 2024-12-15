@@ -244,7 +244,7 @@ pub mod proto {
                 value: Some(component_id_uuid),
             };
             let target_worker_id = golem::worker::TargetWorkerId {
-                component_id: Some(component_id.clone()),
+                component_id: Some(component_id),
                 name: Some("hello".to_string()),
             };
             let worker_id = golem::worker::WorkerId {

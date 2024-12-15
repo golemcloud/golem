@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::component::*;
-use crate::core::{ExportDesc, RetainsInstructions};
+use crate::core::{Data, ExportDesc, RetainsInstructions};
 
 impl From<&InstantiationArgRef> for wasm_encoder::ModuleArg {
     fn from(value: &InstantiationArgRef) -> Self {
@@ -112,12 +112,12 @@ impl TryFrom<&CoreType> for wasm_encoder::CoreTypeSection {
 }
 
 fn add_to_core_type_encoder(
-    encoder: wasm_encoder::CoreTypeEncoder,
+    encoder: wasm_encoder::ComponentCoreTypeEncoder,
     value: &CoreType,
 ) -> Result<(), String> {
     match value {
         CoreType::Function(func_type) => {
-            encoder.function(
+            encoder.core().function(
                 func_type
                     .input
                     .values

@@ -75,7 +75,7 @@ pub trait Redis {
 
     fn flush_db(&self, db: u16) {
         let mut connection = self.get_connection(db);
-        redis::cmd("FLUSHDB").execute(&mut connection)
+        redis::cmd("FLUSHDB").exec(&mut connection).unwrap()
     }
 }
 

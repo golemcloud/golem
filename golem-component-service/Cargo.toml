@@ -26,7 +26,6 @@ async-trait = { workspace = true }
 console-subscriber = { workspace = true }
 figment = { workspace = true }
 futures-util = { workspace = true }
-http_02 = { workspace = true }
 humantime-serde = { workspace = true }
 lazy_static = { workspace = true }
 mappable-rc = "0.1.1"

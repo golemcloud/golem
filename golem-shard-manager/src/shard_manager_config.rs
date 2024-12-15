@@ -17,9 +17,8 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use golem_common::config::{
-    ConfigExample, ConfigLoader, HasConfigExamples, RedisConfig, RetryConfig,
-};
+use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples, RedisConfig};
+use golem_common::model::RetryConfig;
 use golem_common::tracing::TracingConfig;
 
 use crate::model::Empty;

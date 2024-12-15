@@ -33,8 +33,8 @@ use golem_common::uri::oss::url::{ComponentUrl, WorkerUrl};
 use golem_common::uri::oss::urn::{ComponentUrn, WorkerUrn};
 use golem_wasm_ast::analysis::{AnalysedExport, AnalysedFunction, AnalysedInstance};
 use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
+use golem_wasm_rpc::parse_type_annotated_value;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::type_annotated_value_from_str;
 use itertools::Itertools;
 use serde_json::Value;
 use std::sync::Arc;
@@ -237,7 +237,7 @@ async fn resolve_worker_component_version<ProjectContext: Send + Sync>(
 
 fn parse_parameter(wave: &str, typ: &AnalysedType) -> Result<TypeAnnotatedValue, GolemError> {
     // Avoid converting from typ to AnalysedType
-    match type_annotated_value_from_str(typ, wave) {
+    match parse_type_annotated_value(typ, wave) {
         Ok(value) => Ok(value),
         Err(err) => Err(GolemError(format!(
             "Failed to parse wave parameter {wave}: {err:?}"

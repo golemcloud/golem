@@ -912,7 +912,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
                 .get_oplog(GetOplogRequest {
                     worker_id: Some(worker_id.clone().into()),
                     from_oplog_index: from.into(),
-                    cursor: cursor.clone(),
+                    cursor,
                     count: 100,
                 })
                 .await?;
@@ -961,7 +961,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
                 .worker_service()
                 .search_oplog(SearchOplogRequest {
                     worker_id: Some(worker_id.clone().into()),
-                    cursor: cursor.clone(),
+                    cursor,
                     count: 100,
                     query: query.to_string(),
                 })
@@ -1323,12 +1323,7 @@ pub fn to_worker_metadata(
                 .expect("no account_id")
                 .clone()
                 .into(),
-            created_at: metadata
-                .created_at
-                .as_ref()
-                .expect("no created_at")
-                .clone()
-                .into(),
+            created_at: (*metadata.created_at.as_ref().expect("no created_at")).into(),
             last_known_status: WorkerStatusRecord {
                 oplog_idx: OplogIndex::default(),
                 status: metadata.status.try_into().expect("invalid status"),
@@ -1340,12 +1335,11 @@ pub fn to_worker_metadata(
                     .iter()
                     .filter_map(|u| match &u.update {
                         Some(Update::Pending(_)) => Some(TimestampedUpdateDescription {
-                            timestamp: u
+                            timestamp: (*u
                                 .timestamp
                                 .as_ref()
-                                .expect("no timestamp on update record")
-                                .clone()
-                                .into(),
+                                .expect("no timestamp on update record"))
+                            .into(),
                             oplog_index: OplogIndex::from_u64(0),
                             description: UpdateDescription::Automatic {
                                 target_version: u.target_version,
@@ -1359,12 +1353,11 @@ pub fn to_worker_metadata(
                     .iter()
                     .filter_map(|u| match &u.update {
                         Some(Update::Failed(failed_update)) => Some(FailedUpdateRecord {
-                            timestamp: u
+                            timestamp: (*u
                                 .timestamp
                                 .as_ref()
-                                .expect("no timestamp on update record")
-                                .clone()
-                                .into(),
+                                .expect("no timestamp on update record"))
+                            .into(),
                             target_version: u.target_version,
                             details: failed_update.details.clone(),
                         }),
@@ -1376,12 +1369,11 @@ pub fn to_worker_metadata(
                     .iter()
                     .filter_map(|u| match &u.update {
                         Some(Update::Successful(_)) => Some(SuccessfulUpdateRecord {
-                            timestamp: u
+                            timestamp: (*u
                                 .timestamp
                                 .as_ref()
-                                .expect("no timestamp on update record")
-                                .clone()
-                                .into(),
+                                .expect("no timestamp on update record"))
+                            .into(),
                             target_version: u.target_version,
                         }),
                         _ => None,
@@ -1399,12 +1391,11 @@ pub fn to_worker_metadata(
                         (
                             WorkerResourceId(*k),
                             WorkerResourceDescription {
-                                created_at: v
+                                created_at: (*v
                                     .created_at
                                     .as_ref()
-                                    .expect("no timestamp on resource metadata")
-                                    .clone()
-                                    .into(),
+                                    .expect("no timestamp on resource metadata"))
+                                .into(),
                                 indexed_resource_key: v.indexed.clone().map(|i| i.into()),
                             },
                         )

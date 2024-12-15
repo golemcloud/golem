@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::error::GolemError;
-use crate::grpc::{authorised_grpc_request, is_grpc_retriable, GrpcError, UriBackConversion};
+use crate::grpc::{authorised_grpc_request, is_grpc_retriable, GrpcError};
 use crate::metrics::component::record_compilation_time;
 use crate::services::compiled_component;
 use crate::services::compiled_component::CompiledComponentService;
@@ -34,10 +34,10 @@ use golem_api_grpc::proto::golem::component::v1::{
 };
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::client::{GrpcClient, GrpcClientConfig};
-use golem_common::config::RetryConfig;
 use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
 use golem_common::model::component_metadata::LinearMemory;
 use golem_common::model::plugin::PluginInstallation;
+use golem_common::model::RetryConfig;
 use golem_common::model::{
     AccountId, ComponentId, ComponentType, ComponentVersion, InitialComponentFile,
 };
@@ -167,7 +167,7 @@ impl ComponentServiceGrpc {
                         .send_compressed(CompressionEncoding::Gzip)
                         .accept_compressed(CompressionEncoding::Gzip)
                 },
-                endpoint.as_http_02(),
+                endpoint,
                 GrpcClientConfig {
                     retries_on_unavailable: retry_config.clone(),
                     ..Default::default() // TODO
@@ -476,9 +476,7 @@ async fn get_metadata_via_grpc(
                     memories: component
                         .metadata
                         .as_ref()
-                        .map(|metadata| {
-                            metadata.memories.iter().map(|m| m.clone().into()).collect()
-                        })
+                        .map(|metadata| metadata.memories.iter().map(|m| (*m).into()).collect())
                         .unwrap_or_default(),
                     exports: component
                         .metadata

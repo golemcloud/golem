@@ -14,7 +14,7 @@
 
 #[allow(unused)]
 #[rustfmt::skip]
-#[cfg(not(feature = "host"))]
+#[cfg(not(feature = "host-bindings"))]
 #[cfg(feature = "stub")]
 mod bindings;
 
@@ -22,12 +22,15 @@ mod bindings;
 test_r::enable!();
 
 /// Implements bincode encoders and decoders for WitValue instances
-#[cfg(feature = "bincode")]
+#[cfg(all(feature = "bincode", feature = "host-bindings"))]
 pub mod bincode;
+
 /// A builder interface for WitValue instances
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
 mod builder;
 
 /// Extension methods for extracting values from WitValue instances
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
 mod extractor;
 
 /// Conversion to and from JSON, in the presence of golem-wasm-ast generated type information
@@ -51,8 +54,11 @@ pub mod serde;
 mod text;
 
 /// A version of values annotated with golem-wasm-ast generated type information
-#[cfg(feature = "typeinfo")]
+#[cfg(all(feature = "typeinfo", feature = "protobuf"))]
 mod type_annotated_value;
+
+#[cfg(feature = "typeinfo")]
+mod value_and_type;
 
 /// For getting current lib version from git tags or cargo
 mod version;
@@ -61,26 +67,29 @@ mod version;
 #[cfg(feature = "wasmtime")]
 pub mod wasmtime;
 
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
 use crate::builder::WitValueBuilder;
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
 pub use builder::{NodeBuilder, WitValueBuilderExtensions};
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
 pub use extractor::{WitNodePointer, WitValueExtractor};
 
-#[cfg(not(feature = "host"))]
+#[cfg(not(feature = "host-bindings"))]
 #[cfg(feature = "stub")]
 pub use bindings::golem::rpc::types::{
     FutureInvokeResult, NodeIndex, RpcError, Uri, WasmRpc, WitNode, WitValue,
 };
-#[cfg(not(feature = "host"))]
+#[cfg(not(feature = "host-bindings"))]
 #[cfg(feature = "stub")]
 pub use bindings::wasi::io::poll::Pollable;
 
-#[cfg(feature = "host")]
+#[cfg(feature = "host-bindings")]
 use ::wasmtime::component::bindgen;
 
-#[cfg(feature = "host")]
+#[cfg(feature = "host-bindings")]
 pub use wasmtime_wasi::Pollable;
 
-#[cfg(feature = "host")]
+#[cfg(feature = "host-bindings")]
 bindgen!({
     path: "wit",
     interfaces: "
@@ -96,15 +105,15 @@ bindgen!({
     }
 });
 
-#[cfg(feature = "host")]
+#[cfg(feature = "host-bindings")]
 pub use golem::rpc::types::{Host, HostWasmRpc, NodeIndex, RpcError, Uri, WitNode, WitValue};
 
-#[cfg(feature = "host")]
+#[cfg(feature = "host-bindings")]
 pub struct WasmRpcEntry {
     pub payload: Box<dyn std::any::Any + Send + Sync>,
 }
 
-#[cfg(feature = "host")]
+#[cfg(feature = "host-bindings")]
 #[async_trait::async_trait]
 pub trait SubscribeAny: std::any::Any {
     async fn ready(&mut self);
@@ -112,12 +121,12 @@ pub trait SubscribeAny: std::any::Any {
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
 }
 
-#[cfg(feature = "host")]
+#[cfg(feature = "host-bindings")]
 pub struct FutureInvokeResultEntry {
     pub payload: Box<dyn SubscribeAny + Send + Sync>,
 }
 
-#[cfg(feature = "host")]
+#[cfg(feature = "host-bindings")]
 #[async_trait::async_trait]
 impl wasmtime_wasi::Subscribe for FutureInvokeResultEntry {
     async fn ready(&mut self) {
@@ -125,13 +134,19 @@ impl wasmtime_wasi::Subscribe for FutureInvokeResultEntry {
     }
 }
 
-#[cfg(feature = "typeinfo")]
+#[cfg(all(feature = "typeinfo", feature = "protobuf"))]
 pub use type_annotated_value::*;
 
-#[cfg(feature = "text")]
-pub use text::{type_annotated_value_from_str, type_annotated_value_to_string};
+#[cfg(all(feature = "text", feature = "protobuf"))]
+pub use text::{parse_type_annotated_value, print_type_annotated_value};
 
-#[cfg(feature = "arbitrary")]
+#[cfg(feature = "text")]
+pub use text::{parse_value_and_type, print_value_and_type};
+
+#[cfg(feature = "typeinfo")]
+pub use value_and_type::*;
+
+#[cfg(all(feature = "arbitrary", feature = "host-bindings"))]
 impl arbitrary::Arbitrary<'_> for Uri {
     fn arbitrary(u: &mut arbitrary::Unstructured) -> arbitrary::Result<Self> {
         let uri = u.arbitrary::<String>()?;
@@ -139,6 +154,7 @@ impl arbitrary::Arbitrary<'_> for Uri {
     }
 }
 
+#[cfg(feature = "host-bindings")]
 impl PartialEq for Uri {
     fn eq(&self, other: &Self) -> bool {
         self.value == other.value
@@ -175,11 +191,12 @@ pub enum Value {
     Option(Option<Box<Value>>),
     Result(Result<Option<Box<Value>>, Option<Box<Value>>>),
     Handle {
-        uri: Uri,
+        uri: String,
         resource_id: u64,
     },
 }
 
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
 impl From<Value> for WitValue {
     fn from(value: Value) -> Self {
         let mut builder = WitValueBuilder::new();
@@ -188,6 +205,7 @@ impl From<Value> for WitValue {
     }
 }
 
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
 impl PartialEq for WitValue {
     fn eq(&self, other: &Self) -> bool {
         let a: Value = self.clone().into();
@@ -196,6 +214,7 @@ impl PartialEq for WitValue {
     }
 }
 
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
 fn build_wit_value(value: Value, builder: &mut WitValueBuilder) -> NodeIndex {
     match value {
         Value::Bool(value) => builder.add_bool(value),
@@ -282,7 +301,7 @@ fn build_wit_value(value: Value, builder: &mut WitValueBuilder) -> NodeIndex {
             }
             Err(None) => builder.add_result_err_unit(),
         },
-        Value::Handle { uri, resource_id } => builder.add_handle(uri, resource_id),
+        Value::Handle { uri, resource_id } => builder.add_handle(Uri { value: uri }, resource_id),
     }
 }
 
@@ -315,6 +334,7 @@ impl Value {
     }
 }
 
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
 impl From<WitValue> for Value {
     fn from(value: WitValue) -> Self {
         assert!(!value.nodes.is_empty());
@@ -322,6 +342,7 @@ impl From<WitValue> for Value {
     }
 }
 
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
 fn build_tree(node: &WitNode, nodes: &[WitNode]) -> Value {
     match node {
         WitNode::RecordValue(field_indices) => {
@@ -390,13 +411,13 @@ fn build_tree(node: &WitNode, nodes: &[WitNode]) -> Value {
         WitNode::PrimBool(value) => Value::Bool(*value),
         WitNode::PrimString(value) => Value::String(value.clone()),
         WitNode::Handle((uri, value)) => Value::Handle {
-            uri: uri.clone(),
+            uri: uri.value.clone(),
             resource_id: *value,
         },
     }
 }
 
-#[cfg(feature = "arbitrary")]
+#[cfg(all(feature = "arbitrary", feature = "host-bindings"))]
 impl<'a> arbitrary::Arbitrary<'a> for WitValue {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
         let arbitrary_value = u.arbitrary::<Value>()?;
@@ -404,9 +425,9 @@ impl<'a> arbitrary::Arbitrary<'a> for WitValue {
     }
 }
 
-#[cfg(feature = "host")]
+#[cfg(feature = "host-bindings")]
 pub const WASM_RPC_WIT: &str = include_str!("../wit/wasm-rpc.wit");
-#[cfg(feature = "host")]
+#[cfg(feature = "host-bindings")]
 pub const WASI_POLL_WIT: &str = include_str!("../wit/deps/io/poll.wit");
 
 pub const WASM_RPC_VERSION: &str = version::lib_version!();

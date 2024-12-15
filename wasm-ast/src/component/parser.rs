@@ -15,7 +15,7 @@
 use crate::component::*;
 use crate::core::{Data, TryFromExprSource};
 use crate::Sections;
-use wasmparser::{Chunk, Parser, Payload};
+use wasmparser::{CanonicalFunction, Chunk, Parser, Payload};
 
 impl TryFrom<wasmparser::InstantiationArg<'_>> for InstantiationArg {
     type Error = String;
@@ -70,9 +70,12 @@ impl TryFrom<wasmparser::ModuleTypeDeclaration<'_>> for ModuleDeclaration {
 
     fn try_from(value: wasmparser::ModuleTypeDeclaration) -> Result<Self, Self::Error> {
         match value {
-            wasmparser::ModuleTypeDeclaration::Type(subtype) => Ok(ModuleDeclaration::Type {
-                typ: subtype.try_into()?,
-            }),
+            wasmparser::ModuleTypeDeclaration::Type(recgroup) => {
+                let subtype = recgroup.into_types().next().ok_or("Empty rec group")?;
+                Ok(ModuleDeclaration::Type {
+                    typ: subtype.try_into()?,
+                })
+            }
             wasmparser::ModuleTypeDeclaration::Export { name, ty } => {
                 Ok(ModuleDeclaration::Export {
                     name: name.to_string(),
@@ -97,13 +100,16 @@ impl TryFrom<wasmparser::SubType> for FuncType {
 
     fn try_from(value: wasmparser::SubType) -> Result<Self, Self::Error> {
         if value.is_final {
-            match value.composite_type {
-                wasmparser::CompositeType::Func(func_type) => Ok(func_type.try_into()?),
-                wasmparser::CompositeType::Array(_) => {
+            match value.composite_type.inner {
+                wasmparser::CompositeInnerType::Func(func_type) => Ok(func_type.try_into()?),
+                wasmparser::CompositeInnerType::Array(_) => {
                     Err("GC proposal is not supported".to_string())
                 }
-                wasmparser::CompositeType::Struct(_) => {
+                wasmparser::CompositeInnerType::Struct(_) => {
                     Err("GC proposal is not supported".to_string())
+                }
+                wasmparser::CompositeInnerType::Cont(_) => {
+                    Err("Task switching proposal is not supported".to_string())
                 }
             }
         } else {
@@ -117,9 +123,9 @@ impl TryFrom<wasmparser::CoreType<'_>> for CoreType {
 
     fn try_from(value: wasmparser::CoreType) -> Result<Self, Self::Error> {
         match value {
-            wasmparser::CoreType::Sub(subtype) => {
-                let func_type = subtype.try_into()?;
-                Ok(CoreType::Function(func_type))
+            wasmparser::CoreType::Rec(recgroup) => {
+                let subtype = recgroup.into_types().next().ok_or("Empty rec group")?;
+                Ok(CoreType::Function(subtype.try_into()?))
             }
             wasmparser::CoreType::Module(module_type_decl) => Ok(CoreType::Module(
                 module_type_decl
@@ -624,6 +630,12 @@ impl TryFrom<wasmparser::CanonicalFunction> for Canon {
             wasmparser::CanonicalFunction::ResourceRep { resource } => {
                 Ok(Canon::ResourceRep { type_idx: resource })
             }
+            CanonicalFunction::ThreadSpawn { .. } => {
+                Err("Threads proposal is not supported".to_string())
+            }
+            CanonicalFunction::ThreadHwConcurrency => {
+                Err("Threads proposal is not supported".to_string())
+            }
         }
     }
 }
@@ -817,6 +829,9 @@ where
             }
             Payload::UnknownSection { .. } => {
                 return Err("Unexpected unknown section in component".to_string());
+            }
+            _ => {
+                return Err("Unexpected section in component".to_string());
             }
         }
     }

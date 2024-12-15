@@ -12,60 +12,49 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::gateway_api_definition::http::CompiledHttpApiDefinition;
 use crate::gateway_binding::{
-    HttpRequestDetails, ResolvedBinding, ResolvedWorkerBinding, RibInputTypeMismatch,
-    RibInputValueResolver, StaticBinding,
+    DefaultGatewayBindingResolver, ErrorOrRedirect, GatewayBindingResolver, GatewayRequestDetails,
+    HttpRequestDetails, ResolvedBinding, ResolvedWorkerBinding, RibInputValueResolver,
+    StaticBinding,
 };
+use crate::gateway_execution::api_definition_lookup::ApiDefinitionsLookup;
 use crate::gateway_execution::auth_call_back_binding_handler::{
     AuthCallBackBindingHandler, AuthCallBackResult,
 };
-use crate::gateway_execution::file_server_binding_handler::{
-    FileServerBindingHandler, FileServerBindingResult,
-};
-use crate::gateway_execution::gateway_session::{GatewaySession, GatewaySessionStore};
+use crate::gateway_execution::file_server_binding_handler::FileServerBindingHandler;
+use crate::gateway_execution::gateway_session::GatewaySessionStore;
 use crate::gateway_execution::to_response::ToHttpResponse;
 use crate::gateway_execution::to_response_failure::ToHttpResponseFromSafeDisplay;
+use crate::gateway_request::http_request::InputHttpRequest;
 use crate::gateway_rib_interpreter::{EvaluationError, WorkerServiceRibInterpreter};
 use crate::gateway_security::{IdentityProvider, SecuritySchemeWithProviderMetadata};
 use async_trait::async_trait;
+use golem_common::SafeDisplay;
 use http::StatusCode;
+use poem::Body;
 use rib::{RibInput, RibResult};
 use std::sync::Arc;
+use tracing::error;
 
 #[async_trait]
-pub trait GatewayHttpInputExecutor<Namespace> {
-    async fn execute_binding(&self, input: &GatewayHttpInput<Namespace>) -> poem::Response;
-}
-
-// A product of actual request input (contained in the ResolvedGatewayBinding)
-// and other details and resolvers that are needed to process the input.
-pub struct GatewayHttpInput<Namespace> {
-    pub http_request_details: HttpRequestDetails,
-    pub resolved_gateway_binding: ResolvedBinding<Namespace>,
-    pub session_store: Arc<dyn GatewaySession + Send + Sync>,
-    pub identity_provider: Arc<dyn IdentityProvider + Send + Sync>,
-}
-
-impl<Namespace: Clone> GatewayHttpInput<Namespace> {
-    pub fn new(
-        http_request_details: &HttpRequestDetails,
-        resolved_gateway_binding: ResolvedBinding<Namespace>,
-        session_store: GatewaySessionStore,
-        identity_provider: Arc<dyn IdentityProvider + Send + Sync>,
-    ) -> Self {
-        GatewayHttpInput {
-            http_request_details: http_request_details.clone(),
-            resolved_gateway_binding,
-            session_store,
-            identity_provider,
-        }
-    }
+pub trait GatewayHttpInputExecutor {
+    async fn execute_http_request(&self, input: poem::Request) -> poem::Response;
 }
 
 pub struct DefaultGatewayInputExecutor<Namespace> {
     pub evaluator: Arc<dyn WorkerServiceRibInterpreter<Namespace> + Sync + Send>,
     pub file_server_binding_handler: Arc<dyn FileServerBindingHandler<Namespace> + Sync + Send>,
     pub auth_call_back_binding_handler: Arc<dyn AuthCallBackBindingHandler + Sync + Send>,
+    pub api_definition_lookup_service: Arc<
+        dyn ApiDefinitionsLookup<
+                InputHttpRequest,
+                ApiDefinition = CompiledHttpApiDefinition<Namespace>,
+            > + Sync
+            + Send,
+    >,
+    pub gateway_session_store: GatewaySessionStore,
+    pub identity_provider: Arc<dyn IdentityProvider + Send + Sync>,
 }
 
 impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
@@ -73,11 +62,80 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         evaluator: Arc<dyn WorkerServiceRibInterpreter<Namespace> + Sync + Send>,
         file_server_binding_handler: Arc<dyn FileServerBindingHandler<Namespace> + Sync + Send>,
         auth_call_back_binding_handler: Arc<dyn AuthCallBackBindingHandler + Sync + Send>,
+        api_definition_lookup_service: Arc<
+            dyn ApiDefinitionsLookup<
+                    InputHttpRequest,
+                    ApiDefinition = CompiledHttpApiDefinition<Namespace>,
+                > + Sync
+                + Send,
+        >,
+        gateway_session_store: GatewaySessionStore,
+        identity_provider: Arc<dyn IdentityProvider + Send + Sync>,
     ) -> Self {
         Self {
             evaluator,
             file_server_binding_handler,
             auth_call_back_binding_handler,
+            api_definition_lookup_service,
+            gateway_session_store,
+            identity_provider,
+        }
+    }
+
+    pub async fn execute(
+        &self,
+        http_request_details: &HttpRequestDetails,
+        binding: ResolvedBinding<Namespace>,
+    ) -> poem::Response {
+        let middleware_opt = &http_request_details.http_middlewares;
+        let mut request_details = http_request_details.clone();
+
+        match &binding {
+            ResolvedBinding::Static(StaticBinding::HttpCorsPreflight(cors_preflight)) => {
+                cors_preflight
+                    .clone()
+                    .to_response(http_request_details, &self.gateway_session_store)
+                    .await
+            }
+
+            ResolvedBinding::Static(StaticBinding::HttpAuthCallBack(auth_call_back)) => {
+                self.handle_http_auth_call_binding(
+                    &auth_call_back.security_scheme_with_metadata,
+                    http_request_details,
+                )
+                .await
+            }
+
+            ResolvedBinding::Worker(resolved_worker_binding) => {
+                let mut response = self
+                    .handle_worker_binding(
+                        &self.gateway_session_store,
+                        &mut request_details,
+                        resolved_worker_binding,
+                    )
+                    .await;
+
+                if let Some(middleware) = middleware_opt {
+                    let result = middleware.process_middleware_out(&mut response).await;
+                    match result {
+                        Ok(_) => response,
+                        Err(err) => {
+                            err.to_response_from_safe_display(|_| StatusCode::INTERNAL_SERVER_ERROR)
+                        }
+                    }
+                } else {
+                    response
+                }
+            }
+
+            ResolvedBinding::FileServer(resolved_file_server_binding) => {
+                self.handle_file_server_binding(
+                    &self.gateway_session_store,
+                    &mut request_details,
+                    resolved_file_server_binding,
+                )
+                .await
+            }
         }
     }
 
@@ -85,10 +143,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         &self,
         request_details: &HttpRequestDetails,
         resolved_worker_binding: &ResolvedWorkerBinding<Namespace>,
-    ) -> Result<(RibInput, RibInput), poem::Response>
-    where
-        RibInputTypeMismatch: ToHttpResponseFromSafeDisplay,
-    {
+    ) -> Result<(RibInput, RibInput), poem::Response> {
         let rib_input_from_request_details = request_details
             .resolve_rib_input_value(&resolved_worker_binding.compiled_response_mapping.rib_input)
             .map_err(|err| err.to_response_from_safe_display(|_| StatusCode::BAD_REQUEST))?;
@@ -162,13 +217,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         session_store: &GatewaySessionStore,
         request_details: &mut HttpRequestDetails,
         resolved_binding: &ResolvedWorkerBinding<Namespace>,
-    ) -> poem::Response
-    where
-        RibResult: ToHttpResponse,
-        EvaluationError: ToHttpResponseFromSafeDisplay,
-        RibInputTypeMismatch: ToHttpResponseFromSafeDisplay,
-        FileServerBindingResult: ToHttpResponse,
-    {
+    ) -> poem::Response {
         match self
             .resolve_rib_inputs(request_details, resolved_binding)
             .await
@@ -201,83 +250,87 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
     async fn handle_http_auth_call_binding(
         &self,
         security_scheme_with_metadata: &SecuritySchemeWithProviderMetadata,
-        input: &GatewayHttpInput<Namespace>,
+        http_request: &HttpRequestDetails,
     ) -> poem::Response
     where
         AuthCallBackResult: ToHttpResponse,
     {
-        let http_request = &input.http_request_details;
         let authorisation_result = self
             .auth_call_back_binding_handler
             .handle_auth_call_back(
                 http_request,
                 security_scheme_with_metadata,
-                &input.session_store,
-                &input.identity_provider,
+                &self.gateway_session_store,
+                &self.identity_provider,
             )
             .await;
 
         authorisation_result
-            .to_response(&input.http_request_details, &input.session_store)
+            .to_response(http_request, &self.gateway_session_store)
             .await
     }
 }
 
 #[async_trait]
-impl<Namespace: Send + Sync + Clone> GatewayHttpInputExecutor<Namespace>
+impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
     for DefaultGatewayInputExecutor<Namespace>
 {
-    async fn execute_binding(&self, input: &GatewayHttpInput<Namespace>) -> poem::Response {
-        let binding = &input.resolved_gateway_binding;
-        let middleware_opt = &input.http_request_details.http_middlewares;
-        let mut request_details = input.http_request_details.clone();
+    async fn execute_http_request(&self, request: poem::Request) -> poem::Response {
+        let input_http_request_result = InputHttpRequest::from_request(request).await;
 
-        match &binding {
-            ResolvedBinding::Static(StaticBinding::HttpCorsPreflight(cors_preflight)) => {
-                cors_preflight
-                    .clone()
-                    .to_response(&input.http_request_details, &input.session_store)
+        match input_http_request_result {
+            Ok(input_http_request) => {
+                let possible_api_definitions = match self
+                    .api_definition_lookup_service
+                    .get(&input_http_request)
                     .await
-            }
-
-            ResolvedBinding::Static(StaticBinding::HttpAuthCallBack(auth_call_back)) => {
-                self.handle_http_auth_call_binding(
-                    &auth_call_back.security_scheme_with_metadata,
-                    input,
-                )
-                .await
-            }
-
-            ResolvedBinding::Worker(resolved_worker_binding) => {
-                let mut response = self
-                    .handle_worker_binding(
-                        &input.session_store,
-                        &mut request_details,
-                        resolved_worker_binding,
-                    )
-                    .await;
-
-                if let Some(middleware) = middleware_opt {
-                    let result = middleware.process_middleware_out(&mut response).await;
-                    match result {
-                        Ok(_) => response,
-                        Err(err) => {
-                            err.to_response_from_safe_display(|_| StatusCode::INTERNAL_SERVER_ERROR)
-                        }
+                {
+                    Ok(api_defs) => api_defs,
+                    Err(api_defs_lookup_error) => {
+                        error!(
+                            "API request host: {} - error: {}",
+                            input_http_request.host, api_defs_lookup_error
+                        );
+                        return poem::Response::builder()
+                            .status(StatusCode::INTERNAL_SERVER_ERROR)
+                            .body(Body::from_string("Internal error".to_string()));
                     }
-                } else {
-                    response
+                };
+
+                let resolver = DefaultGatewayBindingResolver::new(
+                    input_http_request,
+                    &self.gateway_session_store,
+                    &self.identity_provider,
+                );
+
+                match resolver
+                    .resolve_gateway_binding(possible_api_definitions)
+                    .await
+                {
+                    Ok(resolved_gateway_binding) => {
+                        let GatewayRequestDetails::Http(request) =
+                            resolved_gateway_binding.request_details;
+
+                        let response: poem::Response = self
+                            .execute(&request, resolved_gateway_binding.resolved_binding)
+                            .await;
+
+                        response
+                    }
+
+                    Err(ErrorOrRedirect::Error(error)) => {
+                        error!(
+                            "Failed to resolve the API definition; error: {}",
+                            error.to_safe_string()
+                        );
+
+                        error.to_http_response()
+                    }
+
+                    Err(ErrorOrRedirect::Redirect(response)) => response,
                 }
             }
-
-            ResolvedBinding::FileServer(resolved_file_server_binding) => {
-                self.handle_file_server_binding(
-                    &input.session_store,
-                    &mut request_details,
-                    resolved_file_server_binding,
-                )
-                .await
-            }
+            Err(response) => response.into(),
         }
     }
 }

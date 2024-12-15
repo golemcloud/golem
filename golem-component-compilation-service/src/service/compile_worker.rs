@@ -14,16 +14,15 @@
 
 use crate::config::CompileWorkerConfig;
 use crate::model::*;
-use crate::UriBackConversion;
 use futures_util::TryStreamExt;
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
 use golem_api_grpc::proto::golem::component::v1::download_component_response;
 use golem_api_grpc::proto::golem::component::v1::ComponentError;
 use golem_api_grpc::proto::golem::component::v1::DownloadComponentRequest;
 use golem_common::client::{GrpcClient, GrpcClientConfig};
-use golem_common::config::RetryConfig;
 use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
 use golem_common::model::ComponentId;
+use golem_common::model::RetryConfig;
 use golem_common::retries::with_retries;
 use golem_worker_executor_base::grpc::authorised_grpc_request;
 use golem_worker_executor_base::grpc::is_grpc_retriable;
@@ -80,7 +79,7 @@ impl CompileWorker {
                         .send_compressed(CompressionEncoding::Gzip)
                         .accept_compressed(CompressionEncoding::Gzip)
                 },
-                uri.as_http_02(),
+                uri,
                 GrpcClientConfig {
                     retries_on_unavailable: config.retries.clone(),
                     ..Default::default() // TODO

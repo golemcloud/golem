@@ -14,8 +14,6 @@
 
 use crate::compiler::worker_functions_in_rib::WorkerFunctionsInRib;
 use crate::{RibByteCode, RibInputTypeInfo, RibOutputTypeInfo};
-use golem_api_grpc::proto::golem::rib::CompilerOutput as ProtoCompilerOutput;
-use std::convert::TryFrom;
 
 #[derive(Debug, Clone)]
 pub struct CompilerOutput {
@@ -30,50 +28,60 @@ pub struct CompilerOutput {
     pub rib_output_type_info: Option<RibOutputTypeInfo>,
 }
 
-impl TryFrom<ProtoCompilerOutput> for CompilerOutput {
-    type Error = String;
+#[cfg(feature = "protobuf")]
+mod protobuf {
+    use crate::{
+        CompilerOutput, RibByteCode, RibInputTypeInfo, RibOutputTypeInfo, WorkerFunctionsInRib,
+    };
+    use golem_api_grpc::proto::golem::rib::CompilerOutput as ProtoCompilerOutput;
 
-    fn try_from(value: ProtoCompilerOutput) -> Result<Self, Self::Error> {
-        let proto_rib_input = value.rib_input.ok_or("Missing rib_input")?;
-        let proto_byte_code = value.byte_code.ok_or("Missing byte_code")?;
-        let rib_input = RibInputTypeInfo::try_from(proto_rib_input)?;
-        let byte_code = RibByteCode::try_from(proto_byte_code)?;
-        let worker_invoke_calls = if let Some(value) = value.worker_invoke_calls {
-            Some(WorkerFunctionsInRib::try_from(value)?)
-        } else {
-            None
-        };
+    impl TryFrom<ProtoCompilerOutput> for CompilerOutput {
+        type Error = String;
 
-        let rib_output_type_info = value
-            .rib_output
-            .map(RibOutputTypeInfo::try_from)
-            .transpose()?;
+        fn try_from(value: ProtoCompilerOutput) -> Result<Self, Self::Error> {
+            let proto_rib_input = value.rib_input.ok_or("Missing rib_input")?;
+            let proto_byte_code = value.byte_code.ok_or("Missing byte_code")?;
+            let rib_input = RibInputTypeInfo::try_from(proto_rib_input)?;
+            let byte_code = RibByteCode::try_from(proto_byte_code)?;
+            let worker_invoke_calls = if let Some(value) = value.worker_invoke_calls {
+                Some(WorkerFunctionsInRib::try_from(value)?)
+            } else {
+                None
+            };
 
-        Ok(CompilerOutput {
-            worker_invoke_calls,
-            byte_code,
-            rib_input_type_info: rib_input,
-            rib_output_type_info,
-        })
+            let rib_output_type_info = value
+                .rib_output
+                .map(RibOutputTypeInfo::try_from)
+                .transpose()?;
+
+            Ok(CompilerOutput {
+                worker_invoke_calls,
+                byte_code,
+                rib_input_type_info: rib_input,
+                rib_output_type_info,
+            })
+        }
     }
-}
 
-impl From<CompilerOutput> for ProtoCompilerOutput {
-    fn from(value: CompilerOutput) -> Self {
-        ProtoCompilerOutput {
-            byte_code: Some(golem_api_grpc::proto::golem::rib::RibByteCode::from(
-                value.byte_code,
-            )),
-            rib_input: Some(golem_api_grpc::proto::golem::rib::RibInputType::from(
-                value.rib_input_type_info,
-            )),
-            worker_invoke_calls: value
-                .worker_invoke_calls
-                .map(golem_api_grpc::proto::golem::rib::WorkerFunctionsInRib::from),
+    impl TryFrom<CompilerOutput> for ProtoCompilerOutput {
+        type Error = String;
 
-            rib_output: value
-                .rib_output_type_info
-                .map(golem_api_grpc::proto::golem::rib::RibOutputType::from),
+        fn try_from(value: CompilerOutput) -> Result<Self, Self::Error> {
+            Ok(ProtoCompilerOutput {
+                byte_code: Some(golem_api_grpc::proto::golem::rib::RibByteCode::try_from(
+                    value.byte_code,
+                )?),
+                rib_input: Some(golem_api_grpc::proto::golem::rib::RibInputType::from(
+                    value.rib_input_type_info,
+                )),
+                worker_invoke_calls: value
+                    .worker_invoke_calls
+                    .map(golem_api_grpc::proto::golem::rib::WorkerFunctionsInRib::from),
+
+                rib_output: value
+                    .rib_output_type_info
+                    .map(golem_api_grpc::proto::golem::rib::RibOutputType::from),
+            })
         }
     }
 }

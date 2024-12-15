@@ -29,7 +29,7 @@ use golem_worker_service_base::gateway_api_definition::http::{
 };
 
 use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
-use golem_worker_service_base::app_config::{KeyValueStorageConfig, WorkerServiceBaseConfig};
+use golem_worker_service_base::app_config::{GatewaySessionStorageConfig, WorkerServiceBaseConfig};
 
 use golem_worker_service_base::gateway_execution::api_definition_lookup::{
     ApiDefinitionsLookup, HttpApiDefinitionLookup,
@@ -47,13 +47,14 @@ use golem_worker_service_base::service::worker::WorkerServiceDefault;
 
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_common::client::{GrpcClientConfig, MultiTargetGrpcClient};
-use golem_common::config::RetryConfig;
+use golem_common::model::RetryConfig;
 
 use golem_common::config::DbConfig;
 use golem_common::redis::RedisPool;
 use golem_service_base::db;
 use golem_worker_service_base::gateway_execution::gateway_session::{
-    GatewaySession, RedisGatewaySession,
+    GatewaySession, RedisGatewaySession, RedisGatewaySessionExpiration, SqliteGatewaySession,
+    SqliteGatewaySessionExpiration,
 };
 use golem_worker_service_base::gateway_request::http_request::InputHttpRequest;
 use golem_worker_service_base::gateway_security::DefaultIdentityProvider;
@@ -142,17 +143,30 @@ impl Services {
             worker_service.clone(),
         ));
 
-        let gateway_session_store = match &config.gateway_session_storage {
-            KeyValueStorageConfig::Redis(redis_config) => {
-                let redis = RedisPool::configured(redis_config)
-                    .await
-                    .map_err(|e| e.to_string())?;
+        let gateway_session_store: Arc<dyn GatewaySession + Sync + Send> =
+            match &config.gateway_session_storage {
+                GatewaySessionStorageConfig::Redis(redis_config) => {
+                    let redis = RedisPool::configured(redis_config)
+                        .await
+                        .map_err(|e| e.to_string())?;
 
-                let gateway_session_with_redis = RedisGatewaySession::new(redis, 60 * 60);
+                    let gateway_session_with_redis =
+                        RedisGatewaySession::new(redis, RedisGatewaySessionExpiration::default());
 
-                Arc::new(gateway_session_with_redis)
-            }
-        };
+                    Arc::new(gateway_session_with_redis)
+                }
+                GatewaySessionStorageConfig::Sqlite(sqlite_config) => {
+                    let pool = SqlitePool::configured(sqlite_config)
+                        .await
+                        .map_err(|e| e.to_string())?;
+
+                    let gateway_session_with_sqlite =
+                        SqliteGatewaySession::new(pool, SqliteGatewaySessionExpiration::default())
+                            .await?;
+
+                    Arc::new(gateway_session_with_sqlite)
+                }
+            };
 
         let (api_definition_repo, api_deployment_repo, security_scheme_repo) = match config
             .db

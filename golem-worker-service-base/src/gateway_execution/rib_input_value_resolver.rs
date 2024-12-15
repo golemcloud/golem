@@ -61,6 +61,11 @@ impl RibInputValueResolver for HttpRequestDetails {
                 warn!("received: {:?}", rib_input_with_request_content);
                 let input = TypeAnnotatedValue::parse_with_type(rib_input_with_request_content, request_type)
                         .map_err(|err| RibInputTypeMismatch(format!("Input request details don't match the requirements for rib expression to execute: {}. Requirements. {:?}", err.join(", "), request_type)))?;
+                let input = input.try_into().map_err(|err| {
+                    RibInputTypeMismatch(format!(
+                        "Internal error converting between value representations: {err}"
+                    ))
+                })?;
 
                 let mut rib_input_map = HashMap::new();
                 rib_input_map.insert("request".to_string(), input);
@@ -86,6 +91,11 @@ impl RibInputValueResolver for WorkerDetail {
                 let request_value =
                     TypeAnnotatedValue::parse_with_type(rib_input_with_request_content, worker_details_type)
                         .map_err(|err| RibInputTypeMismatch(format!("Worker details don't match the requirements for rib expression to execute: {}. Requirements. {:?}", err.join(", "), worker_details_type)))?;
+                let request_value = request_value.try_into().map_err(|err| {
+                    RibInputTypeMismatch(format!(
+                        "Internal error converting between value representations: {err}"
+                    ))
+                })?;
 
                 let mut rib_input_map = HashMap::new();
                 rib_input_map.insert("worker".to_string(), request_value);

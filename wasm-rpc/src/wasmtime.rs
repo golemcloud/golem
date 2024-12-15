@@ -411,7 +411,8 @@ async fn decode_param_impl(
         Type::Own(_) => {
             match param {
                 Value::Handle { uri, resource_id } => {
-                    if resource_store.self_uri() == *uri {
+                    let uri = Uri { value: uri.clone() };
+                    if resource_store.self_uri() == uri {
                         match resource_store.get(*resource_id).await {
                             Some(resource) => Ok(DecodeParamResult {
                                 val: Val::Resource(resource),
@@ -437,7 +438,8 @@ async fn decode_param_impl(
         }
         Type::Borrow(_) => match param {
             Value::Handle { uri, resource_id } => {
-                if resource_store.self_uri() == *uri {
+                let uri = Uri { value: uri.clone() };
+                if resource_store.self_uri() == uri {
                     match resource_store.borrow(*resource_id).await {
                         Some(resource) => Ok(DecodeParamResult::simple(Val::Resource(resource))),
                         None => Err(EncodingError::ValueMismatch {
@@ -644,7 +646,7 @@ pub async fn encode_output(
         Val::Resource(resource) => {
             let id = resource_store.add(*resource).await;
             Ok(Value::Handle {
-                uri: resource_store.self_uri(),
+                uri: resource_store.self_uri().value,
                 resource_id: id,
             })
         }

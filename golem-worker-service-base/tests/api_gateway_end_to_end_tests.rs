@@ -25,29 +25,26 @@ use crate::internal::get_preflight_from_response;
 use crate::security::TestIdentityProvider;
 use chrono::{DateTime, Utc};
 use golem_common::model::IdempotencyKey;
-use golem_worker_service_base::gateway_api_deployment::ApiSiteString;
 use golem_worker_service_base::gateway_execution::auth_call_back_binding_handler::DefaultAuthCallBack;
 use golem_worker_service_base::gateway_execution::gateway_binding_resolver::{
-    DefaultGatewayBindingResolver, ErrorOrRedirect, GatewayBindingResolver,
+    DefaultGatewayBindingResolver, GatewayBindingResolver,
 };
 use golem_worker_service_base::gateway_execution::gateway_http_input_executor::{
-    DefaultGatewayInputExecutor, GatewayHttpInput, GatewayHttpInputExecutor,
+    DefaultGatewayInputExecutor, GatewayHttpInputExecutor,
 };
 use golem_worker_service_base::gateway_execution::gateway_session::{
     GatewaySession, GatewaySessionStore,
 };
 use golem_worker_service_base::gateway_middleware::HttpCors;
 use golem_worker_service_base::gateway_request::http_request::{ApiInputPath, InputHttpRequest};
-use golem_worker_service_base::gateway_request::request_details::GatewayRequestDetails;
 use golem_worker_service_base::gateway_security::{
-    Provider, SecurityScheme, SecuritySchemeIdentifier,
+    IdentityProvider, Provider, SecurityScheme, SecuritySchemeIdentifier,
 };
 use golem_worker_service_base::{api, gateway_api_definition};
 use http::header::LOCATION;
-use http::uri::Scheme;
-use http::{HeaderMap, HeaderValue, Method, StatusCode};
+use http::{HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
-use poem::Response;
+use poem::{Request, Response};
 use serde_json::Value;
 use url::Url;
 
@@ -60,17 +57,11 @@ use url::Url;
 // Example: RibResult has an instance of `ToResponse<TestResponse>`.
 // The tests skips validation and transformations done at the service side.
 async fn execute(
-    api_request: &InputHttpRequest,
+    api_request: Request,
     api_specification: &HttpApiDefinition,
     session_store: &GatewaySessionStore,
     test_identity_provider: &TestIdentityProvider,
 ) -> Response {
-    let test_executor = DefaultGatewayInputExecutor::new(
-        internal::get_test_rib_interpreter(),
-        internal::get_test_file_server_binding_handler(),
-        Arc::new(DefaultAuthCallBack),
-    );
-
     // Compile the API definition
     let compiled = CompiledHttpApiDefinition::from_http_api_definition(
         api_specification,
@@ -79,35 +70,16 @@ async fn execute(
     )
     .expect("Failed to compile API definition");
 
-    // Resolve the API definition binding from input
-    let resolver = DefaultGatewayBindingResolver::new(
-        api_request.clone(),
+    let test_executor = DefaultGatewayInputExecutor::new(
+        internal::get_test_rib_interpreter(),
+        internal::get_test_file_server_binding_handler(),
+        Arc::new(DefaultAuthCallBack),
+        Arc::new(internal::TestApiDefinitionLookup::new(compiled)),
         Arc::clone(session_store),
         Arc::new(test_identity_provider.clone()),
     );
 
-    let resolved_gateway_binding = resolver.resolve_gateway_binding(vec![compiled]).await;
-
-    match resolved_gateway_binding {
-        Ok(resolved_binding) => {
-            let GatewayRequestDetails::Http(http) = resolved_binding.request_details;
-
-            // Create the input for the executor
-            let input = GatewayHttpInput::new(
-                &http,
-                resolved_binding.resolved_binding,
-                Arc::clone(session_store),
-                Arc::new(test_identity_provider.clone()),
-            );
-
-            test_executor.execute_binding(&input).await
-        }
-
-        Err(binding_resolver_error) => match binding_resolver_error {
-            ErrorOrRedirect::Redirect(response) => response,
-            ErrorOrRedirect::Error(error) => error.to_http_response(),
-        },
-    }
+    test_executor.execute_http_request(api_request).await
 }
 
 #[test]
@@ -131,7 +103,7 @@ async fn test_api_def_for_valid_input() {
     let session_store: Arc<dyn GatewaySession + Sync + Send> = internal::get_session_store();
 
     let response = execute(
-        &api_request,
+        api_request,
         &api_specification,
         &session_store,
         &TestIdentityProvider::default(),
@@ -176,7 +148,7 @@ async fn test_api_def_for_invalid_input_with_type_mismatch_for_worker_name_rib_i
         get_gateway_request("/foo/bar", None, &HeaderMap::new(), serde_json::Value::Null);
 
     let response = execute(
-        &api_request,
+        api_request,
         &api_specification,
         &session_store,
         &TestIdentityProvider::default(),
@@ -209,7 +181,7 @@ async fn test_api_def_for_invalid_input_with_type_mismatch_for_response_mapping_
         get_gateway_request("/foo/bar", None, &HeaderMap::new(), serde_json::Value::Null);
 
     let response = execute(
-        &api_request,
+        api_request,
         &api_specification,
         &session_store,
         &TestIdentityProvider::default(),
@@ -252,7 +224,7 @@ async fn test_api_def_with_security_for_input_with_invalid_signatures() {
     let session_store = internal::get_session_store();
 
     let initial_redirect_response = execute(
-        &api_request,
+        api_request,
         &api_specification,
         &session_store,
         &invalid_identity_provider_resolver,
@@ -285,13 +257,8 @@ async fn test_api_def_with_security_for_input_with_invalid_signatures() {
             "localhost",
         );
 
-    let request_to_auth_call_back_endpoint =
-        InputHttpRequest::from_request(call_back_request_from_identity_provider)
-            .await
-            .expect("Failed to get request");
-
     let auth_call_back_response = execute(
-        &request_to_auth_call_back_endpoint,
+        call_back_request_from_identity_provider,
         &api_specification,
         &session_store,
         &invalid_identity_provider_resolver,
@@ -308,7 +275,7 @@ async fn test_api_def_with_security_for_input_with_invalid_signatures() {
 
     // Hitting the endpoint with an expired token
     let test_response_from_actual_endpoint = execute(
-        &input_http_request,
+        input_http_request,
         &api_specification,
         &session_store,
         &invalid_identity_provider_resolver,
@@ -356,7 +323,7 @@ async fn test_api_def_with_security_for_input_when_session_expired() {
     let session_store = internal::get_session_store();
 
     let initial_response_to_identity_provider = execute(
-        &api_request,
+        api_request,
         &api_specification,
         &session_store,
         &invalid_identity_provider,
@@ -389,13 +356,8 @@ async fn test_api_def_with_security_for_input_when_session_expired() {
             "localhost",
         );
 
-    let request_to_auth_call_back_endpoint =
-        InputHttpRequest::from_request(call_back_request_from_identity_provider)
-            .await
-            .expect("Failed to get request");
-
     let auth_call_back_response = execute(
-        &request_to_auth_call_back_endpoint,
+        call_back_request_from_identity_provider,
         &api_specification,
         &session_store,
         &invalid_identity_provider,
@@ -415,7 +377,7 @@ async fn test_api_def_with_security_for_input_when_session_expired() {
 
     // Hitting the protected resource with an expired token
     let test_response_from_actual_endpoint = execute(
-        &api_request_from_browser,
+        api_request_from_browser,
         &api_specification,
         &session_store,
         &invalid_identity_provider,
@@ -464,7 +426,7 @@ async fn test_api_def_with_security_for_input_with_expired_token() {
     let session_store = internal::get_session_store();
 
     let initial_response_to_identity_provider = execute(
-        &api_request,
+        api_request,
         &api_specification,
         &session_store,
         &invalid_identity_provider_resolver,
@@ -497,13 +459,8 @@ async fn test_api_def_with_security_for_input_with_expired_token() {
             "localhost",
         );
 
-    let request_to_auth_call_back_endpoint =
-        InputHttpRequest::from_request(call_back_request_from_identity_provider)
-            .await
-            .expect("Failed to get request");
-
     let auth_call_back_response = execute(
-        &request_to_auth_call_back_endpoint,
+        call_back_request_from_identity_provider,
         &api_specification,
         &session_store,
         &invalid_identity_provider_resolver,
@@ -520,7 +477,7 @@ async fn test_api_def_with_security_for_input_with_expired_token() {
 
     // Hitting the protected resource with an expired token
     let test_response_from_actual_endpoint = execute(
-        &api_request_from_browser,
+        api_request_from_browser,
         &api_specification,
         &session_store,
         &invalid_identity_provider_resolver,
@@ -569,7 +526,7 @@ async fn test_api_def_with_security_for_valid_input() {
     let session_store = internal::get_session_store();
 
     let initial_response_to_identity_provider = execute(
-        &api_request,
+        api_request,
         &api_specification,
         &session_store,
         &identity_provider,
@@ -621,9 +578,7 @@ async fn test_api_def_with_security_for_valid_input() {
     // If successful, then it implies auth call back is successful and we get another redirect response.
     // This time, the redirect response will have a location that points to the original protected resource.
     let final_redirect_response = execute(
-        &InputHttpRequest::from_request(call_back_request_from_identity_provider)
-            .await
-            .expect("Failed to get request"),
+        call_back_request_from_identity_provider,
         &api_specification,
         &session_store,
         &identity_provider,
@@ -636,7 +591,7 @@ async fn test_api_def_with_security_for_valid_input() {
     let api_request = security::create_request_from_redirect(redirect_response_headers).await;
 
     let response = execute(
-        &api_request,
+        api_request,
         &api_specification,
         &session_store,
         &identity_provider,
@@ -685,7 +640,7 @@ async fn test_api_def_with_cors_preflight_for_valid_input() {
     let session_store = internal::get_session_store();
 
     let response = execute(
-        &api_request,
+        api_request,
         &api_specification,
         &session_store,
         &TestIdentityProvider::get_provider_with_valid_id_token(),
@@ -709,7 +664,7 @@ async fn test_api_def_with_default_cors_preflight_for_valid_input() {
     let session_store = internal::get_session_store();
 
     let response = execute(
-        &api_request,
+        api_request,
         &api_specification,
         &session_store,
         &TestIdentityProvider::default(),
@@ -752,14 +707,14 @@ async fn test_api_def_with_cors_preflight_default_for_preflight_input_and_simple
     let session_store = internal::get_session_store();
 
     let preflight_response = execute(
-        &preflight_request,
+        preflight_request,
         &api_specification,
         &session_store,
         &TestIdentityProvider::default(),
     )
     .await;
     let response_from_other_endpoint = execute(
-        &api_request,
+        api_request,
         &api_specification,
         &session_store,
         &TestIdentityProvider::default(),
@@ -823,14 +778,14 @@ async fn test_api_def_with_cors_preflight_for_preflight_input_and_simple_input()
     let session_store = internal::get_session_store();
 
     let preflight_response = execute(
-        &preflight_request,
+        preflight_request,
         &api_specification,
         &session_store,
         &TestIdentityProvider::default(),
     )
     .await;
     let actual_response = execute(
-        &api_request,
+        api_request,
         &api_specification,
         &session_store,
         &TestIdentityProvider::default(),
@@ -893,7 +848,7 @@ async fn test_api_def_with_path_and_query_params_lookup_for_valid_input() {
     let session_store = internal::get_session_store();
 
     let response = execute(
-        &api_request,
+        api_request,
         &api_specification,
         &session_store,
         &TestIdentityProvider::default(),
@@ -952,7 +907,7 @@ async fn test_api_def_with_path_and_query_params_lookup_complex_for_valid_input(
     let session_store = internal::get_session_store();
 
     let response = execute(
-        &api_request,
+        api_request,
         &api_specification,
         &session_store,
         &TestIdentityProvider::default(),
@@ -1010,7 +965,7 @@ async fn test_api_def_with_request_body_params_lookup_for_valid_input1() {
     let session_store = internal::get_session_store();
 
     let test_response = execute(
-        &api_request,
+        api_request,
         &api_specification,
         &session_store,
         &TestIdentityProvider::default(),
@@ -1082,7 +1037,7 @@ async fn test_api_def_with_request_body_params_lookup_for_valid_input2() {
     let session_store = internal::get_session_store();
 
     let response = execute(
-        &api_request,
+        api_request,
         &api_specification,
         &session_store,
         &TestIdentityProvider::default(),
@@ -1152,7 +1107,7 @@ async fn test_api_def_with_request_body_params_lookup_for_valid_input3() {
     let session_store = internal::get_session_store();
 
     let response = execute(
-        &api_request,
+        api_request,
         &api_specification,
         &session_store,
         &TestIdentityProvider::default(),
@@ -1203,11 +1158,16 @@ async fn test_api_def_for_valid_input_with_idempotency_key_in_header() {
         )
         .unwrap();
 
+        let input_http_request = InputHttpRequest::from_request(api_request).await.unwrap();
+
+        let identity_provider: Arc<dyn IdentityProvider + Sync + Send> =
+            Arc::new(TestIdentityProvider::default());
+
         // Resolve the API definition binding from input
         let resolver = DefaultGatewayBindingResolver::new(
-            api_request.clone(),
-            internal::get_session_store(),
-            Arc::new(TestIdentityProvider::default()),
+            input_http_request,
+            &internal::get_session_store(),
+            &identity_provider,
         );
 
         let resolved_route = resolver
@@ -1235,18 +1195,36 @@ fn get_gateway_request(
     query_path: Option<&str>,
     headers: &HeaderMap,
     req_body: serde_json::Value,
-) -> InputHttpRequest {
-    InputHttpRequest {
-        scheme: Some(Scheme::HTTP),
-        host: ApiSiteString("localhost".to_string()),
-        api_input_path: ApiInputPath {
-            base_path: base_path.to_string(),
-            query_path: query_path.map(|x| x.to_string()),
-        },
-        headers: headers.clone(),
-        req_method: Method::GET,
-        req_body,
+) -> Request {
+    let full_uri = match query_path {
+        Some(query) => format!("{}?{}", base_path.trim_end_matches('/'), query),
+        None => base_path.to_string(),
+    };
+
+    // Construct the URI object
+
+    let uri = Uri::builder()
+        .scheme("http")
+        .authority("localhost")
+        .path_and_query(full_uri)
+        .build()
+        .unwrap();
+    // Create the request
+    let mut request = Request::builder()
+        .method(Method::GET)
+        .uri(uri)
+        .body(req_body.to_string());
+
+    // Add headers
+    for (key, value) in headers.iter() {
+        request.headers_mut().insert(key.clone(), value.clone());
     }
+
+    request
+        .headers_mut()
+        .insert("host", "localhost".parse().unwrap());
+
+    request
 }
 
 fn get_preflight_gateway_request(
@@ -1254,18 +1232,33 @@ fn get_preflight_gateway_request(
     query_path: Option<&str>,
     headers: &HeaderMap,
     req_body: Value,
-) -> InputHttpRequest {
-    InputHttpRequest {
-        scheme: Some(Scheme::HTTP),
-        host: ApiSiteString("localhost".to_string()),
-        api_input_path: ApiInputPath {
-            base_path: base_path.to_string(),
-            query_path: query_path.map(|x| x.to_string()),
-        },
-        headers: headers.clone(),
-        req_method: Method::OPTIONS,
-        req_body,
+) -> Request {
+    let full_uri = match query_path {
+        Some(query) => format!("{}?{}", base_path.trim_end_matches('/'), query),
+        None => base_path.to_string(),
+    };
+
+    let uri = Uri::builder()
+        .scheme("http")
+        .authority("localhost")
+        .path_and_query(full_uri)
+        .build()
+        .unwrap();
+
+    let mut request: Request = Request::builder()
+        .method(Method::OPTIONS)
+        .uri(uri)
+        .body(req_body.to_string());
+
+    for (key, value) in headers.iter() {
+        request.headers_mut().insert(key.clone(), value.clone());
     }
+
+    request
+        .headers_mut()
+        .insert("host", "localhost".parse().unwrap());
+
+    request
 }
 
 async fn get_api_def_with_worker_binding(
@@ -1594,7 +1587,9 @@ mod internal {
     };
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, Type, TypedRecord, TypedTuple};
-    use golem_worker_service_base::gateway_api_definition::http::ComponentMetadataDictionary;
+    use golem_worker_service_base::gateway_api_definition::http::{
+        CompiledHttpApiDefinition, ComponentMetadataDictionary,
+    };
     use golem_worker_service_base::gateway_execution::file_server_binding_handler::{
         FileServerBindingHandler, FileServerBindingResult,
     };
@@ -1618,12 +1613,38 @@ mod internal {
     use poem::Response;
     use rib::RibResult;
 
+    use golem_worker_service_base::gateway_execution::api_definition_lookup::{
+        ApiDefinitionLookupError, ApiDefinitionsLookup,
+    };
     use golem_worker_service_base::gateway_execution::gateway_session::{
         DataKey, DataValue, GatewaySession, GatewaySessionError, GatewaySessionStore, SessionId,
     };
+    use golem_worker_service_base::gateway_request::http_request::InputHttpRequest;
     use serde_json::Value;
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
+
+    pub struct TestApiDefinitionLookup {
+        pub api_definition: CompiledHttpApiDefinition<DefaultNamespace>,
+    }
+
+    impl TestApiDefinitionLookup {
+        pub fn new(api_definition: CompiledHttpApiDefinition<DefaultNamespace>) -> Self {
+            Self { api_definition }
+        }
+    }
+
+    #[async_trait]
+    impl ApiDefinitionsLookup<InputHttpRequest> for TestApiDefinitionLookup {
+        type ApiDefinition = CompiledHttpApiDefinition<DefaultNamespace>;
+
+        async fn get(
+            &self,
+            _input: &InputHttpRequest,
+        ) -> Result<Vec<Self::ApiDefinition>, ApiDefinitionLookupError> {
+            Ok(vec![self.api_definition.clone()])
+        }
+    }
 
     pub struct TestApiGatewayWorkerRequestExecutor {}
 
@@ -1778,9 +1799,9 @@ mod internal {
                     name: None,
                     typ: record(vec![
                         field("component_id", str()),
-                        field("name", str()),
                         field("function_name", str()),
-                        field("function_params", tuple(vec![str()])),
+                        field("function_params", tuple(vec![str(), str()])),
+                        field("worker_name", str()),
                     ]),
                 }],
             }],
@@ -2080,7 +2101,6 @@ pub mod security {
     use std::str::FromStr;
     use std::sync::Arc;
 
-    use golem_worker_service_base::gateway_request::http_request::InputHttpRequest;
     use tokio::sync::Mutex;
 
     // These keys are used over the default JwkKeySet of the actual client
@@ -2424,7 +2444,7 @@ nUhg4edJVHjqxYyoQT+YSPLlHl6AkLZt9/n1NJ+bft0=
         )
         .unwrap();
 
-        let request = poem::Request::builder()
+        let request = Request::builder()
             .method(Method::GET)
             .uri(uri)
             .header("host", redirect_host)
@@ -2646,7 +2666,7 @@ nUhg4edJVHjqxYyoQT+YSPLlHl6AkLZt9/n1NJ+bft0=
         )]))
     }
 
-    pub async fn create_request_from_redirect(headers: &HeaderMap) -> InputHttpRequest {
+    pub async fn create_request_from_redirect(headers: &HeaderMap) -> Request {
         let cookies = extract_cookies_from_redirect(headers);
 
         let cookie_header = cookies
@@ -2664,16 +2684,12 @@ nUhg4edJVHjqxYyoQT+YSPLlHl6AkLZt9/n1NJ+bft0=
             .and_then(|loc| loc.to_str().ok())
             .unwrap_or("/");
 
-        let request = Request::builder()
+        Request::builder()
             .method(Method::GET)
             .uri(Uri::from_str(format!("http://localhost/{}", location).as_str()).unwrap()) // Use the "Location" header as the URL
             .header(HOST, "localhost")
             .header(COOKIE, cookie_header)
-            .finish();
-
-        InputHttpRequest::from_request(request)
-            .await
-            .expect("Failed to get http request")
+            .finish()
     }
 
     fn extract_cookies_from_redirect(headers: &HeaderMap) -> HashMap<String, String> {

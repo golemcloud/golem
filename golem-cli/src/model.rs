@@ -29,7 +29,6 @@ use clap::builder::{StringValueParser, TypedValueParser};
 use clap::error::{ContextKind, ContextValue, ErrorKind};
 use clap::{Arg, ArgMatches, Error, FromArgMatches, ValueEnum};
 use clap_verbosity_flag::Verbosity;
-use derive_more::{Display, FromStr};
 use golem_client::model::{ApiDefinitionInfo, ApiSite, Provider, ScanCursor};
 use golem_common::model::plugin::{ComponentPluginScope, DefaultPluginScope};
 use golem_common::model::trim_date::TrimDateTime;
@@ -339,7 +338,7 @@ impl From<&ComponentUriArg> for ComponentUriOrNameArgs {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Debug, Display, FromStr)]
+#[derive(Clone, PartialEq, Eq, Debug, derive_more::Display, derive_more::FromStr)]
 pub struct ComponentName(pub String); // TODO: Validate
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -348,10 +347,12 @@ pub struct ComponentUriArg {
     pub explicit_name: bool,
 }
 
-#[derive(Clone, PartialEq, Eq, Debug, Display, FromStr)]
+#[derive(Clone, PartialEq, Eq, Debug, derive_more::Display, derive_more::FromStr)]
 pub struct WorkerName(pub String); // TODO: Validate
 
-#[derive(Clone, PartialEq, Eq, Debug, Display, FromStr, Serialize, Deserialize)]
+#[derive(
+    Clone, PartialEq, Eq, Debug, derive_more::Display, derive_more::FromStr, Serialize, Deserialize,
+)]
 pub struct IdempotencyKey(pub String); // TODO: Validate
 
 impl IdempotencyKey {
@@ -437,7 +438,7 @@ impl FromStr for ApiDefinitionIdWithVersion {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Debug, Display, FromStr)]
+#[derive(Clone, PartialEq, Eq, Debug, derive_more::Display, derive_more::FromStr)]
 pub struct ApiDefinitionId(pub String); // TODO: Validate
 
 #[derive(ValueEnum, Clone, Debug)]
@@ -456,7 +457,7 @@ impl Display for ApiDefinitionFileFormat {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Debug, Display, FromStr)]
+#[derive(Clone, PartialEq, Eq, Debug, derive_more::Display, derive_more::FromStr)]
 pub struct ApiDefinitionVersion(pub String); // TODO: Validate
 
 #[derive(Clone)]
@@ -532,7 +533,7 @@ impl FromStr for PathBufOrStdin {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Debug, Display)]
+#[derive(Clone, PartialEq, Eq, Debug, derive_more::Display)]
 pub enum WorkerUpdateMode {
     Automatic,
     Manual,

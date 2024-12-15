@@ -1,5 +1,3 @@
-use golem_api_grpc::proto::golem::component::FunctionConstraint as FunctionConstraintProto;
-use golem_api_grpc::proto::golem::component::FunctionConstraintCollection as FunctionConstraintCollectionProto;
 use golem_wasm_ast::analysis::AnalysedType;
 use rib::{RegistryKey, WorkerFunctionType, WorkerFunctionsInRib};
 use std::collections::HashMap;
@@ -11,40 +9,6 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionConstraintCollection {
     pub function_constraints: Vec<FunctionConstraint>,
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::component::FunctionConstraintCollection>
-    for FunctionConstraintCollection
-{
-    type Error = String;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::component::FunctionConstraintCollection,
-    ) -> Result<Self, Self::Error> {
-        let collection = FunctionConstraintCollection {
-            function_constraints: value
-                .constraints
-                .iter()
-                .map(|constraint_proto| FunctionConstraint::try_from(constraint_proto.clone()))
-                .collect::<Result<_, _>>()?,
-        };
-
-        Ok(collection)
-    }
-}
-
-impl From<FunctionConstraintCollection> for FunctionConstraintCollectionProto {
-    fn from(value: FunctionConstraintCollection) -> Self {
-        FunctionConstraintCollectionProto {
-            constraints: value
-                .function_constraints
-                .iter()
-                .map(|function_constraint| {
-                    FunctionConstraintProto::from(function_constraint.clone())
-                })
-                .collect(),
-        }
-    }
 }
 
 impl From<FunctionConstraintCollection> for WorkerFunctionsInRib {
@@ -165,52 +129,95 @@ impl FunctionConstraint {
     }
 }
 
-impl TryFrom<FunctionConstraintProto> for FunctionConstraint {
-    type Error = String;
+#[cfg(feature = "protobuf")]
+mod protobuf {
+    use crate::model::component_constraint::{FunctionConstraint, FunctionConstraintCollection};
+    use golem_api_grpc::proto::golem::component::FunctionConstraint as FunctionConstraintProto;
+    use golem_api_grpc::proto::golem::component::FunctionConstraintCollection as FunctionConstraintCollectionProto;
+    use golem_wasm_ast::analysis::AnalysedType;
+    use rib::RegistryKey;
 
-    fn try_from(value: FunctionConstraintProto) -> Result<Self, Self::Error> {
-        let return_types = value
-            .return_types
-            .iter()
-            .map(AnalysedType::try_from)
-            .collect::<Result<_, _>>()?;
+    impl TryFrom<golem_api_grpc::proto::golem::component::FunctionConstraintCollection>
+        for FunctionConstraintCollection
+    {
+        type Error = String;
 
-        let parameter_types = value
-            .parameter_types
-            .iter()
-            .map(AnalysedType::try_from)
-            .collect::<Result<_, _>>()?;
+        fn try_from(
+            value: golem_api_grpc::proto::golem::component::FunctionConstraintCollection,
+        ) -> Result<Self, Self::Error> {
+            let collection = FunctionConstraintCollection {
+                function_constraints: value
+                    .constraints
+                    .iter()
+                    .map(|constraint_proto| FunctionConstraint::try_from(constraint_proto.clone()))
+                    .collect::<Result<_, _>>()?,
+            };
 
-        let registry_key_proto = value.function_key.ok_or("Function key missing")?;
-        let function_key = RegistryKey::try_from(registry_key_proto)?;
-        let usage_count = value.usage_count;
-
-        Ok(Self {
-            function_key,
-            return_types,
-            parameter_types,
-            usage_count,
-        })
+            Ok(collection)
+        }
     }
-}
 
-impl From<FunctionConstraint> for FunctionConstraintProto {
-    fn from(value: FunctionConstraint) -> Self {
-        let registry_key = value.function_key.into();
+    impl From<FunctionConstraintCollection> for FunctionConstraintCollectionProto {
+        fn from(value: FunctionConstraintCollection) -> Self {
+            FunctionConstraintCollectionProto {
+                constraints: value
+                    .function_constraints
+                    .iter()
+                    .map(|function_constraint| {
+                        FunctionConstraintProto::from(function_constraint.clone())
+                    })
+                    .collect(),
+            }
+        }
+    }
 
-        FunctionConstraintProto {
-            function_key: Some(registry_key),
-            parameter_types: value
-                .parameter_types
-                .iter()
-                .map(|analysed_type| analysed_type.into())
-                .collect(),
-            return_types: value
+    impl TryFrom<FunctionConstraintProto> for FunctionConstraint {
+        type Error = String;
+
+        fn try_from(value: FunctionConstraintProto) -> Result<Self, Self::Error> {
+            let return_types = value
                 .return_types
                 .iter()
-                .map(|analysed_type| analysed_type.into())
-                .collect(),
-            usage_count: value.usage_count,
+                .map(AnalysedType::try_from)
+                .collect::<Result<_, _>>()?;
+
+            let parameter_types = value
+                .parameter_types
+                .iter()
+                .map(AnalysedType::try_from)
+                .collect::<Result<_, _>>()?;
+
+            let registry_key_proto = value.function_key.ok_or("Function key missing")?;
+            let function_key = RegistryKey::try_from(registry_key_proto)?;
+            let usage_count = value.usage_count;
+
+            Ok(Self {
+                function_key,
+                return_types,
+                parameter_types,
+                usage_count,
+            })
+        }
+    }
+
+    impl From<FunctionConstraint> for FunctionConstraintProto {
+        fn from(value: FunctionConstraint) -> Self {
+            let registry_key = value.function_key.into();
+
+            FunctionConstraintProto {
+                function_key: Some(registry_key),
+                parameter_types: value
+                    .parameter_types
+                    .iter()
+                    .map(|analysed_type| analysed_type.into())
+                    .collect(),
+                return_types: value
+                    .return_types
+                    .iter()
+                    .map(|analysed_type| analysed_type.into())
+                    .collect(),
+                usage_count: value.usage_count,
+            }
         }
     }
 }

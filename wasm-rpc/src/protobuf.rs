@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::protobuf::typed_result::ResultValue;
-use crate::{Uri, Value};
+use crate::Value;
 use golem_wasm_ast::analysis::{AnalysedFunctionParameter, AnalysedType};
 
 include!(concat!(env!("OUT_DIR"), "/wasm.rpc.rs"));
@@ -334,7 +334,7 @@ impl TryFrom<&type_annotated_value::TypeAnnotatedValue> for Type {
                 })))
             }
             type_annotated_value::TypeAnnotatedValue::Handle(TypedHandle { typ, .. }) => {
-                if let Some(typ) = typ.clone() {
+                if let Some(typ) = *typ {
                     Ok(r#type::Type::Handle(typ))
                 } else {
                     Err("Missing type for Handle".to_string())
@@ -480,7 +480,7 @@ impl TryFrom<type_annotated_value::TypeAnnotatedValue> for Value {
                 }
             }
             type_annotated_value::TypeAnnotatedValue::Handle(handle) => Ok(Value::Handle {
-                uri: Uri { value: handle.uri },
+                uri: handle.uri,
                 resource_id: handle.resource_id,
             }),
             type_annotated_value::TypeAnnotatedValue::Variant(variant) => {
@@ -632,7 +632,7 @@ impl From<Value> for Val {
             },
             Value::Handle { uri, resource_id } => Val {
                 val: Some(val::Val::Handle(ValHandle {
-                    uri: uri.value,
+                    uri,
                     value: resource_id,
                 })),
             },
@@ -738,7 +738,7 @@ impl TryFrom<Val> for Value {
                 }
             }
             Some(val::Val::Handle(ValHandle { uri, value })) => Ok(Value::Handle {
-                uri: super::Uri { value: uri },
+                uri,
                 resource_id: value,
             }),
         }

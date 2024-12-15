@@ -285,7 +285,7 @@ async fn get_or_create_indexed_resource<'a, Ctx: WorkerCtx>(
             Ok(InvokeResult::from_success(
                 0,
                 vec![Value::Handle {
-                    uri: store.data().self_uri(),
+                    uri: store.data().self_uri().value,
                     resource_id: resource_id.0,
                 }],
             ))
@@ -302,6 +302,11 @@ async fn get_or_create_indexed_resource<'a, Ctx: WorkerCtx>(
                 .ok_or(GolemError::invalid_request(
                     "Could not extract resource constructor parameters from function name",
                 ))?;
+
+            let constructor_params: Vec<Value> = constructor_params
+                .into_iter()
+                .map(|vnt| vnt.value)
+                .collect();
 
             debug!("Creating new indexed resource with parameters {constructor_params:?}");
 
@@ -407,13 +412,13 @@ async fn drop_resource<Ctx: WorkerCtx>(
 
     let resource_id = match function_input.first() {
         Some(Value::Handle { uri, resource_id }) => {
-            if uri == &self_uri {
+            if uri == &self_uri.value {
                 Ok(*resource_id)
             } else {
                 Err(GolemError::ValueMismatch {
                     details: format!(
                         "trying to drop handle for on wrong worker ({} vs {}) {}",
-                        uri.value, self_uri.value, raw_function_name
+                        uri, self_uri.value, raw_function_name
                     ),
                 })
             }
