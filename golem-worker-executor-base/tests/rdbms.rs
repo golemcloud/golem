@@ -96,15 +96,16 @@ async fn rdbms_postgres_create_insert_select(
             (
                 user_id             uuid    NOT NULL PRIMARY KEY,
                 name                text    NOT NULL,
+                tags                text[],
                 created_on          timestamp DEFAULT NOW()
             );
         "#;
 
     let insert_statement = r#"
             INSERT INTO test_users
-            (user_id, name)
+            (user_id, name, tags)
             VALUES
-            ($1::uuid, $2)
+            ($1::uuid, $2, ARRAY[$3::text, $4::text])
         "#;
 
     let count = 60;
@@ -117,13 +118,20 @@ async fn rdbms_postgres_create_insert_select(
         None,
     ));
 
-    let mut expected_rows: Vec<serde_json::Value> = Vec::with_capacity(count);
+    let mut expected_values: Vec<(Uuid, String, String, String)> = Vec::with_capacity(count);
 
-    for _ in 0..count {
+    for i in 0..count {
         let user_id = Uuid::new_v4();
         let name = format!("name-{}", Uuid::new_v4());
+        let tag1 = format!("tag-1-{}", i);
+        let tag2 = format!("tag-2-{}", i);
 
-        let params: Vec<String> = vec![user_id.clone().to_string(), name.clone()];
+        let params: Vec<String> = vec![
+            user_id.clone().to_string(),
+            name.clone(),
+            tag1.clone(),
+            tag2.clone(),
+        ];
 
         insert_tests.push(RdbmsTest::execute_test(
             insert_statement,
@@ -131,9 +139,21 @@ async fn rdbms_postgres_create_insert_select(
             Some(1),
         ));
 
-        let user_id = user_id.as_u64_pair();
+        expected_values.push((user_id, name, tag1, tag2));
+    }
 
-        let row = json!(
+    rdbms_component_test::<PostgresType>(
+        last_unique_id,
+        deps,
+        db_addresses.clone(),
+        insert_tests,
+        1,
+    )
+    .await;
+
+    fn get_row(columns: (Uuid, String, String, String)) -> serde_json::Value {
+        let user_id = columns.0.as_u64_pair();
+        json!(
                     {
                        "values":[
                           {
@@ -146,26 +166,31 @@ async fn rdbms_postgres_create_insert_select(
                           },
                           {
                              "nodes":[{
-                                "text": name
+                                "text": columns.1
                              }]
+                          },
+                          {
+                             "nodes":[
+                              {
+                                "array": [1, 2]
+                              },
+                              {
+                                "text": columns.2
+                              },
+                              {
+                                "text": columns.3
+                              }
+                             ]
                           }
                        ]
                     }
-        );
-
-        expected_rows.push(row);
+        )
     }
 
-    rdbms_component_test::<PostgresType>(
-        last_unique_id,
-        deps,
-        db_addresses.clone(),
-        insert_tests,
-        1,
-    )
-    .await;
-
-    let expected = json!(
+    fn get_expected(expected_values: Vec<(Uuid, String, String, String)>) -> serde_json::Value {
+        let expected_rows: Vec<serde_json::Value> =
+            expected_values.into_iter().map(get_row).collect();
+        json!(
             [
                {
                   "ok":{
@@ -189,23 +214,50 @@ async fn rdbms_postgres_create_insert_select(
                            "db-type-name":"TEXT",
                            "name":"name",
                            "ordinal":1
+                        },
+                        {
+                           "db-type":{
+                              "nodes":[
+                              {
+
+                                 "array": 1
+                              },
+                              {
+                                 "text":null
+                              }
+                            ]
+                           },
+                           "db-type-name":"TEXT[]",
+                           "name":"tags",
+                           "ordinal":2
                         }
                      ],
                      "rows": expected_rows
                   }
                }
             ]
-    );
-    let select_test = RdbmsTest::query_test(
-        "SELECT user_id, name FROM test_users ORDER BY created_on ASC",
+        )
+    }
+
+    let expected = get_expected(expected_values.clone());
+    let select_test1 = RdbmsTest::query_test(
+        "SELECT user_id, name, tags FROM test_users ORDER BY created_on ASC",
         vec![],
         Some(expected),
     );
+
+    let expected = get_expected(vec![expected_values[0].clone()]);
+    let select_test2 = RdbmsTest::query_test(
+        "SELECT user_id, name, tags FROM test_users WHERE user_id = $1::uuid ORDER BY created_on ASC",
+        vec![expected_values[0].0.to_string()],
+        Some(expected),
+    );
+
     rdbms_component_test::<PostgresType>(
         last_unique_id,
         deps,
         db_addresses.clone(),
-        vec![select_test],
+        vec![select_test1, select_test2],
         3,
     )
     .await;
@@ -302,7 +354,7 @@ async fn rdbms_mysql_create_insert_select(
         None,
     ));
 
-    let mut expected_rows: Vec<serde_json::Value> = Vec::with_capacity(count);
+    let mut expected_values: Vec<(String, String)> = Vec::with_capacity(count);
 
     for i in 0..count {
         let user_id = format!("{:03}", i);
@@ -316,28 +368,33 @@ async fn rdbms_mysql_create_insert_select(
             Some(1),
         ));
 
-        let row = json!(
-                    {
-                       "values":[
-                          {
-                              "varchar": user_id
-
-                          },
-                          {
-
-                              "varchar": name
-                          }
-                       ]
-                    }
-        );
-
-        expected_rows.push(row);
+        expected_values.push((user_id, name));
     }
 
     rdbms_component_test::<MysqlType>(last_unique_id, deps, db_addresses.clone(), insert_tests, 1)
         .await;
 
-    let expected = json!(
+    fn get_row(columns: (String, String)) -> serde_json::Value {
+        json!(
+            {
+                "values":[
+                  {
+                      "varchar": columns.0
+
+                  },
+                  {
+
+                      "varchar": columns.1
+                  }
+               ]
+            }
+        )
+    }
+
+    fn get_expected(expected_values: Vec<(String, String)>) -> serde_json::Value {
+        let expected_rows: Vec<serde_json::Value> =
+            expected_values.into_iter().map(get_row).collect();
+        json!(
             [
                {
                   "ok":{
@@ -363,17 +420,28 @@ async fn rdbms_mysql_create_insert_select(
                   }
                }
             ]
-    );
-    let select_test = RdbmsTest::query_test(
+        )
+    }
+
+    let expected = get_expected(expected_values.clone());
+    let select_test1 = RdbmsTest::query_test(
         "SELECT user_id, name FROM test_users ORDER BY user_id ASC",
         vec![],
         Some(expected),
     );
+
+    let expected = get_expected(vec![expected_values[0].clone()]);
+    let select_test2 = RdbmsTest::query_test(
+        "SELECT user_id, name FROM test_users WHERE user_id = ? ORDER BY user_id ASC",
+        vec![expected_values[0].clone().0],
+        Some(expected),
+    );
+
     rdbms_component_test::<MysqlType>(
         last_unique_id,
         deps,
         db_addresses.clone(),
-        vec![select_test],
+        vec![select_test1, select_test2],
         3,
     )
     .await;

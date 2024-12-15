@@ -905,6 +905,14 @@ pub(crate) mod postgres_utils {
             self.nodes.len() as NodeIndex - 1
         }
 
+        fn update_node<F>(&mut self, index: NodeIndex, mut f: F) -> NodeIndex
+        where
+            F: FnMut(&mut DbValueNode),
+        {
+            f(&mut self.nodes[index as usize]);
+            index
+        }
+
         fn add(&mut self, value: postgres_types::DbValue) -> NodeIndex {
             match value {
                 postgres_types::DbValue::Character(s) => self.add_node(DbValueNode::Character(s)),
@@ -982,30 +990,48 @@ pub(crate) mod postgres_utils {
                     self.add_node(DbValueNode::Enumeration(v.into()))
                 }
                 postgres_types::DbValue::Composite(v) => {
+                    let node_index = self.add_node(DbValueNode::Composite(Composite {
+                        name: v.name,
+                        values: vec![],
+                    }));
                     let mut values: Vec<NodeIndex> = Vec::with_capacity(v.values.len());
                     for v in v.values {
                         let i = self.add(v);
                         values.push(i);
                     }
-                    self.add_node(DbValueNode::Composite(Composite {
-                        name: v.name,
-                        values,
-                    }))
+                    self.update_node(node_index, |v| match v {
+                        DbValueNode::Composite(v) => {
+                            v.values = values.clone();
+                        }
+                        _ => (),
+                    })
                 }
                 postgres_types::DbValue::Domain(v) => {
-                    let i = self.add(*v.value);
-                    self.add_node(DbValueNode::Domain(Domain {
+                    let node_index = self.add_node(DbValueNode::Domain(Domain {
                         name: v.name,
-                        value: i,
-                    }))
+                        value: NodeIndex::MAX,
+                    }));
+                    let value_node_index = self.add(*v.value);
+                    self.update_node(node_index, |v| match v {
+                        DbValueNode::Domain(v) => {
+                            v.value = value_node_index;
+                        }
+                        _ => (),
+                    })
                 }
                 postgres_types::DbValue::Array(vs) => {
+                    let node_index = self.add_node(DbValueNode::Array(vec![]));
                     let mut values: Vec<NodeIndex> = Vec::with_capacity(vs.len());
                     for v in vs {
                         let i = self.add(v);
                         values.push(i);
                     }
-                    self.add_node(DbValueNode::Array(values))
+                    self.update_node(node_index, |v| match v {
+                        DbValueNode::Array(vs) => {
+                            vs.extend(values.clone());
+                        }
+                        _ => (),
+                    })
                 }
                 postgres_types::DbValue::Null => self.add_node(DbValueNode::Null),
             }
@@ -1034,6 +1060,14 @@ pub(crate) mod postgres_utils {
         fn add_node(&mut self, node: DbColumnTypeNode) -> NodeIndex {
             self.nodes.push(node);
             self.nodes.len() as NodeIndex - 1
+        }
+
+        fn update_node<F>(&mut self, index: NodeIndex, mut f: F) -> NodeIndex
+        where
+            F: FnMut(&mut DbColumnTypeNode),
+        {
+            f(&mut self.nodes[index as usize]);
+            index
         }
 
         fn add(&mut self, value: postgres_types::DbColumnType) -> NodeIndex {
@@ -1092,27 +1126,47 @@ pub(crate) mod postgres_utils {
                     self.add_node(DbColumnTypeNode::Enumeration(v.into()))
                 }
                 postgres_types::DbColumnType::Composite(v) => {
+                    let node_index = self.add_node(DbColumnTypeNode::Composite(CompositeType {
+                        name: v.name,
+                        attributes: vec![],
+                    }));
                     let mut attributes: Vec<(String, NodeIndex)> =
                         Vec::with_capacity(v.attributes.len());
                     for (n, v) in v.attributes {
                         let i = self.add(v);
                         attributes.push((n, i));
                     }
-                    self.add_node(DbColumnTypeNode::Composite(CompositeType {
-                        name: v.name,
-                        attributes,
-                    }))
+                    self.update_node(node_index, |v| match v {
+                        DbColumnTypeNode::Composite(v) => {
+                            v.attributes = attributes.clone();
+                        }
+                        _ => (),
+                    })
                 }
                 postgres_types::DbColumnType::Domain(v) => {
-                    let i = self.add(*v.base_type);
-                    self.add_node(DbColumnTypeNode::Domain(DomainType {
+                    let node_index = self.add_node(DbColumnTypeNode::Domain(DomainType {
                         name: v.name,
-                        base_type: i,
-                    }))
+                        base_type: NodeIndex::MAX,
+                    }));
+
+                    let value_node_index = self.add(*v.base_type);
+
+                    self.update_node(node_index, |v| match v {
+                        DbColumnTypeNode::Domain(v) => {
+                            v.base_type = value_node_index;
+                        }
+                        _ => (),
+                    })
                 }
                 postgres_types::DbColumnType::Array(v) => {
-                    let i = self.add(*v);
-                    self.add_node(DbColumnTypeNode::Array(i))
+                    let node_index = self.add_node(DbColumnTypeNode::Array(NodeIndex::MAX));
+                    let value_node_index = self.add(*v);
+                    self.update_node(node_index, |v| match v {
+                        DbColumnTypeNode::Array(v) => {
+                            *v = value_node_index;
+                        }
+                        _ => (),
+                    })
                 }
             }
         }

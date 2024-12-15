@@ -1284,7 +1284,6 @@ async fn postgres_execute_test_create_insert_select_array(
             name: "int8range_col".to_string(),
             ordinal: 30,
             db_type: postgres_types::DbColumnType::Int8range.into_array(),
-
             db_type_name: "INT8RANGE[]".to_string(),
         },
         postgres_types::DbColumn {
