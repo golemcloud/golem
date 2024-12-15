@@ -157,6 +157,10 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
         self.components.keys()
     }
 
+    pub fn contains_component(&self, component_name: &ComponentName) -> bool {
+        self.components.contains_key(component_name)
+    }
+
     pub fn wit_deps(&self) -> Vec<PathBuf> {
         self.wit_deps.iter().map(PathBuf::from).collect()
     }

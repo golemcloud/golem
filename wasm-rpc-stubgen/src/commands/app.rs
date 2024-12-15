@@ -2,8 +2,8 @@ use crate::cargo::regenerate_cargo_package_component;
 use crate::fs;
 use crate::fs::PathExtra;
 use crate::log::{
-    log_action, log_skipping_up_to_date, log_validated_action_result, log_warn_action,
-    set_log_output, LogColorize, LogIndent, Output,
+    log_action, log_skipping_up_to_date, log_warn_action, set_log_output, LogColorize, LogIndent,
+    Output,
 };
 use crate::model::app::{
     includes_from_yaml_file, AppBuildStep, Application, ComponentName,
@@ -11,7 +11,7 @@ use crate::model::app::{
 };
 use crate::model::app_raw;
 use crate::stub::{StubConfig, StubDefinition};
-use crate::validation::ValidatedResult;
+use crate::validation::{ValidatedResult, ValidationBuilder};
 use crate::wit_generate::{
     add_stub_as_dependency_to_wit_dir, extract_main_interface_as_wit_dep, AddStubAsDepConfig,
     UpdateCargoToml,
@@ -35,7 +35,8 @@ use std::time::SystemTime;
 use walkdir::WalkDir;
 
 pub struct Config<CPE: ComponentPropertiesExtensions> {
-    pub app_resolve_mode: ApplicationSourceMode,
+    pub app_source_mode: ApplicationSourceMode,
+    pub component_select_mode: ComponentSelectMode,
     pub skip_up_to_date_checks: bool,
     pub profile: Option<ProfileName>,
     pub offline: bool,
@@ -60,12 +61,19 @@ pub enum ApplicationSourceMode {
     Explicit(Vec<PathBuf>),
 }
 
+#[derive(Debug, Clone)]
+pub enum ComponentSelectMode {
+    CurrentDir,
+    Explicit(Vec<ComponentName>),
+}
+
 pub struct ApplicationContext<CPE: ComponentPropertiesExtensions> {
     pub config: Config<CPE>,
     pub application: Application<CPE>,
     pub wit: ResolvedWitApplication,
     common_wit_deps: OnceCell<anyhow::Result<WitDepsResolver>>,
     component_generated_base_wit_deps: HashMap<ComponentName, WitDepsResolver>,
+    selected_component_names: BTreeSet<ComponentName>,
 }
 
 impl<CPE: ComponentPropertiesExtensions> ApplicationContext<CPE> {
@@ -75,185 +83,26 @@ impl<CPE: ComponentPropertiesExtensions> ApplicationContext<CPE> {
         let ctx = to_anyhow(
             config.log_output,
             "Failed to create application context, see problems above",
-            load_app_validated(&config).and_then(|application| {
+            load_app(&config).and_then(|(application, selected_component_names)| {
                 ResolvedWitApplication::new(&application, config.profile.as_ref()).map(|wit| {
+                    let selected_component_names = if selected_component_names.is_empty() {
+                        application.component_names().cloned().collect()
+                    } else {
+                        selected_component_names
+                    };
                     ApplicationContext {
                         config,
                         application,
                         wit,
                         common_wit_deps: OnceCell::new(),
                         component_generated_base_wit_deps: HashMap::new(),
+                        selected_component_names,
                     }
                 })
             }),
         )?;
 
-        // Selecting and validating profiles
-        {
-            match &ctx.config.profile {
-                Some(profile) => {
-                    let all_profiles = ctx.application.all_profiles();
-                    if all_profiles.is_empty() {
-                        bail!(
-                            "Profile {} not found, no available profiles",
-                            profile.as_str().log_color_error_highlight(),
-                        );
-                    } else if !all_profiles.contains(profile) {
-                        bail!(
-                            "Profile {} not found, available profiles: {}",
-                            profile.as_str().log_color_error_highlight(),
-                            all_profiles
-                                .into_iter()
-                                .map(|s| s.as_str().log_color_highlight())
-                                .join(", ")
-                        );
-                    }
-                    log_action(
-                        "Selecting",
-                        format!(
-                            "profiles, requested profile: {}",
-                            profile.as_str().log_color_highlight()
-                        ),
-                    );
-                }
-                None => {
-                    log_action("Selecting", "profiles, no profile was requested");
-                }
-            }
-
-            let _indent = LogIndent::new();
-            for component_name in ctx.application.component_names() {
-                let selection = ctx
-                    .application
-                    .component_effective_property_source(component_name, ctx.profile());
-
-                let message = match (
-                    selection.profile,
-                    selection.template_name,
-                    ctx.profile().is_some(),
-                    selection.is_requested_profile,
-                ) {
-                    (None, None, false, _) => {
-                        format!(
-                            "default build for {}",
-                            component_name.as_str().log_color_highlight()
-                        )
-                    }
-                    (None, None, true, _) => {
-                        format!(
-                            "default build for {}, component has no profiles",
-                            component_name.as_str().log_color_highlight()
-                        )
-                    }
-                    (None, Some(template), false, _) => {
-                        format!(
-                            "default build for {} using template {}{}",
-                            component_name.as_str().log_color_highlight(),
-                            template.as_str().log_color_highlight(),
-                            if selection.any_template_overrides {
-                                " with overrides"
-                            } else {
-                                ""
-                            }
-                        )
-                    }
-                    (None, Some(template), true, _) => {
-                        format!(
-                            "default build for {} using template {}{}, component has no profiles",
-                            component_name.as_str().log_color_highlight(),
-                            template.as_str().log_color_highlight(),
-                            if selection.any_template_overrides {
-                                " with overrides"
-                            } else {
-                                ""
-                            }
-                        )
-                    }
-                    (Some(profile), None, false, false) => {
-                        format!(
-                            "default profile {} for {}",
-                            profile.as_str().log_color_highlight(),
-                            component_name.as_str().log_color_highlight()
-                        )
-                    }
-                    (Some(profile), None, true, false) => {
-                        format!(
-                            "default profile {} for {}, component has no matching requested profile",
-                            profile.as_str().log_color_highlight(),
-                            component_name.as_str().log_color_highlight()
-                        )
-                    }
-                    (Some(profile), Some(template), false, false) => {
-                        format!(
-                            "default profile {} for {} using template {}{}",
-                            profile.as_str().log_color_highlight(),
-                            component_name.as_str().log_color_highlight(),
-                            template.as_str().log_color_highlight(),
-                            if selection.any_template_overrides {
-                                " with overrides"
-                            } else {
-                                ""
-                            }
-                        )
-                    }
-                    (Some(profile), Some(template), true, false) => {
-                        format!(
-                            "default profile {} for {} using template {}{}, component has no matching requested profile",
-                            profile.as_str().log_color_highlight(),
-                            component_name.as_str().log_color_highlight(),
-                            template.as_str().log_color_highlight(),
-                            if selection.any_template_overrides {
-                                " with overrides"
-                            } else {
-                                ""
-                            }
-                        )
-                    }
-                    (Some(profile), None, false, true) => {
-                        format!(
-                            "profile {} for {}",
-                            profile.as_str().log_color_highlight(),
-                            component_name.as_str().log_color_highlight()
-                        )
-                    }
-                    (Some(profile), None, true, true) => {
-                        format!(
-                            "requested profile {} for {}",
-                            profile.as_str().log_color_highlight(),
-                            component_name.as_str().log_color_highlight()
-                        )
-                    }
-                    (Some(profile), Some(template), false, true) => {
-                        format!(
-                            "profile {} for {} using template {}{}",
-                            profile.as_str().log_color_highlight(),
-                            component_name.as_str().log_color_highlight(),
-                            template.as_str().log_color_highlight(),
-                            if selection.any_template_overrides {
-                                " with overrides"
-                            } else {
-                                ""
-                            }
-                        )
-                    }
-                    (Some(profile), Some(template), true, true) => {
-                        format!(
-                            "requested profile {} for {} using template {}{}",
-                            profile.as_str().log_color_highlight(),
-                            component_name.as_str().log_color_highlight(),
-                            template.as_str().log_color_highlight(),
-                            if selection.any_template_overrides {
-                                " with overrides"
-                            } else {
-                                ""
-                            }
-                        )
-                    }
-                };
-
-                log_action("Selected", message);
-            }
-        }
+        select_and_validate_profiles(&ctx)?;
 
         if ctx.config.offline {
             log_action("Selected", "offline mode");
@@ -315,8 +164,16 @@ impl<CPE: ComponentPropertiesExtensions> ApplicationContext<CPE> {
             .get(component_name)
             .unwrap())
     }
+
+    pub fn selected_component_names(&self) -> impl Iterator<Item = &ComponentName> {
+        self.selected_component_names.iter()
+    }
 }
 
+// TODO: this step is not selected_component_names aware yet, for that we have to build / filter
+//         - based on wit deps and / or
+//         - based on rpc deps
+//       depending on the sub-step
 async fn gen_rpc<CPE: ComponentPropertiesExtensions>(
     ctx: &mut ApplicationContext<CPE>,
 ) -> anyhow::Result<()> {
@@ -353,7 +210,7 @@ fn componentize<CPE: ComponentPropertiesExtensions>(
     log_action("Building", "components");
     let _indent = LogIndent::new();
 
-    for component_name in ctx.application.component_names() {
+    for component_name in ctx.selected_component_names() {
         let component_properties = ctx
             .application
             .component_properties(component_name, ctx.profile());
@@ -389,7 +246,7 @@ async fn link_rpc<CPE: ComponentPropertiesExtensions>(
     log_action("Linking", "RPC");
     let _indent = LogIndent::new();
 
-    for component_name in ctx.application.component_names() {
+    for component_name in ctx.selected_component_names() {
         let dependencies = ctx
             .application
             .component_wasm_rpc_dependencies(component_name);
@@ -493,11 +350,12 @@ pub async fn build<CPE: ComponentPropertiesExtensions>(config: Config<CPE>) -> a
     Ok(())
 }
 
+// TODO: clean is not selected_component_names aware yet
 pub fn clean<CPE: ComponentPropertiesExtensions>(config: Config<CPE>) -> anyhow::Result<()> {
-    let app = to_anyhow(
+    let (app, _selected_component_names) = to_anyhow(
         config.log_output,
         "Failed to load application manifest(s), see problems above",
-        load_app_validated(&config),
+        load_app(&config),
     )?;
 
     {
@@ -585,15 +443,16 @@ pub fn clean<CPE: ComponentPropertiesExtensions>(config: Config<CPE>) -> anyhow:
     Ok(())
 }
 
+// TODO: collect_custom_commands is not selected_component_names aware yet
 pub fn collect_custom_commands<CPE: ComponentPropertiesExtensions>(
     config: Config<CPE>,
 ) -> anyhow::Result<BTreeMap<String, BTreeSet<ProfileName>>> {
     set_log_output(config.log_output);
 
-    let app = to_anyhow(
+    let (app, _selected_component_names) = to_anyhow(
         config.log_output,
         "Failed to load application manifest(s), see problems above",
-        load_app_validated(&config),
+        load_app(&config),
     )?;
 
     let all_profiles = app.all_option_profiles();
@@ -693,48 +552,118 @@ fn delete_path(context: &str, path: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn load_app_validated<CPE: ComponentPropertiesExtensions>(
+fn load_app<CPE: ComponentPropertiesExtensions>(
     config: &Config<CPE>,
-) -> ValidatedResult<Application<CPE>> {
-    let sources = collect_sources(&config.app_resolve_mode);
-    let oam_apps = sources.and_then(|sources| {
+) -> ValidatedResult<(Application<CPE>, BTreeSet<ComponentName>)> {
+    collect_sources(&config.app_source_mode).and_then(|(sources, calling_working_dir)| {
         sources
             .into_iter()
             .map(|source| {
                 ValidatedResult::from_result(app_raw::ApplicationWithSource::from_yaml_file(source))
             })
             .collect::<ValidatedResult<Vec<_>>>()
-    });
+            .map(|source_apps| (source_apps, calling_working_dir))
+    }).and_then(|(source_raw_apps, calling_working_dir)| {
+        let current_dir = std::env::current_dir().expect("Failed to get current working directory");
 
-    log_action("Collecting", "components");
-    let _indent = LogIndent::new();
+        log_action("Collecting", "components");
+        let _indent = LogIndent::new();
 
-    let app = oam_apps.and_then(Application::from_raw_apps);
+        Application::from_raw_apps(source_raw_apps)
+            .and_then(|application| {
+                let component_names: ValidatedResult<BTreeSet<ComponentName>> =
+                    match &config.component_select_mode {
+                        ComponentSelectMode::CurrentDir => match &config.app_source_mode {
+                            ApplicationSourceMode::Automatic => {
+                                let called_from_project_root = calling_working_dir == current_dir;
+                                if called_from_project_root {
+                                    ValidatedResult::Ok(BTreeSet::new())
+                                } else {
+                                    ValidatedResult::Ok(
+                                        application
+                                            .component_names()
+                                            .filter(|component_name| application.component_source_dir(component_name) == calling_working_dir.as_path())
+                                            .cloned()
+                                            .collect()
+                                    )
+                                }
+                            }
+                            ApplicationSourceMode::Explicit(_) => ValidatedResult::Ok(BTreeSet::new()),
+                        },
+                        ComponentSelectMode::Explicit(component_names) => {
+                            let mut validation = ValidationBuilder::new();
+                            for component_name in component_names {
+                                if !application.contains_component(component_name) {
+                                    validation.add_error(format!(
+                                        "Requested component {} not found, available components: {}",
+                                        component_name.as_str().log_color_error_highlight(),
+                                        application
+                                            .component_names()
+                                            .map(|s| s.as_str().log_color_highlight())
+                                            .join(", ")
+                                    ));
+                                }
+                            }
+                            validation.build(BTreeSet::from_iter(component_names.iter().cloned()))
+                        }
+                    };
 
-    log_validated_action_result("Found", &app, |app| {
-        if app.component_names().next().is_none() {
-            "no components".to_string()
-        } else {
-            format!(
-                "components: {}",
-                app.component_names()
-                    .map(|s| s.as_str().log_color_highlight())
-                    .join(", ")
-            )
-        }
-    });
+                component_names.map(|component_names| (application, component_names))
+            })
+            .inspect(|(application, component_names)| {
+                if application.component_names().next().is_none() {
+                    log_action("Found", "no components".to_string())
+                } else {
+                    log_action(
+                        "Found",
+                        format!(
+                            "components: {}",
+                            application
+                                .component_names()
+                                .map(|s| s.as_str().log_color_highlight())
+                                .join(", ")
+                        ),
+                    )
+                }
 
-    app
+                if !component_names.is_empty() {
+                    match config.component_select_mode {
+                        ComponentSelectMode::CurrentDir => log_action(
+                            "Selected",
+                            format!(
+                                "components based on current dir: {} ",
+                                component_names
+                                    .iter()
+                                    .map(|s| s.as_str().log_color_highlight())
+                                    .join(", ")
+                            ),
+                        ),
+                        ComponentSelectMode::Explicit(_) => log_action(
+                            "Selected",
+                            format!(
+                                "components based on request: {} ",
+                                component_names
+                                    .iter()
+                                    .map(|s| s.as_str().log_color_highlight())
+                                    .join(", ")
+                            ),
+                        ),
+                    }
+                }
+            })
+    })
 }
 
-fn collect_sources(mode: &ApplicationSourceMode) -> ValidatedResult<BTreeSet<PathBuf>> {
+fn collect_sources(mode: &ApplicationSourceMode) -> ValidatedResult<(BTreeSet<PathBuf>, PathBuf)> {
+    let calling_working_dir =
+        std::env::current_dir().expect("Failed to get current working directory");
+
     log_action("Collecting", "sources");
     let _indent = LogIndent::new();
 
-    let sources = match mode {
+    match mode {
         ApplicationSourceMode::Automatic => match find_main_source() {
             Some(source) => {
-                // TODO: save original current dir and use it as a component filter
                 let source_ext = PathExtra::new(&source);
                 let source_dir = source_ext.parent().unwrap();
                 std::env::set_current_dir(source_dir)
@@ -773,23 +702,24 @@ fn collect_sources(mode: &ApplicationSourceMode) -> ValidatedResult<BTreeSet<Pat
                 non_unique_source_warns,
             )
         }
-    };
-
-    log_validated_action_result("Found", &sources, |sources| {
+    }
+    .inspect(|sources| {
         if sources.is_empty() {
-            "no sources".to_string()
+            log_action("Found", "no sources".to_string());
         } else {
-            format!(
-                "sources: {}",
-                sources
-                    .iter()
-                    .map(|source| source.log_color_highlight())
-                    .join(", ")
-            )
+            log_action(
+                "Found",
+                format!(
+                    "sources: {}",
+                    sources
+                        .iter()
+                        .map(|source| source.log_color_highlight())
+                        .join(", ")
+                ),
+            );
         }
-    });
-
-    sources
+    })
+    .map(|sources| (sources, calling_working_dir))
 }
 
 fn find_main_source() -> Option<PathBuf> {
@@ -810,6 +740,176 @@ fn find_main_source() -> Option<PathBuf> {
     }
 
     last_source
+}
+
+fn select_and_validate_profiles<CPE: ComponentPropertiesExtensions>(
+    ctx: &ApplicationContext<CPE>,
+) -> anyhow::Result<()> {
+    match &ctx.config.profile {
+        Some(profile) => {
+            let all_profiles = ctx.application.all_profiles();
+            if all_profiles.is_empty() {
+                bail!(
+                    "Profile {} not found, no available profiles",
+                    profile.as_str().log_color_error_highlight(),
+                );
+            } else if !all_profiles.contains(profile) {
+                bail!(
+                    "Profile {} not found, available profiles: {}",
+                    profile.as_str().log_color_error_highlight(),
+                    all_profiles
+                        .into_iter()
+                        .map(|s| s.as_str().log_color_highlight())
+                        .join(", ")
+                );
+            }
+            log_action(
+                "Selecting",
+                format!(
+                    "profiles, requested profile: {}",
+                    profile.as_str().log_color_highlight()
+                ),
+            );
+        }
+        None => {
+            log_action("Selecting", "profiles, no profile was requested");
+        }
+    }
+
+    let _indent = LogIndent::new();
+    for component_name in ctx.application.component_names() {
+        let selection = ctx
+            .application
+            .component_effective_property_source(component_name, ctx.profile());
+
+        let message = match (
+            selection.profile,
+            selection.template_name,
+            ctx.profile().is_some(),
+            selection.is_requested_profile,
+        ) {
+            (None, None, false, _) => {
+                format!(
+                    "default build for {}",
+                    component_name.as_str().log_color_highlight()
+                )
+            }
+            (None, None, true, _) => {
+                format!(
+                    "default build for {}, component has no profiles",
+                    component_name.as_str().log_color_highlight()
+                )
+            }
+            (None, Some(template), false, _) => {
+                format!(
+                    "default build for {} using template {}{}",
+                    component_name.as_str().log_color_highlight(),
+                    template.as_str().log_color_highlight(),
+                    if selection.any_template_overrides {
+                        " with overrides"
+                    } else {
+                        ""
+                    }
+                )
+            }
+            (None, Some(template), true, _) => {
+                format!(
+                    "default build for {} using template {}{}, component has no profiles",
+                    component_name.as_str().log_color_highlight(),
+                    template.as_str().log_color_highlight(),
+                    if selection.any_template_overrides {
+                        " with overrides"
+                    } else {
+                        ""
+                    }
+                )
+            }
+            (Some(profile), None, false, false) => {
+                format!(
+                    "default profile {} for {}",
+                    profile.as_str().log_color_highlight(),
+                    component_name.as_str().log_color_highlight()
+                )
+            }
+            (Some(profile), None, true, false) => {
+                format!(
+                    "default profile {} for {}, component has no matching requested profile",
+                    profile.as_str().log_color_highlight(),
+                    component_name.as_str().log_color_highlight()
+                )
+            }
+            (Some(profile), Some(template), false, false) => {
+                format!(
+                    "default profile {} for {} using template {}{}",
+                    profile.as_str().log_color_highlight(),
+                    component_name.as_str().log_color_highlight(),
+                    template.as_str().log_color_highlight(),
+                    if selection.any_template_overrides {
+                        " with overrides"
+                    } else {
+                        ""
+                    }
+                )
+            }
+            (Some(profile), Some(template), true, false) => {
+                format!(
+                    "default profile {} for {} using template {}{}, component has no matching requested profile",
+                    profile.as_str().log_color_highlight(),
+                    component_name.as_str().log_color_highlight(),
+                    template.as_str().log_color_highlight(),
+                    if selection.any_template_overrides {
+                        " with overrides"
+                    } else {
+                        ""
+                    }
+                )
+            }
+            (Some(profile), None, false, true) => {
+                format!(
+                    "profile {} for {}",
+                    profile.as_str().log_color_highlight(),
+                    component_name.as_str().log_color_highlight()
+                )
+            }
+            (Some(profile), None, true, true) => {
+                format!(
+                    "requested profile {} for {}",
+                    profile.as_str().log_color_highlight(),
+                    component_name.as_str().log_color_highlight()
+                )
+            }
+            (Some(profile), Some(template), false, true) => {
+                format!(
+                    "profile {} for {} using template {}{}",
+                    profile.as_str().log_color_highlight(),
+                    component_name.as_str().log_color_highlight(),
+                    template.as_str().log_color_highlight(),
+                    if selection.any_template_overrides {
+                        " with overrides"
+                    } else {
+                        ""
+                    }
+                )
+            }
+            (Some(profile), Some(template), true, true) => {
+                format!(
+                    "requested profile {} for {} using template {}{}",
+                    profile.as_str().log_color_highlight(),
+                    component_name.as_str().log_color_highlight(),
+                    template.as_str().log_color_highlight(),
+                    if selection.any_template_overrides {
+                        " with overrides"
+                    } else {
+                        ""
+                    }
+                )
+            }
+        };
+
+        log_action("Selected", message);
+    }
+
+    Ok(())
 }
 
 fn to_anyhow<T>(

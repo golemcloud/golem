@@ -27,6 +27,7 @@ pub mod wit_encode;
 pub mod wit_generate;
 pub mod wit_resolve;
 
+use crate::commands::app::ComponentSelectMode;
 use crate::log::{LogColorize, Output};
 use crate::model::app::{AppBuildStep, ComponentPropertiesExtensions};
 use crate::stub::{StubConfig, StubDefinition};
@@ -175,9 +176,12 @@ pub struct InitializeWorkspaceArgs {
 
 #[derive(clap::Parser, Debug)]
 pub struct App {
-    /// List of application manifests, can be defined multiple times
+    /// Application manifest to be used, can be defined multiple times
     #[clap(long, short)]
     pub app: Vec<PathBuf>,
+    /// Selects a component, can be defined multiple times
+    #[clap(long, short)]
+    pub component_name: Vec<String>,
     /// Selects a build profile
     #[clap(long, short)]
     pub build_profile: Option<String>,
@@ -312,7 +316,20 @@ fn app_command_to_config_and_subcommand<CPE: ComponentPropertiesExtensions>(
 ) -> (commands::app::Config<CPE>, Option<AppSubCommand>) {
     (
         commands::app::Config {
-            app_resolve_mode: app_manifest_sources_to_resolve_mode(command.app),
+            app_source_mode: app_manifest_sources_to_resolve_mode(command.app),
+            component_select_mode: {
+                if command.component_name.is_empty() {
+                    ComponentSelectMode::CurrentDir
+                } else {
+                    ComponentSelectMode::Explicit(
+                        command
+                            .component_name
+                            .into_iter()
+                            .map(|component_name| component_name.into())
+                            .collect(),
+                    )
+                }
+            },
             skip_up_to_date_checks: false,
             profile: command.build_profile.map(|profile| profile.into()),
             offline: command.offline,

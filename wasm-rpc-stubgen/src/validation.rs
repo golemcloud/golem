@@ -99,6 +99,16 @@ impl<T> ValidatedResult<T> {
             }
         }
     }
+
+    pub fn inspect<F>(self, f: F) -> Self
+    where
+        F: FnOnce(&T),
+    {
+        if let Some(value) = self.as_ok_ref() {
+            f(value);
+        }
+        self
+    }
 }
 
 impl<T, E> ValidatedResult<Result<T, E>> {

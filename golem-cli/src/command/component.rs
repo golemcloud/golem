@@ -25,7 +25,9 @@ use crate::service::project::ProjectResolver;
 use clap::Subcommand;
 use golem_client::model::ComponentType;
 use golem_common::model::PluginInstallationId;
-use golem_wasm_rpc_stubgen::commands::app::{ApplicationContext, ApplicationSourceMode, Config};
+use golem_wasm_rpc_stubgen::commands::app::{
+    ApplicationContext, ApplicationSourceMode, ComponentSelectMode, Config,
+};
 use golem_wasm_rpc_stubgen::log::Output;
 use golem_wasm_rpc_stubgen::model::app;
 use itertools::Itertools;
@@ -504,14 +506,27 @@ impl<
 
 fn app_ctx(
     sources: Vec<PathBuf>,
+    component_names: Vec<String>,
     build_profile: Option<app::ProfileName>,
 ) -> Result<ApplicationContext<GolemComponentExtensions>, GolemError> {
     Ok(ApplicationContext::new(Config {
-        app_resolve_mode: {
+        app_source_mode: {
             if sources.is_empty() {
                 ApplicationSourceMode::Automatic
             } else {
                 ApplicationSourceMode::Explicit(sources)
+            }
+        },
+        component_select_mode: {
+            if component_names.is_empty() {
+                ComponentSelectMode::CurrentDir
+            } else {
+                ComponentSelectMode::Explicit(
+                    component_names
+                        .into_iter()
+                        .map(|component_name| component_name.into())
+                        .collect(),
+                )
             }
         },
         skip_up_to_date_checks: false,
@@ -540,7 +555,7 @@ impl ApplicationComponentContext {
         build_profile: Option<app::ProfileName>,
         component_name: &str,
     ) -> Result<Self, GolemError> {
-        let app_ctx = app_ctx(sources, build_profile.clone())?;
+        let app_ctx = app_ctx(sources, vec![component_name.into()], build_profile.clone())?;
         let name = app::ComponentName::from(component_name.to_string());
 
         if !app_ctx.application.component_names().contains(&name) {
