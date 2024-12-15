@@ -2,7 +2,7 @@ package wasi:rdbms@0.0.1;
 
 interface postgres {
 
-  type node-index = s32;
+  type node-index = u32;
 
   variant error {
     connection-failure(string),

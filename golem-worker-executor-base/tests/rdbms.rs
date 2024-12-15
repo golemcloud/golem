@@ -137,17 +137,17 @@ async fn rdbms_postgres_create_insert_select(
                     {
                        "values":[
                           {
-                             "primitive":{
+                             "nodes":[{
                                 "uuid":  {
                                    "high-bits": user_id.0,
                                    "low-bits": user_id.1
                                 }
-                             }
+                              }]
                           },
                           {
-                             "primitive":{
+                             "nodes":[{
                                 "text": name
-                             }
+                             }]
                           }
                        ]
                     }
@@ -172,9 +172,9 @@ async fn rdbms_postgres_create_insert_select(
                      "columns":[
                         {
                            "db-type":{
-                              "primitive":{
+                              "nodes":[{
                                  "uuid":null
-                              }
+                              }]
                            },
                            "db-type-name":"UUID",
                            "name":"user_id",
@@ -182,9 +182,9 @@ async fn rdbms_postgres_create_insert_select(
                         },
                         {
                            "db-type":{
-                              "primitive":{
+                              "nodes":[{
                                  "text":null
-                              }
+                              }]
                            },
                            "db-type-name":"TEXT",
                            "name":"name",
@@ -228,9 +228,9 @@ async fn rdbms_postgres_select1(
                      "columns":[
                         {
                            "db-type":{
-                              "primitive":{
+                              "nodes":[{
                                  "int4":null
-                              }
+                              }]
                            },
                            "db-type-name":"INT4",
                            "name":"?column?",
@@ -241,9 +241,9 @@ async fn rdbms_postgres_select1(
                         {
                            "values":[
                               {
-                                 "primitive":{
+                                 "nodes":[{
                                     "int4":1
-                                 }
+                                 }]
                               }
                            ]
                         }

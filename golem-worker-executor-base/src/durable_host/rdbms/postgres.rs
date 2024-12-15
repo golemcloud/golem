@@ -15,18 +15,18 @@
 use crate::durable_host::DurableWorkerCtx;
 use crate::metrics::wasm::record_host_function_call;
 use crate::preview2::wasi::rdbms::postgres::{
-    Date, Datebound, Daterange, DbColumn, DbColumnType, DbRow, DbValue, Enumeration, Error, Host,
-    HostDbConnection, HostDbResultSet, Int4bound, Int4range, Int8bound, Int8range, Interval,
-    IpAddress, MacAddress, Numbound, Numrange, Time, Timestamp, Timestamptz, Timetz, Tsbound,
-    Tsrange, Tstzbound, Tstzrange, Uuid,
+    Date, Datebound, Daterange, DbColumn, DbColumnType, DbRow, DbValue, Enumeration,
+    EnumerationType, Error, Host, HostDbConnection, HostDbResultSet, Int4bound, Int4range,
+    Int8bound, Int8range, Interval, IpAddress, Numbound, Numrange, Time, Timestamp, Timestamptz,
+    Timetz, Tsbound, Tsrange, Tstzbound, Tstzrange,
 };
+use crate::services::rdbms::postgres::types as postgres_types;
 use crate::services::rdbms::postgres::PostgresType;
 use crate::services::rdbms::RdbmsPoolKey;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use bigdecimal::BigDecimal;
 use chrono::{Datelike, Offset, Timelike};
-use sqlx::types::BitVec;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::ops::{Bound, Deref};
 use std::str::FromStr;
@@ -299,300 +299,35 @@ impl<Ctx: WorkerCtx> HostDbResultSet for &mut DurableWorkerCtx<Ctx> {
     }
 }
 
-impl TryFrom<DbValue> for crate::services::rdbms::postgres::types::DbValue {
+impl TryFrom<DbValue> for postgres_types::DbValue {
     type Error = String;
     fn try_from(value: DbValue) -> Result<Self, Self::Error> {
-        // match value {
-        //     DbValuePrimitive::Character(v) => Ok(Self::Character(v)),
-        //     DbValuePrimitive::Int2(i) => Ok(Self::Int2(i)),
-        //     DbValuePrimitive::Int4(i) => Ok(Self::Int4(i)),
-        //     DbValuePrimitive::Int8(i) => Ok(Self::Int8(i)),
-        //     DbValuePrimitive::Numeric(s) => {
-        //         let v = bigdecimal::BigDecimal::from_str(&s).map_err(|e| e.to_string())?;
-        //         Ok(Self::Numeric(v))
-        //     }
-        //     DbValuePrimitive::Float4(f) => Ok(Self::Float4(f)),
-        //     DbValuePrimitive::Float8(f) => Ok(Self::Float8(f)),
-        //     DbValuePrimitive::Boolean(b) => Ok(Self::Boolean(b)),
-        //     DbValuePrimitive::Timestamp(v) => {
-        //         let value = v.try_into()?;
-        //         Ok(Self::Timestamp(value))
-        //     }
-        //     DbValuePrimitive::Timestamptz(v) => {
-        //         let value = v.try_into()?;
-        //         Ok(Self::Timestamptz(value))
-        //     }
-        //     DbValuePrimitive::Time(v) => {
-        //         let value = v.try_into()?;
-        //         Ok(Self::Time(value))
-        //     }
-        //     DbValuePrimitive::Timetz(v) => {
-        //         let value = v.try_into()?;
-        //         Ok(Self::Timetz(value))
-        //     }
-        //     DbValuePrimitive::Date(v) => {
-        //         let value = v.try_into()?;
-        //         Ok(Self::Date(value))
-        //     }
-        //     DbValuePrimitive::Interval(v) => Ok(Self::Interval(v.into())),
-        //     DbValuePrimitive::Text(s) => Ok(Self::Text(s)),
-        //     DbValuePrimitive::Varchar(s) => Ok(Self::Varchar(s)),
-        //     DbValuePrimitive::Bpchar(s) => Ok(Self::Bpchar(s)),
-        //     DbValuePrimitive::Bytea(u) => Ok(Self::Bytea(u)),
-        //     DbValuePrimitive::Json(v) => {
-        //         let v: serde_json::Value = serde_json::from_str(&v).map_err(|e| e.to_string())?;
-        //         Ok(Self::Json(v))
-        //     }
-        //     DbValuePrimitive::Jsonb(v) => {
-        //         let v: serde_json::Value = serde_json::from_str(&v).map_err(|e| e.to_string())?;
-        //         Ok(Self::Jsonb(v))
-        //     }
-        //     DbValuePrimitive::Jsonpath(s) => Ok(Self::Jsonpath(s)),
-        //     DbValuePrimitive::Xml(s) => Ok(Self::Xml(s)),
-        //     DbValuePrimitive::Uuid(v) => Ok(Self::Uuid(uuid::Uuid::from_u64_pair(
-        //         v.high_bits,
-        //         v.low_bits,
-        //     ))),
-        //     DbValuePrimitive::Bit(v) => Ok(Self::Bit(BitVec::from_iter(v))),
-        //     DbValuePrimitive::Varbit(v) => Ok(Self::Varbit(BitVec::from_iter(v))),
-        //     DbValuePrimitive::Oid(v) => Ok(Self::Oid(v)),
-        //     DbValuePrimitive::Inet(v) => Ok(Self::Inet(v.into())),
-        //     DbValuePrimitive::Cidr(v) => Ok(Self::Cidr(v.into())),
-        //     DbValuePrimitive::Macaddr(v) => Ok(Self::Macaddr(
-        //         sqlx::types::mac_address::MacAddress::new(v.octets.into()),
-        //     )),
-        //     DbValuePrimitive::Int4range(v) => Ok(Self::Int4range(v.into())),
-        //     DbValuePrimitive::Int8range(v) => Ok(Self::Int8range(v.into())),
-        //     DbValuePrimitive::Numrange(v) => {
-        //         let v = v.try_into()?;
-        //         Ok(Self::Numrange(v))
-        //     }
-        //     DbValuePrimitive::Tsrange(v) => {
-        //         let v = v.try_into()?;
-        //         Ok(Self::Tsrange(v))
-        //     }
-        //     DbValuePrimitive::Tstzrange(v) => {
-        //         let v = v.try_into()?;
-        //         Ok(Self::Tstzrange(v))
-        //     }
-        //     DbValuePrimitive::Daterange(v) => {
-        //         let v = v.try_into()?;
-        //         Ok(Self::Daterange(v))
-        //     }
-        //     DbValuePrimitive::Money(v) => Ok(Self::Money(v)),
-        //     DbValuePrimitive::Enumeration(v) => Ok(Self::Enum(v.into())),
-        //     DbValuePrimitive::Null => Ok(Self::Null),
-        // }
-        todo!()
+        postgres_utils::to_db_value(value)
     }
 }
 
-impl From<crate::services::rdbms::postgres::types::DbValue> for DbValue {
-    fn from(value: crate::services::rdbms::postgres::types::DbValue) -> Self {
-        // match value {
-        //     crate::services::rdbms::postgres::types::DbValue::Character(s) => {
-        //         Self::Character(s)
-        //     }
-        //     crate::services::rdbms::postgres::types::DbValue::Int2(i) => Self::Int2(i),
-        //     crate::services::rdbms::postgres::types::DbValue::Int4(i) => Self::Int4(i),
-        //     crate::services::rdbms::postgres::types::DbValue::Int8(i) => Self::Int8(i),
-        //     crate::services::rdbms::postgres::types::DbValue::Numeric(s) => {
-        //         Self::Numeric(s.to_string())
-        //     }
-        //     crate::services::rdbms::postgres::types::DbValue::Float4(f) => Self::Float4(f),
-        //     crate::services::rdbms::postgres::types::DbValue::Float8(f) => Self::Float8(f),
-        //     crate::services::rdbms::postgres::types::DbValue::Boolean(b) => {
-        //         Self::Boolean(b)
-        //     }
-        //     crate::services::rdbms::postgres::types::DbValue::Timestamp(v) => {
-        //         Self::Timestamp(v.into())
-        //     }
-        //     crate::services::rdbms::postgres::types::DbValue::Timestamptz(v) => {
-        //         Self::Timestamptz(v.into())
-        //     }
-        //     crate::services::rdbms::postgres::types::DbValue::Time(v) => {
-        //         Self::Time(v.into())
-        //     }
-        //     crate::services::rdbms::postgres::types::DbValue::Timetz(v) => {
-        //         Self::Timetz(v.into())
-        //     }
-        //     crate::services::rdbms::postgres::types::DbValue::Date(v) => {
-        //         Self::Date(v.into())
-        //     }
-        //     crate::services::rdbms::postgres::types::DbValue::Interval(v) => {
-        //         Self::Interval(v.into())
-        //     }
-        //     crate::services::rdbms::postgres::types::DbValue::Text(s) => Self::Text(s),
-        //     crate::services::rdbms::postgres::types::DbValue::Varchar(s) => {
-        //         Self::Varchar(s)
-        //     }
-        //     crate::services::rdbms::postgres::types::DbValue::Bpchar(s) => Self::Bpchar(s),
-        //     crate::services::rdbms::postgres::types::DbValue::Bytea(u) => Self::Bytea(u),
-        //     crate::services::rdbms::postgres::types::DbValue::Json(s) => {
-        //         Self::Json(s.to_string())
-        //     }
-        //     crate::services::rdbms::postgres::types::DbValue::Jsonb(s) => {
-        //         Self::Jsonb(s.to_string())
-        //     }
-        //     crate::services::rdbms::postgres::types::DbValue::Jsonpath(s) => {
-        //         Self::Jsonpath(s)
-        //     }
-        //     crate::services::rdbms::postgres::types::DbValue::Xml(s) => Self::Xml(s),
-        //     crate::services::rdbms::postgres::types::DbValue::Uuid(uuid) => {
-        //         let (high_bits, low_bits) = uuid.as_u64_pair();
-        //         Self::Uuid(Uuid {
-        //             high_bits,
-        //             low_bits,
-        //         })
-        //     }
-        //     crate::services::rdbms::postgres::types::DbValue::Bit(v) => {
-        //         Self::Bit(v.iter().collect())
-        //     }
-        //     crate::services::rdbms::postgres::types::DbValue::Varbit(v) => {
-        //         Self::Varbit(v.iter().collect())
-        //     }
-        //     crate::services::rdbms::postgres::types::DbValue::Inet(v) => {
-        //         Self::Inet(v.into())
-        //     }
-        //     crate::services::rdbms::postgres::types::DbValue::Cidr(v) => {
-        //         Self::Cidr(v.into())
-        //     }
-        //     crate::services::rdbms::postgres::types::DbValue::Macaddr(v) => {
-        //         let v = v.bytes();
-        //         DbValuePrimitive::Macaddr(MacAddress { octets: v.into() })
-        //     }
-        //     crate::services::rdbms::postgres::types::DbValue::Tsrange(v) => {
-        //         Self::Tsrange(v.into())
-        //     }
-        //     crate::services::rdbms::postgres::types::DbValue::Tstzrange(v) => {
-        //         Self::Tstzrange(v.into())
-        //     }
-        //     crate::services::rdbms::postgres::types::DbValue::Daterange(v) => {
-        //         Self::Daterange(v.into())
-        //     }
-        //     crate::services::rdbms::postgres::types::DbValue::Int4range(v) => {
-        //         Self::Int4range(v.into())
-        //     }
-        //     crate::services::rdbms::postgres::types::DbValue::Int8range(v) => {
-        //         Self::Int8range(v.into())
-        //     }
-        //     crate::services::rdbms::postgres::types::DbValue::Numrange(v) => {
-        //         Self::Numrange(v.into())
-        //     }
-        //     crate::services::rdbms::postgres::types::DbValue::Oid(v) => Self::Oid(v),
-        //     crate::services::rdbms::postgres::types::DbValue::Money(v) => Self::Money(v),
-        //     crate::services::rdbms::postgres::types::DbValue::Enum(v) => {
-        //         Self::Enumeration(v.into())
-        //     }
-        //     crate::services::rdbms::postgres::types::DbValue::Composite(_) => {
-        //         todo!()
-        //     }
-        //     crate::services::rdbms::postgres::types::DbValue::Domain(_) => {
-        //         todo!()
-        //     }
-        //     crate::services::rdbms::postgres::types::DbValue::Null => Self::Null,
-        // }
-        todo!()
+impl From<postgres_types::DbValue> for DbValue {
+    fn from(value: postgres_types::DbValue) -> Self {
+        postgres_utils::from_db_value(value)
     }
 }
 
-impl From<crate::services::rdbms::DbRow<crate::services::rdbms::postgres::types::DbValue>>
-    for DbRow
-{
-    fn from(
-        value: crate::services::rdbms::DbRow<crate::services::rdbms::postgres::types::DbValue>,
-    ) -> Self {
+impl From<crate::services::rdbms::DbRow<postgres_types::DbValue>> for DbRow {
+    fn from(value: crate::services::rdbms::DbRow<postgres_types::DbValue>) -> Self {
         Self {
             values: value.values.into_iter().map(|v| v.into()).collect(),
         }
     }
 }
 
-impl From<crate::services::rdbms::postgres::types::DbColumnType> for DbColumnType {
-    fn from(value: crate::services::rdbms::postgres::types::DbColumnType) -> Self {
-        // match value {
-        //     crate::services::rdbms::postgres::types::DbColumnType::Character => {
-        //         Self::Character
-        //     }
-        //     crate::services::rdbms::postgres::types::DbColumnType::Int2 => Self::Int2,
-        //     crate::services::rdbms::postgres::types::DbColumnType::Int4 => Self::Int4,
-        //     crate::services::rdbms::postgres::types::DbColumnType::Int8 => Self::Int8,
-        //     crate::services::rdbms::postgres::types::DbColumnType::Numeric => {
-        //         Self::Numeric
-        //     }
-        //     crate::services::rdbms::postgres::types::DbColumnType::Float4 => Self::Float4,
-        //     crate::services::rdbms::postgres::types::DbColumnType::Float8 => Self::Float8,
-        //     crate::services::rdbms::postgres::types::DbColumnType::Boolean => {
-        //         Self::Boolean
-        //     }
-        //     crate::services::rdbms::postgres::types::DbColumnType::Timestamp => {
-        //         Self::Timestamp
-        //     }
-        //     crate::services::rdbms::postgres::types::DbColumnType::Timestamptz => {
-        //         Self::Timestamptz
-        //     }
-        //     crate::services::rdbms::postgres::types::DbColumnType::Interval => {
-        //         Self::Interval
-        //     }
-        //     crate::services::rdbms::postgres::types::DbColumnType::Time => Self::Time,
-        //     crate::services::rdbms::postgres::types::DbColumnType::Timetz => Self::Timetz,
-        //     crate::services::rdbms::postgres::types::DbColumnType::Date => Self::Date,
-        //     crate::services::rdbms::postgres::types::DbColumnType::Text => Self::Text,
-        //     crate::services::rdbms::postgres::types::DbColumnType::Varchar => {
-        //         Self::Varchar
-        //     }
-        //     crate::services::rdbms::postgres::types::DbColumnType::Bpchar => Self::Bpchar,
-        //     crate::services::rdbms::postgres::types::DbColumnType::Bytea => Self::Bytea,
-        //     crate::services::rdbms::postgres::types::DbColumnType::Jsonb => Self::Jsonb,
-        //     crate::services::rdbms::postgres::types::DbColumnType::Json => Self::Json,
-        //     crate::services::rdbms::postgres::types::DbColumnType::Jsonpath => {
-        //         Self::Jsonpath
-        //     }
-        //     crate::services::rdbms::postgres::types::DbColumnType::Xml => Self::Xml,
-        //     crate::services::rdbms::postgres::types::DbColumnType::Bit => Self::Bit,
-        //     crate::services::rdbms::postgres::types::DbColumnType::Varbit => Self::Varbit,
-        //     crate::services::rdbms::postgres::types::DbColumnType::Oid => Self::Oid,
-        //     crate::services::rdbms::postgres::types::DbColumnType::Inet => Self::Inet,
-        //     crate::services::rdbms::postgres::types::DbColumnType::Cidr => Self::Cidr,
-        //     crate::services::rdbms::postgres::types::DbColumnType::Macaddr => {
-        //         Self::Macaddr
-        //     }
-        //     crate::services::rdbms::postgres::types::DbColumnType::Int4range => {
-        //         Self::Int4range
-        //     }
-        //     crate::services::rdbms::postgres::types::DbColumnType::Int8range => {
-        //         Self::Int8range
-        //     }
-        //     crate::services::rdbms::postgres::types::DbColumnType::Numrange => {
-        //         Self::Numrange
-        //     }
-        //     crate::services::rdbms::postgres::types::DbColumnType::Tsrange => {
-        //         Self::Tsrange
-        //     }
-        //     crate::services::rdbms::postgres::types::DbColumnType::Tstzrange => {
-        //         Self::Tstzrange
-        //     }
-        //     crate::services::rdbms::postgres::types::DbColumnType::Daterange => {
-        //         Self::Daterange
-        //     }
-        //     crate::services::rdbms::postgres::types::DbColumnType::Uuid => Self::Uuid,
-        //     crate::services::rdbms::postgres::types::DbColumnType::Money => Self::Money,
-        //     crate::services::rdbms::postgres::types::DbColumnType::Enum(v) => {
-        //         Self::Enumeration(v.name)
-        //     }
-        //     crate::services::rdbms::postgres::types::DbColumnType::Composite(v) => {
-        //         todo!()
-        //     }
-        //     crate::services::rdbms::postgres::types::DbColumnType::Domain(v) => {
-        //         todo!()
-        //     }
-        // }
-        todo!()
+impl From<postgres_types::DbColumnType> for DbColumnType {
+    fn from(value: postgres_types::DbColumnType) -> Self {
+        postgres_utils::from_db_column_type(value)
     }
 }
 
-impl From<crate::services::rdbms::postgres::types::DbColumn> for DbColumn {
-    fn from(value: crate::services::rdbms::postgres::types::DbColumn) -> Self {
+impl From<postgres_types::DbColumn> for DbColumn {
+    fn from(value: postgres_types::DbColumn) -> Self {
         Self {
             ordinal: value.ordinal,
             name: value.name,
@@ -657,7 +392,7 @@ impl TryFrom<Time> for chrono::NaiveTime {
     }
 }
 
-impl TryFrom<Timetz> for crate::services::rdbms::postgres::types::TimeTz {
+impl TryFrom<Timetz> for postgres_types::TimeTz {
     type Error = String;
 
     fn try_from(value: Timetz) -> Result<Self, Self::Error> {
@@ -668,7 +403,7 @@ impl TryFrom<Timetz> for crate::services::rdbms::postgres::types::TimeTz {
     }
 }
 
-impl From<Interval> for crate::services::rdbms::postgres::types::Interval {
+impl From<Interval> for postgres_types::Interval {
     fn from(v: Interval) -> Self {
         Self {
             months: v.months,
@@ -678,12 +413,18 @@ impl From<Interval> for crate::services::rdbms::postgres::types::Interval {
     }
 }
 
-impl From<Enumeration> for crate::services::rdbms::postgres::types::Enum {
+impl From<Enumeration> for postgres_types::Enum {
     fn from(v: Enumeration) -> Self {
         Self {
             name: v.name,
             value: v.value,
         }
+    }
+}
+
+impl From<EnumerationType> for postgres_types::EnumType {
+    fn from(v: EnumerationType) -> Self {
+        Self { name: v.name }
     }
 }
 
@@ -740,16 +481,16 @@ impl From<chrono::NaiveTime> for Time {
     }
 }
 
-impl From<crate::services::rdbms::postgres::types::TimeTz> for Timetz {
-    fn from(v: crate::services::rdbms::postgres::types::TimeTz) -> Self {
+impl From<postgres_types::TimeTz> for Timetz {
+    fn from(v: postgres_types::TimeTz) -> Self {
         let time = v.time.into();
         let offset = v.offset.local_minus_utc();
         Timetz { time, offset }
     }
 }
 
-impl From<crate::services::rdbms::postgres::types::Interval> for Interval {
-    fn from(v: crate::services::rdbms::postgres::types::Interval) -> Self {
+impl From<postgres_types::Interval> for Interval {
+    fn from(v: postgres_types::Interval) -> Self {
         Self {
             months: v.months,
             days: v.days,
@@ -758,12 +499,18 @@ impl From<crate::services::rdbms::postgres::types::Interval> for Interval {
     }
 }
 
-impl From<crate::services::rdbms::postgres::types::Enum> for Enumeration {
-    fn from(v: crate::services::rdbms::postgres::types::Enum) -> Self {
+impl From<postgres_types::Enum> for Enumeration {
+    fn from(v: postgres_types::Enum) -> Self {
         Self {
             name: v.name,
             value: v.value,
         }
+    }
+}
+
+impl From<postgres_types::EnumType> for EnumerationType {
+    fn from(v: postgres_types::EnumType) -> Self {
+        Self { name: v.name }
     }
 }
 
@@ -792,12 +539,12 @@ impl From<chrono::DateTime<chrono::Utc>> for Timestamptz {
     }
 }
 
-type NaiveDateTimeBounds = crate::services::rdbms::postgres::types::Range<chrono::NaiveDateTime>;
-type NaiveDateBounds = crate::services::rdbms::postgres::types::Range<chrono::NaiveDate>;
-type DateTimeBounds = crate::services::rdbms::postgres::types::Range<chrono::DateTime<chrono::Utc>>;
-type I32Bounds = crate::services::rdbms::postgres::types::Range<i32>;
-type I64Bounds = crate::services::rdbms::postgres::types::Range<i64>;
-type BigDecimalBounds = crate::services::rdbms::postgres::types::Range<BigDecimal>;
+type NaiveDateTimeBounds = postgres_types::Range<chrono::NaiveDateTime>;
+type NaiveDateBounds = postgres_types::Range<chrono::NaiveDate>;
+type DateTimeBounds = postgres_types::Range<chrono::DateTime<chrono::Utc>>;
+type I32Bounds = postgres_types::Range<i32>;
+type I64Bounds = postgres_types::Range<i64>;
+type BigDecimalBounds = postgres_types::Range<BigDecimal>;
 
 impl From<Int4range> for I32Bounds {
     fn from(value: Int4range) -> Self {
@@ -999,6 +746,379 @@ impl From<NaiveDateBounds> for Daterange {
         Self {
             start: to_bounds(value.start),
             end: to_bounds(value.end),
+        }
+    }
+}
+
+pub(crate) mod postgres_utils {
+    use crate::preview2::wasi::rdbms::postgres::{
+        Composite, CompositeType, DbColumnType, DbColumnTypeNode, DbValue, DbValueNode, Domain,
+        DomainType, MacAddress, NodeIndex, Uuid,
+    };
+    use crate::services::rdbms::postgres::types as postgres_types;
+    use sqlx::types::BitVec;
+    use std::str::FromStr;
+
+    pub(crate) fn to_db_value(value: DbValue) -> Result<postgres_types::DbValue, String> {
+        make_db_value(0, &value.nodes)
+    }
+
+    fn make_db_value(
+        index: NodeIndex,
+        nodes: &[DbValueNode],
+    ) -> Result<postgres_types::DbValue, String> {
+        if index as usize >= nodes.len() {
+            Err(format!("Index ({}) out of range", index))
+        } else {
+            let node = &nodes[index as usize];
+            match node {
+                DbValueNode::Character(v) => Ok(postgres_types::DbValue::Character(*v)),
+                DbValueNode::Int2(i) => Ok(postgres_types::DbValue::Int2(*i)),
+                DbValueNode::Int4(i) => Ok(postgres_types::DbValue::Int4(*i)),
+                DbValueNode::Int8(i) => Ok(postgres_types::DbValue::Int8(*i)),
+                DbValueNode::Numeric(s) => {
+                    let v = bigdecimal::BigDecimal::from_str(s).map_err(|e| e.to_string())?;
+                    Ok(postgres_types::DbValue::Numeric(v))
+                }
+                DbValueNode::Float4(f) => Ok(postgres_types::DbValue::Float4(*f)),
+                DbValueNode::Float8(f) => Ok(postgres_types::DbValue::Float8(*f)),
+                DbValueNode::Boolean(b) => Ok(postgres_types::DbValue::Boolean(*b)),
+                DbValueNode::Timestamp(v) => {
+                    let value = (*v).try_into()?;
+                    Ok(postgres_types::DbValue::Timestamp(value))
+                }
+                DbValueNode::Timestamptz(v) => {
+                    let value = (*v).try_into()?;
+                    Ok(postgres_types::DbValue::Timestamptz(value))
+                }
+                DbValueNode::Time(v) => {
+                    let value = (*v).try_into()?;
+                    Ok(postgres_types::DbValue::Time(value))
+                }
+                DbValueNode::Timetz(v) => {
+                    let value = (*v).try_into()?;
+                    Ok(postgres_types::DbValue::Timetz(value))
+                }
+                DbValueNode::Date(v) => {
+                    let value = (*v).try_into()?;
+                    Ok(postgres_types::DbValue::Date(value))
+                }
+                DbValueNode::Interval(v) => Ok(postgres_types::DbValue::Interval((*v).into())),
+                DbValueNode::Text(s) => Ok(postgres_types::DbValue::Text(s.clone())),
+                DbValueNode::Varchar(s) => Ok(postgres_types::DbValue::Varchar(s.clone())),
+                DbValueNode::Bpchar(s) => Ok(postgres_types::DbValue::Bpchar(s.clone())),
+                DbValueNode::Bytea(u) => Ok(postgres_types::DbValue::Bytea(u.clone())),
+                DbValueNode::Json(v) => {
+                    let v: serde_json::Value =
+                        serde_json::from_str(v).map_err(|e| e.to_string())?;
+                    Ok(postgres_types::DbValue::Json(v))
+                }
+                DbValueNode::Jsonb(v) => {
+                    let v: serde_json::Value =
+                        serde_json::from_str(v).map_err(|e| e.to_string())?;
+                    Ok(postgres_types::DbValue::Jsonb(v))
+                }
+                DbValueNode::Jsonpath(s) => Ok(postgres_types::DbValue::Jsonpath(s.clone())),
+                DbValueNode::Xml(s) => Ok(postgres_types::DbValue::Xml(s.clone())),
+                DbValueNode::Uuid(v) => Ok(postgres_types::DbValue::Uuid(
+                    uuid::Uuid::from_u64_pair(v.high_bits, v.low_bits),
+                )),
+                DbValueNode::Bit(v) => {
+                    Ok(postgres_types::DbValue::Bit(BitVec::from_iter(v.clone())))
+                }
+                DbValueNode::Varbit(v) => Ok(postgres_types::DbValue::Varbit(BitVec::from_iter(
+                    v.clone(),
+                ))),
+                DbValueNode::Oid(v) => Ok(postgres_types::DbValue::Oid(*v)),
+                DbValueNode::Inet(v) => Ok(postgres_types::DbValue::Inet((*v).into())),
+                DbValueNode::Cidr(v) => Ok(postgres_types::DbValue::Cidr((*v).into())),
+                DbValueNode::Macaddr(v) => Ok(postgres_types::DbValue::Macaddr(
+                    sqlx::types::mac_address::MacAddress::new(v.octets.into()),
+                )),
+                DbValueNode::Int4range(v) => Ok(postgres_types::DbValue::Int4range((*v).into())),
+                DbValueNode::Int8range(v) => Ok(postgres_types::DbValue::Int8range((*v).into())),
+                DbValueNode::Numrange(v) => {
+                    let v = v.clone().try_into()?;
+                    Ok(postgres_types::DbValue::Numrange(v))
+                }
+                DbValueNode::Tsrange(v) => {
+                    let v = (*v).try_into()?;
+                    Ok(postgres_types::DbValue::Tsrange(v))
+                }
+                DbValueNode::Tstzrange(v) => {
+                    let v = (*v).try_into()?;
+                    Ok(postgres_types::DbValue::Tstzrange(v))
+                }
+                DbValueNode::Daterange(v) => {
+                    let v = (*v).try_into()?;
+                    Ok(postgres_types::DbValue::Daterange(v))
+                }
+                DbValueNode::Money(v) => Ok(postgres_types::DbValue::Money(*v)),
+                DbValueNode::Enumeration(v) => Ok(postgres_types::DbValue::Enum(v.clone().into())),
+                DbValueNode::Array(vs) => {
+                    let mut values: Vec<postgres_types::DbValue> = Vec::with_capacity(vs.len());
+                    for i in vs.iter() {
+                        let v = make_db_value(*i, nodes)?;
+                        values.push(v);
+                    }
+                    Ok(postgres_types::DbValue::Array(values))
+                }
+                DbValueNode::Composite(v) => {
+                    let mut values: Vec<postgres_types::DbValue> =
+                        Vec::with_capacity(v.values.len());
+                    for i in v.values.iter() {
+                        let v = make_db_value(*i, nodes)?;
+                        values.push(v);
+                    }
+                    Ok(postgres_types::DbValue::Composite(
+                        postgres_types::Composite::new(v.name.clone(), values),
+                    ))
+                }
+                DbValueNode::Domain(v) => {
+                    let value = make_db_value(v.value, nodes)?;
+                    Ok(postgres_types::DbValue::Domain(
+                        postgres_types::Domain::new(v.name.clone(), value),
+                    ))
+                }
+                DbValueNode::Null => Ok(postgres_types::DbValue::Null),
+            }
+        }
+    }
+
+    pub(crate) fn from_db_value(value: postgres_types::DbValue) -> DbValue {
+        let mut builder = DbValueBuilder::new();
+        builder.add(value);
+        builder.build()
+    }
+
+    struct DbValueBuilder {
+        nodes: Vec<DbValueNode>,
+    }
+
+    impl DbValueBuilder {
+        fn new() -> Self {
+            Self { nodes: Vec::new() }
+        }
+
+        fn add_node(&mut self, node: DbValueNode) -> NodeIndex {
+            self.nodes.push(node);
+            self.nodes.len() as NodeIndex - 1
+        }
+
+        fn add(&mut self, value: postgres_types::DbValue) -> NodeIndex {
+            match value {
+                postgres_types::DbValue::Character(s) => self.add_node(DbValueNode::Character(s)),
+                postgres_types::DbValue::Int2(i) => self.add_node(DbValueNode::Int2(i)),
+                postgres_types::DbValue::Int4(i) => self.add_node(DbValueNode::Int4(i)),
+                postgres_types::DbValue::Int8(i) => self.add_node(DbValueNode::Int8(i)),
+                postgres_types::DbValue::Numeric(s) => {
+                    self.add_node(DbValueNode::Numeric(s.to_string()))
+                }
+                postgres_types::DbValue::Float4(f) => self.add_node(DbValueNode::Float4(f)),
+                postgres_types::DbValue::Float8(f) => self.add_node(DbValueNode::Float8(f)),
+                postgres_types::DbValue::Boolean(b) => self.add_node(DbValueNode::Boolean(b)),
+                postgres_types::DbValue::Timestamp(v) => {
+                    self.add_node(DbValueNode::Timestamp(v.into()))
+                }
+                postgres_types::DbValue::Timestamptz(v) => {
+                    self.add_node(DbValueNode::Timestamptz(v.into()))
+                }
+                postgres_types::DbValue::Time(v) => self.add_node(DbValueNode::Time(v.into())),
+                postgres_types::DbValue::Timetz(v) => self.add_node(DbValueNode::Timetz(v.into())),
+                postgres_types::DbValue::Date(v) => self.add_node(DbValueNode::Date(v.into())),
+                postgres_types::DbValue::Interval(v) => {
+                    self.add_node(DbValueNode::Interval(v.into()))
+                }
+                postgres_types::DbValue::Text(s) => self.add_node(DbValueNode::Text(s)),
+                postgres_types::DbValue::Varchar(s) => self.add_node(DbValueNode::Varchar(s)),
+                postgres_types::DbValue::Bpchar(s) => self.add_node(DbValueNode::Bpchar(s)),
+                postgres_types::DbValue::Bytea(u) => self.add_node(DbValueNode::Bytea(u)),
+                postgres_types::DbValue::Json(s) => self.add_node(DbValueNode::Json(s.to_string())),
+                postgres_types::DbValue::Jsonb(s) => {
+                    self.add_node(DbValueNode::Jsonb(s.to_string()))
+                }
+                postgres_types::DbValue::Jsonpath(s) => self.add_node(DbValueNode::Jsonpath(s)),
+                postgres_types::DbValue::Xml(s) => self.add_node(DbValueNode::Xml(s)),
+                postgres_types::DbValue::Uuid(uuid) => {
+                    let (high_bits, low_bits) = uuid.as_u64_pair();
+                    self.add_node(DbValueNode::Uuid(Uuid {
+                        high_bits,
+                        low_bits,
+                    }))
+                }
+                postgres_types::DbValue::Bit(v) => {
+                    self.add_node(DbValueNode::Bit(v.iter().collect()))
+                }
+                postgres_types::DbValue::Varbit(v) => {
+                    self.add_node(DbValueNode::Varbit(v.iter().collect()))
+                }
+                postgres_types::DbValue::Inet(v) => self.add_node(DbValueNode::Inet(v.into())),
+                postgres_types::DbValue::Cidr(v) => self.add_node(DbValueNode::Cidr(v.into())),
+                postgres_types::DbValue::Macaddr(v) => {
+                    let v = v.bytes();
+                    self.add_node(DbValueNode::Macaddr(MacAddress { octets: v.into() }))
+                }
+                postgres_types::DbValue::Tsrange(v) => {
+                    self.add_node(DbValueNode::Tsrange(v.into()))
+                }
+                postgres_types::DbValue::Tstzrange(v) => {
+                    self.add_node(DbValueNode::Tstzrange(v.into()))
+                }
+                postgres_types::DbValue::Daterange(v) => {
+                    self.add_node(DbValueNode::Daterange(v.into()))
+                }
+                postgres_types::DbValue::Int4range(v) => {
+                    self.add_node(DbValueNode::Int4range(v.into()))
+                }
+                postgres_types::DbValue::Int8range(v) => {
+                    self.add_node(DbValueNode::Int8range(v.into()))
+                }
+                postgres_types::DbValue::Numrange(v) => {
+                    self.add_node(DbValueNode::Numrange(v.into()))
+                }
+                postgres_types::DbValue::Oid(v) => self.add_node(DbValueNode::Oid(v)),
+                postgres_types::DbValue::Money(v) => self.add_node(DbValueNode::Money(v)),
+                postgres_types::DbValue::Enum(v) => {
+                    self.add_node(DbValueNode::Enumeration(v.into()))
+                }
+                postgres_types::DbValue::Composite(v) => {
+                    let mut values: Vec<NodeIndex> = Vec::with_capacity(v.values.len());
+                    for v in v.values {
+                        let i = self.add(v);
+                        values.push(i);
+                    }
+                    self.add_node(DbValueNode::Composite(Composite {
+                        name: v.name,
+                        values,
+                    }))
+                }
+                postgres_types::DbValue::Domain(v) => {
+                    let i = self.add(*v.value);
+                    self.add_node(DbValueNode::Domain(Domain {
+                        name: v.name,
+                        value: i,
+                    }))
+                }
+                postgres_types::DbValue::Array(vs) => {
+                    let mut values: Vec<NodeIndex> = Vec::with_capacity(vs.len());
+                    for v in vs {
+                        let i = self.add(v);
+                        values.push(i);
+                    }
+                    self.add_node(DbValueNode::Array(values))
+                }
+                postgres_types::DbValue::Null => self.add_node(DbValueNode::Null),
+            }
+        }
+
+        fn build(self) -> DbValue {
+            DbValue { nodes: self.nodes }
+        }
+    }
+
+    pub(crate) fn from_db_column_type(value: postgres_types::DbColumnType) -> DbColumnType {
+        let mut builder = DbColumnTypeBuilder::new();
+        builder.add(value);
+        builder.build()
+    }
+
+    struct DbColumnTypeBuilder {
+        nodes: Vec<DbColumnTypeNode>,
+    }
+
+    impl DbColumnTypeBuilder {
+        fn new() -> Self {
+            Self { nodes: Vec::new() }
+        }
+
+        fn add_node(&mut self, node: DbColumnTypeNode) -> NodeIndex {
+            self.nodes.push(node);
+            self.nodes.len() as NodeIndex - 1
+        }
+
+        fn add(&mut self, value: postgres_types::DbColumnType) -> NodeIndex {
+            match value {
+                postgres_types::DbColumnType::Character => {
+                    self.add_node(DbColumnTypeNode::Character)
+                }
+                postgres_types::DbColumnType::Int2 => self.add_node(DbColumnTypeNode::Int2),
+                postgres_types::DbColumnType::Int4 => self.add_node(DbColumnTypeNode::Int4),
+                postgres_types::DbColumnType::Int8 => self.add_node(DbColumnTypeNode::Int8),
+                postgres_types::DbColumnType::Numeric => self.add_node(DbColumnTypeNode::Numeric),
+                postgres_types::DbColumnType::Float4 => self.add_node(DbColumnTypeNode::Float4),
+                postgres_types::DbColumnType::Float8 => self.add_node(DbColumnTypeNode::Float8),
+                postgres_types::DbColumnType::Boolean => self.add_node(DbColumnTypeNode::Boolean),
+                postgres_types::DbColumnType::Timestamp => {
+                    self.add_node(DbColumnTypeNode::Timestamp)
+                }
+                postgres_types::DbColumnType::Timestamptz => {
+                    self.add_node(DbColumnTypeNode::Timestamptz)
+                }
+                postgres_types::DbColumnType::Time => self.add_node(DbColumnTypeNode::Time),
+                postgres_types::DbColumnType::Timetz => self.add_node(DbColumnTypeNode::Timetz),
+                postgres_types::DbColumnType::Date => self.add_node(DbColumnTypeNode::Date),
+                postgres_types::DbColumnType::Interval => self.add_node(DbColumnTypeNode::Interval),
+                postgres_types::DbColumnType::Text => self.add_node(DbColumnTypeNode::Text),
+                postgres_types::DbColumnType::Varchar => self.add_node(DbColumnTypeNode::Varchar),
+                postgres_types::DbColumnType::Bpchar => self.add_node(DbColumnTypeNode::Bpchar),
+                postgres_types::DbColumnType::Bytea => self.add_node(DbColumnTypeNode::Bytea),
+                postgres_types::DbColumnType::Json => self.add_node(DbColumnTypeNode::Json),
+                postgres_types::DbColumnType::Jsonb => self.add_node(DbColumnTypeNode::Jsonb),
+                postgres_types::DbColumnType::Jsonpath => self.add_node(DbColumnTypeNode::Jsonpath),
+                postgres_types::DbColumnType::Xml => self.add_node(DbColumnTypeNode::Xml),
+                postgres_types::DbColumnType::Uuid => self.add_node(DbColumnTypeNode::Uuid),
+                postgres_types::DbColumnType::Bit => self.add_node(DbColumnTypeNode::Bit),
+                postgres_types::DbColumnType::Varbit => self.add_node(DbColumnTypeNode::Varbit),
+                postgres_types::DbColumnType::Inet => self.add_node(DbColumnTypeNode::Inet),
+                postgres_types::DbColumnType::Cidr => self.add_node(DbColumnTypeNode::Cidr),
+                postgres_types::DbColumnType::Macaddr => self.add_node(DbColumnTypeNode::Macaddr),
+                postgres_types::DbColumnType::Tsrange => self.add_node(DbColumnTypeNode::Tsrange),
+                postgres_types::DbColumnType::Tstzrange => {
+                    self.add_node(DbColumnTypeNode::Tstzrange)
+                }
+                postgres_types::DbColumnType::Daterange => {
+                    self.add_node(DbColumnTypeNode::Daterange)
+                }
+                postgres_types::DbColumnType::Int4range => {
+                    self.add_node(DbColumnTypeNode::Int4range)
+                }
+                postgres_types::DbColumnType::Int8range => {
+                    self.add_node(DbColumnTypeNode::Int8range)
+                }
+                postgres_types::DbColumnType::Numrange => self.add_node(DbColumnTypeNode::Numrange),
+                postgres_types::DbColumnType::Oid => self.add_node(DbColumnTypeNode::Oid),
+                postgres_types::DbColumnType::Money => self.add_node(DbColumnTypeNode::Money),
+                postgres_types::DbColumnType::Enum(v) => {
+                    self.add_node(DbColumnTypeNode::Enumeration(v.into()))
+                }
+                postgres_types::DbColumnType::Composite(v) => {
+                    let mut attributes: Vec<(String, NodeIndex)> =
+                        Vec::with_capacity(v.attributes.len());
+                    for (n, v) in v.attributes {
+                        let i = self.add(v);
+                        attributes.push((n, i));
+                    }
+                    self.add_node(DbColumnTypeNode::Composite(CompositeType {
+                        name: v.name,
+                        attributes,
+                    }))
+                }
+                postgres_types::DbColumnType::Domain(v) => {
+                    let i = self.add(*v.base_type);
+                    self.add_node(DbColumnTypeNode::Domain(DomainType {
+                        name: v.name,
+                        base_type: i,
+                    }))
+                }
+                postgres_types::DbColumnType::Array(v) => {
+                    let i = self.add(*v);
+                    self.add_node(DbColumnTypeNode::Array(i))
+                }
+            }
+        }
+
+        fn build(self) -> DbColumnType {
+            DbColumnType { nodes: self.nodes }
         }
     }
 }

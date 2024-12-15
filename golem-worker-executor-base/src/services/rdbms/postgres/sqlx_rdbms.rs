@@ -923,7 +923,7 @@ fn get_db_value_array<G: PgValueGetter>(
             let vs: Option<PgComposites> = getter.try_get_value()?;
             DbValue::array_from(vs.map(|v| v.0), DbValue::Composite)
         }
-        DbColumnType::Domain(v) => {
+        DbColumnType::Domain(_) => {
             let vs: Option<PgDomains> = getter.try_get_value()?;
             DbValue::array_from(vs.map(|v| v.0), DbValue::Domain)
         }

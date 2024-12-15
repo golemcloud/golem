@@ -12,7 +12,7 @@ pub mod wasi {
             static __FORCE_SECTION_REF: fn() =
                 super::super::super::__link_custom_section_describing_imports;
             use super::super::super::_rt;
-            pub type NodeIndex = i32;
+            pub type NodeIndex = u32;
             #[derive(Clone)]
             pub enum Error {
                 ConnectionFailure(_rt::String),
@@ -1136,7 +1136,7 @@ pub mod wasi {
                                                             );
                                                             let l21 = *base.add(8).cast::<i32>();
 
-                                                            (_rt::string_lift(bytes20), l21)
+                                                            (_rt::string_lift(bytes20), l21 as u32)
                                                         };
                                                         result22.push(e22);
                                                     }
@@ -1163,7 +1163,7 @@ pub mod wasi {
 
                                                     DomainType {
                                                         name: _rt::string_lift(bytes25),
-                                                        base_type: l26,
+                                                        base_type: l26 as u32,
                                                     }
                                                 };
                                                 DbColumnTypeNode::Domain(e28)
@@ -1176,7 +1176,7 @@ pub mod wasi {
                                                 let e28 = {
                                                     let l27 = *base.add(4).cast::<i32>();
 
-                                                    l27
+                                                    l27 as u32
                                                 };
                                                 DbColumnTypeNode::Array(e28)
                                             }
@@ -2706,7 +2706,7 @@ pub mod wasi {
                                                                             name: _rt::string_lift(
                                                                                 bytes249,
                                                                             ),
-                                                                            value: l250,
+                                                                            value: l250 as u32,
                                                                         }
                                                                     };
                                                                     DbValueNode::Domain(e254)
@@ -10607,7 +10607,7 @@ pub(crate) use __export_rdbms_service_impl as export;
 #[doc(hidden)]
 pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 4740] = *b"\
 \0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\x80$\x01A\x02\x01A\x0a\
-\x01Bg\x01z\x04\0\x0anode-index\x03\0\0\x01q\x05\x12connection-failure\x01s\0\x17\
+\x01Bg\x01y\x04\0\x0anode-index\x03\0\0\x01q\x05\x12connection-failure\x01s\0\x17\
 query-parameter-failure\x01s\0\x17query-execution-failure\x01s\0\x16query-respon\
 se-failure\x01s\0\x05other\x01s\0\x04\0\x05error\x03\0\x02\x01r\x02\x09high-bits\
 w\x08low-bitsw\x04\0\x04uuid\x03\0\x04\x01o\x04}}}}\x01o\x08{{{{{{{{\x01q\x02\x04\

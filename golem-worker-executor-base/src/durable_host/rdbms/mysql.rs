@@ -18,6 +18,7 @@ use crate::preview2::wasi::rdbms::mysql::{
     Date, DbColumn, DbColumnType, DbRow, DbValue, Error, Host, HostDbConnection, HostDbResultSet,
     Time, Timestamp,
 };
+use crate::services::rdbms::mysql::types as mysql_types;
 use crate::services::rdbms::mysql::MysqlType;
 use crate::services::rdbms::RdbmsPoolKey;
 use crate::workerctx::WorkerCtx;
@@ -297,7 +298,7 @@ impl<Ctx: WorkerCtx> HostDbResultSet for &mut DurableWorkerCtx<Ctx> {
     }
 }
 
-impl TryFrom<DbValue> for crate::services::rdbms::mysql::types::DbValue {
+impl TryFrom<DbValue> for mysql_types::DbValue {
     type Error = String;
     fn try_from(value: DbValue) -> Result<Self, Self::Error> {
         match value {
@@ -359,123 +360,101 @@ impl TryFrom<DbValue> for crate::services::rdbms::mysql::types::DbValue {
     }
 }
 
-impl From<crate::services::rdbms::mysql::types::DbValue> for DbValue {
-    fn from(value: crate::services::rdbms::mysql::types::DbValue) -> Self {
+impl From<mysql_types::DbValue> for DbValue {
+    fn from(value: mysql_types::DbValue) -> Self {
         match value {
-            crate::services::rdbms::mysql::types::DbValue::Boolean(v) => Self::Boolean(v),
-            crate::services::rdbms::mysql::types::DbValue::Tinyint(v) => Self::Tinyint(v),
-            crate::services::rdbms::mysql::types::DbValue::Smallint(v) => Self::Smallint(v),
-            crate::services::rdbms::mysql::types::DbValue::Mediumint(v) => Self::Mediumint(v),
-            crate::services::rdbms::mysql::types::DbValue::Int(v) => Self::Int(v),
-            crate::services::rdbms::mysql::types::DbValue::Bigint(v) => Self::Bigint(v),
-            crate::services::rdbms::mysql::types::DbValue::TinyintUnsigned(v) => {
-                Self::TinyintUnsigned(v)
-            }
-            crate::services::rdbms::mysql::types::DbValue::SmallintUnsigned(v) => {
-                Self::SmallintUnsigned(v)
-            }
-            crate::services::rdbms::mysql::types::DbValue::MediumintUnsigned(v) => {
-                Self::MediumintUnsigned(v)
-            }
-            crate::services::rdbms::mysql::types::DbValue::IntUnsigned(v) => Self::IntUnsigned(v),
-            crate::services::rdbms::mysql::types::DbValue::BigintUnsigned(v) => {
-                Self::BigintUnsigned(v)
-            }
-            crate::services::rdbms::mysql::types::DbValue::Decimal(v) => {
-                Self::Decimal(v.to_string())
-            }
-            crate::services::rdbms::mysql::types::DbValue::Float(v) => Self::Float(v),
-            crate::services::rdbms::mysql::types::DbValue::Double(v) => Self::Double(v),
-            crate::services::rdbms::mysql::types::DbValue::Text(v) => Self::Text(v),
-            crate::services::rdbms::mysql::types::DbValue::Varchar(v) => Self::Varchar(v),
-            crate::services::rdbms::mysql::types::DbValue::Fixchar(v) => Self::Fixchar(v),
-            crate::services::rdbms::mysql::types::DbValue::Blob(v) => Self::Blob(v),
-            crate::services::rdbms::mysql::types::DbValue::Tinyblob(v) => Self::Tinyblob(v),
-            crate::services::rdbms::mysql::types::DbValue::Mediumblob(v) => Self::Mediumblob(v),
-            crate::services::rdbms::mysql::types::DbValue::Longblob(v) => Self::Longblob(v),
-            crate::services::rdbms::mysql::types::DbValue::Binary(v) => Self::Binary(v),
-            crate::services::rdbms::mysql::types::DbValue::Varbinary(v) => Self::Varbinary(v),
-            crate::services::rdbms::mysql::types::DbValue::Tinytext(v) => Self::Tinytext(v),
-            crate::services::rdbms::mysql::types::DbValue::Mediumtext(v) => Self::Mediumtext(v),
-            crate::services::rdbms::mysql::types::DbValue::Longtext(v) => Self::Longtext(v),
-            crate::services::rdbms::mysql::types::DbValue::Json(v) => Self::Json(v.to_string()),
-            crate::services::rdbms::mysql::types::DbValue::Timestamp(v) => {
-                Self::Timestamp(v.into())
-            }
-            crate::services::rdbms::mysql::types::DbValue::Date(v) => Self::Date(v.into()),
-            crate::services::rdbms::mysql::types::DbValue::Time(v) => Self::Time(v.into()),
-            crate::services::rdbms::mysql::types::DbValue::Datetime(v) => Self::Datetime(v.into()),
-            crate::services::rdbms::mysql::types::DbValue::Year(v) => Self::Year(v),
-            crate::services::rdbms::mysql::types::DbValue::Set(v) => Self::Set(v),
-            crate::services::rdbms::mysql::types::DbValue::Enumeration(v) => Self::Enumeration(v),
-            crate::services::rdbms::mysql::types::DbValue::Bit(v) => Self::Bit(v.iter().collect()),
-            crate::services::rdbms::mysql::types::DbValue::Null => Self::Null,
+            mysql_types::DbValue::Boolean(v) => Self::Boolean(v),
+            mysql_types::DbValue::Tinyint(v) => Self::Tinyint(v),
+            mysql_types::DbValue::Smallint(v) => Self::Smallint(v),
+            mysql_types::DbValue::Mediumint(v) => Self::Mediumint(v),
+            mysql_types::DbValue::Int(v) => Self::Int(v),
+            mysql_types::DbValue::Bigint(v) => Self::Bigint(v),
+            mysql_types::DbValue::TinyintUnsigned(v) => Self::TinyintUnsigned(v),
+            mysql_types::DbValue::SmallintUnsigned(v) => Self::SmallintUnsigned(v),
+            mysql_types::DbValue::MediumintUnsigned(v) => Self::MediumintUnsigned(v),
+            mysql_types::DbValue::IntUnsigned(v) => Self::IntUnsigned(v),
+            mysql_types::DbValue::BigintUnsigned(v) => Self::BigintUnsigned(v),
+            mysql_types::DbValue::Decimal(v) => Self::Decimal(v.to_string()),
+            mysql_types::DbValue::Float(v) => Self::Float(v),
+            mysql_types::DbValue::Double(v) => Self::Double(v),
+            mysql_types::DbValue::Text(v) => Self::Text(v),
+            mysql_types::DbValue::Varchar(v) => Self::Varchar(v),
+            mysql_types::DbValue::Fixchar(v) => Self::Fixchar(v),
+            mysql_types::DbValue::Blob(v) => Self::Blob(v),
+            mysql_types::DbValue::Tinyblob(v) => Self::Tinyblob(v),
+            mysql_types::DbValue::Mediumblob(v) => Self::Mediumblob(v),
+            mysql_types::DbValue::Longblob(v) => Self::Longblob(v),
+            mysql_types::DbValue::Binary(v) => Self::Binary(v),
+            mysql_types::DbValue::Varbinary(v) => Self::Varbinary(v),
+            mysql_types::DbValue::Tinytext(v) => Self::Tinytext(v),
+            mysql_types::DbValue::Mediumtext(v) => Self::Mediumtext(v),
+            mysql_types::DbValue::Longtext(v) => Self::Longtext(v),
+            mysql_types::DbValue::Json(v) => Self::Json(v.to_string()),
+            mysql_types::DbValue::Timestamp(v) => Self::Timestamp(v.into()),
+            mysql_types::DbValue::Date(v) => Self::Date(v.into()),
+            mysql_types::DbValue::Time(v) => Self::Time(v.into()),
+            mysql_types::DbValue::Datetime(v) => Self::Datetime(v.into()),
+            mysql_types::DbValue::Year(v) => Self::Year(v),
+            mysql_types::DbValue::Set(v) => Self::Set(v),
+            mysql_types::DbValue::Enumeration(v) => Self::Enumeration(v),
+            mysql_types::DbValue::Bit(v) => Self::Bit(v.iter().collect()),
+            mysql_types::DbValue::Null => Self::Null,
         }
     }
 }
 
-impl From<crate::services::rdbms::DbRow<crate::services::rdbms::mysql::types::DbValue>> for DbRow {
-    fn from(
-        value: crate::services::rdbms::DbRow<crate::services::rdbms::mysql::types::DbValue>,
-    ) -> Self {
+impl From<crate::services::rdbms::DbRow<mysql_types::DbValue>> for DbRow {
+    fn from(value: crate::services::rdbms::DbRow<mysql_types::DbValue>) -> Self {
         Self {
             values: value.values.into_iter().map(|v| v.into()).collect(),
         }
     }
 }
 
-impl From<crate::services::rdbms::mysql::types::DbColumnType> for DbColumnType {
-    fn from(value: crate::services::rdbms::mysql::types::DbColumnType) -> Self {
+impl From<mysql_types::DbColumnType> for DbColumnType {
+    fn from(value: mysql_types::DbColumnType) -> Self {
         match value {
-            crate::services::rdbms::mysql::types::DbColumnType::Boolean => Self::Boolean,
-            crate::services::rdbms::mysql::types::DbColumnType::Tinyint => Self::Tinyint,
-            crate::services::rdbms::mysql::types::DbColumnType::Smallint => Self::Smallint,
-            crate::services::rdbms::mysql::types::DbColumnType::Mediumint => Self::Mediumint,
-            crate::services::rdbms::mysql::types::DbColumnType::Int => Self::Int,
-            crate::services::rdbms::mysql::types::DbColumnType::Bigint => Self::Bigint,
-            crate::services::rdbms::mysql::types::DbColumnType::IntUnsigned => Self::IntUnsigned,
-            crate::services::rdbms::mysql::types::DbColumnType::TinyintUnsigned => {
-                Self::TinyintUnsigned
-            }
-            crate::services::rdbms::mysql::types::DbColumnType::SmallintUnsigned => {
-                Self::SmallintUnsigned
-            }
-            crate::services::rdbms::mysql::types::DbColumnType::MediumintUnsigned => {
-                Self::MediumintUnsigned
-            }
-            crate::services::rdbms::mysql::types::DbColumnType::BigintUnsigned => {
-                Self::BigintUnsigned
-            }
-            crate::services::rdbms::mysql::types::DbColumnType::Float => Self::Float,
-            crate::services::rdbms::mysql::types::DbColumnType::Double => Self::Double,
-            crate::services::rdbms::mysql::types::DbColumnType::Decimal => Self::Decimal,
-            crate::services::rdbms::mysql::types::DbColumnType::Text => Self::Text,
-            crate::services::rdbms::mysql::types::DbColumnType::Varchar => Self::Varchar,
-            crate::services::rdbms::mysql::types::DbColumnType::Fixchar => Self::Fixchar,
-            crate::services::rdbms::mysql::types::DbColumnType::Blob => Self::Blob,
-            crate::services::rdbms::mysql::types::DbColumnType::Json => Self::Json,
-            crate::services::rdbms::mysql::types::DbColumnType::Timestamp => Self::Timestamp,
-            crate::services::rdbms::mysql::types::DbColumnType::Date => Self::Date,
-            crate::services::rdbms::mysql::types::DbColumnType::Time => todo!(), //Self::Time,
-            crate::services::rdbms::mysql::types::DbColumnType::Datetime => Self::Datetime,
-            crate::services::rdbms::mysql::types::DbColumnType::Year => Self::Year,
-            crate::services::rdbms::mysql::types::DbColumnType::Bit => Self::Bit,
-            crate::services::rdbms::mysql::types::DbColumnType::Binary => Self::Binary,
-            crate::services::rdbms::mysql::types::DbColumnType::Varbinary => Self::Varbinary,
-            crate::services::rdbms::mysql::types::DbColumnType::Tinyblob => Self::Tinyblob,
-            crate::services::rdbms::mysql::types::DbColumnType::Mediumblob => Self::Mediumblob,
-            crate::services::rdbms::mysql::types::DbColumnType::Longblob => Self::Longblob,
-            crate::services::rdbms::mysql::types::DbColumnType::Tinytext => Self::Tinytext,
-            crate::services::rdbms::mysql::types::DbColumnType::Mediumtext => Self::Mediumtext,
-            crate::services::rdbms::mysql::types::DbColumnType::Longtext => Self::Longtext,
-            crate::services::rdbms::mysql::types::DbColumnType::Enumeration => Self::Enumeration,
-            crate::services::rdbms::mysql::types::DbColumnType::Set => Self::Set,
+            mysql_types::DbColumnType::Boolean => Self::Boolean,
+            mysql_types::DbColumnType::Tinyint => Self::Tinyint,
+            mysql_types::DbColumnType::Smallint => Self::Smallint,
+            mysql_types::DbColumnType::Mediumint => Self::Mediumint,
+            mysql_types::DbColumnType::Int => Self::Int,
+            mysql_types::DbColumnType::Bigint => Self::Bigint,
+            mysql_types::DbColumnType::IntUnsigned => Self::IntUnsigned,
+            mysql_types::DbColumnType::TinyintUnsigned => Self::TinyintUnsigned,
+            mysql_types::DbColumnType::SmallintUnsigned => Self::SmallintUnsigned,
+            mysql_types::DbColumnType::MediumintUnsigned => Self::MediumintUnsigned,
+            mysql_types::DbColumnType::BigintUnsigned => Self::BigintUnsigned,
+            mysql_types::DbColumnType::Float => Self::Float,
+            mysql_types::DbColumnType::Double => Self::Double,
+            mysql_types::DbColumnType::Decimal => Self::Decimal,
+            mysql_types::DbColumnType::Text => Self::Text,
+            mysql_types::DbColumnType::Varchar => Self::Varchar,
+            mysql_types::DbColumnType::Fixchar => Self::Fixchar,
+            mysql_types::DbColumnType::Blob => Self::Blob,
+            mysql_types::DbColumnType::Json => Self::Json,
+            mysql_types::DbColumnType::Timestamp => Self::Timestamp,
+            mysql_types::DbColumnType::Date => Self::Date,
+            mysql_types::DbColumnType::Time => todo!(), //Self::Time,
+            mysql_types::DbColumnType::Datetime => Self::Datetime,
+            mysql_types::DbColumnType::Year => Self::Year,
+            mysql_types::DbColumnType::Bit => Self::Bit,
+            mysql_types::DbColumnType::Binary => Self::Binary,
+            mysql_types::DbColumnType::Varbinary => Self::Varbinary,
+            mysql_types::DbColumnType::Tinyblob => Self::Tinyblob,
+            mysql_types::DbColumnType::Mediumblob => Self::Mediumblob,
+            mysql_types::DbColumnType::Longblob => Self::Longblob,
+            mysql_types::DbColumnType::Tinytext => Self::Tinytext,
+            mysql_types::DbColumnType::Mediumtext => Self::Mediumtext,
+            mysql_types::DbColumnType::Longtext => Self::Longtext,
+            mysql_types::DbColumnType::Enumeration => Self::Enumeration,
+            mysql_types::DbColumnType::Set => Self::Set,
         }
     }
 }
 
-impl From<crate::services::rdbms::mysql::types::DbColumn> for DbColumn {
-    fn from(value: crate::services::rdbms::mysql::types::DbColumn) -> Self {
+impl From<mysql_types::DbColumn> for DbColumn {
+    fn from(value: mysql_types::DbColumn) -> Self {
         Self {
             ordinal: value.ordinal,
             name: value.name,
