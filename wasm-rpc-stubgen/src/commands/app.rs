@@ -582,7 +582,7 @@ fn load_app<CPE: ComponentPropertiesExtensions>(
                                     ValidatedResult::Ok(
                                         application
                                             .component_names()
-                                            .filter(|component_name| application.component_source_dir(component_name) == calling_working_dir.as_path())
+                                            .filter(|component_name| application.component_source_dir(component_name).starts_with(calling_working_dir.as_path()))
                                             .cloned()
                                             .collect()
                                     )
