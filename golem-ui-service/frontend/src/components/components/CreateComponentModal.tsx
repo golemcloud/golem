@@ -1,4 +1,4 @@
-import { Folder, Upload, X } from 'lucide-react';
+import { AlertCircle, Cloud, FileIcon, Folder, Loader2, Plus, Server, Upload, X } from 'lucide-react';
 import { useCreateComponent, useUpdateComponent } from '../../api/components';
 import { useEffect, useRef, useState } from 'react';
 
@@ -10,8 +10,117 @@ type ComponentType = 'Durable' | 'Ephemeral';
 interface ComponentModalProps {
     isOpen: boolean;
     onClose: () => void;
-    existingComponent?: Component; // Pass this for update mode
+    existingComponent?: Component;
 }
+
+const Input = ({ label, error, ...props }: any) => (
+    <div>
+        <label className="block text-sm font-medium mb-1.5 text-gray-300">{label}</label>
+        <input
+            {...props}
+            className="w-full px-4 py-2.5 bg-gray-700/50 rounded-lg border border-gray-600 
+                     focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none
+                     transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+        />
+        {error && (
+            <div className="mt-1 flex items-center gap-1 text-red-400 text-sm">
+                <AlertCircle size={14} />
+                <span>{error}</span>
+            </div>
+        )}
+    </div>
+);
+
+const FileDropzone = ({ 
+    onFileDrop, 
+    onFileSelect, 
+    inputRef, 
+    file, 
+    onRemove,
+    isSubmitting,
+    accept = "*",
+    multiple = false,
+    dragActive,
+    setDragActive,
+    placeholder
+}: any) => (
+    <div
+        onClick={() => !isSubmitting && inputRef.current?.click()}
+        onDragOver={(e) => {
+            e.preventDefault();
+            !isSubmitting && setDragActive(true);
+        }}
+        onDragLeave={() => setDragActive(false)}
+        onDrop={onFileDrop}
+        className={`border-2 border-dashed rounded-lg p-6 text-center transition-all duration-200
+            ${isSubmitting ? 'cursor-not-allowed opacity-60' : 'cursor-pointer hover:border-blue-400/50'} 
+            ${dragActive ? 'border-blue-500 bg-blue-500/10' : 'border-gray-600'}`}
+    >
+        {file || (multiple && file?.length > 0) ? (
+            <div className="space-y-2">
+                {multiple ? (
+                    file.map((f: File, index: number) => (
+                        <div key={index} 
+                             className="flex items-center justify-between bg-gray-700/50 rounded-lg px-4 py-2">
+                            <div className="flex items-center gap-2">
+                                <FileIcon size={16} className="text-blue-400" />
+                                <span className="text-sm truncate">{f.name}</span>
+                            </div>
+                            {!isSubmitting && (
+                                <button
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        onRemove(index);
+                                    }}
+                                    className="p-1 text-gray-400 hover:text-red-400 rounded-md
+                                             hover:bg-gray-600/50 transition-colors"
+                                >
+                                    <X size={14} />
+                                </button>
+                            )}
+                        </div>
+                    ))
+                ) : (
+                    <div className="flex items-center justify-between bg-gray-700/50 rounded-lg px-4 py-2">
+                        <div className="flex items-center gap-2">
+                            <FileIcon size={16} className="text-blue-400" />
+                            <span className="text-sm">{file.name}</span>
+                        </div>
+                        {!isSubmitting && (
+                            <button
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    onRemove();
+                                }}
+                                className="p-1 text-gray-400 hover:text-red-400 rounded-md
+                                         hover:bg-gray-600/50 transition-colors"
+                            >
+                                <X size={14} />
+                            </button>
+                        )}
+                    </div>
+                )}
+            </div>
+        ) : (
+            <div className="space-y-3">
+                <Upload className="h-8 w-8 mx-auto text-gray-400" />
+                <div>
+                    <p className="text-sm text-gray-300">{placeholder}</p>
+                    <p className="text-xs text-gray-400 mt-1">or click to browse</p>
+                </div>
+            </div>
+        )}
+        <input
+            ref={inputRef}
+            type="file"
+            accept={accept}
+            multiple={multiple}
+            onChange={onFileSelect}
+            className="hidden"
+            disabled={isSubmitting}
+        />
+    </div>
+);
 
 const CreateComponentModal = ({ isOpen, onClose, existingComponent }: ComponentModalProps) => {
     const isUpdateMode = !!existingComponent;
@@ -75,7 +184,6 @@ const CreateComponentModal = ({ isOpen, onClose, existingComponent }: ComponentM
             formData.append('component', mainFile);
         }
 
-        // Append additional files
         additionalFiles.forEach(file => {
             formData.append('files', file);
         });
@@ -102,173 +210,152 @@ const CreateComponentModal = ({ isOpen, onClose, existingComponent }: ComponentM
         } catch (error) {
             toast.error(`Failed to ${isUpdateMode ? 'update' : 'create'} component`);
             setIsSubmitting(false);
-            console.error(`Failed to ${isUpdateMode ? 'update' : 'create'} component:`, error);
         }
     };
 
-    return isOpen ? (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-            <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full">
-                <h2 className="text-xl font-semibold mb-4">Create New Component</h2>
+    if (!isOpen) return null;
 
-                <div className="space-y-4">
-                    <div>
-                        <label className="block text-sm font-medium mb-1">Component Name</label>
-                        <input
-                            type="text"
-                            value={name}
-                            onChange={(e) => setName(e.target.value)}
-                            className="w-full px-3 py-2 bg-gray-700 rounded-md focus:ring-2 focus:ring-blue-500"
-                            placeholder="Enter component name"
-                            disabled={isSubmitting || isUpdateMode}
-                        />
-                    </div>
-
-                    <div>
-                        <label className="block text-sm font-medium mb-1">Component Type</label>
-                        <select
-                            value={componentType}
-                            onChange={(e) => setComponentType(e.target.value as ComponentType)}
-                            className="w-full px-3 py-2 bg-gray-700 rounded-md focus:ring-2 focus:ring-blue-500"
-                            disabled={isSubmitting}
-                        >
-                            <option value="Durable">Durable</option>
-                            <option value="Ephemeral">Ephemeral</option>
-                        </select>
-                    </div>
-
-                    <div>
-                        <label className="block text-sm font-medium mb-1">WASM File</label>
-                        <div
-                            onClick={() => !isSubmitting && mainInputRef.current?.click()}
-                            onDragOver={(e) => {
-                                e.preventDefault();
-                                !isSubmitting && setDragActive(true);
-                            }}
-                            onDragLeave={() => setDragActive(false)}
-                            onDrop={handleMainFileDrop}
-                            className={`border-2 border-dashed rounded-lg p-8 text-center 
-                ${isSubmitting ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'} 
-                ${dragActive ? 'border-blue-500 bg-blue-500 bg-opacity-10' : 'border-gray-600'}`}
-                        >
-                            {mainFile ? (
-                                <div className="flex items-center justify-center space-x-2">
-                                    <Folder className="h-5 w-5" />
-                                    <span>{mainFile.name}</span>
-                                    {!isSubmitting && (
-                                        <button
-                                            onClick={(e) => {
-                                                e.stopPropagation();
-                                                setMainFile(null);
-                                                if (mainInputRef.current) {
-                                                    mainInputRef.current.value = '';
-                                                }
-                                            }}
-                                            className="ml-2 text-red-400 hover:text-red-300"
-                                        >
-                                            <X size={16} />
-                                        </button>
-                                    )}
-                                </div>
-                            ) : (
-                                <div className="space-y-2">
-                                    <Upload className="h-8 w-8 mx-auto text-gray-400" />
-                                    <div>
-                                        <p className="text-sm">Drag and drop your WASM file here</p>
-                                        <p className="text-xs text-gray-400">or click to browse</p>
-                                    </div>
-                                </div>
-                            )}
-                            <input
-                                ref={mainInputRef}
-                                type="file"
-                                accept=".wasm"
-                                onChange={handleMainFileSelect}
-                                className="hidden"
-                                disabled={isSubmitting}
-                            />
+    return (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50 backdrop-blur-sm">
+            <div className="bg-gray-800 rounded-xl p-6 max-w-md w-full shadow-xl">
+                <div className="flex justify-between items-start mb-6">
+                    <div className="flex items-center gap-3">
+                        <div className="p-2 rounded-md bg-blue-500/10 text-blue-400">
+                            <Plus size={20} />
+                        </div>
+                        <div>
+                            <h2 className="text-xl font-semibold">
+                                {isUpdateMode ? 'Update Component' : 'Create New Component'}
+                            </h2>
+                            <p className="text-sm text-gray-400 mt-1">
+                                Configure your component settings
+                            </p>
                         </div>
                     </div>
+                    <button
+                        onClick={onClose}
+                        className="text-gray-400 hover:text-gray-300 p-1 hover:bg-gray-700/50 
+                                 rounded-md transition-colors"
+                    >
+                        <X size={20} />
+                    </button>
+                </div>
+
+                <div className="space-y-6">
+                    <Input
+                        label="Component Name"
+                        value={name}
+                        onChange={(e: any) => setName(e.target.value)}
+                        placeholder="Enter component name"
+                        disabled={isSubmitting || isUpdateMode}
+                    />
 
                     <div>
-                        <label className="block text-sm font-medium mb-1">Additional Files</label>
-                        <div className="space-y-2">
-                            {additionalFiles.map((file, index) => (
-                                <div
-                                    key={index}
-                                    className="flex items-center justify-between bg-gray-700 rounded-md px-3 py-2"
+                        <label className="block text-sm font-medium mb-1.5 text-gray-300">
+                            Component Type
+                        </label>
+                        <div className="grid grid-cols-2 gap-4">
+                            {[
+                                { value: 'Durable', label: 'Durable', icon: Server },
+                                { value: 'Ephemeral', label: 'Ephemeral', icon: Cloud }
+                            ].map(option => (
+                                <button
+                                    key={option.value}
+                                    onClick={() => setComponentType(option.value as ComponentType)}
+                                    className={`flex items-center gap-3 p-4 rounded-lg border-2 transition-all
+                                             ${componentType === option.value 
+                                                 ? 'border-blue-500 bg-blue-500/10' 
+                                                 : 'border-gray-600 hover:border-gray-500'}`}
+                                    disabled={isSubmitting}
                                 >
-                                    <span className="text-sm truncate">{file.name}</span>
-                                    {!isSubmitting && (
-                                        <button
-                                            onClick={() => removeAdditionalFile(index)}
-                                            className="text-red-400 hover:text-red-300"
-                                        >
-                                            <X size={16} />
-                                        </button>
-                                    )}
-                                </div>
+                                    <option.icon 
+                                        className={componentType === option.value ? 'text-blue-400' : 'text-gray-400'} 
+                                        size={20} 
+                                    />
+                                    <span>{option.label}</span>
+                                </button>
                             ))}
-                            <button
-                                onClick={() => !isSubmitting && additionalInputRef.current?.click()}
-                                className="w-full px-3 py-2 text-sm border border-dashed border-gray-600 rounded-md hover:border-gray-500 disabled:opacity-50"
-                                disabled={isSubmitting}
-                            >
-                                Add Files
-                            </button>
-                            <input
-                                ref={additionalInputRef}
-                                type="file"
-                                multiple
-                                onChange={handleAdditionalFileSelect}
-                                className="hidden"
-                                disabled={isSubmitting}
+                        </div>
+                    </div>
+
+                    <div className="space-y-4">
+                        <div>
+                            <label className="block text-sm font-medium mb-1.5 text-gray-300">
+                                WASM File
+                            </label>
+                            <FileDropzone
+                                onFileDrop={handleMainFileDrop}
+                                onFileSelect={handleMainFileSelect}
+                                inputRef={mainInputRef}
+                                file={mainFile}
+                                onRemove={() => {
+                                    setMainFile(null);
+                                    if (mainInputRef.current) {
+                                        mainInputRef.current.value = '';
+                                    }
+                                }}
+                                isSubmitting={isSubmitting}
+                                accept=".wasm"
+                                dragActive={dragActive}
+                                setDragActive={setDragActive}
+                                placeholder="Drag and drop your WASM file here"
+                            />
+                        </div>
+
+                        <div>
+                            <label className="block text-sm font-medium mb-1.5 text-gray-300">
+                                Additional Files
+                            </label>
+                            <FileDropzone
+                                onFileSelect={handleAdditionalFileSelect}
+                                inputRef={additionalInputRef}
+                                file={additionalFiles}
+                                onRemove={removeAdditionalFile}
+                                isSubmitting={isSubmitting}
+                                multiple={true}
+                                dragActive={dragActive}
+                                setDragActive={setDragActive}
+                                placeholder="Add additional files"
                             />
                         </div>
                     </div>
 
-                    <div className="flex justify-end space-x-3 mt-6">
+                    <div className="flex justify-end items-center gap-3 pt-2">
                         <button
                             onClick={onClose}
-                            className="px-4 py-2 text-sm bg-gray-700 rounded-md hover:bg-gray-600 disabled:opacity-50"
+                            className="px-4 py-2 text-sm bg-gray-700 rounded-lg hover:bg-gray-600 
+                                     transition-colors disabled:opacity-50"
                             disabled={isSubmitting}
                         >
                             Cancel
                         </button>
                         <button
                             onClick={handleSubmit}
-                            disabled={!name || !mainFile || isSubmitting}
-                            className="px-4 py-2 text-sm bg-blue-500 rounded-md hover:bg-blue-600 disabled:opacity-50 flex items-center gap-2"
+                            disabled={!name || (!mainFile && !isUpdateMode) || isSubmitting}
+                            className="px-4 py-2 text-sm bg-blue-500 rounded-lg hover:bg-blue-600 
+                                     disabled:opacity-50 transition-colors flex items-center gap-2"
                         >
                             {isSubmitting ? (
                                 <>
-                                    <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
-                                        <circle
-                                            className="opacity-25"
-                                            cx="12"
-                                            cy="12"
-                                            r="10"
-                                            stroke="currentColor"
-                                            strokeWidth="4"
-                                            fill="none"
-                                        />
-                                        <path
-                                            className="opacity-75"
-                                            fill="currentColor"
-                                            d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                                        />
-                                    </svg>
-                                    Creating...
+                                    <Loader2 size={16} className="animate-spin" />
+                                    <span>
+                                        {isUpdateMode ? 'Updating...' : 'Creating...'}
+                                    </span>
                                 </>
                             ) : (
-                                isUpdateMode ? 'Update Component' : 'Create Component'
+                                <>
+                                    <Plus size={16} />
+                                    <span>
+                                        {isUpdateMode ? 'Update Component' : 'Create Component'}
+                                    </span>
+                                </>
                             )}
                         </button>
                     </div>
                 </div>
             </div>
         </div>
-    ) : null;
+    );
 };
 
 export default CreateComponentModal;

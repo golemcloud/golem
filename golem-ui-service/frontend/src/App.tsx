@@ -6,6 +6,8 @@ import {
 import { Components } from './pages/Components';
 import { Layout } from './components/layout/Layout';
 import { Overview } from './pages/Overview';
+import PluginDetailPage from './pages/PluginDetail';
+import { PluginsPage } from './pages/Plugins';
 import { Toaster } from 'react-hot-toast';
 
 function App() {
@@ -17,8 +19,9 @@ function App() {
           <Route path="/workers" element={<div>Workers Page</div>} />
           <Route path="/components" element={<Components />} />
           <Route path="/components/:id" element={<ComponentDetail />} />
-          <Route path="/plugins" element={<div>Plugins Page</div>} />
+          <Route path="/plugins" element={<PluginsPage />} />
           <Route path="/api" element={<div>API Page</div>} />
+          <Route path="/plugins/:name/:version" element={<PluginDetailPage />} />
         </Routes>
         <div>
           {/* This component will render the toasts */}

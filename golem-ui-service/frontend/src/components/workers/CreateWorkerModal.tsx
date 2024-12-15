@@ -1,5 +1,26 @@
+import { AlertCircle, Key, Loader2, Plus, Settings, Terminal, X } from 'lucide-react';
+
+import toast from 'react-hot-toast';
 import { useCreateWorker } from "../../api/workers";
 import { useState } from "react";
+
+const Input = ({ label, error, ...props }: any) => (
+    <div>
+        <label className="block text-sm font-medium mb-1.5 text-gray-300">{label}</label>
+        <input
+            {...props}
+            className="w-full px-4 py-2.5 bg-gray-700/50 rounded-lg border border-gray-600 
+                     focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none
+                     transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+        />
+        {error && (
+            <div className="mt-1 flex items-center gap-1 text-red-400 text-sm">
+                <AlertCircle size={14} />
+                <span>{error}</span>
+            </div>
+        )}
+    </div>
+);
 
 export const CreateWorkerModal = ({
     isOpen,
@@ -26,103 +47,201 @@ export const CreateWorkerModal = ({
             env: envRecord,
             args
         }, {
-            onSuccess: onClose
+            onSuccess: () => {
+                toast.success('Worker created successfully');
+                onClose();
+            },
+            onError: () => {
+                toast.error('Failed to create worker');
+            }
         });
     };
 
-    return isOpen ? (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4">
-            <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full">
-                <h2 className="text-xl font-semibold mb-4">Create New Worker</h2>
+    const removeEnvVar = (index: number) => {
+        setEnv(env.filter((_, i) => i !== index));
+    };
 
-                <div className="space-y-4">
-                    <div>
-                        <label className="block text-sm font-medium mb-1">Worker Name</label>
-                        <input
-                            type="text"
-                            value={name}
-                            onChange={(e) => setName(e.target.value)}
-                            className="w-full px-3 py-2 bg-gray-700 rounded-md"
-                            placeholder="Enter worker name"
-                        />
-                    </div>
+    const removeArg = (index: number) => {
+        setArguments(args.filter((_, i) => i !== index));
+    };
 
-                    <div>
-                        <label className="block text-sm font-medium mb-2">Environment Variables</label>
-                        {env.map((item, index) => (
-                            <div key={index} className="flex gap-2 mb-2">
-                                <input
-                                    placeholder="Key"
-                                    value={item.key}
-                                    onChange={(e) => {
-                                        const newEnv = [...env];
-                                        newEnv[index].key = e.target.value;
-                                        setEnv(newEnv);
-                                    }}
-                                    className="flex-1 px-3 py-2 bg-gray-700 rounded-md"
-                                />
-                                <input
-                                    placeholder="Value"
-                                    value={item.value}
-                                    onChange={(e) => {
-                                        const newEnv = [...env];
-                                        newEnv[index].value = e.target.value;
-                                        setEnv(newEnv);
-                                    }}
-                                    className="flex-1 px-3 py-2 bg-gray-700 rounded-md"
-                                />
+    if (!isOpen) return null;
+
+
+    return (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50 backdrop-blur-sm">
+            <div className="bg-gray-800 rounded-xl shadow-xl w-full max-w-2xl">
+                {/* Header */}
+                <div className="p-6 border-b border-gray-700">
+                    <div className="flex justify-between items-start">
+                        <div className="flex items-center gap-3">
+                            <div className="p-2 rounded-md bg-blue-500/10 text-blue-400">
+                                <Terminal size={20} />
                             </div>
-                        ))}
-                        <button
-                            onClick={() => setEnv([...env, { key: '', value: '' }])}
-                            className="text-sm text-blue-400 hover:text-blue-300"
-                        >
-                            + Add Environment Variable
-                        </button>
-
-                    </div>
-
-                    {/* Arguments */}
-                    <div>
-                        <label className="block text-sm font-medium mb-2">Arguments</label>
-                        {args.map((arg, index) => (
-                            <input
-                                key={index}
-                                value={arg}
-                                onChange={(e) => {
-                                    const newArgs = [...args];
-                                    newArgs[index] = e.target.value;
-                                    setArguments(newArgs);
-                                }}
-                                className="w-full px-3 py-2 bg-gray-700 rounded-md"
-                                placeholder="Enter argument"
-                            />
-                        ))}
-                        <button
-                            onClick={() => setArguments([...args, ''])}
-                            className="text-sm text-blue-400 hover:text-blue-300"
-                        >
-                            + Add Argument
-                        </button>
-                    </div>
-
-                    <div className="flex justify-end space-x-3 mt-6">
+                            <div>
+                                <h2 className="text-xl font-semibold">Create New Worker</h2>
+                                <p className="text-sm text-gray-400 mt-1">Configure worker settings</p>
+                            </div>
+                        </div>
                         <button
                             onClick={onClose}
-                            className="px-4 py-2 text-sm bg-gray-700 rounded-md hover:bg-gray-600"
+                            className="text-gray-400 hover:text-gray-300 p-1 hover:bg-gray-700/50 
+                                     rounded-md transition-colors"
+                        >
+                            <X size={20} />
+                        </button>
+                    </div>
+                </div>
+
+                {/* Scrollable Content */}
+                <div className="p-6 max-h-[calc(100vh-16rem)] overflow-y-auto">
+                    <div className="space-y-6">
+                        <Input
+                            label="Worker Name"
+                            value={name}
+                            onChange={(e: any) => setName(e.target.value)}
+                            placeholder="Enter worker name"
+                            disabled={createWorker.isLoading}
+                        />
+
+                        {/* Environment Variables */}
+                        <div>
+                            <div className="flex justify-between items-center mb-2">
+                                <label className="block text-sm font-medium text-gray-300">
+                                    Environment Variables
+                                </label>
+                                <button
+                                    onClick={() => setEnv([...env, { key: '', value: '' }])}
+                                    className="text-sm text-blue-400 hover:text-blue-300 flex items-center gap-1
+                                             px-2 py-1 rounded hover:bg-blue-500/10 transition-colors"
+                                    disabled={createWorker.isLoading}
+                                >
+                                    <Plus size={14} />
+                                    Add Variable
+                                </button>
+                            </div>
+                            <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                                {env.map((item, index) => (
+                                    <div key={index} 
+                                         className="flex gap-2 items-center p-2 rounded-lg bg-gray-700/30 
+                                                  group hover:bg-gray-700/50 transition-colors">
+                                        <Key size={16} className="text-gray-400 flex-shrink-0" />
+                                        <input
+                                            placeholder="Key"
+                                            value={item.key}
+                                            onChange={(e) => {
+                                                const newEnv = [...env];
+                                                newEnv[index].key = e.target.value;
+                                                setEnv(newEnv);
+                                            }}
+                                            className="flex-1 min-w-0 px-3 py-1.5 bg-gray-700/50 rounded-md border border-gray-600
+                                                     focus:border-blue-500 outline-none transition-colors"
+                                            disabled={createWorker.isLoading}
+                                        />
+                                        <input
+                                            placeholder="Value"
+                                            value={item.value}
+                                            onChange={(e) => {
+                                                const newEnv = [...env];
+                                                newEnv[index].value = e.target.value;
+                                                setEnv(newEnv);
+                                            }}
+                                            className="flex-1 min-w-0 px-3 py-1.5 bg-gray-700/50 rounded-md border border-gray-600
+                                                     focus:border-blue-500 outline-none transition-colors"
+                                            disabled={createWorker.isLoading}
+                                        />
+                                        <button
+                                            onClick={() => removeEnvVar(index)}
+                                            className="p-1.5 text-gray-400 hover:text-red-400 rounded-md flex-shrink-0
+                                                     opacity-0 group-hover:opacity-100 transition-all hover:bg-gray-600/50"
+                                            disabled={createWorker.isLoading}
+                                        >
+                                            <X size={14} />
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+
+                        {/* Arguments */}
+                        <div>
+                            <div className="flex justify-between items-center mb-2">
+                                <label className="block text-sm font-medium text-gray-300">Arguments</label>
+                                <button
+                                    onClick={() => setArguments([...args, ''])}
+                                    className="text-sm text-blue-400 hover:text-blue-300 flex items-center gap-1
+                                             px-2 py-1 rounded hover:bg-blue-500/10 transition-colors"
+                                    disabled={createWorker.isLoading}
+                                >
+                                    <Plus size={14} />
+                                    Add Argument
+                                </button>
+                            </div>
+                            <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                                {args.map((arg, index) => (
+                                    <div key={index} 
+                                         className="flex items-center gap-2 p-2 rounded-lg bg-gray-700/30
+                                                  group hover:bg-gray-700/50 transition-colors">
+                                        <Settings size={16} className="text-gray-400 flex-shrink-0" />
+                                        <input
+                                            value={arg}
+                                            onChange={(e) => {
+                                                const newArgs = [...args];
+                                                newArgs[index] = e.target.value;
+                                                setArguments(newArgs);
+                                            }}
+                                            className="flex-1 min-w-0 px-3 py-1.5 bg-gray-700/50 rounded-md border border-gray-600
+                                                     focus:border-blue-500 outline-none transition-colors"
+                                            placeholder="Enter argument"
+                                            disabled={createWorker.isLoading}
+                                        />
+                                        <button
+                                            onClick={() => removeArg(index)}
+                                            className="p-1.5 text-gray-400 hover:text-red-400 rounded-md flex-shrink-0
+                                                     opacity-0 group-hover:opacity-100 transition-all hover:bg-gray-600/50"
+                                            disabled={createWorker.isLoading}
+                                        >
+                                            <X size={14} />
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Footer */}
+                <div className="p-6 border-t border-gray-700">
+                    <div className="flex justify-end items-center gap-3">
+                        <button
+                            onClick={onClose}
+                            className="px-4 py-2 text-sm bg-gray-700 rounded-lg hover:bg-gray-600 
+                                     transition-colors disabled:opacity-50"
+                            disabled={createWorker.isLoading}
                         >
                             Cancel
                         </button>
                         <button
                             onClick={handleSubmit}
-                            disabled={!name}
-                            className="px-4 py-2 text-sm bg-blue-500 rounded-md hover:bg-blue-600 disabled:opacity-50"
+                            disabled={!name || createWorker.isLoading}
+                            className="px-4 py-2 text-sm bg-blue-500 rounded-lg hover:bg-blue-600 
+                                     disabled:opacity-50 transition-colors flex items-center gap-2"
                         >
-                            Create Worker
+                            {createWorker.isLoading ? (
+                                <>
+                                    <Loader2 size={16} className="animate-spin" />
+                                    <span>Creating...</span>
+                                </>
+                            ) : (
+                                <>
+                                    <Plus size={16} />
+                                    <span>Create Worker</span>
+                                </>
+                            )}
                         </button>
                     </div>
                 </div>
             </div>
         </div>
-    ) : null;
+    );
 };
