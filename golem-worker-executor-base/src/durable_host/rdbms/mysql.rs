@@ -435,7 +435,7 @@ impl From<mysql_types::DbColumnType> for DbColumnType {
             mysql_types::DbColumnType::Json => Self::Json,
             mysql_types::DbColumnType::Timestamp => Self::Timestamp,
             mysql_types::DbColumnType::Date => Self::Date,
-            mysql_types::DbColumnType::Time => todo!(), //Self::Time,
+            mysql_types::DbColumnType::Time => Self::Time,
             mysql_types::DbColumnType::Datetime => Self::Datetime,
             mysql_types::DbColumnType::Year => Self::Year,
             mysql_types::DbColumnType::Bit => Self::Bit,
@@ -549,5 +549,84 @@ impl From<chrono::DateTime<chrono::Utc>> for Timestamp {
         let date = v.date().into();
         let time = v.time().into();
         Timestamp { date, time }
+    }
+}
+
+#[cfg(test)]
+pub mod tests {
+    use crate::preview2::wasi::rdbms::mysql::DbValue;
+    use crate::services::rdbms::mysql::types as mysql_types;
+    use assert2::check;
+    use bigdecimal::BigDecimal;
+    use serde_json::json;
+    use sqlx::types::BitVec;
+    use std::str::FromStr;
+    use test_r::test;
+    use uuid::Uuid;
+
+    fn check_db_value(value: mysql_types::DbValue) {
+        let wit: DbValue = value.clone().into();
+        let value2: mysql_types::DbValue = wit.try_into().unwrap();
+        check!(value == value2);
+    }
+
+    #[test]
+    fn test_db_values_conversions() {
+        let params = vec![
+            mysql_types::DbValue::Tinyint(1),
+            mysql_types::DbValue::Smallint(2),
+            mysql_types::DbValue::Mediumint(3),
+            mysql_types::DbValue::Int(4),
+            mysql_types::DbValue::Bigint(5),
+            mysql_types::DbValue::Float(6.0),
+            mysql_types::DbValue::Double(7.0),
+            mysql_types::DbValue::Decimal(BigDecimal::from_str("80.00").unwrap()),
+            mysql_types::DbValue::Date(chrono::NaiveDate::from_ymd_opt(2030, 10, 12).unwrap()),
+            mysql_types::DbValue::Datetime(chrono::DateTime::from_naive_utc_and_offset(
+                chrono::NaiveDateTime::new(
+                    chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
+                    chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+                ),
+                chrono::Utc,
+            )),
+            mysql_types::DbValue::Timestamp(chrono::DateTime::from_naive_utc_and_offset(
+                chrono::NaiveDateTime::new(
+                    chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
+                    chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+                ),
+                chrono::Utc,
+            )),
+            mysql_types::DbValue::Fixchar("0123456789".to_string()),
+            mysql_types::DbValue::Varchar(format!("name-{}", Uuid::new_v4())),
+            mysql_types::DbValue::Tinytext("Tinytext".to_string()),
+            mysql_types::DbValue::Text("text".to_string()),
+            mysql_types::DbValue::Mediumtext("Mediumtext".to_string()),
+            mysql_types::DbValue::Longtext("Longtext".to_string()),
+            mysql_types::DbValue::Binary(vec![66, 105, 110, 97, 114, 121]),
+            mysql_types::DbValue::Varbinary("Varbinary".as_bytes().to_vec()),
+            mysql_types::DbValue::Tinyblob("Tinyblob".as_bytes().to_vec()),
+            mysql_types::DbValue::Blob("Blob".as_bytes().to_vec()),
+            mysql_types::DbValue::Mediumblob("Mediumblob".as_bytes().to_vec()),
+            mysql_types::DbValue::Longblob("Longblob".as_bytes().to_vec()),
+            mysql_types::DbValue::Enumeration("value2".to_string()),
+            mysql_types::DbValue::Set("value1,value2".to_string()),
+            mysql_types::DbValue::Json(json!(
+                   {
+                      "id": 100
+                   }
+            )),
+            mysql_types::DbValue::Bit(BitVec::from_iter([true, false, false])),
+            mysql_types::DbValue::TinyintUnsigned(10),
+            mysql_types::DbValue::SmallintUnsigned(20),
+            mysql_types::DbValue::MediumintUnsigned(30),
+            mysql_types::DbValue::IntUnsigned(40),
+            mysql_types::DbValue::BigintUnsigned(50),
+            mysql_types::DbValue::Year(2020),
+            mysql_types::DbValue::Time(chrono::NaiveTime::from_hms_opt(1, 20, 30).unwrap()),
+        ];
+
+        for param in params {
+            check_db_value(param);
+        }
     }
 }

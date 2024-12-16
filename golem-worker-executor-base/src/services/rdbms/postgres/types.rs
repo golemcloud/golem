@@ -107,18 +107,18 @@ impl NamedType for DomainType {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct Range<T> {
+pub struct ValuesRange<T> {
     pub start: Bound<T>,
     pub end: Bound<T>,
 }
 
-impl<T> Range<T> {
+impl<T> ValuesRange<T> {
     pub fn new(start: Bound<T>, end: Bound<T>) -> Self {
-        Range { start, end }
+        ValuesRange { start, end }
     }
 }
 
-impl<T: Debug> Display for Range<T> {
+impl<T: Debug> Display for ValuesRange<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?} {:?}", self.start, self.end)
     }
@@ -382,12 +382,12 @@ pub enum DbValue {
     Macaddr(MacAddress),
     Bit(BitVec),
     Varbit(BitVec),
-    Int4range(Range<i32>),
-    Int8range(Range<i64>),
-    Numrange(Range<BigDecimal>),
-    Tsrange(Range<chrono::NaiveDateTime>),
-    Tstzrange(Range<chrono::DateTime<chrono::Utc>>),
-    Daterange(Range<chrono::NaiveDate>),
+    Int4range(ValuesRange<i32>),
+    Int8range(ValuesRange<i64>),
+    Numrange(ValuesRange<BigDecimal>),
+    Tsrange(ValuesRange<chrono::NaiveDateTime>),
+    Tstzrange(ValuesRange<chrono::DateTime<chrono::Utc>>),
+    Daterange(ValuesRange<chrono::NaiveDate>),
     Money(i64),
     Oid(u32),
     Enum(Enum),

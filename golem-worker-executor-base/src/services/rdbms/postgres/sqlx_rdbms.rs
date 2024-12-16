@@ -15,7 +15,7 @@
 use crate::services::golem_config::{RdbmsConfig, RdbmsPoolConfig};
 use crate::services::rdbms::postgres::types::{
     Composite, CompositeType, DbColumn, DbColumnType, DbValue, Domain, DomainType, Enum, EnumType,
-    Interval, NamedType, Range, TimeTz,
+    Interval, NamedType, TimeTz, ValuesRange,
 };
 use crate::services::rdbms::postgres::{PostgresType, POSTGRES};
 use crate::services::rdbms::sqlx_common::{
@@ -1060,8 +1060,8 @@ fn get_db_column_type(type_info: &sqlx::postgres::PgTypeInfo) -> Result<DbColumn
     }
 }
 
-impl<T> From<Range<T>> for PgRange<T> {
-    fn from(range: Range<T>) -> Self {
+impl<T> From<ValuesRange<T>> for PgRange<T> {
+    fn from(range: ValuesRange<T>) -> Self {
         PgRange {
             start: range.start,
             end: range.end,
@@ -1069,9 +1069,9 @@ impl<T> From<Range<T>> for PgRange<T> {
     }
 }
 
-impl<T> From<PgRange<T>> for Range<T> {
+impl<T> From<PgRange<T>> for ValuesRange<T> {
     fn from(range: PgRange<T>) -> Self {
-        Range {
+        ValuesRange {
             start: range.start,
             end: range.end,
         }

@@ -539,14 +539,7 @@ impl From<chrono::DateTime<chrono::Utc>> for Timestamptz {
     }
 }
 
-type NaiveDateTimeBounds = postgres_types::Range<chrono::NaiveDateTime>;
-type NaiveDateBounds = postgres_types::Range<chrono::NaiveDate>;
-type DateTimeBounds = postgres_types::Range<chrono::DateTime<chrono::Utc>>;
-type I32Bounds = postgres_types::Range<i32>;
-type I64Bounds = postgres_types::Range<i64>;
-type BigDecimalBounds = postgres_types::Range<BigDecimal>;
-
-impl From<Int4range> for I32Bounds {
+impl From<Int4range> for postgres_types::ValuesRange<i32> {
     fn from(value: Int4range) -> Self {
         fn to_bounds(v: Int4bound) -> Bound<i32> {
             match v {
@@ -562,7 +555,7 @@ impl From<Int4range> for I32Bounds {
     }
 }
 
-impl From<Int8range> for I64Bounds {
+impl From<Int8range> for postgres_types::ValuesRange<i64> {
     fn from(value: Int8range) -> Self {
         fn to_bounds(v: Int8bound) -> Bound<i64> {
             match v {
@@ -578,7 +571,7 @@ impl From<Int8range> for I64Bounds {
     }
 }
 
-impl TryFrom<Numrange> for BigDecimalBounds {
+impl TryFrom<Numrange> for postgres_types::ValuesRange<BigDecimal> {
     type Error = String;
 
     fn try_from(value: Numrange) -> Result<Self, Self::Error> {
@@ -600,7 +593,7 @@ impl TryFrom<Numrange> for BigDecimalBounds {
     }
 }
 
-impl TryFrom<Daterange> for NaiveDateBounds {
+impl TryFrom<Daterange> for postgres_types::ValuesRange<chrono::NaiveDate> {
     type Error = String;
 
     fn try_from(value: Daterange) -> Result<Self, Self::Error> {
@@ -618,7 +611,7 @@ impl TryFrom<Daterange> for NaiveDateBounds {
     }
 }
 
-impl TryFrom<Tsrange> for NaiveDateTimeBounds {
+impl TryFrom<Tsrange> for postgres_types::ValuesRange<chrono::NaiveDateTime> {
     type Error = String;
 
     fn try_from(value: Tsrange) -> Result<Self, Self::Error> {
@@ -636,7 +629,7 @@ impl TryFrom<Tsrange> for NaiveDateTimeBounds {
     }
 }
 
-impl TryFrom<Tstzrange> for DateTimeBounds {
+impl TryFrom<Tstzrange> for postgres_types::ValuesRange<chrono::DateTime<chrono::Utc>> {
     type Error = String;
 
     fn try_from(value: Tstzrange) -> Result<Self, Self::Error> {
@@ -654,8 +647,8 @@ impl TryFrom<Tstzrange> for DateTimeBounds {
     }
 }
 
-impl From<I32Bounds> for Int4range {
-    fn from(value: I32Bounds) -> Self {
+impl From<postgres_types::ValuesRange<i32>> for Int4range {
+    fn from(value: postgres_types::ValuesRange<i32>) -> Self {
         fn to_bounds(v: Bound<i32>) -> Int4bound {
             match v {
                 Bound::Included(v) => Int4bound::Included(v),
@@ -670,8 +663,8 @@ impl From<I32Bounds> for Int4range {
     }
 }
 
-impl From<I64Bounds> for Int8range {
-    fn from(value: I64Bounds) -> Self {
+impl From<postgres_types::ValuesRange<i64>> for Int8range {
+    fn from(value: postgres_types::ValuesRange<i64>) -> Self {
         fn to_bounds(v: Bound<i64>) -> Int8bound {
             match v {
                 Bound::Included(v) => Int8bound::Included(v),
@@ -686,8 +679,8 @@ impl From<I64Bounds> for Int8range {
     }
 }
 
-impl From<BigDecimalBounds> for Numrange {
-    fn from(value: BigDecimalBounds) -> Self {
+impl From<postgres_types::ValuesRange<BigDecimal>> for Numrange {
+    fn from(value: postgres_types::ValuesRange<BigDecimal>) -> Self {
         fn to_bounds(v: Bound<BigDecimal>) -> Numbound {
             match v {
                 Bound::Included(v) => Numbound::Included(v.to_string()),
@@ -702,8 +695,8 @@ impl From<BigDecimalBounds> for Numrange {
     }
 }
 
-impl From<DateTimeBounds> for Tstzrange {
-    fn from(value: DateTimeBounds) -> Self {
+impl From<postgres_types::ValuesRange<chrono::DateTime<chrono::Utc>>> for Tstzrange {
+    fn from(value: postgres_types::ValuesRange<chrono::DateTime<chrono::Utc>>) -> Self {
         fn to_bounds(v: Bound<chrono::DateTime<chrono::Utc>>) -> Tstzbound {
             match v {
                 Bound::Included(v) => Tstzbound::Included(v.into()),
@@ -718,8 +711,8 @@ impl From<DateTimeBounds> for Tstzrange {
     }
 }
 
-impl From<NaiveDateTimeBounds> for Tsrange {
-    fn from(value: NaiveDateTimeBounds) -> Self {
+impl From<postgres_types::ValuesRange<chrono::NaiveDateTime>> for Tsrange {
+    fn from(value: postgres_types::ValuesRange<chrono::NaiveDateTime>) -> Self {
         fn to_bounds(v: Bound<chrono::NaiveDateTime>) -> Tsbound {
             match v {
                 Bound::Included(v) => Tsbound::Included(v.into()),
@@ -734,8 +727,8 @@ impl From<NaiveDateTimeBounds> for Tsrange {
     }
 }
 
-impl From<NaiveDateBounds> for Daterange {
-    fn from(value: NaiveDateBounds) -> Self {
+impl From<postgres_types::ValuesRange<chrono::NaiveDate>> for Daterange {
+    fn from(value: postgres_types::ValuesRange<chrono::NaiveDate>) -> Self {
         fn to_bounds(v: Bound<chrono::NaiveDate>) -> Datebound {
             match v {
                 Bound::Included(v) => Datebound::Included(v.into()),
@@ -1271,7 +1264,15 @@ pub(crate) mod postgres_utils {
         use crate::durable_host::rdbms::postgres::postgres_utils;
         use crate::services::rdbms::postgres::types as postgres_types;
         use assert2::check;
+        use bigdecimal::BigDecimal;
+        use chrono::Offset;
+        use serde_json::json;
+        use sqlx::types::mac_address::MacAddress;
+        use sqlx::types::BitVec;
+        use std::collections::Bound;
+        use std::net::{IpAddr, Ipv4Addr};
         use test_r::test;
+        use uuid::Uuid;
 
         fn check_db_value(value: postgres_types::DbValue) {
             let wit = postgres_utils::from_db_value(value.clone());
@@ -1284,88 +1285,249 @@ pub(crate) mod postgres_utils {
 
         #[test]
         fn test_db_values_conversions() {
-            let value = postgres_types::DbValue::Array(vec![
-                postgres_types::DbValue::Varchar("tag1".to_string()),
-                postgres_types::DbValue::Varchar("tag2".to_string()),
-            ]);
+            let tstzbounds = postgres_types::ValuesRange::new(
+                Bound::Included(chrono::DateTime::from_naive_utc_and_offset(
+                    chrono::NaiveDateTime::new(
+                        chrono::NaiveDate::from_ymd_opt(2023, 3, 2).unwrap(),
+                        chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+                    ),
+                    chrono::Utc,
+                )),
+                Bound::Excluded(chrono::DateTime::from_naive_utc_and_offset(
+                    chrono::NaiveDateTime::new(
+                        chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+                        chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+                    ),
+                    chrono::Utc,
+                )),
+            );
+            let tsbounds = postgres_types::ValuesRange::new(
+                Bound::Included(chrono::NaiveDateTime::new(
+                    chrono::NaiveDate::from_ymd_opt(2022, 2, 2).unwrap(),
+                    chrono::NaiveTime::from_hms_opt(16, 50, 30).unwrap(),
+                )),
+                Bound::Excluded(chrono::NaiveDateTime::new(
+                    chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+                    chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+                )),
+            );
 
-            check_db_value(value);
-
-            let value = postgres_types::DbValue::Domain(postgres_types::Domain::new(
-                "ddd".to_string(),
-                postgres_types::DbValue::Varchar("tag2".to_string()),
-            ));
-
-            check_db_value(value);
-
-            let value = postgres_types::DbValue::Array(vec![
+            let params = vec![
+                postgres_types::DbValue::Array(vec![
+                    postgres_types::DbValue::Enum(postgres_types::Enum::new(
+                        "a_test_enum".to_string(),
+                        "second".to_string(),
+                    )),
+                    postgres_types::DbValue::Enum(postgres_types::Enum::new(
+                        "a_test_enum".to_string(),
+                        "third".to_string(),
+                    )),
+                ]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Character(2)]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Int2(1)]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Int4(2)]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Int8(3)]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Float4(4.0)]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Float8(5.0)]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Numeric(
+                    BigDecimal::from(48888),
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Boolean(true)]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Text(
+                    "text".to_string(),
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Varchar(
+                    "varchar".to_string(),
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Bpchar(
+                    "0123456789".to_string(),
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Timestamp(
+                    chrono::NaiveDateTime::new(
+                        chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
+                        chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+                    ),
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Timestamptz(
+                    chrono::DateTime::from_naive_utc_and_offset(
+                        chrono::NaiveDateTime::new(
+                            chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+                            chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+                        ),
+                        chrono::Utc,
+                    ),
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Date(
+                    chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Time(
+                    chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Timetz(
+                    postgres_types::TimeTz::new(
+                        chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+                        chrono::Utc.fix(),
+                    ),
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Interval(
+                    postgres_types::Interval::new(10, 20, 30),
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Bytea(
+                    "bytea".as_bytes().to_vec(),
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Uuid(Uuid::new_v4())]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Json(json!(
+                       {
+                          "id": 2
+                       }
+                ))]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Jsonb(json!(
+                       {
+                          "index": 4
+                       }
+                ))]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Inet(IpAddr::V4(
+                    Ipv4Addr::new(127, 0, 0, 1),
+                ))]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Cidr(IpAddr::V4(
+                    Ipv4Addr::new(198, 168, 0, 0),
+                ))]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Macaddr(
+                    MacAddress::new([0, 1, 2, 3, 4, 1]),
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Bit(
+                    BitVec::from_iter(vec![true, false, true]),
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Varbit(
+                    BitVec::from_iter(vec![true, false, false]),
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Xml(
+                    "<foo>200</foo>".to_string(),
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Int4range(
+                    postgres_types::ValuesRange::new(Bound::Included(1), Bound::Excluded(4)),
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Int8range(
+                    postgres_types::ValuesRange::new(Bound::Included(1), Bound::Unbounded),
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Numrange(
+                    postgres_types::ValuesRange::new(
+                        Bound::Included(BigDecimal::from(11)),
+                        Bound::Excluded(BigDecimal::from(221)),
+                    ),
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Tsrange(tsbounds)]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Tstzrange(
+                    tstzbounds,
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Daterange(
+                    postgres_types::ValuesRange::new(
+                        Bound::Included(chrono::NaiveDate::from_ymd_opt(2023, 2, 3).unwrap()),
+                        Bound::Unbounded,
+                    ),
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Money(1234)]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Jsonpath(
+                    "$.user.addresses[0].city".to_string(),
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Text(
+                    "'a' 'and' 'ate' 'cat' 'fat' 'mat' 'on' 'rat' 'sat'".to_string(),
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Text(
+                    "'fat' & 'rat' & !'cat'".to_string(),
+                )]),
+                postgres_types::DbValue::Array(vec![
+                    postgres_types::DbValue::Composite(postgres_types::Composite::new(
+                        "a_inventory_item".to_string(),
+                        vec![
+                            postgres_types::DbValue::Uuid(Uuid::new_v4()),
+                            postgres_types::DbValue::Text("text".to_string()),
+                            postgres_types::DbValue::Int4(3),
+                            postgres_types::DbValue::Numeric(BigDecimal::from(111)),
+                        ],
+                    )),
+                    postgres_types::DbValue::Composite(postgres_types::Composite::new(
+                        "a_inventory_item".to_string(),
+                        vec![
+                            postgres_types::DbValue::Uuid(Uuid::new_v4()),
+                            postgres_types::DbValue::Text("text".to_string()),
+                            postgres_types::DbValue::Int4(4),
+                            postgres_types::DbValue::Numeric(BigDecimal::from(111)),
+                        ],
+                    )),
+                ]),
+                postgres_types::DbValue::Array(vec![
+                    postgres_types::DbValue::Domain(postgres_types::Domain::new(
+                        "posint8".to_string(),
+                        postgres_types::DbValue::Int8(1),
+                    )),
+                    postgres_types::DbValue::Domain(postgres_types::Domain::new(
+                        "posint8".to_string(),
+                        postgres_types::DbValue::Int8(2),
+                    )),
+                ]),
+                postgres_types::DbValue::Array(vec![
+                    postgres_types::DbValue::Composite(postgres_types::Composite::new(
+                        "ccc".to_string(),
+                        vec![
+                            postgres_types::DbValue::Varchar("v1".to_string()),
+                            postgres_types::DbValue::Int2(1),
+                            postgres_types::DbValue::Array(vec![postgres_types::DbValue::Domain(
+                                postgres_types::Domain::new(
+                                    "ddd".to_string(),
+                                    postgres_types::DbValue::Varchar("v11".to_string()),
+                                ),
+                            )]),
+                        ],
+                    )),
+                    postgres_types::DbValue::Composite(postgres_types::Composite::new(
+                        "ccc".to_string(),
+                        vec![
+                            postgres_types::DbValue::Varchar("v2".to_string()),
+                            postgres_types::DbValue::Int2(2),
+                            postgres_types::DbValue::Array(vec![
+                                postgres_types::DbValue::Domain(postgres_types::Domain::new(
+                                    "ddd".to_string(),
+                                    postgres_types::DbValue::Varchar("v21".to_string()),
+                                )),
+                                postgres_types::DbValue::Domain(postgres_types::Domain::new(
+                                    "ddd".to_string(),
+                                    postgres_types::DbValue::Varchar("v22".to_string()),
+                                )),
+                            ]),
+                        ],
+                    )),
+                    postgres_types::DbValue::Composite(postgres_types::Composite::new(
+                        "ccc".to_string(),
+                        vec![
+                            postgres_types::DbValue::Varchar("v3".to_string()),
+                            postgres_types::DbValue::Int2(3),
+                            postgres_types::DbValue::Array(vec![
+                                postgres_types::DbValue::Domain(postgres_types::Domain::new(
+                                    "ddd".to_string(),
+                                    postgres_types::DbValue::Varchar("v31".to_string()),
+                                )),
+                                postgres_types::DbValue::Domain(postgres_types::Domain::new(
+                                    "ddd".to_string(),
+                                    postgres_types::DbValue::Varchar("v32".to_string()),
+                                )),
+                                postgres_types::DbValue::Domain(postgres_types::Domain::new(
+                                    "ddd".to_string(),
+                                    postgres_types::DbValue::Varchar("v33".to_string()),
+                                )),
+                            ]),
+                        ],
+                    )),
+                ]),
                 postgres_types::DbValue::Domain(postgres_types::Domain::new(
                     "ddd".to_string(),
-                    postgres_types::DbValue::Varchar("v1".to_string()),
+                    postgres_types::DbValue::Varchar("tag2".to_string()),
                 )),
-                postgres_types::DbValue::Domain(postgres_types::Domain::new(
-                    "ddd".to_string(),
-                    postgres_types::DbValue::Varchar("v2".to_string()),
-                )),
-            ]);
+            ];
 
-            check_db_value(value);
-
-            let value = postgres_types::DbValue::Array(vec![
-                postgres_types::DbValue::Composite(postgres_types::Composite::new(
-                    "ccc".to_string(),
-                    vec![
-                        postgres_types::DbValue::Varchar("v1".to_string()),
-                        postgres_types::DbValue::Int2(1),
-                        postgres_types::DbValue::Array(vec![postgres_types::DbValue::Domain(
-                            postgres_types::Domain::new(
-                                "ddd".to_string(),
-                                postgres_types::DbValue::Varchar("v11".to_string()),
-                            ),
-                        )]),
-                    ],
-                )),
-                postgres_types::DbValue::Composite(postgres_types::Composite::new(
-                    "ccc".to_string(),
-                    vec![
-                        postgres_types::DbValue::Varchar("v2".to_string()),
-                        postgres_types::DbValue::Int2(2),
-                        postgres_types::DbValue::Array(vec![
-                            postgres_types::DbValue::Domain(postgres_types::Domain::new(
-                                "ddd".to_string(),
-                                postgres_types::DbValue::Varchar("v21".to_string()),
-                            )),
-                            postgres_types::DbValue::Domain(postgres_types::Domain::new(
-                                "ddd".to_string(),
-                                postgres_types::DbValue::Varchar("v22".to_string()),
-                            )),
-                        ]),
-                    ],
-                )),
-                postgres_types::DbValue::Composite(postgres_types::Composite::new(
-                    "ccc".to_string(),
-                    vec![
-                        postgres_types::DbValue::Varchar("v3".to_string()),
-                        postgres_types::DbValue::Int2(3),
-                        postgres_types::DbValue::Array(vec![
-                            postgres_types::DbValue::Domain(postgres_types::Domain::new(
-                                "ddd".to_string(),
-                                postgres_types::DbValue::Varchar("v31".to_string()),
-                            )),
-                            postgres_types::DbValue::Domain(postgres_types::Domain::new(
-                                "ddd".to_string(),
-                                postgres_types::DbValue::Varchar("v32".to_string()),
-                            )),
-                            postgres_types::DbValue::Domain(postgres_types::Domain::new(
-                                "ddd".to_string(),
-                                postgres_types::DbValue::Varchar("v33".to_string()),
-                            )),
-                        ]),
-                    ],
-                )),
-            ]);
-
-            check_db_value(value);
+            for param in params {
+                check_db_value(param);
+            }
         }
 
         fn check_db_column_type(value: postgres_types::DbColumnType) {
