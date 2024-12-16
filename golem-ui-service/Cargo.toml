@@ -20,5 +20,8 @@ clap = { version = "4.0", features = ["derive"] }
 [build-dependencies]
 embed-resource = "3.0.1"
 
+[dev-dependencies]
+test-r = { workspace = true }
+
 [lib]
 harness = false

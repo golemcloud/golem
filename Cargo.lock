@@ -4409,6 +4409,7 @@ dependencies = [
  "rust-embed",
  "serde 1.0.216",
  "serde_json",
+ "test-r",
  "tokio",
  "tower-http 0.4.4",
  "tracing",
