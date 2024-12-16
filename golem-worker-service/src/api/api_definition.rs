@@ -1,22 +1,48 @@
-use golem_common::json_yaml::JsonOrYaml;
-use golem_common::{recorded_http_api_request, safe};
+// Copyright 2024 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use crate::api::{
+    api_deployment::ApiDeploymentApi,
+    openapi_generator::{generate_openapi, OpenApiSpec},
+    security_scheme::SecuritySchemeApi,
+    worker::WorkerApi,
+};
+use crate::service::Services;
+use golem_api_grpc::proto::golem::apidefinition::{HttpApiDefinition, HttpRoute};
+use golem_common::{json_yaml::JsonOrYaml, recorded_http_api_request, safe, SafeDisplay};
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
-use golem_worker_service_base::api::ApiEndpointError;
-use golem_worker_service_base::api::HttpApiDefinitionRequest;
-use golem_worker_service_base::api::HttpApiDefinitionResponseData;
-use golem_worker_service_base::gateway_api_definition::http::CompiledHttpApiDefinition;
-use golem_worker_service_base::gateway_api_definition::http::HttpApiDefinitionRequest as CoreHttpApiDefinitionRequest;
-use golem_worker_service_base::gateway_api_definition::http::OpenApiHttpApiDefinitionRequest;
+use golem_worker_service_base::api::{
+    ApiEndpointError, HealthcheckApi, HttpApiDefinitionRequest, HttpApiDefinitionResponseData,
+};
+use golem_worker_service_base::gateway_api_definition::http::{
+    CompiledHttpApiDefinition, HttpApiDefinitionRequest as CoreHttpApiDefinitionRequest,
+    OpenApiHttpApiDefinitionRequest,
+};
 use golem_worker_service_base::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use golem_worker_service_base::service::gateway::api_definition::ApiDefinitionService;
-use poem_openapi::param::{Path, Query};
-use poem_openapi::payload::Json;
-use poem_openapi::*;
+use poem::Route;
+use poem_openapi::{
+    param::{Path, Query},
+    payload::{Json, PlainText},
+    OpenApi, OpenApiService,
+};
 use std::result::Result;
 use std::sync::Arc;
 use tracing::{error, Instrument};
 
+#[derive(Clone)]
 pub struct RegisterApiDefinitionApi {
     definition_service: Arc<dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace> + Sync + Send>,
 }
@@ -67,7 +93,7 @@ impl RegisterApiDefinitionApi {
     /// Create a new API definition
     ///
     /// Creates a new API definition described by Golem's API definition JSON document.
-    /// If an API definition of the same version already exists, its an error.
+    /// If an API definition of the same version already exists, it's an error.
     #[oai(path = "/", method = "post", operation_id = "create_definition")]
     async fn create(
         &self,
@@ -254,7 +280,7 @@ impl RegisterApiDefinitionApi {
     /// Get or list API definitions
     ///
     /// If `api_definition_id` is specified, returns a single API definition.
-    /// Otherwise lists all API definitions.
+    /// Otherwise, lists all API definitions.
     #[oai(path = "/", method = "get", operation_id = "list_definitions")]
     async fn list(
         &self,
@@ -290,6 +316,134 @@ impl RegisterApiDefinitionApi {
             Ok(Json(values))
         };
         record.result(response)
+    }
+
+    /// Export an API Definition to OpenAPI
+    #[oai(
+        path = "/:id/:version/export",
+        method = "get",
+        operation_id = "export_api_definition"
+    )]
+    pub async fn export(
+        &self,
+        id: Path<ApiDefinitionId>,
+        version: Path<ApiVersion>,
+    ) -> Result<Json<OpenApiSpec>, ApiEndpointError> {
+        let record = recorded_http_api_request!(
+            "export_api_definition",
+            api_definition_id = id.0.to_string(),
+            version = version.0.to_string()
+        );
+
+        let response = {
+            // Retrieve the API definition
+            let api_definition = self
+                .definition_service
+                .get(
+                    &id.0,
+                    &version.0,
+                    &DefaultNamespace::default(),
+                    &EmptyAuthCtx::default(),
+                )
+                .instrument(record.span.clone())
+                .await?;
+
+            // Handle case where the API definition is not found
+            let compiled_definition = api_definition.ok_or_else(|| {
+                ApiEndpointError::not_found(safe(format!(
+                    "No API definition found for id {} and version {}",
+                    id.0, version.0
+                )))
+            })?;
+
+            // Convert `CompiledHttpApiDefinition` to `HttpApiDefinition`
+
+            let http_api_definition =
+                convert_compiled_to_http(compiled_definition).map_err(|err| {
+                    ApiEndpointError::internal(safe(format!(
+                        "Error converting API definition: {:?}",
+                        err
+                    )))
+                })?;
+
+            // Generate OpenAPI Specification
+            let openapi_spec = generate_openapi(&http_api_definition, &version.0.to_string());
+
+            Ok(Json(openapi_spec))
+        };
+
+        record.result(response)
+    }
+
+    #[oai(path = "/swagger-ui/*path", method = "get")]
+    async fn swagger_ui(&self, path: Path<String>) -> PlainText<String> {
+        PlainText(format!("Swagger UI for path: {}", path.0))
+    }
+}
+
+/// Configures the routes for the OpenAPI service, including `/docs` for Swagger and `/specs` for YAML.
+fn build_api_routes(services: Arc<Services>) -> Route {
+    let api_service = Arc::new(OpenApiService::new(
+        (
+            WorkerApi {
+                component_service: services.component_service.clone(),
+                worker_service: services.worker_service.clone(),
+            },
+            RegisterApiDefinitionApi::new(services.definition_service.clone()),
+            ApiDeploymentApi::new(services.deployment_service.clone()),
+            SecuritySchemeApi::new(services.security_scheme_service.clone()),
+            HealthcheckApi,
+        ),
+        "API Service",
+        "1.0",
+    ));
+
+    Route::new()
+        .nest("/", api_service.spec_endpoint())
+        .nest("/docs", api_service.swagger_ui())
+        .nest("/specs", api_service.spec_endpoint_yaml())
+}
+
+struct SafeString(String);
+
+impl SafeDisplay for SafeString {
+    fn to_safe_string(&self) -> String {
+        self.0.clone()
+    }
+}
+
+/// Converts a `CompiledHttpApiDefinition<DefaultNamespace>` to `HttpApiDefinition`.
+fn convert_compiled_to_http(
+    compiled: CompiledHttpApiDefinition<DefaultNamespace>,
+) -> Result<HttpApiDefinition, ApiEndpointError> {
+    let routes = compiled
+        .routes
+        .into_iter()
+        .map(|route| {
+            Ok(HttpRoute {
+                path: route.path.to_string(),
+                method: http_method_to_i32(&route.method.to_string())?,
+                binding: None,
+                middleware: None,
+            })
+        })
+        .collect::<Result<Vec<HttpRoute>, ApiEndpointError>>()?;
+    Ok(HttpApiDefinition { routes })
+}
+
+fn http_method_to_i32(method: &str) -> Result<i32, ApiEndpointError> {
+    match method.to_uppercase().as_str() {
+        "GET" => Ok(0),
+        "POST" => Ok(1),
+        "PUT" => Ok(2),
+        "DELETE" => Ok(3),
+        "PATCH" => Ok(4),
+        "HEAD" => Ok(5),
+        "OPTIONS" => Ok(6),
+        "TRACE" => Ok(7),
+        _ => Err(ApiEndpointError::bad_request(SafeString(
+            method.to_string(),
+        ))),
     }
 }
 
@@ -454,6 +608,7 @@ mod test {
 
     #[test]
     async fn conflict_error_returned() {
+        // Test to ensure attempting to create a duplicate API definition returns a conflict error.
         let (api, _db) = make_route().await;
         let client = TestClient::new(api);
 
@@ -527,7 +682,7 @@ mod test {
     }
 
     #[test]
-    async fn update_non_existant() {
+    async fn update_non_existent() {
         let (api, _db) = make_route().await;
         let client = TestClient::new(api);
 

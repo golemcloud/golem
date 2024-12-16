@@ -1,5 +1,6 @@
 pub mod api_definition;
 pub mod api_deployment;
+mod openapi_generator;
 mod security_scheme;
 pub mod worker;
 pub mod worker_connect;

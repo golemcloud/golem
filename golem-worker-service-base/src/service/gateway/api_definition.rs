@@ -71,6 +71,8 @@ pub enum ApiDefinitionError {
     InternalRepoError(RepoError),
     #[error("Internal error: {0}")]
     Internal(String),
+    #[error("Invalid input: {0}")]
+    InvalidInput(String),
 }
 
 impl ApiDefinitionError {}
@@ -95,6 +97,7 @@ impl SafeDisplay for ApiDefinitionError {
             ApiDefinitionError::InternalRepoError(inner) => inner.to_safe_string(),
             ApiDefinitionError::Internal(_) => self.to_string(),
             ApiDefinitionError::SecuritySchemeError(inner) => inner.to_safe_string(),
+            ApiDefinitionError::InvalidInput(_) => self.to_string(),
         }
     }
 }

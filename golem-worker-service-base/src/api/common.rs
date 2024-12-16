@@ -241,6 +241,9 @@ mod conversion {
                     ApiEndpointError::from(error)
                 }
                 ApiDefinitionServiceError::Internal(_) => ApiEndpointError::internal(error),
+                ApiDefinitionServiceError::InvalidInput(_) => {
+                    ApiEndpointError::from(error)
+                }
             }
         }
     }
@@ -346,6 +349,11 @@ mod conversion {
                     })),
                 },
                 ApiDefinitionServiceError::Internal(_) => ApiDefinitionError {
+                    error: Some(api_definition_error::Error::InternalError(ErrorBody {
+                        error: error.to_safe_string(),
+                    })),
+                },
+                ApiDefinitionServiceError::InvalidInput(_) => ApiDefinitionError {
                     error: Some(api_definition_error::Error::InternalError(ErrorBody {
                         error: error.to_safe_string(),
                     })),
