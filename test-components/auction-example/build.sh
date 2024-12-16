@@ -7,4 +7,5 @@ cp target/wasm32-wasi/release/auction_stub.wasm target/wasm32-wasi/release/aucti
 wasm-tools compose -v target/wasm32-wasi/release/auction_registry.wasm -o target/wasm32-wasi/release/auction_registry_composed.wasm
 
 cp target/wasm32-wasi/release/auction_registry_composed.wasm ..
+cp target/wasm32-wasi/release/auction_registry.wasm ..
 cp target/wasm32-wasi/release/auction.wasm ..

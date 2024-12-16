@@ -14,5 +14,6 @@ cp target/wasm32-wasi/release/ephemeral_stub.wasm target/wasm32-wasi/release/rpc
 wasm-tools compose -v target/wasm32-wasi/release/caller_composed1.wasm -o target/wasm32-wasi/release/caller_composed.wasm
 
 cp target/wasm32-wasi/release/caller_composed.wasm ..
+cp target/wasm32-wasi/release/caller.wasm ..
 cp target/wasm32-wasi/release/counters.wasm ..
 cp target/wasm32-wasi/release/ephemeral.wasm ..
