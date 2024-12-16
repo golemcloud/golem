@@ -55,6 +55,17 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+            node-version: '22'
+            cache: 'npm'
+            cache-dependency-path: './golem-ui-service/frontend/package-lock.json'
+      - name: Build Frontend
+        working-directory: ./golem-ui-service/frontend
+        run: |
+            npm ci
+            npm run build
 
       - run: cargo install cross
         if: ${{ matrix.platform.cross }}
@@ -218,6 +229,18 @@ jobs:
         run: git fetch origin --deepen=1
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+            node-version: '22'
+            cache: 'npm'
+            cache-dependency-path: './golem-ui-service/frontend/package-lock.json'
+      - name: Build Frontend
+        working-directory: ./golem-ui-service/frontend
+        run: |
+            npm ci
+            npm run build
+
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: debug
@@ -287,6 +310,18 @@ jobs:
         run: git fetch origin --deepen=1
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+            node-version: '22'
+            cache: 'npm'
+            cache-dependency-path: './golem-ui-service/frontend/package-lock.json'
+      - name: Build Frontend
+        working-directory: ./golem-ui-service/frontend
+        run: |
+            npm ci
+            npm run build
+
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: debug-workertests
@@ -336,6 +371,18 @@ jobs:
         run: git fetch origin --deepen=1
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+            node-version: '22'
+            cache: 'npm'
+            cache-dependency-path: './golem-ui-service/frontend/package-lock.json'
+      - name: Build Frontend
+        working-directory: ./golem-ui-service/frontend
+        run: |
+            npm ci
+            npm run build
+
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: debug-workertests
@@ -373,6 +420,18 @@ jobs:
         run: git fetch origin --deepen=1
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+            node-version: '22'
+            cache: 'npm'
+            cache-dependency-path: './golem-ui-service/frontend/package-lock.json'
+      - name: Build Frontend
+        working-directory: ./golem-ui-service/frontend
+        run: |
+            npm ci
+            npm run build
+
       - uses: cargo-bins/cargo-binstall@main
       - name: Install cargo-component
         run: cargo binstall --no-confirm cargo-component@0.13.2
@@ -560,6 +619,18 @@ jobs:
         run: git fetch origin --deepen=1
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable && rustup target add ${{ matrix.cfg.rust-target }}
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+            node-version: '22'
+            cache: 'npm'
+            cache-dependency-path: './golem-ui-service/frontend/package-lock.json'
+      - name: Build Frontend
+        working-directory: ./golem-ui-service/frontend
+        run: |
+            npm ci
+            npm run build
+
       - uses: davidB/rust-cargo-make@v1
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
