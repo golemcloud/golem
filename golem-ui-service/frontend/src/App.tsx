@@ -1,5 +1,7 @@
 import { BrowserRouter, Route, Routes } from 'react-router-dom';
 
+import { ApiDefinitionView } from './pages/ApiDefinitionDetail';
+import { ApiDefinitionsPage } from './pages/ApiDefinitions';
 import {
   ComponentDetail
 } from './pages/ComponentDetail';
@@ -20,8 +22,11 @@ function App() {
           <Route path="/components" element={<Components />} />
           <Route path="/components/:id" element={<ComponentDetail />} />
           <Route path="/plugins" element={<PluginsPage />} />
-          <Route path="/api" element={<div>API Page</div>} />
+          <Route path="/api" element={<ApiDefinitionsPage />} />
+          <Route path="/api/definitions/:id/:version" element={<ApiDefinitionView />} />
           <Route path="/plugins/:name/:version" element={<PluginDetailPage />} />
+
+          {/* <Route path="/api" */}
         </Routes>
         <div>
           {/* This component will render the toasts */}

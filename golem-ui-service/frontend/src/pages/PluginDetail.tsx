@@ -34,7 +34,7 @@ const JsonDisplay = ({ data }: { data: string }) => {
         try {
             const parsed = JSON.parse(data);
             setFormattedJson(JSON.stringify(parsed, null, 2));
-        } catch (e) {
+        } catch (_) {
             setFormattedJson(data);
         }
     }, [data]);

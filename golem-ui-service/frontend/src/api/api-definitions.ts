@@ -1,21 +1,23 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { ApiDefinition } from '../types/api';
-import { apiClient } from '../lib/api-client';
+import { ApiDefinition } from "../types/api";
+import { apiClient } from "../lib/api-client";
 
 // Query keys
 export const apiDefinitionKeys = {
-  all: ['api-definitions'] as const,
-  lists: () => [...apiDefinitionKeys.all, 'list'] as const,
-  list: (filters: Record<string, unknown>) => [...apiDefinitionKeys.lists(), filters] as const,
-  details: () => [...apiDefinitionKeys.all, 'detail'] as const,
-  detail: (id: string, version: string) => [...apiDefinitionKeys.details(), id, version] as const,
+  all: ["api-definitions"] as const,
+  lists: () => [...apiDefinitionKeys.all, "list"] as const,
+  list: (filters: Record<string, unknown>) =>
+    [...apiDefinitionKeys.lists(), filters] as const,
+  details: () => [...apiDefinitionKeys.all, "detail"] as const,
+  detail: (id: string, version: string) =>
+    [...apiDefinitionKeys.details(), id, version] as const,
 };
 
 // API Functions
 export const getApiDefinitions = async (apiDefinitionId?: string) => {
-  const { data } = await apiClient.get<ApiDefinition[]>('/v1/api/definitions', {
-    params: { 'api-definition-id': apiDefinitionId }
+  const { data } = await apiClient.get<ApiDefinition[]>("/v1/api/definitions", {
+    params: { "api-definition-id": apiDefinitionId },
   });
   return data;
 };
@@ -27,35 +29,46 @@ export const getApiDefinition = async (id: string, version: string) => {
   return data;
 };
 
-export const createApiDefinition = async (definition: Omit<ApiDefinition, 'id' | 'createdAt'>) => {
-  const { data } = await apiClient.post<ApiDefinition>('/v1/api/definitions', definition);
+export const createApiDefinition = async (
+  definition: Omit<ApiDefinition, "id" | "createdAt">
+) => {
+  const { data } = await apiClient.post<ApiDefinition>(
+    "/v1/api/definitions",
+    definition
+  );
   return data;
 };
 
 export const updateApiDefinition = async ({
   id,
   version,
-  definition
+  definition,
 }: {
   id: string;
   version: string;
   definition: Partial<ApiDefinition>;
 }) => {
+  console.log({ id, version, definition });
   const { data } = await apiClient.put<ApiDefinition>(
     `/v1/api/definitions/${id}/${version}`,
-    definition
+    definition,
+    {
+      headers: { "Content-Type": "application/json" },
+    }
   );
   return data;
 };
 
 export const deleteApiDefinition = async (id: string, version: string) => {
-  const { data } = await apiClient.delete<string>(`/v1/api/definitions/${id}/${version}`);
+  const { data } = await apiClient.delete<string>(
+    `/v1/api/definitions/${id}/${version}`
+  );
   return data;
 };
 
 export const importOpenApiDefinition = async (openApiDoc: any) => {
   const { data } = await apiClient.put<ApiDefinition>(
-    '/v1/api/definitions/import',
+    "/v1/api/definitions/import",
     openApiDoc
   );
   return data;
@@ -78,7 +91,7 @@ export const useApiDefinition = (id: string, version: string) => {
 
 export const useCreateApiDefinition = () => {
   const queryClient = useQueryClient();
-  
+
   return useMutation({
     mutationFn: createApiDefinition,
     onSuccess: () => {
@@ -89,15 +102,15 @@ export const useCreateApiDefinition = () => {
 
 export const useUpdateApiDefinition = () => {
   const queryClient = useQueryClient();
-  
+
   return useMutation({
     mutationFn: updateApiDefinition,
     onSuccess: (_, { id, version }) => {
-      queryClient.invalidateQueries({ 
-        queryKey: apiDefinitionKeys.detail(id, version) 
+      queryClient.invalidateQueries({
+        queryKey: apiDefinitionKeys.detail(id, version),
       });
-      queryClient.invalidateQueries({ 
-        queryKey: apiDefinitionKeys.lists() 
+      queryClient.invalidateQueries({
+        queryKey: apiDefinitionKeys.lists(),
       });
     },
   });
@@ -105,7 +118,7 @@ export const useUpdateApiDefinition = () => {
 
 export const useDeleteApiDefinition = () => {
   const queryClient = useQueryClient();
-  
+
   return useMutation({
     mutationFn: ({ id, version }: { id: string; version: string }) =>
       deleteApiDefinition(id, version),
@@ -117,7 +130,7 @@ export const useDeleteApiDefinition = () => {
 
 export const useImportOpenApiDefinition = () => {
   const queryClient = useQueryClient();
-  
+
   return useMutation({
     mutationFn: importOpenApiDefinition,
     onSuccess: () => {
