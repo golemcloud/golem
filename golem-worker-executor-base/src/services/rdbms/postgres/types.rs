@@ -107,6 +107,33 @@ impl NamedType for DomainType {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RangeType {
+    pub name: String,
+    pub base_type: Box<DbColumnType>,
+}
+
+impl RangeType {
+    pub fn new(name: String, base_type: DbColumnType) -> Self {
+        RangeType {
+            name,
+            base_type: Box::new(base_type),
+        }
+    }
+}
+
+impl Display for RangeType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}({})", self.name, self.base_type)
+    }
+}
+
+impl NamedType for RangeType {
+    fn name(&self) -> String {
+        self.name.clone()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ValuesRange<T> {
     pub start: Bound<T>,
@@ -116,6 +143,22 @@ pub struct ValuesRange<T> {
 impl<T> ValuesRange<T> {
     pub fn new(start: Bound<T>, end: Bound<T>) -> Self {
         ValuesRange { start, end }
+    }
+
+    pub fn start_value(&self) -> Option<&T> {
+        match &self.start {
+            Bound::Included(v) => Some(v),
+            Bound::Excluded(v) => Some(v),
+            Bound::Unbounded => None,
+        }
+    }
+
+    pub fn end_value(&self) -> Option<&T> {
+        match &self.end {
+            Bound::Included(v) => Some(v),
+            Bound::Excluded(v) => Some(v),
+            Bound::Unbounded => None,
+        }
     }
 }
 
@@ -246,6 +289,33 @@ impl Display for Domain {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct Range {
+    pub name: String,
+    pub value: Box<ValuesRange<DbValue>>,
+}
+
+impl Range {
+    pub fn new(name: String, value: ValuesRange<DbValue>) -> Self {
+        Range {
+            name,
+            value: Box::new(value),
+        }
+    }
+}
+
+impl NamedType for Range {
+    fn name(&self) -> String {
+        self.name.clone()
+    }
+}
+
+impl Display for Range {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}({})", self.name, self.value)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DbColumnType {
     Character,
@@ -287,6 +357,7 @@ pub enum DbColumnType {
     Enum(EnumType),
     Composite(CompositeType),
     Domain(DomainType),
+    Range(RangeType),
     Array(Box<DbColumnType>),
 }
 
@@ -302,7 +373,10 @@ impl DbColumnType {
     pub fn is_complex_type(&self) -> bool {
         matches!(
             self,
-            DbColumnType::Composite(_) | DbColumnType::Domain(_) | DbColumnType::Array(_)
+            DbColumnType::Composite(_)
+                | DbColumnType::Domain(_)
+                | DbColumnType::Array(_)
+                | DbColumnType::Range(_)
         )
     }
 }
@@ -355,6 +429,9 @@ impl Display for DbColumnType {
             DbColumnType::Array(v) => {
                 write!(f, "{}[]", v)
             }
+            DbColumnType::Range(v) => {
+                write!(f, "range: {}", v)
+            }
             DbColumnType::Money => write!(f, "money"),
         }
     }
@@ -401,6 +478,7 @@ pub enum DbValue {
     Enum(Enum),
     Composite(Composite),
     Domain(Domain),
+    Range(Range),
     Array(Vec<DbValue>),
     Null,
 }
@@ -448,6 +526,7 @@ impl Display for DbValue {
             DbValue::Composite(v) => write!(f, "{}", v),
             DbValue::Domain(v) => write!(f, "{}", v),
             DbValue::Array(v) => write!(f, "[{}]", v.iter().format(", ")),
+            DbValue::Range(v) => write!(f, "{}", v),
             DbValue::Null => write!(f, "NULL"),
         }
     }
@@ -465,10 +544,17 @@ impl DbValue {
         value.unwrap_or(DbValue::Null)
     }
 
+    pub(crate) fn primitive_from_plain<T>(value: Option<T>, f: impl Fn(T) -> DbValue) -> Self {
+        match value {
+            Some(v) => f(v),
+            None => DbValue::Null,
+        }
+    }
+
     pub fn is_complex_type(&self) -> bool {
         matches!(
             self,
-            DbValue::Composite(_) | DbValue::Domain(_) | DbValue::Array(_)
+            DbValue::Composite(_) | DbValue::Domain(_) | DbValue::Array(_) | DbValue::Range(_)
         )
     }
 }

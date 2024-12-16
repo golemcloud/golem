@@ -40,6 +40,7 @@ interface postgres {
     excluded(timestamp),
     unbounded
   }
+
   variant tstzbound {
     included(timestamptz),
     excluded(timestamptz),
@@ -111,6 +112,27 @@ interface postgres {
     value: lazy-db-value
   }
 
+  record range-type {
+    name: string,
+    base-type: lazy-db-column-type
+  }
+
+  variant value-bound {
+    included(lazy-db-value),
+    excluded(lazy-db-value),
+    unbounded
+  }
+
+  record values-range {
+    start: value-bound,
+    end: value-bound
+  }
+
+  record range {
+    name: string,
+    value: values-range
+  }
+
   variant db-column-type {
     character,
     int2,
@@ -151,7 +173,8 @@ interface postgres {
     enumeration(enumeration-type),
     composite(composite-type),
     domain(domain-type),
-    array(lazy-db-column-type)
+    array(lazy-db-column-type),
+    range(range-type)
   }
 
   variant db-value {
@@ -195,16 +218,17 @@ interface postgres {
     composite(composite),
     domain(domain),
     array(list<lazy-db-value>),
+    range(range),
     null
   }
 
   resource lazy-db-value {
-constructor(value: db-value);
+    constructor(value: db-value);
     get: func() -> db-value;
   }
 
   resource lazy-db-column-type {
-constructor(value: db-column-type);
+    constructor(value: db-column-type);
     get: func() -> db-column-type;
   }
 

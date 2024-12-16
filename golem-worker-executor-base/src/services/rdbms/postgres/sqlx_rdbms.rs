@@ -15,7 +15,7 @@
 use crate::services::golem_config::{RdbmsConfig, RdbmsPoolConfig};
 use crate::services::rdbms::postgres::types::{
     Composite, CompositeType, DbColumn, DbColumnType, DbValue, Domain, DomainType, Enum, EnumType,
-    Interval, NamedType, TimeTz, ValuesRange,
+    Interval, NamedType, Range, RangeType, TimeTz, ValuesRange,
 };
 use crate::services::rdbms::postgres::{PostgresType, POSTGRES};
 use crate::services::rdbms::sqlx_common::{
@@ -26,11 +26,13 @@ use async_trait::async_trait;
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
 use futures_util::stream::BoxStream;
+use itertools::Itertools;
 use mac_address::MacAddress;
 use serde_json::json;
 use sqlx::postgres::types::{Oid, PgInterval, PgMoney, PgRange, PgTimeTz};
 use sqlx::postgres::{PgConnectOptions, PgTypeKind};
 use sqlx::{Column, ConnectOptions, Pool, Row, Type, TypeInfo, ValueRef};
+use std::collections::Bound;
 use std::net::IpAddr;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -171,6 +173,7 @@ fn set_value<'a, S: PgValueSetter<'a>>(setter: &mut S, value: DbValue) -> Result
         DbValue::Enum(v) => setter.try_set_value(v),
         DbValue::Composite(v) => setter.try_set_value(v),
         DbValue::Domain(v) => setter.try_set_value(v),
+        DbValue::Range(v) => set_value_range(setter, v),
         DbValue::Array(vs) => set_value_array(setter, vs),
         DbValue::Null => setter.try_set_value(PgNull {}),
     }
@@ -245,7 +248,6 @@ fn set_value_array<'a, S: PgValueSetter<'a>>(
                 })?;
                 setter.try_set_value(values)
             }
-
             DbValue::Float8(_) => {
                 let values: Vec<f64> = get_plain_values(values, |v| {
                     if let DbValue::Float8(v) = v {
@@ -577,12 +579,93 @@ fn set_value_array<'a, S: PgValueSetter<'a>>(
                 })?;
                 setter.try_set_value(PgDomains(values))
             }
+            DbValue::Range(_) => {
+                let values: Vec<_> = get_plain_values(values, |v| {
+                    if let DbValue::Range(v) = v {
+                        Some(v)
+                    } else {
+                        None
+                    }
+                })?;
+                set_value_range_array(setter, values)
+            }
             DbValue::Array(_) => Err("Array of arrays is not supported".to_string()),
             DbValue::Null => Err(format!(
                 "Array param element '{}' with index 0 is not supported",
                 first
             )),
         }
+    }
+}
+
+fn set_value_range<'a, S: PgValueSetter<'a>>(setter: &mut S, value: Range) -> Result<(), String> {
+    let v = (*value.value).start_value().or((*value.value).end_value());
+    if let Some(v) = v {
+        match v {
+            DbValue::Float4(_) => {
+                let v: PgCustomRange<f32> = get_pg_range(value, |v| {
+                    if let DbValue::Float4(v) = v {
+                        Some(v)
+                    } else {
+                        None
+                    }
+                })?;
+                setter.try_set_value(v)
+            }
+            DbValue::Float8(_) => {
+                let v: PgCustomRange<f64> = get_pg_range(value, |v| {
+                    if let DbValue::Float8(v) = v {
+                        Some(v)
+                    } else {
+                        None
+                    }
+                })?;
+                setter.try_set_value(v)
+            }
+            _ => Err(format!("Range of '{}' is not supported", v))?,
+        }
+    } else {
+        let v: PgCustomRange<PgNull> = get_pg_range(value, |_| None)?;
+        setter.try_set_value(v)
+    }
+}
+
+fn set_value_range_array<'a, S: PgValueSetter<'a>>(
+    setter: &mut S,
+    values: Vec<Range>,
+) -> Result<(), String> {
+    let v = values
+        .iter()
+        .map(|value| (*value.value).start_value().or((*value.value).end_value()))
+        .find_or_first(|v| v.is_some())
+        .flatten();
+    if let Some(v) = v {
+        match v {
+            DbValue::Float4(_) => {
+                let vs: Vec<PgCustomRange<f32>> = get_pg_ranges(values, |v| {
+                    if let DbValue::Float4(v) = v {
+                        Some(v)
+                    } else {
+                        None
+                    }
+                })?;
+                setter.try_set_value(PgCustomRanges(vs))
+            }
+            DbValue::Float8(_) => {
+                let vs: Vec<PgCustomRange<f64>> = get_pg_ranges(values, |v| {
+                    if let DbValue::Float8(v) = v {
+                        Some(v)
+                    } else {
+                        None
+                    }
+                })?;
+                setter.try_set_value(PgCustomRanges(vs))
+            }
+            _ => Err(format!("Range of '{}' is not supported", v))?,
+        }
+    } else {
+        let vs: Vec<PgCustomRange<PgNull>> = get_pg_ranges(values, |_| None)?;
+        setter.try_set_value(PgCustomRanges(vs))
     }
 }
 
@@ -603,6 +686,70 @@ fn get_plain_values<T>(
         }
     }
     Ok(result)
+}
+
+fn get_pg_range<T: Clone>(
+    value: Range,
+    f: impl Fn(DbValue) -> Option<T> + Clone,
+) -> Result<PgCustomRange<T>, String> {
+    fn to_value<T: Clone>(v: DbValue, f: impl Fn(DbValue) -> Option<T>) -> Result<T, String> {
+        if let Some(v) = f(v.clone()) {
+            Ok(v)
+        } else {
+            Err(format!(
+                "Bound element '{}' has different type than expected",
+                v
+            ))?
+        }
+    }
+
+    fn to_bound<T: Clone>(
+        v: Bound<DbValue>,
+        f: impl Fn(DbValue) -> Option<T>,
+    ) -> Result<Bound<T>, String> {
+        match v {
+            Bound::Included(v) => Ok(Bound::Included(to_value(v, f)?)),
+            Bound::Excluded(v) => Ok(Bound::Excluded(to_value(v, f)?)),
+            Bound::Unbounded => Ok(Bound::Unbounded),
+        }
+    }
+
+    let name = value.name;
+    let value = *value.value;
+
+    let start = to_bound(value.start, f.clone())?;
+    let end = to_bound(value.end, f.clone())?;
+
+    Ok(PgCustomRange::new(name, PgRange { start, end }))
+}
+
+fn get_pg_ranges<T: Clone>(
+    values: Vec<Range>,
+    f: impl Fn(DbValue) -> Option<T> + Clone,
+) -> Result<Vec<PgCustomRange<T>>, String> {
+    let mut result: Vec<PgCustomRange<T>> = Vec::with_capacity(values.len());
+    for (index, value) in values.iter().enumerate() {
+        let r = get_pg_range(value.clone(), f.clone());
+
+        if let Ok(v) = r {
+            result.push(v);
+        } else {
+            Err(format!(
+                "Array element '{}' with index {} has different type than expected",
+                value.clone(),
+                index
+            ))?
+        }
+    }
+    Ok(result)
+}
+
+fn get_range<T>(value: PgCustomRange<T>, f: impl Fn(T) -> DbValue + Clone) -> DbValue {
+    let name = value.name;
+    let start = value.value.start.map(f.clone());
+    let end = value.value.end.map(f.clone());
+    let value = ValuesRange { start, end };
+    DbValue::Range(Range::new(name, value))
 }
 
 impl TryFrom<&sqlx::postgres::PgRow> for DbRow<DbValue> {
@@ -787,6 +934,7 @@ fn get_db_value<G: PgValueGetter>(
             let v: Option<Domain> = getter.try_get_value()?;
             DbValue::primitive_from(v.map(DbValue::Domain))
         }
+        DbColumnType::Range(v) => get_db_value_range(&v.base_type, getter)?,
         DbColumnType::Array(v) => get_db_value_array(v, getter)?,
     };
     Ok(value)
@@ -954,7 +1102,44 @@ fn get_db_value_array<G: PgValueGetter>(
             let vs: Option<PgDomains> = getter.try_get_value()?;
             DbValue::array_from(vs.map(|v| v.0), DbValue::Domain)
         }
+        DbColumnType::Range(r) => get_db_value_range_array(&r.base_type, getter)?,
         DbColumnType::Array(_) => Err("Array of arrays is not supported".to_string())?,
+    };
+    Ok(value)
+}
+
+fn get_db_value_range<G: PgValueGetter>(
+    db_type: &DbColumnType,
+    getter: &mut G,
+) -> Result<DbValue, String> {
+    let value = match db_type {
+        DbColumnType::Float4 => {
+            let v: Option<PgCustomRange<f32>> = getter.try_get_value()?;
+            DbValue::primitive_from_plain(v, |v| get_range(v, DbValue::Float4))
+        }
+        DbColumnType::Float8 => {
+            let v: Option<PgCustomRange<f64>> = getter.try_get_value()?;
+            DbValue::primitive_from_plain(v, |v| get_range(v, DbValue::Float8))
+        }
+        _ => Err(format!("Range of {} is not supported", db_type))?,
+    };
+    Ok(value)
+}
+
+fn get_db_value_range_array<G: PgValueGetter>(
+    db_type: &DbColumnType,
+    getter: &mut G,
+) -> Result<DbValue, String> {
+    let value = match db_type {
+        DbColumnType::Float4 => {
+            let vs: Option<PgCustomRanges<f32>> = getter.try_get_value()?;
+            DbValue::array_from(vs.map(|v| v.0), |v| get_range(v, DbValue::Float4))
+        }
+        DbColumnType::Float8 => {
+            let vs: Option<PgCustomRanges<f64>> = getter.try_get_value()?;
+            DbValue::array_from(vs.map(|v| v.0), |v| get_range(v, DbValue::Float8))
+        }
+        _ => Err(format!("Array of range of {} is not supported", db_type))?,
     };
     Ok(value)
 }
@@ -1073,10 +1258,17 @@ fn get_db_column_type(type_info: &sqlx::postgres::PgTypeInfo) -> Result<DbColumn
                 let base_type = get_db_column_type(base_type)?;
                 Ok(DbColumnType::Domain(DomainType::new(type_name, base_type)))
             }
+            PgTypeKind::Range(base_type) => {
+                let base_type = get_db_column_type(base_type)?;
+                Ok(DbColumnType::Range(RangeType::new(type_name, base_type)))
+            }
             PgTypeKind::Array(element_type)
                 if matches!(
                     element_type.kind(),
-                    PgTypeKind::Enum(_) | PgTypeKind::Domain(_) | PgTypeKind::Composite(_)
+                    PgTypeKind::Enum(_)
+                        | PgTypeKind::Domain(_)
+                        | PgTypeKind::Composite(_)
+                        | PgTypeKind::Range(_)
                 ) =>
             {
                 let column_type = get_db_column_type(element_type)?;
@@ -1341,6 +1533,7 @@ impl sqlx::Encode<'_, sqlx::Postgres> for PgJsonPath {
     }
 }
 
+#[derive(Clone)]
 struct PgNull;
 
 impl sqlx::Encode<'_, sqlx::Postgres> for PgNull {
@@ -1565,6 +1758,109 @@ impl<'r> sqlx::Decode<'r, sqlx::Postgres> for PgDomains {
     }
 }
 
+struct PgCustomRange<T> {
+    name: String,
+    value: PgRange<T>,
+}
+
+impl<T> NamedType for PgCustomRange<T> {
+    fn name(&self) -> String {
+        self.name.clone()
+    }
+}
+
+impl<T> PgCustomRange<T> {
+    fn new(name: String, value: PgRange<T>) -> PgCustomRange<T> {
+        Self { name, value }
+    }
+}
+
+impl<T> sqlx::Type<sqlx::Postgres> for PgCustomRange<T> {
+    fn type_info() -> sqlx::postgres::PgTypeInfo {
+        sqlx::postgres::PgTypeInfo::with_oid(Oid(5080)) // pseudo type
+    }
+
+    fn compatible(ty: &sqlx::postgres::PgTypeInfo) -> bool {
+        matches!(ty.kind(), PgTypeKind::Range(_))
+    }
+}
+
+impl<'q, T> sqlx::Encode<'q, sqlx::Postgres> for PgCustomRange<T>
+where
+    T: sqlx::Encode<'q, sqlx::Postgres> + sqlx::Type<sqlx::Postgres>,
+{
+    fn encode_by_ref(
+        &self,
+        buf: &mut sqlx::postgres::PgArgumentBuffer,
+    ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
+        <PgRange<T> as sqlx::Encode<sqlx::Postgres>>::encode_by_ref(&self.value, buf)
+    }
+
+    fn produces(&self) -> Option<sqlx::postgres::PgTypeInfo> {
+        Some(sqlx::postgres::PgTypeInfo::with_name(
+            self.name.clone().leak(),
+        ))
+    }
+}
+
+impl<'r, T> sqlx::Decode<'r, sqlx::Postgres> for PgCustomRange<T>
+where
+    T: for<'a> sqlx::Decode<'a, sqlx::Postgres> + sqlx::Type<sqlx::Postgres>,
+{
+    fn decode(
+        value: sqlx::postgres::PgValueRef<'r>,
+    ) -> Result<Self, Box<dyn std::error::Error + 'static + Send + Sync>> {
+        let type_info = &value.type_info();
+        let name = type_info.name().to_string();
+        if let PgTypeKind::Range(_) = type_info.kind() {
+            let v = <PgRange<T> as sqlx::Decode<sqlx::Postgres>>::decode(value)?;
+            Ok(PgCustomRange::new(name, v))
+        } else {
+            Err(format!("Type '{}' is not supported", name).into())
+        }
+    }
+}
+
+struct PgCustomRanges<T>(Vec<PgCustomRange<T>>);
+
+impl<T> sqlx::Type<sqlx::Postgres> for PgCustomRanges<T> {
+    fn type_info() -> sqlx::postgres::PgTypeInfo {
+        sqlx::postgres::PgTypeInfo::with_oid(Oid(2277)) // pseudo type
+    }
+
+    fn compatible(ty: &sqlx::postgres::PgTypeInfo) -> bool {
+        matches!(ty.kind(), PgTypeKind::Array(ty) if <PgCustomRange<T> as sqlx::types::Type<sqlx::Postgres>>::compatible(ty))
+    }
+}
+
+impl<'q, T> sqlx::Encode<'q, sqlx::Postgres> for PgCustomRanges<T>
+where
+    T: sqlx::Encode<'q, sqlx::Postgres> + sqlx::Type<sqlx::Postgres>,
+{
+    fn encode_by_ref(
+        &self,
+        buf: &mut sqlx::postgres::PgArgumentBuffer,
+    ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
+        <Vec<PgCustomRange<T>> as sqlx::Encode<sqlx::Postgres>>::encode_by_ref(&self.0, buf)
+    }
+
+    fn produces(&self) -> Option<sqlx::postgres::PgTypeInfo> {
+        get_array_pg_type_info(&self.0)
+    }
+}
+
+impl<'r, T> sqlx::Decode<'r, sqlx::Postgres> for PgCustomRanges<T>
+where
+    T: for<'a> sqlx::Decode<'a, sqlx::Postgres> + sqlx::Type<sqlx::Postgres>,
+{
+    fn decode(
+        value: sqlx::postgres::PgValueRef<'r>,
+    ) -> Result<Self, Box<dyn std::error::Error + 'static + Send + Sync>> {
+        let value = <Vec<PgCustomRange<T>> as sqlx::Decode<sqlx::Postgres>>::decode(value)?;
+        Ok(Self(value))
+    }
+}
+
 fn get_array_pg_type_info<T: NamedType>(values: &[T]) -> Option<sqlx::postgres::PgTypeInfo> {
     if values.is_empty() {
         None
@@ -1590,13 +1886,17 @@ fn get_db_column_type_attributes(
 
 fn get_db_type_name(type_info: &sqlx::postgres::PgTypeInfo) -> String {
     match type_info.kind() {
-        PgTypeKind::Enum(_) | PgTypeKind::Composite(_) | PgTypeKind::Domain(_) => {
-            type_info.name().to_string()
-        }
+        PgTypeKind::Enum(_)
+        | PgTypeKind::Composite(_)
+        | PgTypeKind::Domain(_)
+        | PgTypeKind::Range(_) => type_info.name().to_string(),
         PgTypeKind::Array(element_type)
             if matches!(
                 element_type.kind(),
-                PgTypeKind::Enum(_) | PgTypeKind::Composite(_) | PgTypeKind::Domain(_)
+                PgTypeKind::Enum(_)
+                    | PgTypeKind::Composite(_)
+                    | PgTypeKind::Domain(_)
+                    | PgTypeKind::Range(_)
             ) =>
         {
             format!("{}[]", element_type.name())
