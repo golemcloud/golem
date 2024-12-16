@@ -197,6 +197,15 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
 
         let addr = golem_config.grpc_addr()?;
 
+        let worker_executor_impl = create_worker_executor_impl::<Ctx, Self>(
+            golem_config.clone(),
+            self,
+            runtime.clone(),
+            join_set,
+            addr.port(),
+        )
+        .await?;
+
         if self.run_grpc_server() {
             let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
             health_reporter
@@ -210,16 +219,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             let listener = TcpListener::bind(addr).await?;
             let grpc_port = listener.local_addr()?.port();
 
-            let worker_executor = create_worker_executor_grpc_api::<Ctx, Self>(
-                golem_config.clone(),
-                self,
-                runtime.clone(),
-                join_set,
-                grpc_port,
-            )
-            .await?;
-
-            let service = WorkerExecutorServer::new(worker_executor)
+            let service = WorkerExecutorServer::new(worker_executor_impl)
                 .accept_compressed(CompressionEncoding::Gzip)
                 .send_compressed(CompressionEncoding::Gzip);
 
@@ -257,7 +257,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
     }
 }
 
-async fn create_worker_executor_grpc_api<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Sized>(
+async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Sized>(
     golem_config: GolemConfig,
     bootstrap: &A,
     runtime: Handle,
