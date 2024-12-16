@@ -124,7 +124,7 @@ export const Overview = () => {
                     subtitle={`Version ${api.version}`}
                     status={api.draft ? 'inactive' : 'active'}
                     icon={Globe}
-                    url={'/'}
+                    url={'/api/definitions/' + api.id + '/' + api.version}
                   />
                 ))}
                 {!apis?.length && (
