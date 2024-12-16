@@ -260,7 +260,7 @@ export const PluginDetailPage = () => {
                                     <label className="text-sm text-gray-400 block mb-1">Version</label>
                                     <div className="flex items-center gap-2">
                                         <Package size={16} className="text-gray-400" />
-                                        <span>{plugin.specs.version}</span>
+                                        <span>{plugin.specs.componentVersion}</span>
                                     </div>
                                 </div>
                             </div>

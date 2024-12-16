@@ -156,7 +156,7 @@ export const ApiDefinitionView = () => {
             <div className='flex items-center justify-between'>
                 <div className='flex items-center gap-4'>
                     <Link
-                        to='/api/definitions'
+                        to='/api'
                         className='p-2 text-gray-400 hover:text-gray-300 rounded-md hover:bg-gray-800'>
                         <ArrowLeft size={20} />
                     </Link>
