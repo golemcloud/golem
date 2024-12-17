@@ -37,9 +37,9 @@ use golem_common::uri::oss::uri::ComponentUri;
 use golem_wasm_rpc_stubgen::App;
 use plugin::PluginSubcommand;
 use profile::{ProfileSubCommand, UniversalProfileAdd};
-use ui::UiCommand;
 use std::future::Future;
 use std::path::PathBuf;
+use ui::UiCommand;
 use worker::WorkerSubcommand;
 
 pub trait ComponentRefSplit<ProjectRef> {

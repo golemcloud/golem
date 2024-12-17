@@ -51,7 +51,7 @@ impl UiCommand {
         });
 
         service.run().await.map_err(|e| GolemError(e.to_string()))?;
-        
+
         Ok(GolemResult::Str("UI server stopped".to_string()))
     }
 }
