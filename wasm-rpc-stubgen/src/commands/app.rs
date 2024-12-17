@@ -650,7 +650,7 @@ fn load_app<CPE: ComponentPropertiesExtensions>(
             })
             .inspect(|(application, component_names)| {
                 if application.component_names().next().is_none() {
-                    log_action("Found", "no components".to_string())
+                    log_action("Found", "no components")
                 } else {
                     log_action(
                         "Found",
@@ -743,7 +743,7 @@ fn collect_sources(mode: &ApplicationSourceMode) -> ValidatedResult<(BTreeSet<Pa
     }
     .inspect(|sources| {
         if sources.is_empty() {
-            log_action("Found", "no sources".to_string());
+            log_action("Found", "no sources");
         } else {
             log_action(
                 "Found",

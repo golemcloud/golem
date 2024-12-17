@@ -22,8 +22,8 @@ use crate::config::{OssProfile, ProfileName};
 use crate::factory::ServiceFactory;
 use crate::init::{init_profile, CliKind, DummyProfileAuth};
 use crate::model::app_ext::GolemComponentExtensions;
-use crate::model::{ComponentUrisArg, Format};
 use crate::model::{ComponentUriArg, GolemError, GolemResult, OssPluginScopeArgs};
+use crate::model::{ComponentUrisArg, Format};
 use crate::oss::factory::OssServiceFactory;
 use crate::oss::resource;
 use crate::{check_for_newer_server_version, VERSION};
@@ -107,8 +107,14 @@ impl CliCommand<NoProfileCommandContext> for OssOnlyCommand {
 }
 
 /// Shared command with oss-specific arguments.
-pub type OssSpecializedSharedCommand<ProfileAdd> =
-    SharedCommand<OssContext, ComponentUriArg, ComponentUrisArg, OssWorkerUriArg, OssPluginScopeArgs, ProfileAdd>;
+pub type OssSpecializedSharedCommand<ProfileAdd> = SharedCommand<
+    OssContext,
+    ComponentUriArg,
+    ComponentUrisArg,
+    OssWorkerUriArg,
+    OssPluginScopeArgs,
+    ProfileAdd,
+>;
 
 #[derive(Parser, Debug)]
 #[command(author, version = crate::VERSION, about, long_about, rename_all = "kebab-case")]
