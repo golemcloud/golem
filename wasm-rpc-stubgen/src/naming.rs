@@ -6,38 +6,38 @@ pub mod wit {
     pub static DEPS_DIR: &str = "deps";
     pub static WIT_DIR: &str = "wit";
 
-    pub static STUB_WIT_FILE_NAME: &str = "stub.wit";
-    pub static INTERFACE_WIT_FILE_NAME: &str = "interface.wit";
+    pub static CLIENT_WIT_FILE_NAME: &str = "client.wit";
+    pub static EXPORTS_WIT_FILE_NAME: &str = "exports.wit";
 
-    pub fn stub_package_name(package_name: &wit_parser::PackageName) -> wit_parser::PackageName {
+    pub fn client_package_name(package_name: &wit_parser::PackageName) -> wit_parser::PackageName {
         wit_parser::PackageName {
             namespace: package_name.namespace.clone(),
-            name: format!("{}-stub", package_name.name),
+            name: format!("{}-client", package_name.name),
             version: package_name.version.clone(),
         }
     }
 
-    pub fn interface_parser_package_name(
+    pub fn exports_parser_package_name(
         package_name: &wit_parser::PackageName,
     ) -> wit_parser::PackageName {
         wit_parser::PackageName {
             namespace: package_name.namespace.clone(),
-            name: format!("{}-interface", package_name.name),
+            name: format!("{}-exports", package_name.name),
             version: package_name.version.clone(),
         }
     }
 
-    pub fn interface_encoder_package_name(
+    pub fn exports_encoder_package_name(
         package_name: &wit_encoder::PackageName,
     ) -> wit_encoder::PackageName {
         wit_encoder::PackageName::new(
             package_name.namespace(),
-            format!("{}-interface", package_name.name()),
+            format!("{}-exports", package_name.name()),
             package_name.version().cloned(),
         )
     }
 
-    pub fn interface_package_world_inline_interface_name(
+    pub fn exports_package_world_inline_interface_name(
         world_name: &wit_encoder::Ident,
         interface_name: &wit_encoder::Ident,
     ) -> String {
@@ -50,31 +50,31 @@ pub mod wit {
         format!("{}-inline-functions", world_name.raw_name())
     }
 
-    pub fn stub_target_package_name(
-        stub_package_name: &wit_parser::PackageName,
+    pub fn client_target_package_name(
+        client_package_name: &wit_parser::PackageName,
     ) -> wit_parser::PackageName {
         wit_parser::PackageName {
-            namespace: stub_package_name.namespace.clone(),
-            name: stub_package_name
+            namespace: client_package_name.namespace.clone(),
+            name: client_package_name
                 .name
-                .strip_suffix("-stub")
-                .expect("Unexpected stub package name")
+                .strip_suffix("-client")
+                .expect("Unexpected client package name")
                 .to_string(),
-            version: stub_package_name.version.clone(),
+            version: client_package_name.version.clone(),
         }
     }
 
-    pub fn stub_import_name(stub_package: &wit_parser::Package) -> anyhow::Result<String> {
-        let package_name = &stub_package.name;
+    pub fn client_import_name(client_package: &wit_parser::Package) -> anyhow::Result<String> {
+        let package_name = &client_package.name;
 
-        if stub_package.interfaces.len() != 1 {
+        if client_package.interfaces.len() != 1 {
             bail!(
-                "Expected exactly one interface in stub package, package name: {}",
+                "Expected exactly one interface in client package, package name: {}",
                 package_name.to_string().log_color_highlight()
             );
         }
 
-        let interface_name = stub_package.interfaces.first().unwrap().0;
+        let interface_name = client_package.interfaces.first().unwrap().0;
 
         Ok(format!(
             "{}:{}/{}{}",
@@ -89,19 +89,19 @@ pub mod wit {
         ))
     }
 
-    pub fn stub_import_interface_prefix_from_stub_package_name(
-        stub_package: &wit_parser::PackageName,
+    pub fn client_import_exports_prefix_from_client_package_name(
+        client_package: &wit_parser::PackageName,
     ) -> anyhow::Result<String> {
         Ok(format!(
-            "{}:{}-interface/",
-            stub_package.namespace,
-            stub_package
+            "{}:{}-exports/",
+            client_package.namespace,
+            client_package
                 .name
                 .clone()
-                .strip_suffix("-stub")
+                .strip_suffix("-client")
                 .ok_or_else(|| anyhow!(
-                    "Expected \"-stub\" suffix in stub package name: {}",
-                    stub_package.to_string()
+                    "Expected \"-client\" suffix in client package name: {}",
+                    client_package.to_string()
                 ))?
         ))
     }

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::wit_encode::EncodedWitDir;
-use crate::wit_generate::extract_main_interface_as_wit_dep;
+use crate::wit_generate::extract_exports_as_wit_dep;
 use crate::wit_resolve::{PackageSource, ResolvedWitDir};
 use crate::{naming, WasmRpcOverride};
 use anyhow::{anyhow, Context};
@@ -34,7 +34,7 @@ pub struct StubConfig {
     pub selected_world: Option<String>,
     pub stub_crate_version: String,
     pub wasm_rpc_override: WasmRpcOverride,
-    pub extract_source_interface_package: bool,
+    pub extract_source_exports_package: bool,
     pub seal_cargo_workspace: bool,
 }
 
@@ -55,9 +55,9 @@ pub struct StubDefinition {
 
 impl StubDefinition {
     pub fn new(config: StubConfig) -> anyhow::Result<Self> {
-        if config.extract_source_interface_package {
-            extract_main_interface_as_wit_dep(&config.source_wit_root)
-                .context("Failed to extract the source interface package")?
+        if config.extract_source_exports_package {
+            extract_exports_as_wit_dep(&config.source_wit_root)
+                .context("Failed to extract exports package")?
         }
 
         let resolved_source = ResolvedWitDir::new(&config.source_wit_root)?;
@@ -123,7 +123,7 @@ impl StubDefinition {
     }
 
     pub fn stub_package_name(&self) -> PackageName {
-        naming::wit::stub_package_name(&self.source_package_name)
+        naming::wit::client_package_name(&self.source_package_name)
     }
 
     pub fn source_world(&self) -> &World {
@@ -146,7 +146,7 @@ impl StubDefinition {
     }
 
     pub fn target_crate_name(&self) -> String {
-        format!("{}-stub", self.source_world_name())
+        format!("{}-client", self.source_world_name())
     }
 
     pub fn target_rust_path(&self) -> PathBuf {
@@ -154,13 +154,11 @@ impl StubDefinition {
     }
 
     pub fn target_interface_name(&self) -> String {
-        // TODO: naming
-        format!("stub-{}", self.source_world_name())
+        format!("{}-client", self.source_world_name())
     }
 
     pub fn target_world_name(&self) -> String {
-        // TODO: naming
-        format!("wasm-rpc-stub-{}", self.source_world_name())
+        format!("wasm-rpc-client-{}", self.source_world_name())
     }
 
     pub fn target_wit_root(&self) -> PathBuf {
@@ -168,7 +166,7 @@ impl StubDefinition {
     }
 
     pub fn target_wit_path(&self) -> PathBuf {
-        self.target_wit_root().join(naming::wit::STUB_WIT_FILE_NAME)
+        self.target_wit_root().join(naming::wit::CLIENT_WIT_FILE_NAME)
     }
 
     pub fn resolve_target_wit(&self) -> anyhow::Result<ResolvedWitDir> {

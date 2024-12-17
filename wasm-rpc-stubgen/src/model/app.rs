@@ -367,15 +367,15 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
             .join(component_name.as_str())
     }
 
-    pub fn component_generated_base_wit_interface_package_dir(
+    pub fn component_generated_base_wit_exports_package_dir(
         &self,
         component_name: &ComponentName,
-        interface_package_name: &PackageName,
+        exports_package_name: &PackageName,
     ) -> PathBuf {
         self.component_generated_base_wit(component_name)
             .join(naming::wit::DEPS_DIR)
-            .join(package_dep_dir_name_from_parser(interface_package_name))
-            .join(naming::wit::INTERFACE_WIT_FILE_NAME)
+            .join(package_dep_dir_name_from_parser(exports_package_name))
+            .join(naming::wit::EXPORTS_WIT_FILE_NAME)
     }
 
     pub fn component_generated_wit(
@@ -423,24 +423,24 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
         )
     }
 
-    fn stub_build_dir(&self) -> PathBuf {
-        self.temp_dir().join("stub")
+    fn client_build_dir(&self) -> PathBuf {
+        self.temp_dir().join("client")
     }
 
-    pub fn stub_temp_build_dir(&self, component_name: &ComponentName) -> PathBuf {
-        self.stub_build_dir()
+    pub fn client_temp_build_dir(&self, component_name: &ComponentName) -> PathBuf {
+        self.client_build_dir()
             .join(component_name.as_str())
             .join("temp-build")
     }
 
-    pub fn stub_wasm(&self, component_name: &ComponentName) -> PathBuf {
-        self.stub_build_dir()
+    pub fn client_wasm(&self, component_name: &ComponentName) -> PathBuf {
+        self.client_build_dir()
             .join(component_name.as_str())
-            .join("stub.wasm")
+            .join("client.wasm")
     }
 
-    pub fn stub_wit(&self, component_name: &ComponentName) -> PathBuf {
-        self.stub_build_dir()
+    pub fn client_wit(&self, component_name: &ComponentName) -> PathBuf {
+        self.client_build_dir()
             .join(component_name.as_str())
             .join(naming::wit::WIT_DIR)
     }

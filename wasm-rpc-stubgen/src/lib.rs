@@ -232,7 +232,7 @@ pub fn generate(args: GenerateArgs) -> anyhow::Result<()> {
             selected_world: args.world,
             stub_crate_version: args.stub_crate_version,
             wasm_rpc_override: args.wasm_rpc_override,
-            extract_source_interface_package: true,
+            extract_source_exports_package: true,
             seal_cargo_workspace: false,
         }
     )
@@ -249,7 +249,7 @@ pub async fn build(args: BuildArgs) -> anyhow::Result<()> {
         selected_world: args.world,
         stub_crate_version: args.stub_crate_version,
         wasm_rpc_override: args.wasm_rpc_override,
-        extract_source_interface_package: true,
+        extract_source_exports_package: true,
         seal_cargo_workspace: false,
     })
     .context("Failed to gather information for the stub generator")?;

@@ -13,7 +13,7 @@ use crate::model::app_raw;
 use crate::stub::{StubConfig, StubDefinition};
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use crate::wit_generate::{
-    add_stub_as_dependency_to_wit_dir, extract_main_interface_as_wit_dep, AddStubAsDepConfig,
+    add_client_as_dependency_to_wit_dir, extract_exports_as_wit_dep, AddClientAsDepConfig,
     UpdateCargoToml,
 };
 use crate::wit_resolve::{ResolvedWitApplication, WitDepsResolver};
@@ -192,7 +192,7 @@ async fn gen_rpc<CPE: ComponentPropertiesExtensions>(
             create_generated_base_wit(ctx, &component_name)?;
         }
         for component_name in &ctx.application.all_wasm_rpc_dependencies() {
-            build_stub(ctx, component_name).await?;
+            build_client(ctx, component_name).await?;
         }
     }
 
@@ -261,9 +261,9 @@ async fn link_rpc<CPE: ComponentPropertiesExtensions>(
         let dependencies = ctx
             .application
             .component_wasm_rpc_dependencies(component_name);
-        let stub_wasms = dependencies
+        let client_wasms = dependencies
             .iter()
-            .map(|dep| ctx.application.stub_wasm(dep))
+            .map(|dep| ctx.application.client_wasm(dep))
             .collect::<Vec<_>>();
         let component_wasm = ctx
             .application
@@ -283,7 +283,7 @@ async fn link_rpc<CPE: ComponentPropertiesExtensions>(
         if is_up_to_date(
             ctx.config.skip_up_to_date_checks || !task_result_marker.is_up_to_date(),
             || {
-                let mut inputs = stub_wasms.clone();
+                let mut inputs = client_wasms.clone();
                 inputs.push(component_wasm.clone());
                 inputs
             },
@@ -330,7 +330,7 @@ async fn link_rpc<CPE: ComponentPropertiesExtensions>(
                         ctx.application
                             .component_wasm(component_name, ctx.profile())
                             .as_path(),
-                        &stub_wasms,
+                        &client_wasms,
                         ctx.application
                             .component_linked_wasm(component_name, ctx.profile())
                             .as_path(),
@@ -426,21 +426,21 @@ pub fn clean<CPE: ComponentPropertiesExtensions>(config: Config<CPE>) -> anyhow:
     }
 
     {
-        log_action("Cleaning", "component stubs");
+        log_action("Cleaning", "component clients");
         let _indent = LogIndent::new();
 
         for component_name in app.all_wasm_rpc_dependencies() {
             log_action(
                 "Cleaning",
                 format!(
-                    "component stub {}",
+                    "component client {}",
                     component_name.as_str().log_color_highlight()
                 ),
             );
             let _indent = LogIndent::new();
 
-            delete_path("stub wit", &app.stub_wit(&component_name))?;
-            delete_path("stub wasm", &app.stub_wasm(&component_name))?;
+            delete_path("client wit", &app.client_wit(&component_name))?;
+            delete_path("client wasm", &app.client_wasm(&component_name))?;
         }
     }
 
@@ -1183,18 +1183,18 @@ fn create_generated_base_wit<CPE: ComponentPropertiesExtensions>(
             }
 
             {
-                let component_interface_package_deps =
-                    ctx.wit.component_interface_package_deps(component_name)?;
-                if !component_interface_package_deps.is_empty() {
-                    log_action("Adding", "component interface package dependencies");
+                let component_exports_package_deps =
+                    ctx.wit.component_exports_package_deps(component_name)?;
+                if !component_exports_package_deps.is_empty() {
+                    log_action("Adding", "component exports package dependencies");
                     let _indent = LogIndent::new();
 
-                    for (dep_interface_package_name, dep_component_name) in
-                        &component_interface_package_deps
+                    for (dep_exports_package_name, dep_component_name) in
+                        &component_exports_package_deps
                     {
                         ctx.component_base_output_wit_deps(dep_component_name)?
                             .add_packages_with_transitive_deps_to_wit_dir(
-                                &[dep_interface_package_name.clone()],
+                                &[dep_exports_package_name.clone()],
                                 &component_generated_base_wit,
                             )?;
                     }
@@ -1205,13 +1205,13 @@ fn create_generated_base_wit<CPE: ComponentPropertiesExtensions>(
                 log_action(
                     "Extracting",
                     format!(
-                        "main interface package from {} to {}",
+                        "exports package from {} to {}",
                         component_source_wit.log_color_highlight(),
                         component_generated_base_wit.log_color_highlight()
                     ),
                 );
                 let _indent = LogIndent::new();
-                extract_main_interface_as_wit_dep(&component_generated_base_wit)?
+                extract_exports_as_wit_dep(&component_generated_base_wit)?
             }
 
             Ok(true)
@@ -1260,7 +1260,7 @@ fn create_generated_wit<CPE: ComponentPropertiesExtensions>(
             let _indent = LogIndent::new();
             delete_path("generated wit directory", &component_generated_wit)?;
             copy_wit_sources(&component_generated_base_wit, &component_generated_wit)?;
-            add_stub_deps(ctx, component_name)?;
+            add_client_deps(ctx, component_name)?;
             Ok(true)
         })())
     }
@@ -1312,13 +1312,13 @@ fn update_cargo_toml<CPE: ComponentPropertiesExtensions>(
     ))
 }
 
-async fn build_stub<CPE: ComponentPropertiesExtensions>(
+async fn build_client<CPE: ComponentPropertiesExtensions>(
     ctx: &ApplicationContext<CPE>,
     component_name: &ComponentName,
 ) -> anyhow::Result<bool> {
-    let target_root = ctx.application.stub_temp_build_dir(component_name);
+    let target_root = ctx.application.client_temp_build_dir(component_name);
 
-    let stub_def = StubDefinition::new(StubConfig {
+    let client_def = StubDefinition::new(StubConfig {
         source_wit_root: ctx.application.component_generated_base_wit(component_name),
         target_root: target_root.clone(),
         selected_world: None,
@@ -1328,38 +1328,39 @@ async fn build_stub<CPE: ComponentPropertiesExtensions>(
             wasm_rpc_path_override: std::env::var("WASM_RPC_PATH_OVERRIDE").ok(),
             wasm_rpc_version_override: std::env::var("WASM_RPC_VERSION_OVERRIDE").ok(),
         },
-        extract_source_interface_package: false,
+        extract_source_exports_package: false,
         seal_cargo_workspace: true,
     })
-    .context("Failed to gather information for the stub generator")?;
+    .context("Failed to gather information for the client generator")?;
 
-    let stub_dep_package_ids = stub_def.stub_dep_package_ids();
-    let stub_sources: Vec<PathBuf> = stub_def
+    let client_dep_package_ids = client_def.stub_dep_package_ids();
+    let client_sources: Vec<PathBuf> = client_def
         .packages_with_wit_sources()
         .flat_map(|(package_id, _, sources)| {
-            (stub_dep_package_ids.contains(&package_id) || package_id == stub_def.source_package_id)
+            (client_dep_package_ids.contains(&package_id)
+                || package_id == client_def.source_package_id)
                 .then(|| sources.files.iter().cloned())
                 .unwrap_or_default()
         })
         .collect();
 
-    let stub_wasm = ctx.application.stub_wasm(component_name);
-    let stub_wit = ctx.application.stub_wit(component_name);
+    let client_wasm = ctx.application.client_wasm(component_name);
+    let client_wit = ctx.application.client_wit(component_name);
     let task_result_marker = TaskResultMarker::new(
         &ctx.application.task_result_marker_dir(),
         ComponentGeneratorMarkerHash {
             component_name,
-            generator_kind: "stub",
+            generator_kind: "client",
         },
     )?;
 
     if is_up_to_date(
         ctx.config.skip_up_to_date_checks || !task_result_marker.is_up_to_date(),
-        || stub_sources,
-        || [stub_wit.clone(), stub_wasm.clone()],
+        || client_sources,
+        || [client_wit.clone(), client_wasm.clone()],
     ) {
         log_skipping_up_to_date(format!(
-            "building wasm rpc stub for {}",
+            "building WASM RPC client for {}",
             component_name.as_str().log_color_highlight()
         ));
         Ok(false)
@@ -1367,7 +1368,7 @@ async fn build_stub<CPE: ComponentPropertiesExtensions>(
         log_action(
             "Building",
             format!(
-                "wasm rpc stub for {}",
+                "WASM RPC client for {}",
                 component_name.as_str().log_color_highlight()
             ),
         );
@@ -1376,31 +1377,39 @@ async fn build_stub<CPE: ComponentPropertiesExtensions>(
 
         task_result_marker.result(
             async {
-                delete_path("stub temp build dir", &target_root)?;
-                delete_path("stub wit", &stub_wit)?;
-                delete_path("stub wasm", &stub_wasm)?;
+                delete_path("client temp build dir", &target_root)?;
+                delete_path("client wit", &client_wit)?;
+                delete_path("client wasm", &client_wasm)?;
 
                 log_action(
                     "Creating",
-                    format!("stub temp build dir {}", target_root.log_color_highlight()),
+                    format!(
+                        "client temp build dir {}",
+                        target_root.log_color_highlight()
+                    ),
                 );
                 fs::create_dir_all(&target_root)?;
 
-                commands::generate::build(&stub_def, &stub_wasm, &stub_wit, ctx.config.offline)
-                    .await
+                commands::generate::build(
+                    &client_def,
+                    &client_wasm,
+                    &client_wit,
+                    ctx.config.offline,
+                )
+                .await
             }
             .await,
         )?;
 
-        if !env_var_flag("WASM_RPC_KEEP_STUB_DIR") {
-            delete_path("stub temp build dir", &target_root)?;
+        if !env_var_flag("WASM_RPC_KEEP_CLIENT_DIR") {
+            delete_path("client temp build dir", &target_root)?;
         }
 
         Ok(true)
     }
 }
 
-fn add_stub_deps<CPE: ComponentPropertiesExtensions>(
+fn add_client_deps<CPE: ComponentPropertiesExtensions>(
     ctx: &ApplicationContext<CPE>,
     component_name: &ComponentName,
 ) -> Result<bool, Error> {
@@ -1413,7 +1422,7 @@ fn add_stub_deps<CPE: ComponentPropertiesExtensions>(
         log_action(
             "Adding",
             format!(
-                "stub wit dependencies to {}",
+                "client wit dependencies to {}",
                 component_name.as_str().log_color_highlight()
             ),
         );
@@ -1424,15 +1433,15 @@ fn add_stub_deps<CPE: ComponentPropertiesExtensions>(
             log_action(
                 "Adding",
                 format!(
-                    "{} stub wit dependency to {}",
+                    "{} client wit dependency to {}",
                     dep_component_name.as_str().log_color_highlight(),
                     component_name.as_str().log_color_highlight()
                 ),
             );
             let _indent = LogIndent::new();
 
-            add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
-                stub_wit_root: ctx.application.stub_wit(dep_component_name),
+            add_client_as_dependency_to_wit_dir(AddClientAsDepConfig {
+                client_wit_root: ctx.application.client_wit(dep_component_name),
                 dest_wit_root: ctx
                     .application
                     .component_generated_wit(component_name, ctx.profile()),

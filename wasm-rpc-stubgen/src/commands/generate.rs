@@ -19,7 +19,7 @@ use crate::log::{log_action, LogColorize, LogIndent};
 use crate::naming;
 use crate::rust::generate_stub_source;
 use crate::stub::StubDefinition;
-use crate::wit_generate::{add_dependencies_to_stub_wit_dir, generate_stub_wit_to_target};
+use crate::wit_generate::{add_dependencies_to_stub_wit_dir, generate_client_wit_to_target};
 use crate::wit_resolve::ResolvedWitDir;
 use anyhow::{anyhow, Context};
 use fs_extra::dir::CopyOptions;
@@ -100,7 +100,7 @@ pub fn generate_stub_wit_dir(stub_def: &StubDefinition) -> anyhow::Result<Resolv
         ),
     );
     let _indent = LogIndent::new();
-    generate_stub_wit_to_target(stub_def).context("Failed to generate the stub wit file")?;
+    generate_client_wit_to_target(stub_def).context("Failed to generate the stub wit file")?;
     add_dependencies_to_stub_wit_dir(stub_def).context("Failed to copy the dependent wit files")?;
     stub_def
         .resolve_target_wit()

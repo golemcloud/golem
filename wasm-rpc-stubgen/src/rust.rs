@@ -32,10 +32,10 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
     );
 
     let root_name = Ident::new(
-        &format!("{}_stub", def.source_package_name.name.to_snake_case()),
+        &format!("{}_client", def.source_package_name.name.to_snake_case()),
         Span::call_site(),
     );
-    let stub_interface_name = format!("stub-{}", def.source_world_name());
+    let stub_interface_name = format!("{}-client", def.source_world_name());
     let stub_interface_name = Ident::new(
         &to_rust_ident(&stub_interface_name).to_snake_case(),
         Span::call_site(),
@@ -476,10 +476,10 @@ fn generate_function_stub_source(
                 Span::call_site(),
             );
             let root_name = Ident::new(
-                &format!("{}_stub", def.source_package_name.name.to_snake_case()),
+                &format!("{}_client", def.source_package_name.name.to_snake_case()),
                 Span::call_site(),
             );
-            let stub_interface_name = format!("stub-{}", def.source_world_name());
+            let stub_interface_name = format!("{}-client", def.source_world_name());
             let stub_interface_name = Ident::new(
                 &to_rust_ident(&stub_interface_name).to_snake_case(),
                 Span::call_site(),
@@ -663,10 +663,10 @@ fn type_to_rust_ident(typ: &Type, def: &StubDefinition) -> anyhow::Result<TokenS
                         Span::call_site(),
                     );
                     let root_name = Ident::new(
-                        &format!("{}_stub", def.source_package_name.name.to_snake_case()),
+                        &format!("{}_client", def.source_package_name.name.to_snake_case()),
                         Span::call_site(),
                     );
-                    let stub_interface_name = format!("stub-{}", def.source_world_name());
+                    let stub_interface_name = format!("{}-client", def.source_world_name());
                     let stub_interface_name = Ident::new(
                         &to_rust_ident(&stub_interface_name).to_snake_case(),
                         Span::call_site(),
@@ -1501,10 +1501,10 @@ fn extract_from_handle_value(
         Span::call_site(),
     );
     let root_name = Ident::new(
-        &format!("{}_stub", def.source_package_name.name.to_snake_case()),
+        &format!("{}_client", def.source_package_name.name.to_snake_case()),
         Span::call_site(),
     );
-    let stub_interface_name = format!("stub-{}", def.source_world_name());
+    let stub_interface_name = format!("{}-client", def.source_world_name());
     let stub_interface_name = Ident::new(
         &to_rust_ident(&stub_interface_name).to_snake_case(),
         Span::call_site(),

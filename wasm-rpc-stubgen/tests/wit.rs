@@ -37,7 +37,7 @@ fn all_wit_types() {
         selected_world: None,
         stub_crate_version: "1.0.0".to_string(),
         wasm_rpc_override: WasmRpcOverride::default(),
-        extract_source_interface_package: true,
+        extract_source_exports_package: true,
         seal_cargo_workspace: false,
     })
     .unwrap();
@@ -128,7 +128,7 @@ fn many_ways_to_export() {
         selected_world: None,
         stub_crate_version: "1.0.0".to_string(),
         wasm_rpc_override: WasmRpcOverride::default(),
-        extract_source_interface_package: true,
+        extract_source_exports_package: true,
         seal_cargo_workspace: false,
     })
     .unwrap();

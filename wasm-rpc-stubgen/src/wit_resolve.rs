@@ -252,11 +252,11 @@ impl ResolvedWitApplication {
             component_name.clone(),
         );
         self.stub_package_to_component.insert(
-            naming::wit::stub_package_name(&resolved_component.main_package_name),
+            naming::wit::client_package_name(&resolved_component.main_package_name),
             component_name.clone(),
         );
         self.interface_package_to_component.insert(
-            naming::wit::interface_parser_package_name(&resolved_component.main_package_name),
+            naming::wit::exports_parser_package_name(&resolved_component.main_package_name),
             component_name.clone(),
         );
         self.components.insert(component_name, resolved_component);
@@ -437,8 +437,8 @@ impl ResolvedWitApplication {
 
                     validation.add_error(formatdoc!("
                       Direct WIT package reference to component {} main package {} is not supported.
-                      For using component stubs, declare them in the app manifest.
-                      For using exported types from another component, use the component interface package (e.g.: ns:package-name-interface).",
+                      For using component clients, declare them in the app manifest as WASM-RPC dependency.
+                      For using exported types from another component, use the component 'exports' package (e.g.: ns:package-name-exports).",
                       dep_component_name.to_string().log_color_highlight(),
                       dep_package_name.to_string().log_color_error_highlight()
                     ));
@@ -456,9 +456,9 @@ impl ResolvedWitApplication {
                         .push_context("referenced package name", dep_package_name.to_string());
 
                     validation.add_error(formatdoc!("
-                      Direct WIT package reference to component {} stub packages {} is not supported.
-                      For using component stubs, declare them in the app manifest.
-                      For using exported types from another component, use the component interface package (e.g.: ns:package-name-interface).",
+                      Direct WIT package reference to component {} client package {} is not supported.
+                      For using component clients, declare them in the app manifest as WASM-RPC dependency.
+                      For using exported types from another component, use the component 'exports' package (e.g.: ns:package-name-exports).",
                       dep_component_name.to_string().log_color_highlight(),
                       dep_package_name.to_string().log_color_error_highlight()
                     ));
@@ -606,7 +606,7 @@ impl ResolvedWitApplication {
             .collect::<Vec<_>>())
     }
 
-    pub fn component_interface_package_deps(
+    pub fn component_exports_package_deps(
         &self,
         component_name: &ComponentName,
     ) -> anyhow::Result<Vec<(PackageName, ComponentName)>> {
