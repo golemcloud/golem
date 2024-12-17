@@ -12,33 +12,40 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::command::ComponentRefSplit;
+use crate::command::{ComponentRefSplit, ComponentRefsSplit};
 use crate::model::app_ext::GolemComponentExtensions;
-use crate::model::text::component::ComponentAddView;
+use crate::model::component::ComponentUpsertResult;
+use crate::model::text::component::{ComponentAddView, ComponentUpdateView};
 use crate::model::{
-    ComponentName, Format, GolemError, GolemResult, PathBufOrStdin, WorkerUpdateMode,
+    ComponentName, Format, GolemError, GolemResult, PathBufOrStdin, PrintRes, WorkerUpdateMode,
 };
 use crate::parse_key_val;
 use crate::service::component::ComponentService;
 use crate::service::deploy::DeployService;
 use crate::service::project::ProjectResolver;
 use clap::Subcommand;
+use futures_util::future::join_all;
 use golem_client::model::ComponentType;
 use golem_common::model::PluginInstallationId;
+use golem_common::uri::oss::uri::ComponentUri;
+use golem_common::uri::oss::url::ComponentUrl;
 use golem_wasm_rpc_stubgen::commands::app::{
     ApplicationContext, ApplicationSourceMode, ComponentSelectMode, Config,
 };
 use golem_wasm_rpc_stubgen::log::Output;
 use golem_wasm_rpc_stubgen::model::app;
-use itertools::Itertools;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 #[derive(Subcommand, Debug)]
 #[command()]
-pub enum ComponentSubCommand<ProjectRef: clap::Args, ComponentRef: clap::Args> {
+pub enum ComponentSubCommand<
+    ProjectRef: clap::Args,
+    ComponentRef: clap::Args,
+    ComponentRefs: clap::Args,
+> {
     /// Creates a new component by uploading the component WASM.
     ///
     /// If neither `component-file` nor `app` is specified, the command will look for the manifest in the current directory and all parent directories.
@@ -47,7 +54,7 @@ pub enum ComponentSubCommand<ProjectRef: clap::Args, ComponentRef: clap::Args> {
     Add {
         /// The WASM file to be used as a Golem component
         ///
-        /// Conflics with `app` flag.
+        /// Conflicts with `app` flag.
         #[arg(value_name = "component-file", value_hint = clap::ValueHint::FilePath)]
         component_file: Option<PathBufOrStdin>, // TODO: validate exists
 
@@ -57,10 +64,12 @@ pub enum ComponentSubCommand<ProjectRef: clap::Args, ComponentRef: clap::Args> {
 
         /// Name of the newly created component
         ///
-        /// If 'component-file' is specified, this flag controls the name of the component.
-        /// If 'component-file' is not specified, or 'app' is specified, this flag is used to resolve the component from the app manifest.
+        /// If 'component-file' is specified, this flag specifies the name for the component.
+        /// If 'component-file' is not specified, or 'app' is specified,
+        /// this flag is used to resolve the component from the app manifest,
+        /// in this case multiple component can be defined
         #[arg(short, long, verbatim_doc_comment)]
-        component_name: ComponentName,
+        component_name: Vec<ComponentName>,
 
         /// The component type. If none specified, the command creates a Durable component.
         ///
@@ -78,7 +87,7 @@ pub enum ComponentSubCommand<ProjectRef: clap::Args, ComponentRef: clap::Args> {
         #[arg(
             long,
             short,
-            conflicts_with_all = vec!["component_file", "component-type-flag"],
+            conflicts_with_all = vec!["component-file", "component-type-flag"],
             verbatim_doc_comment
         )]
         app: Vec<PathBuf>,
@@ -104,9 +113,9 @@ pub enum ComponentSubCommand<ProjectRef: clap::Args, ComponentRef: clap::Args> {
         )]
         component_file: Option<PathBufOrStdin>, // TODO: validate exists
 
-        /// The component to update
+        /// Component(s) to update
         #[command(flatten)]
-        component_name_or_uri: ComponentRef,
+        component_names_or_uris: ComponentRefs,
 
         /// The updated component's type. If none specified, the previous version's type is used.
         ///
@@ -115,7 +124,7 @@ pub enum ComponentSubCommand<ProjectRef: clap::Args, ComponentRef: clap::Args> {
         component_type: UpdatedComponentTypeArg,
 
         /// Application manifest to use. Can be specified multiple times.
-        /// The component-name flag is used to resolve the component from the app manifest.
+        /// The component-name flag can be used to select component(s) from the app manifest.
         /// Other settings are then taken from the app manifest.
         ///
         /// Conflicts with `component-file` flag.
@@ -280,27 +289,33 @@ impl UpdatedComponentTypeArg {
 impl<
         ProjectRef: clap::Args + Send + Sync + 'static,
         ComponentRef: ComponentRefSplit<ProjectRef> + clap::Args,
-    > ComponentSubCommand<ProjectRef, ComponentRef>
+        ComponentRefs: ComponentRefsSplit<ProjectRef> + clap::Args,
+    > ComponentSubCommand<ProjectRef, ComponentRef, ComponentRefs>
 {
     pub async fn handle<ProjectContext: Clone + Send + Sync>(
         self,
         format: Format,
-        service: Arc<dyn ComponentService<ProjectContext = ProjectContext> + Send + Sync>,
+        component_service: Arc<dyn ComponentService<ProjectContext = ProjectContext> + Send + Sync>,
         deploy_service: Arc<dyn DeployService<ProjectContext = ProjectContext> + Send + Sync>,
         projects: &(dyn ProjectResolver<ProjectRef, ProjectContext> + Send + Sync),
     ) -> Result<GolemResult, GolemError> {
         match self {
             ComponentSubCommand::Add {
                 project_ref,
-                component_name,
+                mut component_name,
                 component_file: Some(component_file),
                 component_type,
                 app: _,
                 build_profile: _,
                 non_interactive,
             } => {
+                if component_name.len() != 1 {
+                    return errors::expected_one_component_name_with_component_file();
+                }
+                let component_name = component_name.swap_remove(0);
+
                 let project_id = projects.resolve_id_or_default(project_ref).await?;
-                let component = service
+                Ok(component_service
                     .add(
                         component_name,
                         component_file,
@@ -310,14 +325,12 @@ impl<
                         format,
                         vec![],
                     )
-                    .await?;
-                Ok(GolemResult::Ok(Box::new(ComponentAddView(
-                    component.into(),
-                ))))
+                    .await?
+                    .to_golem_result())
             }
             ComponentSubCommand::Add {
                 project_ref,
-                component_name,
+                component_name: component_names,
                 component_file: None,
                 component_type: _,
                 app,
@@ -330,26 +343,35 @@ impl<
                     format,
                     app,
                     build_profile.map(|profile| profile.into()),
-                    &component_name.0,
+                    component_names.into_iter().map(|name| name.0).collect(),
                 )?;
 
-                let component = service
-                    .add(
-                        component_name,
-                        PathBufOrStdin::Path(ctx.linked_wasm),
-                        ctx.extensions.component_type,
-                        Some(project_id),
-                        non_interactive,
-                        format,
-                        ctx.extensions.files,
-                    )
-                    .await?;
-                Ok(GolemResult::Ok(Box::new(ComponentAddView(
-                    component.into(),
-                ))))
+                let component_names = ctx.selected_component_names();
+                if component_names.is_empty() {
+                    return errors::no_components_found();
+                }
+
+                for component_name in component_names {
+                    let extensions = ctx.component_extensions(component_name);
+                    component_service
+                        .add(
+                            ComponentName(component_name.to_string()),
+                            PathBufOrStdin::Path(ctx.component_linked_wasm_rpc(component_name)),
+                            extensions.component_type,
+                            Some(project_id.clone()),
+                            non_interactive,
+                            format,
+                            extensions.files.clone(),
+                        )
+                        .await?
+                        .to_golem_result()
+                        .streaming_print(format);
+                }
+
+                Ok(GolemResult::Empty)
             }
             ComponentSubCommand::Update {
-                component_name_or_uri,
+                component_names_or_uris,
                 component_file: Some(component_file),
                 component_type,
                 app: _,
@@ -358,9 +380,19 @@ impl<
                 update_mode,
                 non_interactive,
             } => {
-                let (component_name_or_uri, project_ref) = component_name_or_uri.split();
+                let Some(split) = component_names_or_uris.split() else {
+                    return errors::all_component_uris_must_use_the_same_project_id();
+                };
+                let (mut component_names_or_uris, project_ref) = split;
+
+                if component_names_or_uris.len() != 1 {
+                    return errors::expected_one_component_name_with_component_file();
+                }
+
+                let component_name_or_uri = component_names_or_uris.swap_remove(0);
+
                 let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
-                let mut result = service
+                component_service
                     .update(
                         component_name_or_uri.clone(),
                         component_file,
@@ -370,18 +402,21 @@ impl<
                         format,
                         vec![],
                     )
-                    .await?;
+                    .await?
+                    .to_golem_result()
+                    .streaming_print(format);
 
                 if try_update_workers {
-                    let deploy_result = deploy_service
+                    deploy_service
                         .try_update_all_workers(component_name_or_uri, project_id, update_mode)
-                        .await?;
-                    result = result.merge(deploy_result);
+                        .await?
+                        .streaming_print(format);
                 }
-                Ok(result)
+
+                Ok(GolemResult::Empty)
             }
             ComponentSubCommand::Update {
-                component_name_or_uri,
+                component_names_or_uris,
                 non_interactive,
                 component_file: None,
                 component_type: _,
@@ -390,11 +425,14 @@ impl<
                 try_update_workers,
                 update_mode,
             } => {
-                let (component_name_or_uri, project_ref) = component_name_or_uri.split();
+                let Some(split) = component_names_or_uris.split() else {
+                    return errors::all_component_uris_must_use_the_same_project_id();
+                };
+                let (component_names_or_uris, project_ref) = split;
 
-                let component_name = service
-                    .resolve_component_name(&component_name_or_uri)
-                    .await?;
+                let component_names_to_uris =
+                    resolve_component_names(component_service.clone(), component_names_or_uris)
+                        .await?;
 
                 let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
 
@@ -402,35 +440,80 @@ impl<
                     format,
                     app,
                     build_profile.map(|profile| profile.into()),
-                    &component_name,
+                    component_names_to_uris.keys().cloned().collect(),
                 )?;
 
-                let mut result = service
-                    .update(
-                        component_name_or_uri.clone(),
-                        PathBufOrStdin::Path(ctx.linked_wasm),
-                        Some(ctx.extensions.component_type),
-                        project_id.clone(),
-                        non_interactive,
-                        format,
-                        ctx.extensions.files,
-                    )
-                    .await?;
-
-                if try_update_workers {
-                    let deploy_result = deploy_service
-                        .try_update_all_workers(component_name_or_uri, project_id, update_mode)
-                        .await?;
-                    result = result.merge(deploy_result);
+                let component_names = ctx.selected_component_names();
+                if component_names.is_empty() {
+                    return errors::no_components_found();
                 }
-                Ok(result)
+
+                let component_names_to_uris = {
+                    let mut component_names_to_uris = component_names_to_uris;
+                    component_names_to_uris.extend(
+                        resolve_component_names(
+                            component_service.clone(),
+                            component_names
+                                .iter()
+                                .filter(|component_name| {
+                                    !component_names_to_uris.contains_key(component_name.as_str())
+                                })
+                                .map(|component_name| {
+                                    ComponentUri::URL(ComponentUrl {
+                                        name: component_name.to_string(),
+                                    })
+                                })
+                                .collect(),
+                        )
+                        .await?,
+                    );
+                    component_names_to_uris
+                };
+
+                for component_name in component_names {
+                    let extensions = ctx.component_extensions(component_name);
+                    component_service
+                        .update(
+                            component_names_to_uris
+                                .get(component_name.as_str())
+                                .expect("Failed to get component uri by name")
+                                .clone(),
+                            PathBufOrStdin::Path(ctx.component_linked_wasm_rpc(component_name)),
+                            Some(extensions.component_type),
+                            project_id.clone(),
+                            non_interactive,
+                            format,
+                            extensions.files.clone(),
+                        )
+                        .await?
+                        .to_golem_result()
+                        .streaming_print(format);
+
+                    if try_update_workers {
+                        deploy_service
+                            .try_update_all_workers(
+                                component_names_to_uris
+                                    .get(component_name.as_str())
+                                    .expect("Failed to get component uri by name")
+                                    .clone(),
+                                project_id.clone(),
+                                update_mode.clone(),
+                            )
+                            .await?
+                            .streaming_print(format);
+                    }
+                }
+
+                Ok(GolemResult::Empty)
             }
             ComponentSubCommand::List {
                 project_ref,
                 component_name,
             } => {
                 let project_id = projects.resolve_id_or_default(project_ref).await?;
-                service.list(component_name, Some(project_id)).await
+                component_service
+                    .list(component_name, Some(project_id))
+                    .await
             }
             ComponentSubCommand::Get {
                 component_name_or_uri,
@@ -438,7 +521,7 @@ impl<
             } => {
                 let (component_name_or_uri, project_ref) = component_name_or_uri.split();
                 let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
-                service
+                component_service
                     .get(component_name_or_uri, version, project_id)
                     .await
             }
@@ -471,7 +554,7 @@ impl<
             } => {
                 let (component_name_or_uri, project_ref) = component_name_or_uri.split();
                 let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
-                service
+                component_service
                     .install_plugin(
                         component_name_or_uri,
                         project_id,
@@ -488,7 +571,7 @@ impl<
             } => {
                 let (component_name_or_uri, project_ref) = component_name_or_uri.split();
                 let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
-                service
+                component_service
                     .get_installations(component_name_or_uri, project_id, version)
                     .await
             }
@@ -498,9 +581,27 @@ impl<
             } => {
                 let (component_name_or_uri, project_ref) = component_name_or_uri.split();
                 let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
-                service
+                component_service
                     .uninstall_plugin(component_name_or_uri, project_id, &installation_id)
                     .await
+            }
+        }
+    }
+}
+
+trait ToGolemResult {
+    fn to_golem_result(self) -> GolemResult;
+}
+
+impl ToGolemResult for ComponentUpsertResult {
+    fn to_golem_result(self) -> GolemResult {
+        match self {
+            ComponentUpsertResult::Skipped => GolemResult::Empty,
+            ComponentUpsertResult::Added(component) => {
+                GolemResult::Ok(Box::new(ComponentAddView(component.into())))
+            }
+            ComponentUpsertResult::Updated(component) => {
+                GolemResult::Ok(Box::new(ComponentUpdateView(component.into())))
             }
         }
     }
@@ -527,7 +628,7 @@ fn app_ctx(
                 ComponentSelectMode::Explicit(
                     component_names
                         .into_iter()
-                        .map(|component_name| component_name.into())
+                        .map(|component_name| component_name.to_string().into())
                         .collect(),
                 )
             }
@@ -546,14 +647,8 @@ fn app_ctx(
 }
 
 struct ApplicationComponentContext {
-    #[allow(dead_code)]
+    application_context: ApplicationContext<GolemComponentExtensions>,
     build_profile: Option<app::ProfileName>,
-    #[allow(dead_code)]
-    app_ctx: ApplicationContext<GolemComponentExtensions>,
-    #[allow(dead_code)]
-    name: app::ComponentName,
-    linked_wasm: PathBuf,
-    extensions: GolemComponentExtensions,
 }
 
 impl ApplicationComponentContext {
@@ -561,38 +656,80 @@ impl ApplicationComponentContext {
         format: Format,
         sources: Vec<PathBuf>,
         build_profile: Option<app::ProfileName>,
-        component_name: &str,
+        component_names: Vec<String>,
     ) -> Result<Self, GolemError> {
-        let app_ctx = app_ctx(
-            format,
-            sources,
-            vec![component_name.into()],
-            build_profile.clone(),
-        )?;
-        let name = app::ComponentName::from(component_name.to_string());
-
-        if !app_ctx.application.component_names().contains(&name) {
-            return Err(GolemError(format!(
-                "Component {} not found in application manifest",
-                name
-            )));
-        }
-
-        let linked_wasm = app_ctx
-            .application
-            .component_linked_wasm(&name, build_profile.as_ref());
-
-        let component_properties = app_ctx
-            .application
-            .component_properties(&name, build_profile.as_ref());
-        let extensions = component_properties.extensions.clone();
-
         Ok(ApplicationComponentContext {
+            application_context: app_ctx(format, sources, component_names, build_profile.clone())?,
             build_profile,
-            app_ctx,
-            name,
-            linked_wasm,
-            extensions,
         })
+    }
+
+    fn component_linked_wasm_rpc(&self, component_name: &app::ComponentName) -> PathBuf {
+        self.application_context
+            .application
+            .component_linked_wasm(component_name, self.build_profile.as_ref())
+    }
+
+    fn component_extensions(
+        &self,
+        component_name: &app::ComponentName,
+    ) -> &GolemComponentExtensions {
+        &self
+            .application_context
+            .application
+            .component_properties(component_name, self.build_profile.as_ref())
+            .extensions
+    }
+
+    fn selected_component_names(&self) -> &BTreeSet<app::ComponentName> {
+        self.application_context.selected_component_names()
+    }
+}
+
+async fn resolve_component_names<ProjectContext>(
+    component_service: Arc<dyn ComponentService<ProjectContext = ProjectContext> + Send + Sync>,
+    component_names_or_uris: Vec<ComponentUri>,
+) -> Result<BTreeMap<String, ComponentUri>, GolemError>
+where
+    ProjectContext: Clone + Send + Sync,
+{
+    join_all(
+        component_names_or_uris
+            .into_iter()
+            .map(|component_name_or_uri| async {
+                (
+                    component_service
+                        .resolve_component_name(&component_name_or_uri)
+                        .await,
+                    component_name_or_uri,
+                )
+            }),
+    )
+    .await
+    .into_iter()
+    .map(|(component_name, component_name_or_uri)| {
+        component_name.map(|component_name| (component_name, component_name_or_uri))
+    })
+    .collect::<Result<BTreeMap<_, _>, _>>()
+}
+
+mod errors {
+    use crate::model::{GolemError, GolemResult};
+
+    pub fn all_component_uris_must_use_the_same_project_id() -> Result<GolemResult, GolemError> {
+        Err(GolemError(
+            "All component URIs must use the same project id".to_string(),
+        ))
+    }
+
+    pub fn expected_one_component_name_with_component_file() -> Result<GolemResult, GolemError> {
+        Err(GolemError(
+            "When component file is specified then exactly one component name is expected"
+                .to_string(),
+        ))
+    }
+
+    pub fn no_components_found() -> Result<GolemResult, GolemError> {
+        Err(GolemError("No components found".to_string()))
     }
 }

@@ -70,6 +70,22 @@ impl From<golem_client::model::Component> for Component {
     }
 }
 
+pub enum ComponentUpsertResult {
+    Skipped,
+    Added(Component),
+    Updated(Component),
+}
+
+impl ComponentUpsertResult {
+    pub fn into_component(self) -> Option<Component> {
+        match self {
+            ComponentUpsertResult::Skipped => None,
+            ComponentUpsertResult::Added(component) => Some(component),
+            ComponentUpsertResult::Updated(component) => Some(component),
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ComponentView {

@@ -26,8 +26,7 @@ use crate::config::ProfileName;
 use crate::diagnose::{self, diagnose};
 use crate::examples;
 use crate::init::{init_profile, CliKind, DummyProfileAuth};
-use crate::model::{ComponentUriArg, GolemError, GolemResult};
-use crate::oss::model::OssContext;
+use crate::model::{GolemError, GolemResult};
 use api_definition::ApiDefinitionSubcommand;
 use api_deployment::ApiDeploymentSubcommand;
 use clap::{self, Command, Subcommand};
@@ -44,10 +43,9 @@ pub trait ComponentRefSplit<ProjectRef> {
     fn split(self) -> (ComponentUri, Option<ProjectRef>);
 }
 
-impl ComponentRefSplit<OssContext> for ComponentUriArg {
-    fn split(self) -> (ComponentUri, Option<OssContext>) {
-        (self.uri, None)
-    }
+pub trait ComponentRefsSplit<ProjectRef> {
+    // Returns None if the projects are IDs are not matching for all URIs
+    fn split(self) -> Option<(Vec<ComponentUri>, Option<ProjectRef>)>;
 }
 
 pub trait CliCommand<Ctx>: Subcommand {
@@ -80,7 +78,7 @@ pub enum EmptyCommand {}
 
 impl<Ctx> CliCommand<Ctx> for EmptyCommand {
     async fn run(self, _ctx: Ctx) -> Result<GolemResult, GolemError> {
-        Ok(GolemResult::Str("".to_string()))
+        Ok(GolemResult::Empty)
     }
 }
 
@@ -116,7 +114,7 @@ impl<Ctx> CliCommand<Ctx> for StaticSharedCommand {
         match self {
             StaticSharedCommand::Diagnose { command } => {
                 diagnose(command);
-                Ok(GolemResult::Str("".to_string()))
+                Ok(GolemResult::Empty)
             }
             StaticSharedCommand::Examples(golem_examples::cli::Command::ListExamples {
                 min_tier,
@@ -141,6 +139,7 @@ impl<Ctx> CliCommand<Ctx> for StaticSharedCommand {
 pub enum SharedCommand<
     ProjectRef: clap::Args,
     ComponentRef: clap::Args,
+    ComponentRefs: clap::Args,
     WorkerRef: clap::Args,
     PluginScopeRef: clap::Args,
     ProfileAdd: clap::Args,
@@ -155,7 +154,7 @@ pub enum SharedCommand<
     #[command()]
     Component {
         #[command(subcommand)]
-        subcommand: ComponentSubCommand<ProjectRef, ComponentRef>,
+        subcommand: ComponentSubCommand<ProjectRef, ComponentRef, ComponentRefs>,
     },
 
     /// Manage Golem workers
@@ -231,11 +230,19 @@ impl NoProfileCommandContext {
 impl<
         ProjectRef: clap::Args,
         ComponentRef: clap::Args,
+        ComponentRefs: clap::Args,
         WorkerRef: clap::Args,
         PluginScopeRef: clap::Args,
         ProfileAdd: clap::Args + Into<UniversalProfileAdd>,
     > CliCommand<NoProfileCommandContext>
-    for SharedCommand<ProjectRef, ComponentRef, WorkerRef, PluginScopeRef, ProfileAdd>
+    for SharedCommand<
+        ProjectRef,
+        ComponentRef,
+        ComponentRefs,
+        WorkerRef,
+        PluginScopeRef,
+        ProfileAdd,
+    >
 {
     async fn run(self, ctx: NoProfileCommandContext) -> Result<GolemResult, GolemError> {
         match self {
@@ -259,7 +266,7 @@ impl<
             }
             SharedCommand::Completion { generator } => {
                 completion::print_completion(ctx.command, generator);
-                Ok(GolemResult::Str("".to_string()))
+                Ok(GolemResult::Empty)
             }
             _ => ctx.fail_uninitialized(),
         }

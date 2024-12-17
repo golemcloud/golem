@@ -165,8 +165,8 @@ impl<CPE: ComponentPropertiesExtensions> ApplicationContext<CPE> {
             .unwrap())
     }
 
-    pub fn selected_component_names(&self) -> impl Iterator<Item = &ComponentName> {
-        self.selected_component_names.iter()
+    pub fn selected_component_names(&self) -> &BTreeSet<ComponentName> {
+        &self.selected_component_names
     }
 }
 
