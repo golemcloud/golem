@@ -21,7 +21,7 @@ use crate::durable_host::http::serialized::SerializableHttpRequest;
 use crate::durable_host::http::{end_http_request, end_http_request_sync};
 use crate::durable_host::io::{ManagedStdErr, ManagedStdOut};
 use crate::durable_host::serialized::SerializableStreamError;
-use crate::durable_host::{Durability, DurableWorkerCtx, HttpRequestCloseOwner};
+use crate::durable_host::{Durability, Durability2, DurableWorkerCtx, HttpRequestCloseOwner};
 use crate::error::GolemError;
 use crate::metrics::wasm::record_host_function_call;
 use crate::workerctx::WorkerCtx;
@@ -39,29 +39,31 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
         self_: Resource<InputStream>,
         len: u64,
     ) -> Result<Vec<u8>, StreamError> {
-        let _permit = self.begin_async_host_function().await?;
-        record_host_function_call("io::streams::input_stream", "read");
         if is_incoming_http_body_stream(self.table(), &self_) {
             let handle = self_.rep();
             let begin_idx = get_http_request_begin_idx(self, handle)?;
 
-            let request = get_http_stream_request(self, handle)?;
-            let result =
-                Durability::<Ctx, SerializableHttpRequest, Vec<u8>, SerializableStreamError>::wrap(
-                    self,
-                    WrappedFunctionType::WriteRemoteBatched(Some(begin_idx)),
-                    "http::types::incoming_body_stream::read",
-                    request,
-                    |ctx| {
-                        Box::pin(async move {
-                            HostInputStream::read(&mut ctx.as_wasi_view(), self_, len).await
-                        })
-                    },
-                )
-                .await;
+            let durability = Durability2::<Ctx, Vec<u8>, SerializableStreamError>::new(
+                self,
+                "http::types::incoming_body_stream",
+                "read",
+                WrappedFunctionType::WriteRemoteBatched(Some(begin_idx)),
+            )
+            .await?;
+
+            let result = if durability.is_live() {
+                let request = get_http_stream_request(self, handle)?;
+                let result = HostInputStream::read(&mut self.as_wasi_view(), self_, len).await;
+                durability.persist(self, request, result).await
+            } else {
+                durability.replay(self).await
+            };
+
             end_http_request_if_closed(self, handle, &result).await?;
             result
         } else {
+            let _permit = self.begin_async_host_function().await?;
+            record_host_function_call("io::streams::input_stream", "read");
             HostInputStream::read(&mut self.as_wasi_view(), self_, len).await
         }
     }
