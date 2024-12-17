@@ -87,7 +87,7 @@ pub enum ComponentSubCommand<
         #[arg(
             long,
             short,
-            conflicts_with_all = vec!["component_file", "component_type"],
+            conflicts_with_all = vec!["component_file", "component-type-flag"],
             verbatim_doc_comment
         )]
         app: Vec<PathBuf>,
