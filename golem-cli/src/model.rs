@@ -388,7 +388,7 @@ struct ComponentUriOrNamesArgs {
         short = 'C',
         long,
         value_name = "URI",
-        conflicts_with_all = vec!["component-name"],
+        conflicts_with_all = vec!["component_name"],
     )]
     component: Option<ComponentUri>,
 
