@@ -88,14 +88,10 @@ impl PrintRes for GolemResult {
                 Format::Json | Format::Text => {
                     println!("{}", serde_json::to_string(&json).unwrap())
                 }
-                Format::Yaml => {
-                    println!("---\n{}", serde_yaml::to_string(&json).unwrap())
-                }
+                Format::Yaml => println!("---\n{}", serde_yaml::to_string(&json).unwrap()),
             },
             GolemResult::Str(string) => println!("{}", string),
-            GolemResult::Empty => {
-                // NOP
-            }
+            GolemResult::Empty => (), // NOP
         }
     }
 }
@@ -114,19 +110,14 @@ where
         match format {
             Format::Json => println!("{}", serde_json::to_string_pretty(self).unwrap()),
             Format::Yaml => println!("{}", serde_yaml::to_string(self).unwrap()),
-            Format::Text => {
-                println!();
-                self.print();
-            }
+            Format::Text => self.print(),
         }
     }
 
     fn streaming_print(&self, format: Format) {
         match format {
             Format::Json => println!("{}", serde_json::to_string(self).unwrap()),
-            Format::Yaml => {
-                println!("---\n{}", serde_yaml::to_string(self).unwrap());
-            }
+            Format::Yaml => println!("---\n{}", serde_yaml::to_string(self).unwrap()),
             Format::Text => self.print(),
         }
     }
