@@ -15,10 +15,11 @@
 use crate::durable_host::DurableWorkerCtx;
 use crate::metrics::wasm::record_host_function_call;
 use crate::preview2::wasi::rdbms::postgres::{
-    Date, Datebound, Daterange, DbColumn, DbColumnType, DbRow, DbValue, Enumeration,
-    EnumerationType, Error, Host, HostDbConnection, HostDbResultSet, Int4bound, Int4range,
-    Int8bound, Int8range, Interval, IpAddress, Numbound, Numrange, Time, Timestamp, Timestamptz,
-    Timetz, Tsbound, Tsrange, Tstzbound, Tstzrange,
+    Composite, CompositeType, Date, Datebound, Daterange, DbColumn, DbColumnType, DbRow, DbValue,
+    Domain, DomainType, Enumeration, EnumerationType, Error, Host, HostDbConnection,
+    HostDbResultSet, HostLazyDbColumnType, HostLazyDbValue, Int4bound, Int4range, Int8bound,
+    Int8range, Interval, IpAddress, MacAddress, Numbound, Numrange, Time, Timestamp, Timestamptz,
+    Timetz, Tsbound, Tsrange, Tstzbound, Tstzrange, Uuid,
 };
 use crate::services::rdbms::postgres::types as postgres_types;
 use crate::services::rdbms::postgres::PostgresType;
@@ -27,11 +28,12 @@ use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use bigdecimal::BigDecimal;
 use chrono::{Datelike, Offset, Timelike};
+use sqlx::types::BitVec;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::ops::{Bound, Deref};
 use std::str::FromStr;
 use std::sync::Arc;
-use wasmtime::component::Resource;
+use wasmtime::component::{Resource, ResourceTable};
 use wasmtime_wasi::WasiView;
 
 #[async_trait]
@@ -92,11 +94,8 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
             .get::<PostgresDbConnection>(&self_)?
             .pool_key
             .clone();
-        match params
-            .into_iter()
-            .map(|v| v.try_into())
-            .collect::<Result<Vec<_>, String>>()
-        {
+
+        match to_db_values(params, self.as_wasi_view().table()) {
             Ok(params) => {
                 let result = self
                     .state
@@ -134,11 +133,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
             .pool_key
             .clone();
 
-        match params
-            .into_iter()
-            .map(|v| v.try_into())
-            .collect::<Result<Vec<_>, String>>()
-        {
+        match to_db_values(params, self.as_wasi_view().table()) {
             Ok(params) => {
                 let result = self
                     .state
@@ -156,7 +151,6 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
 
     fn drop(&mut self, rep: Resource<PostgresDbConnection>) -> anyhow::Result<()> {
         record_host_function_call("rdbms::postgres::db-connection", "drop");
-
         let worker_id = self.state.owned_worker_id.worker_id.clone();
         let pool_key = self
             .as_wasi_view()
@@ -226,7 +220,7 @@ impl DbResultSetEntry {
 impl<Ctx: WorkerCtx> HostDbResultSet for DurableWorkerCtx<Ctx> {
     async fn get_columns(
         &mut self,
-        self_: Resource<crate::durable_host::rdbms::postgres::DbResultSetEntry>,
+        self_: Resource<DbResultSetEntry>,
     ) -> anyhow::Result<Vec<DbColumn>> {
         let _permit = self.begin_async_host_function().await?;
         record_host_function_call("rdbms::postgres::db-result-set", "get-columns");
@@ -234,43 +228,48 @@ impl<Ctx: WorkerCtx> HostDbResultSet for DurableWorkerCtx<Ctx> {
         let internal = self
             .as_wasi_view()
             .table()
-            .get::<crate::durable_host::rdbms::postgres::DbResultSetEntry>(&self_)?
+            .get::<DbResultSetEntry>(&self_)?
             .internal
             .clone();
 
         let columns = internal.deref().get_columns().await.map_err(Error::from)?;
 
-        let columns = columns.into_iter().map(|c| c.into()).collect();
+        let columns = from_db_columns(columns, self.as_wasi_view().table())
+            .map_err(Error::QueryResponseFailure)?;
         Ok(columns)
     }
 
     async fn get_next(
         &mut self,
-        self_: Resource<crate::durable_host::rdbms::postgres::DbResultSetEntry>,
+        self_: Resource<DbResultSetEntry>,
     ) -> anyhow::Result<Option<Vec<DbRow>>> {
         let _permit = self.begin_async_host_function().await?;
         record_host_function_call("rdbms::postgres::db-result-set", "get-next");
         let internal = self
             .as_wasi_view()
             .table()
-            .get::<crate::durable_host::rdbms::postgres::DbResultSetEntry>(&self_)?
+            .get::<DbResultSetEntry>(&self_)?
             .internal
             .clone();
 
         let rows = internal.deref().get_next().await.map_err(Error::from)?;
 
-        let rows = rows.map(|r| r.into_iter().map(|r| r.into()).collect());
+        let rows = match rows {
+            Some(rows) => {
+                let result = from_db_rows(rows, self.as_wasi_view().table())
+                    .map_err(Error::QueryResponseFailure)?;
+                Some(result)
+            }
+            None => None,
+        };
         Ok(rows)
     }
 
-    fn drop(
-        &mut self,
-        rep: Resource<crate::durable_host::rdbms::postgres::DbResultSetEntry>,
-    ) -> anyhow::Result<()> {
+    fn drop(&mut self, rep: Resource<DbResultSetEntry>) -> anyhow::Result<()> {
         record_host_function_call("rdbms::postgres::db-result-set", "drop");
         self.as_wasi_view()
             .table()
-            .delete::<crate::durable_host::rdbms::postgres::DbResultSetEntry>(rep)?;
+            .delete::<DbResultSetEntry>(rep)?;
         Ok(())
     }
 }
@@ -279,61 +278,153 @@ impl<Ctx: WorkerCtx> HostDbResultSet for DurableWorkerCtx<Ctx> {
 impl<Ctx: WorkerCtx> HostDbResultSet for &mut DurableWorkerCtx<Ctx> {
     async fn get_columns(
         &mut self,
-        self_: Resource<crate::durable_host::rdbms::postgres::DbResultSetEntry>,
+        self_: Resource<DbResultSetEntry>,
     ) -> anyhow::Result<Vec<DbColumn>> {
         (*self).get_columns(self_).await
     }
 
     async fn get_next(
         &mut self,
-        self_: Resource<crate::durable_host::rdbms::postgres::DbResultSetEntry>,
+        self_: Resource<DbResultSetEntry>,
     ) -> anyhow::Result<Option<Vec<DbRow>>> {
         (*self).get_next(self_).await
     }
 
-    fn drop(
-        &mut self,
-        rep: Resource<crate::durable_host::rdbms::postgres::DbResultSetEntry>,
-    ) -> anyhow::Result<()> {
+    fn drop(&mut self, rep: Resource<DbResultSetEntry>) -> anyhow::Result<()> {
         HostDbResultSet::drop(*self, rep)
     }
 }
 
-impl TryFrom<DbValue> for postgres_types::DbValue {
-    type Error = String;
-    fn try_from(value: DbValue) -> Result<Self, Self::Error> {
-        postgres_utils::to_db_value(value)
+pub struct LazyDbColumnTypeEntry {
+    pub value: postgres_types::DbColumnType,
+}
+
+impl LazyDbColumnTypeEntry {
+    fn new(value: postgres_types::DbColumnType) -> Self {
+        Self { value }
     }
 }
 
-impl From<postgres_types::DbValue> for DbValue {
-    fn from(value: postgres_types::DbValue) -> Self {
-        postgres_utils::from_db_value(value)
+#[async_trait]
+impl<Ctx: WorkerCtx> HostLazyDbColumnType for DurableWorkerCtx<Ctx> {
+    async fn create(
+        &mut self,
+        value: DbColumnType,
+    ) -> anyhow::Result<Resource<LazyDbColumnTypeEntry>> {
+        let _permit = self.begin_async_host_function().await?;
+        record_host_function_call("rdbms::postgres::lazy-db-column-type", "create");
+        let value = to_db_column_type(value, self.as_wasi_view().table()).map_err(Error::Other)?;
+        let result = self
+            .as_wasi_view()
+            .table()
+            .push(LazyDbColumnTypeEntry::new(value))?;
+        Ok(result)
+    }
+
+    async fn get(
+        &mut self,
+        self_: Resource<LazyDbColumnTypeEntry>,
+    ) -> anyhow::Result<DbColumnType> {
+        let _permit = self.begin_async_host_function().await?;
+        record_host_function_call("rdbms::postgres::lazy-db-column-type", "get");
+        let value = self
+            .as_wasi_view()
+            .table()
+            .get::<LazyDbColumnTypeEntry>(&self_)?
+            .value
+            .clone();
+        let result =
+            from_db_column_type(value, self.as_wasi_view().table()).map_err(Error::Other)?;
+        Ok(result)
+    }
+
+    fn drop(&mut self, rep: Resource<LazyDbColumnTypeEntry>) -> anyhow::Result<()> {
+        record_host_function_call("rdbms::postgres::lazy-db-column-type", "drop");
+        self.as_wasi_view()
+            .table()
+            .delete::<LazyDbColumnTypeEntry>(rep)?;
+        Ok(())
     }
 }
 
-impl From<crate::services::rdbms::DbRow<postgres_types::DbValue>> for DbRow {
-    fn from(value: crate::services::rdbms::DbRow<postgres_types::DbValue>) -> Self {
-        Self {
-            values: value.values.into_iter().map(|v| v.into()).collect(),
-        }
+#[async_trait]
+impl<Ctx: WorkerCtx> HostLazyDbColumnType for &mut DurableWorkerCtx<Ctx> {
+    async fn create(
+        &mut self,
+        value: DbColumnType,
+    ) -> anyhow::Result<Resource<LazyDbColumnTypeEntry>> {
+        HostLazyDbColumnType::create(*self, value).await
+    }
+
+    async fn get(
+        &mut self,
+        self_: Resource<LazyDbColumnTypeEntry>,
+    ) -> anyhow::Result<DbColumnType> {
+        HostLazyDbColumnType::get(*self, self_).await
+    }
+
+    fn drop(&mut self, rep: Resource<LazyDbColumnTypeEntry>) -> anyhow::Result<()> {
+        HostLazyDbColumnType::drop(*self, rep)
     }
 }
 
-impl From<postgres_types::DbColumnType> for DbColumnType {
-    fn from(value: postgres_types::DbColumnType) -> Self {
-        postgres_utils::from_db_column_type(value)
+pub struct LazyDbValueEntry {
+    pub value: postgres_types::DbValue,
+}
+
+impl LazyDbValueEntry {
+    fn new(value: postgres_types::DbValue) -> Self {
+        Self { value }
     }
 }
 
-impl From<postgres_types::DbColumn> for DbColumn {
-    fn from(value: postgres_types::DbColumn) -> Self {
-        Self {
-            ordinal: value.ordinal,
-            name: value.name,
-            db_type: value.db_type.into(),
-            db_type_name: value.db_type_name,
-        }
+#[async_trait]
+impl<Ctx: WorkerCtx> HostLazyDbValue for DurableWorkerCtx<Ctx> {
+    async fn create(&mut self, value: DbValue) -> anyhow::Result<Resource<LazyDbValueEntry>> {
+        let _permit = self.begin_async_host_function().await?;
+        record_host_function_call("rdbms::postgres::lazy-db-value", "create");
+        let value = to_db_value(value, self.as_wasi_view().table()).map_err(Error::Other)?;
+        let result = self
+            .as_wasi_view()
+            .table()
+            .push(LazyDbValueEntry::new(value))?;
+        Ok(result)
+    }
+
+    async fn get(&mut self, self_: Resource<LazyDbValueEntry>) -> anyhow::Result<DbValue> {
+        let _permit = self.begin_async_host_function().await?;
+        record_host_function_call("rdbms::postgres::lazy-db-value", "get");
+        let value = self
+            .as_wasi_view()
+            .table()
+            .get::<LazyDbValueEntry>(&self_)?
+            .value
+            .clone();
+        let result = from_db_value(value, self.as_wasi_view().table()).map_err(Error::Other)?;
+        Ok(result)
+    }
+
+    fn drop(&mut self, rep: Resource<LazyDbValueEntry>) -> anyhow::Result<()> {
+        record_host_function_call("rdbms::postgres::lazy-db-value", "drop");
+        self.as_wasi_view()
+            .table()
+            .delete::<LazyDbValueEntry>(rep)?;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> HostLazyDbValue for &mut DurableWorkerCtx<Ctx> {
+    async fn create(&mut self, value: DbValue) -> anyhow::Result<Resource<LazyDbValueEntry>> {
+        HostLazyDbValue::create(*self, value).await
+    }
+
+    async fn get(&mut self, self_: Resource<LazyDbValueEntry>) -> anyhow::Result<DbValue> {
+        HostLazyDbValue::get(*self, self_).await
+    }
+
+    fn drop(&mut self, rep: Resource<LazyDbValueEntry>) -> anyhow::Result<()> {
+        HostLazyDbValue::drop(*self, rep)
     }
 }
 
@@ -743,829 +834,737 @@ impl From<postgres_types::ValuesRange<chrono::NaiveDate>> for Daterange {
     }
 }
 
-pub(crate) mod postgres_utils {
-    use crate::preview2::wasi::rdbms::postgres::{
-        Composite, CompositeType, DbColumnType, DbColumnTypeNode, DbValue, DbValueNode, Domain,
-        DomainType, MacAddress, NodeIndex, Uuid,
+fn to_db_values(
+    values: Vec<DbValue>,
+    resource_table: &mut ResourceTable,
+) -> Result<Vec<postgres_types::DbValue>, String> {
+    let mut result: Vec<postgres_types::DbValue> = Vec::with_capacity(values.len());
+    for value in values {
+        let v = to_db_value(value, resource_table)?;
+        result.push(v);
+    }
+    Ok(result)
+}
+
+fn to_db_value(
+    value: DbValue,
+    resource_table: &mut ResourceTable,
+) -> Result<postgres_types::DbValue, String> {
+    match value {
+        DbValue::Character(v) => Ok(postgres_types::DbValue::Character(v)),
+        DbValue::Int2(i) => Ok(postgres_types::DbValue::Int2(i)),
+        DbValue::Int4(i) => Ok(postgres_types::DbValue::Int4(i)),
+        DbValue::Int8(i) => Ok(postgres_types::DbValue::Int8(i)),
+        DbValue::Numeric(s) => {
+            let v = bigdecimal::BigDecimal::from_str(&s).map_err(|e| e.to_string())?;
+            Ok(postgres_types::DbValue::Numeric(v))
+        }
+        DbValue::Float4(f) => Ok(postgres_types::DbValue::Float4(f)),
+        DbValue::Float8(f) => Ok(postgres_types::DbValue::Float8(f)),
+        DbValue::Boolean(b) => Ok(postgres_types::DbValue::Boolean(b)),
+        DbValue::Timestamp(v) => {
+            let value = v.try_into()?;
+            Ok(postgres_types::DbValue::Timestamp(value))
+        }
+        DbValue::Timestamptz(v) => {
+            let value = v.try_into()?;
+            Ok(postgres_types::DbValue::Timestamptz(value))
+        }
+        DbValue::Time(v) => {
+            let value = v.try_into()?;
+            Ok(postgres_types::DbValue::Time(value))
+        }
+        DbValue::Timetz(v) => {
+            let value = v.try_into()?;
+            Ok(postgres_types::DbValue::Timetz(value))
+        }
+        DbValue::Date(v) => {
+            let value = v.try_into()?;
+            Ok(postgres_types::DbValue::Date(value))
+        }
+        DbValue::Interval(v) => Ok(postgres_types::DbValue::Interval(v.into())),
+        DbValue::Text(s) => Ok(postgres_types::DbValue::Text(s.clone())),
+        DbValue::Varchar(s) => Ok(postgres_types::DbValue::Varchar(s.clone())),
+        DbValue::Bpchar(s) => Ok(postgres_types::DbValue::Bpchar(s.clone())),
+        DbValue::Bytea(u) => Ok(postgres_types::DbValue::Bytea(u.clone())),
+        DbValue::Json(v) => {
+            let v: serde_json::Value = serde_json::from_str(&v).map_err(|e| e.to_string())?;
+            Ok(postgres_types::DbValue::Json(v))
+        }
+        DbValue::Jsonb(v) => {
+            let v: serde_json::Value = serde_json::from_str(&v).map_err(|e| e.to_string())?;
+            Ok(postgres_types::DbValue::Jsonb(v))
+        }
+        DbValue::Jsonpath(s) => Ok(postgres_types::DbValue::Jsonpath(s.clone())),
+        DbValue::Xml(s) => Ok(postgres_types::DbValue::Xml(s)),
+        DbValue::Uuid(v) => Ok(postgres_types::DbValue::Uuid(uuid::Uuid::from_u64_pair(
+            v.high_bits,
+            v.low_bits,
+        ))),
+        DbValue::Bit(v) => Ok(postgres_types::DbValue::Bit(BitVec::from_iter(v))),
+        DbValue::Varbit(v) => Ok(postgres_types::DbValue::Varbit(BitVec::from_iter(v))),
+        DbValue::Oid(v) => Ok(postgres_types::DbValue::Oid(v)),
+        DbValue::Inet(v) => Ok(postgres_types::DbValue::Inet(v.into())),
+        DbValue::Cidr(v) => Ok(postgres_types::DbValue::Cidr(v.into())),
+        DbValue::Macaddr(v) => Ok(postgres_types::DbValue::Macaddr(
+            sqlx::types::mac_address::MacAddress::new(v.octets.into()),
+        )),
+        DbValue::Int4range(v) => Ok(postgres_types::DbValue::Int4range(v.into())),
+        DbValue::Int8range(v) => Ok(postgres_types::DbValue::Int8range(v.into())),
+        DbValue::Numrange(v) => {
+            let v = v.clone().try_into()?;
+            Ok(postgres_types::DbValue::Numrange(v))
+        }
+        DbValue::Tsrange(v) => {
+            let v = v.try_into()?;
+            Ok(postgres_types::DbValue::Tsrange(v))
+        }
+        DbValue::Tstzrange(v) => {
+            let v = v.try_into()?;
+            Ok(postgres_types::DbValue::Tstzrange(v))
+        }
+        DbValue::Daterange(v) => {
+            let v = v.try_into()?;
+            Ok(postgres_types::DbValue::Daterange(v))
+        }
+        DbValue::Money(v) => Ok(postgres_types::DbValue::Money(v)),
+        DbValue::Enumeration(v) => Ok(postgres_types::DbValue::Enum(v.into())),
+        DbValue::Array(vs) => {
+            let mut values: Vec<postgres_types::DbValue> = Vec::with_capacity(vs.len());
+            for i in vs.iter() {
+                let v = resource_table
+                    .get::<LazyDbValueEntry>(i)
+                    .map_err(|e| e.to_string())?
+                    .value
+                    .clone();
+                values.push(v);
+            }
+            Ok(postgres_types::DbValue::Array(values))
+        }
+        DbValue::Composite(v) => {
+            let mut values: Vec<postgres_types::DbValue> = Vec::with_capacity(v.values.len());
+            for i in v.values.iter() {
+                let v = resource_table
+                    .get::<LazyDbValueEntry>(i)
+                    .map_err(|e| e.to_string())?
+                    .value
+                    .clone();
+                values.push(v);
+            }
+            Ok(postgres_types::DbValue::Composite(
+                postgres_types::Composite::new(v.name, values),
+            ))
+        }
+        DbValue::Domain(v) => {
+            let value = resource_table
+                .get::<LazyDbValueEntry>(&v.value)
+                .map_err(|e| e.to_string())?
+                .value
+                .clone();
+            Ok(postgres_types::DbValue::Domain(
+                postgres_types::Domain::new(v.name, value),
+            ))
+        }
+        DbValue::Null => Ok(postgres_types::DbValue::Null),
+    }
+}
+
+fn from_db_rows(
+    values: Vec<crate::services::rdbms::DbRow<postgres_types::DbValue>>,
+    resource_table: &mut ResourceTable,
+) -> Result<Vec<DbRow>, String> {
+    let mut result: Vec<DbRow> = Vec::with_capacity(values.len());
+    for value in values {
+        let v = from_db_row(value, resource_table)?;
+        result.push(v);
+    }
+    Ok(result)
+}
+
+fn from_db_row(
+    value: crate::services::rdbms::DbRow<postgres_types::DbValue>,
+    resource_table: &mut ResourceTable,
+) -> Result<DbRow, String> {
+    let mut values: Vec<DbValue> = Vec::with_capacity(value.values.len());
+    for value in value.values {
+        let v = from_db_value(value, resource_table)?;
+        values.push(v);
+    }
+    Ok(DbRow { values })
+}
+
+fn from_db_value(
+    value: postgres_types::DbValue,
+    resource_table: &mut ResourceTable,
+) -> Result<DbValue, String> {
+    match value {
+        postgres_types::DbValue::Character(s) => Ok(DbValue::Character(s)),
+        postgres_types::DbValue::Int2(i) => Ok(DbValue::Int2(i)),
+        postgres_types::DbValue::Int4(i) => Ok(DbValue::Int4(i)),
+        postgres_types::DbValue::Int8(i) => Ok(DbValue::Int8(i)),
+        postgres_types::DbValue::Numeric(s) => Ok(DbValue::Numeric(s.to_string())),
+        postgres_types::DbValue::Float4(f) => Ok(DbValue::Float4(f)),
+        postgres_types::DbValue::Float8(f) => Ok(DbValue::Float8(f)),
+        postgres_types::DbValue::Boolean(b) => Ok(DbValue::Boolean(b)),
+        postgres_types::DbValue::Timestamp(v) => Ok(DbValue::Timestamp(v.into())),
+        postgres_types::DbValue::Timestamptz(v) => Ok(DbValue::Timestamptz(v.into())),
+        postgres_types::DbValue::Time(v) => Ok(DbValue::Time(v.into())),
+        postgres_types::DbValue::Timetz(v) => Ok(DbValue::Timetz(v.into())),
+        postgres_types::DbValue::Date(v) => Ok(DbValue::Date(v.into())),
+        postgres_types::DbValue::Interval(v) => Ok(DbValue::Interval(v.into())),
+        postgres_types::DbValue::Text(s) => Ok(DbValue::Text(s)),
+        postgres_types::DbValue::Varchar(s) => Ok(DbValue::Varchar(s)),
+        postgres_types::DbValue::Bpchar(s) => Ok(DbValue::Bpchar(s)),
+        postgres_types::DbValue::Bytea(u) => Ok(DbValue::Bytea(u)),
+        postgres_types::DbValue::Json(s) => Ok(DbValue::Json(s.to_string())),
+        postgres_types::DbValue::Jsonb(s) => Ok(DbValue::Jsonb(s.to_string())),
+        postgres_types::DbValue::Jsonpath(s) => Ok(DbValue::Jsonpath(s)),
+        postgres_types::DbValue::Xml(s) => Ok(DbValue::Xml(s)),
+        postgres_types::DbValue::Uuid(uuid) => {
+            let (high_bits, low_bits) = uuid.as_u64_pair();
+            Ok(DbValue::Uuid(Uuid {
+                high_bits,
+                low_bits,
+            }))
+        }
+        postgres_types::DbValue::Bit(v) => Ok(DbValue::Bit(v.iter().collect())),
+        postgres_types::DbValue::Varbit(v) => Ok(DbValue::Varbit(v.iter().collect())),
+        postgres_types::DbValue::Inet(v) => Ok(DbValue::Inet(v.into())),
+        postgres_types::DbValue::Cidr(v) => Ok(DbValue::Cidr(v.into())),
+        postgres_types::DbValue::Macaddr(v) => {
+            let v = v.bytes();
+            Ok(DbValue::Macaddr(MacAddress { octets: v.into() }))
+        }
+        postgres_types::DbValue::Tsrange(v) => Ok(DbValue::Tsrange(v.into())),
+        postgres_types::DbValue::Tstzrange(v) => Ok(DbValue::Tstzrange(v.into())),
+        postgres_types::DbValue::Daterange(v) => Ok(DbValue::Daterange(v.into())),
+        postgres_types::DbValue::Int4range(v) => Ok(DbValue::Int4range(v.into())),
+        postgres_types::DbValue::Int8range(v) => Ok(DbValue::Int8range(v.into())),
+        postgres_types::DbValue::Numrange(v) => Ok(DbValue::Numrange(v.into())),
+        postgres_types::DbValue::Oid(v) => Ok(DbValue::Oid(v)),
+        postgres_types::DbValue::Money(v) => Ok(DbValue::Money(v)),
+        postgres_types::DbValue::Enum(v) => Ok(DbValue::Enumeration(v.into())),
+        postgres_types::DbValue::Composite(v) => {
+            let mut values: Vec<Resource<LazyDbValueEntry>> = Vec::with_capacity(v.values.len());
+            for v in v.values {
+                let value = resource_table
+                    .push(LazyDbValueEntry::new(v))
+                    .map_err(|e| e.to_string())?;
+                values.push(value);
+            }
+            Ok(DbValue::Composite(Composite {
+                name: v.name,
+                values,
+            }))
+        }
+        postgres_types::DbValue::Domain(v) => {
+            let value = resource_table
+                .push(LazyDbValueEntry::new(*v.value))
+                .map_err(|e| e.to_string())?;
+            Ok(DbValue::Domain(Domain {
+                name: v.name,
+                value,
+            }))
+        }
+        postgres_types::DbValue::Array(vs) => {
+            let mut values: Vec<Resource<LazyDbValueEntry>> = Vec::with_capacity(vs.len());
+            for v in vs {
+                let value = resource_table
+                    .push(LazyDbValueEntry::new(v))
+                    .map_err(|e| e.to_string())?;
+                values.push(value);
+            }
+            Ok(DbValue::Array(values))
+        }
+        postgres_types::DbValue::Null => Ok(DbValue::Null),
+    }
+}
+
+fn from_db_columns(
+    values: Vec<postgres_types::DbColumn>,
+    resource_table: &mut ResourceTable,
+) -> Result<Vec<DbColumn>, String> {
+    let mut result: Vec<DbColumn> = Vec::with_capacity(values.len());
+    for value in values {
+        let v = from_db_column(value, resource_table)?;
+        result.push(v);
+    }
+    Ok(result)
+}
+
+fn from_db_column(
+    value: postgres_types::DbColumn,
+    resource_table: &mut ResourceTable,
+) -> Result<DbColumn, String> {
+    let db_type = from_db_column_type(value.db_type, resource_table)?;
+    Ok(DbColumn {
+        ordinal: value.ordinal,
+        name: value.name,
+        db_type,
+        db_type_name: value.db_type_name,
+    })
+}
+
+fn from_db_column_type(
+    value: postgres_types::DbColumnType,
+    resource_table: &mut ResourceTable,
+) -> Result<DbColumnType, String> {
+    match value {
+        postgres_types::DbColumnType::Character => Ok(DbColumnType::Character),
+        postgres_types::DbColumnType::Int2 => Ok(DbColumnType::Int2),
+        postgres_types::DbColumnType::Int4 => Ok(DbColumnType::Int4),
+        postgres_types::DbColumnType::Int8 => Ok(DbColumnType::Int8),
+        postgres_types::DbColumnType::Numeric => Ok(DbColumnType::Numeric),
+        postgres_types::DbColumnType::Float4 => Ok(DbColumnType::Float4),
+        postgres_types::DbColumnType::Float8 => Ok(DbColumnType::Float8),
+        postgres_types::DbColumnType::Boolean => Ok(DbColumnType::Boolean),
+        postgres_types::DbColumnType::Timestamp => Ok(DbColumnType::Timestamp),
+        postgres_types::DbColumnType::Timestamptz => Ok(DbColumnType::Timestamptz),
+        postgres_types::DbColumnType::Time => Ok(DbColumnType::Time),
+        postgres_types::DbColumnType::Timetz => Ok(DbColumnType::Timetz),
+        postgres_types::DbColumnType::Date => Ok(DbColumnType::Date),
+        postgres_types::DbColumnType::Interval => Ok(DbColumnType::Interval),
+        postgres_types::DbColumnType::Text => Ok(DbColumnType::Text),
+        postgres_types::DbColumnType::Varchar => Ok(DbColumnType::Varchar),
+        postgres_types::DbColumnType::Bpchar => Ok(DbColumnType::Bpchar),
+        postgres_types::DbColumnType::Bytea => Ok(DbColumnType::Bytea),
+        postgres_types::DbColumnType::Json => Ok(DbColumnType::Json),
+        postgres_types::DbColumnType::Jsonb => Ok(DbColumnType::Jsonb),
+        postgres_types::DbColumnType::Jsonpath => Ok(DbColumnType::Jsonpath),
+        postgres_types::DbColumnType::Xml => Ok(DbColumnType::Xml),
+        postgres_types::DbColumnType::Uuid => Ok(DbColumnType::Uuid),
+        postgres_types::DbColumnType::Bit => Ok(DbColumnType::Bit),
+        postgres_types::DbColumnType::Varbit => Ok(DbColumnType::Varbit),
+        postgres_types::DbColumnType::Inet => Ok(DbColumnType::Inet),
+        postgres_types::DbColumnType::Cidr => Ok(DbColumnType::Cidr),
+        postgres_types::DbColumnType::Macaddr => Ok(DbColumnType::Macaddr),
+        postgres_types::DbColumnType::Tsrange => Ok(DbColumnType::Tsrange),
+        postgres_types::DbColumnType::Tstzrange => Ok(DbColumnType::Tstzrange),
+        postgres_types::DbColumnType::Daterange => Ok(DbColumnType::Daterange),
+        postgres_types::DbColumnType::Int4range => Ok(DbColumnType::Int4range),
+        postgres_types::DbColumnType::Int8range => Ok(DbColumnType::Int8range),
+        postgres_types::DbColumnType::Numrange => Ok(DbColumnType::Numrange),
+        postgres_types::DbColumnType::Oid => Ok(DbColumnType::Oid),
+        postgres_types::DbColumnType::Money => Ok(DbColumnType::Money),
+        postgres_types::DbColumnType::Enum(v) => Ok(DbColumnType::Enumeration(v.into())),
+        postgres_types::DbColumnType::Composite(v) => {
+            let mut attributes: Vec<(String, Resource<LazyDbColumnTypeEntry>)> =
+                Vec::with_capacity(v.attributes.len());
+            for (n, t) in v.attributes {
+                let value = resource_table
+                    .push(LazyDbColumnTypeEntry::new(t))
+                    .map_err(|e| e.to_string())?;
+                attributes.push((n, value));
+            }
+            Ok(DbColumnType::Composite(CompositeType {
+                name: v.name,
+                attributes,
+            }))
+        }
+        postgres_types::DbColumnType::Domain(v) => {
+            let value = resource_table
+                .push(LazyDbColumnTypeEntry::new(*v.base_type))
+                .map_err(|e| e.to_string())?;
+            Ok(DbColumnType::Domain(DomainType {
+                name: v.name,
+                base_type: value,
+            }))
+        }
+        postgres_types::DbColumnType::Array(v) => {
+            let value = resource_table
+                .push(LazyDbColumnTypeEntry::new(*v))
+                .map_err(|e| e.to_string())?;
+            Ok(DbColumnType::Array(value))
+        }
+    }
+}
+
+fn to_db_column_type(
+    value: DbColumnType,
+    resource_table: &mut ResourceTable,
+) -> Result<postgres_types::DbColumnType, String> {
+    match value {
+        DbColumnType::Character => Ok(postgres_types::DbColumnType::Character),
+        DbColumnType::Int2 => Ok(postgres_types::DbColumnType::Int2),
+        DbColumnType::Int4 => Ok(postgres_types::DbColumnType::Int4),
+        DbColumnType::Int8 => Ok(postgres_types::DbColumnType::Int8),
+        DbColumnType::Numeric => Ok(postgres_types::DbColumnType::Numeric),
+        DbColumnType::Float4 => Ok(postgres_types::DbColumnType::Float4),
+        DbColumnType::Float8 => Ok(postgres_types::DbColumnType::Float8),
+        DbColumnType::Boolean => Ok(postgres_types::DbColumnType::Boolean),
+        DbColumnType::Timestamp => Ok(postgres_types::DbColumnType::Timestamp),
+        DbColumnType::Timestamptz => Ok(postgres_types::DbColumnType::Timestamptz),
+        DbColumnType::Time => Ok(postgres_types::DbColumnType::Time),
+        DbColumnType::Timetz => Ok(postgres_types::DbColumnType::Timetz),
+        DbColumnType::Date => Ok(postgres_types::DbColumnType::Date),
+        DbColumnType::Interval => Ok(postgres_types::DbColumnType::Interval),
+        DbColumnType::Bytea => Ok(postgres_types::DbColumnType::Bytea),
+        DbColumnType::Text => Ok(postgres_types::DbColumnType::Text),
+        DbColumnType::Varchar => Ok(postgres_types::DbColumnType::Varchar),
+        DbColumnType::Bpchar => Ok(postgres_types::DbColumnType::Bpchar),
+        DbColumnType::Json => Ok(postgres_types::DbColumnType::Json),
+        DbColumnType::Jsonb => Ok(postgres_types::DbColumnType::Jsonb),
+        DbColumnType::Jsonpath => Ok(postgres_types::DbColumnType::Jsonpath),
+        DbColumnType::Uuid => Ok(postgres_types::DbColumnType::Uuid),
+        DbColumnType::Xml => Ok(postgres_types::DbColumnType::Xml),
+        DbColumnType::Bit => Ok(postgres_types::DbColumnType::Bit),
+        DbColumnType::Varbit => Ok(postgres_types::DbColumnType::Varbit),
+        DbColumnType::Inet => Ok(postgres_types::DbColumnType::Inet),
+        DbColumnType::Cidr => Ok(postgres_types::DbColumnType::Cidr),
+        DbColumnType::Macaddr => Ok(postgres_types::DbColumnType::Macaddr),
+        DbColumnType::Tsrange => Ok(postgres_types::DbColumnType::Tsrange),
+        DbColumnType::Tstzrange => Ok(postgres_types::DbColumnType::Tstzrange),
+        DbColumnType::Daterange => Ok(postgres_types::DbColumnType::Daterange),
+        DbColumnType::Int4range => Ok(postgres_types::DbColumnType::Int4range),
+        DbColumnType::Int8range => Ok(postgres_types::DbColumnType::Int8range),
+        DbColumnType::Numrange => Ok(postgres_types::DbColumnType::Numrange),
+        DbColumnType::Oid => Ok(postgres_types::DbColumnType::Oid),
+        DbColumnType::Money => Ok(postgres_types::DbColumnType::Money),
+        DbColumnType::Enumeration(v) => Ok(postgres_types::DbColumnType::Enum(v.into())),
+        DbColumnType::Composite(v) => {
+            let mut attributes: Vec<(String, postgres_types::DbColumnType)> =
+                Vec::with_capacity(v.attributes.len());
+            for (n, i) in v.attributes.iter() {
+                let v = resource_table
+                    .get::<LazyDbColumnTypeEntry>(i)
+                    .map_err(|e| e.to_string())?
+                    .value
+                    .clone();
+                attributes.push((n.clone(), v));
+            }
+
+            Ok(postgres_types::DbColumnType::Composite(
+                postgres_types::CompositeType::new(v.name, attributes),
+            ))
+        }
+        DbColumnType::Domain(v) => {
+            let t = resource_table
+                .get::<LazyDbColumnTypeEntry>(&v.base_type)
+                .map_err(|e| e.to_string())?
+                .value
+                .clone();
+            Ok(postgres_types::DbColumnType::Domain(
+                postgres_types::DomainType::new(v.name, t),
+            ))
+        }
+        DbColumnType::Array(v) => {
+            let t = resource_table
+                .get::<LazyDbColumnTypeEntry>(&v)
+                .map_err(|e| e.to_string())?
+                .value
+                .clone();
+            Ok(postgres_types::DbColumnType::Array(Box::new(t)))
+        }
+    }
+}
+
+#[cfg(test)]
+pub mod tests {
+    use crate::durable_host::rdbms::postgres::{
+        from_db_column_type, from_db_value, to_db_column_type, to_db_value,
     };
     use crate::services::rdbms::postgres::types as postgres_types;
+    use assert2::check;
+    use bigdecimal::BigDecimal;
+    use chrono::Offset;
+    use serde_json::json;
+    use sqlx::types::mac_address::MacAddress;
     use sqlx::types::BitVec;
-    use std::str::FromStr;
+    use std::collections::Bound;
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+    use test_r::test;
+    use uuid::Uuid;
+    use wasmtime::component::ResourceTable;
 
-    pub(crate) fn to_db_value(value: DbValue) -> Result<postgres_types::DbValue, String> {
-        make_db_value(0, &value.nodes)
+    fn check_db_value(value: postgres_types::DbValue, resource_table: &mut ResourceTable) {
+        let wit = from_db_value(value.clone(), resource_table).unwrap();
+        // println!("wit {:?}", wit);
+        let value2 = to_db_value(wit, resource_table).unwrap();
+        check!(value == value2);
     }
 
-    fn make_db_value(
-        index: NodeIndex,
-        nodes: &[DbValueNode],
-    ) -> Result<postgres_types::DbValue, String> {
-        if index as usize >= nodes.len() {
-            Err(format!("Index ({}) out of range", index))
-        } else {
-            let node = &nodes[index as usize];
-            match node {
-                DbValueNode::Character(v) => Ok(postgres_types::DbValue::Character(*v)),
-                DbValueNode::Int2(i) => Ok(postgres_types::DbValue::Int2(*i)),
-                DbValueNode::Int4(i) => Ok(postgres_types::DbValue::Int4(*i)),
-                DbValueNode::Int8(i) => Ok(postgres_types::DbValue::Int8(*i)),
-                DbValueNode::Numeric(s) => {
-                    let v = bigdecimal::BigDecimal::from_str(s).map_err(|e| e.to_string())?;
-                    Ok(postgres_types::DbValue::Numeric(v))
-                }
-                DbValueNode::Float4(f) => Ok(postgres_types::DbValue::Float4(*f)),
-                DbValueNode::Float8(f) => Ok(postgres_types::DbValue::Float8(*f)),
-                DbValueNode::Boolean(b) => Ok(postgres_types::DbValue::Boolean(*b)),
-                DbValueNode::Timestamp(v) => {
-                    let value = (*v).try_into()?;
-                    Ok(postgres_types::DbValue::Timestamp(value))
-                }
-                DbValueNode::Timestamptz(v) => {
-                    let value = (*v).try_into()?;
-                    Ok(postgres_types::DbValue::Timestamptz(value))
-                }
-                DbValueNode::Time(v) => {
-                    let value = (*v).try_into()?;
-                    Ok(postgres_types::DbValue::Time(value))
-                }
-                DbValueNode::Timetz(v) => {
-                    let value = (*v).try_into()?;
-                    Ok(postgres_types::DbValue::Timetz(value))
-                }
-                DbValueNode::Date(v) => {
-                    let value = (*v).try_into()?;
-                    Ok(postgres_types::DbValue::Date(value))
-                }
-                DbValueNode::Interval(v) => Ok(postgres_types::DbValue::Interval((*v).into())),
-                DbValueNode::Text(s) => Ok(postgres_types::DbValue::Text(s.clone())),
-                DbValueNode::Varchar(s) => Ok(postgres_types::DbValue::Varchar(s.clone())),
-                DbValueNode::Bpchar(s) => Ok(postgres_types::DbValue::Bpchar(s.clone())),
-                DbValueNode::Bytea(u) => Ok(postgres_types::DbValue::Bytea(u.clone())),
-                DbValueNode::Json(v) => {
-                    let v: serde_json::Value =
-                        serde_json::from_str(v).map_err(|e| e.to_string())?;
-                    Ok(postgres_types::DbValue::Json(v))
-                }
-                DbValueNode::Jsonb(v) => {
-                    let v: serde_json::Value =
-                        serde_json::from_str(v).map_err(|e| e.to_string())?;
-                    Ok(postgres_types::DbValue::Jsonb(v))
-                }
-                DbValueNode::Jsonpath(s) => Ok(postgres_types::DbValue::Jsonpath(s.clone())),
-                DbValueNode::Xml(s) => Ok(postgres_types::DbValue::Xml(s.clone())),
-                DbValueNode::Uuid(v) => Ok(postgres_types::DbValue::Uuid(
-                    uuid::Uuid::from_u64_pair(v.high_bits, v.low_bits),
-                )),
-                DbValueNode::Bit(v) => {
-                    Ok(postgres_types::DbValue::Bit(BitVec::from_iter(v.clone())))
-                }
-                DbValueNode::Varbit(v) => Ok(postgres_types::DbValue::Varbit(BitVec::from_iter(
-                    v.clone(),
-                ))),
-                DbValueNode::Oid(v) => Ok(postgres_types::DbValue::Oid(*v)),
-                DbValueNode::Inet(v) => Ok(postgres_types::DbValue::Inet((*v).into())),
-                DbValueNode::Cidr(v) => Ok(postgres_types::DbValue::Cidr((*v).into())),
-                DbValueNode::Macaddr(v) => Ok(postgres_types::DbValue::Macaddr(
-                    sqlx::types::mac_address::MacAddress::new(v.octets.into()),
-                )),
-                DbValueNode::Int4range(v) => Ok(postgres_types::DbValue::Int4range((*v).into())),
-                DbValueNode::Int8range(v) => Ok(postgres_types::DbValue::Int8range((*v).into())),
-                DbValueNode::Numrange(v) => {
-                    let v = v.clone().try_into()?;
-                    Ok(postgres_types::DbValue::Numrange(v))
-                }
-                DbValueNode::Tsrange(v) => {
-                    let v = (*v).try_into()?;
-                    Ok(postgres_types::DbValue::Tsrange(v))
-                }
-                DbValueNode::Tstzrange(v) => {
-                    let v = (*v).try_into()?;
-                    Ok(postgres_types::DbValue::Tstzrange(v))
-                }
-                DbValueNode::Daterange(v) => {
-                    let v = (*v).try_into()?;
-                    Ok(postgres_types::DbValue::Daterange(v))
-                }
-                DbValueNode::Money(v) => Ok(postgres_types::DbValue::Money(*v)),
-                DbValueNode::Enumeration(v) => Ok(postgres_types::DbValue::Enum(v.clone().into())),
-                DbValueNode::Array(vs) => {
-                    let mut values: Vec<postgres_types::DbValue> = Vec::with_capacity(vs.len());
-                    for i in vs.iter() {
-                        let v = make_db_value(*i, nodes)?;
-                        values.push(v);
-                    }
-                    Ok(postgres_types::DbValue::Array(values))
-                }
-                DbValueNode::Composite(v) => {
-                    let mut values: Vec<postgres_types::DbValue> =
-                        Vec::with_capacity(v.values.len());
-                    for i in v.values.iter() {
-                        let v = make_db_value(*i, nodes)?;
-                        values.push(v);
-                    }
-                    Ok(postgres_types::DbValue::Composite(
-                        postgres_types::Composite::new(v.name.clone(), values),
-                    ))
-                }
-                DbValueNode::Domain(v) => {
-                    let value = make_db_value(v.value, nodes)?;
-                    Ok(postgres_types::DbValue::Domain(
-                        postgres_types::Domain::new(v.name.clone(), value),
-                    ))
-                }
-                DbValueNode::Null => Ok(postgres_types::DbValue::Null),
-            }
-        }
-    }
-
-    pub(crate) fn from_db_value(value: postgres_types::DbValue) -> DbValue {
-        let mut builder = DbValueBuilder::new();
-        builder.add(value);
-        builder.build()
-    }
-
-    struct DbValueBuilder {
-        nodes: Vec<DbValueNode>,
-        offset: NodeIndex,
-    }
-
-    impl DbValueBuilder {
-        fn new() -> Self {
-            Self::new_with_offset(0)
-        }
-
-        fn new_with_offset(offset: NodeIndex) -> Self {
-            Self {
-                nodes: Vec::new(),
-                offset,
-            }
-        }
-
-        fn add_nodes(&mut self, node: DbValueNode, child_nodes: Vec<DbValueNode>) -> NodeIndex {
-            let index = self.add_node(node);
-            self.nodes.extend(child_nodes);
-            index
-        }
-
-        fn add_node(&mut self, node: DbValueNode) -> NodeIndex {
-            self.nodes.push(node);
-            self.nodes.len() as NodeIndex - 1 + self.offset
-        }
-
-        fn child_builder(&self) -> DbValueBuilder {
-            let offset = self.nodes.len() as NodeIndex + 1 + self.offset;
-            DbValueBuilder::new_with_offset(offset)
-        }
-
-        fn add(&mut self, value: postgres_types::DbValue) -> NodeIndex {
-            match value {
-                postgres_types::DbValue::Character(s) => self.add_node(DbValueNode::Character(s)),
-                postgres_types::DbValue::Int2(i) => self.add_node(DbValueNode::Int2(i)),
-                postgres_types::DbValue::Int4(i) => self.add_node(DbValueNode::Int4(i)),
-                postgres_types::DbValue::Int8(i) => self.add_node(DbValueNode::Int8(i)),
-                postgres_types::DbValue::Numeric(s) => {
-                    self.add_node(DbValueNode::Numeric(s.to_string()))
-                }
-                postgres_types::DbValue::Float4(f) => self.add_node(DbValueNode::Float4(f)),
-                postgres_types::DbValue::Float8(f) => self.add_node(DbValueNode::Float8(f)),
-                postgres_types::DbValue::Boolean(b) => self.add_node(DbValueNode::Boolean(b)),
-                postgres_types::DbValue::Timestamp(v) => {
-                    self.add_node(DbValueNode::Timestamp(v.into()))
-                }
-                postgres_types::DbValue::Timestamptz(v) => {
-                    self.add_node(DbValueNode::Timestamptz(v.into()))
-                }
-                postgres_types::DbValue::Time(v) => self.add_node(DbValueNode::Time(v.into())),
-                postgres_types::DbValue::Timetz(v) => self.add_node(DbValueNode::Timetz(v.into())),
-                postgres_types::DbValue::Date(v) => self.add_node(DbValueNode::Date(v.into())),
-                postgres_types::DbValue::Interval(v) => {
-                    self.add_node(DbValueNode::Interval(v.into()))
-                }
-                postgres_types::DbValue::Text(s) => self.add_node(DbValueNode::Text(s)),
-                postgres_types::DbValue::Varchar(s) => self.add_node(DbValueNode::Varchar(s)),
-                postgres_types::DbValue::Bpchar(s) => self.add_node(DbValueNode::Bpchar(s)),
-                postgres_types::DbValue::Bytea(u) => self.add_node(DbValueNode::Bytea(u)),
-                postgres_types::DbValue::Json(s) => self.add_node(DbValueNode::Json(s.to_string())),
-                postgres_types::DbValue::Jsonb(s) => {
-                    self.add_node(DbValueNode::Jsonb(s.to_string()))
-                }
-                postgres_types::DbValue::Jsonpath(s) => self.add_node(DbValueNode::Jsonpath(s)),
-                postgres_types::DbValue::Xml(s) => self.add_node(DbValueNode::Xml(s)),
-                postgres_types::DbValue::Uuid(uuid) => {
-                    let (high_bits, low_bits) = uuid.as_u64_pair();
-                    self.add_node(DbValueNode::Uuid(Uuid {
-                        high_bits,
-                        low_bits,
-                    }))
-                }
-                postgres_types::DbValue::Bit(v) => {
-                    self.add_node(DbValueNode::Bit(v.iter().collect()))
-                }
-                postgres_types::DbValue::Varbit(v) => {
-                    self.add_node(DbValueNode::Varbit(v.iter().collect()))
-                }
-                postgres_types::DbValue::Inet(v) => self.add_node(DbValueNode::Inet(v.into())),
-                postgres_types::DbValue::Cidr(v) => self.add_node(DbValueNode::Cidr(v.into())),
-                postgres_types::DbValue::Macaddr(v) => {
-                    let v = v.bytes();
-                    self.add_node(DbValueNode::Macaddr(MacAddress { octets: v.into() }))
-                }
-                postgres_types::DbValue::Tsrange(v) => {
-                    self.add_node(DbValueNode::Tsrange(v.into()))
-                }
-                postgres_types::DbValue::Tstzrange(v) => {
-                    self.add_node(DbValueNode::Tstzrange(v.into()))
-                }
-                postgres_types::DbValue::Daterange(v) => {
-                    self.add_node(DbValueNode::Daterange(v.into()))
-                }
-                postgres_types::DbValue::Int4range(v) => {
-                    self.add_node(DbValueNode::Int4range(v.into()))
-                }
-                postgres_types::DbValue::Int8range(v) => {
-                    self.add_node(DbValueNode::Int8range(v.into()))
-                }
-                postgres_types::DbValue::Numrange(v) => {
-                    self.add_node(DbValueNode::Numrange(v.into()))
-                }
-                postgres_types::DbValue::Oid(v) => self.add_node(DbValueNode::Oid(v)),
-                postgres_types::DbValue::Money(v) => self.add_node(DbValueNode::Money(v)),
-                postgres_types::DbValue::Enum(v) => {
-                    self.add_node(DbValueNode::Enumeration(v.into()))
-                }
-                postgres_types::DbValue::Composite(v) => {
-                    let mut child_builder = self.child_builder();
-                    let mut values: Vec<NodeIndex> = Vec::with_capacity(v.values.len());
-                    for v in v.values {
-                        let i = child_builder.add(v);
-                        values.push(i);
-                    }
-                    self.add_nodes(
-                        DbValueNode::Composite(Composite {
-                            name: v.name,
-                            values,
-                        }),
-                        child_builder.nodes,
-                    )
-                }
-                postgres_types::DbValue::Domain(v) => {
-                    let mut child_builder = self.child_builder();
-                    let value_node_index = child_builder.add(*v.value);
-                    self.add_nodes(
-                        DbValueNode::Domain(Domain {
-                            name: v.name,
-                            value: value_node_index,
-                        }),
-                        child_builder.nodes,
-                    )
-                }
-                postgres_types::DbValue::Array(vs) => {
-                    let mut child_builder = self.child_builder();
-                    let mut values: Vec<NodeIndex> = Vec::with_capacity(vs.len());
-                    for v in vs {
-                        let i = child_builder.add(v);
-                        values.push(i);
-                    }
-                    self.add_nodes(DbValueNode::Array(values), child_builder.nodes)
-                }
-                postgres_types::DbValue::Null => self.add_node(DbValueNode::Null),
-            }
-        }
-
-        fn build(self) -> DbValue {
-            DbValue { nodes: self.nodes }
-        }
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn to_db_column_type(
-        value: DbColumnType,
-    ) -> Result<postgres_types::DbColumnType, String> {
-        make_db_column_type(0, &value.nodes)
-    }
-
-    fn make_db_column_type(
-        index: NodeIndex,
-        nodes: &[DbColumnTypeNode],
-    ) -> Result<postgres_types::DbColumnType, String> {
-        if index as usize >= nodes.len() {
-            Err(format!("Index ({}) out of range", index))
-        } else {
-            let node = &nodes[index as usize];
-            match node {
-                DbColumnTypeNode::Character => Ok(postgres_types::DbColumnType::Character),
-                DbColumnTypeNode::Int2 => Ok(postgres_types::DbColumnType::Int2),
-                DbColumnTypeNode::Int4 => Ok(postgres_types::DbColumnType::Int4),
-                DbColumnTypeNode::Int8 => Ok(postgres_types::DbColumnType::Int8),
-                DbColumnTypeNode::Numeric => Ok(postgres_types::DbColumnType::Numeric),
-                DbColumnTypeNode::Float4 => Ok(postgres_types::DbColumnType::Float4),
-                DbColumnTypeNode::Float8 => Ok(postgres_types::DbColumnType::Float8),
-                DbColumnTypeNode::Boolean => Ok(postgres_types::DbColumnType::Boolean),
-                DbColumnTypeNode::Timestamp => Ok(postgres_types::DbColumnType::Timestamp),
-                DbColumnTypeNode::Timestamptz => Ok(postgres_types::DbColumnType::Timestamptz),
-                DbColumnTypeNode::Time => Ok(postgres_types::DbColumnType::Time),
-                DbColumnTypeNode::Timetz => Ok(postgres_types::DbColumnType::Timetz),
-                DbColumnTypeNode::Date => Ok(postgres_types::DbColumnType::Date),
-                DbColumnTypeNode::Interval => Ok(postgres_types::DbColumnType::Interval),
-                DbColumnTypeNode::Bytea => Ok(postgres_types::DbColumnType::Bytea),
-                DbColumnTypeNode::Text => Ok(postgres_types::DbColumnType::Text),
-                DbColumnTypeNode::Varchar => Ok(postgres_types::DbColumnType::Varchar),
-                DbColumnTypeNode::Bpchar => Ok(postgres_types::DbColumnType::Bpchar),
-                DbColumnTypeNode::Json => Ok(postgres_types::DbColumnType::Json),
-                DbColumnTypeNode::Jsonb => Ok(postgres_types::DbColumnType::Jsonb),
-                DbColumnTypeNode::Jsonpath => Ok(postgres_types::DbColumnType::Jsonpath),
-                DbColumnTypeNode::Uuid => Ok(postgres_types::DbColumnType::Uuid),
-                DbColumnTypeNode::Xml => Ok(postgres_types::DbColumnType::Xml),
-                DbColumnTypeNode::Bit => Ok(postgres_types::DbColumnType::Bit),
-                DbColumnTypeNode::Varbit => Ok(postgres_types::DbColumnType::Varbit),
-                DbColumnTypeNode::Inet => Ok(postgres_types::DbColumnType::Inet),
-                DbColumnTypeNode::Cidr => Ok(postgres_types::DbColumnType::Cidr),
-                DbColumnTypeNode::Macaddr => Ok(postgres_types::DbColumnType::Macaddr),
-                DbColumnTypeNode::Tsrange => Ok(postgres_types::DbColumnType::Tsrange),
-                DbColumnTypeNode::Tstzrange => Ok(postgres_types::DbColumnType::Tstzrange),
-                DbColumnTypeNode::Daterange => Ok(postgres_types::DbColumnType::Daterange),
-                DbColumnTypeNode::Int4range => Ok(postgres_types::DbColumnType::Int4range),
-                DbColumnTypeNode::Int8range => Ok(postgres_types::DbColumnType::Int8range),
-                DbColumnTypeNode::Numrange => Ok(postgres_types::DbColumnType::Numrange),
-                DbColumnTypeNode::Oid => Ok(postgres_types::DbColumnType::Oid),
-                DbColumnTypeNode::Money => Ok(postgres_types::DbColumnType::Money),
-                DbColumnTypeNode::Enumeration(v) => {
-                    Ok(postgres_types::DbColumnType::Enum(v.clone().into()))
-                }
-                DbColumnTypeNode::Composite(v) => {
-                    let mut attributes: Vec<(String, postgres_types::DbColumnType)> =
-                        Vec::with_capacity(v.attributes.len());
-                    for (n, i) in v.attributes.iter() {
-                        let v = make_db_column_type(*i, nodes)?;
-                        attributes.push((n.clone(), v));
-                    }
-
-                    Ok(postgres_types::DbColumnType::Composite(
-                        postgres_types::CompositeType::new(v.name.clone(), attributes),
-                    ))
-                }
-                DbColumnTypeNode::Domain(v) => {
-                    let t = make_db_column_type(v.base_type, nodes)?;
-                    Ok(postgres_types::DbColumnType::Domain(
-                        postgres_types::DomainType::new(v.name.clone(), t),
-                    ))
-                }
-                DbColumnTypeNode::Array(v) => {
-                    let t = make_db_column_type(*v, nodes)?;
-                    Ok(postgres_types::DbColumnType::Array(Box::new(t)))
-                }
-            }
-        }
-    }
-
-    pub(crate) fn from_db_column_type(value: postgres_types::DbColumnType) -> DbColumnType {
-        let mut builder = DbColumnTypeBuilder::new();
-        builder.add(value);
-        builder.build()
-    }
-
-    struct DbColumnTypeBuilder {
-        nodes: Vec<DbColumnTypeNode>,
-        offset: NodeIndex,
-    }
-
-    impl DbColumnTypeBuilder {
-        fn new() -> Self {
-            Self::new_with_offset(0)
-        }
-
-        fn new_with_offset(offset: NodeIndex) -> Self {
-            Self {
-                nodes: Vec::new(),
-                offset,
-            }
-        }
-
-        fn add_nodes(
-            &mut self,
-            node: DbColumnTypeNode,
-            child_nodes: Vec<DbColumnTypeNode>,
-        ) -> NodeIndex {
-            let index = self.add_node(node);
-            self.nodes.extend(child_nodes);
-            index
-        }
-
-        fn add_node(&mut self, node: DbColumnTypeNode) -> NodeIndex {
-            self.nodes.push(node);
-            self.nodes.len() as NodeIndex - 1 + self.offset
-        }
-
-        fn child_builder(&self) -> DbColumnTypeBuilder {
-            let offset = self.nodes.len() as NodeIndex + 1 + self.offset;
-            DbColumnTypeBuilder::new_with_offset(offset)
-        }
-
-        fn add(&mut self, value: postgres_types::DbColumnType) -> NodeIndex {
-            match value {
-                postgres_types::DbColumnType::Character => {
-                    self.add_node(DbColumnTypeNode::Character)
-                }
-                postgres_types::DbColumnType::Int2 => self.add_node(DbColumnTypeNode::Int2),
-                postgres_types::DbColumnType::Int4 => self.add_node(DbColumnTypeNode::Int4),
-                postgres_types::DbColumnType::Int8 => self.add_node(DbColumnTypeNode::Int8),
-                postgres_types::DbColumnType::Numeric => self.add_node(DbColumnTypeNode::Numeric),
-                postgres_types::DbColumnType::Float4 => self.add_node(DbColumnTypeNode::Float4),
-                postgres_types::DbColumnType::Float8 => self.add_node(DbColumnTypeNode::Float8),
-                postgres_types::DbColumnType::Boolean => self.add_node(DbColumnTypeNode::Boolean),
-                postgres_types::DbColumnType::Timestamp => {
-                    self.add_node(DbColumnTypeNode::Timestamp)
-                }
-                postgres_types::DbColumnType::Timestamptz => {
-                    self.add_node(DbColumnTypeNode::Timestamptz)
-                }
-                postgres_types::DbColumnType::Time => self.add_node(DbColumnTypeNode::Time),
-                postgres_types::DbColumnType::Timetz => self.add_node(DbColumnTypeNode::Timetz),
-                postgres_types::DbColumnType::Date => self.add_node(DbColumnTypeNode::Date),
-                postgres_types::DbColumnType::Interval => self.add_node(DbColumnTypeNode::Interval),
-                postgres_types::DbColumnType::Text => self.add_node(DbColumnTypeNode::Text),
-                postgres_types::DbColumnType::Varchar => self.add_node(DbColumnTypeNode::Varchar),
-                postgres_types::DbColumnType::Bpchar => self.add_node(DbColumnTypeNode::Bpchar),
-                postgres_types::DbColumnType::Bytea => self.add_node(DbColumnTypeNode::Bytea),
-                postgres_types::DbColumnType::Json => self.add_node(DbColumnTypeNode::Json),
-                postgres_types::DbColumnType::Jsonb => self.add_node(DbColumnTypeNode::Jsonb),
-                postgres_types::DbColumnType::Jsonpath => self.add_node(DbColumnTypeNode::Jsonpath),
-                postgres_types::DbColumnType::Xml => self.add_node(DbColumnTypeNode::Xml),
-                postgres_types::DbColumnType::Uuid => self.add_node(DbColumnTypeNode::Uuid),
-                postgres_types::DbColumnType::Bit => self.add_node(DbColumnTypeNode::Bit),
-                postgres_types::DbColumnType::Varbit => self.add_node(DbColumnTypeNode::Varbit),
-                postgres_types::DbColumnType::Inet => self.add_node(DbColumnTypeNode::Inet),
-                postgres_types::DbColumnType::Cidr => self.add_node(DbColumnTypeNode::Cidr),
-                postgres_types::DbColumnType::Macaddr => self.add_node(DbColumnTypeNode::Macaddr),
-                postgres_types::DbColumnType::Tsrange => self.add_node(DbColumnTypeNode::Tsrange),
-                postgres_types::DbColumnType::Tstzrange => {
-                    self.add_node(DbColumnTypeNode::Tstzrange)
-                }
-                postgres_types::DbColumnType::Daterange => {
-                    self.add_node(DbColumnTypeNode::Daterange)
-                }
-                postgres_types::DbColumnType::Int4range => {
-                    self.add_node(DbColumnTypeNode::Int4range)
-                }
-                postgres_types::DbColumnType::Int8range => {
-                    self.add_node(DbColumnTypeNode::Int8range)
-                }
-                postgres_types::DbColumnType::Numrange => self.add_node(DbColumnTypeNode::Numrange),
-                postgres_types::DbColumnType::Oid => self.add_node(DbColumnTypeNode::Oid),
-                postgres_types::DbColumnType::Money => self.add_node(DbColumnTypeNode::Money),
-                postgres_types::DbColumnType::Enum(v) => {
-                    self.add_node(DbColumnTypeNode::Enumeration(v.into()))
-                }
-                postgres_types::DbColumnType::Composite(v) => {
-                    let mut attributes: Vec<(String, NodeIndex)> =
-                        Vec::with_capacity(v.attributes.len());
-                    let mut child_builder = self.child_builder();
-                    for (n, v) in v.attributes {
-                        let i = child_builder.add(v);
-                        attributes.push((n, i));
-                    }
-                    self.add_nodes(
-                        DbColumnTypeNode::Composite(CompositeType {
-                            name: v.name,
-                            attributes,
-                        }),
-                        child_builder.nodes,
-                    )
-                }
-                postgres_types::DbColumnType::Domain(v) => {
-                    let mut child_builder = self.child_builder();
-                    let value_node_index = child_builder.add(*v.base_type);
-                    self.add_nodes(
-                        DbColumnTypeNode::Domain(DomainType {
-                            name: v.name,
-                            base_type: value_node_index,
-                        }),
-                        child_builder.nodes,
-                    )
-                }
-                postgres_types::DbColumnType::Array(v) => {
-                    let mut child_builder = self.child_builder();
-                    let value_node_index = child_builder.add(*v);
-                    self.add_nodes(
-                        DbColumnTypeNode::Array(value_node_index),
-                        child_builder.nodes,
-                    )
-                }
-            }
-        }
-
-        fn build(self) -> DbColumnType {
-            DbColumnType { nodes: self.nodes }
-        }
-    }
-
-    #[cfg(test)]
-    pub mod tests {
-        use crate::durable_host::rdbms::postgres::postgres_utils;
-        use crate::services::rdbms::postgres::types as postgres_types;
-        use assert2::check;
-        use bigdecimal::BigDecimal;
-        use chrono::Offset;
-        use serde_json::json;
-        use sqlx::types::mac_address::MacAddress;
-        use sqlx::types::BitVec;
-        use std::collections::Bound;
-        use std::net::{IpAddr, Ipv4Addr};
-        use test_r::test;
-        use uuid::Uuid;
-
-        fn check_db_value(value: postgres_types::DbValue) {
-            let wit = postgres_utils::from_db_value(value.clone());
-
-            // println!("wit {:?}", wit);
-            let value2 = postgres_utils::to_db_value(wit).unwrap();
-
-            check!(value == value2);
-        }
-
-        #[test]
-        fn test_db_values_conversions() {
-            let tstzbounds = postgres_types::ValuesRange::new(
-                Bound::Included(chrono::DateTime::from_naive_utc_and_offset(
-                    chrono::NaiveDateTime::new(
-                        chrono::NaiveDate::from_ymd_opt(2023, 3, 2).unwrap(),
-                        chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-                    ),
-                    chrono::Utc,
-                )),
-                Bound::Excluded(chrono::DateTime::from_naive_utc_and_offset(
-                    chrono::NaiveDateTime::new(
-                        chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
-                        chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-                    ),
-                    chrono::Utc,
-                )),
-            );
-            let tsbounds = postgres_types::ValuesRange::new(
-                Bound::Included(chrono::NaiveDateTime::new(
-                    chrono::NaiveDate::from_ymd_opt(2022, 2, 2).unwrap(),
-                    chrono::NaiveTime::from_hms_opt(16, 50, 30).unwrap(),
-                )),
-                Bound::Excluded(chrono::NaiveDateTime::new(
+    #[test]
+    fn test_db_values_conversions() {
+        let mut resource_table = ResourceTable::new();
+        let tstzbounds = postgres_types::ValuesRange::new(
+            Bound::Included(chrono::DateTime::from_naive_utc_and_offset(
+                chrono::NaiveDateTime::new(
+                    chrono::NaiveDate::from_ymd_opt(2023, 3, 2).unwrap(),
+                    chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+                ),
+                chrono::Utc,
+            )),
+            Bound::Excluded(chrono::DateTime::from_naive_utc_and_offset(
+                chrono::NaiveDateTime::new(
                     chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
                     chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-                )),
-            );
+                ),
+                chrono::Utc,
+            )),
+        );
+        let tsbounds = postgres_types::ValuesRange::new(
+            Bound::Included(chrono::NaiveDateTime::new(
+                chrono::NaiveDate::from_ymd_opt(2022, 2, 2).unwrap(),
+                chrono::NaiveTime::from_hms_opt(16, 50, 30).unwrap(),
+            )),
+            Bound::Excluded(chrono::NaiveDateTime::new(
+                chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+                chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+            )),
+        );
 
-            let params = vec![
-                postgres_types::DbValue::Array(vec![
-                    postgres_types::DbValue::Enum(postgres_types::Enum::new(
-                        "a_test_enum".to_string(),
-                        "second".to_string(),
-                    )),
-                    postgres_types::DbValue::Enum(postgres_types::Enum::new(
-                        "a_test_enum".to_string(),
-                        "third".to_string(),
-                    )),
-                ]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Character(2)]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Int2(1)]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Int4(2)]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Int8(3)]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Float4(4.0)]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Float8(5.0)]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Numeric(
-                    BigDecimal::from(48888),
-                )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Boolean(true)]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Text(
-                    "text".to_string(),
-                )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Varchar(
-                    "varchar".to_string(),
-                )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Bpchar(
-                    "0123456789".to_string(),
-                )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Timestamp(
-                    chrono::NaiveDateTime::new(
-                        chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
-                        chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-                    ),
-                )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Timestamptz(
-                    chrono::DateTime::from_naive_utc_and_offset(
-                        chrono::NaiveDateTime::new(
-                            chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
-                            chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-                        ),
-                        chrono::Utc,
-                    ),
-                )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Date(
+        let params = vec![
+            postgres_types::DbValue::Array(vec![
+                postgres_types::DbValue::Enum(postgres_types::Enum::new(
+                    "a_test_enum".to_string(),
+                    "second".to_string(),
+                )),
+                postgres_types::DbValue::Enum(postgres_types::Enum::new(
+                    "a_test_enum".to_string(),
+                    "third".to_string(),
+                )),
+            ]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValue::Character(2)]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValue::Int2(1)]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValue::Int4(2)]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValue::Int8(3)]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValue::Float4(4.0)]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValue::Float8(5.0)]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValue::Numeric(
+                BigDecimal::from(48888),
+            )]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValue::Boolean(true)]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValue::Text("text".to_string())]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValue::Varchar(
+                "varchar".to_string(),
+            )]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValue::Bpchar(
+                "0123456789".to_string(),
+            )]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValue::Timestamp(
+                chrono::NaiveDateTime::new(
                     chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
-                )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Time(
                     chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-                )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Timetz(
-                    postgres_types::TimeTz::new(
+                ),
+            )]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValue::Timestamptz(
+                chrono::DateTime::from_naive_utc_and_offset(
+                    chrono::NaiveDateTime::new(
+                        chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
                         chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-                        chrono::Utc.fix(),
                     ),
-                )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Interval(
-                    postgres_types::Interval::new(10, 20, 30),
-                )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Bytea(
-                    "bytea".as_bytes().to_vec(),
-                )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Uuid(Uuid::new_v4())]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Json(json!(
-                       {
-                          "id": 2
-                       }
-                ))]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Jsonb(json!(
-                       {
-                          "index": 4
-                       }
-                ))]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Inet(IpAddr::V4(
-                    Ipv4Addr::new(127, 0, 0, 1),
-                ))]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Cidr(IpAddr::V4(
-                    Ipv4Addr::new(198, 168, 0, 0),
-                ))]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Macaddr(
-                    MacAddress::new([0, 1, 2, 3, 4, 1]),
-                )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Bit(
-                    BitVec::from_iter(vec![true, false, true]),
-                )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Varbit(
-                    BitVec::from_iter(vec![true, false, false]),
-                )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Xml(
-                    "<foo>200</foo>".to_string(),
-                )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Int4range(
-                    postgres_types::ValuesRange::new(Bound::Included(1), Bound::Excluded(4)),
-                )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Int8range(
-                    postgres_types::ValuesRange::new(Bound::Included(1), Bound::Unbounded),
-                )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Numrange(
-                    postgres_types::ValuesRange::new(
-                        Bound::Included(BigDecimal::from(11)),
-                        Bound::Excluded(BigDecimal::from(221)),
-                    ),
-                )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Tsrange(tsbounds)]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Tstzrange(
-                    tstzbounds,
-                )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Daterange(
-                    postgres_types::ValuesRange::new(
-                        Bound::Included(chrono::NaiveDate::from_ymd_opt(2023, 2, 3).unwrap()),
-                        Bound::Unbounded,
-                    ),
-                )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Money(1234)]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Jsonpath(
-                    "$.user.addresses[0].city".to_string(),
-                )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Text(
-                    "'a' 'and' 'ate' 'cat' 'fat' 'mat' 'on' 'rat' 'sat'".to_string(),
-                )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Text(
-                    "'fat' & 'rat' & !'cat'".to_string(),
-                )]),
-                postgres_types::DbValue::Array(vec![
-                    postgres_types::DbValue::Composite(postgres_types::Composite::new(
-                        "a_inventory_item".to_string(),
-                        vec![
-                            postgres_types::DbValue::Uuid(Uuid::new_v4()),
-                            postgres_types::DbValue::Text("text".to_string()),
-                            postgres_types::DbValue::Int4(3),
-                            postgres_types::DbValue::Numeric(BigDecimal::from(111)),
-                        ],
-                    )),
-                    postgres_types::DbValue::Composite(postgres_types::Composite::new(
-                        "a_inventory_item".to_string(),
-                        vec![
-                            postgres_types::DbValue::Uuid(Uuid::new_v4()),
-                            postgres_types::DbValue::Text("text".to_string()),
-                            postgres_types::DbValue::Int4(4),
-                            postgres_types::DbValue::Numeric(BigDecimal::from(111)),
-                        ],
-                    )),
-                ]),
-                postgres_types::DbValue::Array(vec![
-                    postgres_types::DbValue::Domain(postgres_types::Domain::new(
-                        "posint8".to_string(),
-                        postgres_types::DbValue::Int8(1),
-                    )),
-                    postgres_types::DbValue::Domain(postgres_types::Domain::new(
-                        "posint8".to_string(),
-                        postgres_types::DbValue::Int8(2),
-                    )),
-                ]),
-                postgres_types::DbValue::Array(vec![
-                    postgres_types::DbValue::Composite(postgres_types::Composite::new(
-                        "ccc".to_string(),
-                        vec![
-                            postgres_types::DbValue::Varchar("v1".to_string()),
-                            postgres_types::DbValue::Int2(1),
-                            postgres_types::DbValue::Array(vec![postgres_types::DbValue::Domain(
-                                postgres_types::Domain::new(
-                                    "ddd".to_string(),
-                                    postgres_types::DbValue::Varchar("v11".to_string()),
-                                ),
-                            )]),
-                        ],
-                    )),
-                    postgres_types::DbValue::Composite(postgres_types::Composite::new(
-                        "ccc".to_string(),
-                        vec![
-                            postgres_types::DbValue::Varchar("v2".to_string()),
-                            postgres_types::DbValue::Int2(2),
-                            postgres_types::DbValue::Array(vec![
-                                postgres_types::DbValue::Domain(postgres_types::Domain::new(
-                                    "ddd".to_string(),
-                                    postgres_types::DbValue::Varchar("v21".to_string()),
-                                )),
-                                postgres_types::DbValue::Domain(postgres_types::Domain::new(
-                                    "ddd".to_string(),
-                                    postgres_types::DbValue::Varchar("v22".to_string()),
-                                )),
-                            ]),
-                        ],
-                    )),
-                    postgres_types::DbValue::Composite(postgres_types::Composite::new(
-                        "ccc".to_string(),
-                        vec![
-                            postgres_types::DbValue::Varchar("v3".to_string()),
-                            postgres_types::DbValue::Int2(3),
-                            postgres_types::DbValue::Array(vec![
-                                postgres_types::DbValue::Domain(postgres_types::Domain::new(
-                                    "ddd".to_string(),
-                                    postgres_types::DbValue::Varchar("v31".to_string()),
-                                )),
-                                postgres_types::DbValue::Domain(postgres_types::Domain::new(
-                                    "ddd".to_string(),
-                                    postgres_types::DbValue::Varchar("v32".to_string()),
-                                )),
-                                postgres_types::DbValue::Domain(postgres_types::Domain::new(
-                                    "ddd".to_string(),
-                                    postgres_types::DbValue::Varchar("v33".to_string()),
-                                )),
-                            ]),
-                        ],
-                    )),
-                ]),
-                postgres_types::DbValue::Domain(postgres_types::Domain::new(
-                    "ddd".to_string(),
-                    postgres_types::DbValue::Varchar("tag2".to_string()),
-                )),
-            ];
-
-            for param in params {
-                check_db_value(param);
-            }
-        }
-
-        fn check_db_column_type(value: postgres_types::DbColumnType) {
-            let wit = postgres_utils::from_db_column_type(value.clone());
-
-            // println!("wit {:?}", wit);
-            let value2 = postgres_utils::to_db_column_type(wit).unwrap();
-
-            check!(value == value2);
-        }
-
-        #[test]
-        fn test_db_column_types_conversions() {
-            let value =
-                postgres_types::DbColumnType::Composite(postgres_types::CompositeType::new(
-                    "inventory_item".to_string(),
+                    chrono::Utc,
+                ),
+            )]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValue::Date(
+                chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
+            )]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValue::Time(
+                chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+            )]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValue::Timetz(
+                postgres_types::TimeTz::new(
+                    chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+                    chrono::Utc.fix(),
+                ),
+            )]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValue::Interval(
+                postgres_types::Interval::new(10, 20, 30),
+            )]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValue::Bytea(
+                "bytea".as_bytes().to_vec(),
+            )]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValue::Uuid(Uuid::new_v4())]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValue::Json(json!(
+                   {
+                      "id": 2
+                   }
+            ))]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValue::Jsonb(json!(
+                   {
+                      "index": 4
+                   }
+            ))]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValue::Inet(IpAddr::V4(
+                Ipv4Addr::new(127, 0, 0, 1),
+            ))]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValue::Cidr(IpAddr::V6(
+                Ipv6Addr::new(0, 0, 0, 0, 0, 0xffff, 0xc00a, 0x2ff),
+            ))]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValue::Macaddr(
+                MacAddress::new([0, 1, 2, 3, 4, 1]),
+            )]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValue::Bit(BitVec::from_iter(
+                vec![true, false, true],
+            ))]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValue::Varbit(
+                BitVec::from_iter(vec![true, false, false]),
+            )]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValue::Xml(
+                "<foo>200</foo>".to_string(),
+            )]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValue::Int4range(
+                postgres_types::ValuesRange::new(Bound::Included(1), Bound::Excluded(4)),
+            )]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValue::Int8range(
+                postgres_types::ValuesRange::new(Bound::Included(1), Bound::Unbounded),
+            )]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValue::Numrange(
+                postgres_types::ValuesRange::new(
+                    Bound::Included(BigDecimal::from(11)),
+                    Bound::Excluded(BigDecimal::from(221)),
+                ),
+            )]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValue::Tsrange(tsbounds)]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValue::Tstzrange(tstzbounds)]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValue::Daterange(
+                postgres_types::ValuesRange::new(
+                    Bound::Included(chrono::NaiveDate::from_ymd_opt(2023, 2, 3).unwrap()),
+                    Bound::Unbounded,
+                ),
+            )]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValue::Money(1234)]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValue::Jsonpath(
+                "$.user.addresses[0].city".to_string(),
+            )]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValue::Text(
+                "'a' 'and' 'ate' 'cat' 'fat' 'mat' 'on' 'rat' 'sat'".to_string(),
+            )]),
+            postgres_types::DbValue::Array(vec![postgres_types::DbValue::Text(
+                "'fat' & 'rat' & !'cat'".to_string(),
+            )]),
+            postgres_types::DbValue::Array(vec![
+                postgres_types::DbValue::Composite(postgres_types::Composite::new(
+                    "a_inventory_item".to_string(),
                     vec![
-                        ("product_id".to_string(), postgres_types::DbColumnType::Uuid),
-                        ("name".to_string(), postgres_types::DbColumnType::Text),
-                        (
-                            "supplier_id".to_string(),
-                            postgres_types::DbColumnType::Int4,
-                        ),
-                        ("price".to_string(), postgres_types::DbColumnType::Numeric),
+                        postgres_types::DbValue::Uuid(Uuid::new_v4()),
+                        postgres_types::DbValue::Text("text".to_string()),
+                        postgres_types::DbValue::Int4(3),
+                        postgres_types::DbValue::Numeric(BigDecimal::from(111)),
                     ],
-                ));
-            check_db_column_type(value.clone());
+                )),
+                postgres_types::DbValue::Composite(postgres_types::Composite::new(
+                    "a_inventory_item".to_string(),
+                    vec![
+                        postgres_types::DbValue::Uuid(Uuid::new_v4()),
+                        postgres_types::DbValue::Text("text".to_string()),
+                        postgres_types::DbValue::Int4(4),
+                        postgres_types::DbValue::Numeric(BigDecimal::from(111)),
+                    ],
+                )),
+            ]),
+            postgres_types::DbValue::Array(vec![
+                postgres_types::DbValue::Domain(postgres_types::Domain::new(
+                    "posint8".to_string(),
+                    postgres_types::DbValue::Int8(1),
+                )),
+                postgres_types::DbValue::Domain(postgres_types::Domain::new(
+                    "posint8".to_string(),
+                    postgres_types::DbValue::Int8(2),
+                )),
+            ]),
+            postgres_types::DbValue::Array(vec![
+                postgres_types::DbValue::Composite(postgres_types::Composite::new(
+                    "ccc".to_string(),
+                    vec![
+                        postgres_types::DbValue::Varchar("v1".to_string()),
+                        postgres_types::DbValue::Int2(1),
+                        postgres_types::DbValue::Array(vec![postgres_types::DbValue::Domain(
+                            postgres_types::Domain::new(
+                                "ddd".to_string(),
+                                postgres_types::DbValue::Varchar("v11".to_string()),
+                            ),
+                        )]),
+                    ],
+                )),
+                postgres_types::DbValue::Composite(postgres_types::Composite::new(
+                    "ccc".to_string(),
+                    vec![
+                        postgres_types::DbValue::Varchar("v2".to_string()),
+                        postgres_types::DbValue::Int2(2),
+                        postgres_types::DbValue::Array(vec![
+                            postgres_types::DbValue::Domain(postgres_types::Domain::new(
+                                "ddd".to_string(),
+                                postgres_types::DbValue::Varchar("v21".to_string()),
+                            )),
+                            postgres_types::DbValue::Domain(postgres_types::Domain::new(
+                                "ddd".to_string(),
+                                postgres_types::DbValue::Varchar("v22".to_string()),
+                            )),
+                        ]),
+                    ],
+                )),
+                postgres_types::DbValue::Composite(postgres_types::Composite::new(
+                    "ccc".to_string(),
+                    vec![
+                        postgres_types::DbValue::Varchar("v3".to_string()),
+                        postgres_types::DbValue::Int2(3),
+                        postgres_types::DbValue::Array(vec![
+                            postgres_types::DbValue::Domain(postgres_types::Domain::new(
+                                "ddd".to_string(),
+                                postgres_types::DbValue::Varchar("v31".to_string()),
+                            )),
+                            postgres_types::DbValue::Domain(postgres_types::Domain::new(
+                                "ddd".to_string(),
+                                postgres_types::DbValue::Varchar("v32".to_string()),
+                            )),
+                            postgres_types::DbValue::Domain(postgres_types::Domain::new(
+                                "ddd".to_string(),
+                                postgres_types::DbValue::Varchar("v33".to_string()),
+                            )),
+                        ]),
+                    ],
+                )),
+            ]),
+            postgres_types::DbValue::Domain(postgres_types::Domain::new(
+                "ddd".to_string(),
+                postgres_types::DbValue::Varchar("tag2".to_string()),
+            )),
+        ];
 
-            check_db_column_type(value.clone().into_array());
-
-            let value = postgres_types::DbColumnType::Domain(postgres_types::DomainType::new(
-                "posint8".to_string(),
-                postgres_types::DbColumnType::Int8,
-            ));
-
-            check_db_column_type(value.clone());
-
-            check_db_column_type(value.clone().into_array());
+        for param in params {
+            check_db_value(param, &mut resource_table);
         }
+    }
+
+    fn check_db_column_type(
+        value: postgres_types::DbColumnType,
+        resource_table: &mut ResourceTable,
+    ) {
+        let wit = from_db_column_type(value.clone(), resource_table).unwrap();
+
+        // println!("wit {:?}", wit);
+        let value2 = to_db_column_type(wit, resource_table).unwrap();
+
+        check!(value == value2);
+    }
+
+    #[test]
+    fn test_db_column_types_conversions() {
+        let mut resource_table = ResourceTable::new();
+        let value = postgres_types::DbColumnType::Composite(postgres_types::CompositeType::new(
+            "inventory_item".to_string(),
+            vec![
+                ("product_id".to_string(), postgres_types::DbColumnType::Uuid),
+                ("name".to_string(), postgres_types::DbColumnType::Text),
+                (
+                    "supplier_id".to_string(),
+                    postgres_types::DbColumnType::Int4,
+                ),
+                ("price".to_string(), postgres_types::DbColumnType::Numeric),
+            ],
+        ));
+        check_db_column_type(value.clone(), &mut resource_table);
+
+        check_db_column_type(value.clone().into_array(), &mut resource_table);
+
+        let value = postgres_types::DbColumnType::Domain(postgres_types::DomainType::new(
+            "posint8".to_string(),
+            postgres_types::DbColumnType::Int8,
+        ));
+
+        check_db_column_type(value.clone(), &mut resource_table);
+
+        check_db_column_type(value.clone().into_array(), &mut resource_table);
     }
 }

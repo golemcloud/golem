@@ -105,7 +105,7 @@ async fn rdbms_postgres_create_insert_select(
             INSERT INTO test_users
             (user_id, name, tags)
             VALUES
-            ($1::uuid, $2, ARRAY[$3::text, $4::text])
+            ($1::uuid, $2, $3)
         "#;
 
     let count = 60;
@@ -118,20 +118,14 @@ async fn rdbms_postgres_create_insert_select(
         None,
     ));
 
-    let mut expected_values: Vec<(Uuid, String, String, String)> = Vec::with_capacity(count);
+    let mut expected_values: Vec<(Uuid, String, String)> = Vec::with_capacity(count);
 
     for i in 0..count {
         let user_id = Uuid::new_v4();
         let name = format!("name-{}", Uuid::new_v4());
-        let tag1 = format!("tag-1-{}", i);
-        let tag2 = format!("tag-2-{}", i);
+        let tags = format!("[tag-1-{}, tag-1-{}]", i, i);
 
-        let params: Vec<String> = vec![
-            user_id.clone().to_string(),
-            name.clone(),
-            tag1.clone(),
-            tag2.clone(),
-        ];
+        let params: Vec<String> = vec![user_id.clone().to_string(), name.clone(), tags.clone()];
 
         insert_tests.push(RdbmsTest::execute_test(
             insert_statement,
@@ -139,7 +133,7 @@ async fn rdbms_postgres_create_insert_select(
             Some(1),
         ));
 
-        expected_values.push((user_id, name, tag1, tag2));
+        expected_values.push((user_id, name, tags));
     }
 
     rdbms_component_test::<PostgresType>(
@@ -151,43 +145,31 @@ async fn rdbms_postgres_create_insert_select(
     )
     .await;
 
-    fn get_row(columns: (Uuid, String, String, String)) -> serde_json::Value {
+    fn get_row(columns: (Uuid, String, String)) -> serde_json::Value {
         let user_id = columns.0.as_u64_pair();
         json!(
                     {
                        "values":[
                           {
-                             "nodes":[{
                                 "uuid":  {
                                    "high-bits": user_id.0,
                                    "low-bits": user_id.1
                                 }
-                              }]
+
                           },
                           {
-                             "nodes":[{
                                 "text": columns.1
-                             }]
                           },
                           {
-                             "nodes":[
-                              {
-                                "array": [1, 2]
-                              },
-                              {
+
                                 "text": columns.2
-                              },
-                              {
-                                "text": columns.3
-                              }
-                             ]
                           }
                        ]
                     }
         )
     }
 
-    fn get_expected(expected_values: Vec<(Uuid, String, String, String)>) -> serde_json::Value {
+    fn get_expected(expected_values: Vec<(Uuid, String, String)>) -> serde_json::Value {
         let expected_rows: Vec<serde_json::Value> =
             expected_values.into_iter().map(get_row).collect();
         json!(
@@ -197,9 +179,7 @@ async fn rdbms_postgres_create_insert_select(
                      "columns":[
                         {
                            "db-type":{
-                              "nodes":[{
-                                 "uuid":null
-                              }]
+                              "uuid":null
                            },
                            "db-type-name":"UUID",
                            "name":"user_id",
@@ -207,9 +187,7 @@ async fn rdbms_postgres_create_insert_select(
                         },
                         {
                            "db-type":{
-                              "nodes":[{
-                                 "text":null
-                              }]
+                              "text":null
                            },
                            "db-type-name":"TEXT",
                            "name":"name",
@@ -217,15 +195,7 @@ async fn rdbms_postgres_create_insert_select(
                         },
                         {
                            "db-type":{
-                              "nodes":[
-                              {
-
-                                 "array": 1
-                              },
-                              {
                                  "text":null
-                              }
-                            ]
                            },
                            "db-type-name":"TEXT[]",
                            "name":"tags",
@@ -280,9 +250,7 @@ async fn rdbms_postgres_select1(
                      "columns":[
                         {
                            "db-type":{
-                              "nodes":[{
                                  "int4":null
-                              }]
                            },
                            "db-type-name":"INT4",
                            "name":"?column?",
@@ -293,9 +261,7 @@ async fn rdbms_postgres_select1(
                         {
                            "values":[
                               {
-                                 "nodes":[{
-                                    "int4":1
-                                 }]
+                                  "int4":1
                               }
                            ]
                         }

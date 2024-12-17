@@ -453,6 +453,48 @@ impl From<mysql_types::DbColumnType> for DbColumnType {
     }
 }
 
+impl From<DbColumnType> for mysql_types::DbColumnType {
+    fn from(value: DbColumnType) -> Self {
+        match value {
+            DbColumnType::Boolean => Self::Boolean,
+            DbColumnType::Tinyint => Self::Tinyint,
+            DbColumnType::Smallint => Self::Smallint,
+            DbColumnType::Mediumint => Self::Mediumint,
+            DbColumnType::Int => Self::Int,
+            DbColumnType::Bigint => Self::Bigint,
+            DbColumnType::IntUnsigned => Self::IntUnsigned,
+            DbColumnType::TinyintUnsigned => Self::TinyintUnsigned,
+            DbColumnType::SmallintUnsigned => Self::SmallintUnsigned,
+            DbColumnType::MediumintUnsigned => Self::MediumintUnsigned,
+            DbColumnType::BigintUnsigned => Self::BigintUnsigned,
+            DbColumnType::Float => Self::Float,
+            DbColumnType::Double => Self::Double,
+            DbColumnType::Decimal => Self::Decimal,
+            DbColumnType::Text => Self::Text,
+            DbColumnType::Varchar => Self::Varchar,
+            DbColumnType::Fixchar => Self::Fixchar,
+            DbColumnType::Blob => Self::Blob,
+            DbColumnType::Json => Self::Json,
+            DbColumnType::Timestamp => Self::Timestamp,
+            DbColumnType::Date => Self::Date,
+            DbColumnType::Time => Self::Time,
+            DbColumnType::Datetime => Self::Datetime,
+            DbColumnType::Year => Self::Year,
+            DbColumnType::Bit => Self::Bit,
+            DbColumnType::Binary => Self::Binary,
+            DbColumnType::Varbinary => Self::Varbinary,
+            DbColumnType::Tinyblob => Self::Tinyblob,
+            DbColumnType::Mediumblob => Self::Mediumblob,
+            DbColumnType::Longblob => Self::Longblob,
+            DbColumnType::Tinytext => Self::Tinytext,
+            DbColumnType::Mediumtext => Self::Mediumtext,
+            DbColumnType::Longtext => Self::Longtext,
+            DbColumnType::Enumeration => Self::Enumeration,
+            DbColumnType::Set => Self::Set,
+        }
+    }
+}
+
 impl From<mysql_types::DbColumn> for DbColumn {
     fn from(value: mysql_types::DbColumn) -> Self {
         Self {
@@ -554,7 +596,7 @@ impl From<chrono::DateTime<chrono::Utc>> for Timestamp {
 
 #[cfg(test)]
 pub mod tests {
-    use crate::preview2::wasi::rdbms::mysql::DbValue;
+    use crate::preview2::wasi::rdbms::mysql::{DbColumnType, DbValue};
     use crate::services::rdbms::mysql::types as mysql_types;
     use assert2::check;
     use bigdecimal::BigDecimal;
@@ -627,6 +669,57 @@ pub mod tests {
 
         for param in params {
             check_db_value(param);
+        }
+    }
+
+    fn check_db_column_type(value: mysql_types::DbColumnType) {
+        let wit: DbColumnType = value.clone().into();
+        let value2: mysql_types::DbColumnType = wit.into();
+        check!(value == value2);
+    }
+
+    #[test]
+    fn test_db_column_types_conversions() {
+        let values = vec![
+            mysql_types::DbColumnType::Boolean,
+            mysql_types::DbColumnType::Tinyint,
+            mysql_types::DbColumnType::Smallint,
+            mysql_types::DbColumnType::Mediumint,
+            mysql_types::DbColumnType::Int,
+            mysql_types::DbColumnType::Bigint,
+            mysql_types::DbColumnType::TinyintUnsigned,
+            mysql_types::DbColumnType::SmallintUnsigned,
+            mysql_types::DbColumnType::MediumintUnsigned,
+            mysql_types::DbColumnType::IntUnsigned,
+            mysql_types::DbColumnType::BigintUnsigned,
+            mysql_types::DbColumnType::Float,
+            mysql_types::DbColumnType::Double,
+            mysql_types::DbColumnType::Decimal,
+            mysql_types::DbColumnType::Date,
+            mysql_types::DbColumnType::Datetime,
+            mysql_types::DbColumnType::Timestamp,
+            mysql_types::DbColumnType::Time,
+            mysql_types::DbColumnType::Year,
+            mysql_types::DbColumnType::Fixchar,
+            mysql_types::DbColumnType::Varchar,
+            mysql_types::DbColumnType::Tinytext,
+            mysql_types::DbColumnType::Text,
+            mysql_types::DbColumnType::Mediumtext,
+            mysql_types::DbColumnType::Longtext,
+            mysql_types::DbColumnType::Binary,
+            mysql_types::DbColumnType::Varbinary,
+            mysql_types::DbColumnType::Tinyblob,
+            mysql_types::DbColumnType::Blob,
+            mysql_types::DbColumnType::Mediumblob,
+            mysql_types::DbColumnType::Longblob,
+            mysql_types::DbColumnType::Enumeration,
+            mysql_types::DbColumnType::Set,
+            mysql_types::DbColumnType::Bit,
+            mysql_types::DbColumnType::Json,
+        ];
+
+        for value in values {
+            check_db_column_type(value);
         }
     }
 }

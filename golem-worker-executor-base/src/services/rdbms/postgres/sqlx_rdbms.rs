@@ -1373,8 +1373,6 @@ impl sqlx::Encode<'_, sqlx::Postgres> for PgXml {
     }
 }
 
-// //https://github.com/launchbadge/sqlx/blob/42ce24dab87aad98f041cafb35cf9a7d5b2b09a7/tests/postgres/postgres.rs#L1241-L1281
-
 impl sqlx::Type<sqlx::Postgres> for Composite {
     fn type_info() -> sqlx::postgres::PgTypeInfo {
         sqlx::postgres::PgTypeInfo::with_oid(Oid(2249)) // pseudo composite type

@@ -104,6 +104,8 @@ fn preview2_mod_gen(golem_wit_path: &str) -> String {
             "wasi:rdbms/mysql/db-result-set": super::durable_host::rdbms::mysql::DbResultSetEntry,
             "wasi:rdbms/postgres/db-connection": super::durable_host::rdbms::postgres::PostgresDbConnection,
             "wasi:rdbms/postgres/db-result-set": super::durable_host::rdbms::postgres::DbResultSetEntry,
+            "wasi:rdbms/postgres/lazy-db-column-type": super::durable_host::rdbms::postgres::LazyDbColumnTypeEntry,
+            "wasi:rdbms/postgres/lazy-db-value": super::durable_host::rdbms::postgres::LazyDbValueEntry,
         }},
     }});
         "#

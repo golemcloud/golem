@@ -28,7 +28,7 @@ use serde_json::json;
 use sqlx::types::mac_address::MacAddress;
 use sqlx::types::BitVec;
 use std::collections::{Bound, HashMap};
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 use std::sync::Arc;
 use test_r::{test, test_dep};
@@ -323,7 +323,9 @@ async fn postgres_execute_test_create_insert_select(
                        }
                 )),
                 postgres_types::DbValue::Inet(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))),
-                postgres_types::DbValue::Cidr(IpAddr::V4(Ipv4Addr::new(198, 168, 0, i as u8))),
+                postgres_types::DbValue::Cidr(IpAddr::V6(Ipv6Addr::new(
+                    0, 0, 0, 0, 0, 0xffff, 0xc00a, 0x2ff,
+                ))),
                 postgres_types::DbValue::Macaddr(MacAddress::new([0, 1, 2, 3, 4, i as u8])),
                 postgres_types::DbValue::Bit(BitVec::from_iter(vec![true, false, true])),
                 postgres_types::DbValue::Varbit(BitVec::from_iter(vec![true, false, false])),
@@ -997,8 +999,8 @@ async fn postgres_execute_test_create_insert_select_array(
                 postgres_types::DbValue::Array(vec![postgres_types::DbValue::Inet(IpAddr::V4(
                     Ipv4Addr::new(127, 0, 0, 1),
                 ))]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Cidr(IpAddr::V4(
-                    Ipv4Addr::new(198, 168, 0, i as u8),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Cidr(IpAddr::V6(
+                    Ipv6Addr::new(0, 0, 0, 0, 0, 0xffff, 0xc00a, 0x2ff),
                 ))]),
                 postgres_types::DbValue::Array(vec![postgres_types::DbValue::Macaddr(
                     MacAddress::new([0, 1, 2, 3, 4, i as u8]),
