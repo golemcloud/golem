@@ -44,6 +44,10 @@ pub struct Application {
     pub components: HashMap<String, Component>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub dependencies: HashMap<String, Vec<Dependency>>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub custom_commands: HashMap<String, Vec<ExternalCommand>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub clean: Vec<String>,
 }
 
 impl Application {

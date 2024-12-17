@@ -140,12 +140,35 @@ pub struct ComponentEffectivePropertySource<'a> {
 }
 
 #[derive(Clone, Debug)]
+pub struct WithSource<T> {
+    pub source: PathBuf,
+    pub value: T,
+}
+
+impl<T> WithSource<T> {
+    pub fn new(source: PathBuf, value: T) -> Self {
+        Self { source, value }
+    }
+}
+
+impl<T: Default> Default for WithSource<T> {
+    fn default() -> Self {
+        Self {
+            source: Default::default(),
+            value: T::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct Application<CPE: ComponentPropertiesExtensions> {
-    temp_dir: Option<String>,
-    wit_deps: Vec<String>,
+    temp_dir: Option<WithSource<String>>,
+    wit_deps: WithSource<Vec<String>>,
     components: BTreeMap<ComponentName, Component<CPE>>,
     dependencies: BTreeMap<ComponentName, BTreeSet<ComponentName>>,
     no_dependencies: BTreeSet<ComponentName>,
+    custom_commands: WithSource<HashMap<String, Vec<app_raw::ExternalCommand>>>,
+    clean: WithSource<Vec<String>>,
 }
 
 impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
@@ -161,8 +184,18 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
         self.components.contains_key(component_name)
     }
 
-    pub fn wit_deps(&self) -> Vec<PathBuf> {
-        self.wit_deps.iter().map(PathBuf::from).collect()
+    pub fn common_custom_commands(
+        &self,
+    ) -> &WithSource<HashMap<String, Vec<app_raw::ExternalCommand>>> {
+        &self.custom_commands
+    }
+
+    pub fn common_clean(&self) -> &WithSource<Vec<String>> {
+        &self.clean
+    }
+
+    pub fn wit_deps(&self) -> &WithSource<Vec<String>> {
+        &self.wit_deps
     }
 
     pub fn all_wasm_rpc_dependencies(&self) -> BTreeSet<ComponentName> {
@@ -186,20 +219,21 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
     }
 
     pub fn all_custom_commands(&self, profile: Option<&ProfileName>) -> BTreeSet<String> {
-        self.component_names()
-            .flat_map(|component_name| {
-                self.component_properties(component_name, profile)
-                    .custom_commands
-                    .keys()
-                    .cloned()
-            })
-            .collect()
+        let mut custom_commands = BTreeSet::new();
+        custom_commands.extend(self.component_names().flat_map(|component_name| {
+            self.component_properties(component_name, profile)
+                .custom_commands
+                .keys()
+                .cloned()
+        }));
+        custom_commands.extend(self.custom_commands.value.keys().cloned());
+        custom_commands
     }
 
-    pub fn temp_dir(&self) -> &Path {
+    pub fn temp_dir(&self) -> PathBuf {
         match self.temp_dir.as_ref() {
-            Some(temp_dir) => Path::new(temp_dir),
-            None => Path::new("golem-temp"),
+            Some(temp_dir) => temp_dir.source.as_path().join(&temp_dir.value),
+            None => Path::new("golem-temp").to_path_buf(),
         }
     }
 
@@ -637,10 +671,11 @@ impl ComponentPropertiesExtensions for ComponentPropertiesExtensionsAny {
 }
 
 mod app_builder {
+    use crate::fs::PathExtra;
     use crate::log::LogColorize;
     use crate::model::app::{
         Application, Component, ComponentName, ComponentProperties, ComponentPropertiesExtensions,
-        ProfileName, ResolvedComponentProperties, TemplateName,
+        ProfileName, ResolvedComponentProperties, TemplateName, WithSource,
     };
     use crate::model::app_raw;
     use crate::validation::{ValidatedResult, ValidationBuilder};
@@ -664,6 +699,8 @@ mod app_builder {
         Include,
         TempDir,
         WitDeps,
+        CustomCommands,
+        Clean,
         Template(TemplateName),
         WasmRpcDependency((ComponentName, ComponentName)),
         Component(ComponentName),
@@ -676,6 +713,8 @@ mod app_builder {
                 UniqueSourceCheckedEntityKey::Include => property,
                 UniqueSourceCheckedEntityKey::TempDir => property,
                 UniqueSourceCheckedEntityKey::WitDeps => property,
+                UniqueSourceCheckedEntityKey::CustomCommands => property,
+                UniqueSourceCheckedEntityKey::Clean => property,
                 UniqueSourceCheckedEntityKey::Template(_) => "Template",
                 UniqueSourceCheckedEntityKey::WasmRpcDependency(_) => "WASM RPC dependency",
                 UniqueSourceCheckedEntityKey::Component(_) => "Component",
@@ -693,6 +732,10 @@ mod app_builder {
                 UniqueSourceCheckedEntityKey::WitDeps => {
                     "witDeps".log_color_highlight().to_string()
                 }
+                UniqueSourceCheckedEntityKey::CustomCommands => {
+                    "customCommands".log_color_highlight().to_string()
+                }
+                UniqueSourceCheckedEntityKey::Clean => "clean".log_color_highlight().to_string(),
                 UniqueSourceCheckedEntityKey::Template(template_name) => {
                     template_name.as_str().log_color_highlight().to_string()
                 }
@@ -716,17 +759,16 @@ mod app_builder {
     #[derive(Default)]
     struct AppBuilder<CPE: ComponentPropertiesExtensions> {
         include: Vec<String>,
-        temp_dir: Option<String>,
-        wit_deps: Vec<String>,
-
+        temp_dir: Option<WithSource<String>>,
+        wit_deps: WithSource<Vec<String>>,
         templates: HashMap<TemplateName, app_raw::ComponentTemplate>,
         dependencies: BTreeMap<ComponentName, BTreeSet<ComponentName>>,
-
+        custom_commands: WithSource<HashMap<String, Vec<app_raw::ExternalCommand>>>,
+        clean: WithSource<Vec<String>>,
         raw_components: HashMap<ComponentName, (PathBuf, app_raw::Component)>,
+        resolved_components: BTreeMap<ComponentName, Component<CPE>>,
 
         entity_sources: HashMap<UniqueSourceCheckedEntityKey, Vec<PathBuf>>,
-
-        resolved_components: BTreeMap<ComponentName, Component<CPE>>,
     }
 
     impl<CPE: ComponentPropertiesExtensions> AppBuilder<CPE> {
@@ -744,6 +786,8 @@ mod app_builder {
                 components: builder.resolved_components,
                 dependencies: builder.dependencies,
                 no_dependencies: BTreeSet::new(),
+                custom_commands: builder.custom_commands,
+                clean: builder.clean,
             })
         }
 
@@ -772,25 +816,31 @@ mod app_builder {
             validation.with_context(
                 vec![("source", app.source.to_string_lossy().to_string())],
                 |validation| {
+                    let app_source = PathExtra::new(&app.source);
+                    let app_source_dir = app_source.parent().unwrap();
+
                     if let Some(dir) = app.application.temp_dir {
-                        self.add_entity_source(UniqueSourceCheckedEntityKey::TempDir, &app.source);
-                        if self.temp_dir.is_none() {
-                            self.temp_dir = Some(dir);
+                        if self
+                            .add_entity_source(UniqueSourceCheckedEntityKey::TempDir, &app.source)
+                        {
+                            self.temp_dir =
+                                Some(WithSource::new(app_source_dir.to_path_buf(), dir));
                         }
                     }
 
-                    if !app.application.includes.is_empty() {
-                        self.add_entity_source(UniqueSourceCheckedEntityKey::Include, &app.source);
-                        if self.include.is_empty() {
-                            self.include = app.application.includes;
-                        }
+                    if !app.application.includes.is_empty()
+                        && self
+                            .add_entity_source(UniqueSourceCheckedEntityKey::Include, &app.source)
+                    {
+                        self.include = app.application.includes;
                     }
 
-                    if !app.application.wit_deps.is_empty() {
-                        self.add_entity_source(UniqueSourceCheckedEntityKey::WitDeps, &app.source);
-                        if self.wit_deps.is_empty() {
-                            self.wit_deps = app.application.wit_deps; // TODO: resolve from source?
-                        }
+                    if !app.application.wit_deps.is_empty()
+                        && self
+                            .add_entity_source(UniqueSourceCheckedEntityKey::WitDeps, &app.source)
+                    {
+                        self.wit_deps =
+                            WithSource::new(app_source_dir.to_path_buf(), app.application.wit_deps);
                     }
 
                     for (template_name, template) in app.application.templates {
@@ -814,6 +864,25 @@ mod app_builder {
                             component_name,
                             component_dependencies,
                         );
+                    }
+
+                    if !app.application.custom_commands.is_empty()
+                        && self.add_entity_source(
+                            UniqueSourceCheckedEntityKey::CustomCommands,
+                            &app.source,
+                        )
+                    {
+                        self.custom_commands = WithSource::new(
+                            app_source_dir.to_path_buf(),
+                            app.application.custom_commands,
+                        )
+                    }
+
+                    if !app.application.clean.is_empty()
+                        && self.add_entity_source(UniqueSourceCheckedEntityKey::Clean, &app.source)
+                    {
+                        self.clean =
+                            WithSource::new(app_source_dir.to_path_buf(), app.application.clean);
                     }
                 },
             );

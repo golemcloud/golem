@@ -130,10 +130,17 @@ impl<CPE: ComponentPropertiesExtensions> ApplicationContext<CPE> {
             .common_wit_deps
             .get_or_init(|| {
                 let sources = self.application.wit_deps();
-                if sources.is_empty() {
+                if sources.value.is_empty() {
                     bail!("No common witDeps were defined in the application manifest")
                 }
-                WitDepsResolver::new(sources)
+                WitDepsResolver::new(
+                    sources
+                        .value
+                        .iter()
+                        .cloned()
+                        .map(|path| sources.source.join(path))
+                        .collect(),
+                )
             })
             .as_ref()
         {
@@ -233,7 +240,11 @@ fn componentize<CPE: ComponentPropertiesExtensions>(
         let _indent = LogIndent::new();
 
         for build_step in &component_properties.build {
-            execute_external_command(ctx, component_name, build_step)?;
+            execute_external_command(
+                ctx,
+                ctx.application.component_source_dir(component_name),
+                build_step,
+            )?;
         }
     }
 
@@ -434,10 +445,20 @@ pub fn clean<CPE: ComponentPropertiesExtensions>(config: Config<CPE>) -> anyhow:
     }
 
     {
+        log_action("Cleaning", "common clean targets");
+        let _indent = LogIndent::new();
+
+        let common_clean = app.common_clean();
+        for path in &common_clean.value {
+            delete_path("common clean target", &common_clean.source.join(path))?;
+        }
+    }
+
+    {
         log_action("Cleaning", "application build dir");
         let _indent = LogIndent::new();
 
-        delete_path("temp dir", app.temp_dir())?;
+        delete_path("temp dir", &app.temp_dir())?;
     }
 
     Ok(())
@@ -511,6 +532,19 @@ pub fn custom_command<CPE: ComponentPropertiesExtensions>(
     );
     let _indent = LogIndent::new();
 
+    let common_custom_commands = ctx.application.common_custom_commands();
+    if let Some(custom_command) = common_custom_commands.value.get(command) {
+        log_action(
+            "Executing",
+            format!("common custom command {}", command.log_color_highlight(),),
+        );
+        let _indent = LogIndent::new();
+
+        for step in custom_command {
+            execute_external_command(&ctx, &common_custom_commands.source, step)?;
+        }
+    }
+
     for component_name in ctx.application.component_names() {
         let properties = &ctx
             .application
@@ -527,7 +561,11 @@ pub fn custom_command<CPE: ComponentPropertiesExtensions>(
             let _indent = LogIndent::new();
 
             for step in custom_command {
-                execute_external_command(&ctx, component_name, step)?;
+                execute_external_command(
+                    &ctx,
+                    ctx.application.component_source_dir(component_name),
+                    step,
+                )?;
             }
         }
     }
@@ -1449,22 +1487,14 @@ fn copy_wit_sources(source: &Path, target: &Path) -> anyhow::Result<()> {
 
 fn execute_external_command<CPE: ComponentPropertiesExtensions>(
     ctx: &ApplicationContext<CPE>,
-    component_name: &ComponentName,
+    base_build_dir: &Path,
     command: &app_raw::ExternalCommand,
 ) -> anyhow::Result<()> {
     let build_dir = command
         .dir
         .as_ref()
-        .map(|dir| {
-            ctx.application
-                .component_source_dir(component_name)
-                .join(dir)
-        })
-        .unwrap_or_else(|| {
-            ctx.application
-                .component_source_dir(component_name)
-                .to_path_buf()
-        });
+        .map(|dir| base_build_dir.join(dir))
+        .unwrap_or_else(|| base_build_dir.to_path_buf());
 
     let task_result_marker = TaskResultMarker::new(
         &ctx.application.task_result_marker_dir(),

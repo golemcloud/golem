@@ -697,7 +697,7 @@ impl WitDepsResolver {
 
         for source in &sources {
             packages.insert(
-                source.clone(),
+                source.to_path_buf().clone(),
                 parse_wit_deps_dir(source)?
                     .into_iter()
                     .map(|package| (package.main.name.clone(), package))
