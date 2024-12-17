@@ -108,7 +108,56 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
     /// Allows customizing the `ActiveWorkers` service.
     fn create_active_workers(&self, golem_config: &GolemConfig) -> Arc<ActiveWorkers<Ctx>>;
 
-    fn run_grpc_server(&self) -> bool;
+    async fn run_server(
+        &self,
+        service_dependencies: All<Ctx>,
+        lazy_worker_activator: Arc<LazyWorkerActivator<Ctx>>,
+        golem_config: GolemConfig,
+        join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+    ) -> anyhow::Result<()> {
+        let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
+        health_reporter
+            .set_serving::<WorkerExecutorServer<WorkerExecutorImpl<Ctx, All<Ctx>>>>()
+            .await;
+
+        let reflection_service = tonic_reflection::server::Builder::configure()
+            .register_encoded_file_descriptor_set(proto::FILE_DESCRIPTOR_SET)
+            .build_v1()?;
+
+        let addr = golem_config.grpc_addr()?;
+
+        let listener = TcpListener::bind(addr).await?;
+        let grpc_port = listener.local_addr()?.port();
+
+        let worker_impl = WorkerExecutorImpl::<Ctx, All<Ctx>>::new(
+            service_dependencies,
+            lazy_worker_activator,
+            grpc_port,
+        )
+        .await?;
+
+        let service = WorkerExecutorServer::new(worker_impl)
+            .accept_compressed(CompressionEncoding::Gzip)
+            .send_compressed(CompressionEncoding::Gzip);
+
+        info!("Starting gRPC server on port {grpc_port}");
+
+        join_set.spawn(
+            async move {
+                Server::builder()
+                    .max_concurrent_streams(Some(golem_config.limits.max_concurrent_streams))
+                    .add_service(reflection_service)
+                    .add_service(service)
+                    .add_service(health_service)
+                    .serve_with_incoming(TcpListenerStream::new(listener))
+                    .await
+                    .map_err(|err| anyhow!(err))
+            }
+            .in_current_span(),
+        );
+
+        Ok(())
+    }
 
     #[allow(clippy::type_complexity)]
     fn create_plugins(
@@ -197,50 +246,24 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
 
         let addr = golem_config.grpc_addr()?;
 
+        let lazy_worker_activator = Arc::new(LazyWorkerActivator::new());
+
         let worker_executor_impl = create_worker_executor_impl::<Ctx, Self>(
             golem_config.clone(),
             self,
             runtime.clone(),
+            &lazy_worker_activator,
             join_set,
-            addr.port(),
         )
         .await?;
 
-        if self.run_grpc_server() {
-            let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
-            health_reporter
-                .set_serving::<WorkerExecutorServer<WorkerExecutorImpl<Ctx, All<Ctx>>>>()
-                .await;
-
-            let reflection_service = tonic_reflection::server::Builder::configure()
-                .register_encoded_file_descriptor_set(proto::FILE_DESCRIPTOR_SET)
-                .build_v1()?;
-
-            let listener = TcpListener::bind(addr).await?;
-            let grpc_port = listener.local_addr()?.port();
-
-            let service = WorkerExecutorServer::new(worker_executor_impl)
-                .accept_compressed(CompressionEncoding::Gzip)
-                .send_compressed(CompressionEncoding::Gzip);
-
-            info!("Starting gRPC server on port {grpc_port}");
-
-            join_set.spawn(
-                async move {
-                    Server::builder()
-                        .max_concurrent_streams(Some(golem_config.limits.max_concurrent_streams))
-                        .add_service(reflection_service)
-                        .add_service(service)
-                        .add_service(health_service)
-                        .serve_with_incoming(TcpListenerStream::new(listener))
-                        .await
-                        .map_err(|err| anyhow!(err))
-                }
-                .in_current_span(),
-            );
-        } else {
-            info!("gRPC server will not be started");
-        }
+        self.run_server(
+            worker_executor_impl,
+            lazy_worker_activator,
+            golem_config.clone(),
+            join_set,
+        )
+        .await?;
 
         let http_port = golem_service_base::observability::start_health_and_metrics_server(
             golem_config.http_addr()?,
@@ -261,9 +284,9 @@ async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Sized>
     golem_config: GolemConfig,
     bootstrap: &A,
     runtime: Handle,
+    lazy_worker_activator: &Arc<LazyWorkerActivator<Ctx>>,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
-    grpc_port: u16,
-) -> Result<WorkerExecutorImpl<Ctx, All<Ctx>>, anyhow::Error> {
+) -> Result<All<Ctx>, anyhow::Error> {
     let (redis, sqlite, key_value_storage): (
         Option<RedisPool>,
         Option<SqlitePool>,
@@ -397,7 +420,6 @@ async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Sized>
     let promise_service: Arc<dyn PromiseService + Send + Sync> =
         Arc::new(DefaultPromiseService::new(key_value_storage.clone()));
     let shard_service = Arc::new(ShardServiceDefault::new());
-    let lazy_worker_activator = Arc::new(LazyWorkerActivator::new());
 
     let mut oplog_archives: Vec<Arc<dyn OplogArchiveService + Send + Sync>> = Vec::new();
     for idx in 1..golem_config.oplog.indexed_storage_layers {
@@ -521,7 +543,7 @@ async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Sized>
         golem_config.scheduler.refresh_interval,
     );
 
-    let services = bootstrap
+    bootstrap
         .create_services(
             active_workers,
             engine,
@@ -546,7 +568,5 @@ async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Sized>
             plugins,
             oplog_processor_plugin,
         )
-        .await?;
-
-    WorkerExecutorImpl::<Ctx, All<Ctx>>::new(services, lazy_worker_activator, grpc_port).await
+        .await
 }

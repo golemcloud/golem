@@ -775,10 +775,6 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         Arc::new(ActiveWorkers::<TestWorkerCtx>::new(&golem_config.memory))
     }
 
-    fn run_grpc_server(&self) -> bool {
-        true
-    }
-
     fn create_plugins(
         &self,
         golem_config: &GolemConfig,
