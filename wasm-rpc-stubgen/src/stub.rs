@@ -166,7 +166,8 @@ impl StubDefinition {
     }
 
     pub fn target_wit_path(&self) -> PathBuf {
-        self.target_wit_root().join(naming::wit::CLIENT_WIT_FILE_NAME)
+        self.target_wit_root()
+            .join(naming::wit::CLIENT_WIT_FILE_NAME)
     }
 
     pub fn resolve_target_wit(&self) -> anyhow::Result<ResolvedWitDir> {
