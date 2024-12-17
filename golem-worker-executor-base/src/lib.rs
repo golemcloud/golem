@@ -55,7 +55,7 @@ use crate::services::worker_enumeration::{
     RunningWorkerEnumerationServiceDefault, WorkerEnumerationService,
 };
 use crate::services::worker_proxy::{RemoteWorkerProxy, WorkerProxy};
-use crate::services::{component, shard_manager, All};
+use crate::services::{component, shard_manager, All, HasConfig};
 use crate::storage::indexed::redis::RedisIndexedStorage;
 use crate::storage::indexed::sqlite::SqliteIndexedStorage;
 use crate::storage::indexed::IndexedStorage;
@@ -112,9 +112,9 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         &self,
         service_dependencies: All<Ctx>,
         lazy_worker_activator: Arc<LazyWorkerActivator<Ctx>>,
-        golem_config: GolemConfig,
         join_set: &mut JoinSet<Result<(), anyhow::Error>>,
     ) -> anyhow::Result<()> {
+        let golem_config = service_dependencies.config();
         let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
         health_reporter
             .set_serving::<WorkerExecutorServer<WorkerExecutorImpl<Ctx, All<Ctx>>>>()
@@ -257,13 +257,8 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         )
         .await?;
 
-        self.run_server(
-            worker_executor_impl,
-            lazy_worker_activator,
-            golem_config.clone(),
-            join_set,
-        )
-        .await?;
+        self.run_server(worker_executor_impl, lazy_worker_activator, join_set)
+            .await?;
 
         let http_port = golem_service_base::observability::start_health_and_metrics_server(
             golem_config.http_addr()?,
