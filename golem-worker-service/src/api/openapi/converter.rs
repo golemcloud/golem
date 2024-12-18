@@ -1,5 +1,8 @@
 use super::types::*;
-use crate::api::definition::types::{ApiDefinition, Route, HttpMethod, BindingType};
+use crate::api::definition::{
+    types::{ApiDefinition, Route, HttpMethod, BindingType},
+    patterns::{AllPathPatterns, PathPattern},
+};
 use std::collections::HashMap;
 use heck::ToSnakeCase; 
 
@@ -209,34 +212,56 @@ impl OpenAPIConverter {
     }
 
     fn extract_path_parameters(path: &str) -> Option<Vec<Parameter>> {
-        let params: Vec<Parameter> = path
-            .split('/')
-            .filter(|segment| segment.starts_with('{') && segment.ends_with('}'))
-            .map(|param| {
-                let param_name = param[1..param.len()-1].to_string();
-                Parameter {
-                    name: param_name.clone(),
+        // Use the official parser to parse the path pattern
+        let path_pattern = match AllPathPatterns::parse(path) {
+            Ok(pattern) => pattern,
+            Err(_) => return None
+        };
+
+        // Extract parameters from path patterns
+        let params: Vec<Parameter> = path_pattern.path_patterns
+            .iter()
+            .filter_map(|pattern| match pattern {
+                PathPattern::Var(info) => Some(Parameter {
+                    name: info.key_name.clone(),
                     r#in: ParameterLocation::Path,
-                    description: None,
+                    description: None, 
                     required: Some(true),
-                    schema:  if param_name.ends_with("_id") {
-                           Schema::String {
-                               format: Some("uuid".to_string()),
-                               enum_values: None
-                           }
-                       } else {
-                          Schema::String {
+                    schema: if info.key_name.ends_with("_id") {
+                        Schema::String {
+                            format: Some("uuid".to_string()),
+                            enum_values: None
+                        }
+                    } else {
+                        Schema::String {
                             format: None,
                             enum_values: None
                         }
                     },
                     style: Some("simple".to_string()),
                     explode: Some(true),
-                }
+                }),
+                PathPattern::CatchAllVar(info) => Some(Parameter {
+                    name: info.key_name.clone(), 
+                    r#in: ParameterLocation::Path,
+                    description: Some("Matches one or more path segments".to_string()),
+                    required: Some(true),
+                    schema: Schema::String {
+                        format: None,
+                        enum_values: None
+                    },
+                    style: Some("simple".to_string()),
+                    explode: Some(true),
+                }),
+                _ => None
             })
             .collect();
 
-        if params.is_empty() { None } else { Some(params) }
+        if params.is_empty() {
+            None
+        } else {
+            Some(params)
+        }
     }
 
     fn extract_query_parameters(route: &Route) -> Vec<Parameter> {
