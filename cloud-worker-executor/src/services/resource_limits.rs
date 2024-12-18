@@ -11,11 +11,10 @@ use cloud_api_grpc::proto::golem::cloud::limit::v1::{
     batch_update_resource_limits_response, get_resource_limits_response, BatchUpdateResourceLimits,
     BatchUpdateResourceLimitsRequest, GetResourceLimitsRequest,
 };
-use cloud_common::UriBackConversion;
 use dashmap::DashMap;
-use golem_common::config::RetryConfig;
 use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
 use golem_common::model::AccountId;
+use golem_common::model::RetryConfig;
 use golem_common::retries::with_retries;
 use golem_worker_executor_base::error::GolemError;
 use golem_worker_executor_base::grpc::{is_grpc_retriable, GrpcError};
@@ -88,7 +87,7 @@ impl ResourceLimitsGrpc {
             &(self.endpoint.clone(), self.access_token, body),
             |(endpoint, access_token, body)| {
                 Box::pin(async move {
-                    let mut client = CloudLimitsServiceClient::connect(endpoint.as_http_02())
+                    let mut client = CloudLimitsServiceClient::connect(endpoint.clone())
                         .await?
                         .send_compressed(CompressionEncoding::Gzip)
                         .accept_compressed(CompressionEncoding::Gzip);
@@ -132,7 +131,7 @@ impl ResourceLimitsGrpc {
             &(self.endpoint.clone(), self.access_token, account_id.clone()),
             |(url, access_token, account_id)| {
                 Box::pin(async move {
-                    let mut client = CloudLimitsServiceClient::connect(url.as_http_02())
+                    let mut client = CloudLimitsServiceClient::connect(url.clone())
                         .await?
                         .send_compressed(CompressionEncoding::Gzip)
                         .accept_compressed(CompressionEncoding::Gzip);

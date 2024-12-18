@@ -1,0 +1,64 @@
+FROM segment/chamber:2 AS chamber
+
+FROM debian:bookworm-slim
+
+COPY --from=chamber /chamber /bin/chamber
+
+WORKDIR /app
+
+COPY /target/x86_64-unknown-linux-gnu/release/cloud-debugging-service ./
+COPY /cloud-debugging-service/config/debug-worker-executor.toml ./config/debug-worker-executor.toml
+
+RUN apt-get update && apt-get install -y libssl-dev
+RUN apt-get update && apt-get install -y ca-certificates
+RUN update-ca-certificates
+
+ARG ENVIRONMENT
+ARG COMPONENT_STORE_OBJECT_PREFIX
+ARG BLOB_STORE_BUCKET_PREFIX
+ARG REDIS_DATABASE
+ARG REDIS_KEY_PREFIX
+ARG CLOUD_SERVICE_HOST
+ARG COMPONENT_SERVICE_HOST
+ARG SHARD_MANAGER_HOST
+ARG WORKER_SERVICE_HOST
+
+ENV ENVIRONMENT=$ENVIRONMENT \
+    RUST_LOG=info \
+    WASMTIME_BACKTRACE_DETAILS=1 \
+    RUST_BACKTRACE=1 \
+    GOLEM__KEY_VALUE_STORAGE__TYPE="Redis" \
+    GOLEM__KEY_VALUE_STORAGE__CONFIG__PORT=6379 \
+    GOLEM__KEY_VALUE_STORAGE__CONFIG__DATABASE=$REDIS_DATABASE \
+    GOLEM__KEY_VALUE_STORAGE__CONFIG__KEY_PREFIX=$REDIS_KEY_PREFIX \
+    GOLEM__INDEXED_STORAGE__TYPE="KVStoreRedis" \
+    GOLEM__BLOB_STORAGE__TYPE="S3" \
+    GOLEM__BLOB_STORAGE__CONFIG__REGION=us-east-1 \
+    GOLEM__BLOB_STORAGE__CONFIG__OBJECT_PREFIX="${COMPONENT_STORE_OBJECT_PREFIX}" \
+    GOLEM__BLOB_STORAGE__CONFIG__USE_MINIO_CREDENTIALS=false \
+    GOLEM__BLOB_STORAGE__CONFIG__RETRIES__MAX_ATTEMPTS=3 \
+    GOLEM__BLOB_STORAGE__CONFIG__RETRIES__MIN_DELAY="100ms" \
+    GOLEM__BLOB_STORAGE__CONFIG__RETRIES__MAX_DELAY="1s" \
+    GOLEM__BLOB_STORAGE__CONFIG__RETRIES__MULTIPLIER="3.0" \
+    GOLEM__COMPONENT_SERVICE__CONFIG__HOST=$COMPONENT_SERVICE_HOST \
+    GOLEM__COMPONENT_SERVICE__CONFIG__PORT=9090 \
+    GOLEM__PORT=9000 \
+    GOLEM__HTTP_PORT=8080 \
+    GOLEM__SHARD_MANAGER_SERVICE__TYPE="Disabled" \
+    GOLEM__PUBLIC_WORKER_API__HOST=$WORKER_SERVICE_HOST \
+    GOLEM__PUBLIC_WORKER_API__PORT=9091 \
+    GOLEM__COMPILED_COMPONENT_SERVICE__TYPE="Enabled" \
+    GOLEM__TRACING__STDOUT__JSON=true \
+    GOLEM__RESOURCE_LIMITS__CONFIG__HOST=$CLOUD_SERVICE_HOST \
+    GOLEM__RESOURCE_LIMITS__CONFIG__PORT=9090
+
+
+RUN chmod +x cloud-debugging-service
+
+COPY cloud-debugging-service/cloud-debugging-service-wrapper.sh cloud-debugging-service-wrapper.sh
+
+RUN chmod +x cloud-worker-executor-wrapper-debug.sh
+
+EXPOSE 9000
+
+ENTRYPOINT ["./cloud-debugging-service-wrapper.sh"]

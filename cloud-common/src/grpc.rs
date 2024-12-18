@@ -3,7 +3,7 @@ use golem_api_grpc::proto::golem::common;
 use golem_common::model::ProjectId;
 
 pub fn proto_project_id_string(id: &Option<common::ProjectId>) -> Option<String> {
-    id.clone()
+    (*id)
         .and_then(|v| TryInto::<ProjectId>::try_into(v).ok())
         .map(|v| v.to_string())
 }

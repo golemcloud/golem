@@ -38,7 +38,6 @@ fred = { workspace = true }
 futures = { workspace = true }
 futures-util = { workspace = true }
 http = { workspace = true }
-http_02 = { workspace = true }
 http-body = "1.0.0" # keep in sync with wasmtime
 http-body-util = "0.1.0" # keep in sync with wasmtime
 humantime-serde = { workspace = true }

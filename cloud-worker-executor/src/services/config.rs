@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples, RetryConfig};
+use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples};
+use golem_common::model::RetryConfig;
 use golem_worker_executor_base::services::golem_config::{make_config_loader, GolemConfig};
 use http::Uri;
 use serde::{Deserialize, Serialize};

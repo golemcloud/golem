@@ -1,6 +1,5 @@
-use golem_common::config::{
-    ConfigExample, ConfigLoader, ConfigLoaderConfig, HasConfigExamples, RetryConfig,
-};
+use golem_common::config::{ConfigExample, ConfigLoader, ConfigLoaderConfig, HasConfigExamples};
+use golem_common::model::RetryConfig;
 use http::Uri;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;

@@ -6,6 +6,11 @@ edition = "2021"
 [lib]
 harness = false
 
+[features]
+default = ["poem", "protobuf"]
+poem = []
+protobuf = []
+
 [dependencies]
 golem-api-grpc = { workspace = true }
 golem-common = { workspace = true }
@@ -18,7 +23,6 @@ bincode = { workspace = true }
 derive_more = { workspace = true }
 figment = { workspace = true }
 http = { workspace = true }
-http_02 = { workspace = true }
 num-traits = { workspace = true }
 poem = { workspace = true, features = ["test"] }
 poem-openapi = { workspace = true }
@@ -32,7 +36,14 @@ tonic = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
-sqlx = "0.7.4"
+sqlx = { version = "0.8", features = [
+    "runtime-tokio",
+    "sqlite",
+    "postgres",
+    "uuid",
+    "migrate",
+    "chrono",
+] }
 
 [dev-dependencies]
 test-r = { workspace = true }

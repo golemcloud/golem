@@ -33,7 +33,7 @@ use cloud_common::clients::project::{ProjectService, ProjectServiceDefault};
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_common::client::{GrpcClientConfig, MultiTargetGrpcClient};
 use golem_common::config::DbConfig;
-use golem_common::config::RetryConfig;
+use golem_common::model::RetryConfig;
 use golem_common::redis::RedisPool;
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::db;
@@ -41,7 +41,7 @@ use golem_service_base::service::initial_component_files::InitialComponentFilesS
 use golem_service_base::service::routing_table::{RoutingTableService, RoutingTableServiceDefault};
 use golem_service_base::storage::blob::BlobStorage;
 use golem_service_base::storage::sqlite::SqlitePool;
-use golem_worker_service_base::app_config::KeyValueStorageConfig;
+use golem_worker_service_base::app_config::GatewaySessionStorageConfig;
 use golem_worker_service_base::gateway_api_definition::http::{
     CompiledHttpApiDefinition, HttpApiDefinition,
 };
@@ -50,7 +50,8 @@ use golem_worker_service_base::gateway_execution::api_definition_lookup::{
 };
 use golem_worker_service_base::gateway_execution::file_server_binding_handler::FileServerBindingHandler;
 use golem_worker_service_base::gateway_execution::gateway_session::{
-    GatewaySession, RedisGatewaySession,
+    GatewaySession, RedisGatewaySession, RedisGatewaySessionExpiration, SqliteGatewaySession,
+    SqliteGatewaySessionExpiration,
 };
 use golem_worker_service_base::gateway_execution::GatewayWorkerRequestExecutor;
 use golem_worker_service_base::gateway_request::http_request::InputHttpRequest;
@@ -171,17 +172,31 @@ impl ApiServices {
             }
         };
 
-        let gateway_session_store = match &config.base_config.gateway_session_storage {
-            KeyValueStorageConfig::Redis(redis_config) => {
-                let redis = RedisPool::configured(redis_config)
-                    .await
-                    .map_err(|e| e.to_string())?;
+        let gateway_session_store: Arc<dyn GatewaySession + Sync + Send> =
+            match &config.base_config.gateway_session_storage {
+                GatewaySessionStorageConfig::Redis(redis_config) => {
+                    let redis = RedisPool::configured(redis_config)
+                        .await
+                        .map_err(|e| e.to_string())?;
 
-                let gateway_session_with_redis = RedisGatewaySession::new(redis, 60 * 60);
+                    let gateway_session_with_redis =
+                        RedisGatewaySession::new(redis, RedisGatewaySessionExpiration::default());
 
-                Arc::new(gateway_session_with_redis)
-            }
-        };
+                    Arc::new(gateway_session_with_redis)
+                }
+
+                GatewaySessionStorageConfig::Sqlite(sqlite_config) => {
+                    let pool = SqlitePool::configured(sqlite_config)
+                        .await
+                        .map_err(|e| e.to_string())?;
+
+                    let gateway_session_with_sqlite =
+                        SqliteGatewaySession::new(pool, SqliteGatewaySessionExpiration::default())
+                            .await?;
+
+                    Arc::new(gateway_session_with_sqlite)
+                }
+            };
 
         let blob_storage: Arc<dyn BlobStorage + Send + Sync> = match &config
             .base_config

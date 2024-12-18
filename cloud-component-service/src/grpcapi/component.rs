@@ -201,8 +201,7 @@ impl ComponentGrpcApi {
         metadata: MetadataMap,
     ) -> Result<Component, ComponentError> {
         let auth = auth(metadata)?;
-        let project_id: Option<ProjectId> =
-            request.project_id.clone().and_then(|id| id.try_into().ok());
+        let project_id: Option<ProjectId> = request.project_id.and_then(|id| id.try_into().ok());
         let name = golem_service_base::model::ComponentName(request.component_name.clone());
         let files = request
             .files
@@ -348,7 +347,6 @@ impl ComponentGrpcApi {
 
         let installation_id = request
             .installation_id
-            .clone()
             .and_then(|id| id.try_into().ok())
             .ok_or_else(|| bad_request_error("Missing installation id"))?;
 
@@ -380,7 +378,6 @@ impl ComponentGrpcApi {
 
         let installation_id = request
             .installation_id
-            .clone()
             .and_then(|id| id.try_into().ok())
             .ok_or_else(|| bad_request_error("Missing installation id"))?;
 
@@ -435,8 +432,7 @@ impl ComponentService for ComponentGrpcApi {
         let record = recorded_grpc_api_request!(
             "create_component",
             component_name = header.as_ref().map(|r| r.component_name.clone()),
-            project_id =
-                proto_project_id_string(&header.as_ref().and_then(|r| r.project_id.clone()))
+            project_id = proto_project_id_string(&header.as_ref().and_then(|r| r.project_id))
         );
 
         let result = match header {
@@ -593,8 +589,7 @@ impl ComponentService for ComponentGrpcApi {
 
         let record = recorded_grpc_api_request!(
             "update_component",
-            component_id =
-                proto_component_id_string(&header.as_ref().and_then(|r| r.component_id.clone()))
+            component_id = proto_component_id_string(&header.as_ref().and_then(|r| r.component_id))
         );
 
         let result = match header {

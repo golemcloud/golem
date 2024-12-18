@@ -26,7 +26,7 @@ pub async fn start_grpc_server(addr: SocketAddr, services: &Services) -> Result<
 
     let reflection_service = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(proto::FILE_DESCRIPTOR_SET)
-        .build()
+        .build_v1()
         .unwrap();
 
     Server::builder()
@@ -77,8 +77,7 @@ fn require_component_id(
     source: &Option<proto::golem::component::ComponentId>,
 ) -> Result<ComponentId, ComponentError> {
     match source {
-        Some(id) => id
-            .clone()
+        Some(id) => (*id)
             .try_into()
             .map_err(|err| bad_request_error(&format!("Invalid component id: {err}"))),
         None => Err(bad_request_error("Missing component id")),

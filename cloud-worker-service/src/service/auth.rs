@@ -4,7 +4,6 @@ use cloud_common::clients::auth::{AuthServiceError, BaseAuthService};
 use cloud_common::clients::grant::GrantService;
 use cloud_common::clients::project::ProjectService;
 use cloud_common::model::{ProjectAction, Role};
-use cloud_common::UriBackConversion;
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
 use golem_api_grpc::proto::golem::component::v1::{
     get_component_metadata_response, GetLatestComponentRequest,
@@ -55,7 +54,7 @@ impl CloudAuthService {
                     .send_compressed(CompressionEncoding::Gzip)
                     .accept_compressed(CompressionEncoding::Gzip)
             },
-            component_service_config.uri().as_http_02(),
+            component_service_config.uri(),
             GrpcClientConfig {
                 retries_on_unavailable: component_service_config.retries.clone(),
                 ..Default::default() // TODO

@@ -30,7 +30,6 @@ console-subscriber = { workspace = true }
 figment = { workspace = true }
 futures-util = { workspace = true }
 http = { workspace = true }
-http_02 = { workspace = true }
 humantime-serde = { workspace = true }
 lazy_static = { workspace = true }
 mappable-rc = "0.1.1"
@@ -43,7 +42,7 @@ prometheus = { workspace = true }
 prost-types = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-sqlx = { version = "0.7", features = [
+sqlx = { version = "0.8", features = [
     "runtime-tokio",
     "sqlite",
     "postgres",

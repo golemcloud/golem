@@ -82,7 +82,7 @@ pub async fn start_grpc_server(addr: SocketAddr, services: &Services) -> Result<
     let reflection_service = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(golem_api_grpc::proto::FILE_DESCRIPTOR_SET)
         .register_encoded_file_descriptor_set(cloud_api_grpc::proto::FILE_DESCRIPTOR_SET)
-        .build()
+        .build_v1()
         .unwrap();
 
     Server::builder()

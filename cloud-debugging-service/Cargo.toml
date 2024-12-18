@@ -1,0 +1,33 @@
+[package]
+name = "cloud-debugging-service"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+harness = false
+
+[[bin]]
+name = "cloud-debugging-service"
+path = "src/server.rs"
+test = false
+
+[dependencies]
+golem-common = { workspace = true }
+golem-api-grpc = { workspace = true }
+golem-wasm-rpc = { workspace = true }
+golem-worker-executor-base = { workspace = true }
+cloud-api-grpc = { path = "../cloud-api-grpc" }
+cloud-common = { path = "../cloud-common" }
+
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+prometheus = { workspace = true }
+serde = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+wasmtime = { version = "=21.0.1", features = ["component-model"] }
+wasmtime-wasi = { version = "=21.0.1" }
+wasmtime-wasi-http = { version = "=21.0.1" }
+
+[dev-dependencies]
+test-r = { workspace = true }

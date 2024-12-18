@@ -1,15 +1,13 @@
 use crate::clients::auth::authorised_request;
 use crate::config::RemoteCloudServiceConfig;
 use crate::model::{Role, TokenSecret};
-use crate::UriBackConversion;
 use async_trait::async_trait;
 use cloud_api_grpc::proto::golem::cloud::grant::v1::cloud_grant_service_client::CloudGrantServiceClient;
 use cloud_api_grpc::proto::golem::cloud::grant::v1::get_self_grants_response;
 use cloud_api_grpc::proto::golem::cloud::grant::v1::grant_error::Error;
 use golem_api_grpc::proto::golem::common::Empty;
 use golem_common::client::{GrpcClient, GrpcClientConfig};
-use golem_common::config::RetryConfig;
-use golem_common::model::AccountId;
+use golem_common::model::{AccountId, RetryConfig};
 use golem_common::retries::with_retries;
 use golem_common::SafeDisplay;
 use std::fmt::Display;
@@ -41,7 +39,7 @@ impl GrantServiceDefault {
                     .send_compressed(CompressionEncoding::Gzip)
                     .accept_compressed(CompressionEncoding::Gzip)
             },
-            config.uri().as_http_02(),
+            config.uri(),
             GrpcClientConfig {
                 retries_on_unavailable: config.retries.clone(),
                 ..Default::default() // TODO

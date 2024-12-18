@@ -3,7 +3,6 @@ use std::fmt::Display;
 use crate::clients::auth::authorised_request;
 use crate::config::RemoteCloudServiceConfig;
 use crate::model::{ProjectAuthorisedActions, ProjectView, TokenSecret};
-use crate::UriBackConversion;
 use async_trait::async_trait;
 use cloud_api_grpc::proto::golem::cloud::project::v1::cloud_project_service_client::CloudProjectServiceClient;
 use cloud_api_grpc::proto::golem::cloud::project::v1::project_error::Error;
@@ -12,8 +11,8 @@ use cloud_api_grpc::proto::golem::cloud::project::v1::{
     GetDefaultProjectRequest, GetProjectActionsRequest, GetProjectRequest,
 };
 use golem_common::client::{GrpcClient, GrpcClientConfig};
-use golem_common::config::RetryConfig;
 use golem_common::model::ProjectId;
+use golem_common::model::RetryConfig;
 use golem_common::retries::with_retries;
 use golem_common::SafeDisplay;
 use tonic::codec::CompressionEncoding;
@@ -53,7 +52,7 @@ impl ProjectServiceDefault {
                         .send_compressed(CompressionEncoding::Gzip)
                         .accept_compressed(CompressionEncoding::Gzip)
                 },
-                config.uri().as_http_02(),
+                config.uri(),
                 GrpcClientConfig {
                     retries_on_unavailable: config.retries.clone(),
                     ..Default::default() // TODO
