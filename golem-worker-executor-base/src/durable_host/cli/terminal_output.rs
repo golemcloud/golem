@@ -30,3 +30,13 @@ impl<Ctx: WorkerCtx> HostTerminalOutput for DurableWorkerCtx<Ctx> {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> HostTerminalOutput for &mut DurableWorkerCtx<Ctx> {
+    fn drop(&mut self, rep: Resource<TerminalOutput>) -> anyhow::Result<()> {
+        (*self).drop(rep)
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {}

@@ -26,6 +26,7 @@ use wasmtime_wasi::bindings::filesystem::preopens::{Descriptor, Host};
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_directories(&mut self) -> anyhow::Result<Vec<(Resource<Descriptor>, String)>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("cli_base::preopens", "get_directories");
 
         let current_dirs1 = Host::get_directories(&mut self.as_wasi_view()).await?;
@@ -63,5 +64,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             },
         )
         .await
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {
+    async fn get_directories(&mut self) -> anyhow::Result<Vec<(Resource<Descriptor>, String)>> {
+        (*self).get_directories().await
     }
 }

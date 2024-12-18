@@ -1,17 +1,29 @@
 pub mod api_definition;
 pub mod api_deployment;
-mod security_scheme;
+pub mod security_scheme;
 pub mod worker;
 pub mod worker_connect;
+pub mod types;
+pub mod openapi;
+pub mod definition;
+pub mod validation;
+
+
 
 use crate::api::worker::WorkerApi;
 use crate::service::Services;
 use golem_worker_service_base::api::CustomHttpRequestApi;
 use golem_worker_service_base::api::HealthcheckApi;
 use poem::endpoint::PrometheusExporter;
-use poem::{get, EndpointExt, Route};
+use poem::{get, EndpointExt};
 use poem_openapi::OpenApiService;
 use prometheus::Registry;
+pub use types::*;
+
+pub use definition::*;
+pub use openapi::OpenAPIConverter;
+pub use openapi::validate_openapi;
+pub use openapi::OpenAPIError;
 
 pub type ApiServices = (
     WorkerApi,
@@ -21,7 +33,7 @@ pub type ApiServices = (
     HealthcheckApi,
 );
 
-pub fn combined_routes(prometheus_registry: Registry, services: &Services) -> Route {
+pub fn combined_routes(prometheus_registry: Registry, services: &Services) -> poem::Route {
     let api_service = make_open_api_service(services);
 
     let ui = api_service.swagger_ui();
@@ -30,7 +42,7 @@ pub fn combined_routes(prometheus_registry: Registry, services: &Services) -> Ro
 
     let connect_services = worker_connect::ConnectService::new(services.worker_service.clone());
 
-    Route::new()
+    poem::Route::new()
         .nest("/", api_service)
         .nest("/docs", ui)
         .nest("/specs", spec)
@@ -41,7 +53,7 @@ pub fn combined_routes(prometheus_registry: Registry, services: &Services) -> Ro
         )
 }
 
-pub fn custom_request_route(services: &Services) -> Route {
+pub fn custom_request_route(services: &Services) -> poem::Route {
     let custom_request_executor = CustomHttpRequestApi::new(
         services.worker_to_http_service.clone(),
         services.http_definition_lookup_service.clone(),
@@ -49,7 +61,7 @@ pub fn custom_request_route(services: &Services) -> Route {
         services.gateway_session_store.clone(),
     );
 
-    Route::new().nest("/", custom_request_executor)
+    poem::Route::new().nest("/", custom_request_executor)
 }
 
 pub fn make_open_api_service(services: &Services) -> OpenApiService<ApiServices, ()> {

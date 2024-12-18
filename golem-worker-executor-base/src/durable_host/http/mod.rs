@@ -25,6 +25,30 @@ pub mod serialized;
 
 pub mod types;
 
+pub(crate) fn end_http_request_sync<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    current_handle: u32,
+) -> Result<(), GolemError> {
+    if let Some(state) = ctx.state.open_http_requests.remove(&current_handle) {
+        match ctx.state.open_function_table.get(&state.root_handle) {
+            Some(begin_index) => {
+                ctx.state.end_function_sync(
+                    &WrappedFunctionType::WriteRemoteBatched(None),
+                    *begin_index,
+                )?;
+                ctx.state.open_function_table.remove(&state.root_handle);
+            }
+            None => {
+                warn!("No matching BeginRemoteWrite index was found when HTTP response arrived. Handle: {}; open functions: {:?}", state.root_handle, ctx.state.open_function_table);
+            }
+        }
+    } else {
+        warn!("No matching HTTP request is associated with resource handle. Handle: {}, open requests: {:?}", current_handle, ctx.state.open_http_requests);
+    }
+
+    Ok(())
+}
+
 pub(crate) async fn end_http_request<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     current_handle: u32,

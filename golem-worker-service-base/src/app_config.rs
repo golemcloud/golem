@@ -43,6 +43,7 @@ pub struct WorkerServiceBaseConfig {
     pub routing_table: RoutingTableConfig,
     pub worker_executor_retries: RetryConfig,
     pub blob_storage: BlobStorageConfig,
+    pub redis: RedisConfig,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -93,6 +94,17 @@ impl Default for WorkerServiceBaseConfig {
                 max_jitter_factor: Some(0.15),
             },
             blob_storage: BlobStorageConfig::default(),
+            redis: RedisConfig {
+                host: "localhost".to_string(),
+                port: 6379,
+                database: 0,
+                username: None,
+                password: None,
+                tracing: false,
+                pool_size: 10,
+                retries: RetryConfig::max_attempts_3(),
+                key_prefix: String::new(),
+            },
         }
     }
 }

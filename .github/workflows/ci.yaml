@@ -20,7 +20,7 @@ env:
 
 jobs:
   docker-targets-build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref_type == 'tag'
     strategy:
       fail-fast: false
@@ -76,7 +76,7 @@ jobs:
           path: target/${{ matrix.platform.target }}.tar
   docker-publish:
     runs-on: ubuntu-22.04
-    needs: [ docker-targets-build ]
+    needs: [docker-targets-build]
     if: github.event_name == 'push' && github.ref_type == 'tag'
     steps:
       - name: Checkout
@@ -207,7 +207,7 @@ jobs:
           labels: ${{ steps.meta-golem-router.outputs.labels }}
 
   build-and-test:
-    runs-on: ubuntu-latest-xlarge
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -242,12 +242,12 @@ jobs:
         uses: mikepenz/action-junit-report@v4
         if: success() || failure() # always run even if the previous step fails
         with:
-          report_paths: '**/target/report-*.xml'
+          report_paths: "**/target/report-*.xml"
           detailed_summary: true
           include_passed: true
 
   wasm-rpc-stub:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -275,7 +275,7 @@ jobs:
         run: cargo component build -p golem-wasm-rpc --no-default-features --features stub
 
   worker-tests-group1:
-    runs-on: ubuntu-latest-xlarge
+    runs-on: ubuntu-latest
     name: worker-tests-group1
     steps:
       - name: Checkout
@@ -308,11 +308,11 @@ jobs:
         uses: mikepenz/action-junit-report@v4
         if: success() || failure() # always run even if the previous step fails
         with:
-          report_paths: '**/target/report-*.xml'
+          report_paths: "**/target/report-*.xml"
           detailed_summary: true
           include_passed: true
   worker-tests:
-    needs: [ worker-tests-group1 ]
+    needs: [worker-tests-group1]
     runs-on: ubuntu-latest-xlarge
     strategy:
       fail-fast: true
@@ -358,11 +358,11 @@ jobs:
         uses: mikepenz/action-junit-report@v4
         if: success() || failure() # always run even if the previous step fails
         with:
-          report_paths: '**/target/report-*.xml'
+          report_paths: "**/target/report-*.xml"
           detailed_summary: true
           include_passed: true
   integration-tests:
-    runs-on: ubuntu-latest-xlarge
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -400,11 +400,11 @@ jobs:
         uses: mikepenz/action-junit-report@v4
         if: success() || failure() # always run even if the previous step fails
         with:
-          report_paths: '**/target/report-*.xml'
+          report_paths: "**/target/report-*.xml"
           detailed_summary: true
           include_passed: true
   cli-tests:
-    runs-on: ubuntu-latest-xlarge
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -439,11 +439,11 @@ jobs:
         uses: mikepenz/action-junit-report@v4
         if: success() || failure() # always run even if the previous step fails
         with:
-          report_paths: '**/target/report-*.xml'
+          report_paths: "**/target/report-*.xml"
           detailed_summary: true
           include_passed: true
   sharding-tests:
-    runs-on: ubuntu-latest-xlarge
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -478,7 +478,7 @@ jobs:
         uses: mikepenz/action-junit-report@v4
         if: success() || failure() # always run even if the previous step fails
         with:
-          report_paths: '**/target/report-*.xml'
+          report_paths: "**/target/report-*.xml"
           detailed_summary: true
           include_passed: true
   publish:
@@ -492,7 +492,7 @@ jobs:
         sharding-tests,
       ]
     if: "startsWith(github.ref, 'refs/tags/v')"
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -530,9 +530,9 @@ jobs:
           - golem
         cfg:
           - rust-target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest-xlarge
+            os: ubuntu-latest
           - rust-target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest-xlarge
+            os: ubuntu-latest
             cross: true
           - rust-target: x86_64-apple-darwin
             os: macos-latest
@@ -595,7 +595,7 @@ jobs:
 
   publish-slack-notification:
     if: ${{ always() && startsWith(github.ref, 'refs/tags/v') }}
-    needs: [ publish, docker-publish, publish_cli_binaries ]
+    needs: [publish, docker-publish, publish_cli_binaries]
     runs-on: ubuntu-22.04
     steps:
       - name: Publish Slack Notification

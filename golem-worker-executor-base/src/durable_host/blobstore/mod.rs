@@ -35,6 +35,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         &mut self,
         name: ContainerName,
     ) -> anyhow::Result<Result<Resource<Container>, Error>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("blobstore::blobstore", "create_container");
         let account_id = self.state.owned_worker_id.account_id();
         let name_clone = name.clone();
@@ -77,6 +78,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         &mut self,
         name: ContainerName,
     ) -> anyhow::Result<Result<Resource<Container>, Error>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("blobstore::blobstore", "get_container");
         let account_id = self.state.owned_worker_id.account_id();
         let result = Durability::<Ctx, String, Option<u64>, SerializableError>::wrap(
@@ -105,6 +107,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn delete_container(&mut self, name: ContainerName) -> anyhow::Result<Result<(), Error>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("blobstore::blobstore", "delete_container");
         let account_id = self.state.owned_worker_id.account_id();
         let result = Durability::<Ctx, String, (), SerializableError>::wrap(
@@ -129,6 +132,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         &mut self,
         name: ContainerName,
     ) -> anyhow::Result<Result<bool, Error>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("blobstore::blobstore", "container_exists");
         let account_id = self.state.owned_worker_id.account_id();
         let result = Durability::<Ctx, String, bool, SerializableError>::wrap(
@@ -154,6 +158,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         src: ObjectId,
         dest: ObjectId,
     ) -> anyhow::Result<Result<(), Error>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("blobstore::blobstore", "copy_object");
         let account_id = self.state.owned_worker_id.account_id();
         let result =
@@ -189,6 +194,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         src: ObjectId,
         dest: ObjectId,
     ) -> anyhow::Result<Result<(), Error>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("blobstore::blobstore", "move_object");
         let account_id = self.state.owned_worker_id.account_id();
         let result =
@@ -217,5 +223,49 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             Ok(_) => Ok(Ok(())),
             Err(e) => Ok(Err(format!("{:?}", e))),
         }
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {
+    async fn create_container(
+        &mut self,
+        name: ContainerName,
+    ) -> anyhow::Result<Result<Resource<Container>, Error>> {
+        (*self).create_container(name).await
+    }
+
+    async fn get_container(
+        &mut self,
+        name: ContainerName,
+    ) -> anyhow::Result<Result<Resource<Container>, Error>> {
+        (*self).get_container(name).await
+    }
+
+    async fn delete_container(&mut self, name: ContainerName) -> anyhow::Result<Result<(), Error>> {
+        (*self).delete_container(name).await
+    }
+
+    async fn container_exists(
+        &mut self,
+        name: ContainerName,
+    ) -> anyhow::Result<Result<bool, Error>> {
+        (*self).container_exists(name).await
+    }
+
+    async fn copy_object(
+        &mut self,
+        src: ObjectId,
+        dest: ObjectId,
+    ) -> anyhow::Result<Result<(), Error>> {
+        (*self).copy_object(src, dest).await
+    }
+
+    async fn move_object(
+        &mut self,
+        src: ObjectId,
+        dest: ObjectId,
+    ) -> anyhow::Result<Result<(), Error>> {
+        (*self).move_object(src, dest).await
     }
 }
