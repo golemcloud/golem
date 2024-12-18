@@ -49,14 +49,3 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         .await
     }
 }
-
-#[async_trait]
-impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {
-    async fn now(&mut self) -> anyhow::Result<Datetime> {
-        (*self).now().await
-    }
-
-    async fn resolution(&mut self) -> anyhow::Result<Datetime> {
-        (*self).resolution().await
-    }
-}

@@ -36,10 +36,3 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         .await
     }
 }
-
-#[async_trait]
-impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {
-    async fn insecure_seed(&mut self) -> anyhow::Result<(u64, u64)> {
-        (*self).insecure_seed().await
-    }
-}

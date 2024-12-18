@@ -103,14 +103,3 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         result
     }
 }
-
-#[async_trait]
-impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {
-    async fn handle(
-        &mut self,
-        request: Resource<HostOutgoingRequest>,
-        options: Option<Resource<types::RequestOptions>>,
-    ) -> HttpResult<Resource<HostFutureIncomingResponse>> {
-        (*self).handle(request, options).await
-    }
-}

@@ -185,39 +185,3 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         }
     }
 }
-
-#[async_trait]
-impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {
-    async fn get(
-        &mut self,
-        bucket: Resource<Bucket>,
-        key: Key,
-    ) -> anyhow::Result<Result<Option<Resource<IncomingValue>>, Resource<Error>>> {
-        (*self).get(bucket, key).await
-    }
-
-    async fn set(
-        &mut self,
-        bucket: Resource<Bucket>,
-        key: Key,
-        outgoing_value: Resource<OutgoingValue>,
-    ) -> anyhow::Result<Result<(), Resource<Error>>> {
-        (*self).set(bucket, key, outgoing_value).await
-    }
-
-    async fn delete(
-        &mut self,
-        bucket: Resource<Bucket>,
-        key: Key,
-    ) -> anyhow::Result<Result<(), Resource<Error>>> {
-        (*self).delete(bucket, key).await
-    }
-
-    async fn exists(
-        &mut self,
-        bucket: Resource<Bucket>,
-        key: Key,
-    ) -> anyhow::Result<Result<bool, Resource<Error>>> {
-        (*self).exists(bucket, key).await
-    }
-}

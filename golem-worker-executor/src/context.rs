@@ -395,9 +395,9 @@ impl ResourceLimiterAsync for Context {
 
     async fn table_growing(
         &mut self,
-        _current: u32,
-        _desired: u32,
-        _maximum: Option<u32>,
+        _current: usize,
+        _desired: usize,
+        _maximum: Option<usize>,
     ) -> anyhow::Result<bool> {
         Ok(true)
     }

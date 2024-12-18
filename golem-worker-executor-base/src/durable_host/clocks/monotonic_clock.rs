@@ -73,22 +73,3 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         Host::subscribe_instant(&mut self.as_wasi_view(), when).await
     }
 }
-
-#[async_trait]
-impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {
-    async fn now(&mut self) -> anyhow::Result<Instant> {
-        (*self).now().await
-    }
-
-    async fn resolution(&mut self) -> anyhow::Result<Instant> {
-        (*self).resolution().await
-    }
-
-    async fn subscribe_instant(&mut self, when: Instant) -> anyhow::Result<Resource<Pollable>> {
-        (*self).subscribe_instant(when).await
-    }
-
-    async fn subscribe_duration(&mut self, when: Duration) -> anyhow::Result<Resource<Pollable>> {
-        (*self).subscribe_duration(when).await
-    }
-}

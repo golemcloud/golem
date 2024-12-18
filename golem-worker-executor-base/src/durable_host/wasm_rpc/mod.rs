@@ -412,7 +412,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         result
     }
 
-    fn drop(&mut self, rep: Resource<WasmRpcEntry>) -> anyhow::Result<()> {
+    async fn drop(&mut self, rep: Resource<WasmRpcEntry>) -> anyhow::Result<()> {
         record_host_function_call("golem::rpc::wasm-rpc", "drop");
 
         let _ = self.table().delete(rep)?;
@@ -738,7 +738,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
         }
     }
 
-    fn drop(&mut self, this: Resource<FutureInvokeResult>) -> anyhow::Result<()> {
+    async fn drop(&mut self, this: Resource<FutureInvokeResult>) -> anyhow::Result<()> {
         record_host_function_call("golem::rpc::future-invoke-result", "drop");
         let _ = self.table().delete(this)?;
         Ok(())

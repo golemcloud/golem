@@ -31,13 +31,3 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         Host::create_tcp_socket(&mut self.as_wasi_view(), address_family)
     }
 }
-
-#[async_trait]
-impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {
-    fn create_tcp_socket(
-        &mut self,
-        address_family: IpAddressFamily,
-    ) -> Result<Resource<TcpSocket>, SocketError> {
-        (*self).create_tcp_socket(address_family)
-    }
-}

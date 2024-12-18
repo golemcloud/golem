@@ -44,7 +44,7 @@ impl<Ctx: WorkerCtx> HostFutureGetResult for DurableWorkerCtx<Ctx> {
         unimplemented!("listen_to_future_get_result")
     }
 
-    fn drop(&mut self, _rep: Resource<FutureGetResult>) -> anyhow::Result<()> {
+    async fn drop(&mut self, _rep: Resource<FutureGetResult>) -> anyhow::Result<()> {
         record_host_function_call("keyvalue::cache::future_get", "drop");
         unimplemented!("drop")
     }
@@ -73,7 +73,7 @@ impl<Ctx: WorkerCtx> HostFutureExistsResult for DurableWorkerCtx<Ctx> {
         unimplemented!("listen_to_future_exists_result")
     }
 
-    fn drop(&mut self, _rep: Resource<FutureExistsResult>) -> anyhow::Result<()> {
+    async fn drop(&mut self, _rep: Resource<FutureExistsResult>) -> anyhow::Result<()> {
         record_host_function_call("keyvalue::cache::future_exists", "drop");
         unimplemented!("drop")
     }
@@ -99,7 +99,7 @@ impl<Ctx: WorkerCtx> HostFutureResult for DurableWorkerCtx<Ctx> {
         unimplemented!("listen_to_future_result")
     }
 
-    fn drop(&mut self, _rep: Resource<FutureResult>) -> anyhow::Result<()> {
+    async fn drop(&mut self, _rep: Resource<FutureResult>) -> anyhow::Result<()> {
         record_host_function_call("keyvalue::cache::future_result", "drop");
         unimplemented!("drop")
     }
@@ -131,7 +131,7 @@ impl<Ctx: WorkerCtx> HostFutureGetOrSetResult for DurableWorkerCtx<Ctx> {
         unimplemented!("listen_to_future_get_or_set_result")
     }
 
-    fn drop(&mut self, _rep: Resource<FutureGetOrSetResult>) -> anyhow::Result<()> {
+    async fn drop(&mut self, _rep: Resource<FutureGetOrSetResult>) -> anyhow::Result<()> {
         record_host_function_call("keyvalue::cache::future_get_or_set", "drop");
         unimplemented!("drop")
     }
@@ -149,7 +149,7 @@ impl<Ctx: WorkerCtx> HostVacancy for DurableWorkerCtx<Ctx> {
         unimplemented!("vacancy_fill")
     }
 
-    fn drop(&mut self, _rep: Resource<Vacancy>) -> anyhow::Result<()> {
+    async fn drop(&mut self, _rep: Resource<Vacancy>) -> anyhow::Result<()> {
         record_host_function_call("keyvalue::cache::vacancy", "drop");
         unimplemented!("drop")
     }
@@ -190,132 +190,5 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let _permit = self.begin_async_host_function().await?;
         record_host_function_call("keyvalue::cache", "delete");
         unimplemented!("delete")
-    }
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> HostFutureGetResult for &mut DurableWorkerCtx<Ctx> {
-    async fn future_get_result_get(
-        &mut self,
-        self_: Resource<FutureGetResult>,
-    ) -> anyhow::Result<Option<Result<Option<Resource<IncomingValue>>, Resource<Error>>>> {
-        (*self).future_get_result_get(self_).await
-    }
-
-    async fn listen_to_future_get_result(
-        &mut self,
-        self_: Resource<FutureGetResult>,
-    ) -> anyhow::Result<Resource<Pollable>> {
-        (*self).listen_to_future_get_result(self_).await
-    }
-
-    fn drop(&mut self, rep: Resource<FutureGetResult>) -> anyhow::Result<()> {
-        HostFutureGetResult::drop(*self, rep)
-    }
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> HostFutureExistsResult for &mut DurableWorkerCtx<Ctx> {
-    async fn future_exists_result_get(
-        &mut self,
-        self_: Resource<FutureExistsResult>,
-    ) -> anyhow::Result<Option<Result<bool, Resource<Error>>>> {
-        (*self).future_exists_result_get(self_).await
-    }
-
-    async fn listen_to_future_exists_result(
-        &mut self,
-        self_: Resource<FutureExistsResult>,
-    ) -> anyhow::Result<Resource<Pollable>> {
-        (*self).listen_to_future_exists_result(self_).await
-    }
-
-    fn drop(&mut self, rep: Resource<FutureExistsResult>) -> anyhow::Result<()> {
-        HostFutureExistsResult::drop(*self, rep)
-    }
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> HostFutureResult for &mut DurableWorkerCtx<Ctx> {
-    async fn future_result_get(
-        &mut self,
-        self_: Resource<FutureResult>,
-    ) -> anyhow::Result<Option<Result<(), Resource<Error>>>> {
-        (*self).future_result_get(self_).await
-    }
-
-    async fn listen_to_future_result(
-        &mut self,
-        self_: Resource<FutureResult>,
-    ) -> anyhow::Result<Resource<Pollable>> {
-        (*self).listen_to_future_result(self_).await
-    }
-
-    fn drop(&mut self, rep: Resource<FutureResult>) -> anyhow::Result<()> {
-        HostFutureResult::drop(*self, rep)
-    }
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> HostFutureGetOrSetResult for &mut DurableWorkerCtx<Ctx> {
-    async fn future_get_or_set_result_get(
-        &mut self,
-        _self_: Resource<FutureGetOrSetResult>,
-    ) -> anyhow::Result<Option<Result<GetOrSetEntry, Resource<Error>>>> {
-        (*self).future_get_or_set_result_get(_self_).await
-    }
-
-    async fn listen_to_future_get_or_set_result(
-        &mut self,
-        _self_: Resource<FutureGetOrSetResult>,
-    ) -> anyhow::Result<Resource<Pollable>> {
-        (*self).listen_to_future_get_or_set_result(_self_).await
-    }
-
-    fn drop(&mut self, rep: Resource<FutureGetOrSetResult>) -> anyhow::Result<()> {
-        HostFutureGetOrSetResult::drop(*self, rep)
-    }
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> HostVacancy for &mut DurableWorkerCtx<Ctx> {
-    async fn vacancy_fill(
-        &mut self,
-        _self_: Resource<Vacancy>,
-        _ttl_ms: Option<u32>,
-    ) -> anyhow::Result<Resource<OutgoingValue>> {
-        (*self).vacancy_fill(_self_, _ttl_ms).await
-    }
-
-    fn drop(&mut self, rep: Resource<Vacancy>) -> anyhow::Result<()> {
-        HostVacancy::drop(*self, rep)
-    }
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {
-    async fn get(&mut self, k: Key) -> anyhow::Result<Resource<FutureGetResult>> {
-        (*self).get(k).await
-    }
-
-    async fn exists(&mut self, k: Key) -> anyhow::Result<Resource<FutureExistsResult>> {
-        (*self).exists(k).await
-    }
-
-    async fn set(
-        &mut self,
-        k: Key,
-        v: Resource<OutgoingValue>,
-        ttl_ms: Option<u32>,
-    ) -> anyhow::Result<Resource<FutureResult>> {
-        (*self).set(k, v, ttl_ms).await
-    }
-
-    async fn get_or_set(&mut self, k: Key) -> anyhow::Result<Resource<FutureGetOrSetResult>> {
-        (*self).get_or_set(k).await
-    }
-
-    async fn delete(&mut self, k: Key) -> anyhow::Result<Resource<FutureResult>> {
-        (*self).delete(k).await
     }
 }

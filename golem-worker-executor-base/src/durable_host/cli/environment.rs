@@ -62,18 +62,3 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         .await
     }
 }
-
-#[async_trait]
-impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {
-    async fn get_environment(&mut self) -> anyhow::Result<Vec<(String, String)>> {
-        (*self).get_environment().await
-    }
-
-    async fn get_arguments(&mut self) -> anyhow::Result<Vec<String>> {
-        (*self).get_arguments().await
-    }
-
-    async fn initial_cwd(&mut self) -> anyhow::Result<Option<String>> {
-        (*self).initial_cwd().await
-    }
-}

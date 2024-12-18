@@ -72,28 +72,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 }
 
-#[async_trait]
-impl<Ctx: WorkerCtx> HostPollable for &mut DurableWorkerCtx<Ctx> {
-    async fn ready(&mut self, self_: Resource<Pollable>) -> anyhow::Result<bool> {
-        (*self).ready(self_).await
-    }
-
-    async fn block(&mut self, self_: Resource<Pollable>) -> anyhow::Result<()> {
-        (*self).block(self_).await
-    }
-
-    fn drop(&mut self, rep: Resource<Pollable>) -> anyhow::Result<()> {
-        (*self).drop(rep)
-    }
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {
-    async fn poll(&mut self, in_: Vec<Resource<Pollable>>) -> anyhow::Result<Vec<u32>> {
-        (*self).poll(in_).await
-    }
-}
-
 fn is_suspend_for_sleep<T>(result: &Result<T, anyhow::Error>) -> Option<Duration> {
     if let Err(err) = result {
         if let Some(SuspendForSleep(duration)) = err.root_cause().downcast_ref::<SuspendForSleep>()

@@ -32,8 +32,7 @@ use crate::metrics::wasm::record_host_function_call;
 use crate::model::InterruptKind;
 use crate::preview2::golem;
 use crate::preview2::golem::api0_2_0::host::{
-    ComponentVersion, HostGetWorkers, PersistenceLevel, RetryPolicy, UpdateMode, Uri,
-    WorkerMetadata,
+    ComponentVersion, HostGetWorkers, PersistenceLevel, RetryPolicy, UpdateMode, WorkerMetadata,
 };
 use crate::services::oplog::CommitLevel;
 use crate::services::HasWorker;
@@ -97,7 +96,7 @@ impl<Ctx: WorkerCtx> HostGetWorkers for DurableWorkerCtx<Ctx> {
         }
     }
 
-    fn drop(&mut self, rep: Resource<GetWorkersEntry>) -> anyhow::Result<()> {
+    async fn drop(&mut self, rep: Resource<GetWorkersEntry>) -> anyhow::Result<()> {
         record_host_function_call("golem::api::get-workers", "drop");
         self.as_wasi_view().table().delete::<GetWorkersEntry>(rep)?;
         Ok(())
@@ -558,141 +557,6 @@ impl<Ctx: WorkerCtx> golem::api0_2_0::host::Host for DurableWorkerCtx<Ctx> {
             }
             None => Ok(None),
         }
-    }
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> HostGetWorkers for &mut DurableWorkerCtx<Ctx> {
-    async fn new(
-        &mut self,
-        component_id: golem::api0_2_0::host::ComponentId,
-        filter: Option<golem::api0_2_0::host::WorkerAnyFilter>,
-        precise: bool,
-    ) -> anyhow::Result<Resource<GetWorkersEntry>> {
-        (*self).new(component_id, filter, precise).await
-    }
-
-    async fn get_next(
-        &mut self,
-        self_: Resource<GetWorkersEntry>,
-    ) -> anyhow::Result<Option<Vec<WorkerMetadata>>> {
-        (*self).get_next(self_).await
-    }
-
-    fn drop(&mut self, rep: Resource<GetWorkersEntry>) -> anyhow::Result<()> {
-        (*self).drop(rep)
-    }
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> golem::api0_2_0::host::Host for &mut DurableWorkerCtx<Ctx> {
-    async fn create_promise(&mut self) -> anyhow::Result<golem::api0_2_0::host::PromiseId> {
-        (*self).create_promise().await
-    }
-
-    async fn await_promise(
-        &mut self,
-        promise_id: golem::api0_2_0::host::PromiseId,
-    ) -> anyhow::Result<Vec<u8>> {
-        (*self).await_promise(promise_id).await
-    }
-
-    async fn complete_promise(
-        &mut self,
-        promise_id: golem::api0_2_0::host::PromiseId,
-        data: Vec<u8>,
-    ) -> anyhow::Result<bool> {
-        (*self).complete_promise(promise_id, data).await
-    }
-
-    async fn delete_promise(
-        &mut self,
-        promise_id: golem::api0_2_0::host::PromiseId,
-    ) -> anyhow::Result<()> {
-        (*self).delete_promise(promise_id).await
-    }
-
-    async fn get_self_uri(&mut self, function_name: String) -> anyhow::Result<Uri> {
-        (*self).get_self_uri(function_name).await
-    }
-
-    async fn get_oplog_index(&mut self) -> anyhow::Result<golem::api0_2_0::host::OplogIndex> {
-        (*self).get_oplog_index().await
-    }
-
-    async fn set_oplog_index(
-        &mut self,
-        oplog_idx: golem::api0_2_0::host::OplogIndex,
-    ) -> anyhow::Result<()> {
-        (*self).set_oplog_index(oplog_idx).await
-    }
-
-    async fn oplog_commit(&mut self, replicas: u8) -> anyhow::Result<()> {
-        (*self).oplog_commit(replicas).await
-    }
-
-    async fn mark_begin_operation(&mut self) -> anyhow::Result<golem::api0_2_0::host::OplogIndex> {
-        (*self).mark_begin_operation().await
-    }
-
-    async fn mark_end_operation(
-        &mut self,
-        begin: golem::api0_2_0::host::OplogIndex,
-    ) -> anyhow::Result<()> {
-        (*self).mark_end_operation(begin).await
-    }
-
-    async fn get_retry_policy(&mut self) -> anyhow::Result<RetryPolicy> {
-        (*self).get_retry_policy().await
-    }
-
-    async fn set_retry_policy(&mut self, new_retry_policy: RetryPolicy) -> anyhow::Result<()> {
-        (*self).set_retry_policy(new_retry_policy).await
-    }
-
-    async fn get_oplog_persistence_level(&mut self) -> anyhow::Result<PersistenceLevel> {
-        (*self).get_oplog_persistence_level().await
-    }
-
-    async fn set_oplog_persistence_level(
-        &mut self,
-        new_persistence_level: PersistenceLevel,
-    ) -> anyhow::Result<()> {
-        (*self)
-            .set_oplog_persistence_level(new_persistence_level)
-            .await
-    }
-
-    async fn get_idempotence_mode(&mut self) -> anyhow::Result<bool> {
-        (*self).get_idempotence_mode().await
-    }
-
-    async fn set_idempotence_mode(&mut self, idempotent: bool) -> anyhow::Result<()> {
-        (*self).set_idempotence_mode(idempotent).await
-    }
-
-    async fn generate_idempotency_key(&mut self) -> anyhow::Result<golem::api0_2_0::host::Uuid> {
-        (*self).generate_idempotency_key().await
-    }
-
-    async fn update_worker(
-        &mut self,
-        worker_id: golem::api0_2_0::host::WorkerId,
-        target_version: ComponentVersion,
-        mode: UpdateMode,
-    ) -> anyhow::Result<()> {
-        (*self).update_worker(worker_id, target_version, mode).await
-    }
-
-    async fn get_self_metadata(&mut self) -> anyhow::Result<WorkerMetadata> {
-        (*self).get_self_metadata().await
-    }
-
-    async fn get_worker_metadata(
-        &mut self,
-        worker_id: golem::api0_2_0::host::WorkerId,
-    ) -> anyhow::Result<Option<WorkerMetadata>> {
-        (*self).get_worker_metadata(worker_id).await
     }
 }
 

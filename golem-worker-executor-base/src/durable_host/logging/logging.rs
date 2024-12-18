@@ -38,10 +38,3 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         Ok(())
     }
 }
-
-#[async_trait]
-impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {
-    async fn log(&mut self, level: Level, context: String, message: String) -> anyhow::Result<()> {
-        (*self).log(level, context, message).await
-    }
-}

@@ -53,14 +53,3 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         .await
     }
 }
-
-#[async_trait]
-impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {
-    async fn get_insecure_random_bytes(&mut self, len: u64) -> anyhow::Result<Vec<u8>> {
-        (*self).get_insecure_random_bytes(len).await
-    }
-
-    async fn get_insecure_random_u64(&mut self) -> anyhow::Result<u64> {
-        (*self).get_insecure_random_u64().await
-    }
-}

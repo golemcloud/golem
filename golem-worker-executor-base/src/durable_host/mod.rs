@@ -93,13 +93,14 @@ use wasmtime::component::{Instance, Resource, ResourceAny};
 use wasmtime::{AsContext, AsContextMut};
 use wasmtime_wasi::bindings::filesystem::preopens::Descriptor;
 use wasmtime_wasi::{
-    FsResult, I32Exit, ResourceTable, ResourceTableError, Stderr, Stdout, WasiCtx, WasiView,
+    FsResult, I32Exit, ResourceTable, ResourceTableError, Stderr, Stdout, WasiCtx, WasiImpl,
+    WasiView,
 };
 use wasmtime_wasi_http::body::HyperOutgoingBody;
 use wasmtime_wasi_http::types::{
     default_send_request, HostFutureIncomingResponse, OutgoingRequestConfig,
 };
-use wasmtime_wasi_http::{HttpResult, WasiHttpCtx, WasiHttpView};
+use wasmtime_wasi_http::{HttpResult, WasiHttpCtx, WasiHttpImpl, WasiHttpView};
 
 pub mod blobstore;
 mod cli;
@@ -299,12 +300,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .map(|exit| exit.0)
     }
 
-    pub fn as_wasi_view(&mut self) -> DurableWorkerCtxWasiView<Ctx> {
-        DurableWorkerCtxWasiView(self)
+    pub fn as_wasi_view(&mut self) -> WasiImpl<DurableWorkerCtxWasiView<Ctx>> {
+        WasiImpl(DurableWorkerCtxWasiView(self))
     }
 
-    pub fn as_wasi_http_view(&mut self) -> DurableWorkerCtxWasiHttpView<Ctx> {
-        DurableWorkerCtxWasiHttpView(self)
+    pub fn as_wasi_http_view(&mut self) -> WasiHttpImpl<DurableWorkerCtxWasiHttpView<Ctx>> {
+        WasiHttpImpl(DurableWorkerCtxWasiHttpView(self))
     }
 
     pub(crate) async fn begin_async_host_function(&self) -> Result<SyncHelperPermit, GolemError> {

@@ -66,10 +66,3 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         .await
     }
 }
-
-#[async_trait]
-impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {
-    async fn get_directories(&mut self) -> anyhow::Result<Vec<(Resource<Descriptor>, String)>> {
-        (*self).get_directories().await
-    }
-}

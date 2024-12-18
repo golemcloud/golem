@@ -84,38 +84,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 }
 
-#[async_trait]
-impl<Ctx: WorkerCtx> HostResolveAddressStream for &mut DurableWorkerCtx<Ctx> {
-    fn resolve_next_address(
-        &mut self,
-        self_: Resource<ResolveAddressStream>,
-    ) -> Result<Option<IpAddress>, SocketError> {
-        (*self).resolve_next_address(self_)
-    }
-
-    fn subscribe(
-        &mut self,
-        self_: Resource<ResolveAddressStream>,
-    ) -> anyhow::Result<Resource<Pollable>> {
-        (*self).subscribe(self_)
-    }
-
-    fn drop(&mut self, rep: Resource<ResolveAddressStream>) -> anyhow::Result<()> {
-        (*self).drop(rep)
-    }
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {
-    async fn resolve_addresses(
-        &mut self,
-        network: Resource<Network>,
-        name: String,
-    ) -> Result<Resource<ResolveAddressStream>, SocketError> {
-        (*self).resolve_addresses(network, name).await
-    }
-}
-
 async fn resolve_and_drain_addresses<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     network: Resource<Network>,
