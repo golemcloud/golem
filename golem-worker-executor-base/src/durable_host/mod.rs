@@ -18,6 +18,7 @@
 use crate::durable_host::http::serialized::SerializableHttpRequest;
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
 use crate::durable_host::replay_state::ReplayState;
+use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::sync_helper::{SyncHelper, SyncHelperPermit};
 use crate::durable_host::wasm_rpc::UrnExtensions;
 use crate::error::GolemError;
@@ -65,7 +66,6 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::plugin::{PluginOwner, PluginScope};
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
-use golem_common::model::RetryConfig;
 use golem_common::model::{exports, PluginInstallationId};
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
@@ -74,6 +74,7 @@ use golem_common::model::{
     ScheduledAction, SuccessfulUpdateRecord, Timestamp, WorkerEvent, WorkerFilter, WorkerId,
     WorkerMetadata, WorkerResourceDescription, WorkerStatus, WorkerStatusRecord,
 };
+use golem_common::model::{RetryConfig, TargetWorkerId};
 use golem_common::retries::get_delay;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::wasmtime::ResourceStore;
@@ -116,6 +117,7 @@ mod sockets;
 pub mod wasm_rpc;
 
 mod durability;
+mod dynamic_linking;
 mod replay_state;
 mod sync_helper;
 
@@ -286,6 +288,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub fn worker_id(&self) -> &WorkerId {
         &self.owned_worker_id.worker_id
+    }
+
+    pub fn owned_worker_id(&self) -> &OwnedWorkerId {
+        &self.owned_worker_id
     }
 
     pub fn component_metadata(&self) -> &ComponentMetadata {
@@ -473,6 +479,32 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             .await;
                     }
                 }
+            }
+        }
+    }
+
+    pub async fn generate_unique_local_worker_id(
+        &mut self,
+        remote_worker_id: TargetWorkerId,
+    ) -> Result<WorkerId, GolemError> {
+        match remote_worker_id.clone().try_into_worker_id() {
+            Some(worker_id) => Ok(worker_id),
+            None => {
+                let worker_id = Durability::<Ctx, (), WorkerId, SerializableError>::wrap(
+                    self,
+                    WrappedFunctionType::ReadLocal,
+                    "golem::rpc::wasm-rpc::generate_unique_local_worker_id",
+                    (),
+                    |ctx| {
+                        Box::pin(async move {
+                            ctx.rpc()
+                                .generate_unique_local_worker_id(remote_worker_id)
+                                .await
+                        })
+                    },
+                )
+                .await?;
+                Ok(worker_id)
             }
         }
     }

@@ -22,6 +22,7 @@ use golem_wasm_ast::analysis::analysed_type::{
 use golem_wasm_ast::analysis::{AnalysedType, TypeResult};
 use wasmtime::component::{types, ResourceAny, Type, Val};
 
+#[derive(Debug)]
 pub enum EncodingError {
     ParamTypeMismatch { details: String },
     ValueMismatch { details: String },
@@ -464,7 +465,7 @@ async fn decode_param_impl(
     }
 }
 
-/// Converts a wasmtime Val to a Golem protobuf Val
+/// Converts a wasmtime Val to a wasm-rpc Value
 #[async_recursion]
 pub async fn encode_output(
     value: &Val,
