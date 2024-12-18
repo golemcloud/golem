@@ -15,6 +15,10 @@
 pub mod component;
 pub mod worker;
 pub mod worker_request_executor;
+pub mod openapi_export;
+pub mod swagger_ui;
+pub mod swagger;
+pub mod api;
 
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
@@ -69,6 +73,13 @@ use std::sync::Arc;
 use std::time::Duration;
 use tonic::codec::CompressionEncoding;
 
+// use crate::api::openapi::validate_openapi;
+use axum::{Router, routing::get, extract::FromRef};
+
+use crate::service::swagger::SwaggerGenerator;
+use crate::service::api::RedisCache;
+use crate::service::openapi_export::OpenAPIExportConfig;
+
 #[derive(Clone)]
 pub struct Services {
     pub worker_service: worker::WorkerService,
@@ -92,6 +103,25 @@ pub struct Services {
         Arc<dyn ApiDefinitionValidatorService<HttpApiDefinition> + Sync + Send>,
     pub fileserver_binding_handler:
         Arc<dyn FileServerBindingHandler<DefaultNamespace> + Sync + Send>,
+    pub swagger_generator: Arc<SwaggerGenerator>,
+    pub cache: Arc<RedisCache>,
+    pub config: ServicesConfig,
+}
+
+#[derive(Clone)]
+pub struct ServicesConfig {
+    pub openapi_export: OpenAPIExportConfig,
+}
+
+impl FromRef<Services> for Arc<RedisCache> {
+    fn from_ref(services: &Services) -> Self {
+        services.cache.clone()
+    }
+}
+impl FromRef<Services> for Arc<dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace> + Sync + Send> {
+    fn from_ref(services: &Services) -> Self {
+        services.definition_service.clone()
+    }
 }
 
 impl Services {
@@ -110,191 +140,217 @@ impl Services {
                 WorkerExecutorClient::new(channel)
                     .send_compressed(CompressionEncoding::Gzip)
                     .accept_compressed(CompressionEncoding::Gzip)
-            },
-            GrpcClientConfig {
-                retries_on_unavailable: RetryConfig {
-                    max_attempts: 0, // we want to invalidate the routing table asap
-                    min_delay: Duration::from_millis(100),
-                    max_delay: Duration::from_secs(2),
-                    multiplier: 2.0,
-                    max_jitter_factor: Some(0.15),
                 },
-                connect_timeout: Duration::from_secs(10),
-            },
-        );
-
-        let component_service: component::ComponentService = {
-            let config = &config.component_service;
-            let uri = config.uri();
-            let retry_config = config.retries.clone();
-
-            Arc::new(RemoteComponentService::new(uri, retry_config))
-        };
-
-        let worker_service: worker::WorkerService = Arc::new(WorkerServiceDefault::new(
-            worker_executor_grpc_clients.clone(),
-            config.worker_executor_retries.clone(),
-            routing_table_service.clone(),
-        ));
-
-        let worker_to_http_service: Arc<
-            dyn GatewayWorkerRequestExecutor<DefaultNamespace> + Sync + Send,
-        > = Arc::new(UnauthorisedWorkerRequestExecutor::new(
-            worker_service.clone(),
-        ));
-
-        let gateway_session_store: Arc<dyn GatewaySession + Sync + Send> =
-            match &config.gateway_session_storage {
-                GatewaySessionStorageConfig::Redis(redis_config) => {
-                    let redis = RedisPool::configured(redis_config)
+                GrpcClientConfig {
+                    retries_on_unavailable: RetryConfig {
+                        max_attempts: 0, // we want to invalidate the routing table asap
+                        min_delay: Duration::from_millis(100),
+                        max_delay: Duration::from_secs(2),
+                        multiplier: 2.0,
+                        max_jitter_factor: Some(0.15),
+                    },
+                    connect_timeout: Duration::from_secs(10),
+                },
+            );
+    
+            let component_service: component::ComponentService = {
+                let config = &config.component_service;
+                let uri = config.uri();
+                let retry_config = config.retries.clone();
+    
+                Arc::new(RemoteComponentService::new(uri, retry_config))
+            };
+    
+            let worker_service: worker::WorkerService = Arc::new(WorkerServiceDefault::new(
+                worker_executor_grpc_clients.clone(),
+                config.worker_executor_retries.clone(),
+                routing_table_service.clone(),
+            ));
+    
+            let worker_to_http_service: Arc<
+                dyn GatewayWorkerRequestExecutor<DefaultNamespace> + Sync + Send,
+            > = Arc::new(UnauthorisedWorkerRequestExecutor::new(
+                worker_service.clone(),
+            ));
+    
+            let gateway_session_store: Arc<dyn GatewaySession + Sync + Send> =
+                match &config.gateway_session_storage {
+                    GatewaySessionStorageConfig::Redis(redis_config) => {
+                        let redis = RedisPool::configured(redis_config)
+                            .await
+                            .map_err(|e| e.to_string())?;
+    
+                        let gateway_session_with_redis =
+                            RedisGatewaySession::new(redis, RedisGatewaySessionExpiration::default());
+    
+                        Arc::new(gateway_session_with_redis)
+                    }
+                    GatewaySessionStorageConfig::Sqlite(sqlite_config) => {
+                        let pool = SqlitePool::configured(sqlite_config)
+                            .await
+                            .map_err(|e| e.to_string())?;
+    
+                        let gateway_session_with_sqlite =
+                            SqliteGatewaySession::new(pool, SqliteGatewaySessionExpiration::default())
+                                .await?;
+    
+                        Arc::new(gateway_session_with_sqlite)
+                    }
+                };
+    
+            let (api_definition_repo, api_deployment_repo, security_scheme_repo) = match config
+                .db
+                .clone()
+            {
+                DbConfig::Postgres(c) => {
+                    let db_pool = db::create_postgres_pool(&c)
                         .await
                         .map_err(|e| e.to_string())?;
-
-                    let gateway_session_with_redis =
-                        RedisGatewaySession::new(redis, RedisGatewaySessionExpiration::default());
-
-                    Arc::new(gateway_session_with_redis)
+                    let api_definition_repo: Arc<dyn api_definition::ApiDefinitionRepo + Sync + Send> =
+                        Arc::new(api_definition::LoggedApiDefinitionRepo::new(
+                            api_definition::DbApiDefinitionRepo::new(db_pool.clone().into()),
+                        ));
+                    let api_deployment_repo: Arc<dyn api_deployment::ApiDeploymentRepo + Sync + Send> =
+                        Arc::new(api_deployment::LoggedDeploymentRepo::new(
+                            api_deployment::DbApiDeploymentRepo::new(db_pool.clone().into()),
+                        ));
+    
+                    let security_scheme_repo: Arc<dyn SecuritySchemeRepo + Sync + Send> =
+                        Arc::new(DbSecuritySchemeRepo::new(db_pool.clone().into()));
+    
+                    (
+                        api_definition_repo,
+                        api_deployment_repo,
+                        security_scheme_repo,
+                    )
                 }
-                GatewaySessionStorageConfig::Sqlite(sqlite_config) => {
-                    let pool = SqlitePool::configured(sqlite_config)
+                DbConfig::Sqlite(c) => {
+                    let db_pool = db::create_sqlite_pool(&c)
                         .await
                         .map_err(|e| e.to_string())?;
-
-                    let gateway_session_with_sqlite =
-                        SqliteGatewaySession::new(pool, SqliteGatewaySessionExpiration::default())
-                            .await?;
-
-                    Arc::new(gateway_session_with_sqlite)
+                    let api_definition_repo: Arc<dyn api_definition::ApiDefinitionRepo + Sync + Send> =
+                        Arc::new(api_definition::LoggedApiDefinitionRepo::new(
+                            api_definition::DbApiDefinitionRepo::new(db_pool.clone().into()),
+                        ));
+                    let api_deployment_repo: Arc<dyn api_deployment::ApiDeploymentRepo + Sync + Send> =
+                        Arc::new(api_deployment::LoggedDeploymentRepo::new(
+                            api_deployment::DbApiDeploymentRepo::new(db_pool.clone().into()),
+                        ));
+    
+                    let security_scheme_repo: Arc<dyn SecuritySchemeRepo + Sync + Send> =
+                        Arc::new(DbSecuritySchemeRepo::new(db_pool.clone().into()));
+    
+                    (
+                        api_definition_repo,
+                        api_deployment_repo,
+                        security_scheme_repo,
+                    )
                 }
             };
-
-        let (api_definition_repo, api_deployment_repo, security_scheme_repo) = match config
-            .db
-            .clone()
-        {
-            DbConfig::Postgres(c) => {
-                let db_pool = db::create_postgres_pool(&c)
-                    .await
-                    .map_err(|e| e.to_string())?;
-                let api_definition_repo: Arc<dyn api_definition::ApiDefinitionRepo + Sync + Send> =
-                    Arc::new(api_definition::LoggedApiDefinitionRepo::new(
-                        api_definition::DbApiDefinitionRepo::new(db_pool.clone().into()),
-                    ));
-                let api_deployment_repo: Arc<dyn api_deployment::ApiDeploymentRepo + Sync + Send> =
-                    Arc::new(api_deployment::LoggedDeploymentRepo::new(
-                        api_deployment::DbApiDeploymentRepo::new(db_pool.clone().into()),
-                    ));
-
-                let security_scheme_repo: Arc<dyn SecuritySchemeRepo + Sync + Send> =
-                    Arc::new(DbSecuritySchemeRepo::new(db_pool.clone().into()));
-
-                (
-                    api_definition_repo,
-                    api_deployment_repo,
-                    security_scheme_repo,
-                )
-            }
-            DbConfig::Sqlite(c) => {
-                let db_pool = db::create_sqlite_pool(&c)
-                    .await
-                    .map_err(|e| e.to_string())?;
-                let api_definition_repo: Arc<dyn api_definition::ApiDefinitionRepo + Sync + Send> =
-                    Arc::new(api_definition::LoggedApiDefinitionRepo::new(
-                        api_definition::DbApiDefinitionRepo::new(db_pool.clone().into()),
-                    ));
-                let api_deployment_repo: Arc<dyn api_deployment::ApiDeploymentRepo + Sync + Send> =
-                    Arc::new(api_deployment::LoggedDeploymentRepo::new(
-                        api_deployment::DbApiDeploymentRepo::new(db_pool.clone().into()),
-                    ));
-
-                let security_scheme_repo: Arc<dyn SecuritySchemeRepo + Sync + Send> =
-                    Arc::new(DbSecuritySchemeRepo::new(db_pool.clone().into()));
-
-                (
-                    api_definition_repo,
-                    api_deployment_repo,
-                    security_scheme_repo,
-                )
-            }
-        };
-
-        let blob_storage: Arc<dyn BlobStorage + Sync + Send> = match &config.blob_storage {
-            BlobStorageConfig::S3(config) => Arc::new(
-                golem_service_base::storage::blob::s3::S3BlobStorage::new(config.clone()).await,
-            ),
-            BlobStorageConfig::LocalFileSystem(config) => Arc::new(
-                golem_service_base::storage::blob::fs::FileSystemBlobStorage::new(&config.root)
-                    .await?,
-            ),
-            BlobStorageConfig::Sqlite(sqlite) => {
-                let pool = SqlitePool::configured(sqlite)
-                    .await
-                    .map_err(|e| format!("Failed to create sqlite pool: {}", e))?;
-                Arc::new(
-                    golem_service_base::storage::blob::sqlite::SqliteBlobStorage::new(pool.clone())
+    
+            let blob_storage: Arc<dyn BlobStorage + Sync + Send> = match &config.blob_storage {
+                BlobStorageConfig::S3(config) => Arc::new(
+                    golem_service_base::storage::blob::s3::S3BlobStorage::new(config.clone()).await,
+                ),
+                BlobStorageConfig::LocalFileSystem(config) => Arc::new(
+                    golem_service_base::storage::blob::fs::FileSystemBlobStorage::new(&config.root)
                         .await?,
-                )
-            }
-            BlobStorageConfig::InMemory => {
-                Arc::new(golem_service_base::storage::blob::memory::InMemoryBlobStorage::new())
-            }
-            _ => {
-                return Err("Unsupported blob storage configuration".to_string());
-            }
-        };
-
-        let initial_component_files_service: Arc<InitialComponentFilesService> =
-            Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
-
-        let fileserver_binding_handler: Arc<
-            dyn FileServerBindingHandler<DefaultNamespace> + Sync + Send,
-        > = Arc::new(DefaultFileServerBindingHandler::new(
-            component_service.clone(),
-            initial_component_files_service.clone(),
-            worker_service.clone(),
-        ));
-
-        let api_definition_validator_service = Arc::new(HttpApiDefinitionValidator {});
-
-        let identity_provider = Arc::new(DefaultIdentityProvider);
-
-        let security_scheme_service = Arc::new(DefaultSecuritySchemeService::new(
-            security_scheme_repo,
-            identity_provider,
-        ));
-
-        let definition_service: Arc<
-            dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace> + Sync + Send,
-        > = Arc::new(ApiDefinitionServiceDefault::new(
-            component_service.clone(),
-            api_definition_repo.clone(),
-            api_deployment_repo.clone(),
-            security_scheme_service.clone(),
-            api_definition_validator_service.clone(),
-        ));
-
-        let deployment_service: Arc<
-            dyn ApiDeploymentService<EmptyAuthCtx, DefaultNamespace> + Sync + Send,
-        > = Arc::new(ApiDeploymentServiceDefault::new(
-            api_deployment_repo.clone(),
-            api_definition_repo.clone(),
-            component_service.clone(),
-        ));
-
-        let http_definition_lookup_service =
-            Arc::new(HttpApiDefinitionLookup::new(deployment_service.clone()));
-
-        Ok(Services {
-            worker_service,
-            definition_service,
-            security_scheme_service,
-            deployment_service,
-            http_definition_lookup_service,
-            worker_to_http_service,
-            component_service,
-            api_definition_validator_service,
-            fileserver_binding_handler,
-            gateway_session_store,
-        })
+                ),
+                BlobStorageConfig::Sqlite(sqlite) => {
+                    let pool = SqlitePool::configured(sqlite)
+                        .await
+                        .map_err(|e| format!("Failed to create sqlite pool: {}", e))?;
+                    Arc::new(
+                        golem_service_base::storage::blob::sqlite::SqliteBlobStorage::new(pool.clone())
+                            .await?,
+                    )
+                }
+                BlobStorageConfig::InMemory => {
+                    Arc::new(golem_service_base::storage::blob::memory::InMemoryBlobStorage::new())
+                }
+                _ => {
+                    return Err("Unsupported blob storage configuration".to_string());
+                }
+            };
+    
+            let initial_component_files_service: Arc<InitialComponentFilesService> =
+                Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
+    
+            let fileserver_binding_handler: Arc<
+                dyn FileServerBindingHandler<DefaultNamespace> + Sync + Send,
+            > = Arc::new(DefaultFileServerBindingHandler::new(
+                component_service.clone(),
+                initial_component_files_service.clone(),
+                worker_service.clone(),
+            ));
+    
+            let api_definition_validator_service = Arc::new(HttpApiDefinitionValidator {});
+    
+            let identity_provider = Arc::new(DefaultIdentityProvider);
+    
+            let security_scheme_service = Arc::new(DefaultSecuritySchemeService::new(
+                security_scheme_repo,
+                identity_provider,
+            ));
+    
+            let definition_service: Arc<
+                dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace> + Sync + Send,
+            > = Arc::new(ApiDefinitionServiceDefault::new(
+                component_service.clone(),
+                api_definition_repo.clone(),
+                api_deployment_repo.clone(),
+                security_scheme_service.clone(),
+                api_definition_validator_service.clone(),
+            ));
+    
+            let deployment_service: Arc<
+                dyn ApiDeploymentService<EmptyAuthCtx, DefaultNamespace> + Sync + Send,
+            > = Arc::new(ApiDeploymentServiceDefault::new(
+                api_deployment_repo.clone(),
+                api_definition_repo.clone(),
+                component_service.clone(),
+            ));
+    
+            let http_definition_lookup_service =
+                Arc::new(HttpApiDefinitionLookup::new(deployment_service.clone()));
+    
+            let swagger_generator = Arc::new(SwaggerGenerator::new("swagger-ui".to_string()));
+    
+            let cache = Arc::new(RedisCache::new(config.redis.url().to_string())
+                .await
+                .map_err(|e| format!("Failed to initialize Redis cache: {}", e))?);
+    
+            let services_config = ServicesConfig {
+                openapi_export: OpenAPIExportConfig::default(),
+            };
+    
+            Ok(Services {
+                worker_service,
+                definition_service,
+                security_scheme_service,
+                deployment_service,
+                http_definition_lookup_service,
+                worker_to_http_service,
+                component_service,
+                api_definition_validator_service,
+                fileserver_binding_handler,
+                gateway_session_store,
+                swagger_generator,
+                cache,
+                config: services_config,
+            })
+        }
+        
+        
     }
-}
+    pub fn routes() -> Router<Services> {
+        Router::new()
+            .route(
+                "/v1/api/definitions/:id/version/:version/export",
+                get(openapi_export::export_openapi),
+            )
+            .route(
+                "/swagger-ui/*path",
+                get(swagger_ui::serve_swagger_ui),
+            )
+    }

@@ -35,6 +35,16 @@ impl UnauthorisedWorkerRequestExecutor {
     pub fn new(worker_service: Arc<dyn WorkerService + Sync + Send>) -> Self {
         Self { worker_service }
     }
+
+    fn sanitize_path(path: &str) -> String {
+        // Remove potentially harmful characters
+        let sanitized: String = path
+            .chars()
+            .filter(|c| c.is_alphanumeric() || *c == '/' || *c == '_' || *c == '-')
+            .collect();
+        // Prevent path traversal attacks, remove any .. or .
+        sanitized.replace("..", "").replace("./", "")
+    }
 }
 
 #[async_trait]
@@ -45,7 +55,7 @@ impl GatewayWorkerRequestExecutor<DefaultNamespace> for UnauthorisedWorkerReques
     ) -> Result<WorkerResponse, WorkerRequestExecutorError> {
         let worker_name_opt_validated = worker_request_params
             .worker_name
-            .map(|w| validate_worker_name(w.as_str()).map(|_| w))
+            .map(|w| validate_worker_name(Self::sanitize_path(&w).as_str()).map(|_| w))
             .transpose()?;
 
         let component_id = worker_request_params.component_id;

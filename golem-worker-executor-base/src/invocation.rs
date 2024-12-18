@@ -120,27 +120,21 @@ pub fn find_first_available_function<Ctx: WorkerCtx>(
 }
 
 fn find_function<'a, Ctx: WorkerCtx>(
-    mut store: &mut StoreContextMut<'a, Ctx>,
+    store: &mut StoreContextMut<'a, Ctx>,
     instance: &'a wasmtime::component::Instance,
     parsed_function_name: &ParsedFunctionName,
 ) -> Result<Option<Func>, GolemError> {
     match &parsed_function_name.site().interface_name() {
         Some(interface_name) => {
-            let exported_instance_idx = instance
-                .get_export(&mut store, None, interface_name)
-                .ok_or(GolemError::invalid_request(format!(
-                    "could not load exports for interface {}",
-                    interface_name
-                )))?;
-            let func = instance
-                .get_export(
-                    &mut store,
-                    Some(&exported_instance_idx),
-                    &parsed_function_name.function().function_name(),
-                )
-                .and_then(|idx| instance.get_func(&mut store, idx));
-
-            match func {
+            let mut exports = instance.exports(store);
+            let mut exported_instance =
+                exports
+                    .instance(interface_name)
+                    .ok_or(GolemError::invalid_request(format!(
+                        "could not load exports for interface {}",
+                        interface_name
+                    )))?;
+            match exported_instance.func(&parsed_function_name.function().function_name()) {
                 Some(func) => Ok(Some(func)),
                 None => {
                     if matches!(
@@ -156,13 +150,8 @@ fn find_function<'a, Ctx: WorkerCtx>(
                                 &parsed_function_name.function().function_name(),
                                 interface_name
                             ))),
-                            Some(parsed_static) => instance
-                                .get_export(
-                                    &mut store,
-                                    Some(&exported_instance_idx),
-                                    &parsed_static.function().function_name(),
-                                )
-                                .and_then(|idx| instance.get_func(&mut store, idx))
+                            Some(parsed_static) => exported_instance
+                                .func(&parsed_static.function().function_name())
                                 .ok_or(GolemError::invalid_request(format!(
                                     "could not load function {} or {} for interface {}",
                                     &parsed_function_name.function().function_name(),
@@ -176,7 +165,7 @@ fn find_function<'a, Ctx: WorkerCtx>(
             }
         }
         None => instance
-            .get_func(store, parsed_function_name.function().function_name())
+            .get_func(store, &parsed_function_name.function().function_name())
             .ok_or(GolemError::invalid_request(format!(
                 "could not load function {}",
                 &parsed_function_name.function().function_name()

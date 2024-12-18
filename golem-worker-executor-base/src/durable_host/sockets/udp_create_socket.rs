@@ -31,3 +31,13 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         Host::create_udp_socket(&mut self.as_wasi_view(), address_family)
     }
 }
+
+#[async_trait]
+impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {
+    fn create_udp_socket(
+        &mut self,
+        address_family: IpAddressFamily,
+    ) -> Result<Resource<UdpSocket>, SocketError> {
+        (*self).create_udp_socket(address_family)
+    }
+}
