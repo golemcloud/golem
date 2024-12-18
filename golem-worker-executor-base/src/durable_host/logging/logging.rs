@@ -22,7 +22,6 @@ use golem_common::model::{LogLevel, WorkerEvent};
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn log(&mut self, level: Level, context: String, message: String) -> anyhow::Result<()> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("logging::handler", "log");
 
         let log_level = match level {

@@ -38,7 +38,7 @@ use crate::durable_host::http::serialized::{
     SerializableErrorCode, SerializableHttpRequest, SerializableResponse,
     SerializableResponseHeaders,
 };
-use crate::durable_host::http::{continue_http_request, end_http_request_sync};
+use crate::durable_host::http::{continue_http_request, end_http_request};
 use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::{Durability, DurableWorkerCtx, HttpRequestCloseOwner};
 use crate::get_oplog_entry;
@@ -370,7 +370,7 @@ impl<Ctx: WorkerCtx> HostIncomingResponse for DurableWorkerCtx<Ctx> {
         let handle = rep.rep();
         if let Some(state) = self.state.open_http_requests.get(&handle) {
             if state.close_owner == HttpRequestCloseOwner::IncomingResponseDrop {
-                end_http_request_sync(self, handle)?;
+                end_http_request(self, handle).await?;
             }
         }
 
@@ -402,17 +402,20 @@ impl<Ctx: WorkerCtx> HostIncomingBody for DurableWorkerCtx<Ctx> {
         result
     }
 
-    fn finish(&mut self, this: Resource<IncomingBody>) -> anyhow::Result<Resource<FutureTrailers>> {
+    async fn finish(
+        &mut self,
+        this: Resource<IncomingBody>,
+    ) -> anyhow::Result<Resource<FutureTrailers>> {
         record_host_function_call("http::types::incoming_body", "finish");
 
         let handle = this.rep();
         if let Some(state) = self.state.open_http_requests.get(&handle) {
             if state.close_owner == HttpRequestCloseOwner::IncomingBodyDropOrFinish {
-                end_http_request_sync(self, handle)?;
+                end_http_request(self, handle).await?;
             }
         }
 
-        HostIncomingBody::finish(&mut self.as_wasi_http_view(), this)
+        HostIncomingBody::finish(&mut self.as_wasi_http_view(), this).await
     }
 
     async fn drop(&mut self, rep: Resource<IncomingBody>) -> anyhow::Result<()> {
@@ -421,7 +424,7 @@ impl<Ctx: WorkerCtx> HostIncomingBody for DurableWorkerCtx<Ctx> {
         let handle = rep.rep();
         if let Some(state) = self.state.open_http_requests.get(&handle) {
             if state.close_owner == HttpRequestCloseOwner::IncomingBodyDropOrFinish {
-                end_http_request_sync(self, handle)?;
+                end_http_request(self, handle).await?;
             }
         }
 
@@ -440,7 +443,6 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
         &mut self,
         self_: Resource<FutureTrailers>,
     ) -> anyhow::Result<Option<Result<Result<Option<Resource<Trailers>>, ErrorCode>, ()>>> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("http::types::future_trailers", "get");
 
         let request_state = self
@@ -605,7 +607,6 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
         &mut self,
         self_: Resource<FutureIncomingResponse>,
     ) -> anyhow::Result<Option<Result<Result<Resource<IncomingResponse>, ErrorCode>, ()>>> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("http::types::future_incoming_response", "get");
         // Each get call is stored in the oplog. If the result was Error or None (future is pending), we just
         // continue the replay. If the result was Ok, we return register the stored response to the table as a new
@@ -727,7 +728,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
         let handle = rep.rep();
         if let Some(state) = self.state.open_http_requests.get(&handle) {
             if state.close_owner == HttpRequestCloseOwner::FutureIncomingResponseDrop {
-                end_http_request_sync(self, handle)?;
+                end_http_request(self, handle).await?;
             }
         }
 

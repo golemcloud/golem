@@ -190,7 +190,6 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
         worker_id: crate::preview2::golem::api1_1_0::oplog::WorkerId,
         start: crate::preview2::golem::api1_1_0::oplog::OplogIndex,
     ) -> anyhow::Result<Resource<GetOplogEntry>> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("golem::api::get-oplog", "new");
 
         let account_id = self.owned_worker_id.account_id();
@@ -210,7 +209,6 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
         &mut self,
         self_: Resource<GetOplogEntry>,
     ) -> anyhow::Result<Option<Vec<OplogEntry>>> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("golem::api::get-oplog", "get-next");
 
         let component_service = self.state.component_service.clone();
@@ -295,7 +293,6 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
         worker_id: golem::api1_1_0::oplog::WorkerId,
         text: String,
     ) -> anyhow::Result<Resource<SearchOplog>> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("golem::api::search-oplog", "new");
 
         let account_id = self.owned_worker_id.account_id();
@@ -316,7 +313,6 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
         &mut self,
         self_: Resource<SearchOplog>,
     ) -> anyhow::Result<Option<Vec<(golem::api1_1_0::oplog::OplogIndex, OplogEntry)>>> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("golem::api::search-oplog", "get-next");
 
         let component_service = self.state.component_service.clone();

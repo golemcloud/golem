@@ -18,7 +18,6 @@
 use crate::durable_host::http::serialized::SerializableHttpRequest;
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
 use crate::durable_host::replay_state::ReplayState;
-use crate::durable_host::sync_helper::{SyncHelper, SyncHelperPermit};
 use crate::durable_host::wasm_rpc::UrnExtensions;
 use crate::error::GolemError;
 use crate::function_result_interpreter::interpret_function_results;
@@ -118,7 +117,6 @@ pub mod wasm_rpc;
 
 mod durability;
 mod replay_state;
-mod sync_helper;
 
 /// Partial implementation of the WorkerCtx interfaces for adding durable execution to workers.
 pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
@@ -306,15 +304,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub fn as_wasi_http_view(&mut self) -> WasiHttpImpl<DurableWorkerCtxWasiHttpView<Ctx>> {
         WasiHttpImpl(DurableWorkerCtxWasiHttpView(self))
-    }
-
-    pub(crate) async fn begin_async_host_function(&self) -> Result<SyncHelperPermit, GolemError> {
-        self.state.sync_helper.sync().await
-    }
-
-    pub async fn flush(&self) -> Result<(), GolemError> {
-        let _ = self.state.sync_helper.sync().await?;
-        Ok(())
     }
 
     pub async fn update_worker_status(&self, f: impl FnOnce(&mut WorkerStatusRecord)) {
@@ -723,8 +712,6 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
     }
 
     async fn set_suspended(&self) -> Result<(), GolemError> {
-        self.flush().await?; // Synchronize with SyncHelper
-
         let mut execution_status = self.execution_status.write().unwrap();
         let current_execution_status = execution_status.clone();
         match current_execution_status {
@@ -1796,7 +1783,6 @@ pub struct PrivateDurableWorkerState<Owner: PluginOwner, Scope: PluginScope> {
     component_metadata: ComponentMetadata,
 
     total_linear_memory_size: u64,
-    sync_helper: SyncHelper,
 }
 
 impl<Owner: PluginOwner, Scope: PluginScope> PrivateDurableWorkerState<Owner, Scope> {
@@ -1857,7 +1843,6 @@ impl<Owner: PluginOwner, Scope: PluginScope> PrivateDurableWorkerState<Owner, Sc
             indexed_resources: HashMap::new(),
             component_metadata,
             total_linear_memory_size,
-            sync_helper: SyncHelper::new(oplog.clone(), replay_state.clone()),
             replay_state,
         }
     }
@@ -1936,35 +1921,6 @@ impl<Owner: PluginOwner, Scope: PluginScope> PrivateDurableWorkerState<Owner, Sc
         } else {
             let begin_index = self.oplog.current_oplog_index().await;
             Ok(begin_index)
-        }
-    }
-
-    pub fn end_function_sync(
-        &mut self,
-        wrapped_function_type: &WrappedFunctionType,
-        begin_index: OplogIndex,
-    ) -> Result<(), GolemError> {
-        if self.persistence_level != PersistenceLevel::PersistNothing
-            && ((*wrapped_function_type == WrappedFunctionType::WriteRemote
-                && !self.assume_idempotence)
-                || matches!(
-                    *wrapped_function_type,
-                    WrappedFunctionType::WriteRemoteBatched(None)
-                ))
-        {
-            if self.is_live() {
-                self.sync_helper
-                    .write_oplog_entry(OplogEntry::end_remote_write(begin_index));
-                Ok(())
-            } else {
-                self.sync_helper.skip_oplog_entry(
-                    Box::new(|entry| matches!(entry, OplogEntry::EndRemoteWrite { .. })),
-                    "EndRemoteWrite",
-                );
-                Ok(())
-            }
-        } else {
-            Ok(())
         }
     }
 
