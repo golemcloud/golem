@@ -59,27 +59,22 @@ fn preview2_mod_gen(golem_wit_path: &str) -> String {
     format!(
         r#"wasmtime::component::bindgen!({{
         path: r"{golem_wit_path}",
-        inline: "
-          package golem:api;
+        interfaces: "
+          import golem:api/host@0.2.0;
+          import golem:api/host@1.1.0;
+          import golem:api/oplog@1.1.0;
 
-          world golem {{
-              import golem:api/host@0.2.0;
-              import golem:api/host@1.1.0;
-              import golem:api/oplog@1.1.0;
-
-              import wasi:blobstore/blobstore;
-              import wasi:blobstore/container;
-              import wasi:blobstore/types;
-              import wasi:keyvalue/atomic@0.1.0;
-              import wasi:keyvalue/eventual-batch@0.1.0;
-              import wasi:keyvalue/cache@0.1.0;
-              import wasi:keyvalue/eventual@0.1.0;
-              import wasi:keyvalue/types@0.1.0;
-              import wasi:keyvalue/wasi-keyvalue-error@0.1.0;
-              import wasi:logging/logging;
-          }}
+          import wasi:blobstore/blobstore;
+          import wasi:blobstore/container;
+          import wasi:blobstore/types;
+          import wasi:keyvalue/atomic@0.1.0;
+          import wasi:keyvalue/eventual-batch@0.1.0;
+          import wasi:keyvalue/cache@0.1.0;
+          import wasi:keyvalue/eventual@0.1.0;
+          import wasi:keyvalue/types@0.1.0;
+          import wasi:keyvalue/wasi-keyvalue-error@0.1.0;
+          import wasi:logging/logging;
         ",
-        world: "golem:api/golem",
         tracing: false,
         async: true,
         trappable_imports: true,
@@ -99,6 +94,7 @@ fn preview2_mod_gen(golem_wit_path: &str) -> String {
             "golem:api/oplog/get-oplog": super::durable_host::golem::v11::GetOplogEntry,
             "golem:api/oplog/search-oplog": super::durable_host::golem::v11::SearchOplogEntry
         }},
+        skip_mut_forwarding_impls: true,
     }});
         "#
     )

@@ -72,6 +72,8 @@ exclude = [
 anyhow = "1.0.94"
 assert2 = "0.3.15"
 async-fs = "2.1.2"
+heck = "0.4"
+validator = "0.16"
 async-hash = "0.5.4"
 async-recursion = "1.1.1"
 async-trait = "0.1.83"
@@ -213,14 +215,15 @@ typed-path = "0.10.0"
 url = "2.5.4"
 uuid = { version = "1.11.0", features = ["serde", "v4", "v5"] }
 wasm-wave = "=0.6.0"
-wasmtime = { version = "=27.0.0", features = ["component-model"] }
-wasmtime-wasi = { version = "=27.0.0" }
-wasmtime-wasi-http = { version = "=27.0.0" }
+wasmtime = { version = "=21.0.1", features = ["component-model"] }
+wasmtime-wasi = { version = "=21.0.1" }
+wasmtime-wasi-http = { version = "=21.0.1" }
 webpki-roots = { version = "0.26.7" }
 xdg = "2.5.2"
+convert_case = "0.6.0"
 
 [patch.crates-io]
 redis-protocol = { git = "https://github.com/golemcloud/redis-protocol.rs.git", branch = "unpin-cookie-factory" }
-wasmtime = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v27.0.0" }
-wasmtime-wasi = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v27.0.0" }
-wasmtime-wasi-http = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v27.0.0" }
+wasmtime = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v21.0.1" }
+wasmtime-wasi = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v21.0.1" }
+wasmtime-wasi-http = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v21.0.1" }

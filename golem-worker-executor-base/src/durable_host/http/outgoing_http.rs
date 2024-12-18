@@ -35,6 +35,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         request: Resource<HostOutgoingRequest>,
         options: Option<Resource<types::RequestOptions>>,
     ) -> HttpResult<Resource<HostFutureIncomingResponse>> {
+        let _permit = self
+            .begin_async_host_function()
+            .await
+            .map_err(HttpError::trap)?;
         record_host_function_call("http::outgoing_handler", "handle");
 
         // Durability is handled by the WasiHttpView send_request method and the follow-up calls to await/poll the response future
@@ -97,5 +101,16 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         }
 
         result
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {
+    async fn handle(
+        &mut self,
+        request: Resource<HostOutgoingRequest>,
+        options: Option<Resource<types::RequestOptions>>,
+    ) -> HttpResult<Resource<HostFutureIncomingResponse>> {
+        (*self).handle(request, options).await
     }
 }
