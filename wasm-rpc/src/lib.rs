@@ -84,29 +84,34 @@ pub use bindings::golem::rpc::types::{
 pub use bindings::wasi::io::poll::Pollable;
 
 #[cfg(feature = "host-bindings")]
-use ::wasmtime::component::bindgen;
-
-#[cfg(feature = "host-bindings")]
 pub use wasmtime_wasi::Pollable;
 
 #[cfg(feature = "host-bindings")]
-bindgen!({
-    path: "wit",
-    interfaces: "
-      import golem:rpc/types@0.1.0;
-    ",
-    tracing: false,
-    async: true,
-    trappable_imports: true,
-    with: {
-        "golem:rpc/types/wasm-rpc": WasmRpcEntry,
-        "golem:rpc/types/future-invoke-result": FutureInvokeResultEntry,
-        "wasi:io/poll/pollable": Pollable,
-    }
-});
+mod generated {
+    use ::wasmtime::component::bindgen;
+
+    bindgen!({
+        path: "wit",
+        world: "wit-value-world",
+        tracing: false,
+        async: true,
+        trappable_imports: true,
+        with: {
+            "golem:rpc/types/wasm-rpc": super::WasmRpcEntry,
+            "golem:rpc/types/future-invoke-result": super::FutureInvokeResultEntry,
+            "wasi:io/poll/pollable": super::Pollable,
+        },
+        wasmtime_crate: ::wasmtime
+    });
+}
 
 #[cfg(feature = "host-bindings")]
-pub use golem::rpc::types::{Host, HostWasmRpc, NodeIndex, RpcError, Uri, WitNode, WitValue};
+pub use generated::golem;
+
+#[cfg(feature = "host-bindings")]
+pub use generated::golem::rpc::types::{
+    Host, HostWasmRpc, NodeIndex, RpcError, Uri, WitNode, WitValue,
+};
 
 #[cfg(feature = "host-bindings")]
 pub struct WasmRpcEntry {

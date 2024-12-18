@@ -35,7 +35,6 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         &mut self,
         container: Resource<Container>,
     ) -> anyhow::Result<Result<String, Error>> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("blobstore::container::container", "name");
         let name = self
             .as_wasi_view()
@@ -49,7 +48,6 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         &mut self,
         container: Resource<Container>,
     ) -> anyhow::Result<Result<ContainerMetadata, Error>> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("blobstore::container::container", "info");
         let info = self
             .as_wasi_view()
@@ -69,7 +67,6 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         start: u64,
         end: u64,
     ) -> anyhow::Result<Result<Resource<IncomingValue>, Error>> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("blobstore::container::container", "get_data");
         let account_id = self.state.owned_worker_id.account_id();
 
@@ -113,7 +110,6 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         name: ObjectName,
         data: Resource<OutgoingValue>,
     ) -> anyhow::Result<Result<(), Error>> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("blobstore::container::container", "write_data");
         let account_id = self.state.owned_worker_id.account_id();
 
@@ -149,7 +145,6 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         &mut self,
         container: Resource<Container>,
     ) -> anyhow::Result<Result<Resource<StreamObjectNames>, Error>> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("blobstore::container::container", "list_objects");
         let account_id = self.state.owned_worker_id.account_id();
 
@@ -187,7 +182,6 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         container: Resource<Container>,
         name: ObjectName,
     ) -> anyhow::Result<Result<(), Error>> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("blobstore::container::container", "delete_object");
         let account_id = self.state.owned_worker_id.account_id();
 
@@ -219,7 +213,6 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         container: Resource<Container>,
         names: Vec<ObjectName>,
     ) -> anyhow::Result<Result<(), Error>> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("blobstore::container::container", "delete_objects");
         let account_id = self.state.owned_worker_id.account_id();
 
@@ -251,7 +244,6 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         container: Resource<Container>,
         name: ObjectName,
     ) -> anyhow::Result<Result<bool, Error>> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("blobstore::container::container", "has_object");
         let account_id = self.state.owned_worker_id.account_id();
 
@@ -283,7 +275,6 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         container: Resource<Container>,
         name: ObjectName,
     ) -> anyhow::Result<Result<ObjectMetadata, Error>> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("blobstore::container::container", "object_info");
         let account_id = self.state.owned_worker_id.account_id();
 
@@ -324,7 +315,6 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
     }
 
     async fn clear(&mut self, container: Resource<Container>) -> anyhow::Result<Result<(), Error>> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("blobstore::container::container", "clear");
         let account_id = self.state.owned_worker_id.account_id();
 
@@ -348,7 +338,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         Ok(Ok(()))
     }
 
-    fn drop(&mut self, container: Resource<Container>) -> anyhow::Result<()> {
+    async fn drop(&mut self, container: Resource<Container>) -> anyhow::Result<()> {
         record_host_function_call("blobstore::container::container", "drop");
         self.as_wasi_view()
             .table()
@@ -364,7 +354,6 @@ impl<Ctx: WorkerCtx> HostStreamObjectNames for DurableWorkerCtx<Ctx> {
         self_: Resource<StreamObjectNames>,
         len: u64,
     ) -> anyhow::Result<Result<(Vec<ObjectName>, bool), Error>> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call(
             "blobstore::container::stream_object_names",
             "read_stream_object_names",
@@ -391,7 +380,6 @@ impl<Ctx: WorkerCtx> HostStreamObjectNames for DurableWorkerCtx<Ctx> {
         self_: Resource<StreamObjectNames>,
         num: u64,
     ) -> anyhow::Result<Result<(u64, bool), Error>> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call(
             "blobstore::container::stream_object_names",
             "skip_stream_object_names",
@@ -413,7 +401,7 @@ impl<Ctx: WorkerCtx> HostStreamObjectNames for DurableWorkerCtx<Ctx> {
         Ok(Ok((result, false)))
     }
 
-    fn drop(&mut self, rep: Resource<StreamObjectNames>) -> anyhow::Result<()> {
+    async fn drop(&mut self, rep: Resource<StreamObjectNames>) -> anyhow::Result<()> {
         record_host_function_call("blobstore::container::stream_object_names", "drop");
         self.as_wasi_view().table().delete(rep)?;
         Ok(())
@@ -422,112 +410,3 @@ impl<Ctx: WorkerCtx> HostStreamObjectNames for DurableWorkerCtx<Ctx> {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> HostContainer for &mut DurableWorkerCtx<Ctx> {
-    async fn name(
-        &mut self,
-        container: Resource<Container>,
-    ) -> anyhow::Result<Result<String, Error>> {
-        (*self).name(container).await
-    }
-
-    async fn info(
-        &mut self,
-        container: Resource<Container>,
-    ) -> anyhow::Result<Result<ContainerMetadata, Error>> {
-        (*self).info(container).await
-    }
-
-    async fn get_data(
-        &mut self,
-        container: Resource<Container>,
-        name: ObjectName,
-        start: u64,
-        end: u64,
-    ) -> anyhow::Result<Result<Resource<IncomingValue>, Error>> {
-        (*self).get_data(container, name, start, end).await
-    }
-
-    async fn write_data(
-        &mut self,
-        container: Resource<Container>,
-        name: ObjectName,
-        data: Resource<OutgoingValue>,
-    ) -> anyhow::Result<Result<(), Error>> {
-        (*self).write_data(container, name, data).await
-    }
-
-    async fn list_objects(
-        &mut self,
-        container: Resource<Container>,
-    ) -> anyhow::Result<Result<Resource<StreamObjectNames>, Error>> {
-        (*self).list_objects(container).await
-    }
-
-    async fn delete_object(
-        &mut self,
-        container: Resource<Container>,
-        name: ObjectName,
-    ) -> anyhow::Result<Result<(), Error>> {
-        (*self).delete_object(container, name).await
-    }
-
-    async fn delete_objects(
-        &mut self,
-        container: Resource<Container>,
-        names: Vec<ObjectName>,
-    ) -> anyhow::Result<Result<(), Error>> {
-        (*self).delete_objects(container, names).await
-    }
-
-    async fn has_object(
-        &mut self,
-        container: Resource<Container>,
-        name: ObjectName,
-    ) -> anyhow::Result<Result<bool, Error>> {
-        (*self).has_object(container, name).await
-    }
-
-    async fn object_info(
-        &mut self,
-        container: Resource<Container>,
-        name: ObjectName,
-    ) -> anyhow::Result<Result<ObjectMetadata, Error>> {
-        (*self).object_info(container, name).await
-    }
-
-    async fn clear(&mut self, container: Resource<Container>) -> anyhow::Result<Result<(), Error>> {
-        (*self).clear(container).await
-    }
-
-    fn drop(&mut self, rep: Resource<ContainerEntry>) -> anyhow::Result<()> {
-        HostContainer::drop(*self, rep)
-    }
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> HostStreamObjectNames for &mut DurableWorkerCtx<Ctx> {
-    async fn read_stream_object_names(
-        &mut self,
-        self_: Resource<StreamObjectNames>,
-        len: u64,
-    ) -> anyhow::Result<Result<(Vec<ObjectName>, bool), Error>> {
-        (*self).read_stream_object_names(self_, len).await
-    }
-
-    async fn skip_stream_object_names(
-        &mut self,
-        self_: Resource<StreamObjectNames>,
-        num: u64,
-    ) -> anyhow::Result<Result<(u64, bool), Error>> {
-        (*self).skip_stream_object_names(self_, num).await
-    }
-
-    fn drop(&mut self, rep: Resource<StreamObjectNames>) -> anyhow::Result<()> {
-        HostStreamObjectNames::drop(*self, rep)
-    }
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {}

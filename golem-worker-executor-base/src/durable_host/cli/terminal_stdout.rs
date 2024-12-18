@@ -27,10 +27,3 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         self.as_wasi_view().get_terminal_stdout()
     }
 }
-
-#[async_trait]
-impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {
-    fn get_terminal_stdout(&mut self) -> anyhow::Result<Option<Resource<TerminalOutput>>> {
-        (*self).get_terminal_stdout()
-    }
-}
