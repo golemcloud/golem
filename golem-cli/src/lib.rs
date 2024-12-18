@@ -148,7 +148,7 @@ where
         .or_else(|| oss_profile.as_ref().map(|(_, p)| p.config.default_format))
         .unwrap_or_default();
 
-    init_tracing(parsed.verbosity.clone());
+    init_tracing(parsed.verbosity);
 
     info!(
         profile = format!("{:?}", oss_profile.as_ref().map(|(n, _)| n)),

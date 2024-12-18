@@ -24,19 +24,9 @@ use wasmtime_wasi::bindings::cli::terminal_input::{Host, HostTerminalInput, Term
 impl<Ctx: WorkerCtx> HostTerminalInput for DurableWorkerCtx<Ctx> {
     fn drop(&mut self, rep: Resource<TerminalInput>) -> anyhow::Result<()> {
         record_host_function_call("cli::terminal_input::terminal_input", "drop");
-        self.as_wasi_view().drop(rep)
+        HostTerminalInput::drop(&mut self.as_wasi_view(), rep)
     }
 }
 
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> HostTerminalInput for &mut DurableWorkerCtx<Ctx> {
-    fn drop(&mut self, rep: Resource<TerminalInput>) -> anyhow::Result<()> {
-        (*self).drop(rep)
-    }
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {}

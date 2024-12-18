@@ -56,7 +56,6 @@ use wasmtime_wasi::subscribe;
 #[async_trait]
 impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
     async fn new(&mut self, location: Uri) -> anyhow::Result<Resource<WasmRpcEntry>> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("golem::rpc::wasm-rpc", "new");
 
         match location.parse_as_golem_urn() {
@@ -92,8 +91,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         record_host_function_call("golem::rpc::wasm-rpc", "invoke-and-await");
         let args = self.get_arguments().await?;
         let env = self.get_environment().await?;
-
-        let _permit = self.begin_async_host_function().await?;
 
         let entry = self.table().get(&self_)?;
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
@@ -243,8 +240,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let args = self.get_arguments().await?;
         let env = self.get_environment().await?;
 
-        let _permit = self.begin_async_host_function().await?;
-
         let entry = self.table().get(&self_)?;
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
         let remote_worker_id = payload.remote_worker_id().clone();
@@ -330,7 +325,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let args = self.get_arguments().await?;
         let env = self.get_environment().await?;
 
-        let _permit = self.begin_async_host_function().await?;
         let begin_index = self
             .state
             .begin_function(&WrappedFunctionType::WriteRemote)
@@ -433,7 +427,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         result
     }
 
-    fn drop(&mut self, rep: Resource<WasmRpcEntry>) -> anyhow::Result<()> {
+    async fn drop(&mut self, rep: Resource<WasmRpcEntry>) -> anyhow::Result<()> {
         record_host_function_call("golem::rpc::wasm-rpc", "drop");
 
         let _ = self.table().delete(rep)?;
@@ -504,7 +498,6 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
         &mut self,
         this: Resource<FutureInvokeResult>,
     ) -> anyhow::Result<Resource<Pollable>> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("golem::rpc::future-invoke-result", "subscribe");
         subscribe(self.table(), this, None)
     }
@@ -513,7 +506,6 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
         &mut self,
         this: Resource<FutureInvokeResult>,
     ) -> anyhow::Result<Option<Result<WitValue, golem_wasm_rpc::RpcError>>> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("golem::rpc::future-invoke-result", "get");
         let rpc = self.rpc();
         let component_service = self.state.component_service.clone();
@@ -759,7 +751,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
         }
     }
 
-    fn drop(&mut self, this: Resource<FutureInvokeResult>) -> anyhow::Result<()> {
+    async fn drop(&mut self, this: Resource<FutureInvokeResult>) -> anyhow::Result<()> {
         record_host_function_call("golem::rpc::future-invoke-result", "drop");
         let _ = self.table().delete(this)?;
         Ok(())

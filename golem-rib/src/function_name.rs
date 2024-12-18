@@ -22,20 +22,6 @@ use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::fmt::Display;
 
-#[derive(Debug, PartialEq, Eq, Clone, Encode, Decode)]
-pub enum ParsedFunctionSite {
-    Global,
-    Interface {
-        name: String,
-    },
-    PackagedInterface {
-        namespace: String,
-        package: String,
-        interface: String,
-        version: Option<SemVer>,
-    },
-}
-
 #[derive(PartialEq, Eq, Clone)]
 pub struct SemVer(pub semver::Version);
 
@@ -108,6 +94,20 @@ impl<'de> BorrowDecode<'de> for SemVer {
     }
 }
 
+#[derive(Debug, PartialEq, Eq, Clone, Encode, Decode)]
+pub enum ParsedFunctionSite {
+    Global,
+    Interface {
+        name: String,
+    },
+    PackagedInterface {
+        namespace: String,
+        package: String,
+        interface: String,
+        version: Option<SemVer>,
+    },
+}
+
 impl ParsedFunctionSite {
     pub fn interface_name(&self) -> Option<String> {
         match self {
@@ -127,45 +127,6 @@ impl ParsedFunctionSite {
             } => Some(format!("{namespace}:{package}/{interface}@{}", version.0)),
         }
     }
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, Encode, Decode)]
-pub enum ParsedFunctionReference {
-    Function {
-        function: String,
-    },
-    RawResourceConstructor {
-        resource: String,
-    },
-    RawResourceDrop {
-        resource: String,
-    },
-    RawResourceMethod {
-        resource: String,
-        method: String,
-    },
-    RawResourceStaticMethod {
-        resource: String,
-        method: String,
-    },
-    IndexedResourceConstructor {
-        resource: String,
-        resource_params: Vec<String>,
-    },
-    IndexedResourceMethod {
-        resource: String,
-        resource_params: Vec<String>,
-        method: String,
-    },
-    IndexedResourceStaticMethod {
-        resource: String,
-        resource_params: Vec<String>,
-        method: String,
-    },
-    IndexedResourceDrop {
-        resource: String,
-        resource_params: Vec<String>,
-    },
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -315,6 +276,45 @@ impl DynamicParsedFunctionReference {
             _ => None,
         }
     }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Encode, Decode)]
+pub enum ParsedFunctionReference {
+    Function {
+        function: String,
+    },
+    RawResourceConstructor {
+        resource: String,
+    },
+    RawResourceDrop {
+        resource: String,
+    },
+    RawResourceMethod {
+        resource: String,
+        method: String,
+    },
+    RawResourceStaticMethod {
+        resource: String,
+        method: String,
+    },
+    IndexedResourceConstructor {
+        resource: String,
+        resource_params: Vec<String>,
+    },
+    IndexedResourceMethod {
+        resource: String,
+        resource_params: Vec<String>,
+        method: String,
+    },
+    IndexedResourceStaticMethod {
+        resource: String,
+        resource_params: Vec<String>,
+        method: String,
+    },
+    IndexedResourceDrop {
+        resource: String,
+        resource_params: Vec<String>,
+    },
 }
 
 impl Display for ParsedFunctionReference {
@@ -491,12 +491,6 @@ impl ParsedFunctionReference {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Encode, Decode)]
-pub struct ParsedFunctionName {
-    pub site: ParsedFunctionSite,
-    pub function: ParsedFunctionReference,
-}
-
 // DynamicParsedFunctionName is different from ParsedFunctionName.
 // In `DynamicParsedFunctionName` the resource parameters are `Expr` (Rib) while they are `String`
 // in `ParsedFunctionName`.
@@ -569,6 +563,12 @@ impl Display for DynamicParsedFunctionName {
         let function_name = self.to_parsed_function_name().to_string();
         write!(f, "{}", function_name)
     }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Encode, Decode)]
+pub struct ParsedFunctionName {
+    pub site: ParsedFunctionSite,
+    pub function: ParsedFunctionReference,
 }
 
 impl Serialize for ParsedFunctionName {
