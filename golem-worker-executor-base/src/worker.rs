@@ -20,6 +20,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use crate::durable_host::recover_stderr_logs;
+use crate::durable_host::wasm_rpc::{UrnExtensions, WasmRpcEntryPayload};
 use crate::error::{GolemError, WorkerOutOfMemory};
 use crate::function_result_interpreter::interpret_function_results;
 use crate::invocation::{find_first_available_function, invoke_worker, InvokeResult};
@@ -30,6 +31,7 @@ use crate::model::{
 use crate::services::component::ComponentMetadata;
 use crate::services::events::Event;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
+use crate::services::rpc::RpcDemand;
 use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
 use crate::services::{
     All, HasActiveWorkers, HasAll, HasBlobStoreService, HasComponentService, HasConfig, HasEvents,
@@ -57,15 +59,17 @@ use golem_common::model::{
 };
 use golem_common::retries::get_delay;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::Value;
+use golem_wasm_rpc::{Uri, Value, WasmRpcEntry};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::{Mutex, MutexGuard, OwnedSemaphorePermit};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, span, warn, Instrument, Level};
-use wasmtime::component::Instance;
+use wasmtime::component::types::ComponentItem;
+use wasmtime::component::{Instance, Resource, ResourceType, Val};
 use wasmtime::{AsContext, Store, UpdateDeadline};
+use wasmtime_wasi::WasiView;
 
 /// Represents worker that may be running or suspended.
 ///
@@ -473,6 +477,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
+    /// Invokes the worker and awaits for a result.
+    ///
+    /// Successful result is a `TypeAnnotatedValue` encoding either a tuple or a record.
     pub async fn invoke_and_await(
         &self,
         idempotency_key: IdempotencyKey,
@@ -1350,7 +1357,8 @@ impl RunningWorker {
         )
         .await?;
 
-        let mut store = Store::new(&parent.engine(), context);
+        let engine = parent.engine();
+        let mut store = Store::new(&engine, context);
         store.set_epoch_deadline(parent.config().limits.epoch_ticks);
         let worker_id_clone = worker_metadata.worker_id.clone();
         store.epoch_deadline_callback(move |mut store| {
@@ -1371,7 +1379,15 @@ impl RunningWorker {
 
         store.limiter_async(|ctx| ctx.resource_limiter());
 
-        let instance_pre = parent.linker().instantiate_pre(&component).map_err(|e| {
+        // TODO MOVE SOMEWHERE ELSE
+        let mut linker = (*parent.linker()).clone(); // fresh linker
+        store.data_mut().link(&engine, &mut linker, &component)?;
+
+        // TODO: check parent.linker() is not affected
+
+        // TODO ^^^
+
+        let instance_pre = linker.instantiate_pre(&component).map_err(|e| {
             GolemError::worker_creation_failed(
                 parent.owned_worker_id.worker_id(),
                 format!(
@@ -1551,13 +1567,13 @@ impl RunningWorker {
                                                     store,
                                                     &instance,
                                                 )
-                                                .await;
+                                                    .await;
 
                                                 match result {
                                                     Ok(InvokeResult::Succeeded {
-                                                        output,
-                                                        consumed_fuel,
-                                                    }) => {
+                                                           output,
+                                                           consumed_fuel,
+                                                       }) => {
                                                         let component_metadata =
                                                             store.as_context().data().component_metadata();
 
@@ -1577,9 +1593,9 @@ impl RunningWorker {
                                                                     output,
                                                                     function_results,
                                                                 )
-                                                                .map_err(|e| GolemError::ValueMismatch {
-                                                                    details: e.join(", "),
-                                                                });
+                                                                    .map_err(|e| GolemError::ValueMismatch {
+                                                                        details: e.join(", "),
+                                                                    });
 
                                                                 match result {
                                                                     Ok(result) => {
@@ -1685,8 +1701,8 @@ impl RunningWorker {
                                                     }
                                                 }
                                             }
-                                            .instrument(span)
-                                            .await;
+                                                .instrument(span)
+                                                .await;
                                             if do_break {
                                                 break;
                                             }
@@ -1713,7 +1729,7 @@ impl RunningWorker {
                                                     vec![
                                                         "golem:api/save-snapshot@1.1.0.{save}".to_string(),
                                                         "golem:api/save-snapshot@0.2.0.{save}".to_string(),
-                                                    ]
+                                                    ],
                                                 ) {
                                                     store.data_mut().begin_call_snapshotting_function();
 
@@ -1950,9 +1966,9 @@ impl InvocationResult {
                 OplogEntry::Error { error, .. } => {
                     let stderr = recover_stderr_logs(services, owned_worker_id, oplog_idx).await;
                     Err(FailedInvocationResult { trap_type: TrapType::Error(error), stderr })
-                },
-                OplogEntry::Interrupted { .. } => Err(FailedInvocationResult { trap_type: TrapType::Interrupt(InterruptKind::Interrupt), stderr: "".to_string()}),
-                OplogEntry::Exited { .. } => Err(FailedInvocationResult { trap_type: TrapType::Exit, stderr: "".to_string()}),
+                }
+                OplogEntry::Interrupted { .. } => Err(FailedInvocationResult { trap_type: TrapType::Interrupt(InterruptKind::Interrupt), stderr: "".to_string() }),
+                OplogEntry::Exited { .. } => Err(FailedInvocationResult { trap_type: TrapType::Exit, stderr: "".to_string() }),
                 _ => panic!("Unexpected oplog entry pointed by invocation result at index {oplog_idx} for {owned_worker_id:?}")
             };
 

@@ -36,13 +36,14 @@ use golem_common::model::{
 };
 use golem_common::uri::oss::urn::{WorkerFunctionUrn, WorkerOrFunctionUrn};
 use golem_wasm_rpc::golem::rpc::types::{
-    FutureInvokeResult, HostFutureInvokeResult, Pollable, Uri,
+    FutureInvokeResult, HostFutureInvokeResult, Pollable, Uri, WasmRpc,
 };
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::{
-    FutureInvokeResultEntry, HostWasmRpc, SubscribeAny, ValueAndType, WasmRpcEntry, WitValue,
+    FutureInvokeResultEntry, HostWasmRpc, SubscribeAny, Value, ValueAndType, WasmRpcEntry, WitValue,
 };
 use std::any::Any;
+use std::fmt::{Debug, Formatter};
 use std::str::FromStr;
 use std::sync::Arc;
 use tracing::{error, warn};
@@ -60,14 +61,15 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
         match location.parse_as_golem_urn() {
             Some((remote_worker_id, None)) => {
-                let remote_worker_id =
-                    generate_unique_local_worker_id(self, remote_worker_id).await?;
+                let remote_worker_id = self
+                    .generate_unique_local_worker_id(remote_worker_id)
+                    .await?;
 
                 let remote_worker_id =
                     OwnedWorkerId::new(&self.owned_worker_id.account_id, &remote_worker_id);
                 let demand = self.rpc().create_demand(&remote_worker_id).await;
                 let entry = self.table().push(WasmRpcEntry {
-                    payload: Box::new(WasmRpcEntryPayload {
+                    payload: Box::new(WasmRpcEntryPayload::Interface {
                         demand,
                         remote_worker_id,
                     }),
@@ -85,7 +87,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         &mut self,
         self_: Resource<WasmRpcEntry>,
         function_name: String,
-        function_params: Vec<WitValue>,
+        mut function_params: Vec<WitValue>,
     ) -> anyhow::Result<Result<WitValue, golem_wasm_rpc::RpcError>> {
         record_host_function_call("golem::rpc::wasm-rpc", "invoke-and-await");
         let args = self.get_arguments().await?;
@@ -95,7 +97,26 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
         let entry = self.table().get(&self_)?;
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
-        let remote_worker_id = payload.remote_worker_id.clone();
+        let remote_worker_id = payload.remote_worker_id().clone();
+
+        // TODO: do this in other variants too
+        match payload {
+            WasmRpcEntryPayload::Resource {
+                resource_uri,
+                resource_id,
+                ..
+            } => {
+                function_params.insert(
+                    0,
+                    Value::Handle {
+                        uri: resource_uri.value.to_string(),
+                        resource_id: *resource_id,
+                    }
+                    .into(),
+                );
+            }
+            _ => {}
+        }
 
         let current_idempotency_key = self
             .get_current_idempotency_key()
@@ -226,7 +247,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
         let entry = self.table().get(&self_)?;
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
-        let remote_worker_id = payload.remote_worker_id.clone();
+        let remote_worker_id = payload.remote_worker_id().clone();
 
         let current_idempotency_key = self
             .get_current_idempotency_key()
@@ -317,7 +338,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
         let entry = self.table().get(&this)?;
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
-        let remote_worker_id = payload.remote_worker_id.clone();
+        let remote_worker_id = payload.remote_worker_id().clone();
 
         let current_idempotency_key = self
             .get_current_idempotency_key()
@@ -748,32 +769,6 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
 #[async_trait]
 impl<Ctx: WorkerCtx> golem_wasm_rpc::Host for DurableWorkerCtx<Ctx> {}
 
-async fn generate_unique_local_worker_id<Ctx: WorkerCtx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    remote_worker_id: TargetWorkerId,
-) -> Result<WorkerId, GolemError> {
-    match remote_worker_id.clone().try_into_worker_id() {
-        Some(worker_id) => Ok(worker_id),
-        None => {
-            let worker_id = Durability::<Ctx, (), WorkerId, SerializableError>::wrap(
-                ctx,
-                WrappedFunctionType::ReadLocal,
-                "golem::rpc::wasm-rpc::generate_unique_local_worker_id",
-                (),
-                |ctx| {
-                    Box::pin(async move {
-                        ctx.rpc()
-                            .generate_unique_local_worker_id(remote_worker_id)
-                            .await
-                    })
-                },
-            )
-            .await?;
-            Ok(worker_id)
-        }
-    }
-}
-
 /// Tries to get a `ValueAndType` representation for the given `WitValue` parameters by querying the latest component metadata for the
 /// target component.
 /// If the query fails, or the expected function name is not in its metadata or the number of parameters does not match, then it returns an
@@ -805,10 +800,63 @@ async fn try_get_typed_parameters(
     Vec::new()
 }
 
-pub struct WasmRpcEntryPayload {
-    #[allow(dead_code)]
-    demand: Box<dyn RpcDemand>,
-    remote_worker_id: OwnedWorkerId,
+pub enum WasmRpcEntryPayload {
+    Interface {
+        #[allow(dead_code)]
+        demand: Box<dyn RpcDemand>,
+        remote_worker_id: OwnedWorkerId,
+    },
+    Resource {
+        #[allow(dead_code)]
+        demand: Box<dyn RpcDemand>,
+        remote_worker_id: OwnedWorkerId,
+        resource_uri: Uri,
+        resource_id: u64,
+    },
+}
+
+impl Debug for WasmRpcEntryPayload {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Interface {
+                remote_worker_id, ..
+            } => f
+                .debug_struct("Interface")
+                .field("remote_worker_id", remote_worker_id)
+                .finish(),
+            Self::Resource {
+                remote_worker_id,
+                resource_uri,
+                resource_id,
+                ..
+            } => f
+                .debug_struct("Resource")
+                .field("remote_worker_id", remote_worker_id)
+                .field("resource_uri", resource_uri)
+                .field("resource_id", resource_id)
+                .finish(),
+        }
+    }
+}
+
+impl WasmRpcEntryPayload {
+    pub fn remote_worker_id(&self) -> &OwnedWorkerId {
+        match self {
+            Self::Interface {
+                remote_worker_id, ..
+            } => remote_worker_id,
+            Self::Resource {
+                remote_worker_id, ..
+            } => remote_worker_id,
+        }
+    }
+
+    pub fn demand(&self) -> &Box<dyn RpcDemand> {
+        match self {
+            Self::Interface { demand, .. } => demand,
+            Self::Resource { demand, .. } => demand,
+        }
+    }
 }
 
 pub trait UrnExtensions {
