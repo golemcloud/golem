@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>{{TITLE}}</title>
+    <link rel="stylesheet" type="text/css" href="https://unpkg.com/swagger-ui-dist@5.9.0/swagger-ui.css" />
+    <link rel="stylesheet" type="text/css" href="https://unpkg.com/swagger-ui-themes@3.0.1/themes/theme-{{THEME}}.css" />
+    <style>
+        html {
+            box-sizing: border-box;
+            overflow: -moz-scrollbars-vertical;
+            overflow-y: scroll;
+        }
+
+        *,
+        *:before,
+        *:after {
+            box-sizing: inherit;
+        }
+
+        body {
+            margin: 0;
+            background: #fafafa;
+        }
+
+        .swagger-ui .topbar {
+            display: none;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="swagger-ui"></div>
+
+    <script src="https://unpkg.com/swagger-ui-dist@5.9.0/swagger-ui-bundle.js"></script>
+    <script src="https://unpkg.com/swagger-ui-dist@5.9.0/swagger-ui-standalone-preset.js"></script>
+    <script>
+        window.onload = function() {
+            const config = {{CONFIG}};
+            const ui = SwaggerUIBundle({
+                url: "{{SPEC_URL}}",
+                dom_id: '#swagger-ui',
+                deepLinking: true,
+                presets: [
+                    SwaggerUIBundle.presets.apis,
+                    SwaggerUIStandalonePreset
+                ],
+                plugins: [
+                    SwaggerUIBundle.plugins.DownloadUrl
+                ],
+                layout: "StandaloneLayout",
+                defaultModelsExpandDepth: config.default_models_expand_depth,
+                defaultModelExpandDepth: config.default_model_expand_depth,
+                defaultModelRendering: config.default_model_rendering.toLowerCase(),
+                displayRequestDuration: config.display_request_duration,
+                docExpansion: config.doc_expansion.toLowerCase(),
+                filter: config.filter,
+                persistAuthorization: config.persist_authorization,
+                syntaxHighlight: {
+                    activate: true,
+                    theme: config.syntax_highlight.toLowerCase()
+                }
+            });
+
+            window.ui = ui;
+        };
+    </script>
+</body>
+</html>

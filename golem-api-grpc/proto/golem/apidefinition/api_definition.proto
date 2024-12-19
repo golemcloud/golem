@@ -119,6 +119,7 @@ enum GatewayBindingType {
   FILE_SERVER = 1;
   CORS_PREFLIGHT = 2;
   AUTH_CALL_BACK = 3;
+  SWAGGER_UI = 4;
 }
 
 // Used in api definition repo and needs to be backward compatible
@@ -132,6 +133,7 @@ message StaticBinding {
   oneof static_binding {
     CorsPreflight http_cors_preflight = 1;
     AuthCallBack auth_callback = 2;
+    SwaggerUI swagger_ui = 3;
   }
 }
 
@@ -179,4 +181,13 @@ message Gitlab{}
 
 message IdentityProviderMetadata {
   string metadata = 1;
+}
+
+message SwaggerUI {
+  // OpenAPI specification to serve
+  string openapi_spec = 1;
+  // Optional custom CSS URL for styling the Swagger UI
+  optional string custom_css_url = 2;
+  // Optional custom JavaScript URL for extending functionality
+  optional string custom_js_url = 3;
 }

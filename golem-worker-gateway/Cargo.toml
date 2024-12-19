@@ -1,0 +1,22 @@
+[package]
+name = "golem-worker-gateway"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Golem Worker Gateway with OpenAPI Support"
+
+[dependencies]
+axum = "0.7"
+cached = "0.46"
+golem-api-grpc = { path = "../golem-api-grpc" }
+golem-worker-service = { path = "../golem-worker-service" }
+openapiv3 = "2.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors"] }
+
+[dev-dependencies]
+tokio-test = "0.4"

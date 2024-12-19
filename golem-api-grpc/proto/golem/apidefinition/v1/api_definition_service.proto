@@ -13,6 +13,7 @@ service ApiDefinitionService {
   rpc GetApiDefinitionVersions (GetApiDefinitionVersionsRequest) returns (GetApiDefinitionVersionsResponse) {}
   rpc GetAllApiDefinitions (GetAllApiDefinitionsRequest) returns (GetAllApiDefinitionsResponse) {}
   rpc DeleteApiDefinition (DeleteApiDefinitionRequest) returns (DeleteApiDefinitionResponse) {}
+  rpc ExportApiDefinition (ExportApiDefinitionRequest) returns (ExportApiDefinitionResponse) {}
 }
 
 message ApiDefinitionRequest {
@@ -96,3 +97,14 @@ message GetAllApiDefinitionsResponse {
   }
 }
 
+message ExportApiDefinitionRequest {
+  ApiDefinitionId api_definition_id = 1;
+  string version = 2;
+}
+
+message ExportApiDefinitionResponse {
+  oneof result {
+    string openapi = 1;
+    ApiDefinitionError error = 2;
+  }
+}
