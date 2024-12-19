@@ -34,7 +34,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         bucket: Resource<Bucket>,
         keys: Vec<Key>,
     ) -> anyhow::Result<Result<Vec<Option<Resource<IncomingValue>>>, Resource<Error>>> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("keyvalue::eventual_batch", "get_many");
         let account_id = self.owned_worker_id.account_id();
         let bucket = self
@@ -93,7 +92,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         &mut self,
         bucket: Resource<Bucket>,
     ) -> anyhow::Result<Result<Vec<Key>, Resource<Error>>> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("keyvalue::eventual_batch", "get_keys");
         let account_id = self.owned_worker_id.account_id();
         let bucket = self
@@ -118,7 +116,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         bucket: Resource<Bucket>,
         key_values: Vec<(Key, Resource<OutgoingValue>)>,
     ) -> anyhow::Result<Result<(), Resource<Error>>> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("keyvalue::eventual_batch", "set_many");
         let account_id = self.owned_worker_id.account_id();
         let bucket = self
@@ -176,7 +173,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         bucket: Resource<Bucket>,
         keys: Vec<Key>,
     ) -> anyhow::Result<Result<(), Resource<Error>>> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("keyvalue::eventual_batch", "delete_many");
         let account_id = self.owned_worker_id.account_id();
         let bucket = self
@@ -207,39 +203,5 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 Ok(Err(error))
             }
         }
-    }
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {
-    async fn get_many(
-        &mut self,
-        bucket: Resource<Bucket>,
-        keys: Vec<Key>,
-    ) -> anyhow::Result<Result<Vec<Option<Resource<IncomingValue>>>, Resource<Error>>> {
-        (*self).get_many(bucket, keys).await
-    }
-
-    async fn keys(
-        &mut self,
-        bucket: Resource<Bucket>,
-    ) -> anyhow::Result<Result<Vec<Key>, Resource<Error>>> {
-        (*self).keys(bucket).await
-    }
-
-    async fn set_many(
-        &mut self,
-        bucket: Resource<Bucket>,
-        key_values: Vec<(Key, Resource<OutgoingValue>)>,
-    ) -> anyhow::Result<Result<(), Resource<Error>>> {
-        (*self).set_many(bucket, key_values).await
-    }
-
-    async fn delete_many(
-        &mut self,
-        bucket: Resource<Bucket>,
-        keys: Vec<Key>,
-    ) -> anyhow::Result<Result<(), Resource<Error>>> {
-        (*self).delete_many(bucket, keys).await
     }
 }
