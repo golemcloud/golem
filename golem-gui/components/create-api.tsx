@@ -36,7 +36,8 @@ const CreateAPI = ({onCreation}:{onCreation?:()=>void}) => {
       }
 
       setError("");
-      // onCreation();
+      //TODO: Add mutation logic and toast
+      onCreation?.();
       console.log("result===>", response)
       return;
   // eslint-disable-next-line @typescript-eslint/no-unused-vars

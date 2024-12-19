@@ -30,6 +30,5 @@ export const getErrorMessage = (error: GolemError | string): string => {
   return 'An unknown error occurred';
 };
 
-export const fetcher = (url:string, options?:RequestInit) => fetch(`/api/proxy${url}`, options ).then((res) => res.json());
-
+export const fetcher =  (url:string, options?:RequestInit) => fetch(`/api/proxy${url}`, options ).then((res) => res.json());
 

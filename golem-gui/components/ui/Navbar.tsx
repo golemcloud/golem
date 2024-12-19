@@ -3,13 +3,14 @@
 import { AppBar, Toolbar } from "@mui/material";
 import { ModeToggle } from "../toggle-button";
 import Logo from "../../assets/golem-logo";
-import { Box, List, ListItem, ListItemText } from "@mui/material";
+import { List, ListItem, ListItemText } from "@mui/material";
 import Link from "next/link";
 import { usePathname } from 'next/navigation';
 
 type NAV_LINK = {
   name: string;
   to: string;
+  comingSoon?: boolean
 };
 
 const links = [
@@ -18,7 +19,7 @@ const links = [
   { name: "Components", to: "/components" },
   { name: "Workers", to: "/workers" },
   { name: "APIs", to: "/apis" },
-  { name: "Plugins", to: "/plugins" },
+  { name: "Plugins", to: "/plugins", comingSoon:true },
 ] as NAV_LINK[];
 
 
@@ -37,7 +38,7 @@ export default function Navbar() {
         <List className="flex gap-4">
           {links.map((link) => (
             <Link key={link.name
-            } href={link.to} style={{ textDecoration: "none", color: "inherit" }}>
+            } href={link.comingSoon ? "#" : link.to} style={{ textDecoration: "none", color: "inherit" }}>
               <ListItem
                 sx={{
                   padding: "0.3rem 0.8rem", // Reduced padding for smaller background
@@ -51,7 +52,7 @@ export default function Navbar() {
                 }}
                 className={`dark:hover:bg-[#373737] hover:bg-[#C0C0C0]`}
               >
-                <ListItemText primary={link.name} />
+                <ListItemText primary={`${link.name}${link.comingSoon? "(Comingsoon)": ""}`} />
               </ListItem>
             </Link>
           ))}

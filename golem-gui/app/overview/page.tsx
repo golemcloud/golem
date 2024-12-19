@@ -5,7 +5,6 @@ import {
   Typography,
   Button,
   Paper,
-  Divider,
   Grid2,
   Modal,
   Stack,
@@ -17,8 +16,10 @@ import CreateComponentForm from "@/components/new-component";
 import { fetcher } from "@/lib/utils";
 import { ApiDefinition , Component} from "@/types/api";
 import useSWR from "swr";
+import { useRouter } from "next/navigation";
 
 const ProjectDashboard = () => {
+  const router = useRouter();
   const [open, setOpen] = useState<string | null>(null);
   const { data: apiData, isLoading } = useSWR("?path=api/definitions", fetcher);
   //TODO
@@ -44,6 +45,8 @@ const ProjectDashboard = () => {
     return obj;
   }, {});
 
+  const uniquesApis = Object.values(apiMap);
+
   const handleOpen = (type: string) => setOpen(type);
   const handleClose = () => setOpen(null);
 
@@ -63,7 +66,7 @@ const ProjectDashboard = () => {
             }}
           >
             {/* View All Button */}
-            <Button
+            {uniquesApis.slice(10)?.length>0 && <Button
               variant="text"
               sx={{
                 position: "absolute",
@@ -74,17 +77,31 @@ const ProjectDashboard = () => {
                 textTransform: "none",
               }}
               className="text-[#888] dark:text-gray-400"
+              onClick={()=>{router.push('/apis')}}
             >
               View All
-            </Button>
+            </Button>}
+            <Button
+                variant="contained"
+                startIcon={<AddIcon />}
+                sx={{
+                  backgroundColor: "#444",
+                  color: "white",
+                  "&:hover": { backgroundColor: "#555" },
+                }}
+                onClick={()=>handleOpen("api")}
+              >
+                Create New
+              </Button>
             <Stack marginTop={6}>
               {!isLoading &&
-                Object.values(apiMap).map((api) => (
+                uniquesApis.slice(0,10).map((api) => (
                   <Box
                     key={api.latestVersion.id}
                     bgcolor="#444"
                     marginBottom={1}
                     padding={1}
+                    onClick={()=>{router.push(`/apis/${api.latestVersion.id}/overview?version=${api.latestVersion.version}`)}}
                   >
                     <Typography variant="body1">
                       {api.latestVersion.id}({api.latestVersion.version})

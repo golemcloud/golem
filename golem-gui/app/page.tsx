@@ -40,7 +40,7 @@ const Dashboard = () => {
           <CardContent>
             <Typography variant="h6">Welcome, Mubashir Shariq</Typography>
             <Typography variant="body2" sx={{ mt: 1 }}>
-              Here's a quick overview of your account.
+              Here&apos;s a quick overview of your account.
             </Typography>
             <Typography variant="h4" sx={{ mt: 2 }}>
               {apis.length}

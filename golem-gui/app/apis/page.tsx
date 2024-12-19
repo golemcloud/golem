@@ -1,4 +1,4 @@
-'use client';
+"use client";
 
 import React, { useState } from "react";
 import {
@@ -15,34 +15,50 @@ import {
 import SearchIcon from "@mui/icons-material/Search";
 import AddIcon from "@mui/icons-material/Add";
 import CreateAPI from "@/components/create-api";
-import ApiIcon from '@mui/icons-material/Api';
+import ApiIcon from "@mui/icons-material/Api";
 import { useRouter } from "next/navigation";
+import useSWR from "swr";
+import { fetcher } from "@/lib/utils";
+import { ApiDefinition } from "@/types/api";
 
-interface ApiPageProps {
-    params: { id: string };
-}
-
-const ComponentsPage = ({ params }: ApiPageProps) => {
+const ComponentsPage = () => {
   const [open, setOpen] = useState(false);
-  const [apis, setApis] = useState([
-    { id: 1, name: "API 1", description: "This is API 1" },
-    { id: 2, name: "API 2", description: "This is API 2" },
-  ]); // Mock APIs data
+  //move this custom hook and us it here.
+  const { data: apiData, isLoading } = useSWR("?path=api/definitions", fetcher);
+  const apis = (apiData?.data || []) as ApiDefinition[];
   const router = useRouter();
-
-  const { id } = params;
+  const apiMap = apis?.reduce<
+    Record<string, { versions: ApiDefinition[]; latestVersion: ApiDefinition }>
+  >((obj, api: ApiDefinition) => {
+    if (api.id in obj) {
+      obj[api.id].versions.push(api);
+      obj[api.id].latestVersion = api;
+    } else {
+      obj[api.id] = {
+        versions: [api] as ApiDefinition[],
+        latestVersion: api,
+      };
+    }
+    return obj;
+  }, {});
 
   const handleOpen = () => setOpen(true);
   const handleClose = () => setOpen(false);
 
-  const handleApiClick = (apiId: number) => {
+  const handleApiClick = (apiId: string) => {
     // Navigate to the API details page within the project
-    router.push(`/apis/${apiId}`);
+    router.push(`/apis/${apiId}/overview`);
   };
 
   return (
     <Container maxWidth="lg" sx={{ mt: 5, height: "100vh" }}>
-      <Box display="flex" justifyContent="space-between" alignItems="center" mb={3} gap={2}>
+      <Box
+        display="flex"
+        justifyContent="space-between"
+        alignItems="center"
+        mb={3}
+        gap={2}
+      >
         <TextField
           placeholder="Search APIs..."
           variant="outlined"
@@ -90,7 +106,12 @@ const ComponentsPage = ({ params }: ApiPageProps) => {
               <ApiIcon sx={{ fontSize: 40 }} />
             </Box>
           </Box>
-          <Typography variant="h6" fontWeight="bold" gutterBottom className="text-[#888] dark:text-gray-400">
+          <Typography
+            variant="h6"
+            fontWeight="bold"
+            gutterBottom
+            className="text-[#888] dark:text-gray-400"
+          >
             No APIs Components
           </Typography>
           <Typography variant="body2" color="grey.500">
@@ -99,20 +120,19 @@ const ComponentsPage = ({ params }: ApiPageProps) => {
         </Box>
       ) : (
         <Box sx={{ display: "flex", flexWrap: "wrap", gap: 2 }}>
-          {apis.map((api) => (
+          {!isLoading && Object.values(apiMap)?.map((api) => (
             <Card
-              key={api.id}
+              key={api.latestVersion.id}
               sx={{
                 cursor: "pointer",
                 width: "200px",
                 "&:hover": { boxShadow: 4 },
                 transition: "all 0.3s ease",
               }}
-              onClick={() => handleApiClick(api.id)}
+              onClick={() => handleApiClick(api.latestVersion.id!)}
             >
               <CardContent>
-                <Typography variant="h6">{api.name}</Typography>
-                <Typography variant="body2">{api.description}</Typography>
+                <Typography variant="h6">{api.latestVersion.id}</Typography>
               </CardContent>
             </Card>
           ))}
@@ -120,7 +140,7 @@ const ComponentsPage = ({ params }: ApiPageProps) => {
       )}
 
       <Modal open={open} onClose={handleClose}>
-        <CreateAPI />
+        <CreateAPI onCreation={handleClose}/>
       </Modal>
     </Container>
   );

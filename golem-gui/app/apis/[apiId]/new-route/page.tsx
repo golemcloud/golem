@@ -16,8 +16,11 @@ import {
 import useSWR from "swr";
 import { fetcher } from "@/lib/utils";
 import { Component } from "@/types/api";
+import { useParams, useSearchParams } from "next/navigation";
 
 const NewRouteForm = () => {
+  const {apiId} = useParams<{apiId:string}>();
+  const version = useSearchParams();
   const { control, handleSubmit, reset, watch } = useForm({
     defaultValues: {
       apiName: "",
@@ -37,7 +40,13 @@ const NewRouteForm = () => {
 
   const onSubmit = async (formData: unknown) => {
     try {
-      // const response = await axios.post(`${BACKEND_URL}/v1/api/definitions/import`, formData);
+    //   fetcher(`?path=api/definitions/${apiId}/${version}`, {method: "POST", headers:{
+    //     "content-type": "application/json"
+    //   },
+    //   body: JSON.stringify({
+    //     routes: []
+    //   })
+    // })
       console.log("Route created successfully:", formData);
     } catch (error) {
       console.error("Error creating route:", error);
