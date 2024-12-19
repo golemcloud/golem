@@ -36,7 +36,7 @@ use golem_common::model::{
 };
 use golem_common::uri::oss::urn::{WorkerFunctionUrn, WorkerOrFunctionUrn};
 use golem_wasm_rpc::golem::rpc::types::{
-    FutureInvokeResult, HostFutureInvokeResult, Pollable, Uri, WasmRpc,
+    FutureInvokeResult, HostFutureInvokeResult, Pollable, Uri,
 };
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::{
