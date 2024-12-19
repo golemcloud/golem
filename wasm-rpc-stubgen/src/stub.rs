@@ -421,7 +421,7 @@ impl StubDefinition {
                 .filter(|function| function.kind == FunctionKind::Freestanding),
         );
 
-        let (used_types, _) = self.extract_interface_stubs_from_types(types.into_iter());
+        let (used_types, _) = self.extract_resource_interface_stubs_from_types(types.into_iter());
 
         Some(InterfaceStub {
             name: name.to_string(),
@@ -447,9 +447,14 @@ impl StubDefinition {
             None => name.to_string(),
         });
 
-        let functions = Self::functions_to_stubs(interface.functions.values());
+        let functions = Self::functions_to_stubs(
+            interface
+                .functions
+                .values()
+                .filter(|function| function.kind == FunctionKind::Freestanding),
+        );
 
-        let (used_types, resource_interfaces) = self.extract_interface_stubs_from_types(
+        let (used_types, resource_interfaces) = self.extract_resource_interface_stubs_from_types(
             interface
                 .types
                 .iter()
@@ -472,7 +477,7 @@ impl StubDefinition {
         interface_stubs
     }
 
-    fn extract_interface_stubs_from_types(
+    fn extract_resource_interface_stubs_from_types(
         &self,
         types: impl Iterator<Item = (String, TypeId)>,
     ) -> (Vec<TypeId>, Vec<InterfaceStub>) {
@@ -529,13 +534,29 @@ impl StubDefinition {
                 .filter(move |function| function.kind == kind)
         };
 
-        let function_stubs_by_kind =
-            |kind: FunctionKind| Self::functions_to_stubs(functions_by_kind(kind));
+        let function_stubs_by_kind = |kind: FunctionKind| {
+            let stubs = Self::functions_to_stubs(functions_by_kind(kind.clone()));
+            match kind {
+                FunctionKind::Freestanding => stubs,
+                FunctionKind::Method(_) => stubs
+                    .into_iter()
+                    .map(|stub| stub.as_method().expect("Expected method function"))
+                    .collect(),
+                FunctionKind::Static(_) => stubs
+                    .into_iter()
+                    .map(|stub| stub.as_static().expect("Expected static function"))
+                    .collect(),
+                FunctionKind::Constructor(_) => stubs,
+            }
+        };
 
-        let (used_types, _) = self.extract_interface_stubs_from_types(
+        let (used_types, _) = self.extract_resource_interface_stubs_from_types(
             owner_interface
                 .types
                 .iter()
+                // TODO: this is just a quick workaround filter for "self", but there could be
+                //       other cases for this code path going into infinite recursion
+                .filter(|(_, &id)| id != type_id)
                 .map(|(name, type_id)| (name.clone(), *type_id)),
         );
 

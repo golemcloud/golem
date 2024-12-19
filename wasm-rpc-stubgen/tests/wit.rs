@@ -17,7 +17,7 @@
 use test_r::test;
 
 use fs_extra::dir::CopyOptions;
-use golem_wasm_rpc_stubgen::commands::generate::generate_stub_wit_dir;
+use golem_wasm_rpc_stubgen::commands::generate::generate_client_wit_dir;
 use golem_wasm_rpc_stubgen::stub::{StubConfig, StubDefinition};
 use golem_wasm_rpc_stubgen::WasmRpcOverride;
 use std::path::Path;
@@ -41,7 +41,7 @@ fn all_wit_types() {
         seal_cargo_workspace: false,
     })
     .unwrap();
-    let resolve = generate_stub_wit_dir(&def).unwrap().resolve;
+    let resolve = generate_client_wit_dir(&def).unwrap().resolve;
 
     assert_has_package_name(&resolve, "test:main-stub");
     assert_has_world(&resolve, "wasm-rpc-stub-api");
@@ -132,7 +132,7 @@ fn many_ways_to_export() {
         seal_cargo_workspace: false,
     })
     .unwrap();
-    let resolve = generate_stub_wit_dir(&def).unwrap().resolve;
+    let resolve = generate_client_wit_dir(&def).unwrap().resolve;
 
     assert_has_package_name(&resolve, "test:exports-stub");
     assert_has_world(&resolve, "wasm-rpc-stub-api");

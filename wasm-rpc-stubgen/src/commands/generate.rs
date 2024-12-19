@@ -27,9 +27,9 @@ use heck::ToSnakeCase;
 use std::path::{Path, PathBuf};
 
 pub fn generate(stub_def: &StubDefinition) -> anyhow::Result<()> {
-    let _ = generate_stub_wit_dir(stub_def)?;
+    let _ = generate_client_wit_dir(stub_def)?;
     generate_cargo_toml(stub_def).context("Failed to generate the Cargo.toml file")?;
-    generate_stub_source(stub_def).context("Failed to generate the stub Rust source")?;
+    generate_stub_source(stub_def).context("Failed to generate the client Rust source")?;
     Ok(())
 }
 
@@ -39,7 +39,7 @@ pub async fn build(
     dest_wit_root: &Path,
     offline: bool,
 ) -> anyhow::Result<()> {
-    let wasm_path = generate_and_build_stub(stub_def, offline).await?;
+    let wasm_path = generate_and_build_client(stub_def, offline).await?;
 
     fs::copy(wasm_path, dest_wasm).context("Failed to copy the WASM file to the destination")?;
     fs::create_dir_all(dest_wit_root).context("Failed to create the target WIT root directory")?;
@@ -54,13 +54,13 @@ pub async fn build(
     Ok(())
 }
 
-pub async fn generate_and_build_stub(
+pub async fn generate_and_build_client(
     stub_def: &StubDefinition,
     offline: bool,
 ) -> anyhow::Result<PathBuf> {
-    let _ = generate_stub_wit_dir(stub_def)?;
+    let _ = generate_client_wit_dir(stub_def)?;
     generate_cargo_toml(stub_def).context("Failed to generate the Cargo.toml file")?;
-    generate_stub_source(stub_def).context("Failed to generate the stub Rust source")?;
+    generate_stub_source(stub_def).context("Failed to generate the client Rust source")?;
 
     compile(
         &stub_def
@@ -69,14 +69,14 @@ pub async fn generate_and_build_stub(
             .canonicalize()
             .with_context(|| {
                 anyhow!(
-                    "Failed to canonicalize stub target root {}",
+                    "Failed to canonicalize client target root {}",
                     stub_def.config.target_root.log_color_error_highlight()
                 )
             })?,
         offline,
     )
     .await
-    .context("Failed to compile the generated stub")?;
+    .context("Failed to compile the generated client")?;
 
     let wasm_path = stub_def
         .config
@@ -91,16 +91,16 @@ pub async fn generate_and_build_stub(
     Ok(wasm_path)
 }
 
-pub fn generate_stub_wit_dir(stub_def: &StubDefinition) -> anyhow::Result<ResolvedWitDir> {
+pub fn generate_client_wit_dir(stub_def: &StubDefinition) -> anyhow::Result<ResolvedWitDir> {
     log_action(
         "Generating",
         format!(
-            "stub WIT directory to {}",
+            "client WIT directory to {}",
             stub_def.config.target_root.log_color_highlight()
         ),
     );
     let _indent = LogIndent::new();
-    generate_client_wit_to_target(stub_def).context("Failed to generate the stub wit file")?;
+    generate_client_wit_to_target(stub_def).context("Failed to generate the client wit file")?;
     add_dependencies_to_stub_wit_dir(stub_def).context("Failed to copy the dependent wit files")?;
     stub_def
         .resolve_target_wit()

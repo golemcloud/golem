@@ -23,7 +23,7 @@ use golem_wasm_ast::component::Component;
 use golem_wasm_ast::DefaultAst;
 use golem_wasm_rpc_stubgen::commands::composition::compose;
 use golem_wasm_rpc_stubgen::commands::dependencies::{add_stub_dependency, UpdateCargoToml};
-use golem_wasm_rpc_stubgen::commands::generate::generate_and_build_stub;
+use golem_wasm_rpc_stubgen::commands::generate::generate_and_build_client;
 use golem_wasm_rpc_stubgen::stub::{StubConfig, StubDefinition};
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
@@ -85,7 +85,7 @@ async fn init_stub(name: &str) -> (TempDir, TempDir, PathBuf) {
         seal_cargo_workspace: true,
     })
     .unwrap();
-    let wasm_path = generate_and_build_stub(&def, false).await.unwrap();
+    let wasm_path = generate_and_build_client(&def, false).await.unwrap();
     (source_dir, stub_dir, wasm_path)
 }
 

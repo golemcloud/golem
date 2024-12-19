@@ -19,7 +19,7 @@ use test_r::test;
 use assert2::assert;
 use fs_extra::dir::CopyOptions;
 use golem_wasm_rpc::{WASI_POLL_WIT, WASM_RPC_WIT};
-use golem_wasm_rpc_stubgen::commands::generate::generate_stub_wit_dir;
+use golem_wasm_rpc_stubgen::commands::generate::generate_client_wit_dir;
 use golem_wasm_rpc_stubgen::stub::{StubConfig, StubDefinition};
 use golem_wasm_rpc_stubgen::wit_generate::{
     add_client_as_dependency_to_wit_dir, AddClientAsDepConfig, UpdateCargoToml,
@@ -585,7 +585,7 @@ fn init_stub(name: &str) -> (TempDir, TempDir) {
         seal_cargo_workspace: false,
     })
     .unwrap();
-    let _ = generate_stub_wit_dir(&def).unwrap();
+    let _ = generate_client_wit_dir(&def).unwrap();
     (source, target)
 }
 
@@ -600,7 +600,7 @@ fn regenerate_stub(stub_dir: &Path, source_wit_root: &Path) {
         seal_cargo_workspace: false,
     })
     .unwrap();
-    let _ = generate_stub_wit_dir(&def).unwrap();
+    let _ = generate_client_wit_dir(&def).unwrap();
 }
 
 fn init_caller(name: &str) -> TempDir {
