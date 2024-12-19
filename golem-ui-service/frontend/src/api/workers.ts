@@ -40,20 +40,20 @@ export const getWorkers = async (
   componentId: string,
   filter?: WorkerFilter[],
   cursor?: string,
-  count?: number
+  count?: number,
 ) => {
   const { data } = await apiClient.get<WorkerListResponse>(
     `/v1/components/${componentId}/workers`,
     {
       params: { filter, cursor, count },
-    }
+    },
   );
   return data;
 };
 
 export const getWorker = async (componentId: string, workerName: string) => {
   const { data } = await apiClient.get<Worker>(
-    `/v1/components/${componentId}/workers/${workerName}`
+    `/v1/components/${componentId}/workers/${workerName}`,
   );
   return data;
 };
@@ -66,18 +66,18 @@ export interface CreateWorkerPayload {
 
 export const createWorker = async (
   componentId: string,
-  payload: CreateWorkerPayload
+  payload: CreateWorkerPayload,
 ) => {
   const { data } = await apiClient.post(
     `/v1/components/${componentId}/workers`,
-    payload
+    payload,
   );
   return data;
 };
 
 export const deleteWorker = async (componentId: string, workerName: string) => {
   const { data } = await apiClient.delete(
-    `/v1/components/${componentId}/workers/${workerName}`
+    `/v1/components/${componentId}/workers/${workerName}`,
   );
   return data;
 };
@@ -93,7 +93,7 @@ export const interruptWorker = async (workerId: {
     null,
     {
       params: { "recovery-immediately": recoverImmediately },
-    }
+    },
   );
   return data;
 };
@@ -104,7 +104,7 @@ export const resumeWorker = async (workerId: {
   recoverImmediately?: boolean;
 }) => {
   const { data } = await apiClient.post(
-    `/v1/components/${workerId.componentId}/workers/${workerId.workerName}/resume`
+    `/v1/components/${workerId.componentId}/workers/${workerId.workerName}/resume`,
   );
   return data;
 };
@@ -114,8 +114,12 @@ export const useWorkers = (
   componentId: string,
   filter?: WorkerFilter[],
   cursor?: string,
-  count?: number
-) => {
+  count?: number,
+): {
+  data: WorkerListResponse | undefined;
+  isLoading: boolean;
+  error: GolemError | null;
+} => {
   return useQuery({
     queryKey: workerKeys.list(componentId, { filter, cursor, count }),
     queryFn: () => getWorkers(componentId, filter, cursor, count),
@@ -152,7 +156,7 @@ export const useDeleteWorker = () => {
       componentId: string;
       workerName: string;
     }) => deleteWorker(componentId, workerName),
-    onSuccess: (_, { componentId }) => {
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: workerKeys.lists() });
     },
   });
@@ -165,7 +169,7 @@ interface InterruptWorkerParams {
 }
 
 export const useInterruptWorker = (
-  options?: UseMutationOptions<void, GolemError, InterruptWorkerParams>
+  options?: UseMutationOptions<void, GolemError, InterruptWorkerParams>,
 ) => {
   const queryClient = useQueryClient();
 
@@ -179,7 +183,7 @@ export const useInterruptWorker = (
       }: {
         componentId: string;
         workerName: string;
-      }
+      },
     ) => {
       // Invalidate specific worker query
       queryClient.invalidateQueries({
@@ -200,7 +204,7 @@ export const useResumeWorker = (
     void,
     GolemError,
     { componentId: string; workerName: string }
-  >
+  >,
 ) => {
   const queryClient = useQueryClient();
 
@@ -214,7 +218,7 @@ export const useResumeWorker = (
       }: {
         componentId: string;
         workerName: string;
-      }
+      },
     ) => {
       // Invalidate specific worker query
       queryClient.invalidateQueries({

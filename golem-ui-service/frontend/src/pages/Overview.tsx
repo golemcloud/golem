@@ -1,19 +1,29 @@
-import { Activity, Box, ChevronRight, Crown, Globe, Package, Puzzle, Server, Terminal } from 'lucide-react';
+import {
+  Activity,
+  Box,
+  ChevronRight,
+  Crown,
+  Globe,
+  Package,
+  Puzzle,
+  Server,
+  Terminal,
+} from "lucide-react";
 
-import { Link } from 'react-router-dom';
-import { useApiDefinitions } from '../api/api-definitions';
-import { useComponents } from '../api/components';
-import { usePlugins } from '../api/plugins';
+import { Link } from "react-router-dom";
+import { useApiDefinitions } from "../api/api-definitions";
+import { useComponents } from "../api/components";
+import { usePlugins } from "../api/plugins";
 
 const SectionCard = ({
   title,
   viewMoreLink,
   icon: Icon,
-  children
+  children,
 }: {
   title: string;
   viewMoreLink: string;
-  icon: any;
+  icon: React.ComponentType<{ size: number }>;
   children: React.ReactNode;
 }) => (
   <div className="bg-gray-800 rounded-lg shadow-lg p-6 hover:shadow-xl transition-shadow duration-200">
@@ -37,22 +47,30 @@ const SectionCard = ({
   </div>
 );
 
-const ListItem = ({ title, subtitle, status, icon: Icon, url }: {
+const ListItem = ({
+  title,
+  subtitle,
+  status,
+  icon: Icon,
+  url,
+}: {
   title: string;
   subtitle?: string;
-  status?: 'active' | 'inactive' | 'error';
-  icon?: any;
-  url?: string
+  status?: "active" | "inactive" | "error";
+  icon?: React.ComponentType<{ size: number }>;
+  url?: string;
 }) => {
   const statusColors = {
-    active: 'bg-green-500',
-    inactive: 'bg-gray-500',
-    error: 'bg-red-500',
+    active: "bg-green-500",
+    inactive: "bg-gray-500",
+    error: "bg-red-500",
   };
 
   return (
-    <div className="border-t border-gray-700 py-4 flex items-center justify-between group hover:bg-gray-700/30 px-3 
-                    rounded-md transition-colors -mx-3">
+    <div
+      className="border-t border-gray-700 py-4 flex items-center justify-between group hover:bg-gray-700/30 px-3 
+                    rounded-md transition-colors -mx-3"
+    >
       <div className="flex items-center gap-3">
         {Icon && (
           <div className="text-gray-400 group-hover:text-blue-400 transition-colors">
@@ -61,11 +79,11 @@ const ListItem = ({ title, subtitle, status, icon: Icon, url }: {
         )}
         <div>
           <Link to={url!}>
-            <h3 className="text-sm font-medium text-gray-200 group-hover:text-white transition-colors">{title}</h3>
+            <h3 className="text-sm font-medium text-gray-200 group-hover:text-white transition-colors">
+              {title}
+            </h3>
           </Link>
-          {subtitle && (
-            <p className="text-xs text-gray-400">{subtitle}</p>
-          )}
+          {subtitle && <p className="text-xs text-gray-400">{subtitle}</p>}
         </div>
       </div>
       {status && (
@@ -105,7 +123,9 @@ export const Overview = () => {
           <Terminal size={24} className="text-blue-400" />
           Overview
         </h1>
-        <p className="text-gray-400 mt-1">Monitor and manage your system components</p>
+        <p className="text-gray-400 mt-1">
+          Monitor and manage your system components
+        </p>
       </div>
 
       {/* Grid section */}
@@ -117,19 +137,19 @@ export const Overview = () => {
               <LoadingState />
             ) : (
               <div className="space-y-1">
-                {apis?.slice(0, 5).map((api) => (
-                  <ListItem
-                    key={api.id}
-                    title={api.id}
-                    subtitle={`Version ${api.version}`}
-                    status={api.draft ? 'inactive' : 'active'}
-                    icon={Globe}
-                    url={'/api/definitions/' + api.id + '/' + api.version}
-                  />
-                ))}
-                {!apis?.length && (
-                  <EmptyState message="No APIs defined" />
-                )}
+                {apis
+                  ?.slice(0, 5)
+                  .map((api) => (
+                    <ListItem
+                      key={api.id}
+                      title={api.id}
+                      subtitle={`Version ${api.version}`}
+                      status={api.draft ? "inactive" : "active"}
+                      icon={Globe}
+                      url={"/api/definitions/" + api.id + "/" + api.version}
+                    />
+                  ))}
+                {!apis?.length && <EmptyState message="No APIs defined" />}
               </div>
             )}
           </SectionCard>
@@ -137,21 +157,27 @@ export const Overview = () => {
 
         {/* Components - 5/8 width */}
         <div className="col-span-5">
-          <SectionCard title="Components" viewMoreLink="/components" icon={Package}>
+          <SectionCard
+            title="Components"
+            viewMoreLink="/components"
+            icon={Package}
+          >
             {componentsLoading ? (
               <LoadingState />
             ) : (
               <div className="space-y-1">
-                {components?.slice(0, 5).map((component) => (
-                  <ListItem
-                    key={component.versionedComponentId.componentId}
-                    title={component.componentName}
-                    subtitle={`Version ${component.versionedComponentId.version}`}
-                    status="active"
-                    icon={Server}
-                    url={`/components/${component.versionedComponentId.componentId}`}
-                  />
-                ))}
+                {components
+                  ?.slice(0, 5)
+                  .map((component) => (
+                    <ListItem
+                      key={component.versionedComponentId.componentId}
+                      title={component.componentName}
+                      subtitle={`Version ${component.versionedComponentId.version}`}
+                      status="active"
+                      icon={Server}
+                      url={`/components/${component.versionedComponentId.componentId}`}
+                    />
+                  ))}
                 {!components?.length && (
                   <EmptyState message="No components available" />
                 )}
@@ -167,19 +193,21 @@ export const Overview = () => {
           <LoadingState />
         ) : (
           <div className="space-y-1">
-            {plugins?.slice(0, 5).map((plugin) => (
-              <ListItem
-                key={`${plugin.name}-${plugin.version}`}
-                title={plugin.name}
-                subtitle={`Version ${plugin.version}`}
-                status={plugin.scope.type === 'Global' ? 'active' : 'inactive'}
-                icon={plugin.scope.type === 'Global' ? Crown : Box}
-                url={`/plugins/${plugin.name}/${plugin.version}`}
-              />
-            ))}
-            {!plugins?.length && (
-              <EmptyState message="No plugins installed" />
-            )}
+            {plugins
+              ?.slice(0, 5)
+              .map((plugin) => (
+                <ListItem
+                  key={`${plugin.name}-${plugin.version}`}
+                  title={plugin.name}
+                  subtitle={`Version ${plugin.version}`}
+                  status={
+                    plugin.scope.type === "Global" ? "active" : "inactive"
+                  }
+                  icon={plugin.scope.type === "Global" ? Crown : Box}
+                  url={`/plugins/${plugin.name}/${plugin.version}`}
+                />
+              ))}
+            {!plugins?.length && <EmptyState message="No plugins installed" />}
           </div>
         )}
       </SectionCard>

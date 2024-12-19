@@ -1,18 +1,26 @@
-import { InstalledPlugin, Plugin } from '../types/api';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { InstalledPlugin, Plugin } from "../types/api";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { apiClient } from '../lib/api-client';
+import { apiClient } from "../lib/api-client";
 
 // Query keys
 export const pluginKeys = {
-  all: ['plugins'] as const,
-  lists: () => [...pluginKeys.all, 'list'] as const,
+  all: ["plugins"] as const,
+  lists: () => [...pluginKeys.all, "list"] as const,
   list: (scope?: string) => [...pluginKeys.lists(), { scope }] as const,
-  details: () => [...pluginKeys.all, 'detail'] as const,
+  details: () => [...pluginKeys.all, "detail"] as const,
   detail: (name: string) => [...pluginKeys.details(), name] as const,
-  version: (name: string, version: string) => [...pluginKeys.detail(name), version] as const,
-  installs: (componentId: string, version: number) => 
-    ['components', componentId, 'versions', version, 'plugins', 'installs'] as const,
+  version: (name: string, version: string) =>
+    [...pluginKeys.detail(name), version] as const,
+  installs: (componentId: string, version: number) =>
+    [
+      "components",
+      componentId,
+      "versions",
+      version,
+      "plugins",
+      "installs",
+    ] as const,
 };
 
 // API Types
@@ -23,14 +31,14 @@ export interface CreatePluginPayload {
   icon?: number[];
   homepage: string;
   specs: {
-    type: 'ComponentTransformer';
+    type: "ComponentTransformer";
     providedWitPackage: string;
     jsonSchema: string;
     validateUrl: string;
     transformUrl: string;
   };
   scope: {
-    type: 'Global';
+    type: "Global";
   };
 }
 
@@ -48,7 +56,7 @@ export interface UpdatePluginInstallPayload {
 
 // Plugin API Functions
 export const getPlugins = async (scope?: string) => {
-  const { data } = await apiClient.get<Plugin[]>('/v1/plugins', {
+  const { data } = await apiClient.get<Plugin[]>("/v1/plugins", {
     params: { scope },
   });
   return data;
@@ -60,35 +68,42 @@ export const getPluginVersions = async (name: string) => {
 };
 
 export const getPluginVersion = async (name: string, version: string) => {
-  const { data } = await apiClient.get<Plugin>(`/v1/plugins/${name}/${version}`);
+  const { data } = await apiClient.get<Plugin>(
+    `/v1/plugins/${name}/${version}`,
+  );
   return data;
 };
 
 export const createPlugin = async (payload: CreatePluginPayload) => {
-  const { data } = await apiClient.post<void>('/v1/plugins', payload);
+  const { data } = await apiClient.post<void>("/v1/plugins", payload);
   return data;
 };
 
 export const deletePlugin = async (name: string, version: string) => {
-  const { data } = await apiClient.delete<void>(`/v1/plugins/${name}/${version}`);
+  const { data } = await apiClient.delete<void>(
+    `/v1/plugins/${name}/${version}`,
+  );
   return data;
 };
 
 // Component Plugin Installation Functions
-export const getInstalledPlugins = async (componentId: string, version: number) => {
+export const getInstalledPlugins = async (
+  componentId: string,
+  version: number,
+) => {
   const { data } = await apiClient.get<InstalledPlugin[]>(
-    `/v1/components/${componentId}/versions/${version}/plugins/installs`
+    `/v1/components/${componentId}/versions/${version}/plugins/installs`,
   );
   return data;
 };
 
 export const installPlugin = async (
   componentId: string,
-  payload: InstallPluginPayload
+  payload: InstallPluginPayload,
 ) => {
   const { data } = await apiClient.post<InstalledPlugin>(
     `/v1/components/${componentId}/latest/plugins/installs`,
-    payload
+    payload,
   );
   return data;
 };
@@ -96,21 +111,21 @@ export const installPlugin = async (
 export const updatePluginInstallation = async (
   componentId: string,
   installationId: string,
-  payload: UpdatePluginInstallPayload
+  payload: UpdatePluginInstallPayload,
 ) => {
   const { data } = await apiClient.put<void>(
     `/v1/components/${componentId}/versions/latest/plugins/installs/${installationId}`,
-    payload
+    payload,
   );
   return data;
 };
 
 export const uninstallPlugin = async (
   componentId: string,
-  installationId: string
+  installationId: string,
 ) => {
   const { data } = await apiClient.delete<void>(
-    `/v1/components/${componentId}/latest/plugins/installs/${installationId}`
+    `/v1/components/${componentId}/latest/plugins/installs/${installationId}`,
   );
   return data;
 };
@@ -139,7 +154,7 @@ export const usePluginVersion = (name: string, version: string) => {
 
 export const useCreatePlugin = () => {
   const queryClient = useQueryClient();
-  
+
   return useMutation({
     mutationFn: createPlugin,
     onSuccess: () => {
@@ -150,7 +165,7 @@ export const useCreatePlugin = () => {
 
 export const useDeletePlugin = () => {
   const queryClient = useQueryClient();
-  
+
   return useMutation({
     mutationFn: ({ name, version }: { name: string; version: string }) =>
       deletePlugin(name, version),
@@ -170,12 +185,13 @@ export const useInstalledPlugins = (componentId: string, version: number) => {
 
 export const useInstallPlugin = (componentId: string) => {
   const queryClient = useQueryClient();
-  
+
   return useMutation({
-    mutationFn: (payload: InstallPluginPayload) => installPlugin(componentId, payload),
+    mutationFn: (payload: InstallPluginPayload) =>
+      installPlugin(componentId, payload),
     onSuccess: () => {
-      queryClient.invalidateQueries({ 
-        queryKey: pluginKeys.installs(componentId, 'latest')
+      queryClient.invalidateQueries({
+        queryKey: pluginKeys.installs(componentId, "latest"),
       });
     },
   });
@@ -183,15 +199,18 @@ export const useInstallPlugin = (componentId: string) => {
 
 export const useUpdatePluginInstallation = (componentId: string) => {
   const queryClient = useQueryClient();
-  
+
   return useMutation({
-    mutationFn: ({ installationId, payload }: { 
-      installationId: string; 
+    mutationFn: ({
+      installationId,
+      payload,
+    }: {
+      installationId: string;
       payload: UpdatePluginInstallPayload;
     }) => updatePluginInstallation(componentId, installationId, payload),
     onSuccess: () => {
-      queryClient.invalidateQueries({ 
-        queryKey: pluginKeys.installs(componentId, 'latest')
+      queryClient.invalidateQueries({
+        queryKey: pluginKeys.installs(componentId, "latest"),
       });
     },
   });
@@ -199,12 +218,13 @@ export const useUpdatePluginInstallation = (componentId: string) => {
 
 export const useUninstallPlugin = (componentId: string) => {
   const queryClient = useQueryClient();
-  
+
   return useMutation({
-    mutationFn: (installationId: string) => uninstallPlugin(componentId, installationId),
+    mutationFn: (installationId: string) =>
+      uninstallPlugin(componentId, installationId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ 
-        queryKey: pluginKeys.installs(componentId, 'latest')
+      queryClient.invalidateQueries({
+        queryKey: pluginKeys.installs(componentId, "latest"),
       });
     },
   });

@@ -1,10 +1,21 @@
-import { Box, Clock, Component as ComponentIcon, Cpu, FileCode, GitBranch, Loader2, Package, Plus, Tag } from 'lucide-react';
-import { useRef, useState } from 'react';
+import {
+  Box,
+  Clock,
+  Component as ComponentIcon,
+  Cpu,
+  FileCode,
+  GitBranch,
+  Loader2,
+  Package,
+  Plus,
+  Tag,
+} from "lucide-react";
 
-import CreateComponentModal from '../components/components/CreateComponentModal';
-import { Link } from 'react-router-dom';
-import { format } from 'date-fns';
-import { useComponents } from '../api/components';
+import CreateComponentModal from "../components/components/CreateComponentModal";
+import { Link } from "react-router-dom";
+import { format } from "date-fns";
+import { useComponents } from "../api/components";
+import { useState } from "react";
 
 export const Components = () => {
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -23,9 +34,9 @@ export const Components = () => {
 
   const getComponentTypeIcon = (type: string) => {
     switch (type.toLowerCase()) {
-      case 'service':
+      case "service":
         return <Cpu className="text-green-400" size={16} />;
-      case 'function':
+      case "function":
         return <FileCode className="text-blue-400" size={16} />;
       default:
         return <ComponentIcon className="text-purple-400" size={16} />;
@@ -40,7 +51,9 @@ export const Components = () => {
             <Package size={24} className="text-blue-400" />
             Components
           </h1>
-          <p className="text-gray-400 mt-1">Manage and deploy your system components</p>
+          <p className="text-gray-400 mt-1">
+            Manage and deploy your system components
+          </p>
         </div>
         <button
           onClick={() => setShowCreateModal(true)}
@@ -52,11 +65,13 @@ export const Components = () => {
         </button>
       </div>
 
-      {(!components || components.length === 0) ? (
+      {!components || components.length === 0 ? (
         <div className="text-center py-12 bg-gray-800 rounded-lg">
           <Box size={48} className="mx-auto text-gray-600 mb-4" />
           <p className="text-gray-400">No components found</p>
-          <p className="text-gray-500 text-sm mt-2">Create your first component to get started</p>
+          <p className="text-gray-500 text-sm mt-2">
+            Create your first component to get started
+          </p>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -75,7 +90,9 @@ export const Components = () => {
                   </h3>
                   <div className="flex items-center gap-2 mt-2 text-sm text-gray-400">
                     <GitBranch size={14} />
-                    <span>Version {component.versionedComponentId.version}</span>
+                    <span>
+                      Version {component.versionedComponentId.version}
+                    </span>
                   </div>
                 </div>
                 <span className="px-2 py-1 rounded-md bg-gray-700/50 text-xs font-medium text-gray-300">
@@ -89,12 +106,16 @@ export const Components = () => {
                     <Clock size={14} />
                     <span>Created</span>
                   </div>
-                  <span>{format(new Date(component.createdAt), 'MMM d, yyyy')}</span>
+                  <span>
+                    {format(new Date(component.createdAt), "MMM d, yyyy")}
+                  </span>
                 </div>
-                
+
                 <div className="mt-2 flex items-center gap-2">
                   <Tag size={14} className="text-gray-400" />
-                  <span className="text-sm text-gray-400">{component.versionedComponentId.componentId}</span>
+                  <span className="text-sm text-gray-400">
+                    {component.versionedComponentId.componentId}
+                  </span>
                 </div>
               </div>
             </Link>

@@ -32,17 +32,17 @@ export const getApiDefinitions = async (apiDefinitionId?: string) => {
 
 export const getApiDefinition = async (id: string, version: string) => {
   const { data } = await apiClient.get<ApiDefinition>(
-    `/v1/api/definitions/${id}/${version}`
+    `/v1/api/definitions/${id}/${version}`,
   );
   return data;
 };
 
 export const createApiDefinition = async (
-  definition: Omit<ApiDefinition, "id" | "createdAt">
+  definition: Omit<ApiDefinition, "id" | "createdAt">,
 ) => {
   const { data } = await apiClient.post<ApiDefinition>(
     "/v1/api/definitions",
-    definition
+    definition,
   );
   return data;
 };
@@ -61,22 +61,22 @@ export const updateApiDefinition = async ({
     definition,
     {
       headers: { "Content-Type": "application/json" },
-    }
+    },
   );
   return data;
 };
 
 export const deleteApiDefinition = async (id: string, version: string) => {
   const { data } = await apiClient.delete<string>(
-    `/v1/api/definitions/${id}/${version}`
+    `/v1/api/definitions/${id}/${version}`,
   );
   return data;
 };
 
-export const importOpenApiDefinition = async (openApiDoc: any) => {
+export const importOpenApiDefinition = async (openApiDoc: object) => {
   const { data } = await apiClient.put<ApiDefinition>(
     "/v1/api/definitions/import",
-    openApiDoc
+    openApiDoc,
   );
   return data;
 };
@@ -89,7 +89,14 @@ export const useApiDefinitions = (apiDefinitionId?: string) => {
   });
 };
 
-export const useApiDefinition = (id: string, version: string) => {
+export const useApiDefinition = (
+  id: string,
+  version: string,
+): {
+  data: ApiDefinition | undefined;
+  isLoading: boolean;
+  error: GolemError | null;
+} => {
   return useQuery({
     queryKey: apiDefinitionKeys.detail(id, version),
     queryFn: () => getApiDefinition(id, version),
@@ -112,7 +119,7 @@ export const useUpdateApiDefinition = () => {
 
   return useMutation({
     mutationFn: updateApiDefinition,
-    onSuccess: (_, { id, version }) => {
+    onSuccess: (_: unknown, { id, version }: ApiDefinition) => {
       queryClient.invalidateQueries({
         queryKey: apiDefinitionKeys.detail(id, version),
       });
@@ -179,23 +186,23 @@ export const deploymentKeys = {
 };
 
 const createDeployment = async (
-  deployment: ApiDeploymentInput
+  deployment: ApiDeploymentInput,
 ): Promise<ApiDeployment> => {
   const { data } = await apiClient.post<ApiDeployment>(
     "/v1/api/deployments/deploy",
-    deployment
+    deployment,
   );
   return data;
 };
 
 export const useCreateDeployment = (
-  options?: UseMutationOptions<ApiDeployment, GolemError, ApiDeploymentInput>
+  options?: UseMutationOptions<ApiDeployment, GolemError, ApiDeploymentInput>,
 ) => {
   const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: createDeployment,
-    onSuccess: (data) => {
+    onSuccess: (data: ApiDeployment) => {
       // Invalidate relevant queries
       queryClient.invalidateQueries({ queryKey: deploymentKeys.lists() });
       queryClient.invalidateQueries({
@@ -208,7 +215,7 @@ export const useCreateDeployment = (
 
 // Fetch deployments for a specific API definition
 const getDeployments = async (
-  apiDefinitionId: string
+  apiDefinitionId: string,
 ): Promise<ApiDeployment[]> => {
   const { data } = await apiClient.get<ApiDeployment[]>("/v1/api/deployments", {
     params: {
@@ -221,7 +228,7 @@ const getDeployments = async (
 // Fetch a single deployment by site
 const getDeployment = async (site: string): Promise<ApiDeployment> => {
   const { data } = await apiClient.get<ApiDeployment>(
-    `/v1/api/deployments/${site}`
+    `/v1/api/deployments/${site}`,
   );
   return data;
 };
@@ -229,7 +236,7 @@ const getDeployment = async (site: string): Promise<ApiDeployment> => {
 // Hook for fetching deployments
 export const useApiDeployments = (
   apiDefinitionId: string,
-  options?: UseQueryOptions<ApiDeployment[], GolemError>
+  options?: UseQueryOptions<ApiDeployment[], GolemError>,
 ): UseQueryResult<ApiDeployment[], GolemError> => {
   return useQuery({
     queryKey: deploymentKeys.list({ apiDefinitionId }),
@@ -242,7 +249,7 @@ export const useApiDeployments = (
 // Hook for fetching a single deployment
 export const useApiDeployment = (
   site: string,
-  options?: UseQueryOptions<ApiDeployment, GolemError>
+  options?: UseQueryOptions<ApiDeployment, GolemError>,
 ): UseQueryResult<ApiDeployment, GolemError> => {
   return useQuery({
     queryKey: deploymentKeys.detail(site),
@@ -255,7 +262,7 @@ export const useApiDeployment = (
 
 // Hook for fetching all deployments (with optional API definition filter)
 export const useAllDeployments = (
-  options?: UseQueryOptions<ApiDeployment[], GolemError>
+  options?: UseQueryOptions<ApiDeployment[], GolemError>,
 ): UseQueryResult<ApiDeployment[], GolemError> => {
   return useQuery({
     queryKey: deploymentKeys.lists(),
@@ -270,27 +277,31 @@ export const useAllDeployments = (
 
 const deleteDeployment = async (site: string): Promise<string> => {
   const { data } = await apiClient.delete<string>(
-    `/v1/api/deployments/${site}`
+    `/v1/api/deployments/${site}`,
   );
   return data;
 };
 
 export const useDeleteDeployment = (
-  options?: UseMutationOptions<string, GolemError, string>
+  options?: UseMutationOptions<string, GolemError, string>,
 ) => {
   const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: deleteDeployment,
-    onSuccess: (_, site) => {
+    onSuccess: (
+      _: unknown,
+      site: {
+        host: string;
+        subdomain?: string;
+      },
+    ) => {
       // Invalidate the specific deployment
       queryClient.invalidateQueries({ queryKey: deploymentKeys.details() });
       queryClient.invalidateQueries({ queryKey: deploymentKeys.list(site) });
-      // queryClient.invalidateQueries({ queryKey: deploymentKeys.list({ apiDefinitionId }) });
-      // Invalidate all deployment lists since they might contain this deployment
       queryClient.invalidateQueries({ queryKey: deploymentKeys.lists() });
     },
-    onError: (error) => {
+    onError: (error: unknown) => {
       console.error("Failed to delete deployment:", error);
     },
     ...options,

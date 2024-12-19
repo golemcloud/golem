@@ -24,7 +24,7 @@ export const getComponents = async (componentName?: string) => {
 
 export const getComponentVersions = async (componentId: string) => {
   const { data } = await apiClient.get<Component[]>(
-    `/v1/components/${componentId}`
+    `/v1/components/${componentId}`,
   );
   return data;
 };
@@ -36,10 +36,10 @@ export const deleteComponent = async (componentId: string) => {
 
 export const getComponentVersion = async (
   componentId: string,
-  version: number
+  version: number,
 ) => {
   const { data } = await apiClient.get<Component>(
-    `/v1/components/${componentId}/versions/${version}`
+    `/v1/components/${componentId}/versions/${version}`,
   );
   return data;
 };
@@ -67,13 +67,18 @@ export const updateComponent = async ({
       headers: {
         "Content-Type": "multipart/form-data",
       },
-    }
+    },
   );
   return data;
 };
 
 // Hooks
-export const useComponents = (componentName?: string) => {
+export const useComponents = (
+  componentName?: string,
+): {
+  data: Component[];
+  isLoading: boolean;
+} => {
   return useQuery({
     queryKey: componentKeys.list({ componentName }),
     queryFn: () => getComponents(componentName),
@@ -131,7 +136,7 @@ export const useComponent = (componentId: string) => {
 
 export const getComponent = async (componentId: string) => {
   const { data } = await apiClient.get<Component>(
-    `/v1/components/${componentId}/latest`
+    `/v1/components/${componentId}/latest`,
   );
   return data;
 };

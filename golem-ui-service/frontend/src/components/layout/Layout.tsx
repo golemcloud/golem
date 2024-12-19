@@ -1,32 +1,48 @@
-import { ChevronRight, Menu, Package, Puzzle, TableOfContents, Webhook, X } from 'lucide-react';
-import { Link, useLocation } from 'react-router-dom';
-import React, { useState } from 'react';
+import {
+  ChevronRight,
+  Menu,
+  Package,
+  Puzzle,
+  TableOfContents,
+  Webhook,
+  X,
+} from "lucide-react";
+import { Link, useLocation } from "react-router-dom";
+import React, { useState } from "react";
 
 const navItems = [
-  { label: 'Overview', path: '/', icon: TableOfContents },
-  { label: 'Components', path: '/components', icon: Package },
-  { label: 'Plugins', path: '/plugins', icon: Puzzle },
-  { label: 'API', path: '/api', icon: Webhook },
+  { label: "Overview", path: "/", icon: TableOfContents },
+  { label: "Components", path: "/components", icon: Package },
+  { label: "Plugins", path: "/plugins", icon: Puzzle },
+  { label: "API", path: "/api", icon: Webhook },
 ];
 
-const NavLink = ({ item, isActive }: { item: typeof navItems[0], isActive: boolean }) => {
+const NavLink = ({
+  item,
+  isActive,
+}: {
+  item: (typeof navItems)[0];
+  isActive: boolean;
+}) => {
   const Icon = item.icon;
 
   return (
     <Link
       to={item.path}
       className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium
-                 transition-all duration-200 group ${isActive
-          ? 'bg-blue-500/10 text-blue-400'
-          : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800'
-        }`}
+                 transition-all duration-200 group ${
+                   isActive
+                     ? "bg-blue-500/10 text-blue-400"
+                     : "text-gray-400 hover:text-gray-200 hover:bg-gray-800"
+                 }`}
     >
-      <Icon size={18} className={`${isActive ? 'text-blue-400' : 'text-gray-500'} 
-                                 transition-colors group-hover:text-inherit`} />
+      <Icon
+        size={18}
+        className={`${isActive ? "text-blue-400" : "text-gray-500"} 
+                                 transition-colors group-hover:text-inherit`}
+      />
       <span>{item.label}</span>
-      {isActive && (
-        <ChevronRight size={16} className="ml-auto text-blue-400" />
-      )}
+      {isActive && <ChevronRight size={16} className="ml-auto text-blue-400" />}
     </Link>
   );
 };
@@ -38,14 +54,18 @@ export const Layout = ({ children }: { children: React.ReactNode }) => {
   return (
     <div className="min-h-screen bg-gray-900 text-gray-100">
       {/* Header */}
-      <header className="sticky top-0 z-50 bg-gray-800/80 border-b border-gray-700/50 
-                        backdrop-blur supports-[backdrop-filter]:bg-gray-800/60">
+      <header
+        className="sticky top-0 z-50 bg-gray-800/80 border-b border-gray-700/50 
+                        backdrop-blur supports-[backdrop-filter]:bg-gray-800/60"
+      >
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
           <div className="flex h-16 items-center justify-between">
             {/* Logo */}
             <Link to="/" className="flex items-center gap-3 group">
-              <div className="p-2 rounded-md bg-blue-500/10 text-blue-400 
-                            transition-colors group-hover:bg-blue-500/20">
+              <div
+                className="p-2 rounded-md bg-blue-500/10 text-blue-400 
+                            transition-colors group-hover:bg-blue-500/20"
+              >
                 <Webhook size={22} />
               </div>
               <span className="text-xl font-bold text-white">
