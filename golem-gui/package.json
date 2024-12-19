@@ -2,6 +2,14 @@
   "name": "my-app",
   "version": "0.1.0",
   "private": true,
+  "react-app-configuration": {
+    "web": {
+      "env": {
+        "REACT_APP_API_URL": "http://localhost:3000"
+      }
+    }
+  },
+  
   "scripts": {
     "dev": "next dev",
     "build": "next build",

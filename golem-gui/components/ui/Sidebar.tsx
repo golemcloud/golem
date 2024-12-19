@@ -9,7 +9,7 @@ import { useTheme } from "@mui/material/styles";
 
 
 type SidebarProps = {
-  apiId: number;
+  apiId: string;
 };
 
 const Sidebar = ({apiId}:SidebarProps) => {

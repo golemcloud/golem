@@ -1,6 +1,11 @@
-import { Box, Typography, Paper, Button } from '@mui/material';
+'use client'
+import RoutePage from '@/components/api-route-page';
+import DeploymentPage from '@/components/deployment';
+import { Box, Typography, Paper } from '@mui/material';
+import { useParams } from 'next/navigation';
 
 export default function Overview() {
+  const { apiId } = useParams<{ apiId: string }>();
   return (
     <Box>
       {/* Routes Section */}
@@ -19,39 +24,11 @@ export default function Overview() {
         <Typography variant="h6" gutterBottom>
           Routes
         </Typography>
-        <Typography variant="body2">
-          No routes defined for this API version.
-        </Typography>
+        <RoutePage apiId={apiId} limit={5}/>
       </Paper>
 
       {/* Active Deployments Section */}
-      <Paper
-        elevation={3}
-         className="bg-[#333]"
-        sx={{
-          p: 3,
-          bgcolor: 'background.paper',
-          color: 'text.primary',
-          border: 1,
-          borderColor: 'divider',
-          borderRadius: 2,
-        }}
-      >
-        <Box
-          display="flex"
-          justifyContent="space-between"
-          alignItems="center"
-          mb={1}
-        >
-          <Typography variant="h6">Active Deployments</Typography>
-          <Button variant="contained" color="primary" size="small">
-            View All
-          </Button>
-        </Box>
-        <Typography variant="body2" >
-          No active deployments for this API version.
-        </Typography>
-      </Paper>
+        <DeploymentPage apiId={apiId} limit={5}/>
     </Box>
   );
 }

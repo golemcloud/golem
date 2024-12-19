@@ -9,12 +9,12 @@ export default function APISLayout({
   children: React.ReactNode;
 }) {
 
-  const { id, apiId } = useParams();
+  const { apiId } = useParams<{apiId:string}>();
 
   return (
     
     <div style={{ display: "flex", height: "100vh", overflow: "hidden" }}>
-      <Sidebar apiId={Number(apiId)} />
+      <Sidebar apiId={apiId!} />
       <div
         className="flex-1 p-[20px]"
         style={{
