@@ -37,7 +37,7 @@ async fn auction_example_1(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let registry_component_id = executor.store_component("auction_registry_composed").await;
+    let registry_component_id = executor.store_component("auction_registry").await;
     let auction_component_id = executor.store_component("auction").await;
 
     let mut env = HashMap::new();
@@ -106,7 +106,7 @@ async fn auction_example_2(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let registry_component_id = executor.store_component("auction_registry_composed").await;
+    let registry_component_id = executor.store_component("auction_registry").await;
     let auction_component_id = executor.store_component("auction").await;
 
     let mut env = HashMap::new();
@@ -589,7 +589,7 @@ async fn error_message_invalid_uri(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let registry_component_id = executor.store_component("auction_registry_composed").await;
+    let registry_component_id = executor.store_component("auction_registry").await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -644,7 +644,7 @@ async fn error_message_non_existing_target_component(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let registry_component_id = executor.store_component("auction_registry_composed").await;
+    let registry_component_id = executor.store_component("auction_registry").await;
 
     let mut env = HashMap::new();
     env.insert(

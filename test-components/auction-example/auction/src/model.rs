@@ -1,7 +1,7 @@
 use std::time::Duration;
 use uuid::Uuid;
 
-use crate::exports::auction::auction::api::{
+use crate::exports::auction::auction_exports::api::{
     Auction as WitAuction, AuctionId as WitAuctionId, BidResult as WitBidResult,
     BidderId as WitBidderId, Deadline as WitDeadline,
 };
