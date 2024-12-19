@@ -5,6 +5,7 @@ use crate::workerctx::{DynamicLinking, WorkerCtx};
 use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_common::model::OwnedWorkerId;
+use golem_wasm_rpc::golem::rpc::types::{FutureInvokeResult, HostFutureInvokeResult};
 use golem_wasm_rpc::wasmtime::{decode_param, encode_output};
 use golem_wasm_rpc::{HostWasmRpc, Uri, Value, WasmRpcEntry, WitValue};
 use rib::{ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite};
@@ -13,11 +14,12 @@ use wasmtime::component::types::ComponentItem;
 use wasmtime::component::{Component, Linker, Resource, ResourceType, Type, Val};
 use wasmtime::{AsContextMut, Engine, StoreContextMut};
 use wasmtime_wasi::WasiView;
-
 // TODO: support multiple different dynamic linkers
 
 #[async_trait]
-impl<Ctx: WorkerCtx + HostWasmRpc> DynamicLinking<Ctx> for DurableWorkerCtx<Ctx> {
+impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DynamicLinking<Ctx>
+    for DurableWorkerCtx<Ctx>
+{
     fn link(
         &mut self,
         engine: &Engine,
@@ -60,6 +62,7 @@ impl<Ctx: WorkerCtx + HostWasmRpc> DynamicLinking<Ctx> for DurableWorkerCtx<Ctx>
                                 ComponentItem::ComponentFunc(fun) => {
                                     let name2 = name.clone();
                                     let ename2 = ename.clone();
+                                    // TODO: need to do the "rpc call type" detection here and if it's not an rpc call then not calling `func_new_async` (for example for 'subscribe' and 'get' on FutureInvokeResult wrappers)
                                     instance.func_new_async(
                                         // TODO: instrument async closure
                                         &ename.clone(),
@@ -96,7 +99,15 @@ impl<Ctx: WorkerCtx + HostWasmRpc> DynamicLinking<Ctx> for DurableWorkerCtx<Ctx>
                                 }
                                 ComponentItem::Type(_) => {}
                                 ComponentItem::Resource(resource) => {
-                                    if ename != "pollable" {
+                                    // TODO: need to detect future result resources and register them as FutureInvokeResult
+                                    if ename == "future-counter-get-value-result" {
+                                        debug!("LINKING FUTURE INVOKE RESULT {ename}");
+                                        instance.resource(
+                                            &ename,
+                                            ResourceType::host::<FutureInvokeResult>(),
+                                            |_store, _rep| Ok(()),
+                                        )?;
+                                    } else if ename != "pollable" {
                                         // TODO: ?? this should be 'if it is not already linked' but not way to check that
                                         debug!("LINKING RESOURCE {ename} {resource:?}");
                                         instance.resource_async(
@@ -141,7 +152,7 @@ impl<Ctx: WorkerCtx + HostWasmRpc> DynamicLinking<Ctx> for DurableWorkerCtx<Ctx>
         );
 
         // TODO: this has to be moved to be calculated in the linking phase
-        let call_type = determine_call_type(interface_name, function_name)?;
+        let call_type = determine_call_type(interface_name, function_name, result_types)?;
 
         match call_type {
             Some(DynamicRpcCall::GlobalStubConstructor) => {
@@ -280,10 +291,43 @@ impl<Ctx: WorkerCtx + HostWasmRpc> DynamicLinking<Ctx> for DurableWorkerCtx<Ctx>
                 Self::value_result_to_wasmtime_vals(result, results, result_types, &mut store)
                     .await?;
             }
+            Some(DynamicRpcCall::FireAndForgetFunctionCall {
+                stub_function_name,
+                target_function_name,
+            }) => {
+                // Async stub interface method
+                debug!(
+                    "FNF {function_name} handle={:?}, rest={:?}",
+                    params[0],
+                    params.iter().skip(1).collect::<Vec<_>>()
+                );
+
+                let handle = match params[0] {
+                    Val::Resource(handle) => handle,
+                    _ => return Err(anyhow!("Invalid handle parameter")),
+                };
+                let handle: Resource<WasmRpcEntry> = handle.try_into_resource(&mut store)?;
+                {
+                    let mut wasi = store.data_mut().as_wasi_view();
+                    let entry = wasi.table().get(&handle)?;
+                    let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
+                    debug!("CALLING {function_name} ON {}", payload.remote_worker_id());
+                }
+
+                Self::remote_invoke(
+                    stub_function_name,
+                    target_function_name,
+                    params,
+                    param_types,
+                    &mut store,
+                    handle,
+                )
+                .await?;
+            }
             Some(DynamicRpcCall::AsyncFunctionCall {
-                     stub_function_name,
-                     target_function_name,
-                 }) => {
+                stub_function_name,
+                target_function_name,
+            }) => {
                 // Async stub interface method
                 debug!(
                     "ASYNC {function_name} handle={:?}, rest={:?}",
@@ -303,17 +347,71 @@ impl<Ctx: WorkerCtx + HostWasmRpc> DynamicLinking<Ctx> for DurableWorkerCtx<Ctx>
                     debug!("CALLING {function_name} ON {}", payload.remote_worker_id());
                 }
 
-                // let result = Self::remote_invoke(
-                //     stub_function_name,
-                //     target_function_name,
-                //     params,
-                //     param_types,
-                //     &mut store,
-                //     handle,
-                // )
-                //     .await?;
-                // Self::value_result_to_wasmtime_vals(result, results, result_types, &mut store)
-                //     .await?;
+                let result = Self::remote_async_invoke_and_await(
+                    stub_function_name,
+                    target_function_name,
+                    params,
+                    param_types,
+                    &mut store,
+                    handle,
+                )
+                .await?;
+
+                Self::value_result_to_wasmtime_vals(result, results, result_types, &mut store)
+                    .await?;
+            }
+            Some(DynamicRpcCall::FutureInvokeResultSubscribe) => {
+                let handle = match params[0] {
+                    Val::Resource(handle) => handle,
+                    _ => return Err(anyhow!("Invalid handle parameter")),
+                };
+                let handle: Resource<FutureInvokeResult> = handle.try_into_resource(&mut store)?;
+                let pollable = store.data_mut().subscribe(handle).await?;
+                let pollable_any = pollable.try_into_resource_any(&mut store)?;
+                let resource_id = store.data_mut().add(pollable_any).await;
+
+                let value_result = Value::Tuple(vec![Value::Handle {
+                    uri: store.data().self_uri().value,
+                    resource_id,
+                }]);
+                Self::value_result_to_wasmtime_vals(
+                    value_result,
+                    results,
+                    result_types,
+                    &mut store,
+                )
+                .await?;
+            }
+            Some(DynamicRpcCall::FutureInvokeResultGet) => {
+                let handle = match params[0] {
+                    Val::Resource(handle) => handle,
+                    _ => return Err(anyhow!("Invalid handle parameter")),
+                };
+                let handle: Resource<FutureInvokeResult> = handle.try_into_resource(&mut store)?;
+                let result = HostFutureInvokeResult::get(store.data_mut(), handle).await?;
+
+                // NOTE: we are currently failing on RpcError instead of passing it to the caller, as the generated stub interface requires
+                let value_result = Value::Tuple(vec![match result {
+                    None => Value::Option(None),
+                    Some(Ok(value)) => {
+                        let value: Value = value.into();
+                        match value {
+                            Value::Tuple(items) if items.len() == 1 => {
+                                Value::Option(Some(Box::new(items.into_iter().next().unwrap())))
+                            }
+                            _ => Err(anyhow!("Invalid future invoke result value"))?, // TODO: better error
+                        }
+                    }
+                    Some(Err(err)) => Err(anyhow!("RPC invocation failed with {err:?}"))?, // TODO: more information into the error
+                }]);
+
+                Self::value_result_to_wasmtime_vals(
+                    value_result,
+                    results,
+                    result_types,
+                    &mut store,
+                )
+                .await?;
             }
             _ => todo!(),
         }
@@ -372,7 +470,6 @@ impl<Ctx: WorkerCtx + HostWasmRpc> DurableWorkerCtx<Ctx> {
                 "CALLING {stub_function_name} as {target_function_name} with parameters {wit_value_params:?}",
             );
 
-        // "auction:auction/api.{initialize}",
         let wit_value_result = store
             .data_mut()
             .invoke_and_await(handle, target_function_name.to_string(), wit_value_params)
@@ -385,6 +482,74 @@ impl<Ctx: WorkerCtx + HostWasmRpc> DurableWorkerCtx<Ctx> {
 
         let value_result: Value = wit_value_result.into();
         Ok(value_result)
+    }
+
+    // TODO: stub_function_name can probably be removed
+    async fn remote_async_invoke_and_await(
+        stub_function_name: ParsedFunctionName,
+        target_function_name: ParsedFunctionName,
+        params: &[Val],
+        param_types: &[Type],
+        store: &mut StoreContextMut<'_, Ctx>,
+        handle: Resource<WasmRpcEntry>,
+    ) -> anyhow::Result<Value> {
+        let mut wit_value_params = Vec::new();
+        for (param, typ) in params.iter().zip(param_types).skip(1) {
+            let value: Value = encode_output(param, typ, store.data_mut())
+                .await
+                .map_err(|err| anyhow!(format!("{err:?}")))?; // TODO: proper error
+            let wit_value: WitValue = value.into();
+            wit_value_params.push(wit_value);
+        }
+
+        debug!(
+                "CALLING {stub_function_name} as {target_function_name} with parameters {wit_value_params:?}",
+            );
+
+        let invoke_result_resource = store
+            .data_mut()
+            .async_invoke_and_await(handle, target_function_name.to_string(), wit_value_params)
+            .await?;
+
+        let invoke_result_resource_any =
+            invoke_result_resource.try_into_resource_any(&mut *store)?;
+        let resource_id = store.data_mut().add(invoke_result_resource_any).await;
+
+        let value_result: Value = Value::Tuple(vec![Value::Handle {
+            uri: store.data().self_uri().value,
+            resource_id,
+        }]);
+        Ok(value_result)
+    }
+
+    // TODO: stub_function_name can probably be removed
+    async fn remote_invoke(
+        stub_function_name: ParsedFunctionName,
+        target_function_name: ParsedFunctionName,
+        params: &[Val],
+        param_types: &[Type],
+        store: &mut StoreContextMut<'_, Ctx>,
+        handle: Resource<WasmRpcEntry>,
+    ) -> anyhow::Result<()> {
+        let mut wit_value_params = Vec::new();
+        for (param, typ) in params.iter().zip(param_types).skip(1) {
+            let value: Value = encode_output(param, typ, store.data_mut())
+                .await
+                .map_err(|err| anyhow!(format!("{err:?}")))?; // TODO: proper error
+            let wit_value: WitValue = value.into();
+            wit_value_params.push(wit_value);
+        }
+
+        debug!(
+                "CALLING {stub_function_name} as {target_function_name} with parameters {wit_value_params:?}",
+            );
+
+        store
+            .data_mut()
+            .invoke(handle, target_function_name.to_string(), wit_value_params)
+            .await??;
+
+        Ok(())
     }
 
     async fn value_result_to_wasmtime_vals(
@@ -482,16 +647,23 @@ enum DynamicRpcCall {
         stub_function_name: ParsedFunctionName,
         target_function_name: ParsedFunctionName,
     },
+    FireAndForgetFunctionCall {
+        stub_function_name: ParsedFunctionName,
+        target_function_name: ParsedFunctionName,
+    },
     AsyncFunctionCall {
         stub_function_name: ParsedFunctionName,
         target_function_name: ParsedFunctionName,
     },
+    FutureInvokeResultSubscribe,
+    FutureInvokeResultGet,
 }
 
 // TODO: this needs to be implementd based on component metadata and no hardcoded values
 fn determine_call_type(
     interface_name: &str,
     function_name: &str,
+    result_types: &[Type],
 ) -> anyhow::Result<Option<DynamicRpcCall>> {
     if (interface_name == "auction:auction-stub/stub-auction"
         && function_name == "[constructor]api")
@@ -544,86 +716,107 @@ fn determine_call_type(
                 .map_err(|err| anyhow!(err))?; // TODO: proper error
         debug!("STUB FUNCTION NAME: {stub_function_name:?}");
 
-        let (blocking, target_function) = match &stub_function_name.function {
-            ParsedFunctionReference::RawResourceMethod { resource, method }
-                if resource == "counter" =>
-            // TODO: this needs to be detected based on the matching constructor
+        if stub_function_name.function.resource_name()
+            == Some(&"future-counter-get-value-result".to_string())
+        {
+            if stub_function_name.function.resource_method_name() == Some("subscribe".to_string()) {
+                Ok(Some(DynamicRpcCall::FutureInvokeResultSubscribe))
+            } else if stub_function_name.function.resource_method_name() == Some("get".to_string())
             {
-                if method.starts_with("blocking-") {
-                    (
-                        true,
-                        ParsedFunctionReference::RawResourceMethod {
-                            resource: resource.to_string(),
-                            method: method
-                                .strip_prefix("blocking-") // TODO: we also have to support the non-blocking variants
-                                .unwrap()
-                                .to_string(),
-                        },
-                    )
-                } else {
-                    (
-                        false,
-                        ParsedFunctionReference::RawResourceMethod {
-                            resource: resource.to_string(),
-                            method: method.to_string(),
-                        },
-                    )
-                }
-            }
-            _ => {
-                let method = stub_function_name.function.resource_method_name().unwrap(); // TODO: proper error
-
-                if method.starts_with("blocking-") {
-                    (
-                        true,
-                        ParsedFunctionReference::Function {
-                            function: method
-                                .strip_prefix("blocking-") // TODO: we also have to support the non-blocking variants
-                                .unwrap()
-                                .to_string(),
-                        },
-                    )
-                } else {
-                    (
-                        false,
-                        ParsedFunctionReference::Function {
-                            function: method.to_string(),
-                        },
-                    )
-                }
-            }
-        };
-
-        let target_function_name = ParsedFunctionName {
-            site: if interface_name.starts_with("auction") {
-                ParsedFunctionSite::PackagedInterface {
-                    // TODO: this must come from component metadata linking information
-                    namespace: "auction".to_string(),
-                    package: "auction".to_string(),
-                    interface: "api".to_string(),
-                    version: None,
-                }
+                Ok(Some(DynamicRpcCall::FutureInvokeResultGet))
             } else {
-                ParsedFunctionSite::PackagedInterface {
-                    namespace: "rpc".to_string(),
-                    package: "counters".to_string(),
-                    interface: "api".to_string(),
-                    version: None,
-                }
-            },
-            function: target_function,
-        };
-
-        if blocking {
-            Ok(Some(DynamicRpcCall::BlockingFunctionCall {
-                stub_function_name,
-                target_function_name,
-            }))
+                Ok(None)
+            }
         } else {
-            Ok(Some(DynamicRpcCall::AsyncFunctionCall {
-                stub_function_name,
-                target_function_name,
-            }))
+            let (blocking, target_function) = match &stub_function_name.function {
+                ParsedFunctionReference::RawResourceMethod { resource, method }
+                    if resource == "counter" =>
+                // TODO: this needs to be detected based on the matching constructor
+                {
+                    if method.starts_with("blocking-") {
+                        (
+                            true,
+                            ParsedFunctionReference::RawResourceMethod {
+                                resource: resource.to_string(),
+                                method: method
+                                    .strip_prefix("blocking-") // TODO: we also have to support the non-blocking variants
+                                    .unwrap()
+                                    .to_string(),
+                            },
+                        )
+                    } else {
+                        (
+                            false,
+                            ParsedFunctionReference::RawResourceMethod {
+                                resource: resource.to_string(),
+                                method: method.to_string(),
+                            },
+                        )
+                    }
+                }
+                _ => {
+                    let method = stub_function_name.function.resource_method_name().unwrap(); // TODO: proper error
+
+                    if method.starts_with("blocking-") {
+                        (
+                            true,
+                            ParsedFunctionReference::Function {
+                                function: method
+                                    .strip_prefix("blocking-") // TODO: we also have to support the non-blocking variants
+                                    .unwrap()
+                                    .to_string(),
+                            },
+                        )
+                    } else {
+                        (
+                            false,
+                            ParsedFunctionReference::Function {
+                                function: method.to_string(),
+                            },
+                        )
+                    }
+                }
+            };
+
+            let target_function_name = ParsedFunctionName {
+                site: if interface_name.starts_with("auction") {
+                    ParsedFunctionSite::PackagedInterface {
+                        // TODO: this must come from component metadata linking information
+                        namespace: "auction".to_string(),
+                        package: "auction".to_string(),
+                        interface: "api".to_string(),
+                        version: None,
+                    }
+                } else {
+                    ParsedFunctionSite::PackagedInterface {
+                        namespace: "rpc".to_string(),
+                        package: "counters".to_string(),
+                        interface: "api".to_string(),
+                        version: None,
+                    }
+                },
+                function: target_function,
+            };
+
+            if blocking {
+                Ok(Some(DynamicRpcCall::BlockingFunctionCall {
+                    stub_function_name,
+                    target_function_name,
+                }))
+            } else {
+                debug!("ASYNC FUNCTION RESULT TYPES: {result_types:?}");
+                if result_types.len() > 0 {
+                    Ok(Some(DynamicRpcCall::AsyncFunctionCall {
+                        stub_function_name,
+                        target_function_name,
+                    }))
+                } else {
+                    Ok(Some(DynamicRpcCall::FireAndForgetFunctionCall {
+                        stub_function_name,
+                        target_function_name,
+                    }))
+                }
+            }
         }
     } else {
         Ok(None)

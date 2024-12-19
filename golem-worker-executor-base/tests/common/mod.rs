@@ -5,9 +5,7 @@ use std::collections::HashSet;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::storage::blob::BlobStorage;
 use golem_wasm_rpc::wasmtime::ResourceStore;
-use golem_wasm_rpc::{
-    FutureInvokeResultEntry, HostWasmRpc, RpcError, Uri, Value, WasmRpcEntry, WitValue,
-};
+use golem_wasm_rpc::{HostWasmRpc, RpcError, Uri, Value, WitValue};
 use golem_worker_executor_base::services::file_loader::FileLoader;
 use prometheus::Registry;
 
@@ -82,6 +80,7 @@ use golem_test_framework::components::worker_executor_cluster::WorkerExecutorClu
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::to_worker_metadata;
 use golem_wasm_rpc::golem::rpc::types::{FutureInvokeResult, WasmRpc};
+use golem_wasm_rpc::golem::rpc::types::{HostFutureInvokeResult, Pollable};
 use golem_worker_executor_base::preview2::golem;
 use golem_worker_executor_base::preview2::golem::api1_1_0;
 use golem_worker_executor_base::services::events::Events;
@@ -586,7 +585,7 @@ impl ResourceStore for TestWorkerCtx {
     }
 
     async fn get(&mut self, resource_id: u64) -> Option<ResourceAny> {
-        self.durable_ctx.get(resource_id).await
+        ResourceStore::get(&mut self.durable_ctx, resource_id).await
     }
 
     async fn borrow(&self, resource_id: u64) -> Option<ResourceAny> {
@@ -832,7 +831,28 @@ impl HostWasmRpc for TestWorkerCtx {
     }
 
     async fn drop(&mut self, rep: Resource<WasmRpc>) -> anyhow::Result<()> {
-        self.durable_ctx.drop(rep).await
+        HostWasmRpc::drop(&mut self.durable_ctx, rep).await
+    }
+}
+
+#[async_trait]
+impl HostFutureInvokeResult for TestWorkerCtx {
+    async fn subscribe(
+        &mut self,
+        self_: Resource<FutureInvokeResult>,
+    ) -> anyhow::Result<Resource<Pollable>> {
+        HostFutureInvokeResult::subscribe(&mut self.durable_ctx, self_).await
+    }
+
+    async fn get(
+        &mut self,
+        self_: Resource<FutureInvokeResult>,
+    ) -> anyhow::Result<Option<Result<WitValue, RpcError>>> {
+        HostFutureInvokeResult::get(&mut self.durable_ctx, self_).await
+    }
+
+    async fn drop(&mut self, rep: Resource<FutureInvokeResult>) -> anyhow::Result<()> {
+        HostFutureInvokeResult::drop(&mut self.durable_ctx, rep).await
     }
 }
 

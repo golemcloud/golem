@@ -20,7 +20,6 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use crate::durable_host::recover_stderr_logs;
-use crate::durable_host::wasm_rpc::{UrnExtensions, WasmRpcEntryPayload};
 use crate::error::{GolemError, WorkerOutOfMemory};
 use crate::function_result_interpreter::interpret_function_results;
 use crate::invocation::{find_first_available_function, invoke_worker, InvokeResult};
@@ -31,7 +30,6 @@ use crate::model::{
 use crate::services::component::ComponentMetadata;
 use crate::services::events::Event;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
-use crate::services::rpc::RpcDemand;
 use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
 use crate::services::{
     All, HasActiveWorkers, HasAll, HasBlobStoreService, HasComponentService, HasConfig, HasEvents,
@@ -59,17 +57,15 @@ use golem_common::model::{
 };
 use golem_common::retries::get_delay;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::{Uri, Value, WasmRpcEntry};
+use golem_wasm_rpc::Value;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::{Mutex, MutexGuard, OwnedSemaphorePermit};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, span, warn, Instrument, Level};
-use wasmtime::component::types::ComponentItem;
-use wasmtime::component::{Instance, Resource, ResourceType, Val};
+use wasmtime::component::Instance;
 use wasmtime::{AsContext, Store, UpdateDeadline};
-use wasmtime_wasi::WasiView;
 
 /// Represents worker that may be running or suspended.
 ///

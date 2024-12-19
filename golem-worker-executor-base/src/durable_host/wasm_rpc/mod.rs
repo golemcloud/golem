@@ -96,7 +96,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
         let remote_worker_id = payload.remote_worker_id().clone();
 
-        // TODO: do this in other variants too
+        // TODO: remove redundancy
         match payload {
             WasmRpcEntryPayload::Resource {
                 resource_uri,
@@ -234,7 +234,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         &mut self,
         self_: Resource<WasmRpcEntry>,
         function_name: String,
-        function_params: Vec<WitValue>,
+        mut function_params: Vec<WitValue>,
     ) -> anyhow::Result<Result<(), golem_wasm_rpc::RpcError>> {
         record_host_function_call("golem::rpc::wasm-rpc", "invoke");
         let args = self.get_arguments().await?;
@@ -243,6 +243,25 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let entry = self.table().get(&self_)?;
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
         let remote_worker_id = payload.remote_worker_id().clone();
+
+        // TODO: remove redundancy
+        match payload {
+            WasmRpcEntryPayload::Resource {
+                resource_uri,
+                resource_id,
+                ..
+            } => {
+                function_params.insert(
+                    0,
+                    Value::Handle {
+                        uri: resource_uri.value.to_string(),
+                        resource_id: *resource_id,
+                    }
+                        .into(),
+                );
+            }
+            _ => {}
+        }
 
         let current_idempotency_key = self
             .get_current_idempotency_key()
@@ -319,7 +338,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         &mut self,
         this: Resource<WasmRpcEntry>,
         function_name: String,
-        function_params: Vec<WitValue>,
+        mut function_params: Vec<WitValue>,
     ) -> anyhow::Result<Resource<FutureInvokeResult>> {
         record_host_function_call("golem::rpc::wasm-rpc", "async-invoke-and-await");
         let args = self.get_arguments().await?;
@@ -333,6 +352,25 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let entry = self.table().get(&this)?;
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
         let remote_worker_id = payload.remote_worker_id().clone();
+
+        // TODO: remove redundancy
+        match payload {
+            WasmRpcEntryPayload::Resource {
+                resource_uri,
+                resource_id,
+                ..
+            } => {
+                function_params.insert(
+                    0,
+                    Value::Handle {
+                        uri: resource_uri.value.to_string(),
+                        resource_id: *resource_id,
+                    }
+                        .into(),
+                );
+            }
+            _ => {}
+        }
 
         let current_idempotency_key = self
             .get_current_idempotency_key()
