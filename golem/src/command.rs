@@ -25,7 +25,7 @@ pub enum SingleExecutableCommand {
     #[clap(name = "start", about = "Start a golem server for local development")]
     Start {
         /// Address to serve the main API on
-        #[clap(long, default_value = "127.0.0.1")]
+        #[clap(long, default_value = "0.0.0.0")]
         router_addr: String,
 
         /// Port to serve the main API on
