@@ -335,6 +335,7 @@ pub async fn start_limited(
                 kid: "1".to_string(),
                 der: "secret".as_bytes().to_vec(),
             }],
+            ..Default::default()
         },
         ..Default::default()
     };

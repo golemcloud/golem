@@ -35,7 +35,7 @@ pub fn start_proxy(
 ) -> Result<Channel<WorkerRequest, WorkerResponse>, anyhow::Error> {
     info!("Starting proxy");
 
-    let listener_address = SocketAddress::new_v4(127, 0, 0, 1, listener_port);
+    let listener_address = SocketAddress::new_v4(0, 0, 0, 0, listener_port);
 
     let http_listener = ListenerBuilder::new_http(listener_address).to_http(None)?;
 
@@ -110,7 +110,7 @@ pub fn start_proxy(
                 id: format!("add-golem-frontend-${route_counter}"),
                 content: RequestType::AddHttpFrontend(RequestHttpFrontend {
                     cluster_id: Some(cluster_id.to_string()),
-                    address: SocketAddress::new_v4(127, 0, 0, 1, listener_port),
+                    address: SocketAddress::new_v4(0, 0, 0, 0, listener_port),
                     hostname: "*".to_string(),
                     path,
                     position: RulePosition::Post.into(),
@@ -138,6 +138,14 @@ pub fn start_proxy(
         ))?;
         add_route((
             PathRule::regex("/v1/components/[^/]+/invoke-and-await"),
+            worker_backend,
+        ))?;
+        add_route((
+            PathRule::regex("/.well-known/jwks.json"),
+            worker_backend,
+        ))?;
+        add_route((
+            PathRule::regex("/.well-known/openid-configuration"),
             worker_backend,
         ))?;
         add_route((PathRule::prefix("/v1/components"), component_backend))?;

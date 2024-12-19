@@ -18,6 +18,8 @@ use crate::AllRunDetails;
 use anyhow::Context;
 use golem_common::config::DbConfig;
 use golem_common::config::DbSqliteConfig;
+use golem_common::config::WorkerIdentityConfig;
+use golem_common::config::WorkerIdentityKey;
 use golem_common::model::Empty;
 use golem_component_service::config::ComponentServiceConfig;
 use golem_component_service::ComponentService;
@@ -42,6 +44,7 @@ use opentelemetry::global;
 use opentelemetry_sdk::metrics::MeterProviderBuilder;
 use prometheus::{default_registry, Registry};
 use std::path::PathBuf;
+use std::sync::LazyLock;
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
 use tracing::Instrument;
@@ -173,36 +176,76 @@ fn worker_executor_config(
     shard_manager_run_details: &golem_shard_manager::RunDetails,
     component_service_run_details: &golem_component_service::RunDetails,
 ) -> GolemConfig {
-    let mut config = GolemConfig {
-        port: 0,
-        http_port: 0,
-        key_value_storage: KeyValueStorageConfig::Sqlite(DbSqliteConfig {
-            database: args
-                .data_dir
-                .join("kv-store.db")
-                .to_string_lossy()
-                .to_string(),
-            max_connections: 32,
-        }),
-        indexed_storage: IndexedStorageConfig::KVStoreSqlite,
-        blob_storage: blob_storage_config(args),
-        component_service: golem_worker_executor_base::services::golem_config::ComponentServiceConfig::Grpc(
-            ComponentServiceGrpcConfig {
+    let loaded_config = golem_worker_executor_base::services::golem_config::make_config_loader().load();
+    let config = match loaded_config {
+        Ok(mut config) => {
+            eprintln!("overriding loaded worker-executor.toml");
+            config.port = 0;
+            config.http_port = 0;
+            config.key_value_storage = KeyValueStorageConfig::Sqlite(DbSqliteConfig {
+                database: args
+                    .data_dir
+                    .join("kv-store.db")
+                    .to_string_lossy()
+                    .to_string(),
+                max_connections: 32,
+            });
+            config.indexed_storage = IndexedStorageConfig::KVStoreSqlite;
+            config.blob_storage = blob_storage_config(args);
+            config.component_service =  golem_worker_executor_base::services::golem_config::ComponentServiceConfig::Grpc(
+                ComponentServiceGrpcConfig {
+                    host: "127.0.0.1".to_string(),
+                    port: component_service_run_details.grpc_port,
+                    ..ComponentServiceGrpcConfig::default()
+                }
+            );
+            config.compiled_component_service = CompiledComponentServiceConfig::Disabled(golem_worker_executor_base::services::golem_config::CompiledComponentServiceDisabledConfig {  });
+            config.shard_manager_service = ShardManagerServiceConfig::Grpc(ShardManagerServiceGrpcConfig {
                 host: "127.0.0.1".to_string(),
-                port: component_service_run_details.grpc_port,
-                ..ComponentServiceGrpcConfig::default()
-            }
-        ),
-        compiled_component_service: CompiledComponentServiceConfig::Disabled(golem_worker_executor_base::services::golem_config::CompiledComponentServiceDisabledConfig {  }),
-        shard_manager_service: ShardManagerServiceConfig::Grpc(ShardManagerServiceGrpcConfig {
-            host: "127.0.0.1".to_string(),
-            port: shard_manager_run_details.grpc_port,
-            ..ShardManagerServiceGrpcConfig::default()
-        }),
-        ..Default::default()
+                port: shard_manager_run_details.grpc_port,
+                ..ShardManagerServiceGrpcConfig::default()
+            });
+
+            config
+        },
+        Err(e) => {
+            eprintln!("using built-in worker-executor.toml: {:?}", e);
+            let mut config = GolemConfig {
+                port: 0,
+                http_port: 0,
+                key_value_storage: KeyValueStorageConfig::Sqlite(DbSqliteConfig {
+                    database: args
+                        .data_dir
+                        .join("kv-store.db")
+                        .to_string_lossy()
+                        .to_string(),
+                    max_connections: 32,
+                }),
+                indexed_storage: IndexedStorageConfig::KVStoreSqlite,
+                blob_storage: blob_storage_config(args),
+                component_service: golem_worker_executor_base::services::golem_config::ComponentServiceConfig::Grpc(
+                    ComponentServiceGrpcConfig {
+                        host: "127.0.0.1".to_string(),
+                        port: component_service_run_details.grpc_port,
+                        ..ComponentServiceGrpcConfig::default()
+                    }
+                ),
+                compiled_component_service: CompiledComponentServiceConfig::Disabled(golem_worker_executor_base::services::golem_config::CompiledComponentServiceDisabledConfig {  }),
+                shard_manager_service: ShardManagerServiceConfig::Grpc(ShardManagerServiceGrpcConfig {
+                    host: "127.0.0.1".to_string(),
+                    port: shard_manager_run_details.grpc_port,
+                    ..ShardManagerServiceGrpcConfig::default()
+                }),
+                worker_identity: IDENTITY_KEY_ONCE_CELL.clone(),
+                ..Default::default()
+            };
+        
+            config.add_port_to_tracing_file_name_if_enabled();
+
+            config
+        },
     };
 
-    config.add_port_to_tracing_file_name_if_enabled();
     config
 }
 
@@ -211,32 +254,89 @@ fn worker_service_config(
     shard_manager_run_details: &golem_shard_manager::RunDetails,
     component_service_run_details: &golem_component_service::RunDetails,
 ) -> WorkerServiceBaseConfig {
-    WorkerServiceBaseConfig {
-        port: 0,
-        worker_grpc_port: 0,
-        custom_request_port: args.custom_request_port,
-        db: DbConfig::Sqlite(DbSqliteConfig {
-            database: args
-                .data_dir
-                .join("workers.db")
-                .to_string_lossy()
-                .to_string(),
-            max_connections: 32,
-        }),
-        blob_storage: blob_storage_config(args),
-        component_service: golem_worker_service_base::app_config::ComponentServiceConfig {
-            host: "127.0.0.1".to_string(),
-            port: component_service_run_details.grpc_port,
-            ..golem_worker_service_base::app_config::ComponentServiceConfig::default()
+    let loaded_config = golem_worker_service::config::make_config_loader().load();
+    let config =  match loaded_config {
+        Ok(mut conf) => {
+            eprintln!("overriding loaded worker-service.toml");
+            conf.port = 0;
+            conf.worker_grpc_port = 0;
+            conf.custom_request_port = args.custom_request_port;
+            conf.db = DbConfig::Sqlite(DbSqliteConfig {
+                database: args
+                    .data_dir
+                    .join("workers.db")
+                    .to_string_lossy()
+                    .to_string(),
+                max_connections: 32,
+            });
+            conf.blob_storage = blob_storage_config(args);
+            conf.component_service = golem_worker_service_base::app_config::ComponentServiceConfig {
+                host: "127.0.0.1".to_string(),
+                port: component_service_run_details.grpc_port,
+                ..golem_worker_service_base::app_config::ComponentServiceConfig::default()
+            };
+            conf.routing_table = RoutingTableConfig {
+                host: "127.0.0.1".to_string(),
+                port: shard_manager_run_details.grpc_port,
+                ..RoutingTableConfig::default()
+            };
+
+            conf
         },
-        routing_table: RoutingTableConfig {
-            host: "127.0.0.1".to_string(),
-            port: shard_manager_run_details.grpc_port,
-            ..RoutingTableConfig::default()
-        },
-        ..Default::default()
+        Err(e) =>  {
+            eprintln!("using built-in worker-service.toml: {:?}", e);
+            WorkerServiceBaseConfig {
+            port: 0,
+            worker_grpc_port: 0,
+            custom_request_port: args.custom_request_port,
+            db: DbConfig::Sqlite(DbSqliteConfig {
+                database: args
+                    .data_dir
+                    .join("workers.db")
+                    .to_string_lossy()
+                    .to_string(),
+                max_connections: 32,
+            }),
+            blob_storage: blob_storage_config(args),
+            component_service: golem_worker_service_base::app_config::ComponentServiceConfig {
+                host: "127.0.0.1".to_string(),
+                port: component_service_run_details.grpc_port,
+                ..golem_worker_service_base::app_config::ComponentServiceConfig::default()
+            },
+            routing_table: RoutingTableConfig {
+                host: "127.0.0.1".to_string(),
+                port: shard_manager_run_details.grpc_port,
+                ..RoutingTableConfig::default()
+            },
+            worker_identity: IDENTITY_KEY_ONCE_CELL.clone(),
+            ..Default::default()
+        }
     }
+    };
+
+    config
+   
 }
+
+// fn worker_identity_shared_config() -> &'static WorkerIdentityConfig {
+//     IDENTITY_KEY_ONCE_CELL.get_or_init(|| {
+//         return WorkerIdentityConfig {
+//             issuer: "".to_string(),
+//             audience: "dev".to_string(),
+//             active_keys: vec![ "generated".to_string() ],
+//             set: vec![ ]
+//         }
+//     })
+// }
+
+static IDENTITY_KEY_ONCE_CELL: LazyLock<WorkerIdentityConfig> = LazyLock::new(|| {
+    WorkerIdentityConfig {
+        issuer: "".to_string(),
+        audience: "dev".to_string(),
+        active_keys: vec![ "generated".to_string() ],
+        set: vec![ WorkerIdentityKey::generate("generated".to_string()) ]
+    }
+});
 
 async fn run_shard_manager(
     config: ShardManagerConfig,

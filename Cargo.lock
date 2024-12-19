@@ -3702,6 +3702,7 @@ name = "golem"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "base64ct",
  "bytes 1.9.0",
  "clap 4.5.22",
  "futures",
@@ -3865,7 +3866,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "base64 0.22.1",
+ "base64ct",
  "bincode",
  "bytes 1.9.0",
  "chrono",
@@ -3886,6 +3887,7 @@ dependencies = [
  "iso8601-timestamp",
  "itertools 0.13.0",
  "lazy_static 1.5.0",
+ "p256 0.13.2",
  "poem",
  "poem-openapi",
  "prometheus",
@@ -3894,6 +3896,7 @@ dependencies = [
  "rand",
  "range-set-blaze",
  "regex",
+ "sec1 0.7.3",
  "serde 1.0.215",
  "serde_json",
  "serde_yaml",
@@ -4384,7 +4387,7 @@ dependencies = [
  "async-trait",
  "aws-config",
  "aws-sdk-s3",
- "base64 0.22.1",
+ "base64ct",
  "bincode",
  "bitflags 2.6.0",
  "bytes 1.9.0",
@@ -4472,7 +4475,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "base64 0.22.1",
+ "base64ct",
  "bincode",
  "bytes 1.9.0",
  "console-subscriber",

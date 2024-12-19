@@ -164,6 +164,7 @@ mod jwk {
         }
     }
 
+    use base64ct::{Base64, Base64Url};
     use poem_openapi::{Enum, Object, Union};
 
     impl From<Box<jsonwebkey::Key>> for Key {
@@ -200,12 +201,14 @@ mod jwk {
 
     impl From<jsonwebkey::Curve> for Curve {
         fn from(value: jsonwebkey::Curve) -> Self {
+            use base64ct::Encoding;
+            
             match value {
                 jsonwebkey::Curve::P256 { d, x, y } => {
                     return Curve::P256(CurveP256 {
                         d: None,
-                        x: base64::encode(x.as_ref()),
-                        y: base64::encode(y.as_ref()),
+                        x: Base64Url::encode_string(x.as_ref()),
+                        y: Base64Url::encode_string(y.as_ref()),
                     })
                 }
             }

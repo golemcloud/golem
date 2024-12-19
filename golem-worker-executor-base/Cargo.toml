@@ -69,7 +69,7 @@ prometheus = { workspace = true }
 prost = { workspace = true }
 rand = { workspace = true }
 ring = "0.17"
-base64 = "*"
+base64ct = { workspace = true }
 ringbuf = "0.4.1"
 rustls = { workspace = true }
 serde = { workspace = true, features = [ "derive" ] }

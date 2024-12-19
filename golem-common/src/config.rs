@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use base64ct::{Base64, Encoding};
 use bincode::{Decode, Encode};
 use figment::providers::{Env, Format, Serialized, Toml};
 use figment::value::Value;
@@ -470,6 +471,9 @@ pub struct DbPostgresConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkerIdentityConfig {
+    pub issuer: String,
+    pub audience: String,
+
     pub set: Vec<WorkerIdentityKey>,
     pub active_keys: Vec<String>,
 }
@@ -482,9 +486,30 @@ pub struct WorkerIdentityKey {
     pub der: Vec<u8>,
 }
 
+impl WorkerIdentityKey {
+    pub fn generate(kid: String) -> Self {
+        use sec1::EncodeEcPrivateKey;
+        use p256::pkcs8::EncodePrivateKey;
+
+        let  key =p256::ecdsa::SigningKey::random(&mut rand::rngs::OsRng)
+            .to_pkcs8_der()
+            .expect("encode secret key faile")
+            .as_bytes()
+            .to_vec();
+
+        Self {
+            kid,
+            alg: "ES256".to_string(),
+            der: key
+        }
+    }
+}
+
 impl Default for WorkerIdentityConfig {
     fn default() -> Self {
         Self {
+            issuer: "default issuer".to_string(),
+            audience: "default audience".to_string(),
             set: vec![],
             active_keys: vec![],
         }
@@ -499,5 +524,5 @@ where
     D: Deserializer<'de>,
 {
     let s = String::deserialize(deserializer)?; // Deserialize as a string
-    base64::decode(&s).map_err(serde::de::Error::custom) // Decode Base64 into Vec<u8>
+    Base64::decode_vec(&s).map_err(serde::de::Error::custom) // Decode Base64 into Vec<u8>
 }

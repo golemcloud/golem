@@ -30,6 +30,7 @@ golem-worker-service = { path = "../golem-worker-service", version = "0.0.0" }
 golem-worker-service-base = { path = "../golem-worker-service-base", version = "0.0.0" }
 
 anyhow = { workspace = true }
+base64ct = { workspace = true }
 bytes = { workspace = true }
 clap = { workspace = true }
 http-body-util = "0.1.2"

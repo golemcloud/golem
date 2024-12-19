@@ -26,12 +26,14 @@ impl WorkerIdentityServiceDefault {
 #[async_trait]
 impl WorkerIdentityService for WorkerIdentityServiceDefault {
     async fn get_jwks(&self) -> Result<Vec<jsonwebkey::JsonWebKey>> {
+        use p256::pkcs8::DecodePrivateKey;
+        
         self.config
             .set
             .iter()
             .map(|a| {
                 let der_encoded_key = &a.der;
-                match &a.alg {
+                match a.alg.as_str() {
                     // "RS256" | "RS384" | "RS512" => {
                     //     // Parse RSA public key
                     //     let public_key = RsaPublicKey::from_pkcs1_der(&der_encoded_key)?;
@@ -41,7 +43,7 @@ impl WorkerIdentityService for WorkerIdentityServiceDefault {
                     // },
                     "ES256" => {
                         // Parse the DER-encoded private key into a SigningKey (which internally contains the private key 'd')
-                        let signing_key = p256::SecretKey::from_sec1_der(&der_encoded_key)?;
+                        let signing_key = p256::SecretKey::from_pkcs8_der(&der_encoded_key)?;
                         let public_key = signing_key.public_key();
                         let pub_key_bytes = public_key.to_sec1_bytes();
                         let (x, y) = split_sec1_public_key(&pub_key_bytes).unwrap(); // P256 public keys are 64 bytes (x and y each 32 bytes)
@@ -56,7 +58,7 @@ impl WorkerIdentityService for WorkerIdentityServiceDefault {
                             },
                         });
                         jwk.key_id = Some(a.kid.clone());
-                        let _ = jwk.set_algorithm(a.alg);
+                        let _ = jwk.set_algorithm(jsonwebkey::Algorithm::ES256);
 
                         Ok(jwk)
                     }

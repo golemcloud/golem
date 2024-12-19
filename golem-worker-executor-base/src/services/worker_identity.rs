@@ -3,6 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 use anyhow::{anyhow, Context};
 use async_trait::async_trait;
 
+use base64ct::Base64Url;
 use golem_common::config::WorkerIdentityConfig;
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey};
 use ring::rand::SystemRandom;
@@ -39,20 +40,23 @@ pub struct Claims {
 }
 
 impl Claims {
-    pub fn from_worker(claims: WorkerClaims) -> Self {
+    pub fn from_worker(claims: WorkerClaims, config: &WorkerIdentityConfig) -> Self {
+        use base64ct::Encoding;
+        use rand::Rng;
+
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("Time went backwards")
             .as_secs() as usize;
 
         Self {
-            iss: "123".to_string(),
-            sub: "123".to_string(),
-            aud: "123".to_string(),
+            iss: config.issuer.clone(),
+            sub: format!("urn:worker:{}/{}", claims.component_id, claims.worker_name),
+            aud: config.audience.clone(),
             exp: now + 60,
             nbf: now,
             iat: now,
-            jti: "123".to_string(),
+            jti: Base64Url::encode_string(&rand::thread_rng().gen::<[u8; 16]>()),
             worker: claims,
         }
     }
@@ -72,7 +76,7 @@ impl DefaultWorkerIdentityService {
 #[async_trait]
 impl WorkerIdentityService for DefaultWorkerIdentityService {
     async fn sign(&self, worker_claims: WorkerClaims) -> anyhow::Result<String> {
-        let claims = Claims::from_worker(worker_claims);
+        let claims = Claims::from_worker(worker_claims, &self.config);
 
         let mut active_keys = self
             .config
