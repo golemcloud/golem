@@ -22,12 +22,14 @@ use sozu_command_lib::{
         RequestHttpFrontend, RulePosition, SocketAddress, WorkerRequest,
     },
 };
+use std::net::Ipv4Addr;
 use tokio::task::JoinSet;
 use tracing::info;
 
 use crate::AllRunDetails;
 
 pub fn start_proxy(
+    listener_addr: &str,
     listener_port: u16,
     healthcheck_port: u16,
     all_run_details: &AllRunDetails,
@@ -35,9 +37,18 @@ pub fn start_proxy(
 ) -> Result<Channel<WorkerRequest, WorkerResponse>, anyhow::Error> {
     info!("Starting proxy");
 
-    let listener_address = SocketAddress::new_v4(127, 0, 0, 1, listener_port);
-
-    let http_listener = ListenerBuilder::new_http(listener_address).to_http(None)?;
+    let ipv4_addr: Ipv4Addr = listener_addr.parse().context(format!(
+        "Failed at parsing the listener host address {}",
+        listener_addr
+    ))?;
+    let listener_socket_addr = SocketAddress::new_v4(
+        ipv4_addr.octets()[0],
+        ipv4_addr.octets()[1],
+        ipv4_addr.octets()[2],
+        ipv4_addr.octets()[3],
+        listener_port,
+    );
+    let http_listener = ListenerBuilder::new_http(listener_socket_addr).to_http(None)?;
 
     let (mut command_channel, proxy_channel) =
         Channel::generate(1000, 10000).with_context(|| "should create a channel")?;
@@ -86,7 +97,13 @@ pub fn start_proxy(
                 content: RequestType::AddBackend(AddBackend {
                     cluster_id: name.to_string(),
                     backend_id: name.to_string(),
-                    address: SocketAddress::new_v4(127, 0, 0, 1, port),
+                    address: SocketAddress::new_v4(
+                        ipv4_addr.octets()[0],
+                        ipv4_addr.octets()[1],
+                        ipv4_addr.octets()[2],
+                        ipv4_addr.octets()[3],
+                        port,
+                    ),
                     ..Default::default()
                 })
                 .into(),
@@ -110,7 +127,7 @@ pub fn start_proxy(
                 id: format!("add-golem-frontend-${route_counter}"),
                 content: RequestType::AddHttpFrontend(RequestHttpFrontend {
                     cluster_id: Some(cluster_id.to_string()),
-                    address: SocketAddress::new_v4(127, 0, 0, 1, listener_port),
+                    address: listener_socket_addr,
                     hostname: "*".to_string(),
                     path,
                     position: RulePosition::Post.into(),
