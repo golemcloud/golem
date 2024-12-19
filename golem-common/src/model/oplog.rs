@@ -735,6 +735,56 @@ impl OplogEntry {
             _ => None,
         }
     }
+
+    pub fn update_worker_id(&self, worker_id: &WorkerId) -> Option<OplogEntry> {
+        match self {
+            OplogEntry::CreateV1 {
+                timestamp,
+                component_version,
+                args,
+                env,
+                account_id,
+                parent,
+                component_size,
+                initial_total_linear_memory_size,
+                ..
+            } => Some(OplogEntry::CreateV1 {
+                timestamp: *timestamp,
+                worker_id: worker_id.clone(),
+                component_version: *component_version,
+                args: args.clone(),
+                env: env.clone(),
+                account_id: account_id.clone(),
+                parent: parent.clone(),
+                component_size: *component_size,
+                initial_total_linear_memory_size: *initial_total_linear_memory_size,
+            }),
+            OplogEntry::Create {
+                timestamp,
+                component_version,
+                args,
+                env,
+                account_id,
+                parent,
+                component_size,
+                initial_total_linear_memory_size,
+                initial_active_plugins,
+                ..
+            } => Some(OplogEntry::Create {
+                timestamp: *timestamp,
+                worker_id: worker_id.clone(),
+                component_version: *component_version,
+                args: args.clone(),
+                env: env.clone(),
+                account_id: account_id.clone(),
+                parent: parent.clone(),
+                component_size: *component_size,
+                initial_total_linear_memory_size: *initial_total_linear_memory_size,
+                initial_active_plugins: initial_active_plugins.clone(),
+            }),
+            _ => None,
+        }
+    }
 }
 
 /// Describes a pending update
