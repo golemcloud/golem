@@ -21,8 +21,9 @@ use golem_worker_service_base::gateway_api_definition::http::{
     CompiledHttpApiDefinition, CompiledRoute,
 };
 use golem_worker_service_base::gateway_api_definition::{ApiDefinitionId, ApiVersion};
-use golem_worker_service_base::gateway_binding::{
-    gateway_binding_compiled::{GatewayBindingCompiled, golem_worker_service_base::gateway_binding::worker_binding_compiled::ResponseMappingCompiled, golem_worker_service_base::gateway_binding::worker_binding_compiled::WorkerBindingCompiled},
+use golem_worker_service_base::gateway_binding::gateway_binding_compiled::GatewayBindingCompiled;
+use golem_worker_service_base::gateway_binding::worker_binding_compiled::{
+    ResponseMappingCompiled, WorkerBindingCompiled,
 };
 use golem_worker_service_base::service::gateway::api_definition::{
     ApiDefinitionError, ApiDefinitionService, ApiResult,
@@ -55,7 +56,6 @@ impl ApiDefinitionService<EmptyAuthCtx, DefaultNamespace> for MockApiDefinitionS
         Err(ApiDefinitionError::InvalidInput(
             "Not implemented".to_string(),
         ))
-
     }
 
     async fn get(
@@ -150,6 +150,7 @@ mod integration_tests {
         let version = Path(ApiVersion("1.0".to_string()));
 
         let response = api.export(id, version).await;
+
 
         if let Err(e) = &response {
             println!("Error: {:?}", e);

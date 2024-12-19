@@ -27,7 +27,7 @@ pub(crate) use worker_binding_compiled::*;
 pub mod gateway_binding_compiled;
 mod static_binding;
 mod worker_binding;
-mod worker_binding_compiled;
+pub mod worker_binding_compiled;
 // A gateway binding is integration to the backend. This is similar to AWS's x-amazon-gateway-integration
 // where it holds the details of where to re-route.
 
