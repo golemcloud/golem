@@ -36,13 +36,6 @@ export interface Route {
   };
 }
 
-// interface ApiDefinition {
-//     id: string;
-//     version: string;
-//     routes: Route[];
-//     draft: boolean;
-// }
-
 export const ApiDefinitionView = () => {
   const { id, version } = useParams<{ id: string; version: string }>();
   const [showRouteModal, setShowRouteModal] = useState(false);
@@ -58,7 +51,6 @@ export const ApiDefinitionView = () => {
     useApiDeployments(id!);
   const deleteDeployment = useDeleteDeployment();
   const updateDefinition = useUpdateApiDefinition();
-  // const deleteDeployment = useDeleteDeployment();
 
   const handleAddRoute = (route: Route) => {
     if (!apiDefinition) return;

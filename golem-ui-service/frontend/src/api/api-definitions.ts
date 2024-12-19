@@ -1,5 +1,6 @@
 import {
   UseMutationOptions,
+  UseMutationResult,
   UseQueryOptions,
   UseQueryResult,
   useMutation,
@@ -114,7 +115,12 @@ export const useCreateApiDefinition = () => {
   });
 };
 
-export const useUpdateApiDefinition = () => {
+export const useUpdateApiDefinition = (): UseMutationResult<
+  {},
+  GolemError,
+  ApiDefinition,
+  void
+> => {
   const queryClient = useQueryClient();
 
   return useMutation({
