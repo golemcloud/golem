@@ -769,7 +769,7 @@ fn exports_caller_component() {
                 name: None,
                 typ: list(tuple(vec![str(), str()])),
             }],
-        })
+        }),
     ];
 
     pretty_assertions::assert_eq!(metadata, expected);

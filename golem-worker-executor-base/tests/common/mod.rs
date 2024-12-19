@@ -831,8 +831,8 @@ impl HostWasmRpc for TestWorkerCtx {
             .await
     }
 
-    fn drop(&mut self, rep: Resource<WasmRpc>) -> anyhow::Result<()> {
-        self.durable_ctx.drop(rep)
+    async fn drop(&mut self, rep: Resource<WasmRpc>) -> anyhow::Result<()> {
+        self.durable_ctx.drop(rep).await
     }
 }
 
@@ -863,13 +863,16 @@ impl DynamicLinking<TestWorkerCtx> for TestWorkerCtx {
             params,
             param_types,
             results,
-            result_types
+            result_types,
         )
         .await
     }
 
-    fn drop_linked_resource(store: StoreContextMut<'_, TestWorkerCtx>, rep: u32) -> anyhow::Result<()> {
-        DurableWorkerCtx::<TestWorkerCtx>::drop_linked_resource(store, rep)
+    async fn drop_linked_resource(
+        store: StoreContextMut<'_, TestWorkerCtx>,
+        rep: u32,
+    ) -> anyhow::Result<()> {
+        DurableWorkerCtx::<TestWorkerCtx>::drop_linked_resource(store, rep).await
     }
 }
 

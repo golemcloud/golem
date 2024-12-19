@@ -99,10 +99,14 @@ impl<Ctx: WorkerCtx + HostWasmRpc> DynamicLinking<Ctx> for DurableWorkerCtx<Ctx>
                                     if ename != "pollable" {
                                         // TODO: ?? this should be 'if it is not already linked' but not way to check that
                                         debug!("LINKING RESOURCE {ename} {resource:?}");
-                                        instance.resource(
+                                        instance.resource_async(
                                             &ename,
                                             ResourceType::host::<WasmRpcEntry>(),
-                                            Ctx::drop_linked_resource,
+                                            |store, rep| {
+                                                Box::new(async move {
+                                                    Ctx::drop_linked_resource(store, rep).await
+                                                })
+                                            },
                                         )?;
                                     }
                                 }
@@ -277,14 +281,28 @@ impl<Ctx: WorkerCtx + HostWasmRpc> DynamicLinking<Ctx> for DurableWorkerCtx<Ctx>
         Ok(())
     }
 
-    fn drop_linked_resource(mut store: StoreContextMut<'_, Ctx>, rep: u32) -> anyhow::Result<()> {
-        let mut wasi = store.data_mut().as_wasi_view();
-        let table = wasi.table();
-        let entry: &WasmRpcEntry = table.get_any_mut(rep).unwrap().downcast_ref().unwrap(); // TODO: error handling
-        let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
-        debug!("DROPPING RESOURCE {payload:?}");
-        if let WasmRpcEntryPayload::Resource { .. } = payload {
-            // TODO: remote drop
+    async fn drop_linked_resource(
+        mut store: StoreContextMut<'_, Ctx>,
+        rep: u32,
+    ) -> anyhow::Result<()> {
+        let must_drop = {
+            let mut wasi = store.data_mut().as_wasi_view();
+            let table = wasi.table();
+            let entry: &WasmRpcEntry = table.get_any_mut(rep).unwrap().downcast_ref().unwrap(); // TODO: error handling
+            let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
+
+            debug!("DROPPING RESOURCE {payload:?}");
+
+            matches!(payload, WasmRpcEntryPayload::Resource { .. })
+        };
+        if must_drop {
+            let resource: Resource<WasmRpcEntry> = Resource::new_own(rep);
+
+            let function_name = "rpc:counters/api.{counter.drop}".to_string(); // TODO: we need to pass the resource name here from the linker
+            let _ = store
+                .data_mut()
+                .invoke_and_await(resource, function_name, vec![])
+                .await?;
         }
         Ok(())
     }

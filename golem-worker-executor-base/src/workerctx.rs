@@ -433,8 +433,8 @@ pub trait DynamicLinking<Ctx: WorkerCtx> {
         params: &[Val],
         param_types: &[Type],
         results: &mut [Val],
-        result_types: &[Type]
+        result_types: &[Type],
     ) -> anyhow::Result<()>;
 
-    fn drop_linked_resource(store: StoreContextMut<'_, Ctx>, rep: u32) -> anyhow::Result<()>;
+    async fn drop_linked_resource(store: StoreContextMut<'_, Ctx>, rep: u32) -> anyhow::Result<()>;
 }
