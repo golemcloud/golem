@@ -652,6 +652,28 @@ impl ParsedFunctionName {
             function,
         })
     }
+
+    pub fn is_constructor(&self) -> Option<&str> {
+        match &self.function {
+            ParsedFunctionReference::RawResourceConstructor { resource, .. }
+            | ParsedFunctionReference::IndexedResourceConstructor { resource, .. } => {
+                Some(resource)
+            }
+            _ => None,
+        }
+    }
+
+    pub fn is_method(&self) -> Option<&str> {
+        match &self.function {
+            ParsedFunctionReference::RawResourceMethod { resource, .. }
+            | ParsedFunctionReference::IndexedResourceMethod { resource, .. }
+            | ParsedFunctionReference::RawResourceStaticMethod { resource, .. }
+            | ParsedFunctionReference::IndexedResourceStaticMethod { resource, .. } => {
+                Some(resource)
+            }
+            _ => None,
+        }
+    }
 }
 
 #[cfg(feature = "protobuf")]
