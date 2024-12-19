@@ -1174,7 +1174,16 @@ fn create_generated_base_wit<CPE: ComponentPropertiesExtensions>(
                     log_action("Adding", "package deps");
                     let _indent = LogIndent::new();
 
-                    ctx.common_wit_deps()?
+                    ctx.common_wit_deps()
+                        .with_context(|| {
+                            format!(
+                                "Failed to add package dependencies: {}",
+                                missing_package_deps
+                                    .iter()
+                                    .map(|s| s.to_string().log_color_highlight())
+                                    .join(", ")
+                            )
+                        })?
                         .add_packages_with_transitive_deps_to_wit_dir(
                             &missing_package_deps,
                             &component_generated_base_wit,

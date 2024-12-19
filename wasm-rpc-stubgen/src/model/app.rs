@@ -777,6 +777,7 @@ mod app_builder {
             let mut validation = ValidationBuilder::default();
 
             builder.add_raw_apps(&mut validation, apps);
+            builder.validate_dependency_targets(&mut validation);
             builder.validate_unique_sources(&mut validation);
             builder.resolve_components(&mut validation);
 
@@ -992,6 +993,47 @@ mod app_builder {
                             .join(", ")
                     ))
                 })
+        }
+
+        fn validate_dependency_targets(&mut self, validation: &mut ValidationBuilder) {
+            for (component, deps) in &self.dependencies {
+                for target in deps {
+                    let invalid_source = !self.raw_components.contains_key(component);
+                    let invalid_target = !self.raw_components.contains_key(target);
+
+                    if invalid_source || invalid_target {
+                        let source = self
+                            .entity_sources
+                            .get(&UniqueSourceCheckedEntityKey::WasmRpcDependency((
+                                component.clone(),
+                                target.clone(),
+                            )))
+                            .expect("Missing sources for dependency")
+                            .first()
+                            .expect("Missing source for dependency");
+
+                        validation.with_context(
+                            vec![("source", source.to_string_lossy().to_string())],
+                            |validation| {
+                                if invalid_source {
+                                    validation.add_error(format!(
+                                        "WASM RPC dependency {} - {} references unknown component",
+                                        component.as_str().log_color_error_highlight(),
+                                        target.as_str().log_color_highlight()
+                                    ))
+                                }
+                                if invalid_target {
+                                    validation.add_error(format!(
+                                        "WASM RPC dependency {} - {} references unknown target component",
+                                        component.as_str().log_color_highlight(),
+                                        target.as_str().log_color_error_highlight()
+                                    ))
+                                }
+                            },
+                        );
+                    }
+                }
+            }
         }
 
         fn template_env<'a>() -> minijinja::Environment<'a> {
