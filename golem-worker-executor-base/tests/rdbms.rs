@@ -123,7 +123,8 @@ async fn rdbms_postgres_create_insert_select(
     for i in 0..count {
         let user_id = Uuid::new_v4();
         let name = format!("name-{}", Uuid::new_v4());
-        let tags = format!("[tag-1-{}, tag-1-{}]", i, i);
+        let vs: Vec<String> = (0..5).map(|v| format!("tag-{}-{}", v, i)).collect();
+        let tags = format!("[{}]", vs.join(", "));
 
         let params: Vec<String> = vec![user_id.clone().to_string(), name.clone(), tags.clone()];
 

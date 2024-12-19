@@ -297,6 +297,13 @@ impl DbColumnType {
             DbColumnType::Array(Box::new(self))
         }
     }
+
+    pub fn is_complex_type(&self) -> bool {
+        matches!(
+            self,
+            DbColumnType::Composite(_) | DbColumnType::Domain(_) | DbColumnType::Array(_)
+        )
+    }
 }
 
 impl Display for DbColumnType {
@@ -455,6 +462,13 @@ impl DbValue {
 
     pub(crate) fn primitive_from(value: Option<DbValue>) -> Self {
         value.unwrap_or(DbValue::Null)
+    }
+
+    pub fn is_complex_type(&self) -> bool {
+        matches!(
+            self,
+            DbValue::Composite(_) | DbValue::Domain(_) | DbValue::Array(_)
+        )
     }
 }
 
