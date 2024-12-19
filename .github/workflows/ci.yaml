@@ -20,7 +20,7 @@ env:
 
 jobs:
   docker-targets-build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref_type == 'tag'
     strategy:
       fail-fast: false
@@ -74,9 +74,10 @@ jobs:
         with:
           name: docker-targets-build-${{ env.PLATFORM_PAIR }}
           path: target/${{ matrix.platform.target }}.tar
+
   docker-publish:
-    runs-on: ubuntu-22.04
-    needs: [ docker-targets-build ]
+    runs-on: ubuntu-latest
+    needs: [docker-targets-build]
     if: github.event_name == 'push' && github.ref_type == 'tag'
     steps:
       - name: Checkout
@@ -113,7 +114,6 @@ jobs:
           else
             COMMIT_SHORT_HASH=$(git rev-parse --short=7 HEAD)
             echo "DOCKER_VERSION=${COMMIT_SHORT_HASH}" >> $GITHUB_ENV
-          fi
       - uses: jpribyl/action-docker-layer-caching@v0.1.1
         continue-on-error: true
       - name: Log in to Docker Hub
@@ -207,7 +207,7 @@ jobs:
           labels: ${{ steps.meta-golem-router.outputs.labels }}
 
   build-and-test:
-    runs-on: ubuntu-latest-xlarge
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -247,7 +247,7 @@ jobs:
           include_passed: true
 
   wasm-rpc-stub:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -275,7 +275,7 @@ jobs:
         run: cargo component build -p golem-wasm-rpc --no-default-features --features stub
 
   worker-tests-group1:
-    runs-on: ubuntu-latest-xlarge
+    runs-on: ubuntu-latest
     name: worker-tests-group1
     steps:
       - name: Checkout
@@ -311,9 +311,10 @@ jobs:
           report_paths: '**/target/report-*.xml'
           detailed_summary: true
           include_passed: true
+
   worker-tests:
-    needs: [ worker-tests-group1 ]
-    runs-on: ubuntu-latest-xlarge
+    needs: [worker-tests-group1]
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: true
       matrix:
@@ -361,8 +362,9 @@ jobs:
           report_paths: '**/target/report-*.xml'
           detailed_summary: true
           include_passed: true
+
   integration-tests:
-    runs-on: ubuntu-latest-xlarge
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -403,8 +405,9 @@ jobs:
           report_paths: '**/target/report-*.xml'
           detailed_summary: true
           include_passed: true
+
   cli-tests:
-    runs-on: ubuntu-latest-xlarge
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -442,8 +445,9 @@ jobs:
           report_paths: '**/target/report-*.xml'
           detailed_summary: true
           include_passed: true
+
   sharding-tests:
-    runs-on: ubuntu-latest-xlarge
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -481,6 +485,7 @@ jobs:
           report_paths: '**/target/report-*.xml'
           detailed_summary: true
           include_passed: true
+
   publish:
     needs:
       [
@@ -492,7 +497,7 @@ jobs:
         sharding-tests,
       ]
     if: "startsWith(github.ref, 'refs/tags/v')"
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -530,9 +535,9 @@ jobs:
           - golem
         cfg:
           - rust-target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest-xlarge
+            os: ubuntu-latest
           - rust-target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest-xlarge
+            os: ubuntu-latest
             cross: true
           - rust-target: x86_64-apple-darwin
             os: macos-latest
@@ -595,8 +600,8 @@ jobs:
 
   publish-slack-notification:
     if: ${{ always() && startsWith(github.ref, 'refs/tags/v') }}
-    needs: [ publish, docker-publish, publish_cli_binaries ]
-    runs-on: ubuntu-22.04
+    needs: [publish, docker-publish, publish_cli_binaries]
+    runs-on: ubuntu-latest
     steps:
       - name: Publish Slack Notification
         uses: rtCamp/action-slack-notify@v2
