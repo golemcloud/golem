@@ -39,9 +39,6 @@ use wasmtime_wasi::WasiView;
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
 
-#[async_trait]
-impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {}
-
 pub struct PostgresDbConnection {
     pub pool_key: RdbmsPoolKey,
 }
@@ -58,7 +55,6 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
         &mut self,
         address: String,
     ) -> anyhow::Result<Result<Resource<PostgresDbConnection>, Error>> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("rdbms::postgres::db-connection", "open");
 
         let worker_id = self.state.owned_worker_id.worker_id.clone();
@@ -85,7 +81,6 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
         statement: String,
         params: Vec<DbValue>,
     ) -> anyhow::Result<Result<Resource<DbResultSetEntry>, Error>> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("rdbms::postgres::db-connection", "query");
         let worker_id = self.state.owned_worker_id.worker_id.clone();
         let pool_key = self
@@ -123,7 +118,6 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
         statement: String,
         params: Vec<DbValue>,
     ) -> anyhow::Result<Result<u64, Error>> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("rdbms::postgres::db-connection", "execute");
         let worker_id = self.state.owned_worker_id.worker_id.clone();
         let pool_key = self
@@ -149,7 +143,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
         }
     }
 
-    fn drop(&mut self, rep: Resource<PostgresDbConnection>) -> anyhow::Result<()> {
+    async fn drop(&mut self, rep: Resource<PostgresDbConnection>) -> anyhow::Result<()> {
         record_host_function_call("rdbms::postgres::db-connection", "drop");
         let worker_id = self.state.owned_worker_id.worker_id.clone();
         let pool_key = self
@@ -172,38 +166,6 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
     }
 }
 
-#[async_trait]
-impl<Ctx: WorkerCtx> HostDbConnection for &mut DurableWorkerCtx<Ctx> {
-    async fn open(
-        &mut self,
-        address: String,
-    ) -> anyhow::Result<Result<Resource<PostgresDbConnection>, Error>> {
-        (*self).open(address).await
-    }
-
-    async fn query(
-        &mut self,
-        self_: Resource<PostgresDbConnection>,
-        statement: String,
-        params: Vec<DbValue>,
-    ) -> anyhow::Result<Result<Resource<DbResultSetEntry>, Error>> {
-        (*self).query(self_, statement, params).await
-    }
-
-    async fn execute(
-        &mut self,
-        self_: Resource<PostgresDbConnection>,
-        statement: String,
-        params: Vec<DbValue>,
-    ) -> anyhow::Result<Result<u64, Error>> {
-        (*self).execute(self_, statement, params).await
-    }
-
-    fn drop(&mut self, rep: Resource<PostgresDbConnection>) -> anyhow::Result<()> {
-        HostDbConnection::drop(*self, rep)
-    }
-}
-
 pub struct DbResultSetEntry {
     pub internal: Arc<dyn crate::services::rdbms::DbResultSet<PostgresType> + Send + Sync>,
 }
@@ -222,7 +184,6 @@ impl<Ctx: WorkerCtx> HostDbResultSet for DurableWorkerCtx<Ctx> {
         &mut self,
         self_: Resource<DbResultSetEntry>,
     ) -> anyhow::Result<Vec<DbColumn>> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("rdbms::postgres::db-result-set", "get-columns");
 
         let internal = self
@@ -243,7 +204,6 @@ impl<Ctx: WorkerCtx> HostDbResultSet for DurableWorkerCtx<Ctx> {
         &mut self,
         self_: Resource<DbResultSetEntry>,
     ) -> anyhow::Result<Option<Vec<DbRow>>> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("rdbms::postgres::db-result-set", "get-next");
         let internal = self
             .as_wasi_view()
@@ -265,33 +225,12 @@ impl<Ctx: WorkerCtx> HostDbResultSet for DurableWorkerCtx<Ctx> {
         Ok(rows)
     }
 
-    fn drop(&mut self, rep: Resource<DbResultSetEntry>) -> anyhow::Result<()> {
+    async fn drop(&mut self, rep: Resource<DbResultSetEntry>) -> anyhow::Result<()> {
         record_host_function_call("rdbms::postgres::db-result-set", "drop");
         self.as_wasi_view()
             .table()
             .delete::<DbResultSetEntry>(rep)?;
         Ok(())
-    }
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> HostDbResultSet for &mut DurableWorkerCtx<Ctx> {
-    async fn get_columns(
-        &mut self,
-        self_: Resource<DbResultSetEntry>,
-    ) -> anyhow::Result<Vec<DbColumn>> {
-        (*self).get_columns(self_).await
-    }
-
-    async fn get_next(
-        &mut self,
-        self_: Resource<DbResultSetEntry>,
-    ) -> anyhow::Result<Option<Vec<DbRow>>> {
-        (*self).get_next(self_).await
-    }
-
-    fn drop(&mut self, rep: Resource<DbResultSetEntry>) -> anyhow::Result<()> {
-        HostDbResultSet::drop(*self, rep)
     }
 }
 
@@ -311,7 +250,6 @@ impl<Ctx: WorkerCtx> HostLazyDbColumnType for DurableWorkerCtx<Ctx> {
         &mut self,
         value: DbColumnType,
     ) -> anyhow::Result<Resource<LazyDbColumnTypeEntry>> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("rdbms::postgres::lazy-db-column-type", "create");
         let value = to_db_column_type(value, self.as_wasi_view().table()).map_err(Error::Other)?;
         let result = self
@@ -325,7 +263,6 @@ impl<Ctx: WorkerCtx> HostLazyDbColumnType for DurableWorkerCtx<Ctx> {
         &mut self,
         self_: Resource<LazyDbColumnTypeEntry>,
     ) -> anyhow::Result<DbColumnType> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("rdbms::postgres::lazy-db-column-type", "get");
         let mut value = self
             .as_wasi_view()
@@ -341,33 +278,12 @@ impl<Ctx: WorkerCtx> HostLazyDbColumnType for DurableWorkerCtx<Ctx> {
         Ok(result)
     }
 
-    fn drop(&mut self, rep: Resource<LazyDbColumnTypeEntry>) -> anyhow::Result<()> {
+    async fn drop(&mut self, rep: Resource<LazyDbColumnTypeEntry>) -> anyhow::Result<()> {
         record_host_function_call("rdbms::postgres::lazy-db-column-type", "drop");
         self.as_wasi_view()
             .table()
             .delete::<LazyDbColumnTypeEntry>(rep)?;
         Ok(())
-    }
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> HostLazyDbColumnType for &mut DurableWorkerCtx<Ctx> {
-    async fn create(
-        &mut self,
-        value: DbColumnType,
-    ) -> anyhow::Result<Resource<LazyDbColumnTypeEntry>> {
-        HostLazyDbColumnType::create(*self, value).await
-    }
-
-    async fn get(
-        &mut self,
-        self_: Resource<LazyDbColumnTypeEntry>,
-    ) -> anyhow::Result<DbColumnType> {
-        HostLazyDbColumnType::get(*self, self_).await
-    }
-
-    fn drop(&mut self, rep: Resource<LazyDbColumnTypeEntry>) -> anyhow::Result<()> {
-        HostLazyDbColumnType::drop(*self, rep)
     }
 }
 
@@ -384,7 +300,6 @@ impl LazyDbValueEntry {
 #[async_trait]
 impl<Ctx: WorkerCtx> HostLazyDbValue for DurableWorkerCtx<Ctx> {
     async fn create(&mut self, value: DbValue) -> anyhow::Result<Resource<LazyDbValueEntry>> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("rdbms::postgres::lazy-db-value", "create");
         let value = to_db_value(value, self.as_wasi_view().table()).map_err(Error::Other)?;
         let result = self
@@ -395,7 +310,6 @@ impl<Ctx: WorkerCtx> HostLazyDbValue for DurableWorkerCtx<Ctx> {
     }
 
     async fn get(&mut self, self_: Resource<LazyDbValueEntry>) -> anyhow::Result<DbValue> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("rdbms::postgres::lazy-db-value", "get");
         let mut value = self
             .as_wasi_view()
@@ -414,27 +328,12 @@ impl<Ctx: WorkerCtx> HostLazyDbValue for DurableWorkerCtx<Ctx> {
         Ok(result)
     }
 
-    fn drop(&mut self, rep: Resource<LazyDbValueEntry>) -> anyhow::Result<()> {
+    async fn drop(&mut self, rep: Resource<LazyDbValueEntry>) -> anyhow::Result<()> {
         record_host_function_call("rdbms::postgres::lazy-db-value", "drop");
         self.as_wasi_view()
             .table()
             .delete::<LazyDbValueEntry>(rep)?;
         Ok(())
-    }
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> HostLazyDbValue for &mut DurableWorkerCtx<Ctx> {
-    async fn create(&mut self, value: DbValue) -> anyhow::Result<Resource<LazyDbValueEntry>> {
-        HostLazyDbValue::create(*self, value).await
-    }
-
-    async fn get(&mut self, self_: Resource<LazyDbValueEntry>) -> anyhow::Result<DbValue> {
-        HostLazyDbValue::get(*self, self_).await
-    }
-
-    fn drop(&mut self, rep: Resource<LazyDbValueEntry>) -> anyhow::Result<()> {
-        HostLazyDbValue::drop(*self, rep)
     }
 }
 

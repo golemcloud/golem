@@ -34,9 +34,6 @@ use wasmtime_wasi::WasiView;
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
 
-#[async_trait]
-impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {}
-
 pub struct MysqlDbConnection {
     pub pool_key: RdbmsPoolKey,
 }
@@ -53,7 +50,6 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
         &mut self,
         address: String,
     ) -> anyhow::Result<Result<Resource<MysqlDbConnection>, Error>> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("rdbms::mysql::db-connection", "open");
 
         let worker_id = self.state.owned_worker_id.worker_id.clone();
@@ -80,7 +76,6 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
         statement: String,
         params: Vec<DbValue>,
     ) -> anyhow::Result<Result<Resource<DbResultSetEntry>, Error>> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("rdbms::mysql::db-connection", "query");
         let worker_id = self.state.owned_worker_id.worker_id.clone();
         let pool_key = self
@@ -121,7 +116,6 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
         statement: String,
         params: Vec<DbValue>,
     ) -> anyhow::Result<Result<u64, Error>> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("rdbms::mysql::db-connection", "execute");
         let worker_id = self.state.owned_worker_id.worker_id.clone();
         let pool_key = self
@@ -151,7 +145,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
         }
     }
 
-    fn drop(&mut self, rep: Resource<MysqlDbConnection>) -> anyhow::Result<()> {
+    async fn drop(&mut self, rep: Resource<MysqlDbConnection>) -> anyhow::Result<()> {
         record_host_function_call("rdbms::mysql::db-connection", "drop");
 
         let worker_id = self.state.owned_worker_id.worker_id.clone();
@@ -175,38 +169,6 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
     }
 }
 
-#[async_trait]
-impl<Ctx: WorkerCtx> HostDbConnection for &mut DurableWorkerCtx<Ctx> {
-    async fn open(
-        &mut self,
-        address: String,
-    ) -> anyhow::Result<Result<Resource<MysqlDbConnection>, Error>> {
-        (*self).open(address).await
-    }
-
-    async fn query(
-        &mut self,
-        self_: Resource<MysqlDbConnection>,
-        statement: String,
-        params: Vec<DbValue>,
-    ) -> anyhow::Result<Result<Resource<DbResultSetEntry>, Error>> {
-        (*self).query(self_, statement, params).await
-    }
-
-    async fn execute(
-        &mut self,
-        self_: Resource<MysqlDbConnection>,
-        statement: String,
-        params: Vec<DbValue>,
-    ) -> anyhow::Result<Result<u64, Error>> {
-        (*self).execute(self_, statement, params).await
-    }
-
-    fn drop(&mut self, rep: Resource<MysqlDbConnection>) -> anyhow::Result<()> {
-        HostDbConnection::drop(*self, rep)
-    }
-}
-
 pub struct DbResultSetEntry {
     pub internal: Arc<dyn crate::services::rdbms::DbResultSet<MysqlType> + Send + Sync>,
 }
@@ -225,7 +187,6 @@ impl<Ctx: WorkerCtx> HostDbResultSet for DurableWorkerCtx<Ctx> {
         &mut self,
         self_: Resource<DbResultSetEntry>,
     ) -> anyhow::Result<Vec<DbColumn>> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("rdbms::mysql::db-result-set", "get-columns");
 
         let internal = self
@@ -246,7 +207,6 @@ impl<Ctx: WorkerCtx> HostDbResultSet for DurableWorkerCtx<Ctx> {
         &mut self,
         self_: Resource<DbResultSetEntry>,
     ) -> anyhow::Result<Option<Vec<DbRow>>> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("rdbms::mysql::db-result-set", "get-next");
         let internal = self
             .as_wasi_view()
@@ -262,33 +222,12 @@ impl<Ctx: WorkerCtx> HostDbResultSet for DurableWorkerCtx<Ctx> {
         Ok(rows)
     }
 
-    fn drop(&mut self, rep: Resource<DbResultSetEntry>) -> anyhow::Result<()> {
+    async fn drop(&mut self, rep: Resource<DbResultSetEntry>) -> anyhow::Result<()> {
         record_host_function_call("rdbms::mysql::db-result-set", "drop");
         self.as_wasi_view()
             .table()
             .delete::<DbResultSetEntry>(rep)?;
         Ok(())
-    }
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> HostDbResultSet for &mut DurableWorkerCtx<Ctx> {
-    async fn get_columns(
-        &mut self,
-        self_: Resource<DbResultSetEntry>,
-    ) -> anyhow::Result<Vec<DbColumn>> {
-        (*self).get_columns(self_).await
-    }
-
-    async fn get_next(
-        &mut self,
-        self_: Resource<DbResultSetEntry>,
-    ) -> anyhow::Result<Option<Vec<DbRow>>> {
-        (*self).get_next(self_).await
-    }
-
-    fn drop(&mut self, rep: Resource<DbResultSetEntry>) -> anyhow::Result<()> {
-        HostDbResultSet::drop(*self, rep)
     }
 }
 

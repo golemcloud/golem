@@ -502,7 +502,7 @@ async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Sized>
     ));
 
     let rdbms_service: Arc<dyn rdbms::RdbmsService + Send + Sync> =
-            Arc::new(rdbms::RdbmsServiceDefault::new(golem_config.rdbms));
+        Arc::new(rdbms::RdbmsServiceDefault::new(golem_config.rdbms));
 
     let events = Arc::new(Events::new(
         golem_config.limits.invocation_result_broadcast_capacity,

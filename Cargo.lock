@@ -1688,6 +1688,12 @@ checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 
 [[package]]
 name = "cfg_aliases"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fd16c4719339c4530435d38e511904438d07cce7950afa3718a84ac36c10e89e"
+
+[[package]]
+name = "cfg_aliases"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
@@ -4213,7 +4219,7 @@ dependencies = [
  "derive_more 0.99.18",
  "dir-diff",
  "fancy-regex",
- "golem-wit",
+ "golem-wit 1.1.1",
  "include_dir",
  "once_cell",
  "regex",
@@ -4496,6 +4502,11 @@ dependencies = [
 
 [[package]]
 name = "golem-wit"
+version = "0.0.0"
+source = "git+https://github.com/justcoon/golem-wit.git?branch=rdbms#d9cb6c3de6e182b55989a82545fce058df276b4f"
+
+[[package]]
+name = "golem-wit"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "52c54c03d2a2c3b54e1bc733115000c69cc027b0a0dd269917b9a7acab37beff"
@@ -4547,6 +4558,7 @@ dependencies = [
  "aws-config",
  "aws-sdk-s3",
  "axum",
+ "bigdecimal",
  "bincode",
  "bitflags 2.6.0",
  "bytes 1.9.0",
@@ -4574,7 +4586,7 @@ dependencies = [
  "golem-test-framework",
  "golem-wasm-ast",
  "golem-wasm-rpc",
- "golem-wit",
+ "golem-wit 0.0.0",
  "hex",
  "http 1.2.0",
  "http-body 1.0.1",
@@ -4608,6 +4620,7 @@ dependencies = [
  "testcontainers-modules",
  "thiserror 2.0.8",
  "tokio",
+ "tokio-postgres",
  "tokio-rustls 0.26.1",
  "tokio-stream",
  "tokio-util",
@@ -5618,6 +5631,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ddc24109865250148c2e0f3d25d4f0f479571723792d3802153c60922a4fb708"
 
 [[package]]
+name = "ipnetwork"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf466541e9d546596ee94f9f69590f89473455f88372423e0008fc1a7daf100e"
+dependencies = [
+ "serde 1.0.216",
+]
+
+[[package]]
 name = "is-terminal"
 version = "0.4.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6127,6 +6149,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "mac_address"
+version = "1.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8836fae9d0d4be2c8b4efcdd79e828a2faa058a90d005abf42f91cac5493a08e"
+dependencies = [
+ "nix 0.28.0",
+ "winapi",
+]
+
+[[package]]
 name = "mach2"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6389,13 +6421,26 @@ dependencies = [
 
 [[package]]
 name = "nix"
+version = "0.28.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab2156c4fce2f8df6c499cc1c763e4394b7482525bf2a9701c9d79d215f519e4"
+dependencies = [
+ "bitflags 2.6.0",
+ "cfg-if",
+ "cfg_aliases 0.1.1",
+ "libc",
+ "memoffset 0.9.1",
+]
+
+[[package]]
+name = "nix"
 version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "71e2746dc3a24dd78b3cfcb7be93368c6de9963d30f43a6a73998a9cf4b17b46"
 dependencies = [
  "bitflags 2.6.0",
  "cfg-if",
- "cfg_aliases",
+ "cfg_aliases 0.2.1",
  "libc",
  "memoffset 0.9.1",
 ]
@@ -7571,8 +7616,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f66ea23a2d0e5734297357705193335e0a957696f34bed2f2faefacb2fec336f"
 dependencies = [
  "bytes 1.9.0",
+ "chrono",
  "fallible-iterator 0.2.0",
  "postgres-protocol",
+ "uuid",
 ]
 
 [[package]]
@@ -9394,6 +9441,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d4d8060b456358185f7d50c55d9b5066ad956956fddec42ee2e8567134a8936e"
 dependencies = [
  "atoi",
+ "bigdecimal",
+ "bit-vec 0.6.3",
  "byteorder",
  "bytes 1.9.0",
  "chrono",
@@ -9410,7 +9459,9 @@ dependencies = [
  "hashlink",
  "hex",
  "indexmap 2.7.0",
+ "ipnetwork",
  "log 0.4.22",
+ "mac_address",
  "memchr",
  "once_cell",
  "paste",
@@ -9475,6 +9526,7 @@ checksum = "64bb4714269afa44aef2755150a0fc19d756fb580a67db8885608cf02f47d06a"
 dependencies = [
  "atoi",
  "base64 0.22.1",
+ "bigdecimal",
  "bitflags 2.6.0",
  "byteorder",
  "bytes 1.9.0",
@@ -9519,6 +9571,8 @@ checksum = "6fa91a732d854c5d7726349bb4bb879bb9478993ceb764247660aee25f67c2f8"
 dependencies = [
  "atoi",
  "base64 0.22.1",
+ "bigdecimal",
+ "bit-vec 0.6.3",
  "bitflags 2.6.0",
  "byteorder",
  "chrono",
@@ -9533,10 +9587,13 @@ dependencies = [
  "hkdf",
  "hmac",
  "home",
+ "ipnetwork",
  "itoa",
  "log 0.4.22",
+ "mac_address",
  "md-5",
  "memchr",
+ "num-bigint",
  "once_cell",
  "rand",
  "serde 1.0.216",
