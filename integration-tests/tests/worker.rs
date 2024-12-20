@@ -828,7 +828,7 @@ async fn auction_example_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) 
         let create_auction_result = deps
             .invoke_and_await(
                 &registry_worker_id,
-                "auction:registry/api.{create-auction}",
+                "auction:registry-exports/api.{create-auction}",
                 vec![
                     Value::String("test-auction".to_string()),
                     Value::String("this is a test".to_string()),
@@ -844,7 +844,7 @@ async fn auction_example_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) 
     let get_auctions_result = deps
         .invoke_and_await(
             &registry_worker_id,
-            "auction:registry/api.{get-auctions}",
+            "auction:registry-exports/api.{get-auctions}",
             vec![],
         )
         .await;
