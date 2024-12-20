@@ -1,5 +1,5 @@
-import { Counter } from "rpc:counters-stub/stub-counters";
-import { CallerWorld } from "./generated/caller";
+import { Counter } from "rpc:counters-client/counters-client";
+import { CallerInlineFunctions } from "./generated/caller";
 import { getEnvironment } from "wasi:cli/environment@0.2.0";
 
 let globalCounter: Counter | undefined = undefined;
@@ -51,10 +51,9 @@ function test5(): BigUint64Array {
   return new BigUint64Array(0);
 }
 
-const _: CallerWorld = {
-  test1,
-  test2,
-  test3,
+export const callerInlineFunctions: CallerInlineFunctions = {
+    test1,
+    test2,
+    test3,
 };
 
-export { test1, test2, test3 };

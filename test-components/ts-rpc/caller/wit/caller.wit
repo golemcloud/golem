@@ -1,7 +1,6 @@
 package rpc:caller;
 
 world caller {
-  import rpc:counters-stub/stub-counters;
   import wasi:cli/environment@0.2.0;
 
   export test1: func() -> u64;

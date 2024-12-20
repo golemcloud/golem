@@ -1,10 +1,7 @@
 package rpc:caller;
 
 world caller {
-  import rpc:counters-stub/stub-counters;
-  import rpc:ephemeral-stub/stub-ephemeral;
-
-  use rpc:counters-stub/stub-counters.{timeline-node};
+  use rpc:counters-exports/api.{timeline-node};
 
   export test1: func() -> list<tuple<string, u64>>;
   export test2: func() -> u64;

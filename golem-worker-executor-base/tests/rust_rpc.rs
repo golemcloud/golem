@@ -37,7 +37,7 @@ async fn auction_example_1(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let registry_component_id = executor.store_component("auction_registry_composed").await;
+    let registry_component_id = executor.store_component("auction_registry").await;
     let auction_component_id = executor.store_component("auction").await;
 
     let mut env = HashMap::new();
@@ -58,7 +58,7 @@ async fn auction_example_1(
     let create_auction_result = executor
         .invoke_and_await(
             &registry_worker_id,
-            "auction:registry/api.{create-auction}",
+            "auction:registry-exports/api.{create-auction}",
             vec![
                 Value::String("test-auction".to_string()),
                 Value::String("this is a test".to_string()),
@@ -71,7 +71,7 @@ async fn auction_example_1(
     let get_auctions_result = executor
         .invoke_and_await(
             &registry_worker_id,
-            "auction:registry/api.{get-auctions}",
+            "auction:registry-exports/api.{get-auctions}",
             vec![],
         )
         .await;
@@ -106,7 +106,7 @@ async fn auction_example_2(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let registry_component_id = executor.store_component("auction_registry_composed").await;
+    let registry_component_id = executor.store_component("auction_registry").await;
     let auction_component_id = executor.store_component("auction").await;
 
     let mut env = HashMap::new();
@@ -127,7 +127,7 @@ async fn auction_example_2(
     let create_auction_result = executor
         .invoke_and_await(
             &registry_worker_id,
-            "auction:registry/api.{create-auction-res}",
+            "auction:registry-exports/api.{create-auction-res}",
             vec![
                 Value::String("test-auction".to_string()),
                 Value::String("this is a test".to_string()),
@@ -140,7 +140,7 @@ async fn auction_example_2(
     let get_auctions_result = executor
         .invoke_and_await(
             &registry_worker_id,
-            "auction:registry/api.{get-auctions}",
+            "auction:registry-exports/api.{get-auctions}",
             vec![],
         )
         .await;
@@ -176,7 +176,7 @@ async fn counter_resource_test_1(
     let executor = start(deps, &context).await.unwrap();
 
     let counters_component_id = executor.store_component("counters").await;
-    let caller_component_id = executor.store_component("caller_composed").await;
+    let caller_component_id = executor.store_component("caller").await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -214,7 +214,7 @@ async fn counter_resource_test_2(
     let executor = start(deps, &context).await.unwrap();
 
     let counters_component_id = executor.store_component("counters").await;
-    let caller_component_id = executor.store_component("caller_composed").await;
+    let caller_component_id = executor.store_component("caller").await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -249,7 +249,7 @@ async fn counter_resource_test_2_with_restart(
     let executor = start(deps, &context).await.unwrap();
 
     let counters_component_id = executor.store_component("counters").await;
-    let caller_component_id = executor.store_component("caller_composed").await;
+    let caller_component_id = executor.store_component("caller").await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -288,7 +288,7 @@ async fn counter_resource_test_3(
     let executor = start(deps, &context).await.unwrap();
 
     let counters_component_id = executor.store_component("counters").await;
-    let caller_component_id = executor.store_component("caller_composed").await;
+    let caller_component_id = executor.store_component("caller").await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -323,7 +323,7 @@ async fn counter_resource_test_3_with_restart(
     let executor = start(deps, &context).await.unwrap();
 
     let counters_component_id = executor.store_component("counters").await;
-    let caller_component_id = executor.store_component("caller_composed").await;
+    let caller_component_id = executor.store_component("caller").await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -362,7 +362,7 @@ async fn context_inheritance(
     let executor = start(deps, &context).await.unwrap();
 
     let counters_component_id = executor.store_component("counters").await;
-    let caller_component_id = executor.store_component("caller_composed").await;
+    let caller_component_id = executor.store_component("caller").await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -448,7 +448,7 @@ async fn counter_resource_test_5(
     let executor = start(deps, &context).await.unwrap();
 
     let counters_component_id = executor.store_component("counters").await;
-    let caller_component_id = executor.store_component("caller_composed").await;
+    let caller_component_id = executor.store_component("caller").await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -489,7 +489,7 @@ async fn counter_resource_test_5_with_restart(
 
     // using store_unique_component to avoid collision with counter_resource_test_5
     let counters_component_id = executor.store_unique_component("counters").await;
-    let caller_component_id = executor.store_unique_component("caller_composed").await;
+    let caller_component_id = executor.store_unique_component("caller").await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -546,7 +546,7 @@ async fn wasm_rpc_bug_32_test(
     let executor = start(deps, &context).await.unwrap();
 
     let counters_component_id = executor.store_component("counters").await;
-    let caller_component_id = executor.store_component("caller_composed").await;
+    let caller_component_id = executor.store_component("caller").await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -589,7 +589,7 @@ async fn error_message_invalid_uri(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let registry_component_id = executor.store_component("auction_registry_composed").await;
+    let registry_component_id = executor.store_component("auction_registry").await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -614,7 +614,7 @@ async fn error_message_invalid_uri(
     let create_auction_result = executor
         .invoke_and_await(
             &registry_worker_id,
-            "auction:registry/api.{create-auction}",
+            "auction:registry-exports/api.{create-auction}",
             vec![
                 Value::String("test-auction".to_string()),
                 Value::String("this is a test".to_string()),
@@ -644,7 +644,7 @@ async fn error_message_non_existing_target_component(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let registry_component_id = executor.store_component("auction_registry_composed").await;
+    let registry_component_id = executor.store_component("auction_registry").await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -669,7 +669,7 @@ async fn error_message_non_existing_target_component(
     let create_auction_result = executor
         .invoke_and_await(
             &registry_worker_id,
-            "auction:registry/api.{create-auction}",
+            "auction:registry-exports/api.{create-auction}",
             vec![
                 Value::String("test-auction".to_string()),
                 Value::String("this is a test".to_string()),
@@ -696,7 +696,7 @@ async fn ephemeral_worker_invocation_via_rpc1(
     let executor = start(deps, &context).await.unwrap();
 
     let ephemeral_component_id = executor.store_ephemeral_component("ephemeral").await;
-    let caller_component_id = executor.store_component("caller_composed").await;
+    let caller_component_id = executor.store_component("caller").await;
 
     let mut env = HashMap::new();
     env.insert(

@@ -1,0 +1,40 @@
+# Schema for IDEA:
+# $schema: https://schema.golem.cloud/app/golem/1.1.0/golem.schema.json
+# Schema for vscode-yaml
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.1.0/golem.schema.json
+
+tempDir: dist/golem-temp
+witDeps:
+  - wit-deps
+templates:
+  ts:
+    build:
+    - command: npx jco stubgen wit-generated -o src/generated
+      sources:
+      - wit-generated
+      targets:
+      - src/generated
+    - command: npx rollup -c
+      sources:
+      - src
+      targets:
+      - dist/index.js
+    - command: npx jco componentize -w wit-generated -o dist/{{ component_name }}-ts.wasm dist/index.js
+      sources:
+        - dist/index.js
+      targets:
+        - dist/{{ component_name }}-ts.wasm
+    sourceWit: wit
+    generatedWit: wit-generated
+    componentWasm: dist/{{ component_name }}-ts.wasm
+    linkedWasm: ../dist/{{ component_name }}-ts.wasm
+    customCommands:
+      copy:
+      - command: cp ../dist/{{ component_name }}-ts.wasm ../..
+      install:
+      - command: npm install
+    clean:
+    - dist
+customCommands:
+  update-wit-deps:
+  - command: wit-deps -d wit-deps -m wit-deps/deps.toml -l wit-deps/deps.lock

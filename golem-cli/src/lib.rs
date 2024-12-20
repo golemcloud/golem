@@ -15,6 +15,7 @@
 use crate::config::{NamedProfile, Profile};
 use crate::init::CliKind;
 use crate::model::text::fmt::format_error;
+use crate::model::PrintRes;
 use crate::service::version::{VersionCheckResult, VersionService};
 use clap_verbosity_flag::Verbosity;
 use colored::Colorize;
@@ -175,7 +176,7 @@ where
 
     match result {
         Ok(result) => {
-            result.print(format);
+            result.println(format);
             ExitCode::SUCCESS
         }
         Err(error) => {

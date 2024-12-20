@@ -16,3 +16,5 @@ project/project/
 metals.sbt
 dump.rdb
 templates/**/*.wasm
+wit-generated
+bindings.rs

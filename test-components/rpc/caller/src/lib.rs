@@ -1,9 +1,9 @@
 mod bindings;
 
+use crate::bindings::exports::rpc::caller_exports::caller_inline_functions::{Guest, TimelineNode};
 use crate::bindings::golem::rpc::types::Uri;
-use crate::bindings::rpc::counters_stub::stub_counters::{Api, Counter};
-use crate::bindings::rpc::ephemeral_stub::stub_ephemeral::Api as EphemeralApi;
-use bindings::*;
+use crate::bindings::rpc::counters_client::counters_client::{Api, Counter};
+use crate::bindings::rpc::ephemeral_client::ephemeral_client::Api as EphemeralApi;
 use std::env;
 
 struct Component;

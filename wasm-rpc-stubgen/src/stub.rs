@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::wit_encode::EncodedWitDir;
-use crate::wit_generate::extract_main_interface_as_wit_dep;
+use crate::wit_generate::extract_exports_as_wit_dep;
 use crate::wit_resolve::{PackageSource, ResolvedWitDir};
 use crate::{naming, WasmRpcOverride};
 use anyhow::{anyhow, Context};
@@ -34,7 +34,7 @@ pub struct StubConfig {
     pub selected_world: Option<String>,
     pub stub_crate_version: String,
     pub wasm_rpc_override: WasmRpcOverride,
-    pub extract_source_interface_package: bool,
+    pub extract_source_exports_package: bool,
     pub seal_cargo_workspace: bool,
 }
 
@@ -55,9 +55,9 @@ pub struct StubDefinition {
 
 impl StubDefinition {
     pub fn new(config: StubConfig) -> anyhow::Result<Self> {
-        if config.extract_source_interface_package {
-            extract_main_interface_as_wit_dep(&config.source_wit_root)
-                .context("Failed to extract the source interface package")?
+        if config.extract_source_exports_package {
+            extract_exports_as_wit_dep(&config.source_wit_root)
+                .context("Failed to extract exports package")?
         }
 
         let resolved_source = ResolvedWitDir::new(&config.source_wit_root)?;
@@ -123,7 +123,7 @@ impl StubDefinition {
     }
 
     pub fn stub_package_name(&self) -> PackageName {
-        naming::wit::stub_package_name(&self.source_package_name)
+        naming::wit::client_package_name(&self.source_package_name)
     }
 
     pub fn source_world(&self) -> &World {
@@ -146,7 +146,7 @@ impl StubDefinition {
     }
 
     pub fn target_crate_name(&self) -> String {
-        format!("{}-stub", self.source_world_name())
+        format!("{}-client", self.source_world_name())
     }
 
     pub fn target_rust_path(&self) -> PathBuf {
@@ -154,13 +154,11 @@ impl StubDefinition {
     }
 
     pub fn target_interface_name(&self) -> String {
-        // TODO: naming
-        format!("stub-{}", self.source_world_name())
+        format!("{}-client", self.source_world_name())
     }
 
     pub fn target_world_name(&self) -> String {
-        // TODO: naming
-        format!("wasm-rpc-stub-{}", self.source_world_name())
+        format!("wasm-rpc-client-{}", self.source_world_name())
     }
 
     pub fn target_wit_root(&self) -> PathBuf {
@@ -168,7 +166,8 @@ impl StubDefinition {
     }
 
     pub fn target_wit_path(&self) -> PathBuf {
-        self.target_wit_root().join(naming::wit::STUB_WIT_FILE_NAME)
+        self.target_wit_root()
+            .join(naming::wit::CLIENT_WIT_FILE_NAME)
     }
 
     pub fn resolve_target_wit(&self) -> anyhow::Result<ResolvedWitDir> {
@@ -422,7 +421,7 @@ impl StubDefinition {
                 .filter(|function| function.kind == FunctionKind::Freestanding),
         );
 
-        let (used_types, _) = self.extract_interface_stubs_from_types(types.into_iter());
+        let (used_types, _) = self.extract_resource_interface_stubs_from_types(types.into_iter());
 
         Some(InterfaceStub {
             name: name.to_string(),
@@ -448,9 +447,14 @@ impl StubDefinition {
             None => name.to_string(),
         });
 
-        let functions = Self::functions_to_stubs(interface.functions.values());
+        let functions = Self::functions_to_stubs(
+            interface
+                .functions
+                .values()
+                .filter(|function| function.kind == FunctionKind::Freestanding),
+        );
 
-        let (used_types, resource_interfaces) = self.extract_interface_stubs_from_types(
+        let (used_types, resource_interfaces) = self.extract_resource_interface_stubs_from_types(
             interface
                 .types
                 .iter()
@@ -473,7 +477,7 @@ impl StubDefinition {
         interface_stubs
     }
 
-    fn extract_interface_stubs_from_types(
+    fn extract_resource_interface_stubs_from_types(
         &self,
         types: impl Iterator<Item = (String, TypeId)>,
     ) -> (Vec<TypeId>, Vec<InterfaceStub>) {
@@ -530,13 +534,29 @@ impl StubDefinition {
                 .filter(move |function| function.kind == kind)
         };
 
-        let function_stubs_by_kind =
-            |kind: FunctionKind| Self::functions_to_stubs(functions_by_kind(kind));
+        let function_stubs_by_kind = |kind: FunctionKind| {
+            let stubs = Self::functions_to_stubs(functions_by_kind(kind.clone()));
+            match kind {
+                FunctionKind::Freestanding => stubs,
+                FunctionKind::Method(_) => stubs
+                    .into_iter()
+                    .map(|stub| stub.as_method().expect("Expected method function"))
+                    .collect(),
+                FunctionKind::Static(_) => stubs
+                    .into_iter()
+                    .map(|stub| stub.as_static().expect("Expected static function"))
+                    .collect(),
+                FunctionKind::Constructor(_) => stubs,
+            }
+        };
 
-        let (used_types, _) = self.extract_interface_stubs_from_types(
+        let (used_types, _) = self.extract_resource_interface_stubs_from_types(
             owner_interface
                 .types
                 .iter()
+                // TODO: this is just a quick workaround filter for "self", but there could be
+                //       other cases for this code path going into infinite recursion
+                .filter(|(_, &id)| id != type_id)
                 .map(|(name, type_id)| (name.clone(), *type_id)),
         );
 

@@ -2,26 +2,32 @@
 name = "child-component"
 version = "0.0.1"
 edition = "2021"
-license = "Apache-2.0"
 homepage = "https://golem.cloud"
+license = "Apache-2.0"
 
+[package.metadata.component.target]
+path = "wit-generated"
 
-[lib]
-path = "src/lib.rs"
-crate-type = ["cdylib"]
-
-[profile.release]
-lto = true
-opt-level = 's'
-strip = true
+[package.metadata.component.target.dependencies."golem:it-exports"]
+path = "wit-generated/deps/golem_it-exports"
 
 [dependencies]
 once_cell = "1.17.1"
 rand = "0.8.5"
-wit-bindgen-rt = { version = "0.26.0", features = ["bitflags"] }
-common = { path = "../../common" }
 
-[package.metadata.component.target]
-path = "wit"
+[dependencies.common]
+path = "../../common"
 
-[package.metadata.component.dependencies]
+[dependencies.wit-bindgen-rt]
+version = "0.26.0"
+features = ["bitflags"]
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+required-features = []
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

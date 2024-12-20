@@ -99,6 +99,16 @@ impl<T> ValidatedResult<T> {
             }
         }
     }
+
+    pub fn inspect<F>(self, f: F) -> Self
+    where
+        F: FnOnce(&T),
+    {
+        if let Some(value) = self.as_ok_ref() {
+            f(value);
+        }
+        self
+    }
 }
 
 impl<T, E> ValidatedResult<Result<T, E>> {
@@ -170,6 +180,7 @@ pub struct ValidationBuilder {
     context: Vec<ValidationContext>,
     warns: Vec<String>,
     errors: Vec<String>,
+    has_any_error_stack: Vec<bool>,
 }
 
 impl ValidationBuilder {
@@ -178,6 +189,7 @@ impl ValidationBuilder {
             context: vec![],
             warns: vec![],
             errors: vec![],
+            has_any_error_stack: vec![],
         }
     }
 
@@ -187,6 +199,47 @@ impl ValidationBuilder {
 
     pub fn pop_context(&mut self) {
         _ = self.context.pop();
+    }
+
+    pub fn with_context<F: FnOnce(&mut ValidationBuilder)>(
+        &mut self,
+        context: Vec<(&'static str, String)>,
+        f: F,
+    ) -> bool {
+        let (_, valid) = self.with_context_returning(context, f);
+        valid
+    }
+
+    pub fn with_context_returning<F, R>(
+        &mut self,
+        context: Vec<(&'static str, String)>,
+        f: F,
+    ) -> (R, bool)
+    where
+        F: FnOnce(&mut ValidationBuilder) -> R,
+    {
+        let context_count = context.len();
+
+        self.has_any_error_stack.push(false);
+
+        for (name, value) in context {
+            self.push_context(name, value);
+        }
+
+        let result = f(self);
+
+        for _ in 0..context_count {
+            self.pop_context()
+        }
+
+        let has_any_errors = self.has_any_error_stack.pop().unwrap();
+        if has_any_errors {
+            self.has_any_error_stack
+                .iter_mut()
+                .for_each(|has_any_errors| *has_any_errors = true)
+        }
+
+        (result, !has_any_errors)
     }
 
     fn format(&mut self, message: String) -> String {
@@ -241,6 +294,9 @@ impl ValidationBuilder {
 
     pub fn add_error(&mut self, error: String) {
         let error = self.format(error);
+        if let Some(has_any_errors) = self.has_any_error_stack.last_mut() {
+            *has_any_errors = true;
+        }
         self.errors.push(error);
     }
 

@@ -1,6 +1,6 @@
 use std::cell::RefCell;
-use crate::bindings::exports::golem::itrpc::rpc_api::Guest;
-use crate::bindings::golem::it_stub::stub_child_component::{Api, Data};
+use crate::bindings::exports::golem::itrpc_exports::rpc_api::Guest;
+use crate::bindings::golem::it_client::child_component_client::{Api, Data};
 use crate::bindings::golem::rpc::types::Uri;
 use std::env;
 

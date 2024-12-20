@@ -1,1 +1,0 @@
-golem-cli stubgen generate --source-wit-root counter/wit --dest-crate-root counter-stub --always-inline-types

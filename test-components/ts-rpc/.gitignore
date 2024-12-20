@@ -1,4 +1,6 @@
-node_modules/
-dist/
-
 *.wasm
+dist/
+node_modules/
+generated
+wit-generated
+wit-deps/*/
