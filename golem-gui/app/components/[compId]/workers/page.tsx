@@ -4,6 +4,7 @@ import { Box, Button, Typography, TextField, IconButton, Chip } from '@mui/mater
 import SearchIcon from '@mui/icons-material/Search';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import DropdownButton from '@/components/ui/DropDownButton'
+import CustomModal from '@/components/CustomModal';
 
 const WorkersPage = () => {
   const [searchQuery, setSearchQuery] = useState('');

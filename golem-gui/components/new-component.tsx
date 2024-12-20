@@ -109,26 +109,12 @@ export default function CreateComponentForm({onCreation}:{onCreation?:()=>void})
 
   return (
     <Paper
-      elevation={3}
+      elevation={4}
       sx={{
-        maxWidth: "800px",
         width: "100%",
-        mx: "auto",
-        mt: 5,
-        p: 3,
-        borderRadius: "8px",
-        maxHeight: "80vh",
-        overflowY: "auto",
-        height: "fit-content",
+        p:2,
       }}
     >
-      {/* Header */}
-      <Typography variant="h5" sx={{ mb: 2, borderBottom: "1px solid #444", pb: 2 }}>
-        Create a new Component
-      </Typography>
-      <Typography variant="body2" sx={{ mb: 3 }}>
-        Components are the building blocks for your project
-      </Typography>
 
       {/* Form */}
       <form onSubmit={handleSubmit(onSubmit)}>

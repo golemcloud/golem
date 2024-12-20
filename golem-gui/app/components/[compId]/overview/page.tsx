@@ -19,6 +19,8 @@ import { InsertChart, CheckCircleOutline, ErrorOutline, RocketLaunch } from "@mu
 import AddIcon from "@mui/icons-material/Add";
 import CloseIcon from "@mui/icons-material/Close";
 import CreateWorker from "@/components/create-worker"; 
+import CustomModal from "@/components/CustomModal"; 
+
 
 const Overview = () => {
   const stats = [
@@ -39,6 +41,9 @@ const Overview = () => {
 
   const [isOpen, setIsOpen] = useState(false);
 
+  const handleOpen = () => setIsOpen(true);
+  const handleClose = () => setIsOpen(false);
+
   return (
     <Box sx={{ padding: 4, minHeight: "100vh" }}>
       <Box sx={{ display: "flex", justifyContent: "flex-end" }}>
@@ -56,6 +61,7 @@ const Overview = () => {
         >
           New
         </Button>
+        
       </Box>
 
       <Grid container spacing={4}>
@@ -97,12 +103,9 @@ const Overview = () => {
         </Grid>
       </Grid>
 
-      {/* Create Worker Modal */}
-      <Dialog open={isOpen} onClose={() => setIsOpen(false)} fullWidth maxWidth="sm">
-        <DialogContent>
-          <CreateWorker  />
-        </DialogContent>
-      </Dialog>
+      <CustomModal open={isOpen} onClose={handleClose} heading="Create Worker">
+        <CreateWorker/>
+      </CustomModal>
     </Box>
   );
 };

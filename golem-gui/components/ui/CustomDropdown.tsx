@@ -146,22 +146,6 @@ export default function CustomDropdown() {
           Select All
         </MenuItem>
       </Menu>
-
-      {/* Display Selected Filters as Chips */}
-      <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-        {selectedFilters.map((filter) => (
-          <Chip
-            key={filter}
-            label={filter}
-            onDelete={() => handleDeleteFilter(filter)}
-            sx={{
-              bgcolor: '#333',
-              color: 'white',
-              '& .MuiChip-deleteIcon': { color: 'gray' },
-            }}
-          />
-        ))}
-      </Box>
     </Box>
   );
 };

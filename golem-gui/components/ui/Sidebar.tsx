@@ -11,7 +11,7 @@ type SidebarProps = {
   id: string;
   navigationLinks:NavigationLinks[],
   variant:string;
-  version: string;     
+  version?: string;     
 };
 
 type NavigationLinks = {

@@ -20,6 +20,7 @@ import { Card, CardContent } from "@mui/material";
 import { Component } from "@/types/api";
 import { useRouter } from "next/navigation"; // If using `pages`
 import { useComponents } from "@/lib/hooks/useComponents";
+import CustomModal from "@/components/CustomModal";
 
 
 const ComponentsPage = () => {
@@ -134,9 +135,9 @@ const ComponentsPage = () => {
         </Typography>
       </Box>)}
       {/* Modal for Creating New API/Component */}
-      <Modal open={open} onClose={handleClose}>
+      <CustomModal open={open} onClose={handleClose} heading="Create a new Component">
         <CreateComponentForm onCreation={handleClose}/>
-      </Modal>
+      </CustomModal>
     </Container>
   );
 };
