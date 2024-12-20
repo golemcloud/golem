@@ -57,6 +57,12 @@ export type BasicStep = {
   nodeId?: string;
 };
 
+export type Trigger = {
+  id?:string;
+  type: string;
+  operation: string;
+} | null
+
 export type ApiStep = ApiDefinition & BasicStep;
 export type RouteStep = ApiRoute &
   BasicStep & { apiInfo: Omit<ApiDefinition, "routes"> };
@@ -86,8 +92,8 @@ export type FlowState = {
   openGlobalEditor: boolean;
   stepEditorOpenForNode: string | null;
   toolboxConfiguration: Record<string, any>;
-  trigger: { type: string; operation: string } | null;
-  setTrigger: (triiger: { type: string; operation: string } | null) => void;
+  trigger: Trigger;
+  setTrigger: (triiger: Trigger) => void;
   onNodesChange: OnNodesChange<FlowNode>;
   onEdgesChange: OnEdgesChange<Edge>;
   onConnect: OnConnect;

@@ -1,15 +1,21 @@
 import React, { memo } from "react";
 import { Handle, Position } from "@xyflow/react";
-// import NodeMenu from "./node-menu";
+import NodeMenu from "./node-menu";
 import useStore from "@/lib/hooks/use-react-flow-store";
 import { GoPlus } from "react-icons/go";
 import { MdNotStarted } from "react-icons/md";
 import { GoSquareFill } from "react-icons/go";
 import { BiSolidError } from "react-icons/bi";
 import { toast } from "react-toastify";
-import { FlowNode } from "@/types/react-flow";
-import ApiIcon from "@mui/icons-material/Api";
-import RouteIcon from "@mui/icons-material/Route";
+import { FlowNode, Trigger } from "@/types/react-flow";
+import {
+  getIconBasedOnType,
+  getStatus,
+  getVersion,
+  getTriggerType,
+} from "@/lib/react-flow/utils";
+import DoneIcon from "@mui/icons-material/Done";
+import { Stack } from "@mui/material";
 
 function CustomNode({ id, data }: FlowNode) {
   const {
@@ -21,20 +27,11 @@ function CustomNode({ id, data }: FlowNode) {
     setTrigger,
   } = useStore();
   const type = data?.type;
-
   const isEmptyNode = !!data?.type?.includes("empty");
   const specialNodeCheck = ["start", "end"].includes(type);
-  function getIconBasedOnType(data: FlowNode["data"]) {
-    switch (data.type) {
-      case "api":
-      case "api_start":
-        return <ApiIcon />;
-      case "route":
-        return <RouteIcon />;
-      default:
-        return null;
-    }
-  }
+  const Icon = getIconBasedOnType(data);
+  const draft = getStatus(data);
+  const triggerType = getTriggerType(id);
 
   function handleNodeClick(e: React.MouseEvent<HTMLDivElement>) {
     e.stopPropagation();
@@ -57,8 +54,6 @@ function CustomNode({ id, data }: FlowNode) {
     setSelectedNode(id);
   }
 
-  console.log("enteirgnt his node", specialNodeCheck);
-
   return (
     <>
       {!specialNodeCheck && (
@@ -78,9 +73,7 @@ function CustomNode({ id, data }: FlowNode) {
               className="p-2 flex-1 flex flex-col items-center justify-center"
               onClick={(e) => {
                 e.preventDefault();
-                const meta = id.split("__");
-                const type = meta[meta.length - 1];
-                setTrigger({ type: type, operation: "creation" });
+                setTrigger({ type: triggerType, operation: "create" });
               }}
             >
               <GoPlus className="w-8 h-8 text-gray-600 font-bold p-0" />
@@ -95,15 +88,35 @@ function CustomNode({ id, data }: FlowNode) {
             <BiSolidError className="size-16  text-red-500 absolute right-[-40px] top-[-40px]" />
           )}
           {!isEmptyNode && (
-            <div className="container p-2 flex-1 flex flex-row items-center justify-between gap-2 flex-wrap">
-              {getIconBasedOnType(data)}
-              <div className="flex-1 flex-col gap-2 flex-wrap truncate">
+            <div className="container p-2 flex-1 flex flex-row items-start justify-between gap-2 flex-wrap">
+              {Icon && <Icon />}
+              {/*TODO: Refactor this with valid styles*/}
+              <div className="flex-1 flex-col flex-wrap truncate">
                 <div className="text-lg font-bold truncate">{data?.name}</div>
-                <div className="text-gray-500 truncate">{type}</div>
+                <Stack
+                  direction={"row"}
+                  justifyContent={"space-between"}
+                  alignItems={"center"}
+                >
+                  <div className="text-gray-500 truncate">
+                    {type}
+                    {getVersion(data)}
+                  </div>
+                </Stack>
+                {draft && (
+                  <Stack direction={"row"} alignItems={"center"}>
+                    <span className="border text-sm border-black px-2  ">
+                      {draft}
+                    </span>
+                    {draft === "Draft" && <DoneIcon />}
+                  </Stack>
+                )}
               </div>
-              {/* <div>
-                <NodeMenu data={data} id={id} />
-              </div> */}
+              <div>
+                {type !== "api_start" && (
+                  <NodeMenu data={data} id={id} triggerType={triggerType} />
+                )}
+              </div>
             </div>
           )}
 
