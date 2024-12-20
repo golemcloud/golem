@@ -203,7 +203,6 @@ impl<Ctx: WorkerCtx> HostDbConnection for &mut DurableWorkerCtx<Ctx> {
     }
 
     fn drop(&mut self, rep: Resource<MysqlDbConnection>) -> anyhow::Result<()> {
-        // (*self).drop(rep)
         HostDbConnection::drop(*self, rep)
     }
 }
@@ -212,7 +211,7 @@ pub struct DbResultSetEntry {
     pub internal: Arc<dyn crate::services::rdbms::DbResultSet<MysqlType> + Send + Sync>,
 }
 
-impl crate::durable_host::rdbms::mysql::DbResultSetEntry {
+impl DbResultSetEntry {
     pub fn new(
         internal: Arc<dyn crate::services::rdbms::DbResultSet<MysqlType> + Send + Sync>,
     ) -> Self {
@@ -224,7 +223,7 @@ impl crate::durable_host::rdbms::mysql::DbResultSetEntry {
 impl<Ctx: WorkerCtx> HostDbResultSet for DurableWorkerCtx<Ctx> {
     async fn get_columns(
         &mut self,
-        self_: Resource<crate::durable_host::rdbms::mysql::DbResultSetEntry>,
+        self_: Resource<DbResultSetEntry>,
     ) -> anyhow::Result<Vec<DbColumn>> {
         let _permit = self.begin_async_host_function().await?;
         record_host_function_call("rdbms::mysql::db-result-set", "get-columns");
@@ -232,43 +231,42 @@ impl<Ctx: WorkerCtx> HostDbResultSet for DurableWorkerCtx<Ctx> {
         let internal = self
             .as_wasi_view()
             .table()
-            .get::<crate::durable_host::rdbms::mysql::DbResultSetEntry>(&self_)?
+            .get::<DbResultSetEntry>(&self_)?
             .internal
             .clone();
 
         let columns = internal.deref().get_columns().await.map_err(Error::from)?;
 
         let columns = columns.into_iter().map(|c| c.into()).collect();
+
         Ok(columns)
     }
 
     async fn get_next(
         &mut self,
-        self_: Resource<crate::durable_host::rdbms::mysql::DbResultSetEntry>,
+        self_: Resource<DbResultSetEntry>,
     ) -> anyhow::Result<Option<Vec<DbRow>>> {
         let _permit = self.begin_async_host_function().await?;
         record_host_function_call("rdbms::mysql::db-result-set", "get-next");
         let internal = self
             .as_wasi_view()
             .table()
-            .get::<crate::durable_host::rdbms::mysql::DbResultSetEntry>(&self_)?
+            .get::<DbResultSetEntry>(&self_)?
             .internal
             .clone();
 
         let rows = internal.deref().get_next().await.map_err(Error::from)?;
 
         let rows = rows.map(|r| r.into_iter().map(|r| r.into()).collect());
+
         Ok(rows)
     }
 
-    fn drop(
-        &mut self,
-        rep: Resource<crate::durable_host::rdbms::mysql::DbResultSetEntry>,
-    ) -> anyhow::Result<()> {
+    fn drop(&mut self, rep: Resource<DbResultSetEntry>) -> anyhow::Result<()> {
         record_host_function_call("rdbms::mysql::db-result-set", "drop");
         self.as_wasi_view()
             .table()
-            .delete::<crate::durable_host::rdbms::mysql::DbResultSetEntry>(rep)?;
+            .delete::<DbResultSetEntry>(rep)?;
         Ok(())
     }
 }
@@ -277,23 +275,19 @@ impl<Ctx: WorkerCtx> HostDbResultSet for DurableWorkerCtx<Ctx> {
 impl<Ctx: WorkerCtx> HostDbResultSet for &mut DurableWorkerCtx<Ctx> {
     async fn get_columns(
         &mut self,
-        self_: Resource<crate::durable_host::rdbms::mysql::DbResultSetEntry>,
+        self_: Resource<DbResultSetEntry>,
     ) -> anyhow::Result<Vec<DbColumn>> {
         (*self).get_columns(self_).await
     }
 
     async fn get_next(
         &mut self,
-        self_: Resource<crate::durable_host::rdbms::mysql::DbResultSetEntry>,
+        self_: Resource<DbResultSetEntry>,
     ) -> anyhow::Result<Option<Vec<DbRow>>> {
         (*self).get_next(self_).await
     }
 
-    fn drop(
-        &mut self,
-        rep: Resource<crate::durable_host::rdbms::mysql::DbResultSetEntry>,
-    ) -> anyhow::Result<()> {
-        // (*self).drop(rep)
+    fn drop(&mut self, rep: Resource<DbResultSetEntry>) -> anyhow::Result<()> {
         HostDbResultSet::drop(*self, rep)
     }
 }

@@ -846,39 +846,8 @@ impl From<postgres_types::ValuesRange<chrono::NaiveDate>> for Daterange {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct DbColumnTypeWithResourceRep {
-    pub(crate) value: postgres_types::DbColumnType,
-    pub(crate) resource_rep: DbColumnTypeResourceRep,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum DbColumnTypeResourceRep {
-    None,
-    Domain(u32),
-    Array(u32),
-    Composite(Vec<u32>),
-}
-
-impl DbColumnTypeResourceRep {
-    fn is_valid_for(&self, value: &postgres_types::DbColumnType) -> bool {
-        match self {
-            DbColumnTypeResourceRep::Domain(_)
-                if !matches!(value, postgres_types::DbColumnType::Domain(_)) =>
-            {
-                false
-            }
-            DbColumnTypeResourceRep::Array(_)
-                if !matches!(value, postgres_types::DbColumnType::Array(_)) =>
-            {
-                false
-            }
-            DbColumnTypeResourceRep::Composite(_)
-                if !matches!(value, postgres_types::DbColumnType::Composite(_)) =>
-            {
-                false
-            }
-            _ => true,
-        }
-    }
+    value: postgres_types::DbColumnType,
+    resource_rep: DbColumnTypeResourceRep,
 }
 
 impl DbColumnTypeWithResourceRep {
@@ -913,45 +882,62 @@ impl DbColumnTypeWithResourceRep {
     }
 }
 
-impl From<DbColumnTypeWithResourceRep> for LazyDbColumnTypeEntry {
-    fn from(value: DbColumnTypeWithResourceRep) -> Self {
-        Self::new(value)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-struct DbValueWithResourceRep {
-    pub(crate) value: postgres_types::DbValue,
-    pub(crate) resource_rep: DbValueResourceRep,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-enum DbValueResourceRep {
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum DbColumnTypeResourceRep {
     None,
     Domain(u32),
-    Array(Vec<u32>),
+    Array(u32),
     Composite(Vec<u32>),
 }
 
-impl DbValueResourceRep {
-    fn is_valid_for(&self, value: &postgres_types::DbValue) -> bool {
+impl DbColumnTypeResourceRep {
+    fn is_valid_for(&self, value: &postgres_types::DbColumnType) -> bool {
         match self {
-            DbValueResourceRep::Domain(_)
-                if !matches!(value, postgres_types::DbValue::Domain(_)) =>
+            DbColumnTypeResourceRep::Domain(_)
+                if !matches!(value, postgres_types::DbColumnType::Domain(_)) =>
             {
                 false
             }
-            DbValueResourceRep::Array(_) if !matches!(value, postgres_types::DbValue::Array(_)) => {
+            DbColumnTypeResourceRep::Array(_)
+                if !matches!(value, postgres_types::DbColumnType::Array(_)) =>
+            {
                 false
             }
-            DbValueResourceRep::Composite(_)
-                if !matches!(value, postgres_types::DbValue::Composite(_)) =>
+            DbColumnTypeResourceRep::Composite(_)
+                if !matches!(value, postgres_types::DbColumnType::Composite(_)) =>
             {
                 false
             }
             _ => true,
         }
     }
+
+    fn get_composite_rep(&self, index: usize) -> Option<u32> {
+        match self {
+            DbColumnTypeResourceRep::Composite(reps) => reps.get(index).cloned(),
+            _ => None,
+        }
+    }
+
+    fn get_domain_rep(&self) -> Option<u32> {
+        match self {
+            DbColumnTypeResourceRep::Domain(id) => Some(*id),
+            _ => None,
+        }
+    }
+
+    fn get_array_rep(&self) -> Option<u32> {
+        match self {
+            DbColumnTypeResourceRep::Array(id) => Some(*id),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct DbValueWithResourceRep {
+    value: postgres_types::DbValue,
+    resource_rep: DbValueResourceRep,
 }
 
 impl DbValueWithResourceRep {
@@ -986,9 +972,53 @@ impl DbValueWithResourceRep {
     }
 }
 
-impl From<DbValueWithResourceRep> for LazyDbValueEntry {
-    fn from(value: DbValueWithResourceRep) -> Self {
-        Self::new(value)
+#[derive(Clone, Debug, PartialEq)]
+enum DbValueResourceRep {
+    None,
+    Domain(u32),
+    Array(Vec<u32>),
+    Composite(Vec<u32>),
+}
+
+impl DbValueResourceRep {
+    fn is_valid_for(&self, value: &postgres_types::DbValue) -> bool {
+        match self {
+            DbValueResourceRep::Domain(_)
+                if !matches!(value, postgres_types::DbValue::Domain(_)) =>
+            {
+                false
+            }
+            DbValueResourceRep::Array(_) if !matches!(value, postgres_types::DbValue::Array(_)) => {
+                false
+            }
+            DbValueResourceRep::Composite(_)
+                if !matches!(value, postgres_types::DbValue::Composite(_)) =>
+            {
+                false
+            }
+            _ => true,
+        }
+    }
+
+    fn get_array_rep(&self, index: usize) -> Option<u32> {
+        match self {
+            DbValueResourceRep::Array(reps) => reps.get(index).cloned(),
+            _ => None,
+        }
+    }
+
+    fn get_composite_rep(&self, index: usize) -> Option<u32> {
+        match self {
+            DbValueResourceRep::Composite(reps) => reps.get(index).cloned(),
+            _ => None,
+        }
+    }
+
+    fn get_domain_rep(&self) -> Option<u32> {
+        match self {
+            DbValueResourceRep::Domain(id) => Some(*id),
+            _ => None,
+        }
     }
 }
 
@@ -1332,14 +1362,9 @@ fn from_db_value(
         }
         postgres_types::DbValue::Composite(v) => {
             let mut values: Vec<Resource<LazyDbValueEntry>> = Vec::with_capacity(v.values.len());
-            let reps = if let DbValueResourceRep::Composite(reps) = value.resource_rep {
-                Some(reps)
-            } else {
-                None
-            };
-            let mut new_reps: Vec<u32> = Vec::with_capacity(v.values.len());
+            let mut new_resource_reps: Vec<u32> = Vec::with_capacity(v.values.len());
             for (i, v) in v.values.into_iter().enumerate() {
-                let value = if let Some(r) = reps.clone().and_then(|r| r.get(i).cloned()) {
+                let value = if let Some(r) = value.resource_rep.get_composite_rep(i) {
                     Resource::new_own(r)
                 } else {
                     resource_table
@@ -1348,7 +1373,7 @@ fn from_db_value(
                         ))
                         .map_err(|e| e.to_string())?
                 };
-                new_reps.push(value.rep());
+                new_resource_reps.push(value.rep());
                 values.push(value);
             }
             Ok((
@@ -1356,11 +1381,11 @@ fn from_db_value(
                     name: v.name,
                     values,
                 }),
-                DbValueResourceRep::Composite(new_reps),
+                DbValueResourceRep::Composite(new_resource_reps),
             ))
         }
         postgres_types::DbValue::Domain(v) => {
-            let value = if let DbValueResourceRep::Domain(r) = value.resource_rep {
+            let value = if let Some(r) = value.resource_rep.get_domain_rep() {
                 Resource::new_own(r)
             } else {
                 resource_table
@@ -1369,25 +1394,20 @@ fn from_db_value(
                     ))
                     .map_err(|e| e.to_string())?
             };
-            let new_rep = value.rep();
+            let new_resource_rep = value.rep();
             Ok((
                 DbValue::Domain(Domain {
                     name: v.name,
                     value,
                 }),
-                DbValueResourceRep::Domain(new_rep),
+                DbValueResourceRep::Domain(new_resource_rep),
             ))
         }
         postgres_types::DbValue::Array(vs) => {
             let mut values: Vec<Resource<LazyDbValueEntry>> = Vec::with_capacity(vs.len());
-            let reps = if let DbValueResourceRep::Array(reps) = value.resource_rep {
-                Some(reps)
-            } else {
-                None
-            };
-            let mut new_reps: Vec<u32> = Vec::with_capacity(vs.len());
+            let mut new_resource_reps: Vec<u32> = Vec::with_capacity(vs.len());
             for (i, v) in vs.into_iter().enumerate() {
-                let value = if let Some(r) = reps.clone().and_then(|r| r.get(i).cloned()) {
+                let value = if let Some(r) = value.resource_rep.get_array_rep(i) {
                     Resource::new_own(r)
                 } else {
                     resource_table
@@ -1396,11 +1416,14 @@ fn from_db_value(
                         ))
                         .map_err(|e| e.to_string())?
                 };
-                new_reps.push(value.rep());
+                new_resource_reps.push(value.rep());
                 values.push(value);
             }
 
-            Ok((DbValue::Array(values), DbValueResourceRep::Array(new_reps)))
+            Ok((
+                DbValue::Array(values),
+                DbValueResourceRep::Array(new_resource_reps),
+            ))
         }
         postgres_types::DbValue::Null => Ok((DbValue::Null, DbValueResourceRep::None)),
     }
@@ -1422,11 +1445,10 @@ fn from_db_column(
     value: postgres_types::DbColumn,
     resource_table: &mut ResourceTable,
 ) -> Result<DbColumn, String> {
-    let db_type = from_db_column_type(
+    let (db_type, _) = from_db_column_type(
         DbColumnTypeWithResourceRep::new(value.db_type, DbColumnTypeResourceRep::None)?,
         resource_table,
-    )?
-    .0;
+    )?;
     Ok(DbColumn {
         ordinal: value.ordinal,
         name: value.name,
@@ -1549,15 +1571,9 @@ fn from_db_column_type(
         postgres_types::DbColumnType::Composite(v) => {
             let mut attributes: Vec<(String, Resource<LazyDbColumnTypeEntry>)> =
                 Vec::with_capacity(v.attributes.len());
-
-            let reps = if let DbColumnTypeResourceRep::Composite(reps) = value.resource_rep {
-                Some(reps)
-            } else {
-                None
-            };
-            let mut new_reps: Vec<u32> = Vec::with_capacity(v.attributes.len());
+            let mut new_resource_reps: Vec<u32> = Vec::with_capacity(v.attributes.len());
             for (i, (n, t)) in v.attributes.into_iter().enumerate() {
-                let value = if let Some(r) = reps.clone().and_then(|r| r.get(i).cloned()) {
+                let value = if let Some(r) = value.resource_rep.get_composite_rep(i) {
                     Resource::new_own(r)
                 } else {
                     resource_table
@@ -1566,7 +1582,7 @@ fn from_db_column_type(
                         ))
                         .map_err(|e| e.to_string())?
                 };
-                new_reps.push(value.rep());
+                new_resource_reps.push(value.rep());
                 attributes.push((n, value));
             }
             Ok((
@@ -1574,11 +1590,11 @@ fn from_db_column_type(
                     name: v.name,
                     attributes,
                 }),
-                DbColumnTypeResourceRep::Composite(new_reps),
+                DbColumnTypeResourceRep::Composite(new_resource_reps),
             ))
         }
         postgres_types::DbColumnType::Domain(v) => {
-            let value = if let DbColumnTypeResourceRep::Domain(r) = value.resource_rep {
+            let value = if let Some(r) = value.resource_rep.get_domain_rep() {
                 Resource::new_own(r)
             } else {
                 resource_table
@@ -1587,17 +1603,17 @@ fn from_db_column_type(
                     ))
                     .map_err(|e| e.to_string())?
             };
-            let new_rep = value.rep();
+            let new_resource_rep = value.rep();
             Ok((
                 DbColumnType::Domain(DomainType {
                     name: v.name,
                     base_type: value,
                 }),
-                DbColumnTypeResourceRep::Domain(new_rep),
+                DbColumnTypeResourceRep::Domain(new_resource_rep),
             ))
         }
         postgres_types::DbColumnType::Array(v) => {
-            let value = if let DbColumnTypeResourceRep::Array(r) = value.resource_rep {
+            let value = if let Some(r) = value.resource_rep.get_array_rep() {
                 Resource::new_own(r)
             } else {
                 resource_table
@@ -1606,10 +1622,10 @@ fn from_db_column_type(
                     ))
                     .map_err(|e| e.to_string())?
             };
-            let new_rep = value.rep();
+            let new_resource_rep = value.rep();
             Ok((
                 DbColumnType::Array(value),
-                DbColumnTypeResourceRep::Array(new_rep),
+                DbColumnTypeResourceRep::Array(new_resource_rep),
             ))
         }
     }
@@ -1734,47 +1750,47 @@ fn to_db_column_type(
         DbColumnType::Composite(v) => {
             let mut attributes: Vec<(String, postgres_types::DbColumnType)> =
                 Vec::with_capacity(v.attributes.len());
-            let mut reps: Vec<u32> = Vec::with_capacity(v.attributes.len());
-            for (n, i) in v.attributes.iter() {
-                let v = resource_table
-                    .get::<LazyDbColumnTypeEntry>(i)
+            let mut resource_reps: Vec<u32> = Vec::with_capacity(v.attributes.len());
+            for (name, resource) in v.attributes.iter() {
+                let value = resource_table
+                    .get::<LazyDbColumnTypeEntry>(resource)
                     .map_err(|e| e.to_string())?
                     .value
                     .clone();
-                reps.push(i.rep());
-                attributes.push((n.clone(), v.value));
+                resource_reps.push(resource.rep());
+                attributes.push((name.clone(), value.value));
             }
-
-            Ok(DbColumnTypeWithResourceRep::new(
+            DbColumnTypeWithResourceRep::new(
                 postgres_types::DbColumnType::Composite(postgres_types::CompositeType::new(
                     v.name, attributes,
                 )),
-                DbColumnTypeResourceRep::Composite(reps),
-            )?)
+                DbColumnTypeResourceRep::Composite(resource_reps),
+            )
         }
         DbColumnType::Domain(v) => {
-            let t = resource_table
+            let value = resource_table
                 .get::<LazyDbColumnTypeEntry>(&v.base_type)
                 .map_err(|e| e.to_string())?
                 .value
                 .clone();
-            Ok(DbColumnTypeWithResourceRep::new(
+            DbColumnTypeWithResourceRep::new(
                 postgres_types::DbColumnType::Domain(postgres_types::DomainType::new(
-                    v.name, t.value,
+                    v.name,
+                    value.value,
                 )),
                 DbColumnTypeResourceRep::Domain(v.base_type.rep()),
-            )?)
+            )
         }
         DbColumnType::Array(v) => {
-            let t = resource_table
+            let value = resource_table
                 .get::<LazyDbColumnTypeEntry>(&v)
                 .map_err(|e| e.to_string())?
                 .value
                 .clone();
-            Ok(DbColumnTypeWithResourceRep::new(
-                postgres_types::DbColumnType::Array(Box::new(t.value)),
+            DbColumnTypeWithResourceRep::new(
+                postgres_types::DbColumnType::Array(Box::new(value.value)),
                 DbColumnTypeResourceRep::Array(v.rep()),
-            )?)
+            )
         }
     }
 }
@@ -1783,7 +1799,8 @@ fn to_db_column_type(
 pub mod tests {
     use crate::durable_host::rdbms::postgres::{
         from_db_column_type, from_db_value, to_db_column_type, to_db_value,
-        DbColumnTypeWithResourceRep, DbValueWithResourceRep,
+        DbColumnTypeResourceRep, DbColumnTypeWithResourceRep, DbValueResourceRep,
+        DbValueWithResourceRep,
     };
     use crate::services::rdbms::postgres::types as postgres_types;
     use assert2::check;
@@ -1803,10 +1820,15 @@ pub mod tests {
         let (wit, new_reps) = from_db_value(value_with_rep, resource_table).unwrap();
 
         let value_with_rep = DbValueWithResourceRep::new(value.clone(), new_reps.clone()).unwrap();
-
         let (wit2, new_reps2) = from_db_value(value_with_rep, resource_table).unwrap();
 
         check!(new_reps == new_reps2);
+
+        if value.is_complex_type() {
+            check!(new_reps2 != DbValueResourceRep::None);
+        } else {
+            check!(new_reps2 == DbValueResourceRep::None);
+        }
 
         // println!("wit {:?}", wit);
         let expected_value = to_db_value(wit, resource_table).unwrap();
@@ -2069,10 +2091,15 @@ pub mod tests {
 
         let value_with_rep =
             DbColumnTypeWithResourceRep::new(value.clone(), new_reps.clone()).unwrap();
-
         let (wit2, new_reps2) = from_db_column_type(value_with_rep, resource_table).unwrap();
 
         check!(new_reps == new_reps2);
+
+        if value.is_complex_type() {
+            check!(new_reps2 != DbColumnTypeResourceRep::None);
+        } else {
+            check!(new_reps2 == DbColumnTypeResourceRep::None);
+        }
 
         // println!("wit {:?}", wit);
         let expected_value = to_db_column_type(wit, resource_table).unwrap();

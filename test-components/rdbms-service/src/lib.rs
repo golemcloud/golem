@@ -115,12 +115,7 @@ impl Guest for Component {
         let mut rows: Vec<PostgresDbRow> = vec![];
 
         while let Some(vs) = result_set.get_next() {
-            let mut rs: Vec<PostgresDbRow> = Vec::with_capacity(vs.len());
-
-            for v in vs {
-                rs.push(get_postgres_db_row(v));
-            }
-
+            let rs: Vec<PostgresDbRow> = vs.into_iter().map(get_postgres_db_row).collect();
             rows.extend(rs);
         }
 
