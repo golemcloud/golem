@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub(crate) use crate::gateway_execution::gateway_binding_resolver::*;
+pub use crate::gateway_execution::gateway_binding_resolver::*;
 pub(crate) use crate::gateway_execution::rib_input_value_resolver::*;
 pub(crate) use crate::gateway_request::request_details::*;
-pub(crate) use gateway_binding_compiled::*;
+pub use gateway_binding_compiled::*;
 use golem_api_grpc::proto::golem::apidefinition::GatewayBindingType;
 use golem_service_base::model::VersionedComponentId;
 use rib::Expr;
@@ -24,7 +24,7 @@ use std::ops::Deref;
 pub(crate) use worker_binding::*;
 pub(crate) use worker_binding_compiled::*;
 
-mod gateway_binding_compiled;
+pub mod gateway_binding_compiled;
 mod static_binding;
 mod worker_binding;
 mod worker_binding_compiled;
