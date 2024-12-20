@@ -23,7 +23,7 @@ export default function NodeMenu({
     data?.type?.includes("empty") ||
     id?.includes("end") ||
     id?.includes("start");
-  const { setSelectedNode, setStepEditorOpenForNode, setTrigger } = useStore();
+  const { setSelectedNode, setTrigger } = useStore();
   const canDelete = checkForDeletion(data);
   return (
     <>
@@ -112,7 +112,6 @@ export default function NodeMenu({
                           id,
                         });
                         setSelectedNode(id);
-                        setStepEditorOpenForNode(id);
                       }}
                       className={`${
                         active ? "bg-slate-200" : "text-gray-900"
@@ -140,7 +139,6 @@ export default function NodeMenu({
                           id,
                         });
                         setSelectedNode(id);
-                        setStepEditorOpenForNode(id);
                       }}
                       disabled={!canDelete}
                       className={`${

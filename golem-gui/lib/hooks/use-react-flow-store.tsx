@@ -8,7 +8,6 @@ import {
   Edge,
 } from "@xyflow/react";
 
-// import { createDefaultNodeV2, createCustomEdgeMeta, processApiFlow} from "../react-flow/utils";
 import { FlowNode, FlowState } from "@/types/react-flow";
 
 export type StoreGet = () => FlowState;
@@ -19,124 +18,11 @@ export type StoreSet = (
     | ((state: FlowState) => FlowState | Partial<FlowState>)
 ) => void;
 
-// function addNodeBetween(
-//   nodeOrEdge: string | null,
-//   step: V2Step,
-//   type: string,
-//   set: StoreSet,
-//   get: StoreGet
-// ) {
-//   if (!nodeOrEdge || !step) return;
-//   let edge = {} as Edge;
-//   if (type === "node") {
-//     edge = get().edges.find((edge) => edge.target === nodeOrEdge) as Edge;
-//   }
-
-//   if (type === "edge") {
-//     edge = get().edges.find((edge) => edge.id === nodeOrEdge) as Edge;
-//   }
-
-//   // eslint-disable-next-line prefer-const
-//   let { source: sourceId, target: targetId } = edge || {};
-//   if (!sourceId || !targetId) return;
-
-//   const nodes = get().nodes;
-
-//   const targetIndex = nodes.findIndex((node) => node.id === targetId);
-//   const sourceIndex = nodes.findIndex((node) => node.id === sourceId);
-//   if (targetIndex == -1) {
-//     return;
-//   }
-
-//   if (sourceId === "trigger_start") {
-//     targetId = "trigger_end";
-//   }
-//   const newNodeId = uuidv4();
-//   const cloneStep = JSON.parse(JSON.stringify(step));
-//   const newStep = { ...cloneStep, id: newNodeId };
-//   const edges = get().edges;
-
-//   // eslint-disable-next-line prefer-const
-//   let { nodes: newNodes, edges: newEdges } = processApiFlow(
-//     [
-//       {
-//         id: sourceId,
-//         type: "temp_node",
-//         name: "temp_node",
-//         componentType: "temp_node",
-//         edgeLabel: edge.label,
-//         edgeColor: edge?.style?.stroke,
-//       },
-//       newStep,
-//       {
-//         id: targetId,
-//         type: "temp_node",
-//         name: "temp_node",
-//         componentType: "temp_node",
-//         edgeNotNeeded: true,
-//       },
-//     ] as V2Step[],
-//     { x: 0, y: 0 },
-//     true
-//   );
-
-//   const finalEdges = [
-//     ...newEdges,
-//     ...(edges.filter(
-//       (edge) => !(edge.source == sourceId && edge.target == targetId)
-//     ) || []),
-//   ];
-
-//   const isNested = !!(
-//     nodes[targetIndex]?.isNested || nodes[sourceIndex]?.isNested
-//   );
-//   newNodes = newNodes.map((node) => ({ ...node, isNested }));
-//   newNodes = [
-//     ...nodes.slice(0, targetIndex),
-//     ...newNodes,
-//     ...nodes.slice(targetIndex),
-//   ];
-//   set({
-//     edges: finalEdges,
-//     nodes: newNodes,
-//     isLayouted: false,
-//     changes: get().changes + 1,
-//   });
-//   if (type == "edge") {
-//     set({
-//       selectedEdge: edges[edges.length - 1]?.id,
-//     });
-//   }
-
-//   if (type === "node") {
-//     set({ selectedNode: nodeOrEdge });
-//   }
-
-//   switch (newNodeId) {
-//     case "interval":
-//     case "manual": {
-//       set({ v2Properties: { ...get().v2Properties, [newNodeId]: "" } });
-//       break;
-//     }
-//     case "alert": {
-//       set({ v2Properties: { ...get().v2Properties, [newNodeId]: {} } });
-//       break;
-//     }
-//     case "incident": {
-//       set({ v2Properties: { ...get().v2Properties, [newNodeId]: {} } });
-//       break;
-//     }
-//   }
-//   //on adding new node. highlight the added node and update the editor
-//   set({selectedNode: newNodeId, stepEditorOpenForNode: newNodeId})
-// }
-
 const useStore = create<FlowState>((set, get) => ({
   nodes: [],
   edges: [],
   selectedNode: null,
   v2Properties: {},
-  openGlobalEditor: true,
   stepEditorOpenForNode: null,
   toolboxConfiguration: {} as Record<string, any>,
   isLayouted: false,
@@ -169,21 +55,15 @@ const useStore = create<FlowState>((set, get) => ({
     edges: Edge[];
   }) => set({ lastSavedChanges: { nodes, edges } }),
   setSelectedEdge: (id) =>
-    set({ selectedEdge: id, selectedNode: null, openGlobalEditor: true }),
+    set({ selectedEdge: id, selectedNode: null }),
   setChanges: (changes: number) => set({ changes: changes }),
   setIsLayouted: (isLayouted) => set({ isLayouted }),
   getEdgeById: (id) => get().edges.find((edge) => edge.id === id),
-  // addNodeBetween: (nodeOrEdge: string | null, step: any, type: string) => {
-  //   addNodeBetween(nodeOrEdge, step, type, set, get);
-  // },
-  setToolBoxConfig: (config) => set({ toolboxConfiguration: config }),
-  setOpneGlobalEditor: (open) => set({ openGlobalEditor: open }),
   updateSelectedNodeData: (key, value) => {
     const currentSelectedNode = get().selectedNode;
     if (currentSelectedNode) {
       const updatedNodes = get().nodes.map((node) => {
         if (node.id === currentSelectedNode) {
-          //properties changes  should not reconstructed the defintion. only recontrreconstructing if there are any structural changes are done on the flow.
           if (value) {
             node.data[key] = value;
           }
@@ -200,26 +80,11 @@ const useStore = create<FlowState>((set, get) => ({
       });
     }
   },
-  setV2Properties: (properties) =>
-    set({ v2Properties: properties, canDeploy: false }),
-  updateV2Properties: (properties) => {
-    const updatedProperties = { ...get().v2Properties, ...properties };
-    set({
-      v2Properties: updatedProperties,
-      changes: get().changes + 1,
-      canDeploy: false,
-    });
-  },
   setSelectedNode: (id) => {
     set({
       selectedNode: id || null,
-      openGlobalEditor: false,
       selectedEdge: null,
     });
-  },
-  setStepEditorOpenForNode: (nodeId) => {
-    set({ openGlobalEditor: false });
-    set({ stepEditorOpenForNode: nodeId });
   },
   onNodesChange: (changes) =>
     set({ nodes: applyNodeChanges(changes, get().nodes) }),
