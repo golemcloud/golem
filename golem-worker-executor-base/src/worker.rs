@@ -1322,7 +1322,7 @@ impl RunningWorker {
 
         let context = Ctx::create(
             OwnedWorkerId::new(&worker_metadata.account_id, &worker_metadata.worker_id),
-            component_metadata,
+            component_metadata.clone(),
             parent.promise_service(),
             parent.worker_service(),
             parent.worker_enumeration_service(),
@@ -1375,13 +1375,10 @@ impl RunningWorker {
 
         store.limiter_async(|ctx| ctx.resource_limiter());
 
-        // TODO MOVE SOMEWHERE ELSE
         let mut linker = (*parent.linker()).clone(); // fresh linker
-        store.data_mut().link(&engine, &mut linker, &component)?;
-
-        // TODO: check parent.linker() is not affected
-
-        // TODO ^^^
+        store
+            .data_mut()
+            .link(&engine, &mut linker, &component, &component_metadata)?;
 
         let instance_pre = linker.instantiate_pre(&component).map_err(|e| {
             GolemError::worker_creation_failed(

@@ -50,8 +50,8 @@ use golem_common::model::{
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::Value;
-use wasmtime::component::{Component, Linker, Type, Val};
-use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync, StoreContextMut};
+use wasmtime::component::{Component, Linker};
+use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 use wasmtime_wasi::WasiView;
 use wasmtime_wasi_http::WasiHttpView;
 
@@ -424,17 +424,6 @@ pub trait DynamicLinking<Ctx: WorkerCtx> {
         engine: &Engine,
         linker: &mut Linker<Ctx>,
         component: &Component,
+        component_metadata: &ComponentMetadata,
     ) -> anyhow::Result<()>;
-
-    async fn dynamic_function_call(
-        store: impl AsContextMut<Data = Ctx> + Send,
-        interface_name: &str,
-        function_name: &str,
-        params: &[Val],
-        param_types: &[Type],
-        results: &mut [Val],
-        result_types: &[Type],
-    ) -> anyhow::Result<()>;
-
-    async fn drop_linked_resource(store: StoreContextMut<'_, Ctx>, rep: u32) -> anyhow::Result<()>;
 }

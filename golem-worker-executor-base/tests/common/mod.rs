@@ -96,8 +96,8 @@ use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
 use golem_worker_executor_base::worker::{RetryDecision, Worker};
 use tonic::transport::Channel;
 use tracing::{debug, info};
-use wasmtime::component::{Component, Instance, Linker, Resource, ResourceAny, Type, Val};
-use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync, StoreContextMut};
+use wasmtime::component::{Component, Instance, Linker, Resource, ResourceAny};
+use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 use wasmtime_wasi::WasiView;
 use wasmtime_wasi_http::WasiHttpView;
 
@@ -863,36 +863,10 @@ impl DynamicLinking<TestWorkerCtx> for TestWorkerCtx {
         engine: &Engine,
         linker: &mut Linker<TestWorkerCtx>,
         component: &Component,
+        component_metadata: &ComponentMetadata,
     ) -> anyhow::Result<()> {
-        self.durable_ctx.link(engine, linker, component)
-    }
-
-    async fn dynamic_function_call(
-        store: impl AsContextMut<Data = TestWorkerCtx> + Send,
-        interface_name: &str,
-        function_name: &str,
-        params: &[Val],
-        param_types: &[Type],
-        results: &mut [Val],
-        result_types: &[Type],
-    ) -> anyhow::Result<()> {
-        DurableWorkerCtx::<TestWorkerCtx>::dynamic_function_call(
-            store,
-            interface_name,
-            function_name,
-            params,
-            param_types,
-            results,
-            result_types,
-        )
-        .await
-    }
-
-    async fn drop_linked_resource(
-        store: StoreContextMut<'_, TestWorkerCtx>,
-        rep: u32,
-    ) -> anyhow::Result<()> {
-        DurableWorkerCtx::<TestWorkerCtx>::drop_linked_resource(store, rep).await
+        self.durable_ctx
+            .link(engine, linker, component, component_metadata)
     }
 }
 

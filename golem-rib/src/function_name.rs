@@ -109,6 +109,11 @@ pub enum ParsedFunctionSite {
 }
 
 impl ParsedFunctionSite {
+    pub fn parse(name: impl AsRef<str>) -> Result<Self, String> {
+        ParsedFunctionName::parse(format!("{}.{{x}}", name.as_ref()))
+            .map(|ParsedFunctionName { site, .. }| site)
+    }
+
     pub fn interface_name(&self) -> Option<String> {
         match self {
             Self::Global => None,
