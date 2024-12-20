@@ -3,11 +3,6 @@
     "version": "1.0.0",
     "description": "",
     "main": "dist/index.js",
-    "scripts": {
-        "gen:ts": "jco stubgen wit/ -o src/generated/",
-        "build": "rollup -c",
-        "componentize": "jco componentize -w wit -o dist/caller-ts.wasm dist/index.js"
-    },
     "devDependencies": {
         "@golemcloud/componentize-js": "0.10.5-golem.3",
         "@golemcloud/jco": "1.4.4-golem.1",

@@ -176,7 +176,7 @@ async fn counter_resource_test_1(
     let executor = start(deps, &context).await.unwrap();
 
     let counters_component_id = executor.store_component("counters").await;
-    let caller_component_id = executor.store_component("caller_composed").await;
+    let caller_component_id = executor.store_component("caller").await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -214,7 +214,7 @@ async fn counter_resource_test_2(
     let executor = start(deps, &context).await.unwrap();
 
     let counters_component_id = executor.store_component("counters").await;
-    let caller_component_id = executor.store_component("caller_composed").await;
+    let caller_component_id = executor.store_component("caller").await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -249,7 +249,7 @@ async fn counter_resource_test_2_with_restart(
     let executor = start(deps, &context).await.unwrap();
 
     let counters_component_id = executor.store_component("counters").await;
-    let caller_component_id = executor.store_component("caller_composed").await;
+    let caller_component_id = executor.store_component("caller").await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -288,7 +288,7 @@ async fn counter_resource_test_3(
     let executor = start(deps, &context).await.unwrap();
 
     let counters_component_id = executor.store_component("counters").await;
-    let caller_component_id = executor.store_component("caller_composed").await;
+    let caller_component_id = executor.store_component("caller").await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -323,7 +323,7 @@ async fn counter_resource_test_3_with_restart(
     let executor = start(deps, &context).await.unwrap();
 
     let counters_component_id = executor.store_component("counters").await;
-    let caller_component_id = executor.store_component("caller_composed").await;
+    let caller_component_id = executor.store_component("caller").await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -362,7 +362,7 @@ async fn context_inheritance(
     let executor = start(deps, &context).await.unwrap();
 
     let counters_component_id = executor.store_component("counters").await;
-    let caller_component_id = executor.store_component("caller_composed").await;
+    let caller_component_id = executor.store_component("caller").await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -448,7 +448,7 @@ async fn counter_resource_test_5(
     let executor = start(deps, &context).await.unwrap();
 
     let counters_component_id = executor.store_component("counters").await;
-    let caller_component_id = executor.store_component("caller_composed").await;
+    let caller_component_id = executor.store_component("caller").await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -489,7 +489,7 @@ async fn counter_resource_test_5_with_restart(
 
     // using store_unique_component to avoid collision with counter_resource_test_5
     let counters_component_id = executor.store_unique_component("counters").await;
-    let caller_component_id = executor.store_unique_component("caller_composed").await;
+    let caller_component_id = executor.store_unique_component("caller").await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -546,7 +546,7 @@ async fn wasm_rpc_bug_32_test(
     let executor = start(deps, &context).await.unwrap();
 
     let counters_component_id = executor.store_component("counters").await;
-    let caller_component_id = executor.store_component("caller_composed").await;
+    let caller_component_id = executor.store_component("caller").await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -696,7 +696,7 @@ async fn ephemeral_worker_invocation_via_rpc1(
     let executor = start(deps, &context).await.unwrap();
 
     let ephemeral_component_id = executor.store_ephemeral_component("ephemeral").await;
-    let caller_component_id = executor.store_component("caller_composed").await;
+    let caller_component_id = executor.store_component("caller").await;
 
     let mut env = HashMap::new();
     env.insert(

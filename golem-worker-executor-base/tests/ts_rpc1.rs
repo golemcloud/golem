@@ -25,7 +25,7 @@ inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
 
 static COUNTER_COMPONENT_NAME: &str = "counter-ts";
-static CALLER_COMPONENT_NAME: &str = "caller-composed-ts";
+static CALLER_COMPONENT_NAME: &str = "caller-ts";
 
 #[test]
 #[tracing::instrument]
