@@ -28,7 +28,7 @@ use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use bigdecimal::BigDecimal;
 use chrono::{Datelike, Offset, Timelike};
-use sqlx::types::BitVec;
+use bit_vec::BitVec;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::ops::{Bound, Deref};
 use std::str::FromStr;
@@ -1047,7 +1047,7 @@ fn to_db_value(
             postgres_types::DbValue::Cidr(v.into()),
         )),
         DbValue::Macaddr(v) => Ok(DbValueWithResourceRep::new_resource_none(
-            postgres_types::DbValue::Macaddr(sqlx::types::mac_address::MacAddress::new(
+            postgres_types::DbValue::Macaddr(mac_address::MacAddress::new(
                 v.octets.into(),
             )),
         )),
@@ -1706,8 +1706,8 @@ pub mod tests {
     use bigdecimal::BigDecimal;
     use chrono::Offset;
     use serde_json::json;
-    use sqlx::types::mac_address::MacAddress;
-    use sqlx::types::BitVec;
+    use mac_address::MacAddress;
+    use bit_vec::BitVec;
     use std::collections::Bound;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
     use test_r::test;

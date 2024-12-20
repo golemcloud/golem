@@ -22,7 +22,7 @@ use crate::services::rdbms::{DbResultSet, DbRow, Error, Rdbms, RdbmsPoolKey};
 use async_trait::async_trait;
 use bigdecimal::BigDecimal;
 use futures_util::stream::BoxStream;
-use sqlx::types::BitVec;
+use bit_vec::BitVec;
 use sqlx::{Column, ConnectOptions, Pool, Row, TypeInfo};
 use std::sync::Arc;
 

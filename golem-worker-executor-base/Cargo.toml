@@ -34,7 +34,8 @@ aws-config = { workspace = true }
 aws-sdk-s3 = { workspace = true }
 bincode = { workspace = true }
 bitflags = "2.6.0"
-bigdecimal = "0.4"
+bigdecimal = { workspace = true }
+bit-vec = "0.6"
 bytes = { workspace = true }
 cap-fs-ext = "3.4.2"                                # keep in sync with wasmtime
 cap-std = { workspace = true }
@@ -63,6 +64,7 @@ iso8601-timestamp = { workspace = true }
 itertools = { workspace = true }
 lazy_static = { workspace = true }
 log = "0.4.22"
+mac_address = "1.1.7"
 md5 = "0.7.0"
 metrohash = "1.0.7"
 nonempty-collections = "0.2.9"
@@ -79,7 +81,6 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-rustls = { workspace = true }
 tokio-stream = { workspace = true }
-tokio-postgres = { workspace = true, features = ["with-chrono-0_4", "with-uuid-1"] }
 tokio-util = { workspace = true }
 tonic = { workspace = true }
 tonic-health = { workspace = true }
@@ -93,7 +94,6 @@ wasmtime-wasi-http = { workspace = true }
 windows-sys = "0.59.0"
 zstd = "0.13"
 sqlx = { workspace = true }
-regex = { workspace = true }
 
 [dev-dependencies]
 golem-test-framework = { path = "../golem-test-framework", version = "0.0.0" }

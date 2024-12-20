@@ -14,8 +14,8 @@
 
 use bigdecimal::BigDecimal;
 use itertools::Itertools;
-use sqlx::types::mac_address::MacAddress;
-use sqlx::types::BitVec;
+use mac_address::MacAddress;
+use bit_vec::BitVec;
 use std::fmt::{Debug, Display};
 use std::net::IpAddr;
 use std::ops::Bound;

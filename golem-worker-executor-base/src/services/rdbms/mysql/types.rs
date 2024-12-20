@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use bigdecimal::BigDecimal;
-use sqlx::types::BitVec;
+use bit_vec::BitVec;
 use std::fmt::Display;
 
 #[derive(Clone, Debug, Eq, PartialEq)]

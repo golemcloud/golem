@@ -24,7 +24,7 @@ use crate::services::rdbms::RdbmsPoolKey;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use chrono::{Datelike, Timelike};
-use sqlx::types::BitVec;
+use bit_vec::BitVec;
 use std::ops::Deref;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -534,7 +534,7 @@ pub mod tests {
     use assert2::check;
     use bigdecimal::BigDecimal;
     use serde_json::json;
-    use sqlx::types::BitVec;
+    use bit_vec::BitVec;
     use std::str::FromStr;
     use test_r::test;
     use uuid::Uuid;

@@ -4397,7 +4397,6 @@ dependencies = [
  "testcontainers",
  "testcontainers-modules",
  "tokio",
- "tokio-postgres",
  "tokio-stream",
  "tonic",
  "tracing",
@@ -4560,6 +4559,7 @@ dependencies = [
  "axum",
  "bigdecimal",
  "bincode",
+ "bit-vec 0.6.3",
  "bitflags 2.6.0",
  "bytes 1.9.0",
  "cap-fs-ext",
@@ -4598,6 +4598,7 @@ dependencies = [
  "itertools 0.13.0",
  "lazy_static 1.5.0",
  "log 0.4.22",
+ "mac_address",
  "md5",
  "metrohash",
  "nonempty-collections",
@@ -4607,7 +4608,6 @@ dependencies = [
  "prost 0.13.4",
  "rand",
  "redis",
- "regex",
  "ringbuf",
  "rustls 0.23.20",
  "serde 1.0.216",
@@ -4620,7 +4620,6 @@ dependencies = [
  "testcontainers-modules",
  "thiserror 2.0.8",
  "tokio",
- "tokio-postgres",
  "tokio-rustls 0.26.1",
  "tokio-stream",
  "tokio-util",
@@ -7616,10 +7615,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f66ea23a2d0e5734297357705193335e0a957696f34bed2f2faefacb2fec336f"
 dependencies = [
  "bytes 1.9.0",
- "chrono",
  "fallible-iterator 0.2.0",
  "postgres-protocol",
- "uuid",
 ]
 
 [[package]]
