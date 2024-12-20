@@ -756,7 +756,7 @@ fn extract_exports_package(
             });
 
             // Insert named imports for extracted inline interfaces
-            for (_, interface) in inline_interface_exports {
+            for interface in inline_interface_exports.values_mut() {
                 world.named_interface_export(interface.name().clone());
             }
 
