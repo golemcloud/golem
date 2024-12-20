@@ -21,7 +21,7 @@ templates:
         linkedWasm: ../target/golem-components/debug/{{ component_name | to_snake_case }}.wasm
         customCommands:
           copy:
-          - command: cp ../target/golem-components/debug/{{ component_name | to_snake_case }}.wasm ../..
+          - command: cp ../target/golem-components/debug/{{ component_name | to_snake_case }}.wasm ../../..
         clean:
         - src/bindings.rs
       release:
@@ -36,6 +36,9 @@ templates:
         generatedWit: wit-generated
         componentWasm: ../target/wasm32-wasi/release/{{ component_name | to_snake_case }}.wasm
         linkedWasm: ../target/golem-components/release/{{ component_name | to_snake_case }}.wasm
+        customCommands:
+          copy:
+          - command: cp ../target/golem-components/release/{{ component_name | to_snake_case }}.wasm ../../..
         clean:
         - src/bindings.rs
     defaultProfile: debug
