@@ -15,8 +15,6 @@ import RouteIcon from "@mui/icons-material/Route";
 export const createDefaultNodeV2 = (
   step: V2Step | NodeData,
   nodeId: string,
-  nextNodeId?: string | null,
-  prevNodeId?: string | null,
   isNested?: boolean
 ): FlowNode =>
   ({
@@ -29,8 +27,6 @@ export const createDefaultNodeV2 = (
       ...step,
     },
     isDraggable: false,
-    nextNodeId,
-    prevNodeId,
     isNested: !!isNested,
   } as FlowNode);
 
@@ -76,52 +72,6 @@ export function createCustomEdgeMeta(
 
   return edges;
 }
-export function handleDefaultNode(
-  step: V2Step,
-  nextNodeId: string,
-  prevNodeId: string,
-  nodeId: string,
-  isNested?: boolean
-) {
-  const nodes = [];
-  let edges = [] as Edge[];
-  const newNode = createDefaultNodeV2(
-    step,
-    nodeId,
-    nextNodeId,
-    prevNodeId,
-    isNested
-  );
-  if (step.type !== "temp_node") {
-    nodes.push(newNode);
-  }
-  // Handle edge for default nodes
-  if (newNode.id !== "end" && !step.edgeNotNeeded) {
-    edges = [
-      ...edges,
-      ...createCustomEdgeMeta(
-        newNode.id,
-        step.edgeTarget || nextNodeId,
-        step.edgeLabel,
-        step.edgeColor
-      ),
-    ];
-
-    edges = [
-      ...edges,
-      ...(nextNodeId == ""
-        ? createCustomEdgeMeta(
-            newNode.id,
-            step.edgeTarget || nextNodeId,
-            step.edgeLabel,
-            step.edgeColor
-          )
-        : []),
-    ];
-  }
-  return { nodes, edges };
-}
-
 export const getTempNodes = (id: string) => {
   return {
     type: "temp_node",
@@ -156,6 +106,8 @@ export const processApiFlow = (
 ) => {
   let newNodes: FlowNode[] = [];
   let newEdges: Edge[] = [];
+  const firstApiDefintion = apiDefinitons[0];
+
   if (isFirstRender) {
     const startStep = {
       type: "start",
@@ -164,100 +116,52 @@ export const processApiFlow = (
       isLayouted: false,
       notClickable: true,
     } as BasicStep;
-    const firstApiDefintion = apiDefinitons[0];
-    const { nodes, edges } = handleDefaultNode(
-      startStep,
-      firstApiDefintion.id,
-      "",
-      "start"
-    );
     newNodes = [
-      ...newNodes,
-      ...nodes,
+      createDefaultNodeV2(startStep, "start"),
       createDefaultNodeV2(
         {
           type: "api_start",
           id: firstApiDefintion.id,
           name: firstApiDefintion.id,
           isLayouted: false,
-          edgeNotNeeded: true,
           notClickable: true,
         } as BasicStep,
         firstApiDefintion.id
       ),
     ];
-    newEdges = [...newEdges, ...edges];
+    newEdges = [
+      ...createCustomEdgeMeta("_", "start"),
+      ...createCustomEdgeMeta("start", firstApiDefintion.id)
+    ];
   }
-  const firstApiDefintion = apiDefinitons[0];
   apiDefinitons?.forEach((apiDefiniton: ApiStep) => {
     const { routes, ...nodeData } = apiDefiniton;
     const nodeId = `${apiDefiniton.id}__${apiDefiniton.version}__api`;
-    const nextNodeId = routes[0]
-      ? `${nodeId}__${routes[0]?.path}__${routes[0]?.method}__route`
-      : "";
-    const { nodes, edges } = handleDefaultNode(
-      apiDefiniton,
-      nextNodeId,
-      firstApiDefintion.id,
-      nodeId
-    );
-
-    console.log("apiDefiniton.id", apiDefiniton.id);
-    console.log("nodes, edges", nodes, edges);
-
-    newNodes = [...newNodes, ...nodes];
     newEdges = [
-      ...newEdges,
-      ...edges,
-      ...createCustomEdgeMeta(firstApiDefintion.id, nodeId),
-    ];
-    routes.forEach((route: ApiRoute) => {
+      ...newEdges, 
+      ...createCustomEdgeMeta(firstApiDefintion.id, nodeId)]
+    newNodes.push(createDefaultNodeV2(apiDefiniton, nodeId));
+    routes.forEach((route, index)=>{
+      const id = `${nodeId}__${route?.path}__${route?.method}__route`;
       const routeData = {
         apiInfo: { ...nodeData } as Omit<ApiDefinition, "routes">,
         ...route,
         name: route.path,
-        type: "route"
+        type: "route",
       } as RouteStep;
-      const routeId = `${nodeId}__${route?.path}__${route?.method}__route`;
-      const tempNodes = [
-        getTempNodes(nodeId),
-        routeData,
-        { ...getRouteEndNode(nodeId), type: "temp_node", edgeNotNeeded: true },
-      ];
-
-      tempNodes.forEach((node, index) => {
-        const previousId = tempNodes[index - 1]?.id;
-        const nextId = tempNodes[index + 1]?.id || "";
-        const id = index === 1 ? routeId : node.id;
-        const { nodes, edges } = handleDefaultNode(
-          node,
-          nextId,
-          previousId,
-          id
-        );
-        newNodes = [...newNodes, ...nodes];
-        newEdges = [...newEdges, ...edges];
-      });
-    });
+      newNodes.push(createDefaultNodeV2(routeData, id));
+      newEdges = [
+        ...newEdges, 
+        ...createCustomEdgeMeta(nodeId, id)]
+    })
 
     if (routes.length === 0) {
-      const tempNodes = [
-        getTempNodes(nodeId),
-        getRouteEmptyNode(nodeId),
-        { ...getRouteEndNode(nodeId), type: "temp_node", edgeNotNeeded: true },
-      ];
-      tempNodes.forEach((node, index) => {
-        const previousId = index === 0 ? nodeId : tempNodes[index - 1]?.id;
-        const nextId = tempNodes[index + 1]?.id || "";
-        const { nodes, edges } = handleDefaultNode(
-          node,
-          nextId,
-          previousId,
-          node.id
-        );
-        newNodes = [...newNodes, ...nodes];
-        newEdges = [...newEdges, ...edges];
-      });
+      const emptyRoute = getRouteEmptyNode(nodeId);
+      newNodes.push(createDefaultNodeV2({...emptyRoute, id: nodeId}, emptyRoute.id));
+      newEdges = [
+        ...newEdges, 
+        ...createCustomEdgeMeta(nodeId, emptyRoute.id)]
+
     }
   });
   if (isFirstRender) {
@@ -290,7 +194,7 @@ export function getVersion(data: FlowNode["data"]) {
 }
 export function getStatus(data: FlowNode["data"]) {
   switch(data.type) {
-    case "api": return data.draft ? "Published" : "Draft"
+    case "api": return data.draft ? "Draft" : "Published";
     default: return ""
   }
 

@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useState } from "react";
 import { useForm, Controller } from "react-hook-form";
 import {
   Box,
@@ -15,10 +15,32 @@ import {
 } from "@mui/material";
 import useSWR from "swr";
 import { fetcher } from "@/lib/utils";
-import { Component } from "@/types/api";
+import { ApiDefinition, Component } from "@/types/api";
 import { useParams, useSearchParams } from "next/navigation";
+import { Loader } from "lucide-react";
+import { getErrorMessage } from "../lib/utils";
 
-const NewRouteForm = ({apiId, version, isModal}:{apiId:string, version?:string, onCreation?:()=>void, isModal?:boolean}) => {
+type FormData = {
+  path: "";
+  workerName: "";
+  response: "";
+  method: "Get";
+  component: "";
+  version: "";
+};
+
+const NewRouteForm = ({
+  apiId,
+  version,
+  isModal,
+  isExperimental,
+}: {
+  apiId: string;
+  version?: string;
+  onCreation?: () => void;
+  isModal?: boolean;
+  isExperimental?: boolean;
+}) => {
   const { control, handleSubmit, reset, watch } = useForm({
     defaultValues: {
       apiName: "",
@@ -33,20 +55,77 @@ const NewRouteForm = ({apiId, version, isModal}:{apiId:string, version?:string, 
   });
 
   const component = watch("component");
+  const [error, setError] = useState<string | null>(null);
+  const { data, isLoading } = useSWR("?path=components", fetcher);
+  const { data: apiData, isLoading: apiDefinitonLoading } = useSWR(
+    `?path=api/definitions?api-definition-id=${apiId}`,
+    fetcher
+  );
+  const apiDefinitions = (
+    Array.isArray(apiData?.data || []) ? apiData?.data || [] : [apiData?.data]
+  ) as ApiDefinition[];
+  const apiDefinition =
+    apiDefinitions.find((api) => api.version === version) ||
+    apiDefinitions[apiDefinitions.length - 1] ||
+    null;
+  const components = (data?.data || null) as Component[];
 
-  //TODO: have to integrate the components data to route form.
-  const { data, isLoading } = useSWR("/v1/components", fetcher);
+  if (apiDefinitonLoading || isLoading) {
+    return <Loader />;
+  }
 
-  const onSubmit = async (formData: unknown) => {
+  const versionNotFound =
+    !apiDefinitonLoading && !apiDefinition
+      ? "Api defintion not found. please check apiId and version are valid"
+      : "";
+
+  const onSubmit = async (formData: any) => {
+    if (isExperimental) {
+      return;
+    }
     try {
-    //   fetcher(`?path=api/definitions/${apiId}/${version}`, {method: "POST", headers:{
-    //     "content-type": "application/json"
-    //   },
-    //   body: JSON.stringify({
-    //     routes: []
-    //   })
-    // })
-      console.log("Route created successfully:", formData);
+      const newRoute = {
+        path: formData.path,
+        method: formData.method,
+        security: null,
+        binding: {
+          bindingType: "default",
+          componentId: {
+            componentId: formData.component,
+            version: formData.version,
+          },
+          corsPreflight: null,
+          idempotencyKey: null,
+          idempotencyKeyInput: null,
+          response: formData.response,
+          responseMappingInput: {
+            types: {},
+          },
+          responseMappingOutput: {},
+          workername: formData.workerName,
+          workerNameInput: {
+            types: {},
+          },
+        },
+      };
+      const response = await fetcher(
+        `?path=api/definitions/${apiId}/${version}`,
+        {
+          method: "PUT",
+          headers: {
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            ...apiDefinition,
+            routes: [...(apiDefinition?.routes || []), newRoute],
+          }),
+        }
+      );
+
+      if (response.status !== 200) {
+        return setError(getErrorMessage(response.data));
+      }
+      console.log("Route created successfully:", response.data);
     } catch (error) {
       console.error("Error creating route:", error);
     }
@@ -60,6 +139,17 @@ const NewRouteForm = ({apiId, version, isModal}:{apiId:string, version?:string, 
         padding: 10,
       }}
     >
+      {isExperimental && (
+        <Typography
+          variant="h5"
+          fontWeight="bold"
+          mb={2}
+          className="text-red-500 text-center"
+        >
+          Experimental. Coming soon!
+        </Typography>
+      )}
+
       {/* Title */}
       <Box className="flex">
         <Typography variant="h5" gutterBottom>
@@ -151,9 +241,9 @@ const NewRouteForm = ({apiId, version, isModal}:{apiId:string, version?:string, 
                   {...field}
                   variant="outlined"
                   label="Component"
-                  disabled={isLoading || data?.data?.length == 0}
+                  disabled={isLoading || components?.length == 0}
                 >
-                  {data?.data?.map((component: Component) => (
+                  {components?.map((component: Component) => (
                     <MenuItem
                       key={component?.versionedComponentId?.componentId}
                       value={component?.versionedComponentId?.componentId}
@@ -176,23 +266,42 @@ const NewRouteForm = ({apiId, version, isModal}:{apiId:string, version?:string, 
                   {...field}
                   variant="outlined"
                   label="Version"
-                  disabled={isLoading || data?.data?.length == 0}
+                  disabled={isLoading || components?.length == 0}
                 >
-                  {!isLoading && data?.data?.map((comp: Component) => {
-                    return comp?.versionedComponentId?.componentId ==
-                      component ? (
-                      <MenuItem
-                        key={comp?.versionedComponentId?.componentId}
-                        value={comp?.versionedComponentId?.componentId}
-                      >
-                        {comp.componentName}
-                      </MenuItem>
-                    ) : null;
-                  })}
+                  {!isLoading &&
+                    components?.map((comp: Component) => {
+                      return comp?.versionedComponentId?.componentId ==
+                        component ? (
+                        <MenuItem
+                          key={`${comp?.versionedComponentId?.componentId}__${comp.versionedComponentId.version}`}
+                          value={comp.versionedComponentId.version}
+                        >
+                          {comp.versionedComponentId.version}
+                        </MenuItem>
+                      ) : null;
+                    })}
                 </Select>
               )}
             />
           </FormControl>
+        </Box>
+        <Box sx={{ marginTop: 4 }}>
+          <Typography variant="subtitle1" gutterBottom>
+            Worker Name
+          </Typography>
+          <Controller
+            name="workerName"
+            control={control}
+            render={({ field }) => (
+              <TextField
+                {...field}
+                fullWidth
+                variant="outlined"
+                label="Worker Name"
+                placeholder="Worker name in Rib expression"
+              />
+            )}
+          />
         </Box>
       </Box>
 
@@ -210,7 +319,7 @@ const NewRouteForm = ({apiId, version, isModal}:{apiId:string, version?:string, 
               fullWidth
               variant="outlined"
               label="Response"
-              placeholder="Enter response"
+              placeholder="Enter response in Rib expression"
               multiline
               rows={3}
               sx={{
@@ -220,7 +329,11 @@ const NewRouteForm = ({apiId, version, isModal}:{apiId:string, version?:string, 
           )}
         />
       </Box>
-
+      {(versionNotFound || error) && (
+        <Typography className="text-red-500 text-sm">
+          {versionNotFound || error}
+        </Typography>
+      )}
       {/* Buttons */}
       <Box
         sx={{ marginTop: 4, display: "flex", justifyContent: "space-between" }}
@@ -237,6 +350,7 @@ const NewRouteForm = ({apiId, version, isModal}:{apiId:string, version?:string, 
           variant="contained"
           color="primary"
           onClick={handleSubmit(onSubmit)}
+          disabled={!!versionNotFound}
         >
           Create Route
         </Button>
