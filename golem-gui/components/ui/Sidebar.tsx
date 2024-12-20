@@ -10,10 +10,18 @@ import PlayForWorkIcon from '@mui/icons-material/PlayForWork';
 
 
 type SidebarProps = {
-  apiId: string;
+  id: string;
+  navigationLinks:NavigationLinks[],
+  variant:string;
 };
 
-const Sidebar = ({apiId}:SidebarProps) => {
+type NavigationLinks = {
+  name: string;
+  href: string;
+  icon: React.ReactNode;
+};
+
+const Sidebar = ({ id, navigationLinks, variant }: SidebarProps) => {
 
   const pathname = usePathname();
   const navigationLinks = [
@@ -84,7 +92,8 @@ const Sidebar = ({apiId}:SidebarProps) => {
         Routes
       </Typography>
 
-      <Link href={`/apis/${apiId}/new-route`}>
+      {variant==="apis" && <Link href={`/apis/${id}/new-route`}>
+       &&
         <Button
         variant="outlined"
         sx={{
@@ -99,7 +108,7 @@ const Sidebar = ({apiId}:SidebarProps) => {
         Add
         < Add className="ml-2" />
         </Button>
-       </Link>
+      </Link>}
     </Box>
   );
 };
