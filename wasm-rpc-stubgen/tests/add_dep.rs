@@ -147,13 +147,13 @@ fn many_ways_to_export_no_collision() {
     assert_has_wasm_rpc_wit_deps(&dest_wit_root);
 
     assert_has_same_wit_package(
-        &PackageName::new("test", "exports-stub", None),
+        &PackageName::new("test", "exports-client", None),
         &dest_wit_root,
         &stub_wit_root,
     );
 
     assert_has_same_wit_package(
-        &PackageName::new("test", "exports-interface", None),
+        &PackageName::new("test", "exports-exports", None),
         source_dir.path(),
         &dest_wit_root,
     );
