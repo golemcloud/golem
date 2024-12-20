@@ -1,4 +1,4 @@
-# Steps to compile
+# Steps to build and update stored components
 
 ```shell
 golem-cli app -b release build
