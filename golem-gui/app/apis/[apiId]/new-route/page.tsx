@@ -19,9 +19,8 @@ import { Component } from "@/types/api";
 import { useParams, useSearchParams } from "next/navigation";
 import NewRouteForm from "@/components/new-route";
 
-const Page = () => {
+export default function Page() {
   const {apiId} =useParams<{apiId:string}>()
-  return <NewRouteForm apiId={apiId} />
+  const searchParams = useSearchParams(); 
+  return <NewRouteForm apiId={apiId} version={searchParams?.get("version") || ""}/>
 }
-
-Page
