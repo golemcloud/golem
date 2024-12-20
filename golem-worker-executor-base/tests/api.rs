@@ -2290,7 +2290,11 @@ async fn counter_resource_test_1(
         .await;
 
     let result2 = executor
-        .invoke_and_await(&worker_id, "rpc:counters-exports/api.{get-all-dropped}", vec![])
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters-exports/api.{get-all-dropped}",
+            vec![],
+        )
         .await;
 
     let (metadata2, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
@@ -2420,7 +2424,11 @@ async fn counter_resource_test_2(
         .await;
 
     let result3 = executor
-        .invoke_and_await(&worker_id, "rpc:counters-exports/api.{get-all-dropped}", vec![])
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters-exports/api.{get-all-dropped}",
+            vec![],
+        )
         .await;
 
     let (metadata2, _) = executor.get_worker_metadata(&worker_id).await.unwrap();

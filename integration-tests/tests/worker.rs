@@ -255,7 +255,11 @@ async fn counter_resource_test_1(deps: &EnvBasedTestDependencies, _tracing: &Tra
         .await;
 
     let result2 = deps
-        .invoke_and_await(&worker_id, "rpc:counters-exports/api.{get-all-dropped}", vec![])
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters-exports/api.{get-all-dropped}",
+            vec![],
+        )
         .await;
 
     let (metadata2, _) = deps.get_worker_metadata(&worker_id).await.unwrap();
@@ -399,7 +403,11 @@ async fn counter_resource_test_1_json(deps: &EnvBasedTestDependencies, _tracing:
         .await;
 
     let result2 = deps
-        .invoke_and_await_json(&worker_id, "rpc:counters-exports/api.{get-all-dropped}", vec![])
+        .invoke_and_await_json(
+            &worker_id,
+            "rpc:counters-exports/api.{get-all-dropped}",
+            vec![],
+        )
         .await;
 
     let (metadata2, _) = deps.get_worker_metadata(&worker_id).await.unwrap();
@@ -554,7 +562,11 @@ async fn counter_resource_test_2(deps: &EnvBasedTestDependencies, _tracing: &Tra
         .await;
 
     let result3 = deps
-        .invoke_and_await(&worker_id, "rpc:counters-exports/api.{get-all-dropped}", vec![])
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters-exports/api.{get-all-dropped}",
+            vec![],
+        )
         .await;
 
     check!(result1 == Ok(vec![Value::U64(5)]));
@@ -642,7 +654,11 @@ async fn counter_resource_test_2_json(deps: &EnvBasedTestDependencies, _tracing:
         .await;
 
     let result3 = deps
-        .invoke_and_await_json(&worker_id, "rpc:counters-exports/api.{get-all-dropped}", vec![])
+        .invoke_and_await_json(
+            &worker_id,
+            "rpc:counters-exports/api.{get-all-dropped}",
+            vec![],
+        )
         .await;
 
     check!(
