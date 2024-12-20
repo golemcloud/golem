@@ -25,9 +25,3 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         self.as_wasi_view().get_stderr()
     }
 }
-
-impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {
-    fn get_stderr(&mut self) -> anyhow::Result<Resource<OutputStream>> {
-        (*self).get_stderr()
-    }
-}

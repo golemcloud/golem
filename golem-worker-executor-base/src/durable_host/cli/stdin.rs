@@ -25,9 +25,3 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         self.as_wasi_view().get_stdin()
     }
 }
-
-impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {
-    fn get_stdin(&mut self) -> anyhow::Result<Resource<InputStream>> {
-        (*self).get_stdin()
-    }
-}

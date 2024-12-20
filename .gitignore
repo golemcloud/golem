@@ -23,4 +23,3 @@ golem-client/*
 logs
 data
 .DS_Store
-*.sln
