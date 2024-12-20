@@ -16,11 +16,10 @@ import GridViewIcon from "@mui/icons-material/GridView";
 import ListIcon from "@mui/icons-material/List";
 import CreateComponentForm from "@/components/new-component"
 import WidgetsIcon from '@mui/icons-material/Widgets';
-import useSWR from "swr";
-import { fetcher } from "@/lib/utils";
 import { Card, CardContent } from "@mui/material";
 import { Component } from "@/types/api";
 import { useRouter } from "next/navigation"; // If using `pages`
+import { useComponents } from "@/lib/hooks/useComponents";
 
 
 const ComponentsPage = () => {
@@ -30,7 +29,7 @@ const ComponentsPage = () => {
   const handleClose = () => setOpen(false);
   const router = useRouter();
 
-  const { data: componentData, isLoading } = useSWR("?path=components", fetcher);
+  const { data: componentData, isLoading } = useComponents();
   const components = (componentData?.data || []) as Component[];
 
 

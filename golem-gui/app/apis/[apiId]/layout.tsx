@@ -3,6 +3,7 @@
 import Sidebar from "@/components/ui/Sidebar";
 import { useParams } from "next/navigation";
 import { Home, Settings, RocketLaunch } from "@mui/icons-material";
+import PlayForWorkIcon from '@mui/icons-material/PlayForWork';
 
 
 export default function APISLayout({
@@ -13,11 +14,13 @@ export default function APISLayout({
 
   const { apiId } = useParams<{apiId:string}>();
 
-   const navigationLinks = [
+  const navigationLinks = [
     { name: "Overview", href: `/apis/${apiId}/overview`, icon: <Home fontSize="small" /> },
     { name: "Settings", href: `/apis/${apiId}/settings`, icon: <Settings fontSize="small" /> },
     { name: "Deployments", href: `/apis/${apiId}/deployments`, icon: <RocketLaunch fontSize="small" /> },
+    { name: "Playground", href: `/apis/${apiId}/playground`, icon: <PlayForWorkIcon fontSize="small" /> },
   ];
+
 
   return (
     

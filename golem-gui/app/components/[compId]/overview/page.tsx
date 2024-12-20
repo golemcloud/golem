@@ -99,14 +99,8 @@ const Overview = () => {
 
       {/* Create Worker Modal */}
       <Dialog open={isOpen} onClose={() => setIsOpen(false)} fullWidth maxWidth="sm">
-        <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: 2 }}>
-          <Typography variant="h6">Create Worker</Typography>
-          <IconButton onClick={() => setIsOpen(false)}>
-            <CloseIcon />
-          </IconButton>
-        </Box>
         <DialogContent>
-          <CreateWorker />
+          <CreateWorker  />
         </DialogContent>
       </Dialog>
     </Box>

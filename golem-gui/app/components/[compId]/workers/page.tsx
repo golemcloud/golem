@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import { Box, Button, Typography, TextField, IconButton, Chip } from '@mui/material';
 import SearchIcon from '@mui/icons-material/Search';
 import RefreshIcon from '@mui/icons-material/Refresh';
+import DropdownButton from '@/components/ui/DropDownButton'
 
 const WorkersPage = () => {
   const [searchQuery, setSearchQuery] = useState('');
@@ -36,6 +37,7 @@ const WorkersPage = () => {
         mt:5
       }}
     >
+      <DropdownButton/>
       {/* Search Bar */}
       <Box
         sx={{

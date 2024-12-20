@@ -1,131 +1,303 @@
-import React from "react";
-import { useForm, Controller } from "react-hook-form";
-import { WorkerFormData } from "@/types/api"; 
+import React, { useState } from "react";
 import {
-  TextField,
-  Button,
   Box,
+  Button,
+  Divider,
+  FormControl,
+  IconButton,
+  InputAdornment,
   MenuItem,
+  OutlinedInput,
+  Select,
+  TextField,
   Typography,
-  Alert,
 } from "@mui/material";
+import AddIcon from "@mui/icons-material/Add";
+import RemoveIcon from "@mui/icons-material/Remove";
+import { useForm, Controller, useFieldArray } from "react-hook-form";
+import { fetcher, getErrorMessage } from "@/lib/utils";
+import { useComponents } from "@/lib/hooks/useComponents";
+import { Component } from "@/types/api";
+
+interface FormData {
+  component: string;
+  workerName: string;
+  arguments: string[];
+  envVars: { key: string; value: string }[];
+}
+
+const obj = {
+  name: "hi",
+  args: ["string"],
+  env: {
+    property1: "string",
+    property2: "string",
+  },
+};
 
 const CreateWorker = () => {
   const {
-    handleSubmit,
     control,
+    handleSubmit,
     formState: { errors },
     reset,
-  } = useForm<WorkerFormData>();
+    setValue,
+    watch,
+  } = useForm<FormData>({
+    defaultValues: {
+      envVars: [{ key: "", value: "" }],
+    },
+  });
 
-  const workerTypes = [
-    { label: "Type A", value: "type-a" },
-    { label: "Type B", value: "type-b" },
-    { label: "Type C", value: "type-c" },
-  ];
+  const { fields, append, remove } = useFieldArray({
+    control,
+    name: "envVars",
+  });
 
-  const onSubmit=(data: WorkerFormData) => {
-    console.log("Worker Created:", data);
-    // Logic to handle worker creation
-    reset(); // Reset form after submission
+  const [error, setError] = useState("");
+  const { data: componentData, isLoading } = useComponents();
+  const components = (componentData?.data || []) as Component[];
+
+  const addEnvVar = () => {
+    append({ key: "", value: "" });
+  };
+
+  const removeEnvVar = (index: number) => {
+    if (index === 0) return;
+    remove(index);
+  };
+
+  const onSubmit = async (data: FormData) => {
+    console.log("data:", data);
+
+    try {
+      const response = await fetcher(
+        `?path=components/${data.component}/workers`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            name: obj.name,
+            args: obj.args,
+            env: data.envVars.reduce((acc, { key, value }) => {
+              //@ts-ignore
+              if (key && value) acc[key] = value;
+              return acc;
+            }, {}),
+          }),
+        }
+      );
+
+      console.log("Result:", response);
+
+      if (response.status !== 200) {
+        return setError(getErrorMessage(response.data));
+      }
+
+      setError(""); // Clear previous error
+      // TODO: Add mutation logic and toast
+      // onCreation?.();
+    } catch (err) {
+      console.error("Error during submission:", err);
+      setError("Something went wrong! Please try again.");
+    }
+
+    console.log(data);
   };
 
   return (
     <Box
       sx={{
-        p: 3,
-        backgroundColor: "#1E1E1E",
-        color: "#FFFFFF",
-        borderRadius: 2,
-        boxShadow: 3,
-        width: "100%",
-        maxWidth: 500,
-        margin: "0 auto",
+        p: 4,
+        minHeight: "100vh",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
       }}
     >
-      <Typography variant="h5" gutterBottom>
-        Create a New Worker
+      {/* Header */}
+      <Typography variant="h5" fontWeight="bold" gutterBottom>
+        Create a new Worker
       </Typography>
-      <Typography variant="body2" sx={{ mb: 2 }}>
-        Fill out the details below to create a worker.
+      <Typography variant="body2" sx={{ mb: 4 }}>
+        Launch a new worker
       </Typography>
-      <form onSubmit={handleSubmit(onSubmit)}>
+
+      {/* Form Container */}
+      <Box
+        component="form"
+        onSubmit={handleSubmit(onSubmit)}
+        sx={{
+          width: "100%",
+          maxWidth: 600,
+          p: 4,
+          borderRadius: 2,
+        }}
+      >
+        {/* Project / Component Dropdowns */}
+        <Box sx={{ display: "flex", gap: 2, mb: 3 }}>
+          <FormControl fullWidth>
+            <Typography variant="body2" sx={{ mb: 1 }}>
+              Component
+            </Typography>
+            <Controller
+              name="component"
+              control={control}
+              defaultValue=""
+              render={({ field }) => (
+                <Select {...field}>
+                  {components?.map((component: Component) => (
+                    <MenuItem
+                      key={component.versionedComponentId.componentId}
+                      value={component.versionedComponentId.componentId}
+                    >
+                      {component.componentName}
+                    </MenuItem>
+                  ))}
+                </Select>
+              )}
+            />
+          </FormControl>
+        </Box>
+
         {/* Worker Name */}
-        <Box sx={{ mb: 3 }}>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 3 }}>
           <Controller
             name="workerName"
             control={control}
-            defaultValue=""
-            rules={{ required: "Worker name is required" }}
+            rules={{ required: "Worker Name is required" }}
             render={({ field }) => (
               <TextField
                 {...field}
+                fullWidth
                 label="Worker Name"
                 variant="outlined"
-                fullWidth
-                sx={{ backgroundColor: "#2C2C2C" }}
-                InputLabelProps={{ style: { color: "#999" } }}
                 error={!!errors.workerName}
-                // helperText={errors.workerName?.message}
               />
             )}
           />
+          <Button
+            variant="contained"
+            sx={{ textTransform: "none" }}
+            onClick={() => {
+              reset({ workerName: "AutoGeneratedWorker" });
+            }}
+          >
+            Generate
+          </Button>
         </Box>
 
-        {/* Worker Type */}
+        {/* Environment Variables */}
         <Box sx={{ mb: 3 }}>
-          <Controller
-            name="workerType"
-            control={control}
-            defaultValue=""
-            rules={{ required: "Worker type is required" }}
-            render={({ field }) => (
-              <TextField
-                {...field}
-                label="Worker Type"
-                variant="outlined"
-                select
-                fullWidth
-                sx={{ backgroundColor: "#2C2C2C" }}
-                InputLabelProps={{ style: { color: "#999" } }}
-                error={!!errors.workerType}
-            //@ts-ignore
-                helperText={errors.workerType?.message}
-              >
-                {workerTypes.map((type) => (
-                  <MenuItem key={type.value} value={type.value}>
-                    {type.label}
-                  </MenuItem>
-                ))}
-              </TextField>
-            )}
-          />
+          <Box
+            sx={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: 2,
+              mb: 2,
+            }}
+          >
+            <Typography variant="body2" sx={{ mb: 1 }}>
+              Environment Variables
+            </Typography>
+            <Button
+              startIcon={<AddIcon />}
+              variant="outlined"
+              sx={{ textTransform: "none" }}
+              onClick={addEnvVar}
+            >
+              Add
+            </Button>
+          </Box>
+          {fields.map((item, index) => (
+            <Box
+              key={item.id}
+              sx={{ display: "flex", alignItems: "center", gap: 2, mb: 2 }}
+            >
+              <Controller
+                //@ts-ignore
+                name={`envVars[${index}].key`}
+                control={control}
+                render={({ field }) => (
+                  <TextField
+                    {...field}
+                    fullWidth
+                    label="Key"
+                    variant="outlined"
+                  />
+                )}
+              />
+              <Controller
+                //@ts-ignore
+                name={`envVars[${index}].value`}
+                control={control}
+                render={({ field }) => (
+                  <OutlinedInput {...field} fullWidth type="password" />
+                )}
+              />
+              <IconButton onClick={() => removeEnvVar(index)}>
+                <RemoveIcon sx={{ bgcolor: "#71bdf6", borderRadius: "50%" }} />
+              </IconButton>
+            </Box>
+          ))}
         </Box>
 
-        {/* Error Alert */}
-        
+        <Divider sx={{ backgroundColor: "#333", mb: 3 }} />
 
-        {/* {errors.formError && (
-          <Alert severity="error" sx={{ mb: 2 }}>
-            {
-            errors.formError.message}
-          </Alert>
-        )} */}
+        {/* Arguments */}
+        <Box sx={{ mb: 3 }}>
+          <Box
+            sx={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: 2,
+              mb: 2,
+            }}
+          >
+            <Typography variant="body2" sx={{ mb: 1 }}>
+              Arguments
+            </Typography>
+            <Button
+              startIcon={<AddIcon />}
+              variant="outlined"
+              sx={{ textTransform: "none" }}
+              onClick={addEnvVar}
+            >
+              Add
+            </Button>
+          </Box>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 2 }}>
+            <Controller
+              name="arguments"
+              control={control}
+              render={({ field }) => (
+                <TextField {...field} fullWidth variant="outlined" />
+              )}
+            />
+          </Box>
+        </Box>
 
-        {/* Submit Button */}
-        <Button
-          type="submit"
-          variant="contained"
-          fullWidth
-          sx={{
-            backgroundColor: "#1976D2",
-            textTransform: "none",
-            ":hover": { backgroundColor: "#125EA5" },
-          }}
-        >
-          Create Worker
-        </Button>
-      </form>
+        {/* Create Worker Button */}
+        <Box sx={{ textAlign: "center" }}>
+          <Button
+            type="submit"
+            variant="contained"
+            sx={{
+              textTransform: "none",
+              width: "100%",
+              py: 1.5,
+              backgroundColor: "#1976d2",
+              ":hover": { backgroundColor: "#125ea5" },
+            }}
+          >
+            Create Worker
+          </Button>
+        </Box>
+      </Box>
     </Box>
   );
 };
