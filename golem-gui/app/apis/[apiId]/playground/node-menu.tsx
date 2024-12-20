@@ -48,28 +48,33 @@ export default function NodeMenu({
           >
             <Menu.Items className="absolute right-0 w-36 origin-top-right divide-y divide-gray-100 rounded-md bg-white shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none">
               <div className="px-1 py-1">
-              <Menu.Item>
-                  {({ active }) => (
-                    <button
-                      onClick={(e) => {
-                        stopPropagation(e);
-                        setTrigger({
-                          type: triggerType,
-                          operation: "new_version",
-                          id,
-                        });
+                {triggerType === "api" && (
+                  <Menu.Item>
+                    {({ active }) => (
+                      <button
+                        onClick={(e) => {
+                          stopPropagation(e);
+                          setTrigger({
+                            type: triggerType,
+                            operation: "new_version",
+                            id,
+                          });
 
-                        // deleteNodes(id);
-                      }}
-                      className={`${
-                        active ? "bg-slate-200" : "text-gray-900"
-                      } group flex w-full items-center rounded-md px-2 py-2 text-xs`}
-                    >
-                      <TrashIcon className="mr-2 h-4 w-4" aria-hidden="true" />
-                      New Version
-                    </button>
-                  )}
-                </Menu.Item>
+                          // deleteNodes(id);
+                        }}
+                        className={`${
+                          active ? "bg-slate-200" : "text-gray-900"
+                        } group flex w-full items-center rounded-md px-2 py-2 text-xs`}
+                      >
+                        <TrashIcon
+                          className="mr-2 h-4 w-4"
+                          aria-hidden="true"
+                        />
+                        New Version
+                      </button>
+                    )}
+                  </Menu.Item>
+                )}
                 <Menu.Item>
                   {({ active }) => (
                     <button
