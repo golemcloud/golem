@@ -18,7 +18,18 @@ import { fetcher } from "@/lib/utils";
 import { Component } from "@/types/api";
 import { useParams, useSearchParams } from "next/navigation";
 
-const NewRouteForm = ({apiId, version, isModal}:{apiId:string, version?:string, onCreation?:()=>void, isModal?:boolean}) => {
+const NewRouteForm = ({
+  apiId,
+  version,
+  isModal,
+  isExperimental,
+}: {
+  apiId: string;
+  version?: string;
+  onCreation?: () => void;
+  isModal?: boolean;
+  isExperimental?: boolean;
+}) => {
   const { control, handleSubmit, reset, watch } = useForm({
     defaultValues: {
       apiName: "",
@@ -38,14 +49,17 @@ const NewRouteForm = ({apiId, version, isModal}:{apiId:string, version?:string, 
   const { data, isLoading } = useSWR("/v1/components", fetcher);
 
   const onSubmit = async (formData: unknown) => {
+    if (isExperimental) {
+      return;
+    }
     try {
-    //   fetcher(`?path=api/definitions/${apiId}/${version}`, {method: "POST", headers:{
-    //     "content-type": "application/json"
-    //   },
-    //   body: JSON.stringify({
-    //     routes: []
-    //   })
-    // })
+      //   fetcher(`?path=api/definitions/${apiId}/${version}`, {method: "POST", headers:{
+      //     "content-type": "application/json"
+      //   },
+      //   body: JSON.stringify({
+      //     routes: []
+      //   })
+      // })
       console.log("Route created successfully:", formData);
     } catch (error) {
       console.error("Error creating route:", error);
@@ -60,6 +74,17 @@ const NewRouteForm = ({apiId, version, isModal}:{apiId:string, version?:string, 
         padding: 10,
       }}
     >
+      {isExperimental && (
+        <Typography
+          variant="h5"
+          fontWeight="bold"
+          mb={2}
+          className="text-red-500 text-center"
+        >
+          Experimental. Coming soon!
+        </Typography>
+      )}
+
       {/* Title */}
       <Box className="flex">
         <Typography variant="h5" gutterBottom>
@@ -178,17 +203,18 @@ const NewRouteForm = ({apiId, version, isModal}:{apiId:string, version?:string, 
                   label="Version"
                   disabled={isLoading || data?.data?.length == 0}
                 >
-                  {!isLoading && data?.data?.map((comp: Component) => {
-                    return comp?.versionedComponentId?.componentId ==
-                      component ? (
-                      <MenuItem
-                        key={comp?.versionedComponentId?.componentId}
-                        value={comp?.versionedComponentId?.componentId}
-                      >
-                        {comp.componentName}
-                      </MenuItem>
-                    ) : null;
-                  })}
+                  {!isLoading &&
+                    data?.data?.map((comp: Component) => {
+                      return comp?.versionedComponentId?.componentId ==
+                        component ? (
+                        <MenuItem
+                          key={comp?.versionedComponentId?.componentId}
+                          value={comp?.versionedComponentId?.componentId}
+                        >
+                          {comp.componentName}
+                        </MenuItem>
+                      ) : null;
+                    })}
                 </Select>
               )}
             />

@@ -290,7 +290,7 @@ export function getVersion(data: FlowNode["data"]) {
 }
 export function getStatus(data: FlowNode["data"]) {
   switch(data.type) {
-    case "api": return data.draft ? "Published" : "Draft"
+    case "api": return data.draft ? "Draft" : "Published";
     default: return ""
   }
 

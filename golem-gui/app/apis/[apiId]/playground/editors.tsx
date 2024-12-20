@@ -1,5 +1,5 @@
 "use client";
-import { Container, Modal, Paper } from "@mui/material";
+import { Container, Modal, Paper, Typography } from "@mui/material";
 import React, { useEffect, useState } from "react";
 import useStore from "@/lib/hooks/use-react-flow-store";
 import CreateAPI from "@/components/create-api";
@@ -27,20 +27,23 @@ export default function Editors() {
         <>
           {trigger?.type === "api" && (
             <>
+              {trigger?.operation === "new_version" && (
+                <CreateAPI onCreation={handleClose} isExperimental={true} />
+              )}
               {trigger?.operation === "create" && (
-                <CreateAPI onCreation={handleClose} />
+                <CreateAPI onCreation={handleClose} isExperimental={true} />
               )}
               {trigger?.operation === "delete" && (
                 // Chnage it to delete modal. work in progress
-                <CreateAPI onCreation={handleClose} />
+                <CreateAPI onCreation={handleClose} isExperimental={true} />
               )}
               {trigger?.operation === "update" && (
                 // Chnage it to update modal. work in progress
-                <CreateAPI onCreation={handleClose} />
+                <CreateAPI onCreation={handleClose} isExperimental={true} />
               )}
                {trigger?.operation === "view" && (
                 // Chnage it to view modal. work in progress
-                <CreateAPI onCreation={handleClose} />
+                <CreateAPI onCreation={handleClose} isExperimental={true} />
               )}
             </>
           )}
@@ -49,19 +52,19 @@ export default function Editors() {
             <Container maxWidth="md" sx={{ mt: 4 }}>
               <Paper elevation={3} sx={{ borderRadius: 2 }}>
                 {trigger?.operation === "create" && (
-                <NewRouteForm apiId={apiId} onCreation={handleClose} />
+                <NewRouteForm apiId={apiId} onCreation={handleClose} isExperimental={true} />
               )}
                {trigger?.operation === "delete" && (
                 // Chnage it to delete modal. work in progress
-                <NewRouteForm apiId={apiId} onCreation={handleClose} />
+                <NewRouteForm apiId={apiId} onCreation={handleClose} isExperimental={true} />
               )}
               {trigger?.operation === "update" && (
                 // Chnage it to update modal. work in progress
-                <NewRouteForm apiId={apiId} onCreation={handleClose} />
+                <NewRouteForm apiId={apiId} onCreation={handleClose} isExperimental={true} />
               )}
                {trigger?.operation === "view" && (
                 // Chnage it to view modal. work in progress
-                <NewRouteForm apiId={apiId} onCreation={handleClose} />
+                <NewRouteForm apiId={apiId} onCreation={handleClose} isExperimental={true} />
               )}
               </Paper>
             </Container>

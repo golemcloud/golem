@@ -9,27 +9,36 @@ import {
 } from "@mui/material";
 import { fetcher, getErrorMessage } from "@/lib/utils";
 
-const CreateAPI = ({onCreation}:{onCreation?:()=>void}) => {
+const CreateAPI = ({
+  onCreation,
+  isExperimental,
+}: {
+  onCreation?: () => void;
+  isExperimental?: boolean;
+}) => {
   const [apiName, setApiName] = useState("");
   const [version, setVersion] = useState("0.1.0");
-  const  [error, setError] = useState("");
+  const [error, setError] = useState("");
 
-  const handleCreateAPI =async() => {
-    try{
-      const response = await fetcher('?path=api/definitions', {
-        method: 'POST',
+  const handleCreateAPI = async () => {
+    if (isExperimental) {
+      return;
+    }
+    try {
+      const response = await fetcher("?path=api/definitions", {
+        method: "POST",
         headers: {
-          'Content-Type': 'application/json',
+          "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          "id": apiName,
-          "version": version,
-          "routes": [],
-          "draft": true
+          id: apiName,
+          version: version,
+          routes: [],
+          draft: true,
         }),
-      })
+      });
 
-      if(response.status>300){
+      if (response.status > 300) {
         const error = getErrorMessage(response.data);
         setError(error);
         return;
@@ -38,18 +47,28 @@ const CreateAPI = ({onCreation}:{onCreation?:()=>void}) => {
       setError("");
       //TODO: Add mutation logic and toast
       onCreation?.();
-      console.log("result===>", response)
+      console.log("result===>", response);
       return;
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  }catch(err){
-    console.log("Err", err);
-    setError("Something went wrong!. please try again");
-  }
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    } catch (err) {
+      console.log("Err", err);
+      setError("Something went wrong!. please try again");
+    }
   };
 
   return (
     <Container maxWidth="sm" sx={{ mt: 4 }}>
       <Paper elevation={3} sx={{ p: 4, borderRadius: 2 }}>
+        {isExperimental && (
+          <Typography
+            variant="h5"
+            fontWeight="bold"
+            mb={2}
+            className="text-red-500 text-center"
+          >
+            Experimental. Coming soon!
+          </Typography>
+        )}
         <Typography variant="h5" fontWeight="bold" mb={2}>
           Create a new API
         </Typography>
@@ -85,7 +104,6 @@ const CreateAPI = ({onCreation}:{onCreation?:()=>void}) => {
           Version prefix for your API
         </Typography>
         {error && <Typography className="text-red-500">{error}</Typography>}
-
 
         {/* Create API Button */}
         <Box display="flex" justifyContent="flex-end" mt={3}>
