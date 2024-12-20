@@ -1,55 +1,44 @@
 use crate::api::definition::ApiDefinition;
-use crate::api::definition::types::BindingType;
+use crate::api::definition::types::*;
 use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_ast::analysis::{TypeStr, TypeS32, TypeS64, TypeF32, TypeF64, TypeBool};
 
 pub fn validate_api_definition(api: &ApiDefinition) -> Result<(), String> {
     for route in &api.routes {
-        match &route.binding {
-            BindingType::Default { input_type, output_type, .. } => {
-                // Convert string types to AnalysedType
-                let input_analysed = string_to_analysed_type(input_type)?;
-                let output_analysed = string_to_analysed_type(output_type)?;
-                
-                validate_wit_type(&input_analysed)?;
-                validate_wit_type(&output_analysed)?;
-                validate_wit_binding_types(&input_analysed, &output_analysed)?;
-            }
-            _ => {}
-        }
+        validate_binding(&route.binding)?;
     }
     Ok(())
 }
 
-fn string_to_analysed_type(type_str: &str) -> Result<AnalysedType, String> {
-    match type_str {
-        "string" => Ok(AnalysedType::Str(TypeStr)),
-        "i32" => Ok(AnalysedType::S32(TypeS32)),
-        "i64" => Ok(AnalysedType::S64(TypeS64)),
-        "f32" => Ok(AnalysedType::F32(TypeF32)),
-        "f64" => Ok(AnalysedType::F64(TypeF64)),
-        "bool" => Ok(AnalysedType::Bool(TypeBool)),
-        _ => Err(format!("Unsupported type: {}", type_str))
+pub fn validate_binding(binding: &BindingType) -> Result<(), String> {
+    match binding {
+        BindingType::Default { input_type, output_type, .. } => {
+            // Add actual validation for the types
+            validate_analysed_type(input_type)?;
+            validate_analysed_type(output_type)?;
+            Ok(())
+        },
+        _ => Ok(())
     }
 }
 
-fn validate_wit_type(wit_type: &AnalysedType) -> Result<(), String> {
-    match wit_type {
+fn validate_analysed_type(analysed_type: &AnalysedType) -> Result<(), String> {
+    match analysed_type {
         AnalysedType::Str(_) |
         AnalysedType::S32(_) |
         AnalysedType::S64(_) |
         AnalysedType::F32(_) |
         AnalysedType::F64(_) |
-        AnalysedType::Bool(_) => Ok(()),
-        _ => Err(format!("Unsupported WIT type: {:?}", wit_type))
+        AnalysedType::Bool(_) |
+        AnalysedType::U8(_) => Ok(()),
+        AnalysedType::List(type_list) => validate_analysed_type(&type_list.inner),
+        AnalysedType::Record(record) => {
+            for field in record.fields.iter() {
+                validate_analysed_type(&field.typ)?;
+            }
+            Ok(())
+        },
+        _ => Err(format!("Unsupported type: {:?}", analysed_type))
     }
-}
-
-fn validate_wit_binding_types(
-    _input_type: &AnalysedType,
-    _output_type: &AnalysedType,
-) -> Result<(), String> {
-    Ok(())
 }
 
 #[cfg(test)]

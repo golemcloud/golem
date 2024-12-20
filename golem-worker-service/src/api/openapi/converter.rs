@@ -3,6 +3,7 @@ use crate::api::definition::{
     types::{ApiDefinition, Route, HttpMethod, BindingType},
     patterns::{AllPathPatterns, PathPattern},
 };
+use golem_wasm_ast::analysis::AnalysedType;
 use std::collections::HashMap;
 use heck::ToSnakeCase; 
 
@@ -885,112 +886,88 @@ impl OpenAPIConverter {
     }
 
 
-    fn wit_type_to_schema(wit_type: &str) -> Schema {
+    fn wit_type_to_schema(wit_type: &AnalysedType) -> Schema {
         match wit_type {
-            "string" => Schema::String { format: None, enum_values: None },
-            "i32" | "i64" => Schema::Integer { format: None },
-            "f32" | "f64" => Schema::Number { format: None },
-            "bool" => Schema::Boolean,
-            t if t.starts_with("list<") => {
-                 let inner_type = &t[5..t.len()-1];
-                  Schema::Array {
-                    items: Box::new(Self::wit_type_to_schema(inner_type)),
-                }
+            AnalysedType::Str(_) => Schema::String { format: None, enum_values: None },
+            AnalysedType::S32(_) | AnalysedType::S64(_) => Schema::Integer { format: None },
+            AnalysedType::F32(_) | AnalysedType::F64(_) => Schema::Number { format: None },
+            AnalysedType::Bool(_) => Schema::Boolean,
+            AnalysedType::List(type_list) => Schema::Array {
+                items: Box::new(Self::wit_type_to_schema(&type_list.inner)),
             },
-             t if t.starts_with("record{") => {
-                Schema::Object {
-                    properties: Self::parse_record_fields(t),
-                    required: None,
-                    additional_properties: None,
-                }
+            AnalysedType::Record(record) => Schema::Object {
+                properties: record.fields.iter().map(|field| {
+                    (field.name.clone(), Self::wit_type_to_schema(&field.typ))
+                }).collect(),
+                required: None,
+                additional_properties: None,
             },
             _ => Schema::Ref {
-                reference: format!("#/components/schemas/{}", wit_type),
+                reference: format!("#/components/schemas/{:?}", wit_type),
             },
         }
-    }
-
-
-    fn parse_record_fields(record_type: &str) -> HashMap<String, Schema> {
-          let mut properties = HashMap::new();
-         if let Some(fields_str) = record_type
-            .strip_prefix("record{")
-            .and_then(|s| s.strip_suffix("}"))
-        {
-            for field in fields_str.split(',').map(str::trim) {
-                if let Some((name, type_str)) = field.split_once(':') {
-                    let name = name.trim().to_string();
-                    let type_str = type_str.trim();
-                   properties.insert(name, Self::wit_type_to_schema(type_str));
-                }
-            }
-        }
-        properties
     }
 
     fn collect_common_schemas(routes: &[Route], schemas: &mut HashMap<String, Schema>) {
-        let mut type_set = std::collections::HashSet::new();
-
-         for route in routes {
-            match &route.binding {
-                BindingType::Default { input_type, output_type, .. } => {
-                    Self::extract_custom_types(input_type, &mut type_set);
-                     Self::extract_custom_types(output_type, &mut type_set);
-                }
-                _ => {}
-            }
-        }
-        for type_name in type_set {
-            if !type_name.starts_with("record{") && !type_name.starts_with("list<")
-                && type_name != "binary" && type_name != "string" && type_name != "i32" && type_name != "i64"
-                && type_name != "f32" && type_name != "f64" && type_name != "bool" {
-                 schemas.insert(
-                    type_name.clone(),
-                    Schema::Object {
-                         properties: Self::parse_record_fields(&format!("record{{{}}}", type_name)),
-                        required: None,
-                        additional_properties: None,
+        for route in routes {
+            if let BindingType::Default { input_type, output_type, .. } = &route.binding {
+                if let AnalysedType::Record(record) = input_type {
+                    for field in record.fields.iter() {
+                        Self::add_type_schema(&field.typ, schemas);
                     }
-                );
+                }
+                if let AnalysedType::Record(record) = output_type {
+                    for field in record.fields.iter() {
+                        Self::add_type_schema(&field.typ, schemas);
+                    }
+                }
             }
         }
     }
 
-    fn extract_custom_types(wit_type: &str, type_set: &mut std::collections::HashSet<String>) {
-        match wit_type {
-            "string" | "i32" | "i64" | "f32" | "f64" | "bool" | "binary" => {},
-            t if t.starts_with("list<") => {
-                let inner_type = &t[5..t.len()-1];
-                Self::extract_custom_types(inner_type, type_set);
-            },
-            t if t.starts_with("record{") => {
-                if let Some(fields_str) = t.strip_prefix("record{").and_then(|s| s.strip_suffix("}")) {
-                    for field in fields_str.split(',').map(str::trim) {
-                        if let Some((_, type_str)) = field.split_once(':') {
-                            Self::extract_custom_types(type_str.trim(), type_set);
+    fn add_type_schema(analysed_type: &AnalysedType, schemas: &mut HashMap<String, Schema>) {
+        match analysed_type {
+            AnalysedType::Record(record) => {
+                let type_name = format!("{:?}", analysed_type);
+                if !schemas.contains_key(&type_name) {
+                    schemas.insert(
+                        type_name,
+                        Schema::Object {
+                            properties: record.fields.iter().map(|field| {
+                                (field.name.clone(), Self::wit_type_to_schema(&field.typ))
+                            }).collect(),
+                            required: None,
+                            additional_properties: None,
                         }
-                    }
+                    );
+                }
+                // Recursively add nested record types
+                for field in record.fields.iter() {
+                    Self::add_type_schema(&field.typ, schemas);
                 }
             },
-            t => {
-                type_set.insert(t.to_string());
-            }
+            AnalysedType::List(type_list) => {
+                Self::add_type_schema(&type_list.inner, schemas);
+            },
+            _ => {}
         }
     }
 
     fn get_response_schema(route: &Route) -> Schema {
         match &route.binding {
             BindingType::Default { output_type, .. } => {
-                if output_type == "binary" {
-                    Schema::String {
-                        format: Some("binary".to_string()),
-                        enum_values: None,
+                // Check if output type is a list of u8 (binary data)
+                if let AnalysedType::List(type_list) = output_type {
+                    if matches!(*type_list.inner, AnalysedType::U8(_)) {
+                        return Schema::String {
+                            format: Some("binary".to_string()),
+                            enum_values: None,
+                        };
                     }
-                } else  {
-                    Schema::Ref {
-                        reference: format!("#/components/schemas/{}",
-                            Self::get_response_type_name(route))
-                    }
+                }
+                Schema::Ref {
+                    reference: format!("#/components/schemas/{:?}",
+                        Self::get_response_type(output_type))
                 }
             },
             BindingType::FileServer { .. } => Schema::String {
@@ -1002,20 +979,26 @@ impl OpenAPIConverter {
                 enum_values: None,
             },
             BindingType::Http => Schema::Ref {
-                reference: format!("#/components/schemas/{}",
+                reference: format!("#/components/schemas/{:?}",
                     Self::get_response_type_name(route))
             },
             BindingType::Worker => Schema::Ref {
-                reference: format!("#/components/schemas/{}",
+                reference: format!("#/components/schemas/{:?}",
                     Self::get_response_type_name(route))
             },
             BindingType::Proxy => Schema::Ref {
-                reference: format!("#/components/schemas/{}",
+                reference: format!("#/components/schemas/{:?}",
                     Self::get_response_type_name(route))
             },
         }
     }
 
+    fn get_response_type(output_type: &AnalysedType) -> &AnalysedType {
+        match output_type {
+            AnalysedType::Record(_) | AnalysedType::List(_) => output_type,
+            _ => output_type
+        }
+    }
 
     fn get_response_type_name(route: &Route) -> String {
         if route.path.ends_with("/workers") && route.method == HttpMethod::Get {
@@ -1024,7 +1007,7 @@ impl OpenAPIConverter {
             "boolean".to_string()
         } else {
             match &route.binding {
-                BindingType::Default { output_type, .. } => output_type.clone(),
+                BindingType::Default { output_type, .. } => format!("{:?}", output_type),
                 BindingType::FileServer { .. } => "binary".to_string(),
                 BindingType::SwaggerUI { .. } => "html".to_string(),
                 BindingType::Http => "HttpResponse".to_string(),
