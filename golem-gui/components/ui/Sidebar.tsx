@@ -7,23 +7,24 @@ import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import PlayForWorkIcon from '@mui/icons-material/PlayForWork';
 
-
-
 type SidebarProps = {
-  apiId: string;
-  version: string;
+  id: string;
+  navigationLinks:NavigationLinks[],
+  variant:string;
+  version: string;     
 };
 
-const Sidebar = ({apiId, version}:SidebarProps) => {
+type NavigationLinks = {
+  name: string;
+  href: string;
+  icon: React.ReactNode;
+};
+
+const Sidebar = ({ id, navigationLinks, variant, version }: SidebarProps) => {
+
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  version = searchParams?.get("version") || version 
-  const navigationLinks = [
-    { name: "Overview", href: `/apis/${apiId}/overview`, icon: <Home fontSize="small" /> },
-    { name: "Settings", href: `/apis/${apiId}/settings`, icon: <Settings fontSize="small" /> },
-    { name: "Deployments", href: `/apis/${apiId}/deployments`, icon: <RocketLaunch fontSize="small" /> },
-    { name: "Playground", href: `/apis/${apiId}/playground`, icon: <PlayForWorkIcon fontSize="small" /> },
-  ];
+  version = searchParams?.get("version") || version       
 
   return (
     <Box
@@ -85,8 +86,7 @@ const Sidebar = ({apiId, version}:SidebarProps) => {
       >
         Routes
       </Typography>
-
-      <Link href={`/apis/${apiId}/new-route?version=${version}`}>
+      {variant==="apis" && <Link href={`/apis/${id}/new-route?version=${version}`}>
         <Button
         variant="outlined"
         sx={{
@@ -101,7 +101,7 @@ const Sidebar = ({apiId, version}:SidebarProps) => {
         Add
         < Add className="ml-2" />
         </Button>
-       </Link>
+      </Link>}
     </Box>
   );
 };
