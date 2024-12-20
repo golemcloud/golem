@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use bincode::{Decode, Encode};
+use std::collections::HashMap;
 use std::fmt::{self, Display, Formatter};
 
 use crate::SafeDisplay;
@@ -24,6 +25,7 @@ use golem_wasm_ast::{
     component::Component,
     IgnoreAllButMetadata,
 };
+use rib::ParsedFunctionSite;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
@@ -34,12 +36,39 @@ pub struct ComponentMetadata {
     pub exports: Vec<AnalysedExport>,
     pub producers: Vec<Producers>,
     pub memories: Vec<LinearMemory>,
+
+    #[serde(default)]
+    pub dynamic_linking: HashMap<String, DynamicLinkedInstance>,
 }
 
 impl ComponentMetadata {
     pub fn analyse_component(data: &[u8]) -> Result<ComponentMetadata, ComponentProcessingError> {
         let raw = RawComponentMetadata::analyse_component(data)?;
         Ok(raw.into())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
+#[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
+#[serde(tag = "type")]
+pub enum DynamicLinkedInstance {
+    WasmRpc(DynamicLinkedWasmRpc),
+}
+
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Encode, Decode,
+)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct DynamicLinkedWasmRpc {
+    pub target_interface_name: String,
+}
+
+impl DynamicLinkedWasmRpc {
+    pub fn target_site(&self) -> Result<ParsedFunctionSite, String> {
+        ParsedFunctionSite::parse(&self.target_interface_name)
     }
 }
 
@@ -119,6 +148,7 @@ impl From<RawComponentMetadata> for ComponentMetadata {
             exports,
             producers,
             memories,
+            dynamic_linking: HashMap::new(),
         }
     }
 }
@@ -299,6 +329,7 @@ mod protobuf {
     use crate::model::component_metadata::{
         ComponentMetadata, LinearMemory, ProducerField, Producers, VersionedName,
     };
+    use std::collections::HashMap;
 
     impl From<golem_api_grpc::proto::golem::component::VersionedName> for VersionedName {
         fn from(value: golem_api_grpc::proto::golem::component::VersionedName) -> Self {
@@ -392,6 +423,7 @@ mod protobuf {
                     .into_iter()
                     .map(|memory| memory.into())
                     .collect(),
+                dynamic_linking: HashMap::new(),
             })
         }
     }

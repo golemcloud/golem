@@ -19,13 +19,16 @@ use golem_common::model::component::{ComponentOwner, DefaultComponentOwner};
 use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::plugin::DefaultPluginScope;
 use golem_common::model::{
-    AccountId, ComponentVersion, IdempotencyKey, OwnedWorkerId, WorkerId, WorkerMetadata,
-    WorkerStatus, WorkerStatusRecord,
+    AccountId, ComponentVersion, IdempotencyKey, OwnedWorkerId, TargetWorkerId, WorkerId,
+    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_common::model::{ComponentFilePath, PluginInstallationId};
+use golem_wasm_rpc::golem::rpc::types::{
+    FutureInvokeResult, HostFutureInvokeResult, Pollable, WasmRpc,
+};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::wasmtime::ResourceStore;
-use golem_wasm_rpc::{Uri, Value};
+use golem_wasm_rpc::{HostWasmRpc, RpcError, Uri, Value, WitValue};
 use golem_worker_executor_base::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
@@ -53,13 +56,15 @@ use golem_worker_executor_base::services::{
 };
 use golem_worker_executor_base::worker::{RetryDecision, Worker};
 use golem_worker_executor_base::workerctx::{
-    ExternalOperations, FileSystemReading, FuelManagement, IndexedResourceStore, InvocationHooks,
-    InvocationManagement, StatusManagement, UpdateManagement, WorkerCtx,
+    DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement, IndexedResourceStore,
+    InvocationHooks, InvocationManagement, StatusManagement, UpdateManagement, WorkerCtx,
 };
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock, Weak};
-use wasmtime::component::{Instance, ResourceAny};
-use wasmtime::{AsContextMut, ResourceLimiterAsync};
+use wasmtime::component::{Component, Instance, Linker, Resource, ResourceAny};
+use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
+use wasmtime_wasi::WasiView;
+use wasmtime_wasi_http::WasiHttpView;
 
 pub struct Context {
     pub durable_ctx: DurableWorkerCtx<Context>,
@@ -347,6 +352,14 @@ impl WorkerCtx for Context {
         })
     }
 
+    fn as_wasi_view(&mut self) -> impl WasiView {
+        self.durable_ctx.as_wasi_view()
+    }
+
+    fn as_wasi_http_view(&mut self) -> impl WasiHttpView {
+        self.durable_ctx.as_wasi_http_view()
+    }
+
     fn get_public_state(&self) -> &Self::PublicState {
         &self.durable_ctx.public_state
     }
@@ -357,6 +370,10 @@ impl WorkerCtx for Context {
 
     fn worker_id(&self) -> &WorkerId {
         self.durable_ctx.worker_id()
+    }
+
+    fn owned_worker_id(&self) -> &OwnedWorkerId {
+        self.durable_ctx.owned_worker_id()
     }
 
     fn component_metadata(&self) -> &ComponentMetadata {
@@ -373,6 +390,15 @@ impl WorkerCtx for Context {
 
     fn worker_proxy(&self) -> Arc<dyn WorkerProxy + Send + Sync> {
         self.durable_ctx.worker_proxy()
+    }
+
+    async fn generate_unique_local_worker_id(
+        &mut self,
+        remote_worker_id: TargetWorkerId,
+    ) -> Result<WorkerId, GolemError> {
+        self.durable_ctx
+            .generate_unique_local_worker_id(remote_worker_id)
+            .await
     }
 }
 
@@ -414,7 +440,7 @@ impl ResourceStore for Context {
     }
 
     async fn get(&mut self, resource_id: u64) -> Option<ResourceAny> {
-        self.durable_ctx.get(resource_id).await
+        ResourceStore::get(&mut self.durable_ctx, resource_id).await
     }
 
     async fn borrow(&self, resource_id: u64) -> Option<ResourceAny> {
@@ -433,5 +459,84 @@ impl FileSystemReading for Context {
 
     async fn read_file(&self, path: &ComponentFilePath) -> Result<ReadFileResult, GolemError> {
         self.durable_ctx.read_file(path).await
+    }
+}
+
+#[async_trait]
+impl HostWasmRpc for Context {
+    async fn new(&mut self, location: Uri) -> anyhow::Result<Resource<WasmRpc>> {
+        self.durable_ctx.new(location).await
+    }
+
+    async fn invoke_and_await(
+        &mut self,
+        self_: Resource<WasmRpc>,
+        function_name: String,
+        function_params: Vec<WitValue>,
+    ) -> anyhow::Result<Result<WitValue, RpcError>> {
+        self.durable_ctx
+            .invoke_and_await(self_, function_name, function_params)
+            .await
+    }
+
+    async fn invoke(
+        &mut self,
+        self_: Resource<WasmRpc>,
+        function_name: String,
+        function_params: Vec<WitValue>,
+    ) -> anyhow::Result<Result<(), RpcError>> {
+        self.durable_ctx
+            .invoke(self_, function_name, function_params)
+            .await
+    }
+
+    async fn async_invoke_and_await(
+        &mut self,
+        self_: Resource<WasmRpc>,
+        function_name: String,
+        function_params: Vec<WitValue>,
+    ) -> anyhow::Result<Resource<FutureInvokeResult>> {
+        self.durable_ctx
+            .async_invoke_and_await(self_, function_name, function_params)
+            .await
+    }
+
+    async fn drop(&mut self, rep: Resource<WasmRpc>) -> anyhow::Result<()> {
+        HostWasmRpc::drop(&mut self.durable_ctx, rep).await
+    }
+}
+
+#[async_trait]
+impl HostFutureInvokeResult for Context {
+    async fn subscribe(
+        &mut self,
+        self_: Resource<FutureInvokeResult>,
+    ) -> anyhow::Result<Resource<Pollable>> {
+        HostFutureInvokeResult::subscribe(&mut self.durable_ctx, self_).await
+    }
+
+    async fn get(
+        &mut self,
+        self_: Resource<FutureInvokeResult>,
+    ) -> anyhow::Result<Option<Result<WitValue, RpcError>>> {
+        HostFutureInvokeResult::get(&mut self.durable_ctx, self_).await
+    }
+
+    async fn drop(&mut self, rep: Resource<FutureInvokeResult>) -> anyhow::Result<()> {
+        HostFutureInvokeResult::drop(&mut self.durable_ctx, rep).await
+    }
+}
+
+#[async_trait]
+impl DynamicLinking<Context> for Context {
+    fn link(
+        &mut self,
+        engine: &Engine,
+        linker: &mut Linker<Context>,
+        component: &Component,
+        component_metadata: &ComponentMetadata,
+    ) -> anyhow::Result<()> {
+        self.durable_ctx
+            .link(engine, linker, component, component_metadata)
     }
 }

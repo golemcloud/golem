@@ -109,6 +109,7 @@ impl InvokeResultView {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::vec;
 
     use test_r::test;
@@ -168,6 +169,7 @@ mod tests {
                     results: func_res,
                 })],
                 memories: vec![],
+                dynamic_linking: HashMap::new(),
             },
             project_id: None,
             created_at: Some(Utc::now()),
