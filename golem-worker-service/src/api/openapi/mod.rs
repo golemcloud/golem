@@ -1,7 +1,7 @@
 mod types;
 mod converter;
 mod validation;
-mod error;
+pub mod error;
 
 pub use types::*;
 pub use converter::OpenAPIConverter;
