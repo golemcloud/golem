@@ -21,18 +21,48 @@ export default function Editors() {
     setOpen(trigger?.type || null);
   }, [trigger]);
 
-  console.log("trigger====>", trigger);
-
   return (
     <div>
       <Modal open={!!open} onClose={handleClose}>
         <>
-          {open === "api" && <CreateAPI onCreation={handleClose} />}
+          {trigger?.type === "api" && (
+            <>
+              {trigger?.operation === "create" && (
+                <CreateAPI onCreation={handleClose} />
+              )}
+              {trigger?.operation === "delete" && (
+                // Chnage it to delete modal. work in progress
+                <CreateAPI onCreation={handleClose} />
+              )}
+              {trigger?.operation === "update" && (
+                // Chnage it to update modal. work in progress
+                <CreateAPI onCreation={handleClose} />
+              )}
+               {trigger?.operation === "view" && (
+                // Chnage it to view modal. work in progress
+                <CreateAPI onCreation={handleClose} />
+              )}
+            </>
+          )}
           {/* for now to differentiate we are using component. need chnge it correct creating element */}
-          {open === "route" && (
+          {trigger?.type === "route" && (
             <Container maxWidth="md" sx={{ mt: 4 }}>
-               <Paper elevation={3} sx={{borderRadius: 2 }}>
-              <NewRouteForm apiId={apiId} onCreation={handleClose} />
+              <Paper elevation={3} sx={{ borderRadius: 2 }}>
+                {trigger?.operation === "create" && (
+                <NewRouteForm apiId={apiId} onCreation={handleClose} />
+              )}
+               {trigger?.operation === "delete" && (
+                // Chnage it to delete modal. work in progress
+                <NewRouteForm apiId={apiId} onCreation={handleClose} />
+              )}
+              {trigger?.operation === "update" && (
+                // Chnage it to update modal. work in progress
+                <NewRouteForm apiId={apiId} onCreation={handleClose} />
+              )}
+               {trigger?.operation === "view" && (
+                // Chnage it to view modal. work in progress
+                <NewRouteForm apiId={apiId} onCreation={handleClose} />
+              )}
               </Paper>
             </Container>
           )}

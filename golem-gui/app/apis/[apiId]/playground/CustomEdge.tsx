@@ -6,6 +6,7 @@ import useStore from "@/lib/hooks/use-react-flow-store";
 import { PlusIcon } from "lucide-react";
 import { Button } from "@mui/material";
 import "@xyflow/react/dist/style.css";
+import { getTriggerType } from "@/lib/react-flow/utils";
 
 interface CustomEdgeProps extends EdgeProps {
   label?: string;
@@ -35,9 +36,9 @@ const CustomEdge: React.FC<CustomEdgeProps> = ({
     targetY,
     borderRadius: 10,
   });
-
   const dynamicLabel = label;
   const isLayouted = !!data?.isLayouted;
+  const triggerType = getTriggerType(id);
   let showAddButton =
     !source?.includes("empty") &&
     !target?.includes("trigger_end") &&
@@ -54,6 +55,7 @@ const CustomEdge: React.FC<CustomEdgeProps> = ({
       : dynamicLabel === "False"
       ? "bg-red-500"
       : "bg-orange-500";
+
   return (
     <>
       <BaseEdge
@@ -120,11 +122,7 @@ const CustomEdge: React.FC<CustomEdgeProps> = ({
             onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              console.log("etnering ths=====>", id);
-              const meta = id?.split("__") || [];
-              const type = meta[meta.length - 1];
-              console.log("etnering ths type=====>", type);
-              setTrigger({ type: type, operation: "creation" });
+              setTrigger({ type: triggerType, operation: "create" });
               setSelectedEdge(id);
             }}
           >

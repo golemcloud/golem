@@ -38,7 +38,7 @@ const getLayoutedElements = (
       ?.replace("__end", "");
 
     const width = ["start", "end"].includes(type) ? 80 : 280;
-    const height = 80;
+    const height = ["start", "end"].includes(type) ? 80: 95;
 
     dagreGraph.setNode(node.id, { width, height });
   });

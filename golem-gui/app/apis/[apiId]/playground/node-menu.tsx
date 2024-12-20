@@ -5,13 +5,16 @@ import { TrashIcon } from "lucide-react";
 import useStore from "@/lib/hooks/use-react-flow-store";
 import { IoMdSettings } from "react-icons/io";
 import { FlowNode } from "@/types/react-flow";
-
+import { canDelete as checkForDeletion } from "@/lib/react-flow/utils";
+import EditIcon from "@mui/icons-material/Edit";
 export default function NodeMenu({
   data,
   id,
+  triggerType,
 }: {
   data: FlowNode["data"];
   id: string;
+  triggerType: string;
 }) {
   const stopPropagation = (e: React.MouseEvent<HTMLButtonElement>) => {
     e.stopPropagation();
@@ -20,8 +23,8 @@ export default function NodeMenu({
     data?.type?.includes("empty") ||
     id?.includes("end") ||
     id?.includes("start");
-  const { setSelectedNode, setStepEditorOpenForNode } = useStore();
-
+  const { setSelectedNode, setStepEditorOpenForNode, setTrigger } = useStore();
+  const canDelete = checkForDeletion(data);
   return (
     <>
       {data && !hideMenu && (
@@ -50,8 +53,18 @@ export default function NodeMenu({
                     <button
                       onClick={(e) => {
                         stopPropagation(e);
+                        if (!canDelete) {
+                          return;
+                        }
+                        setTrigger({
+                          type: triggerType,
+                          operation: "delete",
+                          id,
+                        });
+
                         // deleteNodes(id);
                       }}
+                      disabled={!canDelete}
                       className={`${
                         active ? "bg-slate-200" : "text-gray-900"
                       } group flex w-full items-center rounded-md px-2 py-2 text-xs`}
@@ -66,6 +79,11 @@ export default function NodeMenu({
                     <button
                       onClick={(e) => {
                         stopPropagation(e);
+                        setTrigger({
+                          type: triggerType,
+                          operation: "view",
+                          id,
+                        });
                         setSelectedNode(id);
                         setStepEditorOpenForNode(id);
                       }}
@@ -77,7 +95,33 @@ export default function NodeMenu({
                         className="mr-2 h-4 w-4"
                         aria-hidden="true"
                       />
-                      Properties
+                      View Details
+                    </button>
+                  )}
+                </Menu.Item>
+                <Menu.Item>
+                  {({ active }) => (
+                    <button
+                      onClick={(e) => {
+                        stopPropagation(e);
+                        if (!canDelete) {
+                          return;
+                        }
+                        setTrigger({
+                          type: triggerType,
+                          operation: "edit",
+                          id,
+                        });
+                        setSelectedNode(id);
+                        setStepEditorOpenForNode(id);
+                      }}
+                      disabled={!canDelete}
+                      className={`${
+                        active ? "bg-slate-200" : "text-gray-900"
+                      } group flex w-full items-center rounded-md px-2 py-2 text-xs`}
+                    >
+                      <EditIcon className="mr-2 h-4 w-4" aria-hidden="true" />
+                      Update
                     </button>
                   )}
                 </Menu.Item>

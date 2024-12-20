@@ -9,6 +9,8 @@ import {
   V2Step,
 } from "@/types/react-flow";
 import { ApiDefinition, ApiRoute } from "@/types/api";
+import ApiIcon from "@mui/icons-material/Api";
+import RouteIcon from "@mui/icons-material/Route";
 
 export const createDefaultNodeV2 = (
   step: V2Step | NodeData,
@@ -160,6 +162,7 @@ export const processApiFlow = (
       id: "start",
       name: "start",
       isLayouted: false,
+      notClickable: true,
     } as BasicStep;
     const firstApiDefintion = apiDefinitons[0];
     const { nodes, edges } = handleDefaultNode(
@@ -178,6 +181,7 @@ export const processApiFlow = (
           name: firstApiDefintion.id,
           isLayouted: false,
           edgeNotNeeded: true,
+          notClickable: true,
         } as BasicStep,
         firstApiDefintion.id
       ),
@@ -212,6 +216,7 @@ export const processApiFlow = (
         apiInfo: { ...nodeData } as Omit<ApiDefinition, "routes">,
         ...route,
         name: route.path,
+        type: "route"
       } as RouteStep;
       const routeId = `${nodeId}__${route?.path}__${route?.method}__route`;
       const tempNodes = [
@@ -261,3 +266,45 @@ export const processApiFlow = (
   }
   return { nodes: newNodes, edges: newEdges };
 };
+
+
+export function getIconBasedOnType(data: FlowNode["data"]) {
+  switch (data.type) {
+    case "api":
+    case "api_start":
+      return ApiIcon;
+    case "route":
+      return RouteIcon;
+    default:
+      return null;
+  }
+}
+
+
+export function getVersion(data: FlowNode["data"]) {
+  switch(data.type) {
+    case "api": return `(${data.version})`
+    default: return ""
+  }
+
+}
+export function getStatus(data: FlowNode["data"]) {
+  switch(data.type) {
+    case "api": return data.draft ? "Published" : "Draft"
+    default: return ""
+  }
+
+}
+
+export function canDelete(data: FlowNode["data"]) {
+  switch(data.type) {
+    case "api": return data.draft || false
+    case "route": return data?.apiInfo?.draft || false;
+    default: return false;
+  }
+}
+
+export function getTriggerType(id: string) {
+  const meta = id.split("__");
+  return meta[meta.length - 1] || "";
+}
