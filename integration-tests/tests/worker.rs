@@ -193,7 +193,7 @@ async fn ephemeral_worker_creation_with_name_is_not_persistent(
     let _ = deps
         .invoke_and_await(
             worker_id.clone(),
-            "rpc:counters/api.{inc-global-by}",
+            "rpc:counters-exports/api.{inc-global-by}",
             vec![Value::U64(2)],
         )
         .await
@@ -202,7 +202,7 @@ async fn ephemeral_worker_creation_with_name_is_not_persistent(
     let result = deps
         .invoke_and_await(
             worker_id.clone(),
-            "rpc:counters/api.{get-global-value}",
+            "rpc:counters-exports/api.{get-global-value}",
             vec![],
         )
         .await
@@ -222,7 +222,7 @@ async fn counter_resource_test_1(deps: &EnvBasedTestDependencies, _tracing: &Tra
     let counter1 = deps
         .invoke_and_await(
             &worker_id,
-            "rpc:counters/api.{[constructor]counter}",
+            "rpc:counters-exports/api.{[constructor]counter}",
             vec![Value::String("counter1".to_string())],
         )
         .await
@@ -231,7 +231,7 @@ async fn counter_resource_test_1(deps: &EnvBasedTestDependencies, _tracing: &Tra
     let _ = deps
         .invoke_and_await(
             &worker_id,
-            "rpc:counters/api.{[method]counter.inc-by}",
+            "rpc:counters-exports/api.{[method]counter.inc-by}",
             vec![counter1[0].clone(), Value::U64(5)],
         )
         .await;
@@ -239,7 +239,7 @@ async fn counter_resource_test_1(deps: &EnvBasedTestDependencies, _tracing: &Tra
     let result1 = deps
         .invoke_and_await(
             &worker_id,
-            "rpc:counters/api.{[method]counter.get-value}",
+            "rpc:counters-exports/api.{[method]counter.get-value}",
             vec![counter1[0].clone()],
         )
         .await;
@@ -249,13 +249,13 @@ async fn counter_resource_test_1(deps: &EnvBasedTestDependencies, _tracing: &Tra
     let _ = deps
         .invoke_and_await(
             &worker_id,
-            "rpc:counters/api.{[drop]counter}",
+            "rpc:counters-exports/api.{[drop]counter}",
             vec![counter1[0].clone()],
         )
         .await;
 
     let result2 = deps
-        .invoke_and_await(&worker_id, "rpc:counters/api.{get-all-dropped}", vec![])
+        .invoke_and_await(&worker_id, "rpc:counters-exports/api.{get-all-dropped}", vec![])
         .await;
 
     let (metadata2, _) = deps.get_worker_metadata(&worker_id).await.unwrap();
@@ -325,7 +325,7 @@ async fn counter_resource_test_1_json(deps: &EnvBasedTestDependencies, _tracing:
     let counter1 = deps
         .invoke_and_await_json(
             &worker_id,
-            "rpc:counters/api.{[constructor]counter}",
+            "rpc:counters-exports/api.{[constructor]counter}",
             vec![json!({ "typ": { "type": "Str" }, "value": "counter1" })],
         )
         .await
@@ -372,7 +372,7 @@ async fn counter_resource_test_1_json(deps: &EnvBasedTestDependencies, _tracing:
     let _ = deps
         .invoke_and_await_json(
             &worker_id,
-            "rpc:counters/api.{[method]counter.inc-by}",
+            "rpc:counters-exports/api.{[method]counter.inc-by}",
             vec![
                 counter1.clone(),
                 json!({ "typ": { "type": "U64"}, "value": 5 }),
@@ -383,7 +383,7 @@ async fn counter_resource_test_1_json(deps: &EnvBasedTestDependencies, _tracing:
     let result1 = deps
         .invoke_and_await_json(
             &worker_id,
-            "rpc:counters/api.{[method]counter.get-value}",
+            "rpc:counters-exports/api.{[method]counter.get-value}",
             vec![counter1.clone()],
         )
         .await;
@@ -393,13 +393,13 @@ async fn counter_resource_test_1_json(deps: &EnvBasedTestDependencies, _tracing:
     let _ = deps
         .invoke_and_await_json(
             &worker_id,
-            "rpc:counters/api.{[drop]counter}",
+            "rpc:counters-exports/api.{[drop]counter}",
             vec![counter1.clone()],
         )
         .await;
 
     let result2 = deps
-        .invoke_and_await_json(&worker_id, "rpc:counters/api.{get-all-dropped}", vec![])
+        .invoke_and_await_json(&worker_id, "rpc:counters-exports/api.{get-all-dropped}", vec![])
         .await;
 
     let (metadata2, _) = deps.get_worker_metadata(&worker_id).await.unwrap();
@@ -503,7 +503,7 @@ async fn counter_resource_test_2(deps: &EnvBasedTestDependencies, _tracing: &Tra
     let _ = deps
         .invoke_and_await(
             &worker_id,
-            "rpc:counters/api.{counter(\"counter1\").inc-by}",
+            "rpc:counters-exports/api.{counter(\"counter1\").inc-by}",
             vec![Value::U64(5)],
         )
         .await;
@@ -511,14 +511,14 @@ async fn counter_resource_test_2(deps: &EnvBasedTestDependencies, _tracing: &Tra
     let _ = deps
         .invoke_and_await(
             &worker_id,
-            "rpc:counters/api.{counter(\"counter2\").inc-by}",
+            "rpc:counters-exports/api.{counter(\"counter2\").inc-by}",
             vec![Value::U64(1)],
         )
         .await;
     let _ = deps
         .invoke_and_await(
             &worker_id,
-            "rpc:counters/api.{counter(\"counter2\").inc-by}",
+            "rpc:counters-exports/api.{counter(\"counter2\").inc-by}",
             vec![Value::U64(2)],
         )
         .await;
@@ -526,14 +526,14 @@ async fn counter_resource_test_2(deps: &EnvBasedTestDependencies, _tracing: &Tra
     let result1 = deps
         .invoke_and_await(
             &worker_id,
-            "rpc:counters/api.{counter(\"counter1\").get-value}",
+            "rpc:counters-exports/api.{counter(\"counter1\").get-value}",
             vec![],
         )
         .await;
     let result2 = deps
         .invoke_and_await(
             &worker_id,
-            "rpc:counters/api.{counter(\"counter2\").get-value}",
+            "rpc:counters-exports/api.{counter(\"counter2\").get-value}",
             vec![],
         )
         .await;
@@ -541,20 +541,20 @@ async fn counter_resource_test_2(deps: &EnvBasedTestDependencies, _tracing: &Tra
     let _ = deps
         .invoke_and_await(
             &worker_id,
-            "rpc:counters/api.{counter(\"counter1\").drop}",
+            "rpc:counters-exports/api.{counter(\"counter1\").drop}",
             vec![],
         )
         .await;
     let _ = deps
         .invoke_and_await(
             &worker_id,
-            "rpc:counters/api.{counter(\"counter2\").drop}",
+            "rpc:counters-exports/api.{counter(\"counter2\").drop}",
             vec![],
         )
         .await;
 
     let result3 = deps
-        .invoke_and_await(&worker_id, "rpc:counters/api.{get-all-dropped}", vec![])
+        .invoke_and_await(&worker_id, "rpc:counters-exports/api.{get-all-dropped}", vec![])
         .await;
 
     check!(result1 == Ok(vec![Value::U64(5)]));
@@ -579,7 +579,7 @@ async fn counter_resource_test_2_json(deps: &EnvBasedTestDependencies, _tracing:
     let _ = deps
         .invoke_and_await_json(
             &worker_id,
-            "rpc:counters/api.{counter(\"counter1\").inc-by}",
+            "rpc:counters-exports/api.{counter(\"counter1\").inc-by}",
             vec![json!(
                 {
                     "typ": { "type": "U64" }, "value": 5
@@ -591,7 +591,7 @@ async fn counter_resource_test_2_json(deps: &EnvBasedTestDependencies, _tracing:
     let _ = deps
         .invoke_and_await_json(
             &worker_id,
-            "rpc:counters/api.{counter(\"counter2\").inc-by}",
+            "rpc:counters-exports/api.{counter(\"counter2\").inc-by}",
             vec![json!(
                 {
                     "typ": { "type": "U64" }, "value": 1
@@ -602,7 +602,7 @@ async fn counter_resource_test_2_json(deps: &EnvBasedTestDependencies, _tracing:
     let _ = deps
         .invoke_and_await_json(
             &worker_id,
-            "rpc:counters/api.{counter(\"counter2\").inc-by}",
+            "rpc:counters-exports/api.{counter(\"counter2\").inc-by}",
             vec![json!(
                 {
                     "typ": { "type": "U64" }, "value": 2
@@ -614,14 +614,14 @@ async fn counter_resource_test_2_json(deps: &EnvBasedTestDependencies, _tracing:
     let result1 = deps
         .invoke_and_await_json(
             &worker_id,
-            "rpc:counters/api.{counter(\"counter1\").get-value}",
+            "rpc:counters-exports/api.{counter(\"counter1\").get-value}",
             vec![],
         )
         .await;
     let result2 = deps
         .invoke_and_await_json(
             &worker_id,
-            "rpc:counters/api.{counter(\"counter2\").get-value}",
+            "rpc:counters-exports/api.{counter(\"counter2\").get-value}",
             vec![],
         )
         .await;
@@ -629,20 +629,20 @@ async fn counter_resource_test_2_json(deps: &EnvBasedTestDependencies, _tracing:
     let _ = deps
         .invoke_and_await_json(
             &worker_id,
-            "rpc:counters/api.{counter(\"counter1\").drop}",
+            "rpc:counters-exports/api.{counter(\"counter1\").drop}",
             vec![],
         )
         .await;
     let _ = deps
         .invoke_and_await_json(
             &worker_id,
-            "rpc:counters/api.{counter(\"counter2\").drop}",
+            "rpc:counters-exports/api.{counter(\"counter2\").drop}",
             vec![],
         )
         .await;
 
     let result3 = deps
-        .invoke_and_await_json(&worker_id, "rpc:counters/api.{get-all-dropped}", vec![])
+        .invoke_and_await_json(&worker_id, "rpc:counters-exports/api.{get-all-dropped}", vec![])
         .await;
 
     check!(
@@ -1340,7 +1340,7 @@ async fn worker_recreation(deps: &EnvBasedTestDependencies, _tracing: &Tracing) 
         let _ = deps
             .invoke_and_await(
                 &worker_id,
-                "rpc:counters/api.{counter(\"counter1\").inc-by}",
+                "rpc:counters-exports/api.{counter(\"counter1\").inc-by}",
                 vec![Value::U64(1)],
             )
             .await;
@@ -1349,7 +1349,7 @@ async fn worker_recreation(deps: &EnvBasedTestDependencies, _tracing: &Tracing) 
     let result1 = deps
         .invoke_and_await(
             &worker_id,
-            "rpc:counters/api.{counter(\"counter1\").get-value}",
+            "rpc:counters-exports/api.{counter(\"counter1\").get-value}",
             vec![],
         )
         .await;
@@ -1362,7 +1362,7 @@ async fn worker_recreation(deps: &EnvBasedTestDependencies, _tracing: &Tracing) 
     let _ = deps
         .invoke_and_await(
             &worker_id,
-            "rpc:counters/api.{counter(\"counter1\").inc-by}",
+            "rpc:counters-exports/api.{counter(\"counter1\").inc-by}",
             vec![Value::U64(1)],
         )
         .await;
@@ -1370,7 +1370,7 @@ async fn worker_recreation(deps: &EnvBasedTestDependencies, _tracing: &Tracing) 
     let result2 = deps
         .invoke_and_await(
             &worker_id,
-            "rpc:counters/api.{counter(\"counter1\").get-value}",
+            "rpc:counters-exports/api.{counter(\"counter1\").get-value}",
             vec![],
         )
         .await;
@@ -1384,7 +1384,7 @@ async fn worker_recreation(deps: &EnvBasedTestDependencies, _tracing: &Tracing) 
     let result3 = deps
         .invoke_and_await(
             &worker_id,
-            "rpc:counters/api.{counter(\"counter1\").get-value}",
+            "rpc:counters-exports/api.{counter(\"counter1\").get-value}",
             vec![],
         )
         .await;
