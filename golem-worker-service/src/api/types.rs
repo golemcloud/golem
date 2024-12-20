@@ -1,6 +1,6 @@
+pub use golem_wasm_ast::analysis::AnalysedType;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use golem_wasm_ast::analysis::analysed_type::AnalysedType;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OpenAPISpec {
@@ -209,6 +209,26 @@ pub enum BindingType {
         content_type: String,
         content: Vec<u8>,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthConfig {
+    pub jwt_secret: String,
+    pub required_claims: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CacheConfig {
+    pub max_age_seconds: u32,
+    pub private: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CorsConfig {
+    pub allowed_origins: Vec<String>,
+    pub allowed_methods: Vec<String>,
+    pub allowed_headers: Vec<String>,
+    pub max_age_seconds: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

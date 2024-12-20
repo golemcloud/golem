@@ -18,9 +18,8 @@ use poem::endpoint::PrometheusExporter;
 use poem::{get, EndpointExt};
 use poem_openapi::OpenApiService;
 use prometheus::Registry;
-pub use types::*;
+pub use definition::{ApiDefinition};
 
-pub use definition::*;
 pub use openapi::OpenAPIConverter;
 pub use openapi::validate_openapi;
 pub use openapi::OpenAPIError;
