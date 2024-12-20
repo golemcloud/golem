@@ -5,7 +5,8 @@ import { Box, Button, List, ListItem, ListItemIcon, ListItemText, Typography } f
 import { Home, Settings, RocketLaunch, Add } from "@mui/icons-material";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useTheme } from "@mui/material/styles";
+import PlayForWorkIcon from '@mui/icons-material/PlayForWork';
+
 
 
 type SidebarProps = {
@@ -15,12 +16,11 @@ type SidebarProps = {
 const Sidebar = ({apiId}:SidebarProps) => {
 
   const pathname = usePathname();
-  const theme=useTheme();
-
   const navigationLinks = [
     { name: "Overview", href: `/apis/${apiId}/overview`, icon: <Home fontSize="small" /> },
     { name: "Settings", href: `/apis/${apiId}/settings`, icon: <Settings fontSize="small" /> },
     { name: "Deployments", href: `/apis/${apiId}/deployments`, icon: <RocketLaunch fontSize="small" /> },
+    { name: "Playground", href: `/apis/${apiId}/playground`, icon: <PlayForWorkIcon fontSize="small" /> },
   ];
 
   return (
