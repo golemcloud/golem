@@ -87,6 +87,11 @@ export interface VersionedComponentId {
     timestamp: string;
     targetVersion: number;
   }
+
+  export type WorkerFormData ={
+    workerName: string;
+    workerType: string;
+  }
   
   export interface WorkerResource {
     createdAt: string;

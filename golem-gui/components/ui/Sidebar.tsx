@@ -5,23 +5,24 @@ import { Box, Button, List, ListItem, ListItemIcon, ListItemText, Typography } f
 import { Home, Settings, RocketLaunch, Add } from "@mui/icons-material";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import PlayForWorkIcon from '@mui/icons-material/PlayForWork';
 
 
 
 type SidebarProps = {
-  apiId: string;
+  id: string;
+  navigationLinks:NavigationLinks[],
+  variant:string;
 };
 
-const Sidebar = ({apiId}:SidebarProps) => {
+type NavigationLinks = {
+  name: string;
+  href: string;
+  icon: React.ReactNode;
+};
+
+const Sidebar = ({ id, navigationLinks, variant }: SidebarProps) => {
 
   const pathname = usePathname();
-  const navigationLinks = [
-    { name: "Overview", href: `/apis/${apiId}/overview`, icon: <Home fontSize="small" /> },
-    { name: "Settings", href: `/apis/${apiId}/settings`, icon: <Settings fontSize="small" /> },
-    { name: "Deployments", href: `/apis/${apiId}/deployments`, icon: <RocketLaunch fontSize="small" /> },
-    { name: "Playground", href: `/apis/${apiId}/playground`, icon: <PlayForWorkIcon fontSize="small" /> },
-  ];
 
   return (
     <Box
@@ -84,7 +85,8 @@ const Sidebar = ({apiId}:SidebarProps) => {
         Routes
       </Typography>
 
-      <Link href={`/apis/${apiId}/new-route`}>
+      {variant==="apis" && <Link href={`/apis/${id}/new-route`}>
+       &&
         <Button
         variant="outlined"
         sx={{
@@ -99,7 +101,7 @@ const Sidebar = ({apiId}:SidebarProps) => {
         Add
         < Add className="ml-2" />
         </Button>
-       </Link>
+      </Link>}
     </Box>
   );
 };

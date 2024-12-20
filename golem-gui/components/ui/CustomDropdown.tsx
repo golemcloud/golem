@@ -1,11 +1,14 @@
-import React, { useState } from 'react';
-import { Box, Menu, MenuItem, Chip, TextField } from '@mui/material';
+"use client"
 
-const FilterDropdown: React.FC = () => {
-  const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
-  const [selectedFilters, setSelectedFilters] = useState<string[]>([]);
-  const [currentFilter, setCurrentFilter] = useState<string>('');
-  const [menuOptions, setMenuOptions] = useState<string[]>([
+import React, { useState } from 'react';
+import { Box, Menu, MenuItem, Chip, TextField, Typography } from '@mui/material';
+
+
+export default function CustomDropdown() {
+  const [anchorEl, setAnchorEl] = useState(null);
+  const [selectedFilters, setSelectedFilters] = useState([]);
+  const [currentFilter, setCurrentFilter] = useState('');
+  const [menuOptions, setMenuOptions] = useState([
     'Running',
     'Idle',
     'Suspended',
@@ -17,7 +20,7 @@ const FilterDropdown: React.FC = () => {
 
   const open = Boolean(anchorEl);
 
-  const handleOpenMenu = (event: React.MouseEvent<HTMLElement>) => {
+  const handleOpenMenu = (event:any) => {
     setAnchorEl(event.currentTarget);
   };
 
@@ -25,39 +28,28 @@ const FilterDropdown: React.FC = () => {
     setAnchorEl(null);
   };
 
-  const handleSelectFilter = (filter: string) => {
-    if (selectedFilters.includes(filter)) {
-      setSelectedFilters(selectedFilters.filter((item) => item !== filter)); // Deselect
-    } else {
-      setSelectedFilters([...selectedFilters, filter]); // Select
+  const handleSelectFilter = (filter:string) => {
+        // @ts-ignore
+    if (!selectedFilters.includes(filter)) {
+        // @ts-ignore
+      setSelectedFilters([...selectedFilters, filter]);
     }
   };
 
-  const handleDeleteFilter = (filterToDelete: string) => {
+  // @ts-ignore
+  const handleDeleteFilter = (filterToDelete) => {
     setSelectedFilters(selectedFilters.filter((filter) => filter !== filterToDelete));
   };
 
-  const handleAddCustomFilter = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    if (event.key === 'Enter' && currentFilter.trim() !== '') {
-      if (!menuOptions.includes(currentFilter.trim())) {
-        setMenuOptions([...menuOptions, currentFilter.trim()]); // Add to options
-      }
-      if (!selectedFilters.includes(currentFilter.trim())) {
-        setSelectedFilters([...selectedFilters, currentFilter.trim()]); // Select
+  const handleAddCustomFilter = (event:any) => {
+    if (event.key === 'Enter' && currentFilter.trim() !== '') { // @ts-ignore
+      if (!selectedFilters.includes(currentFilter.trim())) { // @ts-ignore
+        setSelectedFilters([...selectedFilters, currentFilter.trim()]);
+        setMenuOptions([...menuOptions, currentFilter.trim()]); // Add to menu options
       }
       setCurrentFilter(''); // Clear input
     }
   };
-
-  const renderSelectedFilters = (): string => {
-    const displayedFilters = selectedFilters.join(', ');
-    return displayedFilters.length > 6 ? `${displayedFilters.slice(0, 6)}...` : displayedFilters;
-  };
-
-  // Filter menu options based on search query
-  const filteredMenuOptions = menuOptions.filter(option =>
-    option.toLowerCase().includes(currentFilter.toLowerCase())
-  );
 
   return (
     <Box
@@ -66,12 +58,13 @@ const FilterDropdown: React.FC = () => {
         flexDirection: 'column',
         gap: 2,
         maxWidth: 400,
+        bgcolor: 'black',
         padding: 2,
-        borderRadius: 0,
+        borderRadius: 1,
         color: 'white',
-        width: '200px',
       }}
     >
+      {/* Trigger for Dropdown */}
       <Box
         onClick={handleOpenMenu}
         sx={{
@@ -81,26 +74,11 @@ const FilterDropdown: React.FC = () => {
           bgcolor: '#333',
           cursor: 'pointer',
           color: 'white',
-          height: '40px', // Fixed height for the selection box
-          display: 'flex',
-          alignItems: 'center',
         }}
       >
-        {selectedFilters.length > 0 ? 
-        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-        {selectedFilters.map((filter) => (
-          <Chip
-            key={filter}
-            label={filter}
-            onDelete={() => handleDeleteFilter(filter)}
-            sx={{
-              bgcolor: '#333',
-              color: 'white',
-              '& .MuiChip-deleteIcon': { color: 'gray' },
-            }}
-          />
-        ))}
-      </Box> : 'Select Filters...'}
+        {selectedFilters.length > 0
+          ? selectedFilters.join(', ')
+          : 'Select Filters...'}
       </Box>
 
       {/* Dropdown Menu */}
@@ -140,12 +118,12 @@ const FilterDropdown: React.FC = () => {
           />
         </MenuItem>
 
-        {/* Filtered Dropdown Options */}
-        {filteredMenuOptions.map((option) => (
+        {/* Dropdown Options */}
+        {menuOptions.map((option) => (
           <MenuItem
             key={option}
             onClick={() => handleSelectFilter(option)}
-            sx={{
+            sx={{// @ts-ignore
               bgcolor: selectedFilters.includes(option) ? '#444' : 'transparent',
               '&:hover': { bgcolor: '#555' },
             }}
@@ -161,15 +139,30 @@ const FilterDropdown: React.FC = () => {
         >
           Clear
         </MenuItem>
-        <MenuItem
+        <MenuItem // @ts-ignore
           onClick={() => setSelectedFilters(menuOptions)}
           sx={{ justifyContent: 'center' }}
         >
           Select All
         </MenuItem>
-      </Menu>      
+      </Menu>
+
+      {/* Display Selected Filters as Chips */}
+      <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+        {selectedFilters.map((filter) => (
+          <Chip
+            key={filter}
+            label={filter}
+            onDelete={() => handleDeleteFilter(filter)}
+            sx={{
+              bgcolor: '#333',
+              color: 'white',
+              '& .MuiChip-deleteIcon': { color: 'gray' },
+            }}
+          />
+        ))}
+      </Box>
     </Box>
   );
 };
 
-export default FilterDropdown;

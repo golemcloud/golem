@@ -16,12 +16,30 @@ import GridViewIcon from "@mui/icons-material/GridView";
 import ListIcon from "@mui/icons-material/List";
 import CreateComponentForm from "@/components/new-component"
 import WidgetsIcon from '@mui/icons-material/Widgets';
+import { Card, CardContent } from "@mui/material";
+import { Component } from "@/types/api";
+import { useRouter } from "next/navigation"; // If using `pages`
+import { useComponents } from "@/lib/hooks/useComponents";
+
 
 const ComponentsPage = () => {
   const [open, setOpen] = useState(false);
 
   const handleOpen = () => setOpen(true);
   const handleClose = () => setOpen(false);
+  const router = useRouter();
+
+  const { data: componentData, isLoading } = useComponents();
+  const components = (componentData?.data || []) as Component[];
+
+
+
+  function handleComponentClick(id: string){
+    console.log("Component Clicked")
+    router.push(`/components/${id}`);
+  }
+
+
   return (
     <Container maxWidth="lg" sx={{ mt: 5, height: "100vh" }}>
       {/* Search Bar and Buttons */}
@@ -69,9 +87,26 @@ const ComponentsPage = () => {
           </Button>
       </Box>
 
-      {/* Empty State */}
-      <Box
-        
+      {components.length > 0 ? (
+        <Box sx={{ display: "flex", flexWrap: "wrap", gap: 2 }}>
+          {!isLoading && components?.map((item: Component) => (
+            <Card
+              key={item.versionedComponentId.componentId}
+              sx={{
+                cursor: "pointer",
+                width: "200px",
+                "&:hover": { boxShadow: 4 },
+                transition: "all 0.3s ease",
+              }}
+              onClick={() => handleComponentClick(item.versionedComponentId.componentId!)}
+            >
+              <CardContent>
+                <Typography variant="h6">{item.componentName}</Typography>
+              </CardContent>
+            </Card>
+          ))}
+        </Box>)
+      :(<Box
         sx={{
           color: "#aaa",
           textAlign: "center",
@@ -97,7 +132,7 @@ const ComponentsPage = () => {
         <Typography variant="body2" color="grey.500">
           Create a new component to get started.
         </Typography>
-      </Box>
+      </Box>)}
       {/* Modal for Creating New API/Component */}
       <Modal open={open} onClose={handleClose}>
         <CreateComponentForm onCreation={handleClose}/>
