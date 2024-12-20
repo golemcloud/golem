@@ -5,7 +5,6 @@ import {
   Button,
   Container,
   InputAdornment,
-  Paper,
   TextField,
   Typography,
   IconButton,
@@ -101,7 +100,7 @@ const ComponentsPage = () => {
       </Box>
       {/* Modal for Creating New API/Component */}
       <Modal open={open} onClose={handleClose}>
-        <CreateComponentForm/>
+        <CreateComponentForm onCreation={handleClose}/>
       </Modal>
     </Container>
   );

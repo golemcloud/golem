@@ -15,20 +15,34 @@ export async function POST(request: NextRequest) {
 
     // Ensure necessary headers are included
     delete headers['host'];
-    const requestBody = await request.json(); 
+    delete headers["content-length"]; // Fetch automatically calculates content-length
     // Parse the JSON body if it's expected
-    const init: RequestInit = {
+    interface ExtendedRequestInit extends RequestInit {
+      duplex?: "half";
+    }
+    
+    const init: ExtendedRequestInit = {
       method: request.method,
       headers: headers,
-      body: JSON.stringify(requestBody),  // Ensure body is a JSON string
+      body: request.body,
+      duplex: "half",
     };
+   
     const backendResponse = await fetch(backendUrl, init);
+    const isJson = backendResponse.headers
+      .get("content-type")
+      ?.includes("application/json");
 
-    const result = await backendResponse.json();
+    const result = isJson
+      ? await backendResponse.json()
+      : await backendResponse.text();
+
     return  NextResponse.json(
-      { status: backendResponse.status, data:  result}
+      { status: backendResponse.status, data:  result},
     );
   } catch (error) {
+    console.log("error====>", error);
+
     return NextResponse.json(
       { error: 'Unexpected error', details: (error as Error).message },
       { status: 500 }
