@@ -7,6 +7,7 @@ pub struct OpenAPISpec {
     pub info: Info,
     pub paths: HashMap<String, PathItem>,
     pub components: Option<Components>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub security: Option<Vec<HashMap<String, Vec<String>>>>,
 }
 
@@ -35,6 +36,7 @@ pub struct Operation {
     pub parameters: Option<Vec<Parameter>>,
     pub request_body: Option<RequestBody>,
     pub responses: HashMap<String, Response>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub security: Option<Vec<HashMap<String, Vec<String>>>>,
     pub tags: Option<Vec<String>>,
 }

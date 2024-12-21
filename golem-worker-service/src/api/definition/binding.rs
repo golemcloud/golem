@@ -1,5 +1,6 @@
 use golem_worker_service_base::gateway_api_definition::binding as base;
 use serde::{Deserialize, Serialize};
+use std::convert::TryFrom;
 
 /// Extended binding types for the worker service
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,16 +34,17 @@ impl From<base::BindingType> for BindingType {
     }
 }
 
-impl From<BindingType> for base::BindingType {
-    fn from(binding: BindingType) -> Self {
+impl TryFrom<BindingType> for base::BindingType {
+    type Error = String;
+
+    fn try_from(binding: BindingType) -> Result<Self, Self::Error> {
         match binding {
             BindingType::Default { input_type, output_type, function_name } => 
-                base::BindingType::Default { input_type, output_type, function_name },
+                Ok(base::BindingType::Default { input_type, output_type, function_name }),
             BindingType::FileServer { root_dir } => 
-                base::BindingType::FileServer { root_dir },
+                Ok(base::BindingType::FileServer { root_dir }),
             BindingType::SwaggerUI { .. } => 
-                // SwaggerUI bindings are handled specially by the worker service
-                panic!("Cannot convert SwaggerUI binding to base binding type"),
+                Err("SwaggerUI bindings cannot be converted to base binding type".to_string()),
         }
     }
 }

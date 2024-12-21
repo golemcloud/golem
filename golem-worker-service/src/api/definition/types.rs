@@ -55,7 +55,7 @@ pub struct Route {
     pub path: String,
     pub method: HttpMethod,
     pub description: String,
-    pub template_name: String,
+    pub component_name: String,
     pub binding: BindingType,
 }
 

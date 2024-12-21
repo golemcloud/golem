@@ -50,8 +50,8 @@ impl RedisCache {
         })
     }
     
-    async fn get_connection(&self) -> Result<redis::aio::Connection, RedisError> {
-        self.redis_client.get_async_connection().await
+    async fn get_connection(&self) -> Result<redis::aio::MultiplexedConnection, RedisError> {
+        self.redis_client.get_multiplexed_async_connection().await
     }
 }
 

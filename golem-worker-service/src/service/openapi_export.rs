@@ -122,7 +122,7 @@ pub async fn export_openapi(
                 path: r.path.to_string(),
                 method: convert_method(&r.method),
                 description: "".to_string(), // Providing a default empty description
-                template_name: "".to_string(), // Providing a default empty template_name
+                component_name: "".to_string(), // Providing a default empty component_name
                 binding: convert_binding(&r.binding),
             })
             .collect(),

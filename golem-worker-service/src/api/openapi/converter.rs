@@ -21,7 +21,9 @@ impl OpenAPIConverter {
             },
             paths: converter.convert_paths(&api.routes),
             components: Some(Self::create_components(&api.routes)),
-            security: None,
+            security: Some(vec![HashMap::from([
+                ("bearerAuth".to_string(), Vec::new())
+            ])]),
         }
     }
 
@@ -60,11 +62,11 @@ impl OpenAPIConverter {
     fn generate_operation(&self, route: &Route) -> Operation {
         match &route.binding {
             BindingType::Default { .. } => {
-                Operation {
+                let operation = Operation {
                     summary: Some(route.description.clone()),
                     description: None,
                     operation_id: Some(format!("{}_{}",
-                        route.template_name.to_snake_case(),
+                        route.component_name.to_snake_case(),
                         route.method.to_string().to_lowercase())),
                     parameters: {
                         let mut params = Self::extract_path_parameters(&route.path).unwrap_or_default();
@@ -81,16 +83,23 @@ impl OpenAPIConverter {
                         }
                         map
                     },
-                    security: None,
-                    tags: Some(vec![route.template_name.clone()]),
-                }
+                    security: if route.method != HttpMethod::Options {
+                        Some(vec![HashMap::from([
+                            ("bearerAuth".to_string(), Vec::new())
+                        ])])
+                    } else {
+                        None
+                    },
+                    tags: Some(vec![route.component_name.clone()]),
+                };
+                operation
             },
             BindingType::FileServer { .. } => {
                 Operation {
                     summary: Some(route.description.clone()),
                     description: None,
                     operation_id: Some(format!("{}_{}",
-                        route.template_name.to_snake_case(),
+                        route.component_name.to_snake_case(),
                         route.method.to_string().to_lowercase())),
                     parameters: {
                         let mut params = Self::extract_path_parameters(&route.path).unwrap_or_default();
@@ -108,7 +117,7 @@ impl OpenAPIConverter {
                         map
                     },
                     security: None,
-                    tags: Some(vec![route.template_name.clone()]),
+                    tags: Some(vec![route.component_name.clone()]),
                 }
             },
             BindingType::SwaggerUI { .. } => {
@@ -116,7 +125,7 @@ impl OpenAPIConverter {
                     summary: Some(route.description.clone()),
                     description: None,
                     operation_id: Some(format!("{}_{}",
-                        route.template_name.to_snake_case(),
+                        route.component_name.to_snake_case(),
                         route.method.to_string().to_lowercase())),
                     parameters: {
                         let mut params = Self::extract_path_parameters(&route.path).unwrap_or_default();
@@ -134,14 +143,14 @@ impl OpenAPIConverter {
                         map
                     },
                     security: None,
-                    tags: Some(vec![route.template_name.clone()]),
+                    tags: Some(vec![route.component_name.clone()]),
                 }
             },
             BindingType::Http => Operation {
                 summary: Some(route.description.clone()),
                 description: None,
                 operation_id: Some(format!("{}_{}",
-                    route.template_name.to_snake_case(),
+                    route.component_name.to_snake_case(),
                     route.method.to_string().to_lowercase())),
                 parameters: {
                     let mut params = Self::extract_path_parameters(&route.path).unwrap_or_default();
@@ -159,13 +168,13 @@ impl OpenAPIConverter {
                     map
                 },
                 security: None,
-                tags: Some(vec![route.template_name.clone()]),
+                tags: Some(vec![route.component_name.clone()]),
             },
             BindingType::Worker => Operation {
                 summary: Some(route.description.clone()),
                 description: None,
                 operation_id: Some(format!("{}_{}",
-                    route.template_name.to_snake_case(),
+                    route.component_name.to_snake_case(),
                     route.method.to_string().to_lowercase())),
                 parameters: {
                     let mut params = Self::extract_path_parameters(&route.path).unwrap_or_default();
@@ -183,13 +192,13 @@ impl OpenAPIConverter {
                     map
                 },
                 security: None,
-                tags: Some(vec![route.template_name.clone()]),
+                tags: Some(vec![route.component_name.clone()]),
             },
             BindingType::Proxy => Operation {
                 summary: Some(route.description.clone()),
                 description: None,
                 operation_id: Some(format!("{}_{}",
-                    route.template_name.to_snake_case(),
+                    route.component_name.to_snake_case(),
                     route.method.to_string().to_lowercase())),
                 parameters: {
                     let mut params = Self::extract_path_parameters(&route.path).unwrap_or_default();
@@ -207,7 +216,7 @@ impl OpenAPIConverter {
                     map
                 },
                 security: None,
-                tags: Some(vec![route.template_name.clone()]),
+                tags: Some(vec![route.component_name.clone()]),
             },
         }
     }
@@ -850,7 +859,7 @@ impl OpenAPIConverter {
                 SecurityScheme::Http {
                     scheme: "bearer".to_string(),
                     bearer_format: Some("JWT".to_string()),
-                    description: Some("JWT Authorization header".to_string()),
+                    description: Some("JWT Authorization header using the Bearer scheme. Example: \"Authorization: Bearer {token}\"".to_string()),
                 },
             );
         }

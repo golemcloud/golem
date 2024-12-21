@@ -9,7 +9,7 @@ fn create_test_route(path: &str, method: HttpMethod, input: &str, output: &str) 
         path: path.to_string(),
         method,
         description: "Test route".to_string(),
-        template_name: "test".to_string(),
+        component_name: "test".to_string(),
         binding: BindingType::Default {
             input_type: input.to_string(),
             output_type: output.to_string(),
@@ -187,7 +187,7 @@ fn test_file_server_binding() {
         path: "/files/{path}".to_string(),
         method: HttpMethod::Get,
         description: "Serve files".to_string(),
-        template_name: "files".to_string(),
+        component_name: "files".to_string(),
         binding: BindingType::FileServer {
             root_dir: "/static".to_string(),
         },
@@ -222,7 +222,7 @@ fn test_swagger_ui_binding() {
         path: "/docs".to_string(),
         method: HttpMethod::Get,
         description: "API Documentation".to_string(),
-        template_name: "docs".to_string(),
+        component_name: "docs".to_string(),
         binding: BindingType::SwaggerUI {
             spec_path: "/api/openapi/my-api/v1".to_string(),
         },
