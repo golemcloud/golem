@@ -27,8 +27,8 @@ use crate::services::rdbms::RdbmsPoolKey;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use bigdecimal::BigDecimal;
-use chrono::{Datelike, Offset, Timelike};
 use bit_vec::BitVec;
+use chrono::{Datelike, Offset, Timelike};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::ops::{Bound, Deref};
 use std::str::FromStr;
@@ -1047,9 +1047,7 @@ fn to_db_value(
             postgres_types::DbValue::Cidr(v.into()),
         )),
         DbValue::Macaddr(v) => Ok(DbValueWithResourceRep::new_resource_none(
-            postgres_types::DbValue::Macaddr(mac_address::MacAddress::new(
-                v.octets.into(),
-            )),
+            postgres_types::DbValue::Macaddr(mac_address::MacAddress::new(v.octets.into())),
         )),
         DbValue::Int4range(v) => Ok(DbValueWithResourceRep::new_resource_none(
             postgres_types::DbValue::Int4range(v.into()),
@@ -1704,10 +1702,10 @@ pub mod tests {
     use crate::services::rdbms::postgres::types as postgres_types;
     use assert2::check;
     use bigdecimal::BigDecimal;
-    use chrono::Offset;
-    use serde_json::json;
-    use mac_address::MacAddress;
     use bit_vec::BitVec;
+    use chrono::Offset;
+    use mac_address::MacAddress;
+    use serde_json::json;
     use std::collections::Bound;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
     use test_r::test;

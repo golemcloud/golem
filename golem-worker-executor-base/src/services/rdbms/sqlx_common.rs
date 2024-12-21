@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::services::golem_config::{RdbmsConfig, RdbmsPoolConfig};
-use crate::services::rdbms::metrics::{record_rdbms_failure, record_rdbms_success};
+use crate::services::golem_config::{RdbmsConfig, RdbmsPoolConfig, RdbmsQueryConfig};
+use crate::services::rdbms::metrics::record_rdbms_metrics;
 use crate::services::rdbms::{
-    DbResultSet, DbRow, Error, Rdbms, RdbmsPoolKey, RdbmsStatus, RdbmsType,
+    DbResultSet, DbRow, DbTransaction, Error, Rdbms, RdbmsPoolKey, RdbmsStatus, RdbmsType,
 };
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -23,10 +23,11 @@ use futures_util::stream::BoxStream;
 use futures_util::StreamExt;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::WorkerId;
-use sqlx::{Database, Pool, Row};
+use sqlx::pool::PoolConnection;
+use sqlx::{Database, Pool, Row, TransactionManager};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, error, info};
@@ -45,7 +46,7 @@ where
 
 impl<T, DB> SqlxRdbms<T, DB>
 where
-    T: RdbmsType + Display + Default + Send + Sync,
+    T: RdbmsType + Display + Default + Send + Sync + QueryExecutor2<T, DB>,
     DB: Database,
     RdbmsPoolKey: PoolCreator<DB>,
 {
@@ -130,27 +131,18 @@ where
         start: Instant,
         result: Result<R, Error>,
     ) -> Result<R, Error> {
-        let end = Instant::now();
-        let rdbms_type = self.rdbms_type.to_string();
-        match result {
-            Ok(result) => {
-                record_rdbms_success(&rdbms_type, name, end.duration_since(start));
-                Ok(result)
-            }
-            Err(err) => {
-                record_rdbms_failure(&rdbms_type, name);
-                Err(err)
-            }
-        }
+        record_rdbms_metrics(&self.rdbms_type, name, start, result)
     }
 }
 
 #[async_trait]
 impl<T, DB> Rdbms<T> for SqlxRdbms<T, DB>
 where
-    T: RdbmsType + Display + Default + Send + Sync,
+    T: RdbmsType + Display + Default + Send + Sync + QueryExecutor2<T, DB> + 'static,
     DB: Database,
-    Pool<DB>: QueryExecutor<T>,
+    for<'c> &'c mut <DB as sqlx::Database>::Connection: sqlx::Executor<'c, Database = DB>,
+    // Pool<DB>: QueryExecutor<T>,
+    // for<'a> &'a mut <DB as Database>::Connection: QueryExecutor<T>,
     RdbmsPoolKey: PoolCreator<DB>,
 {
     async fn create(&self, address: &str, worker_id: &WorkerId) -> Result<RdbmsPoolKey, Error> {
@@ -205,7 +197,8 @@ where
 
         let result = {
             let pool = self.get_or_create(key, worker_id).await?;
-            pool.deref().execute(statement, params).await
+
+            T::execute(statement, params, pool.deref()).await
         };
 
         let result = result.map_err(|e| {
@@ -241,10 +234,8 @@ where
         );
 
         let result = {
-            let pool = self.get_or_create(key, worker_id).await?;
-            pool.deref()
-                .query_stream(statement, params, self.config.query.query_batch)
-                .await
+            let pool= self.get_or_create(key, worker_id).await?;
+            T::query_stream(statement, params, self.config.query.query_batch, pool.deref()).await
         };
 
         let result = result.map_err(|e| {
@@ -258,6 +249,49 @@ where
             e
         });
         self.record_metrics("query", start, result)
+    }
+
+    async fn begin(
+        &self,
+        key: &RdbmsPoolKey,
+        worker_id: &WorkerId,
+    ) -> Result<Arc<dyn DbTransaction<T> + Send + Sync>, Error> {
+        let start = Instant::now();
+        debug!(
+            rdbms_type = self.rdbms_type.to_string(),
+            pool_key = key.to_string(),
+            "begin",
+        );
+
+        let result = {
+            let pool = self.get_or_create(key, worker_id).await?;
+
+            let mut connection = pool
+                .deref()
+                .acquire()
+                .await
+                .map_err(|e| Error::ConnectionFailure(e.to_string()))?;
+            DB::TransactionManager::begin(&mut connection)
+                .await
+                .map_err(|e| Error::QueryExecutionFailure(e.to_string()))?;
+
+            let db_transaction: Arc<dyn DbTransaction<T> + Send + Sync> = Arc::new(
+                SqlxDbTransaction::new(key.clone(), self.config.query, connection),
+            );
+
+            Ok(db_transaction)
+        };
+
+        let result = result.map_err(|e| {
+            error!(
+                rdbms_type = self.rdbms_type.to_string(),
+                pool_key = key.to_string(),
+                "begin - error: {}",
+                e
+            );
+            e
+        });
+        self.record_metrics("begin", start, result)
     }
 
     fn status(&self) -> RdbmsStatus {
@@ -286,6 +320,237 @@ pub(crate) trait QueryExecutor<T: RdbmsType> {
         batch: usize,
     ) -> Result<Arc<dyn DbResultSet<T> + Send + Sync>, Error>;
 }
+
+#[async_trait]
+pub(crate) trait QueryExecutor2<T: RdbmsType, DB: Database> {
+    async fn execute<'c, E>(
+        statement: &str,
+        params: Vec<T::DbValue>,
+        executor: E,
+    ) -> Result<u64, Error>
+    where
+        E: sqlx::Executor<'c, Database = DB>;
+
+    async fn query_stream<'c, E>(
+        statement: &str,
+        params: Vec<T::DbValue>,
+        batch: usize,
+        executor: E,
+    ) -> Result<Arc<dyn DbResultSet<T> + Send + Sync + 'c>, Error>
+    where
+        E: sqlx::Executor<'c, Database = DB>;
+}
+
+#[derive(Clone)]
+#[allow(clippy::type_complexity)]
+pub struct SqlxDbTransaction<T: RdbmsType, DB: Database> {
+    rdbms_type: T,
+    pool_key: RdbmsPoolKey,
+    query_config: RdbmsQueryConfig,
+    transaction: Arc<async_mutex::Mutex<(PoolConnection<DB>, bool)>>,
+}
+
+impl<T, DB> SqlxDbTransaction<T, DB>
+where
+    T: RdbmsType + Display + Default + Send + Sync + QueryExecutor2<T, DB>,
+    DB: Database,
+{
+    fn new(
+        pool_key: RdbmsPoolKey,
+        query_config: RdbmsQueryConfig,
+        connection: PoolConnection<DB>,
+    ) -> Self {
+        let rdbms_type = T::default();
+        Self {
+            rdbms_type,
+            pool_key,
+            query_config,
+            transaction: Arc::new(async_mutex::Mutex::new((connection, true))),
+        }
+    }
+
+    fn record_metrics<R>(
+        &self,
+        name: &'static str,
+        start: Instant,
+        result: Result<R, Error>,
+    ) -> Result<R, Error> {
+        record_rdbms_metrics(&self.rdbms_type, name, start, result)
+    }
+}
+
+#[async_trait]
+impl<T, DB> DbTransaction<T> for SqlxDbTransaction<T, DB>
+where
+    T: RdbmsType + Display + Default + Send + Sync + QueryExecutor2<T, DB>,
+    DB: Database,
+    // for<'a> &'a mut <DB as Database>::Connection: QueryExecutor<T>,
+    for<'c> &'c mut <DB as sqlx::Database>::Connection: sqlx::Executor<'c, Database = DB>,
+    RdbmsPoolKey: PoolCreator<DB>,
+{
+    async fn execute(&self, statement: &str, params: Vec<T::DbValue>) -> Result<u64, Error>
+    where
+        <T as RdbmsType>::DbValue: 'async_trait,
+    {
+        let start = Instant::now();
+        debug!(
+            rdbms_type = self.rdbms_type.to_string(),
+            pool_key = self.pool_key.to_string(),
+            "execute - statement: {}, params count: {}",
+            statement,
+            params.len()
+        );
+
+        let result = {
+            let mut transaction = self.transaction.lock().await;
+            T::execute(statement, params, transaction.0.deref_mut()).await
+        };
+
+        let result = result.map_err(|e| {
+            error!(
+                rdbms_type = self.rdbms_type.to_string(),
+                pool_key = self.pool_key.to_string(),
+                "execute - statement: {}, error: {}",
+                statement,
+                e
+            );
+            e
+        });
+        self.record_metrics("execute", start, result)
+    }
+
+    async fn query(
+        &self,
+        statement: &str,
+        params: Vec<T::DbValue>,
+    ) -> Result<Arc<dyn DbResultSet<T> + Send + Sync>, Error>
+    where
+        <T as RdbmsType>::DbValue: 'async_trait,
+    {
+        // let start = Instant::now();
+        // debug!(
+        //     rdbms_type = self.rdbms_type.to_string(),
+        //     pool_key = self.pool_key.to_string(),
+        //     "query - statement: {}, params count: {}",
+        //     statement,
+        //     params.len()
+        // );
+        //
+        // let result = {
+        //     let mut transaction = self.transaction.lock().await;
+        //     T::query_stream(
+        //         statement,
+        //         params,
+        //         self.query_config.query_batch,
+        //         transaction.0.deref_mut(),
+        //     )
+        //     .await
+        // };
+        //
+        // let result = result.map_err(|e| {
+        //     error!(
+        //         rdbms_type = self.rdbms_type.to_string(),
+        //         pool_key = self.pool_key.to_string(),
+        //         "query - statement: {}, error: {}",
+        //         statement,
+        //         e
+        //     );
+        //     e
+        // });
+        // self.record_metrics("query", start, result)
+        todo!()
+
+    }
+
+    async fn commit(&self) -> Result<(), Error> {
+        let start = Instant::now();
+        debug!(
+            rdbms_type = self.rdbms_type.to_string(),
+            pool_key = self.pool_key.to_string(),
+            "commit"
+        );
+
+        let mut transaction = self.transaction.lock().await;
+        let result = DB::TransactionManager::commit(&mut transaction.0).await;
+        if result.is_ok() {
+            transaction.1 = false;
+        }
+
+        let result = result.map_err(|e| {
+            let e = Error::QueryExecutionFailure(e.to_string());
+            error!(
+                rdbms_type = self.rdbms_type.to_string(),
+                pool_key = self.pool_key.to_string(),
+                "commit - error: {}",
+                e
+            );
+            e
+        });
+        self.record_metrics("commit", start, result)
+    }
+
+    async fn rollback(&self) -> Result<(), Error> {
+        let start = Instant::now();
+        debug!(
+            rdbms_type = self.rdbms_type.to_string(),
+            pool_key = self.pool_key.to_string(),
+            "rollback"
+        );
+
+        let mut transaction = self.transaction.lock().await;
+        let result = DB::TransactionManager::rollback(&mut transaction.0).await;
+        if result.is_ok() {
+            transaction.1 = false;
+        }
+        let result = result.map_err(|e| {
+            let e = Error::QueryExecutionFailure(e.to_string());
+            error!(
+                rdbms_type = self.rdbms_type.to_string(),
+                pool_key = self.pool_key.to_string(),
+                "rollback - error: {}",
+                e
+            );
+            e
+        });
+        self.record_metrics("rollback", start, result)
+    }
+
+    async fn rollback_if_open(&self) -> Result<(), Error> {
+        let start = Instant::now();
+        debug!(
+            rdbms_type = self.rdbms_type.to_string(),
+            pool_key = self.pool_key.to_string(),
+            "rollback if open"
+        );
+
+        let mut transaction = self.transaction.lock().await;
+
+        if transaction.1 {
+            DB::TransactionManager::start_rollback(&mut transaction.0);
+        }
+
+        self.record_metrics("rollback-if-open", start, Ok(()))
+    }
+}
+
+// impl<'c,  T, DB> Drop for SqlxDbTransaction<'c, T, DB>
+// where
+//     DB: Database,
+//     T: RdbmsType,
+// {
+//     fn drop(&mut self) {
+//         let (connection, open) = self.transaction.get_mut();
+//         if *open {
+//             // starts a rollback operation
+//
+//             // what this does depends on the database but generally this means we queue a rollback
+//             // operation that will happen on the next asynchronous invocation of the underlying
+//             // connection (including if the connection is returned to a pool)
+//
+//             DB::TransactionManager::start_rollback(connection);
+//         }
+//     }
+// }
 
 #[derive(Clone)]
 #[allow(clippy::type_complexity)]

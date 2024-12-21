@@ -52,6 +52,27 @@ impl Display for RdbmsStatus {
 }
 
 #[async_trait]
+pub trait DbTransaction<T: RdbmsType> {
+    async fn execute(&self, statement: &str, params: Vec<T::DbValue>) -> Result<u64, Error>
+    where
+        <T as RdbmsType>::DbValue: 'async_trait;
+
+    async fn query(
+        &self,
+        statement: &str,
+        params: Vec<T::DbValue>,
+    ) -> Result<Arc<dyn DbResultSet<T> + Send + Sync>, Error>
+    where
+        <T as RdbmsType>::DbValue: 'async_trait;
+
+    async fn commit(&self) -> Result<(), Error>;
+
+    async fn rollback(&self) -> Result<(), Error>;
+
+    async fn rollback_if_open(&self) -> Result<(), Error>;
+}
+
+#[async_trait]
 pub trait Rdbms<T: RdbmsType> {
     async fn create(&self, address: &str, worker_id: &WorkerId) -> Result<RdbmsPoolKey, Error>;
 
@@ -78,6 +99,12 @@ pub trait Rdbms<T: RdbmsType> {
     ) -> Result<Arc<dyn DbResultSet<T> + Send + Sync>, Error>
     where
         <T as RdbmsType>::DbValue: 'async_trait;
+
+    async fn begin(
+        &self,
+        key: &RdbmsPoolKey,
+        worker_id: &WorkerId,
+    ) -> Result<Arc<dyn DbTransaction<T> + Send + Sync>, Error>;
 
     fn status(&self) -> RdbmsStatus;
 }

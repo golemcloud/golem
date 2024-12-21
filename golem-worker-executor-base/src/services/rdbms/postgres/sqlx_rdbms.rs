@@ -19,17 +19,17 @@ use crate::services::rdbms::postgres::types::{
 };
 use crate::services::rdbms::postgres::{PostgresType, POSTGRES};
 use crate::services::rdbms::sqlx_common::{
-    PoolCreator, QueryExecutor, QueryParamsBinder, SqlxRdbms, StreamDbResultSet,
+    PoolCreator, QueryExecutor, QueryExecutor2, QueryParamsBinder, SqlxRdbms, StreamDbResultSet,
 };
 use crate::services::rdbms::{DbResultSet, DbRow, Error, Rdbms, RdbmsPoolKey};
 use async_trait::async_trait;
 use bigdecimal::BigDecimal;
+use bit_vec::BitVec;
 use futures_util::stream::BoxStream;
+use mac_address::MacAddress;
 use serde_json::json;
 use sqlx::postgres::types::{Oid, PgInterval, PgMoney, PgRange, PgTimeTz};
 use sqlx::postgres::{PgConnectOptions, PgTypeKind};
-use mac_address::MacAddress;
-use bit_vec::BitVec;
 use sqlx::{Column, ConnectOptions, Pool, Row, Type, TypeInfo, ValueRef};
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -59,8 +59,45 @@ impl PoolCreator<sqlx::Postgres> for RdbmsPoolKey {
     }
 }
 
+// #[async_trait]
+// impl QueryExecutor<PostgresType> for sqlx::Pool<sqlx::Postgres> {
+//     async fn execute(&self, statement: &str, params: Vec<DbValue>) -> Result<u64, Error> {
+//         let query: sqlx::query::Query<sqlx::Postgres, sqlx::postgres::PgArguments> =
+//             sqlx::query(statement).bind_params(params)?;
+//
+//         let result = query
+//             .execute(self)
+//             .await
+//             .map_err(|e| Error::QueryExecutionFailure(e.to_string()))?;
+//         Ok(result.rows_affected())
+//     }
+//
+//     async fn query_stream(
+//         &self,
+//         statement: &str,
+//         params: Vec<DbValue>,
+//         batch: usize,
+//     ) -> Result<Arc<dyn DbResultSet<PostgresType> + Send + Sync>, Error> {
+//         let query: sqlx::query::Query<sqlx::Postgres, sqlx::postgres::PgArguments> =
+//             sqlx::query(statement.to_string().leak()).bind_params(params)?;
+//
+//         let stream: BoxStream<Result<sqlx::postgres::PgRow, sqlx::Error>> = query.fetch(self);
+//
+//         let response: StreamDbResultSet<PostgresType, sqlx::postgres::Postgres> =
+//             StreamDbResultSet::create(stream, batch).await?;
+//         Ok(Arc::new(response))
+//     }
+// }
+
 #[async_trait]
-impl QueryExecutor<PostgresType> for sqlx::Pool<sqlx::Postgres> {
+// impl<'c, E: sqlx::Executor<'c, Database = sqlx::Postgres>> QueryExecutor<PostgresType> for E {
+// impl<E> QueryExecutor<PostgresType> for E where &E: sqlx::Executor<'_, Database = sqlx::Postgres> {
+impl<E> QueryExecutor<PostgresType> for E
+where
+    for<'a> &'a E: sqlx::Executor<'static, Database = sqlx::Postgres>,
+{
+    // impl<'c, E: sqlx::Executor<'c, Database = sqlx::Postgres>> QueryExecutor<PostgresType> for E where &E: sqlx::Executor<'_> {
+    // impl<'c, E: sqlx::Executor<'c, Database = sqlx::Postgres>> QueryExecutor<PostgresType> for E where for<'a> &'a E: sqlx::Executor<'_> {
     async fn execute(&self, statement: &str, params: Vec<DbValue>) -> Result<u64, Error> {
         let query: sqlx::query::Query<sqlx::Postgres, sqlx::postgres::PgArguments> =
             sqlx::query(statement).bind_params(params)?;
@@ -84,6 +121,48 @@ impl QueryExecutor<PostgresType> for sqlx::Pool<sqlx::Postgres> {
         let stream: BoxStream<Result<sqlx::postgres::PgRow, sqlx::Error>> = query.fetch(self);
 
         let response: StreamDbResultSet<PostgresType, sqlx::postgres::Postgres> =
+            StreamDbResultSet::create(stream, batch).await?;
+        Ok(Arc::new(response))
+    }
+}
+
+// struct PostgresQueryExecutor;
+
+#[async_trait]
+impl QueryExecutor2<PostgresType, sqlx::Postgres> for PostgresType {
+    async fn execute<'c, E>(
+        statement: &str,
+        params: Vec<DbValue>,
+        executor: E,
+    ) -> Result<u64, Error>
+    where
+        E: sqlx::Executor<'c, Database = sqlx::Postgres>,
+    {
+        let query: sqlx::query::Query<sqlx::Postgres, sqlx::postgres::PgArguments> =
+            sqlx::query(statement).bind_params(params)?;
+
+        let result = query
+            .execute(executor)
+            .await
+            .map_err(|e| Error::QueryExecutionFailure(e.to_string()))?;
+        Ok(result.rows_affected())
+    }
+
+    async fn query_stream<'c, E>(
+        statement: &str,
+        params: Vec<DbValue>,
+        batch: usize,
+        executor: E,
+    ) -> Result<Arc<dyn DbResultSet<PostgresType> + Send + Sync + 'c>, Error>
+    where
+        E: sqlx::Executor<'c, Database = sqlx::Postgres>,
+    {
+        let query: sqlx::query::Query<sqlx::Postgres, sqlx::postgres::PgArguments> =
+            sqlx::query(statement.to_string().leak()).bind_params(params)?;
+
+        let stream: BoxStream<Result<sqlx::postgres::PgRow, sqlx::Error>> = query.fetch(executor);
+
+        let response: StreamDbResultSet<'c, PostgresType, sqlx::postgres::Postgres> =
             StreamDbResultSet::create(stream, batch).await?;
         Ok(Arc::new(response))
     }

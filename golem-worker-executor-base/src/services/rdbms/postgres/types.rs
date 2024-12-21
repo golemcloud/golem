@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use bigdecimal::BigDecimal;
+use bit_vec::BitVec;
 use itertools::Itertools;
 use mac_address::MacAddress;
-use bit_vec::BitVec;
 use std::fmt::{Debug, Display};
 use std::net::IpAddr;
 use std::ops::Bound;
@@ -59,6 +59,7 @@ impl CompositeType {
         CompositeType { name, attributes }
     }
 }
+
 impl Display for CompositeType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
