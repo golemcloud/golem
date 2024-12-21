@@ -151,6 +151,23 @@ export interface VersionedComponentId {
     draft: boolean;
     createdAt: string;
   }
+
+
+  export type DeploymentApiDefinition = {
+    id: string;
+    version: string;
+  }
+  
+  type Site = {
+    host: string;
+    subdomain: string;
+  };
+  
+  export type ApiDeployment = {
+    apiDefinitions: DeploymentApiDefinition[];
+    createdAt: string;
+    site: Site;
+  };
   
   export interface Plugin {
     name: string;

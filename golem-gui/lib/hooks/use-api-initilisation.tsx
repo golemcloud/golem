@@ -90,8 +90,6 @@ const useApiInitialization = (
     onConnect,
     onDragOver,
     onDrop,
-    setV2Properties,
-    openGlobalEditor,
     selectedNode,
     isLayouted,
     setIsLayouted,
@@ -167,13 +165,11 @@ const useApiInitialization = (
         ...(apiDefnitions.map((api)=>({...api, type: "api", name: api.id, isLayouted: false}))) as ApiStep[]
       ]
       const {nodes, edges} = processApiFlow(sequences, true)
-      const lastestVersion = apiDefnitions[apiDefnitions.length-1];
       setSelectedNode(null);
       setFirstInitilisationDone(false);
       setIsLayouted(false);
       setNodes(nodes);
       setEdges(edges);
-      setV2Properties(lastestVersion);
       setChanges(1);
       setIsLoading(false);
     };
@@ -189,7 +185,6 @@ const useApiInitialization = (
     onConnect: onConnect,
     onDragOver: onDragOver,
     onDrop: handleDrop,
-    openGlobalEditor,
     selectedNode,
     setNodes,
     isLayouted,

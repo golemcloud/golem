@@ -21,7 +21,6 @@ function CustomNode({ id, data }: FlowNode) {
   const {
     selectedNode,
     setSelectedNode,
-    setOpneGlobalEditor,
     errorNode,
     synced,
     setTrigger,
@@ -48,7 +47,6 @@ function CustomNode({ id, data }: FlowNode) {
       if (id?.includes("empty")) {
         setSelectedNode(id);
       }
-      setOpneGlobalEditor(true);
       return;
     }
     setSelectedNode(id);
@@ -139,7 +137,6 @@ function CustomNode({ id, data }: FlowNode) {
               return;
             }
             if (specialNodeCheck || id?.includes("end")) {
-              setOpneGlobalEditor(true);
               return;
             }
             setSelectedNode(id);

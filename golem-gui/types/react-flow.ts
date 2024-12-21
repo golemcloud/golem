@@ -76,11 +76,6 @@ export type FlowNode = Node & {
   edge_label?: string;
   data: NodeData;
   isDraggable?: boolean;
-  nextStepId?: string | string[];
-  prevStep?: NodeStepMeta[] | NodeStepMeta | null;
-  nextStep?: NodeStepMeta[] | NodeStepMeta | null;
-  prevNodeId?: string | null;
-  nextNodeId?: string | null;
   id: string;
   isNested: boolean;
 };
@@ -88,10 +83,6 @@ export type FlowState = {
   nodes: FlowNode[];
   edges: Edge[];
   selectedNode: string | null;
-  v2Properties: V2Properties;
-  openGlobalEditor: boolean;
-  stepEditorOpenForNode: string | null;
-  toolboxConfiguration: Record<string, any>;
   trigger: Trigger;
   setTrigger: (triiger: Trigger) => void;
   onNodesChange: OnNodesChange<FlowNode>;
@@ -115,14 +106,9 @@ export type FlowState = {
   duplicateNode: (node: FlowNode) => void;
   // addNode: (node: Partial<FlowNode>) => void;
   setSelectedNode: (id: string | null) => void;
-  setV2Properties: (properties: V2Properties) => void;
-  setOpneGlobalEditor: (open: boolean) => void;
   // updateNodeData: (nodeId: string, key: string, value: any) => void;
   updateSelectedNodeData: (key: string, value: any) => void;
-  updateV2Properties: (properties: V2Properties) => void;
-  setStepEditorOpenForNode: (nodeId: string | null) => void;
   updateEdge: (id: string, key: string, value: any) => void;
-  setToolBoxConfig: (config: Record<string, any>) => void;
   // addNodeBetween: (
   //   nodeOrEdge: string | null,
   //   step: V2Step,
