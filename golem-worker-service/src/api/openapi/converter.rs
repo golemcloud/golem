@@ -97,24 +97,49 @@ impl OpenAPIConverter {
             BindingType::FileServer { .. } => {
                 Operation {
                     summary: Some(route.description.clone()),
-                    description: None,
+                    description: Some("File server operation".to_string()),
                     operation_id: Some(format!("{}_{}",
                         route.component_name.to_snake_case(),
                         route.method.to_string().to_lowercase())),
                     parameters: {
                         let mut params = Self::extract_path_parameters(&route.path).unwrap_or_default();
-                        params.extend(Self::extract_query_parameters(route));
-                        params.extend(Self::extract_header_parameters(route));
+                        // Special handling for catch-all file paths
+                        if route.path.contains("/{*path}") {
+                            params = vec![Parameter {
+                                name: "path".to_string(),
+                                r#in: ParameterLocation::Path,
+                                description: Some("Full file path".to_string()),
+                                required: Some(true),
+                                schema: Schema::String {
+                                    format: None,
+                                    enum_values: None
+                                },
+                                style: Some("simple".to_string()),
+                                explode: Some(false),
+                            }];
+                        }
                         if params.is_empty() { None } else { Some(params) }
                     },
-                    request_body: Self::create_request_body(route),
+                    request_body: None,
                     responses: {
-                        let mut map = Self::create_responses(route, "*");
-                        // Add CORS headers to all responses
-                        for response in map.values_mut() {
-                            response.headers = Some(Self::create_cors_headers("*"));
-                        }
-                        map
+                        let mut responses = HashMap::new();
+                        responses.insert("200".to_string(), Response {
+                            description: "File operation successful".to_string(),
+                            content: Some(HashMap::from([(
+                                "application/octet-stream".to_string(),
+                                MediaType {
+                                    schema: Schema::String {
+                                        format: Some("binary".to_string()),
+                                        enum_values: None
+                                    },
+                                    example: None,
+                                }
+                            )])),
+                            headers: Some(Self::create_cors_headers("*")),
+                        });
+                        // standard error responses
+                        Self::add_error_responses(&mut responses, "*");
+                        responses
                     },
                     security: None,
                     tags: Some(vec![route.component_name.clone()]),
@@ -123,7 +148,7 @@ impl OpenAPIConverter {
             BindingType::SwaggerUI { .. } => {
                 Operation {
                     summary: Some(route.description.clone()),
-                    description: None,
+                    description: Some("SwaggerUI interface endpoint - serves the OpenAPI documentation and UI assets".to_string()),
                     operation_id: Some(format!("{}_{}",
                         route.component_name.to_snake_case(),
                         route.method.to_string().to_lowercase())),
@@ -133,16 +158,74 @@ impl OpenAPIConverter {
                         params.extend(Self::extract_header_parameters(route));
                         if params.is_empty() { None } else { Some(params) }
                     },
-                    request_body: Self::create_request_body(route),
+                    request_body: None, // SwaggerUI endpoints don't accept request bodies
                     responses: {
-                        let mut map = Self::create_responses(route, "*");
-                        // Add CORS headers to all responses
-                        for response in map.values_mut() {
-                            response.headers = Some(Self::create_cors_headers("*"));
-                        }
-                        map
+                        let mut responses = HashMap::new();
+                        responses.insert("200".to_string(), Response {
+                            description: "SwaggerUI interface or asset files".to_string(),
+                            content: Some(HashMap::from([
+                                ("text/html".to_string(), MediaType {
+                                    schema: Schema::String {
+                                        format: Some("html".to_string()),
+                                        enum_values: None
+                                    },
+                                    example: None,
+                                }),
+                                ("application/javascript".to_string(), MediaType {
+                                    schema: Schema::String {
+                                        format: None,
+                                        enum_values: None
+                                    },
+                                    example: None,
+                                }),
+                                ("text/css".to_string(), MediaType {
+                                    schema: Schema::String {
+                                        format: None,
+                                        enum_values: None
+                                    },
+                                    example: None,
+                                })
+                            ])),
+                            headers: Some(Self::create_cors_headers("*")),
+                        });
+                        
+                        // error responses with good descriptions
+                        responses.insert("400".to_string(), Response {
+                            description: "Invalid request parameters or malformed request".to_string(),
+                            content: Some(HashMap::from([
+                                ("application/json; charset=utf-8".to_string(), MediaType {
+                                    schema: Schema::Ref { reference: "#/components/schemas/ErrorsBody".to_string() },
+                                    example: None,
+                                })
+                            ])),
+                            headers: Some(Self::create_cors_headers("*")),
+                        });
+
+                        responses.insert("404".to_string(), Response {
+                            description: "Requested SwaggerUI resource not found".to_string(),
+                            content: Some(HashMap::from([
+                                ("application/json; charset=utf-8".to_string(), MediaType {
+                                    schema: Schema::Ref { reference: "#/components/schemas/ErrorBody".to_string() },
+                                    example: None,
+                                })
+                            ])),
+                            headers: Some(Self::create_cors_headers("*")),
+                        });
+
+                        responses.insert("500".to_string(), Response {
+                            description: "Internal server error while serving SwaggerUI content".to_string(),
+                            content: Some(HashMap::from([
+                                ("application/json; charset=utf-8".to_string(), MediaType {
+                                    schema: Schema::Ref { reference: "#/components/schemas/GolemErrorBody".to_string() },
+                                    example: None,
+                                })
+                            ])),
+                            headers: Some(Self::create_cors_headers("*")),
+                        });
+
+                        responses
                     },
-                    security: None,
+                    security: None, // SwaggerUI is typically publicly accessible
                     tags: Some(vec![route.component_name.clone()]),
                 }
             },
@@ -254,14 +337,14 @@ impl OpenAPIConverter {
                 PathPattern::CatchAllVar(info) => Some(Parameter {
                     name: info.key_name.clone(), 
                     r#in: ParameterLocation::Path,
-                    description: Some("Matches one or more path segments".to_string()),
+                    description: Some("Full path".to_string()),
                     required: Some(true),
                     schema: Schema::String {
                         format: None,
                         enum_values: None
                     },
-                    style: Some("simple".to_string()),
-                    explode: Some(true),
+                    style: Some("matrix".to_string()), // using matrix style to catch-all paths
+                    explode: Some(false),
                 }),
                 _ => None
             })
@@ -701,27 +784,75 @@ impl OpenAPIConverter {
     }
 
     fn add_error_responses(responses: &mut HashMap<String, Response>, cors_allowed_origins: &str) {
-        let error_codes = ["400", "401", "403", "404", "409", "500"];
-          let error_schemas = [
-            "#/components/schemas/ErrorsBody",
-            "#/components/schemas/ErrorBody",
-            "#/components/schemas/ErrorBody",
-            "#/components/schemas/ErrorBody",
-            "#/components/schemas/ErrorBody",
-            "#/components/schemas/GolemErrorBody"
+        let error_definitions = [
+            (
+                "400",
+                "Bad Request - The request parameters are invalid or malformed",
+                "#/components/schemas/ErrorsBody",
+                Some(serde_json::json!({
+                    "errors": ["Invalid parameter format", "Missing required field"]
+                }))
+            ),
+            (
+                "401",
+                "Unauthorized - Authentication credentials are missing or invalid",
+                "#/components/schemas/ErrorBody",
+                Some(serde_json::json!({
+                    "error": "Invalid or expired authentication token"
+                }))
+            ),
+            (
+                "403",
+                "Forbidden - The authenticated user lacks sufficient permissions",
+                "#/components/schemas/ErrorBody",
+                Some(serde_json::json!({
+                    "error": "Insufficient permissions to access this resource"
+                }))
+            ),
+            (
+                "404",
+                "Not Found - The requested resource does not exist",
+                "#/components/schemas/ErrorBody",
+                Some(serde_json::json!({
+                    "error": "Resource not found"
+                }))
+            ),
+            (
+                "409",
+                "Conflict - The request conflicts with the current state",
+                "#/components/schemas/ErrorBody",
+                Some(serde_json::json!({
+                    "error": "Resource already exists or version conflict"
+                }))
+            ),
+            (
+                "500",
+                "Internal Server Error - An unexpected error occurred",
+                "#/components/schemas/GolemErrorBody",
+                Some(serde_json::json!({
+                    "golemError": {
+                        "code": "INTERNAL_ERROR",
+                        "message": "An unexpected error occurred",
+                        "details": {
+                            "trace_id": "1234567890abcdef"
+                        }
+                    }
+                }))
+            ),
         ];
-        for (code, schema) in error_codes.iter().zip(error_schemas.iter()) {
+
+        for (code, description, schema, example) in error_definitions {
             responses.insert(
                 code.to_string(),
                 Response {
-                    description: String::new(),
-                   content: Some(HashMap::from([(
+                    description: description.to_string(),
+                    content: Some(HashMap::from([(
                         "application/json; charset=utf-8".to_string(),
                         MediaType {
                             schema: Schema::Ref {
                                 reference: schema.to_string()
                             },
-                            example: None,
+                            example: example.map(|e| e.to_string()),
                         }
                     )])),
                     headers: Some(Self::create_cors_headers(cors_allowed_origins)),
@@ -729,7 +860,6 @@ impl OpenAPIConverter {
             );
         }
     }
-
 
     fn create_components(routes: &[Route]) -> Components {
         let mut components = Components {
