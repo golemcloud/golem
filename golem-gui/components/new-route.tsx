@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
 
 import React, { useState } from "react";
@@ -15,10 +16,9 @@ import {
 } from "@mui/material";
 import useSWR from "swr";
 import { fetcher } from "@/lib/utils";
-import { ApiDefinition, Component } from "@/types/api";
-import { useParams, useSearchParams } from "next/navigation";
+import { ApiRoute, Component } from "@/types/api";
 import { Loader } from "lucide-react";
-import { getErrorMessage } from "../lib/utils";
+import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 
 type FormData = {
   path: "";
@@ -41,10 +41,8 @@ const NewRouteForm = ({
   isModal?: boolean;
   isExperimental?: boolean;
 }) => {
-  const { control, handleSubmit, reset, watch } = useForm({
+  const { control, handleSubmit, reset, watch } = useForm<FormData>({
     defaultValues: {
-      apiName: "",
-      apiVersion: "",
       path: "",
       workerName: "",
       response: "",
@@ -57,34 +55,21 @@ const NewRouteForm = ({
   const component = watch("component");
   const [error, setError] = useState<string | null>(null);
   const { data, isLoading } = useSWR("?path=components", fetcher);
-  const { data: apiData, isLoading: apiDefinitonLoading } = useSWR(
-    `?path=api/definitions?api-definition-id=${apiId}`,
-    fetcher
-  );
-  const apiDefinitions = (
-    Array.isArray(apiData?.data || []) ? apiData?.data || [] : [apiData?.data]
-  ) as ApiDefinition[];
-  const apiDefinition =
-    apiDefinitions.find((api) => api.version === version) ||
-    apiDefinitions[apiDefinitions.length - 1] ||
-    null;
+  const {getApiDefintion,isLoading: apiDefinitonLoading, upsertRoute} = useApiDefinitions();
+  const {error: apiDefintionError} = getApiDefintion(apiId, version);
   const components = (data?.data || null) as Component[];
 
   if (apiDefinitonLoading || isLoading) {
     return <Loader />;
   }
 
-  const versionNotFound =
-    !apiDefinitonLoading && !apiDefinition
-      ? "Api defintion not found. please check apiId and version are valid"
-      : "";
-
+  const versionNotFound = !apiDefinitonLoading && apiDefintionError
   const onSubmit = async (formData: any) => {
     if (isExperimental) {
       return;
     }
     try {
-      const newRoute = {
+      const newRoute: ApiRoute = {
         path: formData.path,
         method: formData.method,
         security: null,
@@ -102,30 +87,17 @@ const NewRouteForm = ({
             types: {},
           },
           responseMappingOutput: {},
-          workername: formData.workerName,
+          workerName: formData.workerName,
           workerNameInput: {
             types: {},
           },
         },
       };
-      const response = await fetcher(
-        `?path=api/definitions/${apiId}/${version}`,
-        {
-          method: "PUT",
-          headers: {
-            "content-type": "application/json",
-          },
-          body: JSON.stringify({
-            ...apiDefinition,
-            routes: [...(apiDefinition?.routes || []), newRoute],
-          }),
-        }
-      );
+      const {success, error} = await upsertRoute(apiId, newRoute, version)
 
-      if (response.status !== 200) {
-        return setError(getErrorMessage(response.data));
+      if (!success) {
+        return setError(error!);
       }
-      console.log("Route created successfully:", response.data);
     } catch (error) {
       console.error("Error creating route:", error);
     }

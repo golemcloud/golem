@@ -122,16 +122,16 @@ export interface VersionedComponentId {
   export interface ApiRoute {
     method: string;
     path: string;
-    security?: string;
+    security?: string | null;
     binding: {
       componentId: VersionedComponentId;
       workerName: string;
-      idempotencyKey?: string;
-      response?: string;
-      bindingType: 'default';
+      idempotencyKey?: string|null;
+      response: string;
+      bindingType: string;
       responseMappingInput?: Record<string, unknown>;
       workerNameInput?: Record<string, unknown>;
-      idempotencyKeyInput?: Record<string, unknown>;
+      idempotencyKeyInput?: Record<string, unknown> | null;
       corsPreflight?: {
         allowOrigin: string;
         allowMethods: string;
@@ -139,7 +139,7 @@ export interface VersionedComponentId {
         exposeHeaders: string;
         allowCredentials: boolean;
         maxAge: number;
-      };
+      }| null;
       responseMappingOutput?: Record<string, unknown>;
     };
   }

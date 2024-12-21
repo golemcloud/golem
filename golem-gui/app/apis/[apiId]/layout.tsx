@@ -1,29 +1,89 @@
-"use client"
-
+"use client";
 import Sidebar from "@/components/ui/Sidebar";
-import { useParams } from "next/navigation";
+import {
+  useParams,
+  usePathname,
+  useRouter,
+  useSearchParams,
+} from "next/navigation";
 import { Home, Settings, RocketLaunch } from "@mui/icons-material";
-import PlayForWorkIcon from '@mui/icons-material/PlayForWork';
-
+import PlayForWorkIcon from "@mui/icons-material/PlayForWork";
+import { useEffect, useMemo, useState } from "react";
+import useApiDefinitions from "@/lib/hooks/use-api-definitons";
+import { Loader } from "lucide-react";
+import {
+  Stack,
+  Typography,
+  Select,
+  MenuItem,
+  Button,
+  Modal,
+  Box,
+  TextField,
+  Container,
+  Paper,
+} from "@mui/material";
 
 export default function APISLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  const { apiId } = useParams<{ apiId: string }>();
+  const params = useSearchParams();
+  const version = params.get("version");
+  const pathname = usePathname();
+  const [newVersion, setNewVersion] = useState("");
+  const [open, setOpen] = useState(false);
+  const router = useRouter();
+  const { apiDefinitions, getApiDefintion, isLoading, addApiDefinition } =
+    useApiDefinitions(apiId);
+  const { data: apiDefinition } = getApiDefintion(apiId, version);
+  const versions = useMemo(() => {
+    return apiDefinitions.map((api) => {
+      return api.version;
+    });
+  }, [apiDefinitions]);
 
-  const { apiId } = useParams<{apiId:string}>();
+  const navigationLinks = useMemo(() => {
+    return [
+      {
+        name: "Overview",
+        href: `/apis/${apiId}/overview${version ? `?version=${version}` : ""}`,
+        icon: <Home fontSize="small" />,
+      },
+      {
+        name: "Settings",
+        href: `/apis/${apiId}/settings${version ? `?version=${version}` : ""}`,
+        icon: <Settings fontSize="small" />,
+      },
+      {
+        name: "Deployments",
+        href: `/apis/${apiId}/deployments${
+          version ? `?version=${version}` : ""
+        }`,
+        icon: <RocketLaunch fontSize="small" />,
+      },
+      {
+        name: "Playground",
+        href: `/apis/${apiId}/playground${
+          version ? `?version=${version}` : ""
+        }`,
+        icon: <PlayForWorkIcon fontSize="small" />,
+      },
+    ];
+  }, [apiId, apiDefinition?.version]);
 
-  const navigationLinks = [
-    { name: "Overview", href: `/apis/${apiId}/overview`, icon: <Home fontSize="small" /> },
-    { name: "Settings", href: `/apis/${apiId}/settings`, icon: <Settings fontSize="small" /> },
-    { name: "Deployments", href: `/apis/${apiId}/deployments`, icon: <RocketLaunch fontSize="small" /> },
-    { name: "Playground", href: `/apis/${apiId}/playground`, icon: <PlayForWorkIcon fontSize="small" /> },
-  ];
+  const tab = useMemo(() => {
+    const parts = pathname?.split("/") || [];
+    return parts[parts.length - 1] || "overview"; // Default to "overview"
+  }, [pathname]);
 
+  if (isLoading) {
+    return <Loader />;
+  }
 
   return (
-    
     <div style={{ display: "flex", height: "100vh", overflow: "hidden" }}>
       <Sidebar id={apiId!} navigationLinks={navigationLinks} variant="apis" />
       <div
@@ -33,6 +93,72 @@ export default function APISLayout({
           height: "100vh",
         }}
       >
+        {tab !== "playground" && (
+          <>
+            <Stack direction="row" alignItems={"center"} marginBottom={2}>
+              <Typography className="">{apiDefinition?.id}</Typography>
+              <Select
+                name="version"
+                variant="outlined"
+                className="w-32 ml-2"
+                value={apiDefinition?.version}
+                onChange={(e) => {
+                  if(apiDefinition && e.target.value!== apiDefinition?.version){
+                    router.push(`/apis/${apiId}/${tab}?version=${e.target.value}`);
+
+                  }
+                }}
+              >
+                {versions?.map((version: string) => (
+                  <MenuItem key={version} value={version}>
+                    {version}
+                  </MenuItem>
+                ))}
+              </Select>
+              {/* TODO: need to add menu for new api creation, deletion and other operations */}
+              <Button
+                type="button"
+                className="ml-auto"
+                onClick={(e) => {
+                  e.preventDefault();
+                  setOpen(true);
+                }}
+              >
+                New Version
+              </Button>
+            </Stack>
+          </>
+        )}
+        <Modal open={open} onClose={() => setOpen(false)}>
+          <>
+            <Container maxWidth="sm" sx={{ mt: 4 }}>
+              <Paper elevation={3} sx={{ p: 4, borderRadius: 2 }}>
+                <TextField
+                  placeholder="Version"
+                  name="version"
+                  label="version"
+                  required
+                  onChange={(e) => {
+                    setNewVersion(e.target.value);
+                  }}
+                />
+                <Typography>Create new version from api {version}</Typography>
+                <Stack>
+                <Button
+                  onClick={async(e) => {
+                    e.preventDefault();
+                    await addApiDefinition({ version: newVersion }, apiId, version);
+                    setOpen(false);
+                  }}
+                  className="self-end"
+                >
+                  Create New
+                </Button>
+                </Stack>
+              </Paper>
+            </Container>
+          </>
+        </Modal>
         {children}
       </div>
     </div>

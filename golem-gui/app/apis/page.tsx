@@ -46,9 +46,9 @@ const ComponentsPage = () => {
   const handleOpen = () => setOpen(true);
   const handleClose = () => setOpen(false);
 
-  const handleApiClick = (apiId: string) => {
+  const handleApiClick = (apiId: string, version:string) => {
     // Navigate to the API details page within the project
-    router.push(`/apis/${apiId}/overview`);
+    router.push(`/apis/${apiId}/overview?version=${version}`);
   };
 
   return (
@@ -130,7 +130,7 @@ const ComponentsPage = () => {
                 "&:hover": { boxShadow: 4 },
                 transition: "all 0.3s ease",
               }}
-              onClick={() => handleApiClick(api.latestVersion.id!)}
+              onClick={() => handleApiClick(api.latestVersion.id!, api.latestVersion.version!)}
             >
               <CardContent>
                 <Typography variant="h6">{api.latestVersion.id}</Typography>
