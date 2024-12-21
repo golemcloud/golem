@@ -20,6 +20,7 @@ import { useRouter } from "next/navigation";
 import useSWR from "swr";
 import { fetcher } from "@/lib/utils";
 import { ApiDefinition } from "@/types/api";
+import CustomModal from "@/components/CustomModal";
 
 const ComponentsPage = () => {
   const [open, setOpen] = useState(false);
@@ -139,9 +140,9 @@ const ComponentsPage = () => {
         </Box>
       )}
 
-      <Modal open={open} onClose={handleClose}>
+      <CustomModal open={open} onClose={handleClose} heading="Create New API">
         <CreateAPI onCreation={handleClose}/>
-      </Modal>
+      </CustomModal>
     </Container>
   );
 };

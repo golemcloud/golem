@@ -57,67 +57,64 @@ const CreateAPI = ({
   };
 
   return (
-    <Container maxWidth="sm" sx={{ mt: 4 }}>
-      <Paper elevation={3} sx={{ p: 4, borderRadius: 2 }}>
-        {isExperimental && (
-          <Typography
-            variant="h5"
-            fontWeight="bold"
-            mb={2}
-            className="text-red-500 text-center"
-          >
-            Experimental. Coming soon!
-          </Typography>
-        )}
-        <Typography variant="h5" fontWeight="bold" mb={2}>
-          Create a new API
+    <Paper elevation={4} sx={{ p: 2 }}>
+      {isExperimental && (
+        <Typography
+          variant="h5"
+          fontWeight="bold"
+          mb={2}
+          className="text-red-500 text-center"
+        >
+          Experimental. Coming soon!
         </Typography>
-        <Typography variant="body2" color="text.secondary" mb={3}>
-          Export worker functions as a REST API
-        </Typography>
+      )}
+      {/* <Typography variant="h5" fontWeight="bold" mb={2}>
+        Create a new API
+      </Typography>
+      <Typography variant="body2" mb={3}>
+        Export worker functions as a REST API
+      </Typography> */}
 
-        {/* Project Dropdown */}
 
-        {/* API Name Input */}
-        <TextField
-          label="API Name"
-          placeholder="Enter API name"
-          fullWidth
-          margin="normal"
-          value={apiName}
-          onChange={(e) => setApiName(e.target.value)}
-        />
-        <Typography variant="caption" color="text.secondary">
-          Must be unique per project
-        </Typography>
+      {/* API Name Input */}
+      <TextField
+        label="API Name"
+        placeholder="Enter API name"
+        fullWidth
+        margin="normal"
+        value={apiName}
+        onChange={(e) => setApiName(e.target.value)}
+      />
+      <Typography variant="caption">
+        Must be unique per project
+      </Typography>
 
-        {/* Version Input */}
-        <TextField
-          label="Version"
-          placeholder="0.1.0"
-          fullWidth
-          margin="normal"
-          value={version}
-          onChange={(e) => setVersion(e.target.value)}
-        />
-        <Typography variant="caption" color="text.secondary">
-          Version prefix for your API
-        </Typography>
-        {error && <Typography className="text-red-500">{error}</Typography>}
+      {/* Version Input */}
+      <TextField
+        label="Version"
+        placeholder="0.1.0"
+        fullWidth
+        margin="normal"
+        value={version}
+        onChange={(e) => setVersion(e.target.value)}
+      />
+      <Typography variant="caption" >
+        Version prefix for your API
+      </Typography>
+      {error && <Typography className="text-red-500">{error}</Typography>}
 
-        {/* Create API Button */}
-        <Box display="flex" justifyContent="flex-end" mt={3}>
-          <Button
-            variant="contained"
-            color="primary"
-            onClick={handleCreateAPI}
-            sx={{ textTransform: "none", fontWeight: "bold" }}
-          >
-            Create API
-          </Button>
-        </Box>
-      </Paper>
-    </Container>
+      {/* Create API Button */}
+      <Box display="flex" justifyContent="flex-end" mt={3}>
+        <Button
+          variant="contained"
+          color="primary"
+          onClick={handleCreateAPI}
+          sx={{ textTransform: "none", fontWeight: "bold" }}
+        >
+          Create
+        </Button>
+      </Box>
+    </Paper>
   );
 };
 

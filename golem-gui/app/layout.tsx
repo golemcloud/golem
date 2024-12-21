@@ -3,6 +3,7 @@ import { Inter } from 'next/font/google';
 import Navbar from '@/components/ui/Navbar';
 import { ThemeProvider } from "@/components/theme-provider"
 import Footer from "@/components/ui/Footer"
+import { ToastContainer } from 'react-toastify';
 
 const inter = Inter({ subsets: ['latin'] });
 
@@ -25,6 +26,10 @@ export default function RootLayout({
             enableSystem
             disableTransitionOnChange
           >
+            <ToastContainer
+              position="bottom-right"
+              theme='dark'
+            />
           <Navbar />
           <div style={{ display: 'flex' }}>
             <main style={{ flexGrow: 1, }}>{children}</main>

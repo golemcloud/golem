@@ -5,6 +5,7 @@ import useStore from "@/lib/hooks/use-react-flow-store";
 import CreateAPI from "@/components/create-api";
 import { useParams } from "next/navigation";
 import NewRouteForm from "@/components/new-route";
+import CustomModal from "@/components/CustomModal";
 
 export default function Editors() {
   const [open, setOpen] = useState<string | null>(null);
@@ -23,7 +24,7 @@ export default function Editors() {
 
   return (
     <div>
-      <Modal open={!!open} onClose={handleClose}>
+      <CustomModal open={(open==null?false:true)} onClose={handleClose} heading={`Create New ${(trigger?.type=='route'?"Route":"API")}`}>
         <>
           {trigger?.type === "api" && (
             <>
@@ -49,8 +50,7 @@ export default function Editors() {
           )}
           {/* for now to differentiate we are using component. need chnge it correct creating element */}
           {trigger?.type === "route" && (
-            <Container maxWidth="md" sx={{ mt: 4 }}>
-              <Paper elevation={3} sx={{ borderRadius: 2 }}>
+              <Paper elevation={4}>
                 {trigger?.operation === "create" && (
                 <NewRouteForm apiId={apiId} onCreation={handleClose} isExperimental={true} />
               )}
@@ -67,10 +67,9 @@ export default function Editors() {
                 <NewRouteForm apiId={apiId} onCreation={handleClose} isExperimental={true} />
               )}
               </Paper>
-            </Container>
           )}
         </>
-      </Modal>
+        </CustomModal>
     </div>
   );
 }
