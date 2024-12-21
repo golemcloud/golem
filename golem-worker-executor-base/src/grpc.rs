@@ -466,9 +466,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             let target_metadata = self.worker_service().get(&owned_target_worker_id).await;
 
             // We allow forking only if the target worker does not exist
-            if target_metadata.is_none() {
-                Err(GolemError::worker_not_found(source_worker_id))
-            } else if target_metadata.is_none() {
+            if target_metadata.is_some() {
+                Err(GolemError::worker_already_exists(target_worker_id))
+            } else {
                 let source_worker_instance = Worker::get_or_create_suspended(
                     self,
                     &owned_source_worker_id,
@@ -499,8 +499,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     ))?;
 
                 // It's not opening an existing oplog but `create` a new one
-                let target_owned_worker_id =
-                    OwnedWorkerId::new(&account_id.clone().into(), &target_worker_id);
+                let target_owned_worker_id = OwnedWorkerId::new(&account_id, &target_worker_id);
 
                 // Not sure if we should copy the metadata or not, or stick on to just default
                 let target_worker_metadata = WorkerMetadata {
@@ -551,8 +550,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         ),
                     ),
                 })
-            } else {
-                Err(GolemError::worker_already_exists(target_worker_id))
             }
         }
     }
