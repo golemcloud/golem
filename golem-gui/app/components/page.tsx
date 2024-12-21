@@ -136,7 +136,10 @@ const ComponentsPage = () => {
       </Box>)}
       {/* Modal for Creating New API/Component */}
       <CustomModal open={open} onClose={handleClose} heading="Create a new Component">
-        <CreateComponentForm onCreation={handleClose}/>
+      <CreateComponentForm
+        onSubmitSuccess={() => handleClose()}
+        mode="create"
+      />
       </CustomModal>
     </Container>
   );

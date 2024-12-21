@@ -18,16 +18,31 @@ import FolderIcon from "@mui/icons-material/Folder";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import CloudUploadIcon from "@mui/icons-material/CloudUpload";
 import { fetcher, getErrorMessage } from "@/lib/utils";
-
+import { toast } from 'react-toastify';
+import { useComponents } from "@/lib/hooks/useComponents";
 
 type FormData = {
   name: string;
-  component_type: "0" | "1";
-  component: File | null;
+  component_type?: "0" | "1";
+  component?: File | null;
   files: File[];
 };
 
-export default function CreateComponentForm({onCreation}:{onCreation?:()=>void}) {
+type Props = {
+  mode: "create" | "update";
+  onSubmitSuccess?: () => void;
+  ComponentId?:string,
+  initialValues?: Partial<FormData>;
+};
+
+// export default function CreateComponentForm({onCreation}:{onCreation?:()=>void}) {
+
+
+export default function ComponentForm({ mode, onSubmitSuccess, initialValues,ComponentId }: Props) {
+  const isCreateMode = mode === "create";
+  
+
+
   const {
     handleSubmit,
     control,
@@ -40,6 +55,7 @@ export default function CreateComponentForm({onCreation}:{onCreation?:()=>void})
       component_type: "0",
       component: null,
       files: [],
+      ...initialValues,
     },
   });
 
@@ -65,61 +81,56 @@ export default function CreateComponentForm({onCreation}:{onCreation?:()=>void})
 
   const onSubmit = async (data: FormData) => {
     console.log("Form submitted:", data);
-  
     try {
+      const formData = new FormData();
+      if(isCreateMode){
+           formData.append("name", data.name);
+      }
+      if (isCreateMode) {
+        formData.append("component_type", data.component_type || "0");
+      }
+      if (data.component) {
+        formData.append("component", data.component);
+      }
 
-      const formdata = new FormData();
-      formdata.append("component_type", data.component_type);
-      formdata.append("name", data.name);
-      if(data.component){
-        formdata.append("component", data.component);
-      }  
+      if (data.files && data.files.length > 0) {
+        data.files.forEach((file, index) => {
+          formData.append(`file_${index}`, file);
+        });
+      }
 
-      // if (data.files && data.files.length > 0) {
-      //   data.files.forEach((file, index) => {
-      //     if (file instanceof File) {
-      //       formData.append(`file_${index}`, file);
-      //     } else {
-      //       console.error(`Invalid file at index ${index}:`, file);
-      //     }
-      //   });
-      // }
-
-      const response = await fetcher('?path=components', {
-        method: 'POST',
-        body: formdata,
+      const endpoint = isCreateMode
+      ? "?path=components"
+      : `?path=components/${ComponentId}/updates`;     
+      
+      const response = await fetcher(endpoint, {
+        method: "POST",
+        body: formData,
       });
 
-      console.log("Result:", response);
-
-      if(response.status!==200){
+      if (response.status !== 200) {
         return setError(getErrorMessage(response.data));
       }
-  
+
       setError(""); // Clear previous error
-      // TODO: Add mutation logic and toast
-      onCreation?.();
+      onSubmitSuccess?.();
+      isCreateMode?toast.success("Component created successfully"):toast.success("Component updated successfully");
     } catch (err) {
       console.error("Error during submission:", err);
       setError("Something went wrong! Please try again.");
     }
   };
   
-  
-
   return (
     <Paper
       elevation={4}
       sx={{
         width: "100%",
-        p:2,
+        p: 2,
       }}
     >
-
-      {/* Form */}
       <form onSubmit={handleSubmit(onSubmit)}>
-        {/* Component Name */}
-        <Box display="flex" gap={2} mb={3}>
+       { isCreateMode && <Box display="flex" gap={2} mb={3}>
           <Controller
             name="name"
             control={control}
@@ -128,75 +139,80 @@ export default function CreateComponentForm({onCreation}:{onCreation?:()=>void})
             )}
           />
         </Box>
+        }
 
         {/* Type Selection */}
-        <Box mb={3}>
-          <Typography variant="body1" mb={1}>
-            Type
-          </Typography>
-          <Controller
-            name="component_type"
-            control={control}
-            render={({ field }) => (
-              <RadioGroup row {...field}>
-                <FormControlLabel
-                  value="0"
-                  control={<Radio />}
-                  label={
-                    <Box>
-                      <Typography>
-                        <b>Durable</b>
-                      </Typography>
-                      <Typography variant="caption" color="gray">
-                        Workers are persistent and executed with transactional guarantees
-                      </Typography>
-                    </Box>
-                  }
-                />
-                <FormControlLabel
-                  value="1"
-                  control={<Radio />}
-                  label={
-                    <Box>
-                      <Typography>
-                        <b>Ephemeral</b>
-                      </Typography>
-                      <Typography variant="caption">
-                        Workers are transient and executed normally
-                      </Typography>
-                    </Box>
-                  }
-                />
-              </RadioGroup>
-            )}
-          />
-        </Box>
+        {isCreateMode && (
+          <Box mb={3}>
+            <Typography variant="body1" mb={1}>
+              Type
+            </Typography>
+            <Controller
+              name="component_type"
+              control={control}
+              render={({ field }) => (
+                <RadioGroup row {...field}>
+                  <FormControlLabel
+                    value="0"
+                    control={<Radio />}
+                    label={
+                      <Box>
+                        <Typography>
+                          <b>Durable</b>
+                        </Typography>
+                        <Typography variant="caption" color="gray">
+                          Workers are persistent and executed with transactional guarantees
+                        </Typography>
+                      </Box>
+                    }
+                  />
+                  <FormControlLabel
+                    value="1"
+                    control={<Radio />}
+                    label={
+                      <Box>
+                        <Typography>
+                          <b>Ephemeral</b>
+                        </Typography>
+                        <Typography variant="caption">
+                          Workers are transient and executed normally
+                        </Typography>
+                      </Box>
+                    }
+                  />
+                </RadioGroup>
+              )}
+            />
+          </Box>
+        )}
 
         {/* WASM Binary Upload */}
-        <Box
-          mb={3}
-          textAlign="center"
-          p={2}
-          border="2px dashed #444"
-          borderRadius="8px"
-          sx={{ cursor: "pointer" }}
-        >
-          <input
-            type="file"
-            hidden
-            id="wasm-upload"
-            onChange={handleWasmUpload}
-            accept=".wasm"
-            name="component"
-          />
-          <label htmlFor="wasm-upload">
-            <UploadFileIcon sx={{ fontSize: 50 }} />
-            <Typography variant="body2" sx={{ mt: 1 }}>
-              {wasmFile ? wasmFile.name : "Upload Component WASM"}
-            </Typography>
-            <Typography variant="caption">File up to 50MB</Typography>
-          </label>
-        </Box>
+        {(
+          <Box
+            mb={3}
+            textAlign="center"
+            p={2}
+            border="2px dashed #444"
+            borderRadius="8px"
+            sx={{ cursor: "pointer" }}
+          >
+            <input
+              type="file"
+              hidden
+              id="wasm-upload"
+              onChange={handleWasmUpload}
+              accept=".wasm"
+              name="component"
+            />
+            <label htmlFor="wasm-upload">
+              <UploadFileIcon sx={{ fontSize: 50 }} />
+              <Typography variant="body2" sx={{ mt: 1 }}>
+                {wasmFile ? wasmFile.name : "Upload Component WASM"}
+              </Typography>
+              <Typography variant="caption">File up to 50MB</Typography>
+            </label>
+          </Box>
+        )}
 
         {/* Initial Files Upload */}
         <Box mb={3} p={2} border="2px dashed #444" borderRadius="8px" textAlign="center">
@@ -248,11 +264,13 @@ export default function CreateComponentForm({onCreation}:{onCreation?:()=>void})
             </Box>
           ))}
         </Box>
+
         {error && <Typography className="text-red-500">{error}</Typography>}
+
         {/* Submit Button */}
         <Box display="flex" justifyContent="flex-end" mt={3}>
           <Button type="submit" variant="contained" startIcon={<CloudUploadIcon />}>
-            Create
+            {isCreateMode ? "Create" : "Update"}
           </Button>
         </Box>
       </form>
