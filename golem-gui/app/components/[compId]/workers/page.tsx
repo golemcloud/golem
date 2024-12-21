@@ -1,123 +1,231 @@
 "use client"
+
 import React, { useState } from 'react';
-import { Box, Button, Typography, TextField, IconButton, Chip } from '@mui/material';
-import SearchIcon from '@mui/icons-material/Search';
+import {
+  Box,
+  TextField,
+  Button,
+  Typography,
+  Stack,
+  IconButton,
+  Select,
+  MenuItem,
+  FormControl,
+  InputLabel,
+  ListSubheader,
+} from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
-import DropdownButton from '@/components/ui/DropDownButton'
-import CustomModal from '@/components/CustomModal';
+import AddIcon from '@mui/icons-material/Add';
+import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
+import { AdapterDateFns } from '@mui/x-date-pickers/AdapterDateFnsV3';
+import { DatePicker } from '@mui/x-date-pickers/DatePicker';
 
-const WorkersPage = () => {
-  const [searchQuery, setSearchQuery] = useState('');
-  const [filters, setFilters] = useState([
-    { label: 'Status', value: true },
-    { label: 'Version', value: true },
-    { label: 'Created After', value: true },
-    { label: 'Created Before', value: true },
-  ]);
+const WorkerListWithDropdowns = () => {
+  const [workerStatus, setWorkerStatus] = useState('');
+  const [version, setVersion] = useState('');
+  const [createdAfter, setCreatedAfter] = useState<Date | null>(null);
+  const [createdBefore, setCreatedBefore] = useState<Date | null>(null);
+  const [searchQuery, setSearchQuery] = useState(''); // For searching statuses
 
-  const handleSearch = (e:any) => {
-    setSearchQuery(e.target.value);
-  };
+  const statuses = ['Running', 'Idle', 'Suspended', 'Interrupted', 'Retrying', 'Failed', 'Exited'];
 
-  const removeFilter = (label: string) => {
-    setFilters((prev) => prev.filter((filter) => filter.label !== label));
-  };
-
-  const handleRetry = () => {
-    console.log('Retry clicked');
-  };
+  const filteredStatuses = statuses.filter((status) =>
+    status.toLowerCase().includes(searchQuery.toLowerCase())
+  );
 
   return (
-    <Box
-      sx={{
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        height: '100vh',
-        px: 4,
-        mt:5
-      }}
-    >
-      <DropdownButton/>
-      {/* Search Bar */}
+    <LocalizationProvider dateAdapter={AdapterDateFns}>
       <Box
         sx={{
+          marginBottom: 3,
+          padding: 3,
           display: 'flex',
-          alignItems: 'center',
-          width: '100%',
-          maxWidth: 800,
-          gap: 2,
-          mb: 4,
+          flexDirection: 'column',
         }}
       >
-        <TextField
-          variant="outlined"
-          placeholder="Worker name..."
-          fullWidth
-          value={searchQuery}
-          onChange={handleSearch}
-          InputProps={{
-            startAdornment: <SearchIcon sx={{ color: 'gray' }} />,
-            sx: { color: 'white' },
-          }}
-          sx={{ bgcolor: '#222', borderRadius: 1 }}
-        />
-        <IconButton onClick={() => setSearchQuery('')}>
-          <RefreshIcon sx={{ color: 'white' }} />
-        </IconButton>
-      </Box>
-
-      {/* Filters */}
-      <Box
-        sx={{
-          display: 'flex',
-          flexWrap: 'wrap',
-          gap: 1,
-          mb: 4,
-          justifyContent: 'center',
-        }}
-      >
-        {filters.map((filter) => (
-          <Chip
-            key={filter.label}
-            label={filter.label}
-            onDelete={() => removeFilter(filter.label)}
-            sx={{
-              bgcolor: '#333',
-              color: 'white',
-              '& .MuiChip-deleteIcon': { color: 'gray' },
+        {/* Search Box */}
+        <Stack direction="row" spacing={2} mb={3}>
+          <TextField
+            placeholder="Worker name..."
+            variant="outlined"
+            fullWidth
+            InputProps={{
+              startAdornment: (
+                <Typography sx={{ marginRight: 1 }}>🔍</Typography>
+              ),
             }}
           />
-        ))}
-      </Box>
+          <IconButton sx={{ color: 'white' }}>
+            <RefreshIcon />
+          </IconButton>
+          <Button
+            variant="contained"
+            startIcon={<AddIcon />}
+            sx={{
+              backgroundColor: '#2962FF',
+              '&:hover': { backgroundColor: '#0039CB' },
+            }}
+          >
+            New
+          </Button>
+        </Stack>
 
-      {/* No Workers Found Message */}
-      <Box
-        sx={{
-          textAlign: 'center',
-          bgcolor: "#1E1E1E",
-          p: 4,
-          borderRadius: 2,
-          width: '100%',
-          maxWidth: 600,
+        {/* Dropdowns and Date Pickers */}
+        <Stack direction="row" spacing={2} mb={3}>
+          {/* Worker Status with Search */}
+          <FormControl variant="outlined" size="medium" sx={{ minWidth: 150 }}>
+            <Select
+              value={workerStatus}
+              onChange={(e) => setWorkerStatus(e.target.value)}
+              MenuProps={{
+                PaperProps: {
+                  sx: {
+                    maxHeight: 300,
+                  },
+                },
+              }}
+              displayEmpty
+            >
+              <ListSubheader>
+                <TextField
+                  placeholder="Search..."
+                  variant="standard"
+                  fullWidth
+                  InputProps={{
+                    disableUnderline: true,
+                    startAdornment: (
+                      <Typography sx={{ marginRight: 1 }}>🔍</Typography>
+                    ),
+                  }}
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  sx={{ padding: 1,
+                    borderRadius: 1,
+                    border: '1px solid gray',
+                   }}
+                />
+              </ListSubheader>
+              {filteredStatuses.map((status) => (
+                <MenuItem key={status} value={status}>
+                  {status}
+                </MenuItem>
+              ))}
+              {filteredStatuses.length === 0 && (
+                <MenuItem disabled>No results found</MenuItem>
+              )}
+            </Select>
+          </FormControl>
+
+          {/* Version */}
+          <FormControl variant="outlined" size="medium" sx={{ minWidth: 150 }}>
+  <Select
+    value={version}
+    onChange={(e) => setVersion(e.target.value)}
+    MenuProps={{
+      PaperProps: {
+        sx: {
+          maxHeight: 300, // Control dropdown height
+        },
+      },
+    }}
+    displayEmpty
+  >
+    <ListSubheader>
+      <TextField
+        placeholder="Search..."
+        variant="standard"
+        fullWidth
+        InputProps={{
+          disableUnderline: true,
+          startAdornment: (
+            <Typography sx={{ marginRight: 1 }}>🔍</Typography>
+          ),
         }}
-      >
-        <Typography variant="h6" sx={{ mb: 2, color: '#888' }}>
-          No Workers Found
-        </Typography>
-        <Typography variant="body1" sx={{ mb: 3 }}>
-          No workers matched the current search
-        </Typography>
-        <Button
-          variant="contained"
-          sx={{ bgcolor: '#1976d2' }}
-          onClick={handleRetry}
+        value={searchQuery}
+        onChange={(e) => setSearchQuery(e.target.value)}
+        sx={{ 
+          padding: 1,
+          borderRadius: 1,
+          border: '1px solid gray',
+         }}
+      />
+    </ListSubheader>
+    {['v1', 'v2', 'v3'].filter((v) =>
+      v.toLowerCase().includes(searchQuery.toLowerCase())
+    ).map((v) => (
+      <MenuItem key={v} value={v}>
+        {v}
+      </MenuItem>
+    ))}
+    {['v1', 'v2', 'v3'].filter((v) =>
+      v.toLowerCase().includes(searchQuery.toLowerCase())
+    ).length === 0 && <MenuItem disabled>No results found</MenuItem>}
+  </Select>
+</FormControl>
+
+
+          {/* Created After */}
+          <DatePicker
+            label="Created After"
+            value={createdAfter}
+            onChange={(date) => setCreatedAfter(date)}
+            renderInput={(params) => (
+              <TextField
+                {...params}
+                sx={{
+                  '.MuiOutlinedInput-notchedOutline': { borderColor: 'gray' },
+                }}
+              />
+            )}
+          />
+
+          {/* Created Before */}
+          <DatePicker
+            label="Created Before"
+            value={createdBefore}
+            onChange={(date) => setCreatedBefore(date)}
+            renderInput={(params) => (
+              <TextField
+                {...params}
+                sx={{
+                  '.MuiOutlinedInput-notchedOutline': { borderColor: 'gray' },
+                }}
+              />
+            )}
+          />
+        </Stack>
+
+        {/* No Workers Found */}
+        <Box
+          className="dark:bg-gray-800 bg-[#E3F2FD] dark:text-white text-black"
+          sx={{
+            flex: 1,
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
+            flexDirection: 'column',
+            padding: 3,
+            borderRadius: 1,
+          }}
         >
-          Retry
-        </Button>
+          <Typography variant="h6" sx={{ mb: 1 }}>
+            No Workers Found
+          </Typography>
+          <Typography variant="body2" sx={{ mb: 2 }}>
+            No workers matched the current search
+          </Typography>
+          <Button
+            variant="contained"
+            sx={{
+              '&:hover': { backgroundColor: '#0039CB' },
+            }}
+          >
+            Retry
+          </Button>
+        </Box>
       </Box>
-    </Box>
+    </LocalizationProvider>
   );
 };
 
-export default WorkersPage;
+export default WorkerListWithDropdowns;
