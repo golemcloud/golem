@@ -5,7 +5,7 @@ interface ComponentInfoProps {
   componentId: string;
   version: string | number;
   name: string;
-  size: string;
+  size: string | number;
   createdAt: string;
 }
 

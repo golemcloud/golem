@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import {
   Grid,
   Paper,
@@ -11,37 +11,59 @@ import {
   ListItem,
   ListItemText,
   Button,
-  Dialog,
-  DialogContent,
-  IconButton,
 } from "@mui/material";
-import { InsertChart, CheckCircleOutline, ErrorOutline, RocketLaunch } from "@mui/icons-material";
+import {
+  InsertChart,
+  CheckCircleOutline,
+  ErrorOutline,
+  RocketLaunch,
+} from "@mui/icons-material";
 import AddIcon from "@mui/icons-material/Add";
-import CloseIcon from "@mui/icons-material/Close";
-import CreateWorker from "@/components/create-worker"; 
-import CustomModal from "@/components/CustomModal"; 
-
+import CreateWorker from "@/components/create-worker";
+import CustomModal from "@/components/CustomModal";
+import useComponents from "@/lib/hooks/use-component";
+import { useParams } from "next/navigation";
+import { ComponentExport } from "@/types/api";
 
 const Overview = () => {
-  const stats = [
-    { label: "Latest Component Version", value: "v1", icon: <InsertChart fontSize="large" /> },
-    { label: "Active Workers", value: 0, icon: <CheckCircleOutline fontSize="large" /> },
-    { label: "Running Workers", value: 0, icon: <RocketLaunch fontSize="large" /> },
-    { label: "Failed Workers", value: 0, icon: <ErrorOutline fontSize="large" /> },
-  ];
-
-  const exports = [
-    "golem:it/api.{initialize-cart}",
-    "golem:it/api.{add-item}",
-    "golem:it/api.{remove-item}",
-    "golem:it/api.{update-item-quantity}",
-    "golem:it/api.{checkout}",
-    "golem:it/api.{get-cart-contents}",
-  ];
-
   const [isOpen, setIsOpen] = useState(false);
+  const { compId } = useParams<{ compId: string }>();
 
-  const handleOpen = () => setIsOpen(true);
+  const { components } = useComponents(compId, "latest");
+  const [latestComponent] = components;
+
+  const stats = useMemo(() => {
+    return [
+      {
+        label: "Latest Component Version",
+        value: latestComponent?.versionedComponentId?.version,
+        icon: <InsertChart fontSize="large" />,
+      },
+      {
+        label: "Active Workers",
+        value: 0,
+        icon: <CheckCircleOutline fontSize="large" />,
+      },
+      {
+        label: "Running Workers",
+        value: 0,
+        icon: <RocketLaunch fontSize="large" />,
+      },
+      {
+        label: "Failed Workers",
+        value: 0,
+        icon: <ErrorOutline fontSize="large" />,
+      },
+    ];
+  }, [latestComponent]);
+
+  const exports = useMemo(() => {
+    const metaExports = (latestComponent?.metadata?.exports ||
+      []) as ComponentExport[];
+    return metaExports?.map((expo: ComponentExport) => expo.name) || [];
+  }, [latestComponent?.versionedComponentId?.version]);
+
+  // const handleOpen = () => setIsOpen(true);
   const handleClose = () => setIsOpen(false);
 
   return (
@@ -61,7 +83,6 @@ const Overview = () => {
         >
           New
         </Button>
-        
       </Box>
 
       <Grid container spacing={4}>
@@ -104,7 +125,7 @@ const Overview = () => {
       </Grid>
 
       <CustomModal open={isOpen} onClose={handleClose} heading="Create Worker">
-        <CreateWorker/>
+        <CreateWorker />
       </CustomModal>
     </Box>
   );
