@@ -22,7 +22,6 @@ const CustomModal: React.FC<CustomModalProps> = ({ open, onClose, children, head
           width: "70%",
           minWidth: "fit-content",
           maxWidth: 600,
-          bgcolor: "#1e1e1e",
           color: "white",
           boxShadow: 24,
           p: 0,
@@ -32,13 +31,14 @@ const CustomModal: React.FC<CustomModalProps> = ({ open, onClose, children, head
           overflowY: "auto",
           border: "1px solid #444",
         }}
+        className="dark:bg-[#1e1e1e] bg-[#fff] dark:text-[#fff] text-[#333]"
       >
         {heading && (
           <Box
             sx={{
               position: "sticky",
               top: 0,
-              bgcolor: "#1e1e1e",
+          
               zIndex: 10,
               px: 2,
               py:1,
@@ -57,9 +57,7 @@ const CustomModal: React.FC<CustomModalProps> = ({ open, onClose, children, head
               </Typography>
               <IconButton
                 onClick={onClose}
-                sx={{
-                  color: "white",
-                }}
+               className="dark:text-[#fff] text-[#333]"
               >
                 <CloseIcon />
               </IconButton>
