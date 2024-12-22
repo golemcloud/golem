@@ -36,7 +36,7 @@ export default function APISLayout({
   const [newVersion, setNewVersion] = useState("");
   const [open, setOpen] = useState(false);
   const router = useRouter();
-  const { apiDefinitions, getApiDefintion, isLoading, addApiDefinition } =
+  const { apiDefinitions, getApiDefintion, isLoading, addNewApiVersionDefinition } =
     useApiDefinitions(apiId);
   const { data: apiDefinition } = getApiDefintion(apiId, version);
   const versions = useMemo(() => {
@@ -147,7 +147,7 @@ export default function APISLayout({
                 <Button
                   onClick={async(e) => {
                     e.preventDefault();
-                    await addApiDefinition({ version: newVersion }, apiId, version);
+                    await addNewApiVersionDefinition({ version: newVersion }, apiId, version);
                     setOpen(false);
                   }}
                   className="self-end"

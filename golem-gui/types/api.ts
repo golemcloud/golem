@@ -149,7 +149,7 @@ export interface VersionedComponentId {
     version: string;
     routes: ApiRoute[];
     draft: boolean;
-    createdAt: string;
+    createdAt?: string;
   }
 
 
@@ -165,7 +165,7 @@ export interface VersionedComponentId {
   
   export type ApiDeployment = {
     apiDefinitions: DeploymentApiDefinition[];
-    createdAt: string;
+    createdAt?: string;
     site: Site;
   };
   

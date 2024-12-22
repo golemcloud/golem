@@ -1,25 +1,36 @@
 "use client";
-import { Box, Typography, Paper, Stack, List , Button, Modal, Container} from "@mui/material";
-import useSWR from "swr";
+import {
+  Box,
+  Typography,
+  Paper,
+  Stack,
+  List,
+  Button,
+  Modal,
+  Container,
+} from "@mui/material";
 import { Loader } from "lucide-react";
-import { fetcher } from "@/lib/utils";
 import { ApiDeployment } from "@/types/api";
 import { Card } from "@/components/ui/card";
 import AddIcon from "@mui/icons-material/Add";
 import { useState } from "react";
 import DeploymentCreationPage from "@/components/deployment-creation";
+import useApiDeployments from "@/lib/hooks/use-api-deployments";
 
-export default function DeploymentPage({apiId, limit}:{apiId:string, limit?:number}) {
+export default function DeploymentPage({
+  apiId,
+  limit,
+}: {
+  apiId: string;
+  limit?: number;
+}) {
   //TODO to move this do separate custom hook so that we can resuse.
   const [open, setOpen] = useState(false);
-  const handleOpen = ()=>setOpen(true)
-  const handleClose = ()=>setOpen(false)
-  const { data, isLoading } = useSWR(
-    `?path=api/deployments?api-definition-id=${apiId!}`,
-    fetcher
-  );
-  let deployments = (data?.data || []) as ApiDeployment[];
-  deployments = limit ? deployments.slice(0, limit) : deployments
+  const handleOpen = () => setOpen(true);
+  const handleClose = () => setOpen(false);
+  const { apiDeployments, addApiDeployment, isLoading } =
+    useApiDeployments(apiId);
+  const deployments = limit ? apiDeployments.slice(0, limit) : apiDeployments;
   const depolymentMap = deployments?.reduce<Record<string, ApiDeployment[]>>(
     (obj, deployment: ApiDeployment) => {
       const key = `${deployment.site.host}__${deployment.site.subdomain}`;
@@ -32,20 +43,6 @@ export default function DeploymentPage({apiId, limit}:{apiId:string, limit?:numb
     },
     {}
   );
-
-  // const handleDelete = async (site: string) => {
-  //   const response = await fetcher(`?path=api/deployments/${apiId}/${site}`, {
-  //     method: "DELETE",
-  //     headers: {
-  //       "Content-Type": "application/json",
-  //     },
-  //   });
-
-  //   if (response.data === apiId) {
-  //     console.log("successfully deleted");
-  //     return;
-  //   }
-  // };
 
   return (
     <Box>
@@ -68,19 +65,23 @@ export default function DeploymentPage({apiId, limit}:{apiId:string, limit?:numb
             mb: 2,
           }}
         >
-          <Stack direction={"row"} justifyContent={"space-between"} alignItems={"center"}>
-          <Typography variant="h6">Active Deployments</Typography>
-          <Button
-          variant="outlined"
-          startIcon={<AddIcon />}
-          sx={{
-            textTransform: "none",
-            marginLeft: "2px",
-          }}
-          onClick={handleOpen}
-        >
-          New
-        </Button>
+          <Stack
+            direction={"row"}
+            justifyContent={"space-between"}
+            alignItems={"center"}
+          >
+            <Typography variant="h6">Active Deployments</Typography>
+            <Button
+              variant="outlined"
+              startIcon={<AddIcon />}
+              sx={{
+                textTransform: "none",
+                marginLeft: "2px",
+              }}
+              onClick={handleOpen}
+            >
+              New
+            </Button>
           </Stack>
 
           {isLoading && <Loader className="self-center" />}
@@ -125,12 +126,15 @@ export default function DeploymentPage({apiId, limit}:{apiId:string, limit?:numb
         )}
       </Paper>
       <Modal open={open} onClose={handleClose}>
-              <Container className="p-2">
-                  <Paper className={"m-auto w-[80%] md:max-w-[45%] lg:max-w-[45%] p-4"}>
-            <DeploymentCreationPage onCreation={handleClose}/>
-            </Paper>
-          </Container>
-        </Modal>
+        <Container className="p-2">
+          <Paper className={"m-auto w-[80%] md:max-w-[45%] lg:max-w-[45%] p-4"}>
+            <DeploymentCreationPage
+              addDeployment={addApiDeployment}
+              apiId={apiId}
+            />
+          </Paper>
+        </Container>
+      </Modal>
     </Box>
   );
 }
