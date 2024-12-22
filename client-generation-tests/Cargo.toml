@@ -1,0 +1,17 @@
+[package]
+name = "client-generation-tests"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+golem-worker-service-base = { path = "../golem-worker-service-base" }
+golem-common = { path = "../golem-common" }
+golem-wasm-ast = { path = "../wasm-ast" }
+assert2 = { workspace = true }
+axum = { workspace = true }
+chrono = { workspace = true }
+tokio = { workspace = true }
+uuid = { workspace = true }
+utoipa = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

@@ -83,6 +83,9 @@ tracing-subscriber = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 wasm-wave = { workspace = true }
+utoipa = { version = "4.2.0", features = ["axum_extras", "yaml", "chrono", "uuid", "openapi_extensions"] }
+utoipa-swagger-ui = { version = "6.0.0" }
+indexmap = "2.2.3"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
