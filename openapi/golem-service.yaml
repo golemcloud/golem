@@ -6305,10 +6305,15 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/LinearMemory'
+        dynamicLinking:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/DynamicLinkedInstance'
       required:
       - exports
       - producers
       - memories
+      - dynamicLinking
     ComponentPluginScope:
       type: object
       properties:
@@ -6372,6 +6377,33 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/Empty'
+    DynamicLinkedInstance:
+      discriminator:
+        propertyName: type
+        mapping:
+          WasmRpc: '#/components/schemas/DynamicLinkedInstance_DynamicLinkedWasmRpc'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/DynamicLinkedInstance_DynamicLinkedWasmRpc'
+    DynamicLinkedInstance_DynamicLinkedWasmRpc:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: WasmRpc
+            type: string
+            enum:
+            - WasmRpc
+        required:
+        - type
+      - $ref: '#/components/schemas/DynamicLinkedWasmRpc'
+    DynamicLinkedWasmRpc:
+      type: object
+      properties:
+        targetInterfaceName:
+          type: string
+      required:
+      - targetInterfaceName
     InitialComponentFile:
       type: object
       properties:
