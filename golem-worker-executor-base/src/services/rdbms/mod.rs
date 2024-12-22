@@ -96,7 +96,7 @@ pub trait Rdbms<T: RdbmsType> {
     where
         <T as RdbmsType>::DbValue: 'async_trait;
 
-    async fn begin(
+    async fn begin_transaction(
         &self,
         key: &RdbmsPoolKey,
         worker_id: &WorkerId,

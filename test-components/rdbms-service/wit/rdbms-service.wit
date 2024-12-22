@@ -1,28 +1,53 @@
 package golem:it;
 
 interface api {
-  use wasi:rdbms/postgres@0.0.1.{db-row as postgres-db-row, db-column as postgres-db-column};
-  use wasi:rdbms/mysql@0.0.1.{db-row as mysql-db-row, db-column as mysql-db-column};
+  use wasi:rdbms/postgres@0.0.1.{db-result as postgres-result};
+  use wasi:rdbms/mysql@0.0.1.{db-result as mysql-result};
 
-  record postgres-query-result {
-    columns: list<postgres-db-column>,
-    rows: list<postgres-db-row>
+  enum transaction-end {
+    commit,
+    rollback,
+    nothing
   }
 
-  record mysql-query-result {
-    columns: list<mysql-db-column>,
-    rows: list<mysql-db-row>
+  enum statement-action {
+    execute,
+    query
+  }
+
+  record statement {
+    statement: string,
+    params: list<string>,
+    action: statement-action
+  }
+
+  variant mysql-transaction-result {
+     execute(u64),
+     query(mysql-result)
+  }
+
+  variant postgres-transaction-result {
+    execute(u64),
+    query(postgres-result)
   }
 
   check: func() -> string;
 
+  mysql-transaction: func(statements: list<statement>, end: transaction-end) -> result<list<mysql-transaction-result>, string>;
+
+  mysql-executions: func(statements: list<statement>) -> result<list<mysql-transaction-result>, string>;
+
   mysql-execute: func(statement: string, params: list<string>) -> result<u64, string>;
 
-  mysql-query: func(statement: string, params: list<string>) -> result<mysql-query-result, string>;
+  mysql-query: func(statement: string, params: list<string>) -> result<mysql-result, string>;
+
+  postgres-transaction: func(statements: list<statement>, end: transaction-end) -> result<list<postgres-transaction-result>, string>;
+
+  postgres-executions: func(statements: list<statement>) -> result<list<postgres-transaction-result>, string>;
 
   postgres-execute: func(statement: string, params: list<string>) -> result<u64, string>;
 
-  postgres-query: func(statement: string, params: list<string>) -> result<postgres-query-result, string>;
+  postgres-query: func(statement: string, params: list<string>) -> result<postgres-result, string>;
 }
 
 world rdbms-service {

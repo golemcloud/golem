@@ -2,9 +2,9 @@ mod bindings;
 
 use crate::bindings::exports::golem::it::api::*;
 use crate::bindings::wasi::rdbms::postgres::{DbConnection as PostgresDbConnection};
-use crate::bindings::wasi::rdbms::postgres::{DbValue as PostgresDbValue, LazyDbValue as PostgresLazyDbValue, DbColumnType as PostgresDbColumnType, DbColumn as PostgresDbColumn, DbRow as PostgresDbRow};
+use crate::bindings::wasi::rdbms::postgres::{DbValue as PostgresDbValue, LazyDbValue as PostgresLazyDbValue, DbColumnType as PostgresDbColumnType, DbColumn as PostgresDbColumn, DbRow as PostgresDbRow, DbResult as PostgresDbResult};
 use crate::bindings::wasi::rdbms::mysql::{DbConnection as MysqlDbConnection};
-use crate::bindings::wasi::rdbms::mysql::{DbValue as MysqlDbValue, DbRow as MysqlDbRow};
+use crate::bindings::wasi::rdbms::mysql::{DbValue as MysqlDbValue, DbRow as MysqlDbRow, DbResult as MysqlDbResult};
 
 fn get_mysql_db_url() -> Result<String, String> {
     std::env::var("DB_MYSQL_URL").map_err(|_| "DB_MYSQL_URL is not set".to_string())
@@ -101,7 +101,7 @@ impl Guest for Component {
         result
     }
 
-    fn postgres_query(statement: String, params: Vec<String>) -> Result<PostgresQueryResult, String> {
+    fn postgres_query(statement: String, params: Vec<String>) -> Result<PostgresDbResult, String> {
         let address = get_postgres_db_url()?;
 
         let connection = PostgresDbConnection::open(&address).map_err(|e| e.to_string())?;
@@ -121,7 +121,75 @@ impl Guest for Component {
 
         println!("postgres query result: {:?}", rows);
 
-        Ok(PostgresQueryResult { columns, rows })
+        Ok(PostgresDbResult { columns, rows })
+    }
+
+
+    fn postgres_executions(statements: Vec<Statement>) -> Result<Vec<PostgresTransactionResult>, String> {
+        let address = get_postgres_db_url()?;
+        let connection = PostgresDbConnection::open(&address).map_err(|e| e.to_string())?;
+
+        println!("postgres - address: {}, statements: {}", address, statements.len());
+
+        let mut results: Vec<PostgresTransactionResult> = Vec::with_capacity(statements.len());
+
+        for statement in statements.into_iter() {
+            let params = statement.params.into_iter().map(get_postgres_db_param).collect::<Vec<PostgresDbValue>>();
+            match statement.action {
+                StatementAction::Execute => {
+                    let result = connection.execute(&statement.statement, params).map_err(|e| e.to_string())?;
+                    results.push(PostgresTransactionResult::Execute(result));
+                }
+                StatementAction::Query => {
+                    let result_set = connection.query(&statement.statement, params).map_err(|e| e.to_string())?;
+
+                    let columns = result_set.get_columns().into_iter().map(get_postgres_db_column).collect();
+                    let mut rows: Vec<PostgresDbRow> = vec![];
+
+                    while let Some(vs) = result_set.get_next() {
+                        let rs: Vec<PostgresDbRow> = vs.into_iter().map(get_postgres_db_row).collect();
+                        rows.extend(rs);
+                    }
+                    println!("postgres query result: {:?}", rows);
+                    let result = PostgresDbResult { columns, rows };
+                    results.push(PostgresTransactionResult::Query(result));
+                }
+            }
+        }
+        Ok(results)
+    }
+
+
+    fn postgres_transaction(statements: Vec<Statement>, end: TransactionEnd) -> Result<Vec<PostgresTransactionResult>, String> {
+        let address = get_postgres_db_url()?;
+        let connection = PostgresDbConnection::open(&address).map_err(|e| e.to_string())?;
+
+        println!("postgres transaction - address: {}, statements: {}, end: {:?}", address, statements.len(), end);
+
+        let transaction = connection.begin_transaction().map_err(|e| e.to_string())?;
+        let mut results: Vec<PostgresTransactionResult> = Vec::with_capacity(statements.len());
+
+        for statement in statements.into_iter() {
+            let params = statement.params.into_iter().map(get_postgres_db_param).collect::<Vec<PostgresDbValue>>();
+            match statement.action {
+                StatementAction::Execute => {
+                    let result = transaction.execute(&statement.statement, params).map_err(|e| e.to_string())?;
+                    results.push(PostgresTransactionResult::Execute(result));
+                }
+                StatementAction::Query => {
+                    let result = transaction.query(&statement.statement, params).map_err(|e| e.to_string())?;
+                    results.push(PostgresTransactionResult::Query(result));
+                }
+            }
+        }
+
+        match end {
+            TransactionEnd::Commit => transaction.commit().map_err(|e| e.to_string())?,
+            TransactionEnd::Rollback => transaction.rollback().map_err(|e| e.to_string())?,
+            TransactionEnd::Nothing => (),
+        }
+
+        Ok(results)
     }
 
 
@@ -141,7 +209,7 @@ impl Guest for Component {
         result
     }
 
-    fn mysql_query(statement: String, params: Vec<String>) -> Result<MysqlQueryResult, String> {
+    fn mysql_query(statement: String, params: Vec<String>) -> Result<MysqlDbResult, String> {
         let address = get_mysql_db_url()?;
 
         let connection = MysqlDbConnection::open(&address).map_err(|e| e.to_string())?;
@@ -160,7 +228,76 @@ impl Guest for Component {
 
         println!("mysql query result: {:?}", rows);
 
-        Ok(MysqlQueryResult { columns, rows })
+        Ok(MysqlDbResult { columns, rows })
+    }
+
+
+    fn mysql_executions(statements: Vec<Statement>) -> Result<Vec<MysqlTransactionResult>, String> {
+        let address = get_mysql_db_url().unwrap_or("N/A".to_string());
+        let connection = MysqlDbConnection::open(&address).map_err(|e| e.to_string())?;
+
+        println!("mysql - address: {}, statements: {}", address, statements.len());
+
+        let mut results: Vec<MysqlTransactionResult> = Vec::with_capacity(statements.len());
+
+        for statement in statements.into_iter() {
+            let params = statement.params.into_iter().map(MysqlDbValue::Text).collect::<Vec<MysqlDbValue>>();
+            match statement.action {
+                StatementAction::Execute => {
+                    let result = connection.execute(&statement.statement, &params).map_err(|e| e.to_string())?;
+                    results.push(MysqlTransactionResult::Execute(result));
+                }
+                StatementAction::Query => {
+                    let result_set = connection.query(&statement.statement, &params).map_err(|e| e.to_string())?;
+                    let columns = result_set.get_columns();
+                    let mut rows: Vec<MysqlDbRow> = vec![];
+
+                    while let Some(rs) = result_set.get_next() {
+                        rows.extend(rs);
+                    }
+
+                    println!("mysql query result: {:?}", rows);
+
+                    let result = MysqlDbResult { columns, rows };
+                    results.push(MysqlTransactionResult::Query(result));
+                }
+            }
+        }
+
+
+        Ok(results)
+    }
+
+    fn mysql_transaction(statements: Vec<Statement>, end: TransactionEnd) -> Result<Vec<MysqlTransactionResult>, String> {
+        let address = get_mysql_db_url().unwrap_or("N/A".to_string());
+        let connection = MysqlDbConnection::open(&address).map_err(|e| e.to_string())?;
+
+        println!("mysql transaction - address: {}, statements: {}, end: {:?}", address, statements.len(), end);
+
+        let transaction = connection.begin_transaction().map_err(|e| e.to_string())?;
+        let mut results: Vec<MysqlTransactionResult> = Vec::with_capacity(statements.len());
+
+        for statement in statements.into_iter() {
+            let params = statement.params.into_iter().map(MysqlDbValue::Text).collect::<Vec<MysqlDbValue>>();
+            match statement.action {
+                StatementAction::Execute => {
+                    let result = transaction.execute(&statement.statement, &params).map_err(|e| e.to_string())?;
+                    results.push(MysqlTransactionResult::Execute(result));
+                }
+                StatementAction::Query => {
+                    let result = transaction.query(&statement.statement, &params).map_err(|e| e.to_string())?;
+                    results.push(MysqlTransactionResult::Query(result));
+                }
+            }
+        }
+
+        match end {
+            TransactionEnd::Commit => transaction.commit().map_err(|e| e.to_string())?,
+            TransactionEnd::Rollback => transaction.rollback().map_err(|e| e.to_string())?,
+            TransactionEnd::Nothing => (),
+        }
+
+        Ok(results)
     }
 }
 

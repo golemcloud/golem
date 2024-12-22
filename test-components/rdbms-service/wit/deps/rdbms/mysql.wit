@@ -120,6 +120,11 @@ interface mysql {
     values: list<db-value>
   }
 
+  record db-result {
+    columns: list<db-column>,
+    rows: list<db-row>
+  }
+
   /// A potentially very large and lazy stream of rows:
   resource db-result-set {
     get-columns: func() -> list<db-column>;
@@ -132,5 +137,17 @@ interface mysql {
     query: func(statement: string, params: list<db-value>) -> result<db-result-set, error>;
 
     execute: func(statement: string, params: list<db-value>) -> result<u64, error>;
+
+    begin-transaction: func() -> result<db-transaction, error>;
+  }
+
+  resource db-transaction {
+    query: func(statement: string, params: list<db-value>) -> result<db-result, error>;
+
+    execute: func(statement: string, params: list<db-value>) -> result<u64, error>;
+
+    commit: func() -> result<_, error>;
+
+    rollback: func() -> result<_, error>;
   }
 }

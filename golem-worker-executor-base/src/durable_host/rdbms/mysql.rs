@@ -15,8 +15,8 @@
 use crate::durable_host::DurableWorkerCtx;
 use crate::metrics::wasm::record_host_function_call;
 use crate::preview2::wasi::rdbms::mysql::{
-    Date, DbColumn, DbColumnType, DbRow, DbValue, Error, Host, HostDbConnection, HostDbResultSet,
-    Time, Timestamp,
+    Date, DbColumn, DbColumnType, DbResult, DbRow, DbValue, Error, Host, HostDbConnection,
+    HostDbResultSet, HostDbTransaction, Time, Timestamp,
 };
 use crate::services::rdbms::mysql::types as mysql_types;
 use crate::services::rdbms::mysql::MysqlType;
@@ -100,8 +100,8 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
                 match result {
                     Ok(result) => {
                         let entry = DbResultSetEntry::new(result);
-                        let db_result_set = self.as_wasi_view().table().push(entry)?;
-                        Ok(Ok(db_result_set))
+                        let resource = self.as_wasi_view().table().push(entry)?;
+                        Ok(Ok(resource))
                     }
                     Err(e) => Ok(Err(e.into())),
                 }
@@ -142,6 +142,36 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
                 Ok(result)
             }
             Err(error) => Ok(Err(Error::QueryParameterFailure(error))),
+        }
+    }
+
+    async fn begin_transaction(
+        &mut self,
+        self_: Resource<MysqlDbConnection>,
+    ) -> anyhow::Result<Result<Resource<DbTransactionEntry>, Error>> {
+        record_host_function_call("rdbms::mysql::db-connection", "begin-transaction");
+        let worker_id = self.state.owned_worker_id.worker_id.clone();
+        let pool_key = self
+            .as_wasi_view()
+            .table()
+            .get::<MysqlDbConnection>(&self_)?
+            .pool_key
+            .clone();
+
+        let result = self
+            .state
+            .rdbms_service
+            .mysql()
+            .begin_transaction(&pool_key, &worker_id)
+            .await;
+
+        match result {
+            Ok(result) => {
+                let entry = DbTransactionEntry::new(result);
+                let resource = self.as_wasi_view().table().push(entry)?;
+                Ok(Ok(resource))
+            }
+            Err(e) => Ok(Err(e.into())),
         }
     }
 
@@ -227,6 +257,120 @@ impl<Ctx: WorkerCtx> HostDbResultSet for DurableWorkerCtx<Ctx> {
         self.as_wasi_view()
             .table()
             .delete::<DbResultSetEntry>(rep)?;
+        Ok(())
+    }
+}
+
+pub struct DbTransactionEntry {
+    pub internal: Arc<dyn crate::services::rdbms::DbTransaction<MysqlType> + Send + Sync>,
+}
+
+impl DbTransactionEntry {
+    pub fn new(
+        internal: Arc<dyn crate::services::rdbms::DbTransaction<MysqlType> + Send + Sync>,
+    ) -> Self {
+        Self { internal }
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> HostDbTransaction for DurableWorkerCtx<Ctx> {
+    async fn query(
+        &mut self,
+        self_: Resource<DbTransactionEntry>,
+        statement: String,
+        params: Vec<DbValue>,
+    ) -> anyhow::Result<Result<DbResult, Error>> {
+        record_host_function_call("rdbms::mysql::db-transaction", "query");
+        match params
+            .into_iter()
+            .map(|v| v.try_into())
+            .collect::<Result<Vec<_>, String>>()
+        {
+            Ok(params) => {
+                let internal = self
+                    .as_wasi_view()
+                    .table()
+                    .get::<DbTransactionEntry>(&self_)?
+                    .internal
+                    .clone();
+                let result = internal
+                    .query(&statement, params)
+                    .await
+                    .map(DbResult::from)
+                    .map_err(Error::from);
+                Ok(result)
+            }
+            Err(error) => Ok(Err(Error::QueryParameterFailure(error))),
+        }
+    }
+
+    async fn execute(
+        &mut self,
+        self_: Resource<DbTransactionEntry>,
+        statement: String,
+        params: Vec<DbValue>,
+    ) -> anyhow::Result<Result<u64, Error>> {
+        record_host_function_call("rdbms::mysql::db-transaction", "execute");
+        match params
+            .into_iter()
+            .map(|v| v.try_into())
+            .collect::<Result<Vec<_>, String>>()
+        {
+            Ok(params) => {
+                let internal = self
+                    .as_wasi_view()
+                    .table()
+                    .get::<DbTransactionEntry>(&self_)?
+                    .internal
+                    .clone();
+                let result = internal
+                    .execute(&statement, params)
+                    .await
+                    .map_err(Error::from);
+                Ok(result)
+            }
+            Err(error) => Ok(Err(Error::QueryParameterFailure(error))),
+        }
+    }
+
+    async fn commit(
+        &mut self,
+        self_: Resource<DbTransactionEntry>,
+    ) -> anyhow::Result<Result<(), Error>> {
+        record_host_function_call("rdbms::mysql::db-transaction", "commit");
+        let internal = self
+            .as_wasi_view()
+            .table()
+            .get::<DbTransactionEntry>(&self_)?
+            .internal
+            .clone();
+        let result = internal.commit().await.map_err(Error::from);
+        Ok(result)
+    }
+
+    async fn rollback(
+        &mut self,
+        self_: Resource<DbTransactionEntry>,
+    ) -> anyhow::Result<Result<(), Error>> {
+        record_host_function_call("rdbms::mysql::db-transaction", "query");
+        let internal = self
+            .as_wasi_view()
+            .table()
+            .get::<DbTransactionEntry>(&self_)?
+            .internal
+            .clone();
+        let result = internal.rollback().await.map_err(Error::from);
+        Ok(result)
+    }
+
+    async fn drop(&mut self, rep: Resource<DbTransactionEntry>) -> anyhow::Result<()> {
+        record_host_function_call("rdbms::mysql::db-result-set", "drop");
+        let entry = self
+            .as_wasi_view()
+            .table()
+            .delete::<DbTransactionEntry>(rep)?;
+        let _ = entry.internal.rollback_if_open().await;
         Ok(())
     }
 }
@@ -424,6 +568,15 @@ impl From<DbColumnType> for mysql_types::DbColumnType {
             DbColumnType::Longtext => Self::Longtext,
             DbColumnType::Enumeration => Self::Enumeration,
             DbColumnType::Set => Self::Set,
+        }
+    }
+}
+
+impl From<crate::services::rdbms::DbResult<MysqlType>> for DbResult {
+    fn from(value: crate::services::rdbms::DbResult<MysqlType>) -> Self {
+        Self {
+            columns: value.columns.into_iter().map(|v| v.into()).collect(),
+            rows: value.rows.into_iter().map(|v| v.into()).collect(),
         }
     }
 }

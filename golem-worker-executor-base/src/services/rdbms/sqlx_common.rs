@@ -256,7 +256,7 @@ where
         self.record_metrics("query", start, result)
     }
 
-    async fn begin(
+    async fn begin_transaction(
         &self,
         key: &RdbmsPoolKey,
         worker_id: &WorkerId,
@@ -574,20 +574,13 @@ where
                     .collect::<Result<Vec<_>, sqlx::Error>>()
                     .map_err(Error::query_execution_failure)?;
 
-                let columns = rows[0]
-                    .columns()
-                    .iter()
-                    .map(|c: &DB::Column| c.try_into())
-                    .collect::<Result<Vec<_>, String>>()
-                    .map_err(Error::QueryResponseFailure)?;
+                let result = create_db_result::<T, DB>(rows)?;
 
-                let first_rows = rows
-                    .iter()
-                    .map(|r: &DB::Row| r.try_into())
-                    .collect::<Result<Vec<_>, String>>()
-                    .map_err(Error::QueryResponseFailure)?;
-
-                Ok(SqlxDbResultSet::new(columns, first_rows, row_stream))
+                Ok(SqlxDbResultSet::new(
+                    result.columns,
+                    result.rows,
+                    row_stream,
+                ))
             }
             _ => Ok(SqlxDbResultSet::new(vec![], vec![], row_stream)),
         }

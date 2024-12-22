@@ -15,11 +15,11 @@
 use crate::durable_host::DurableWorkerCtx;
 use crate::metrics::wasm::record_host_function_call;
 use crate::preview2::wasi::rdbms::postgres::{
-    Composite, CompositeType, Date, Datebound, Daterange, DbColumn, DbColumnType, DbRow, DbValue,
-    Domain, DomainType, Enumeration, EnumerationType, Error, Host, HostDbConnection,
-    HostDbResultSet, HostLazyDbColumnType, HostLazyDbValue, Int4bound, Int4range, Int8bound,
-    Int8range, Interval, IpAddress, MacAddress, Numbound, Numrange, Time, Timestamp, Timestamptz,
-    Timetz, Tsbound, Tsrange, Tstzbound, Tstzrange, Uuid,
+    Composite, CompositeType, Date, Datebound, Daterange, DbColumn, DbColumnType, DbResult, DbRow,
+    DbValue, Domain, DomainType, Enumeration, EnumerationType, Error, Host, HostDbConnection,
+    HostDbResultSet, HostDbTransaction, HostLazyDbColumnType, HostLazyDbValue, Int4bound,
+    Int4range, Int8bound, Int8range, Interval, IpAddress, MacAddress, Numbound, Numrange, Time,
+    Timestamp, Timestamptz, Timetz, Tsbound, Tsrange, Tstzbound, Tstzrange, Uuid,
 };
 use crate::services::rdbms::postgres::types as postgres_types;
 use crate::services::rdbms::postgres::PostgresType;
@@ -102,8 +102,8 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
                 match result {
                     Ok(result) => {
                         let entry = DbResultSetEntry::new(result);
-                        let db_result_set = self.as_wasi_view().table().push(entry)?;
-                        Ok(Ok(db_result_set))
+                        let resource = self.as_wasi_view().table().push(entry)?;
+                        Ok(Ok(resource))
                     }
                     Err(e) => Ok(Err(e.into())),
                 }
@@ -140,6 +140,36 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
                 Ok(result)
             }
             Err(error) => Ok(Err(Error::QueryParameterFailure(error))),
+        }
+    }
+
+    async fn begin_transaction(
+        &mut self,
+        self_: Resource<PostgresDbConnection>,
+    ) -> anyhow::Result<Result<Resource<DbTransactionEntry>, Error>> {
+        record_host_function_call("rdbms::postgres::db-connection", "begin-transaction");
+        let worker_id = self.state.owned_worker_id.worker_id.clone();
+        let pool_key = self
+            .as_wasi_view()
+            .table()
+            .get::<PostgresDbConnection>(&self_)?
+            .pool_key
+            .clone();
+
+        let result = self
+            .state
+            .rdbms_service
+            .postgres()
+            .begin_transaction(&pool_key, &worker_id)
+            .await;
+
+        match result {
+            Ok(result) => {
+                let entry = DbTransactionEntry::new(result);
+                let resource = self.as_wasi_view().table().push(entry)?;
+                Ok(Ok(resource))
+            }
+            Err(e) => Ok(Err(e.into())),
         }
     }
 
@@ -230,6 +260,115 @@ impl<Ctx: WorkerCtx> HostDbResultSet for DurableWorkerCtx<Ctx> {
         self.as_wasi_view()
             .table()
             .delete::<DbResultSetEntry>(rep)?;
+        Ok(())
+    }
+}
+
+pub struct DbTransactionEntry {
+    pub internal: Arc<dyn crate::services::rdbms::DbTransaction<PostgresType> + Send + Sync>,
+}
+
+impl DbTransactionEntry {
+    pub fn new(
+        internal: Arc<dyn crate::services::rdbms::DbTransaction<PostgresType> + Send + Sync>,
+    ) -> Self {
+        Self { internal }
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> HostDbTransaction for DurableWorkerCtx<Ctx> {
+    async fn query(
+        &mut self,
+        self_: Resource<DbTransactionEntry>,
+        statement: String,
+        params: Vec<DbValue>,
+    ) -> anyhow::Result<Result<DbResult, Error>> {
+        record_host_function_call("rdbms::postgres::db-transaction", "query");
+        match to_db_values(params, self.as_wasi_view().table()) {
+            Ok(params) => {
+                let internal = self
+                    .as_wasi_view()
+                    .table()
+                    .get::<DbTransactionEntry>(&self_)?
+                    .internal
+                    .clone();
+                let result = internal.query(&statement, params).await;
+                match result {
+                    Ok(result) => {
+                        let result = from_db_result(result, self.as_wasi_view().table())
+                            .map_err(Error::QueryResponseFailure);
+                        Ok(result)
+                    },
+                    Err(e) => Ok(Err(e.into())),
+                }
+            }
+            Err(error) => Ok(Err(Error::QueryParameterFailure(error))),
+        }
+    }
+
+    async fn execute(
+        &mut self,
+        self_: Resource<DbTransactionEntry>,
+        statement: String,
+        params: Vec<DbValue>,
+    ) -> anyhow::Result<Result<u64, Error>> {
+        record_host_function_call("rdbms::postgres::db-transaction", "execute");
+        match to_db_values(params, self.as_wasi_view().table()) {
+            Ok(params) => {
+                let internal = self
+                    .as_wasi_view()
+                    .table()
+                    .get::<DbTransactionEntry>(&self_)?
+                    .internal
+                    .clone();
+                let result = internal
+                    .execute(&statement, params)
+                    .await
+                    .map_err(Error::from);
+                Ok(result)
+            }
+            Err(error) => Ok(Err(Error::QueryParameterFailure(error))),
+        }
+    }
+
+    async fn commit(
+        &mut self,
+        self_: Resource<DbTransactionEntry>,
+    ) -> anyhow::Result<Result<(), Error>> {
+        record_host_function_call("rdbms::postgres::db-transaction", "commit");
+        let internal = self
+            .as_wasi_view()
+            .table()
+            .get::<DbTransactionEntry>(&self_)?
+            .internal
+            .clone();
+        let result = internal.commit().await.map_err(Error::from);
+        Ok(result)
+    }
+
+    async fn rollback(
+        &mut self,
+        self_: Resource<DbTransactionEntry>,
+    ) -> anyhow::Result<Result<(), Error>> {
+        record_host_function_call("rdbms::postgres::db-transaction", "query");
+        let internal = self
+            .as_wasi_view()
+            .table()
+            .get::<DbTransactionEntry>(&self_)?
+            .internal
+            .clone();
+        let result = internal.rollback().await.map_err(Error::from);
+        Ok(result)
+    }
+
+    async fn drop(&mut self, rep: Resource<DbTransactionEntry>) -> anyhow::Result<()> {
+        record_host_function_call("rdbms::postgres::db-result-set", "drop");
+        let entry = self
+            .as_wasi_view()
+            .table()
+            .delete::<DbTransactionEntry>(rep)?;
+        let _ = entry.internal.rollback_if_open().await;
         Ok(())
     }
 }
@@ -1690,6 +1829,15 @@ fn to_db_column_type(
             )
         }
     }
+}
+
+fn from_db_result(
+    result: crate::services::rdbms::DbResult<PostgresType>,
+    resource_table: &mut ResourceTable,
+) -> Result<DbResult, String> {
+    let columns = from_db_columns(result.columns, resource_table)?;
+    let rows = from_db_rows(result.rows, resource_table)?;
+    Ok(DbResult { columns, rows })
 }
 
 #[cfg(test)]

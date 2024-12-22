@@ -110,7 +110,7 @@ async fn postgres_transaction_tests(
     check!(connection.is_ok(), "connection to {} failed", db_address);
     let pool_key = connection.unwrap();
 
-    let transaction = rdbms.begin(&pool_key, &worker_id).await;
+    let transaction = rdbms.begin_transaction(&pool_key, &worker_id).await;
 
     check!(
         transaction.is_ok(),
@@ -165,7 +165,7 @@ async fn postgres_transaction_tests(
     let commit = transaction.commit().await;
     check!(commit.is_ok(), "transaction commit {} failed", db_address);
 
-    let transaction = rdbms.begin(&pool_key, &worker_id).await;
+    let transaction = rdbms.begin_transaction(&pool_key, &worker_id).await;
 
     check!(
         transaction.is_ok(),
@@ -1645,7 +1645,7 @@ async fn mysql_transaction_tests(mysql: &DockerMysqlRdbs, rdbms_service: &RdbmsS
     check!(connection.is_ok(), "connection to {} failed", db_address);
     let pool_key = connection.unwrap();
 
-    let transaction = rdbms.begin(&pool_key, &worker_id).await;
+    let transaction = rdbms.begin_transaction(&pool_key, &worker_id).await;
 
     check!(
         transaction.is_ok(),
@@ -1695,7 +1695,7 @@ async fn mysql_transaction_tests(mysql: &DockerMysqlRdbs, rdbms_service: &RdbmsS
     let commit = transaction.commit().await;
     check!(commit.is_ok(), "transaction commit {} failed", db_address);
 
-    let transaction = rdbms.begin(&pool_key, &worker_id).await;
+    let transaction = rdbms.begin_transaction(&pool_key, &worker_id).await;
 
     check!(
         transaction.is_ok(),
