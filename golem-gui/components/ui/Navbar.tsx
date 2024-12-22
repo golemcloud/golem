@@ -1,9 +1,10 @@
 "use client";
 
-import { AppBar, Toolbar } from "@mui/material";
+import { useState } from "react";
+import { AppBar, Toolbar, IconButton, Drawer, List, ListItem, ListItemText, Box } from "@mui/material";
+import { Menu as MenuIcon } from "@mui/icons-material";
 import { ModeToggle } from "../toggle-button";
 import Logo from "../../assets/golem-logo";
-import { List, ListItem, ListItemText } from "@mui/material";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -24,6 +25,12 @@ const links = [
 
 export default function Navbar() {
   const pathname = usePathname();
+  const [drawerOpen, setDrawerOpen] = useState(false);
+
+  const toggleDrawer = (open: boolean) => () => {
+    setDrawerOpen(open);
+  };
+
   return (
     <AppBar
       position="static"
@@ -32,45 +39,91 @@ export default function Navbar() {
       sx={{ boxShadow: "0px 0px" }}
     >
       <Toolbar className="flex justify-between">
+        {/* Logo */}
         <Logo />
-        <List className="flex gap-4">
-          {links.map((link) => {
-            const isActive =
-              pathname === link.to ||
-              (link.to !== "/" && pathname.startsWith(link.to));
-            return (
-              <Link
-                key={link.name}
-                href={link.comingSoon ? "#" : link.to}
-                style={{ textDecoration: "none", color: "inherit" }}
+
+        {/* Desktop Navigation */}
+        <Box sx={{ display: { xs: "none", md: "flex" }, gap: 4 }}>
+          {links.map((link) => (
+            <Link
+              key={link.name}
+              href={link.comingSoon ? "#" : link.to}
+              style={{ textDecoration: "none", color: "inherit" }}
+            >
+              <ListItem
+                sx={{
+                  padding: "0.3rem 0.8rem", // Reduced padding for smaller background
+                  marginBottom: "0.5rem",
+                  cursor: "pointer",
+                  borderRadius: "3px",
+                  borderBottom: pathname === link.to ? "1px solid #373737" : "transparent",
+                  "&:hover": {
+                    backgroundColor: "#373737",
+                  },
+                }}
+                className={`dark:hover:bg-[#373737] hover:bg-[#C0C0C0]`}
               >
-                <ListItem
-                  sx={{
-                    padding: "0.3rem 0.8rem", // Reduced padding for smaller background
-                    marginBottom: "0.5rem",
-                    cursor: "pointer",
-                    borderRadius: "3px",
-                    borderBottom: isActive
-                      ? "1px solid #373737"
-                      : "transparent",
-                    "&:hover": {
-                      backgroundColor: "#373737",
-                    },
-                  }}
-                  className={`dark:hover:bg-[#373737] hover:bg-[#C0C0C0]`}
-                >
-                  <ListItemText
-                    primary={`${link.name}${
-                      link.comingSoon ? "(Comingsoon)" : ""
-                    }`}
-                  />
-                </ListItem>
-              </Link>
-            );
-          })}
-        </List>
+                <ListItemText
+                  primary={`${link.name}${link.comingSoon ? " (Coming Soon)" : ""}`}
+                />
+              </ListItem>
+            </Link>
+          ))}
+        </Box>
+
+        {/* Mobile Menu Toggle */}
+        <IconButton
+          edge="start"
+          color="inherit"
+          aria-label="menu"
+          sx={{ display: { xs: "block", md: "none" } }}
+          onClick={toggleDrawer(true)}
+        >
+          <MenuIcon />
+        </IconButton>
+
+        {/* Dark Mode Toggle */}
         <ModeToggle />
       </Toolbar>
+
+      {/* Mobile Drawer */}
+      <Drawer
+        anchor="right"
+        open={drawerOpen}
+        onClose={toggleDrawer(false)}
+        PaperProps={{
+          sx: {
+            width: 250,
+            backgroundColor: "background.default",
+          },
+        }}
+      >
+        <List>
+          {links.map((link) => (
+            <Link
+              key={link.name}
+              href={link.comingSoon ? "#" : link.to}
+              style={{ textDecoration: "none", color: "inherit" }}
+            >
+              <ListItem
+                button
+                sx={{
+                  padding: "0.8rem 1.2rem",
+                  borderBottom: pathname === link.to ? "1px solid #373737" : "transparent",
+                  "&:hover": {
+                    backgroundColor: "#f0f0f0",
+                  },
+                }}
+                onClick={toggleDrawer(false)}
+              >
+                <ListItemText
+                  primary={`${link.name}${link.comingSoon ? " (Coming Soon)" : ""}`}
+                />
+              </ListItem>
+            </Link>
+          ))}
+        </List>
+      </Drawer>
     </AppBar>
   );
 }

@@ -1,55 +1,60 @@
 import { Box, Card, CardContent, Typography, Chip } from "@mui/material";
 
 interface CustomCardProps {
-  title: string;
-  time: number;
-  version: number;
-  exports: number;
-  size: string;
-  componentType: string;
-}
-const CustomCard = ({
-  title,
-  time,
-  exports,
-  size,
-  componentType,
-  version,
-}: CustomCardProps) => {
+    title: string;
+    timestamp: string;
+    tags: string[];
+    version: string;
+  }
+const CustomCard = ({ title, timestamp, tags, version }:CustomCardProps) => {
   return (
     <Card
       sx={{
-        width:350,
-        padding: 1,
+        width: 300,
+        backgroundColor: "#1c1c1c",
+        color: "#ffffff",
+        borderRadius: 2,
+        padding: 2,
+        position: "relative",
       }}
     >
       <CardContent>
-        <Box sx={{ display: "flex", justifyContent: "space-between" }}>
-          <Typography variant="inherit" component="div" gutterBottom>
-            {title}
-          </Typography>
-          <Typography
-          className=" bg-[#787676] text-white px-2 py-1 rounded-md text-sm"
-         >
-            v{version}
-          </Typography>
-        </Box>
-        <Typography variant="body2"
-            className="text-[#555] dark:text-gray-300 mb-3"
-        >{time} hours ago</Typography>
-        <Box sx={{ display: "flex", gap: 1, alignItems: "center"}}
+        <Typography variant="h6" component="div" gutterBottom>
+          {title}
+        </Typography>
+        <Typography
+          variant="body2"
+          sx={{ color: "gray", marginBottom: 2 }}
         >
-           <Typography variant="body1" className="border border-[#555] px-2 rounded-md">
-           {`${exports} Exports`} 
-            </Typography> 
-            <Typography variant="body1" className="border border-[#555] px-2 rounded-md">
-            {`${size} MB`}
-            </Typography> 
-            <Typography variant="body1" className="border border-[#555] px-2 rounded-md">
-            {componentType} 
-            </Typography> 
+          {timestamp}
+        </Typography>
+        <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
+          {tags.map((tag, index) => (
+            <Chip
+              key={index}
+              label={tag}
+              sx={{
+                backgroundColor: "#333",
+                color: "#fff",
+              }}
+            />
+          ))}
         </Box>
       </CardContent>
+      <Box
+        sx={{
+          position: "absolute",
+          top: 8,
+          right: 8,
+          backgroundColor: "#333",
+          color: "#fff",
+          borderRadius: 1,
+          padding: "2px 6px",
+          fontSize: "0.8rem",
+        }}
+      >
+        {version}
+      </Box>
     </Card>
   );
 };
