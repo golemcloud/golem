@@ -10,7 +10,7 @@ type SettingProps = {
         title: string;
         description: string;
         buttonText: string;
-        onClick: () => void;
+        onClick: (e:any) => void;
     }[];
     };
 const DangerZone = ({ title, description, actions }: SettingProps) => {

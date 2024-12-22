@@ -2,10 +2,9 @@
 
 import React from "react";
 import { Box, Button, List, ListItem, ListItemIcon, ListItemText, Typography } from "@mui/material";
-import { Home, Settings, RocketLaunch, Add } from "@mui/icons-material";
+import { Add } from "@mui/icons-material";
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
-import PlayForWorkIcon from '@mui/icons-material/PlayForWork';
 
 type SidebarProps = {
   id: string;
@@ -20,11 +19,9 @@ type NavigationLinks = {
   icon: React.ReactNode;
 };
 
-const Sidebar = ({ id, navigationLinks, variant, version }: SidebarProps) => {
+const Sidebar = ({ id, navigationLinks, variant }: SidebarProps) => {
 
   const pathname = usePathname();
-  const searchParams = useSearchParams();
-  version = searchParams?.get("version") || version       
 
   return (
     <Box
@@ -86,7 +83,7 @@ const Sidebar = ({ id, navigationLinks, variant, version }: SidebarProps) => {
       >
         Routes
       </Typography>
-      {variant==="apis" && <Link href={`/apis/${id}/new-route?version=${version}`}>
+      {variant==="apis" && <Link href={`/apis/${id}/new-route`}>
         <Button
         variant="outlined"
         sx={{

@@ -1,11 +1,8 @@
 "use client";
 import {
-  Box,
-  Container,
   Divider,
   InputLabel,
   MenuItem,
-  Paper,
   Select,
   Stack,
   TextField,
@@ -15,10 +12,10 @@ import { Button } from "@/components/ui/button";
 import React, { useState } from "react";
 import AddCircleOutlineIcon from "@mui/icons-material/AddCircleOutline";
 import DeleteIcon from "@mui/icons-material/Delete";
-import { fetcher, getErrorMessage } from "@/lib/utils";
-import useSWR from "swr";
-import { ApiDefinition } from "@/types/api";
+import { ApiDefinition, ApiDeployment } from "@/types/api";
 import { useForm, Controller } from "react-hook-form";
+import useApiDefinitions from "@/lib/hooks/use-api-definitons";
+import { addNewApiDeployment } from "@/lib/hooks/use-api-deployments";
 
 interface KeyValue {
   id: string;
@@ -33,13 +30,20 @@ interface FormValues {
 
 export default function DeploymentCreationPage({
   onCreation,
+  addDeployment,
+  apiId,
 }: {
-  onCreation: () => void;
+  onCreation?: () => void;
+  apiId?: string;
+  addDeployment?: (newDeploy: ApiDeployment) => Promise<{
+    success: boolean;
+    data?: ApiDeployment | null;
+    error?: string | null;
+  }>;
 }) {
-  const [error, setError] = useState("");
-  const { data, isLoading } = useSWR(`?path=api/definitions`, fetcher);
-  let apiDefintions = (data?.data || []) as ApiDefinition[];
-  apiDefintions = apiDefintions.filter((api) => api.draft);
+  const [error, setError] = useState<string | null>(null);
+  const { apiDefinitions: data, isLoading } = useApiDefinitions(apiId);
+  const apiDefinitions = data.filter((api) => api.draft);
 
   const { control, handleSubmit, register, watch, setValue } =
     useForm<FormValues>({
@@ -54,7 +58,7 @@ export default function DeploymentCreationPage({
   const onSubmit = async (formData: FormValues) => {
     console.log("Form submitted:", formData);
     // Add your submission logic here
-    const newDeploy = {
+    const newDeploy: ApiDeployment = {
       apiDefinitions: formData.definitions,
       site: {
         host: formData.domain,
@@ -62,19 +66,13 @@ export default function DeploymentCreationPage({
       },
     };
 
-    const response = await fetcher("?path=api/deployments/deploy", {
-      method: "POST",
-      body: JSON.stringify(newDeploy),
-      headers: {
-        "content-type": "application/json",
-      },
-    });
-
-    if (response.status !== 200) {
-      return setError(getErrorMessage(response.data));
+    if (addDeployment) {
+      const { error } = await addDeployment(newDeploy);
+      return setError(error || null);
     }
-    console.log("response", response);
-    onCreation();
+    const { error } = await addNewApiDeployment(newDeploy);
+    setError(error || null);
+    onCreation?.();
   };
 
   return (
@@ -126,12 +124,13 @@ export default function DeploymentCreationPage({
                   0 ||
                 "At least one valid API definition with a version is required.",
             }}
-            render={({ field }) => {
+            render={() => {
               return (
                 <>
                   {definitions.map((definition, index) => {
                     return (
                       <Stack
+                        key={`${definition.id}__${index}`}
                         direction="row"
                         justifyContent={"space-between"}
                         alignItems={"center"}
@@ -142,7 +141,7 @@ export default function DeploymentCreationPage({
                           <Select
                             name={`definition[${index}].id`}
                             variant="outlined"
-                            disabled={isLoading || apiDefintions?.length === 0}
+                            disabled={isLoading || apiDefinitions?.length === 0}
                             value={definitions[index].id}
                             onChange={(e) => {
                               const newDef = {
@@ -157,7 +156,7 @@ export default function DeploymentCreationPage({
                             }}
                           >
                             {!isLoading &&
-                              apiDefintions?.map(
+                              apiDefinitions?.map(
                                 (apiDefintion: ApiDefinition) => (
                                   <MenuItem
                                     key={apiDefintion?.id}
@@ -175,7 +174,7 @@ export default function DeploymentCreationPage({
                             name={`definition[${index}].version`}
                             value={definitions[index].version}
                             variant="outlined"
-                            disabled={isLoading || apiDefintions?.length === 0}
+                            disabled={isLoading || apiDefinitions?.length === 0}
                             onChange={(e) => {
                               const newDef = {
                                 ...definition,
@@ -189,7 +188,7 @@ export default function DeploymentCreationPage({
                             }}
                           >
                             {!isLoading &&
-                              apiDefintions
+                              apiDefinitions
                                 ?.filter((api) => api.id === definition.id)
                                 ?.map((apiDefintion: ApiDefinition) => (
                                   <MenuItem

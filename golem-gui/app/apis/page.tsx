@@ -8,7 +8,6 @@ import {
   InputAdornment,
   TextField,
   Typography,
-  Modal,
   Card,
   CardContent,
 } from "@mui/material";
@@ -17,31 +16,27 @@ import AddIcon from "@mui/icons-material/Add";
 import CreateAPI from "@/components/create-api";
 import ApiIcon from "@mui/icons-material/Api";
 import { useRouter } from "next/navigation";
-import useSWR from "swr";
-import { fetcher } from "@/lib/utils";
 import { ApiDefinition } from "@/types/api";
 import CustomModal from "@/components/CustomModal";
+import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 
 const ComponentsPage = () => {
   const [open, setOpen] = useState(false);
-  //move this custom hook and us it here.
-  const { data: apiData, isLoading } = useSWR("?path=api/definitions", fetcher);
-  const apis = (apiData?.data || []) as ApiDefinition[];
+  //Ideally we are not sure about latest version. as we are getting the every version separately. there is no way of knowing what is the latest version.
+  //out of all the fetched api's considering the last one as latest. there is chance that if pagination applied on the api's latest version may show wrong.
+  const { apiDefinitions, getApiDefintion, isLoading } = useApiDefinitions();
   const router = useRouter();
-  const apiMap = apis?.reduce<
-    Record<string, { versions: ApiDefinition[]; latestVersion: ApiDefinition }>
-  >((obj, api: ApiDefinition) => {
-    if (api.id in obj) {
-      obj[api.id].versions.push(api);
-      obj[api.id].latestVersion = api;
-    } else {
-      obj[api.id] = {
-        versions: [api] as ApiDefinition[],
-        latestVersion: api,
-      };
-    }
-    return obj;
-  }, {});
+  const apiMap = apiDefinitions?.reduce<Record<string, ApiDefinition | null>>(
+    (obj, api: ApiDefinition) => {
+      if (api.id in obj) {
+        return obj;
+      } else {
+        obj[api.id] = getApiDefintion(api.id)?.data || null;
+      }
+      return obj;
+    },
+    {}
+  );
 
   const handleOpen = () => setOpen(true);
   const handleClose = () => setOpen(false);
@@ -86,7 +81,7 @@ const ComponentsPage = () => {
         </Button>
       </Box>
 
-      {apis.length === 0 ? (
+      {apiDefinitions.length === 0 ? (
         <Box
           sx={{
             color: "#aaa",
@@ -121,27 +116,29 @@ const ComponentsPage = () => {
         </Box>
       ) : (
         <Box sx={{ display: "flex", flexWrap: "wrap", gap: 2 }}>
-          {!isLoading && Object.values(apiMap)?.map((api) => (
-            <Card
-              key={api.latestVersion.id}
-              sx={{
-                cursor: "pointer",
-                width: "200px",
-                "&:hover": { boxShadow: 4 },
-                transition: "all 0.3s ease",
-              }}
-              onClick={() => handleApiClick(api.latestVersion.id!)}
-            >
-              <CardContent>
-                <Typography variant="h6">{api.latestVersion.id}</Typography>
-              </CardContent>
-            </Card>
-          ))}
+          {!isLoading &&
+            Object.values(apiMap)?.map((api: ApiDefinition | null) =>
+              api ? (
+                <Card
+                  key={api.id}
+                  sx={{
+                    cursor: "pointer",
+                    width: "200px",
+                    "&:hover": { boxShadow: 4 },
+                    transition: "all 0.3s ease",
+                  }}
+                  onClick={() => handleApiClick(api.id!)}
+                >
+                  <CardContent>
+                    <Typography variant="h6">{api.id}</Typography>
+                  </CardContent>
+                </Card>
+              ) : null
+            )}
         </Box>
       )}
-
       <CustomModal open={open} onClose={handleClose} heading="Create New API">
-        <CreateAPI onCreation={handleClose}/>
+        <CreateAPI onCreation={handleClose} />
       </CustomModal>
     </Container>
   );
