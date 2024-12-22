@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::services::golem_config::{RdbmsConfig, RdbmsPoolConfig, RdbmsQueryConfig};
+use crate::services::golem_config::{RdbmsConfig, RdbmsPoolConfig};
 use crate::services::rdbms::metrics::record_rdbms_metrics;
 use crate::services::rdbms::{
-    DbResultSet, DbRow, DbTransaction, Error, Rdbms, RdbmsPoolKey, RdbmsStatus, RdbmsType,
+    DbResult, DbResultSet, DbRow, DbTransaction, Error, Rdbms, RdbmsPoolKey, RdbmsStatus, RdbmsType,
 };
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -46,7 +46,7 @@ where
 
 impl<T, DB> SqlxRdbms<T, DB>
 where
-    T: RdbmsType + Display + Default + Send + Sync + QueryExecutor2<T, DB>,
+    T: RdbmsType + Display + Default + Send + Sync + QueryExecutor<T, DB>,
     DB: Database,
     RdbmsPoolKey: PoolCreator<DB>,
 {
@@ -138,11 +138,9 @@ where
 #[async_trait]
 impl<T, DB> Rdbms<T> for SqlxRdbms<T, DB>
 where
-    T: RdbmsType + Display + Default + Send + Sync + QueryExecutor2<T, DB> + 'static,
+    T: RdbmsType + Display + Default + Send + Sync + QueryExecutor<T, DB> + 'static,
     DB: Database,
-    for<'c> &'c mut <DB as sqlx::Database>::Connection: sqlx::Executor<'c, Database = DB>,
-    // Pool<DB>: QueryExecutor<T>,
-    // for<'a> &'a mut <DB as Database>::Connection: QueryExecutor<T>,
+    for<'c> &'c mut <DB as Database>::Connection: sqlx::Executor<'c, Database = DB>,
     RdbmsPoolKey: PoolCreator<DB>,
 {
     async fn create(&self, address: &str, worker_id: &WorkerId) -> Result<RdbmsPoolKey, Error> {
@@ -234,8 +232,14 @@ where
         );
 
         let result = {
-            let pool= self.get_or_create(key, worker_id).await?;
-            T::query_stream(statement, params, self.config.query.query_batch, pool.deref()).await
+            let pool = self.get_or_create(key, worker_id).await?;
+            T::query_stream(
+                statement,
+                params,
+                self.config.query.query_batch,
+                pool.deref(),
+            )
+            .await
         };
 
         let result = result.map_err(|e| {
@@ -275,9 +279,8 @@ where
                 .await
                 .map_err(|e| Error::QueryExecutionFailure(e.to_string()))?;
 
-            let db_transaction: Arc<dyn DbTransaction<T> + Send + Sync> = Arc::new(
-                SqlxDbTransaction::new(key.clone(), self.config.query, connection),
-            );
+            let db_transaction: Arc<dyn DbTransaction<T> + Send + Sync> =
+                Arc::new(SqlxDbTransaction::new(key.clone(), connection));
 
             Ok(db_transaction)
         };
@@ -309,25 +312,33 @@ pub(crate) trait PoolCreator<DB: Database> {
     async fn create_pool(&self, config: &RdbmsPoolConfig) -> Result<Pool<DB>, Error>;
 }
 
-#[async_trait]
-pub(crate) trait QueryExecutor<T: RdbmsType> {
-    async fn execute(&self, statement: &str, params: Vec<T::DbValue>) -> Result<u64, Error>;
+// #[async_trait]
+// pub(crate) trait QueryExecutor<T: RdbmsType> {
+//     async fn execute(self, statement: &str, params: Vec<T::DbValue>) -> Result<u64, Error>;
+//
+//     async fn query_stream(
+//         self,
+//         statement: &str,
+//         params: Vec<T::DbValue>,
+//         batch: usize,
+//     ) -> Result<Arc<dyn DbResultSet<T> + Send + Sync>, Error>;
+// }
 
-    async fn query_stream(
-        &self,
-        statement: &str,
-        params: Vec<T::DbValue>,
-        batch: usize,
-    ) -> Result<Arc<dyn DbResultSet<T> + Send + Sync>, Error>;
-}
-
 #[async_trait]
-pub(crate) trait QueryExecutor2<T: RdbmsType, DB: Database> {
+pub(crate) trait QueryExecutor<T: RdbmsType, DB: Database> {
     async fn execute<'c, E>(
         statement: &str,
         params: Vec<T::DbValue>,
         executor: E,
     ) -> Result<u64, Error>
+    where
+        E: sqlx::Executor<'c, Database = DB>;
+
+    async fn query<'c, E>(
+        statement: &str,
+        params: Vec<T::DbValue>,
+        executor: E,
+    ) -> Result<DbResult<T>, Error>
     where
         E: sqlx::Executor<'c, Database = DB>;
 
@@ -341,30 +352,99 @@ pub(crate) trait QueryExecutor2<T: RdbmsType, DB: Database> {
         E: sqlx::Executor<'c, Database = DB>;
 }
 
+// async fn execute_statement<'c, T, DB, E>(
+//     statement: &str,
+//     params: Vec<T::DbValue>,
+//     executor: E,
+// ) -> Result<u64, Error>
+// where
+//     T: RdbmsType,
+//     DB: Database,
+//     sqlx::query::Query<'c, DB, <DB as Database>::Arguments<'c>>: QueryParamsBinder<'c, T, DB>,
+//     <DB as Database>::Arguments<'c>: sqlx::IntoArguments<'c, DB>,
+//     E: sqlx::Executor<'c, Database = DB> {
+//     let query: sqlx::query::Query<DB, <DB as Database>::Arguments<'c>> =
+//         sqlx::query(statement).bind_params(params)?;
+//     let result = query
+//         .execute(executor)
+//         .await
+//         .map_err(|e| Error::QueryExecutionFailure(e.to_string()))?;
+//     Ok(result.rows_affected())
+// }
+//
+// async fn query_statement<'c, T, DB, E>(
+//     statement: &'c str,
+//     params: Vec<T::DbValue>,
+//     executor: E,
+// ) -> Result<DbResult<T>, Error>
+// where
+//     T: RdbmsType + Send + Sync,
+//     DB: Database,
+//     DB::Row: Row,
+//     sqlx::query::Query<'c, DB, <DB as Database>::Arguments<'c>>: QueryParamsBinder<'c, T, DB>,
+//     <DB as Database>::Arguments<'c>: sqlx::IntoArguments<'c, DB>,
+//     DbRow<T::DbValue>: for<'a> TryFrom<&'a DB::Row, Error = String>,
+//     T::DbColumn: for<'a> TryFrom<&'a DB::Column, Error = String>,
+//     E: sqlx::Executor<'c, Database = DB> {
+//     let query: sqlx::query::Query<DB, <DB as Database>::Arguments<'c>> =
+//         sqlx::query(statement).bind_params(params)?;
+//     let result = query
+//         .fetch_all(executor)
+//         .await
+//         .map_err(|e| Error::QueryExecutionFailure(e.to_string()))?;
+//     create_db_result::<T, DB>(result)
+// }
+//
+// async fn query_stream_statement<'c, T, DB, E>(
+//     statement: &'c str,
+//     params: Vec<T::DbValue>,
+//     batch: usize,
+//     executor: E,
+// ) -> Result<Arc<dyn DbResultSet<T> + Send + Sync + 'c>, Error>
+// where
+//     T: RdbmsType + Default + Display + Send + Sync + 'c,
+//     DB: Database,
+//     DB::Row: Row,
+//     sqlx::query::Query<'c, DB, <DB as Database>::Arguments<'c>>: QueryParamsBinder<'c, T, DB>,
+//     <DB as Database>::Arguments<'c>: sqlx::IntoArguments<'c, DB>,
+//     DbRow<T::DbValue>: for<'a> TryFrom<&'a DB::Row, Error = String>,
+//     T::DbColumn: for<'a> TryFrom<&'a DB::Column, Error = String>,
+//     E: sqlx::Executor<'c, Database = DB> {
+//
+//     let query: sqlx::query::Query<DB, <DB as Database>::Arguments<'c>> =
+//         sqlx::query(statement).bind_params(params)?;
+//
+//     let stream: BoxStream<Result<DB::Row, sqlx::Error>> = query.fetch(executor);
+//     let response: StreamDbResultSet<'c, T, DB> =
+//         StreamDbResultSet::create(stream, batch).await?;
+//
+//     Ok(Arc::new(response))
+// }
+//
+//
+// pub(crate) enum SqlxConnectionContext<DB: Database> {
+//     Pool(Arc<sqlx::Pool<DB>>),
+//     Transaction(Arc<async_mutex::Mutex<(PoolConnection<DB>, bool)>>)
+// }
+
 #[derive(Clone)]
 #[allow(clippy::type_complexity)]
 pub struct SqlxDbTransaction<T: RdbmsType, DB: Database> {
     rdbms_type: T,
     pool_key: RdbmsPoolKey,
-    query_config: RdbmsQueryConfig,
     transaction: Arc<async_mutex::Mutex<(PoolConnection<DB>, bool)>>,
 }
 
 impl<T, DB> SqlxDbTransaction<T, DB>
 where
-    T: RdbmsType + Display + Default + Send + Sync + QueryExecutor2<T, DB>,
+    T: RdbmsType + Display + Default + Send + Sync + QueryExecutor<T, DB>,
     DB: Database,
 {
-    fn new(
-        pool_key: RdbmsPoolKey,
-        query_config: RdbmsQueryConfig,
-        connection: PoolConnection<DB>,
-    ) -> Self {
+    fn new(pool_key: RdbmsPoolKey, connection: PoolConnection<DB>) -> Self {
         let rdbms_type = T::default();
         Self {
             rdbms_type,
             pool_key,
-            query_config,
             transaction: Arc::new(async_mutex::Mutex::new((connection, true))),
         }
     }
@@ -382,7 +462,7 @@ where
 #[async_trait]
 impl<T, DB> DbTransaction<T> for SqlxDbTransaction<T, DB>
 where
-    T: RdbmsType + Display + Default + Send + Sync + QueryExecutor2<T, DB>,
+    T: RdbmsType + Display + Default + Send + Sync + QueryExecutor<T, DB>,
     DB: Database,
     // for<'a> &'a mut <DB as Database>::Connection: QueryExecutor<T>,
     for<'c> &'c mut <DB as sqlx::Database>::Connection: sqlx::Executor<'c, Database = DB>,
@@ -419,47 +499,35 @@ where
         self.record_metrics("execute", start, result)
     }
 
-    async fn query(
-        &self,
-        statement: &str,
-        params: Vec<T::DbValue>,
-    ) -> Result<Arc<dyn DbResultSet<T> + Send + Sync>, Error>
+    async fn query(&self, statement: &str, params: Vec<T::DbValue>) -> Result<DbResult<T>, Error>
     where
         <T as RdbmsType>::DbValue: 'async_trait,
     {
-        // let start = Instant::now();
-        // debug!(
-        //     rdbms_type = self.rdbms_type.to_string(),
-        //     pool_key = self.pool_key.to_string(),
-        //     "query - statement: {}, params count: {}",
-        //     statement,
-        //     params.len()
-        // );
-        //
-        // let result = {
-        //     let mut transaction = self.transaction.lock().await;
-        //     T::query_stream(
-        //         statement,
-        //         params,
-        //         self.query_config.query_batch,
-        //         transaction.0.deref_mut(),
-        //     )
-        //     .await
-        // };
-        //
-        // let result = result.map_err(|e| {
-        //     error!(
-        //         rdbms_type = self.rdbms_type.to_string(),
-        //         pool_key = self.pool_key.to_string(),
-        //         "query - statement: {}, error: {}",
-        //         statement,
-        //         e
-        //     );
-        //     e
-        // });
-        // self.record_metrics("query", start, result)
-        todo!()
+        let start = Instant::now();
+        debug!(
+            rdbms_type = self.rdbms_type.to_string(),
+            pool_key = self.pool_key.to_string(),
+            "query - statement: {}, params count: {}",
+            statement,
+            params.len()
+        );
 
+        let result = {
+            let mut transaction = self.transaction.lock_arc().await;
+            T::query(statement, params, transaction.0.deref_mut()).await
+        };
+
+        let result = result.map_err(|e| {
+            error!(
+                rdbms_type = self.rdbms_type.to_string(),
+                pool_key = self.pool_key.to_string(),
+                "query - statement: {}, error: {}",
+                statement,
+                e
+            );
+            e
+        });
+        self.record_metrics("query", start, result)
     }
 
     async fn commit(&self) -> Result<(), Error> {
@@ -471,7 +539,7 @@ where
         );
 
         let mut transaction = self.transaction.lock().await;
-        let result = DB::TransactionManager::commit(&mut transaction.0).await;
+        let result = DB::TransactionManager::commit(transaction.0.deref_mut()).await;
         if result.is_ok() {
             transaction.1 = false;
         }
@@ -498,7 +566,7 @@ where
         );
 
         let mut transaction = self.transaction.lock().await;
-        let result = DB::TransactionManager::rollback(&mut transaction.0).await;
+        let result = DB::TransactionManager::rollback(transaction.0.deref_mut()).await;
         if result.is_ok() {
             transaction.1 = false;
         }
@@ -667,4 +735,32 @@ pub(crate) trait QueryParamsBinder<'q, T: RdbmsType, DB: Database> {
         self,
         params: Vec<T::DbValue>,
     ) -> Result<sqlx::query::Query<'q, DB, <DB as Database>::Arguments<'q>>, Error>;
+}
+
+pub(crate) fn create_db_result<T, DB>(rows: Vec<DB::Row>) -> Result<DbResult<T>, Error>
+where
+    T: RdbmsType + Send + Sync,
+    DB: Database,
+    DB::Row: Row,
+    DbRow<T::DbValue>: for<'a> TryFrom<&'a DB::Row, Error = String>,
+    T::DbColumn: for<'a> TryFrom<&'a DB::Column, Error = String>,
+{
+    if rows.is_empty() {
+        Ok(DbResult::empty())
+    } else {
+        let columns = rows[0]
+            .columns()
+            .iter()
+            .map(|c: &DB::Column| c.try_into())
+            .collect::<Result<Vec<_>, String>>()
+            .map_err(Error::QueryResponseFailure)?;
+
+        let values = rows
+            .iter()
+            .map(|r: &DB::Row| r.try_into())
+            .collect::<Result<Vec<_>, String>>()
+            .map_err(Error::QueryResponseFailure)?;
+
+        Ok(DbResult::new(columns, values))
+    }
 }

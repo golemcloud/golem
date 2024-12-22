@@ -57,11 +57,7 @@ pub trait DbTransaction<T: RdbmsType> {
     where
         <T as RdbmsType>::DbValue: 'async_trait;
 
-    async fn query(
-        &self,
-        statement: &str,
-        params: Vec<T::DbValue>,
-    ) -> Result<Arc<dyn DbResultSet<T> + Send + Sync>, Error>
+    async fn query(&self, statement: &str, params: Vec<T::DbValue>) -> Result<DbResult<T>, Error>
     where
         <T as RdbmsType>::DbValue: 'async_trait;
 
@@ -228,6 +224,25 @@ pub trait DbResultSet<T: RdbmsType> {
     async fn get_columns(&self) -> Result<Vec<T::DbColumn>, Error>;
 
     async fn get_next(&self) -> Result<Option<Vec<DbRow<T::DbValue>>>, Error>;
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct DbResult<T: RdbmsType> {
+    pub columns: Vec<T::DbColumn>,
+    pub rows: Vec<DbRow<T::DbValue>>,
+}
+
+impl<T: RdbmsType> DbResult<T> {
+    pub fn new(columns: Vec<T::DbColumn>, rows: Vec<DbRow<T::DbValue>>) -> Self {
+        Self { columns, rows }
+    }
+
+    pub fn empty() -> Self {
+        Self {
+            columns: vec![],
+            rows: vec![],
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

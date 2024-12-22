@@ -14,7 +14,7 @@
 
 use crate::services::rdbms::mysql::types as mysql_types;
 use crate::services::rdbms::postgres::types as postgres_types;
-use crate::services::rdbms::{DbRow, Error};
+use crate::services::rdbms::{DbRow, DbTransaction, Error};
 use crate::services::rdbms::{Rdbms, RdbmsServiceDefault, RdbmsType};
 use crate::services::rdbms::{RdbmsPoolKey, RdbmsService};
 use assert2::check;
@@ -79,7 +79,96 @@ async fn postgres_execute_test_select1(
 }
 
 #[test]
-async fn postgres_execute_test_create_insert_select(
+async fn postgres_transaction_tests(
+    postgres: &DockerPostgresRdbs,
+    rdbms_service: &RdbmsServiceDefault,
+) {
+    let db_address = postgres.rdbs[1].host_connection_string();
+    let rdbms = rdbms_service.postgres();
+
+    let create_table_statement = r#"
+            CREATE TABLE IF NOT EXISTS test_users
+            (
+                user_id             text    NOT NULL PRIMARY KEY,
+                name                text    NOT NULL,
+                tags                text[],
+                created_on          timestamp DEFAULT NOW()
+            );
+        "#;
+
+    rdbms_execute_test(
+        rdbms.clone(),
+        &db_address,
+        create_table_statement,
+        vec![],
+        None,
+    )
+    .await;
+
+    let worker_id = new_worker_id();
+    let connection = rdbms.create(&db_address, &worker_id).await;
+    check!(connection.is_ok(), "connection to {} failed", db_address);
+    let pool_key = connection.unwrap();
+
+    let transaction = rdbms.begin(&pool_key, &worker_id).await;
+
+    check!(
+        transaction.is_ok(),
+        "transaction begin {} failed",
+        db_address
+    );
+    let transaction = transaction.unwrap();
+
+    let insert_statement = r#"
+            INSERT INTO test_users
+            (user_id, name, tags)
+            VALUES
+            ($1, $2, $3)
+        "#;
+
+    let count = 4;
+
+    let mut rows: Vec<DbRow<postgres_types::DbValue>> = Vec::with_capacity(count);
+
+    for i in 0..count {
+        let params: Vec<postgres_types::DbValue> = vec![
+            postgres_types::DbValue::Text(format!("{:03}", i)),
+            postgres_types::DbValue::Text(format!("name-{:03}", i)),
+            postgres_types::DbValue::Array(vec![
+                postgres_types::DbValue::Text(format!("tag-1-{}", i)),
+                postgres_types::DbValue::Text(format!("tag-2-{}", i)),
+            ]),
+        ];
+        rdbms_execute_with_transaction_test(
+            transaction.clone(),
+            insert_statement,
+            params.clone(),
+            Some(1),
+        )
+        .await;
+
+        rows.push(DbRow { values: params });
+    }
+
+    let select_statement = "SELECT user_id, name, tags FROM test_users ORDER BY user_id ASC";
+
+    rdbms_query_with_transaction_test(
+        transaction.clone(),
+        select_statement,
+        vec![],
+        None,
+        Some(rows),
+    )
+    .await;
+
+    let commit = transaction.commit().await;
+    check!(commit.is_ok(), "transaction commit {} failed", db_address);
+
+    rdbms_service.postgres().remove(&pool_key, &worker_id);
+}
+
+#[test]
+async fn postgres_create_insert_select_test(
     postgres: &DockerPostgresRdbs,
     rdbms_service: &RdbmsServiceDefault,
 ) {
@@ -725,7 +814,7 @@ async fn postgres_execute_test_create_insert_select(
 }
 
 #[test]
-async fn postgres_execute_test_create_insert_select_array(
+async fn postgres_create_insert_select_array_test(
     postgres: &DockerPostgresRdbs,
     rdbms_service: &RdbmsServiceDefault,
 ) {
@@ -1502,7 +1591,7 @@ async fn mysql_execute_test_select1(mysql: &DockerMysqlRdbs, rdbms_service: &Rdb
 }
 
 #[test]
-async fn mysql_execute_test_create_insert_select(
+async fn mysql_create_insert_select_test(
     mysql: &DockerMysqlRdbs,
     rdbms_service: &RdbmsServiceDefault,
 ) {
@@ -1924,6 +2013,65 @@ async fn mysql_execute_test_create_insert_select(
         None,
     )
     .await;
+}
+
+async fn rdbms_execute_with_transaction_test<T: RdbmsType>(
+    transaction: Arc<dyn DbTransaction<T> + Send + Sync>,
+    query: &str,
+    params: Vec<T::DbValue>,
+    expected: Option<u64>,
+) {
+    let result = transaction.execute(query, params).await;
+
+    if result.is_err() {
+        println!("error {}", result.clone().err().unwrap());
+    }
+
+    check!(result.is_ok(), "query {} failed", query);
+    if let Some(expected) = expected {
+        check!(
+            result.unwrap() == expected,
+            "query {} - result do not match",
+            query
+        );
+    }
+}
+
+async fn rdbms_query_with_transaction_test<T: RdbmsType>(
+    transaction: Arc<dyn DbTransaction<T> + Send + Sync>,
+    query: &str,
+    params: Vec<T::DbValue>,
+    expected_columns: Option<Vec<T::DbColumn>>,
+    expected_rows: Option<Vec<DbRow<T::DbValue>>>,
+) {
+    let result = transaction.query(query, params).await;
+
+    check!(result.is_ok(), "query {} failed", query);
+
+    let result = result.unwrap();
+    let columns = result.columns;
+
+    if let Some(expected) = expected_columns {
+        println!("columns: {:#?}", columns);
+        println!("expected: {:#?}", expected);
+        check!(
+            columns == expected,
+            "query {} - response columns do not match",
+            query
+        );
+    }
+
+    let rows: Vec<DbRow<T::DbValue>> = result.rows;
+
+    if let Some(expected) = expected_rows {
+        println!("rows: {:#?}", rows);
+        println!("expected: {:#?}", expected);
+        check!(
+            rows == expected,
+            "query {}- response rows do not match",
+            query
+        );
+    }
 }
 
 async fn rdbms_execute_test<T: RdbmsType>(

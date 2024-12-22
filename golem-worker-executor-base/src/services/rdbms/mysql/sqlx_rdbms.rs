@@ -16,9 +16,9 @@ use crate::services::golem_config::{RdbmsConfig, RdbmsPoolConfig};
 use crate::services::rdbms::mysql::types::{DbColumn, DbColumnType, DbValue};
 use crate::services::rdbms::mysql::{MysqlType, MYSQL};
 use crate::services::rdbms::sqlx_common::{
-    PoolCreator, QueryExecutor, QueryExecutor2, QueryParamsBinder, SqlxRdbms, StreamDbResultSet,
+    create_db_result, PoolCreator, QueryExecutor, QueryParamsBinder, SqlxRdbms, StreamDbResultSet,
 };
-use crate::services::rdbms::{DbResultSet, DbRow, Error, Rdbms, RdbmsPoolKey};
+use crate::services::rdbms::{DbResult, DbResultSet, DbRow, Error, Rdbms, RdbmsPoolKey};
 use async_trait::async_trait;
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
@@ -51,6 +51,52 @@ impl PoolCreator<sqlx::MySql> for RdbmsPoolKey {
 }
 
 // #[async_trait]
+// impl QueryExecutor<MysqlType> for SqlxConnectionContext<sqlx::MySql> {
+//     async fn execute(self, statement: &str, params: Vec<DbValue>) -> Result<u64, Error> {
+//         let query: sqlx::query::Query<sqlx::MySql, sqlx::mysql::MySqlArguments> =
+//             sqlx::query(statement).bind_params(params)?;
+//
+//         let result =
+//             match self {
+//                 SqlxConnectionContext::Pool(pool) => {
+//                     query.execute(pool.deref()).await
+//                 }
+//                 SqlxConnectionContext::Transaction(transaction) => {
+//                     let mut transaction = transaction.lock_arc().await;
+//                     query.execute(transaction.0.deref_mut()).await
+//                 }
+//             };
+//
+//         let result = result.map_err(|e| Error::QueryExecutionFailure(e.to_string()))?;
+//         Ok(result.rows_affected())
+//     }
+//
+//     async fn query_stream(
+//         self,
+//         statement: &str,
+//         params: Vec<DbValue>,
+//         batch: usize,
+//     ) -> Result<Arc<dyn DbResultSet<MysqlType> + Send + Sync>, Error> {
+//         let query: sqlx::query::Query<sqlx::MySql, sqlx::mysql::MySqlArguments> =
+//             sqlx::query(statement.to_string().leak()).bind_params(params)?;
+//
+//         let stream: BoxStream<Result<sqlx::mysql::MySqlRow, sqlx::Error>> =  match self {
+//             SqlxConnectionContext::Pool(pool) => {
+//                 query.fetch(pool.deref())
+//
+//             }
+//             SqlxConnectionContext::Transaction(transaction) => {
+//                 let mut transaction = transaction.lock_arc().await;
+//                 query.fetch(transaction.0.deref_mut())
+//             }
+//         };
+//
+//         let response: StreamDbResultSet<MysqlType, sqlx::mysql::MySql> =
+//             StreamDbResultSet::create(stream, batch).await?;
+//         Ok(Arc::new(response))
+//     }
+// }
+// #[async_trait]
 // impl QueryExecutor<MysqlType> for Pool<sqlx::MySql> {
 //     async fn execute(&self, statement: &str, params: Vec<DbValue>) -> Result<u64, Error> {
 //         let query: sqlx::query::Query<sqlx::MySql, sqlx::mysql::MySqlArguments> =
@@ -80,46 +126,44 @@ impl PoolCreator<sqlx::MySql> for RdbmsPoolKey {
 //     }
 // }
 
-#[async_trait]
-// impl<'c, E: sqlx::Executor<'c, Database = sqlx::MySql>> QueryExecutor<MysqlType> for E {
-// impl<E> QueryExecutor<MysqlType> for E where &E: sqlx::Executor<'_, Database = sqlx::MySql> {
-impl<E> QueryExecutor<MysqlType> for E
-where
-    for<'a> &'a E: sqlx::Executor<'static, Database = sqlx::MySql>,
-{
-    // impl<'c, E: sqlx::Executor<'c, Database = sqlx::MySql>> QueryExecutor<MysqlType> for E where for<'a> &'a E: sqlx::Executor<'_> {
-    async fn execute(&self, statement: &str, params: Vec<DbValue>) -> Result<u64, Error> {
-        let query: sqlx::query::Query<sqlx::MySql, sqlx::mysql::MySqlArguments> =
-            sqlx::query(statement).bind_params(params)?;
-
-        let result = query
-            .execute(self)
-            .await
-            .map_err(|e| Error::QueryExecutionFailure(e.to_string()))?;
-        Ok(result.rows_affected())
-    }
-
-    async fn query_stream(
-        &self,
-        statement: &str,
-        params: Vec<DbValue>,
-        batch: usize,
-    ) -> Result<Arc<dyn DbResultSet<MysqlType> + Send + Sync>, Error> {
-        let query: sqlx::query::Query<sqlx::MySql, sqlx::mysql::MySqlArguments> =
-            sqlx::query(statement.to_string().leak()).bind_params(params)?;
-
-        let stream: BoxStream<Result<sqlx::mysql::MySqlRow, sqlx::Error>> = query.fetch(self);
-
-        let response: StreamDbResultSet<MysqlType, sqlx::mysql::MySql> =
-            StreamDbResultSet::create(stream, batch).await?;
-        Ok(Arc::new(response))
-    }
-}
-
-// struct MysqlQueryExecutor;
+// #[async_trait]
+// // impl<'c, E: sqlx::Executor<'c, Database = sqlx::MySql>> QueryExecutor<MysqlType> for E {
+// // impl<E> QueryExecutor<MysqlType> for E where &E: sqlx::Executor<'_, Database = sqlx::MySql> {
+// impl<E> QueryExecutor<MysqlType> for E
+// where
+//     for<'a> &'a E: sqlx::Executor<'static, Database = sqlx::MySql>,
+// {
+//     // impl<'c, E: sqlx::Executor<'c, Database = sqlx::MySql>> QueryExecutor<MysqlType> for E where for<'a> &'a E: sqlx::Executor<'_> {
+//     async fn execute(&self, statement: &str, params: Vec<DbValue>) -> Result<u64, Error> {
+//         let query: sqlx::query::Query<sqlx::MySql, sqlx::mysql::MySqlArguments> =
+//             sqlx::query(statement).bind_params(params)?;
+//
+//         let result = query
+//             .execute(self)
+//             .await
+//             .map_err(|e| Error::QueryExecutionFailure(e.to_string()))?;
+//         Ok(result.rows_affected())
+//     }
+//
+//     async fn query_stream(
+//         &self,
+//         statement: &str,
+//         params: Vec<DbValue>,
+//         batch: usize,
+//     ) -> Result<Arc<dyn DbResultSet<MysqlType> + Send + Sync>, Error> {
+//         let query: sqlx::query::Query<sqlx::MySql, sqlx::mysql::MySqlArguments> =
+//             sqlx::query(statement.to_string().leak()).bind_params(params)?;
+//
+//         let stream: BoxStream<Result<sqlx::mysql::MySqlRow, sqlx::Error>> = query.fetch(self);
+//
+//         let response: StreamDbResultSet<MysqlType, sqlx::mysql::MySql> =
+//             StreamDbResultSet::create(stream, batch).await?;
+//         Ok(Arc::new(response))
+//     }
+// }
 
 #[async_trait]
-impl QueryExecutor2<MysqlType, sqlx::MySql> for MysqlType {
+impl QueryExecutor<MysqlType, sqlx::MySql> for MysqlType {
     async fn execute<'c, E>(
         statement: &str,
         params: Vec<DbValue>,
@@ -136,6 +180,24 @@ impl QueryExecutor2<MysqlType, sqlx::MySql> for MysqlType {
             .await
             .map_err(|e| Error::QueryExecutionFailure(e.to_string()))?;
         Ok(result.rows_affected())
+    }
+
+    async fn query<'c, E>(
+        statement: &str,
+        params: Vec<DbValue>,
+        executor: E,
+    ) -> Result<DbResult<MysqlType>, Error>
+    where
+        E: sqlx::Executor<'c, Database = sqlx::MySql>,
+    {
+        let query: sqlx::query::Query<sqlx::MySql, sqlx::mysql::MySqlArguments> =
+            sqlx::query(statement).bind_params(params)?;
+
+        let result = query
+            .fetch_all(executor)
+            .await
+            .map_err(|e| Error::QueryExecutionFailure(e.to_string()))?;
+        create_db_result::<MysqlType, sqlx::MySql>(result)
     }
 
     async fn query_stream<'c, E>(
