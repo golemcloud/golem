@@ -24,15 +24,11 @@ const ComponentsPage = () => {
   const [open, setOpen] = useState(false);
   //Ideally we are not sure about latest version. as we are getting the every version separately. there is no way of knowing what is the latest version.
   //out of all the fetched api's considering the last one as latest. there is chance that if pagination applied on the api's latest version may show wrong.
-  const { apiDefinitions, getApiDefintion, isLoading } = useApiDefinitions();
+  const { apiDefinitions, isLoading } = useApiDefinitions();
   const router = useRouter();
   const apiMap = apiDefinitions?.reduce<Record<string, ApiDefinition | null>>(
     (obj, api: ApiDefinition) => {
-      if (api.id in obj) {
-        return obj;
-      } else {
-        obj[api.id] = getApiDefintion(api.id)?.data || null;
-      }
+        obj[api.id] = api;
       return obj;
     },
     {}
@@ -131,6 +127,7 @@ const ComponentsPage = () => {
                 >
                   <CardContent>
                     <Typography variant="h6">{api.id}</Typography>
+                    <Typography>latest:{" "}{api.version}</Typography>
                   </CardContent>
                 </Card>
               ) : null

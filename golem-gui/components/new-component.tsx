@@ -18,8 +18,8 @@ import FolderIcon from "@mui/icons-material/Folder";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import CloudUploadIcon from "@mui/icons-material/CloudUpload";
 import { fetcher, getErrorMessage } from "@/lib/utils";
-import { toast } from 'react-toastify';
-import { useComponents } from "@/lib/hooks/useComponents";
+import { toast } from "react-toastify";
+import { addNewcomponent } from "@/lib/hooks/use-component";
 
 type FormData = {
   name: string;
@@ -31,37 +31,34 @@ type FormData = {
 type Props = {
   mode: "create" | "update";
   onSubmitSuccess?: () => void;
-  ComponentId?:string,
+  componentId?: string;
   initialValues?: Partial<FormData>;
+  getVersions?: () => any;
 };
 
-// export default function CreateComponentForm({onCreation}:{onCreation?:()=>void}) {
-
-
-export default function ComponentForm({ mode, onSubmitSuccess, initialValues,ComponentId }: Props) {
+export default function ComponentForm({
+  mode,
+  onSubmitSuccess,
+  initialValues,
+  componentId,
+  getVersions,
+}: Props) {
   const isCreateMode = mode === "create";
-  
 
-
-  const {
-    handleSubmit,
-    control,
-    watch,
-    setValue,
-    getValues,
-  } = useForm<FormData>({
-    defaultValues: {
-      name: "",
-      component_type: "0",
-      component: null,
-      files: [],
-      ...initialValues,
-    },
-  });
+  const { handleSubmit, control, watch, setValue, getValues } =
+    useForm<FormData>({
+      defaultValues: {
+        name: "",
+        component_type: "0",
+        component: null,
+        files: [],
+        ...initialValues,
+      },
+    });
 
   const wasmFile = watch("component");
   const files = watch("files");
-  const [error, setError] = React.useState("");
+  const [error, setError] = React.useState<string|null>(null);
 
   const handleWasmUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
@@ -83,8 +80,8 @@ export default function ComponentForm({ mode, onSubmitSuccess, initialValues,Com
     console.log("Form submitted:", data);
     try {
       const formData = new FormData();
-      if(isCreateMode){
-           formData.append("name", data.name);
+      if (isCreateMode) {
+        formData.append("name", data.name);
       }
       if (isCreateMode) {
         formData.append("component_type", data.component_type || "0");
@@ -99,28 +96,21 @@ export default function ComponentForm({ mode, onSubmitSuccess, initialValues,Com
         });
       }
 
-      const endpoint = isCreateMode
-      ? "?path=components"
-      : `?path=components/${ComponentId}/updates`;     
-      
-      const response = await fetcher(endpoint, {
-        method: "POST",
-        body: formData,
-      });
-
-      if (response.status !== 200) {
-        return setError(getErrorMessage(response.data));
-      }
-
-      setError(""); // Clear previous error
+      const { error} = await addNewcomponent(
+        formData,
+        componentId,
+        mode
+      );
+      setError(error||null); // Clear previous error
       onSubmitSuccess?.();
-      isCreateMode?toast.success("Component created successfully"):toast.success("Component updated successfully");
+      if (isCreateMode) toast.success("Component created successfully");
+      else toast.success("Component updated successfully");
     } catch (err) {
       console.error("Error during submission:", err);
       setError("Something went wrong! Please try again.");
     }
   };
-  
+
   return (
     <Paper
       elevation={4}
@@ -130,16 +120,22 @@ export default function ComponentForm({ mode, onSubmitSuccess, initialValues,Com
       }}
     >
       <form onSubmit={handleSubmit(onSubmit)}>
-       { isCreateMode && <Box display="flex" gap={2} mb={3}>
-          <Controller
-            name="name"
-            control={control}
-            render={({ field }) => (
-              <TextField label="Component Name" variant="outlined" fullWidth {...field} />
-            )}
-          />
-        </Box>
-        }
+        {isCreateMode && (
+          <Box display="flex" gap={2} mb={3}>
+            <Controller
+              name="name"
+              control={control}
+              render={({ field }) => (
+                <TextField
+                  label="Component Name"
+                  variant="outlined"
+                  fullWidth
+                  {...field}
+                />
+              )}
+            />
+          </Box>
+        )}
 
         {/* Type Selection */}
         {isCreateMode && (
@@ -161,7 +157,8 @@ export default function ComponentForm({ mode, onSubmitSuccess, initialValues,Com
                           <b>Durable</b>
                         </Typography>
                         <Typography variant="caption" color="gray">
-                          Workers are persistent and executed with transactional guarantees
+                          Workers are persistent and executed with transactional
+                          guarantees
                         </Typography>
                       </Box>
                     }
@@ -187,7 +184,7 @@ export default function ComponentForm({ mode, onSubmitSuccess, initialValues,Com
         )}
 
         {/* WASM Binary Upload */}
-        {(
+        {
           <Box
             mb={3}
             textAlign="center"
@@ -212,10 +209,16 @@ export default function ComponentForm({ mode, onSubmitSuccess, initialValues,Com
               <Typography variant="caption">File up to 50MB</Typography>
             </label>
           </Box>
-        )}
+        }
 
         {/* Initial Files Upload */}
-        <Box mb={3} p={2} border="2px dashed #444" borderRadius="8px" textAlign="center">
+        <Box
+          mb={3}
+          p={2}
+          border="2px dashed #444"
+          borderRadius="8px"
+          textAlign="center"
+        >
           <input
             type="file"
             multiple
@@ -269,7 +272,11 @@ export default function ComponentForm({ mode, onSubmitSuccess, initialValues,Com
 
         {/* Submit Button */}
         <Box display="flex" justifyContent="flex-end" mt={3}>
-          <Button type="submit" variant="contained" startIcon={<CloudUploadIcon />}>
+          <Button
+            type="submit"
+            variant="contained"
+            startIcon={<CloudUploadIcon />}
+          >
             {isCreateMode ? "Create" : "Update"}
           </Button>
         </Box>

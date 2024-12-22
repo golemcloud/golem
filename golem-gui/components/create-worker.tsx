@@ -5,7 +5,6 @@ import {
   Divider,
   FormControl,
   IconButton,
-  InputAdornment,
   MenuItem,
   OutlinedInput,
   Select,
@@ -17,7 +16,7 @@ import AddIcon from "@mui/icons-material/Add";
 import RemoveIcon from "@mui/icons-material/Remove";
 import { useForm, Controller, useFieldArray } from "react-hook-form";
 import { fetcher, getErrorMessage } from "@/lib/utils";
-import { useComponents } from "@/lib/hooks/useComponents";
+import useComponents from "@/lib/hooks/use-component";
 import { Component } from "@/types/api";
 
 interface FormData {
@@ -61,8 +60,7 @@ const CreateWorker = () => {
   });
   
   const [error, setError] = useState("");
-  const { data: componentData, isLoading } = useComponents();
-  const components = (componentData?.data || []) as Component[];
+  const { components, isLoading } = useComponents();
 
   const addEnvVar = () => {
     append({ key: "", value: "" });

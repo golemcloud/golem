@@ -16,6 +16,7 @@ export default function Overview() {
   if (isLoading) {
     return <Loader />;
   }
+  //TODO: we can make this api overview simialr to components tab structure so that we will have more control over the data
   return (
     <>
       {/* Routes Section */}
