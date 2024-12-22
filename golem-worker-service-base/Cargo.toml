@@ -83,6 +83,7 @@ tracing-subscriber = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 wasm-wave = { workspace = true }
+log = "0.4.22"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

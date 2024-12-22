@@ -1395,7 +1395,11 @@ async fn fork_worker_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         .await;
 
     let _ = deps
-        .invoke_and_await(&source_worker_id, "golem:it/api.{get-cart-contents}", vec![])
+        .invoke_and_await(
+            &source_worker_id,
+            "golem:it/api.{get-cart-contents}",
+            vec![],
+        )
         .await;
 
     let _ = deps
@@ -1408,17 +1412,21 @@ async fn fork_worker_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         .search_oplog(&source_worker_id, "product-id:G1001")
         .await;
 
-    let index =
-        second_call_oplogs.last().expect("Expect at least one entry for the product id G1001").oplog_index;
+    let index = second_call_oplogs
+        .last()
+        .expect("Expect at least one entry for the product id G1001")
+        .oplog_index;
 
     let target_worker_id = WorkerId {
         component_id: component_id.clone(),
         worker_name: "forked-worker".to_string(),
     };
 
-    let _ =
-        deps.fork_worker(&source_worker_id, &target_worker_id, index).await;
+    let _ = deps
+        .fork_worker(&source_worker_id, &target_worker_id, index)
+        .await;
 
+    // Now executing the functions against the forked worker
     let _ = deps
         .invoke_and_await(
             &target_worker_id,
@@ -1440,10 +1448,9 @@ async fn fork_worker_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         )
         .await;
 
+    let result = deps.search_oplog(&target_worker_id, "G1002").await;
 
-    let result1 = deps.search_oplog(&target_worker_id, "G1002").await;
-
-    assert_eq!(result1.len(), 2); // two separate invocations in the forked worker
+    assert_eq!(result.len(), 4); //  two invocations for G1002 and two log messages
 }
 
 #[test]

@@ -20,7 +20,18 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use golem_api_grpc::proto::golem::worker::update_record::Update;
 use golem_api_grpc::proto::golem::worker::v1::worker_error::Error;
-use golem_api_grpc::proto::golem::worker::v1::{fork_worker_response, get_oplog_response, get_worker_metadata_response, get_workers_metadata_response, interrupt_worker_response, invoke_and_await_json_response, invoke_and_await_response, invoke_response, launch_new_worker_response, list_directory_response, resume_worker_response, search_oplog_response, update_worker_response, worker_execution_error, ConnectWorkerRequest, DeleteWorkerRequest, ForkWorkerRequest, ForkWorkerResponse, GetFileContentsRequest, GetOplogRequest, GetWorkerMetadataRequest, GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitJsonRequest, InvokeAndAwaitRequest, InvokeRequest, LaunchNewWorkerRequest, ListDirectoryRequest, ResumeWorkerRequest, SearchOplogRequest, UpdateWorkerRequest, UpdateWorkerResponse, WorkerError, WorkerExecutionError};
+use golem_api_grpc::proto::golem::worker::v1::{
+    fork_worker_response, get_oplog_response, get_worker_metadata_response,
+    get_workers_metadata_response, interrupt_worker_response, invoke_and_await_json_response,
+    invoke_and_await_response, invoke_response, launch_new_worker_response,
+    list_directory_response, resume_worker_response, search_oplog_response, update_worker_response,
+    worker_execution_error, ConnectWorkerRequest, DeleteWorkerRequest, ForkWorkerRequest,
+    ForkWorkerResponse, GetFileContentsRequest, GetOplogRequest, GetWorkerMetadataRequest,
+    GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse, InterruptWorkerRequest,
+    InterruptWorkerResponse, InvokeAndAwaitJsonRequest, InvokeAndAwaitRequest, InvokeRequest,
+    LaunchNewWorkerRequest, ListDirectoryRequest, ResumeWorkerRequest, SearchOplogRequest,
+    UpdateWorkerRequest, UpdateWorkerResponse, WorkerError, WorkerExecutionError,
+};
 use golem_api_grpc::proto::golem::worker::{
     log_event, InvokeParameters, LogEvent, StdErrLog, StdOutLog, UpdateMode,
 };
@@ -1106,7 +1117,12 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         ))
     }
 
-    async fn fork_worker(&self, source_worker_id: &WorkerId, target_worker_id: &WorkerId, oplog_index: OplogIndex) -> crate::Result<()> {
+    async fn fork_worker(
+        &self,
+        source_worker_id: &WorkerId,
+        target_worker_id: &WorkerId,
+        oplog_index: OplogIndex,
+    ) -> crate::Result<()> {
         let response = self
             .worker_service()
             .fork_worker(ForkWorkerRequest {
@@ -1597,7 +1613,12 @@ pub trait TestDslUnsafe {
         parameters: HashMap<String, String>,
     ) -> PluginInstallationId;
 
-    async fn fork_worker(&self, source_worker_id: &WorkerId, target_worker_id: &WorkerId, oplog_index: OplogIndex);
+    async fn fork_worker(
+        &self,
+        source_worker_id: &WorkerId,
+        target_worker_id: &WorkerId,
+        oplog_index: OplogIndex,
+    );
 }
 
 #[async_trait]
@@ -1930,7 +1951,12 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
             .expect("Failed to wait for status")
     }
 
-    async fn fork_worker(&self, source_worker_id: &WorkerId, target_worker_id: &WorkerId, oplog_index: OplogIndex) {
+    async fn fork_worker(
+        &self,
+        source_worker_id: &WorkerId,
+        target_worker_id: &WorkerId,
+        oplog_index: OplogIndex,
+    ) {
         <T as TestDsl>::fork_worker(self, source_worker_id, target_worker_id, oplog_index)
             .await
             .expect("Failed to fork worker")

@@ -25,7 +25,17 @@ use tracing::Level;
 
 use anyhow::anyhow;
 use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
-use golem_api_grpc::proto::golem::worker::v1::{get_file_contents_response, ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, ForkWorkerRequest, ForkWorkerResponse, GetFileContentsRequest, GetOplogRequest, GetOplogResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse, InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitJsonRequest, InvokeAndAwaitJsonResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeJsonRequest, InvokeRequest, InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse, ListDirectoryRequest, ListDirectoryResponse, ResumeWorkerRequest, ResumeWorkerResponse, SearchOplogRequest, SearchOplogResponse, UpdateWorkerRequest, UpdateWorkerResponse};
+use golem_api_grpc::proto::golem::worker::v1::{
+    get_file_contents_response, ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse,
+    ForkWorkerRequest, ForkWorkerResponse, GetFileContentsRequest, GetOplogRequest,
+    GetOplogResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse,
+    GetWorkersMetadataRequest, GetWorkersMetadataResponse, InterruptWorkerRequest,
+    InterruptWorkerResponse, InvokeAndAwaitJsonRequest, InvokeAndAwaitJsonResponse,
+    InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeJsonRequest, InvokeRequest,
+    InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse, ListDirectoryRequest,
+    ListDirectoryResponse, ResumeWorkerRequest, ResumeWorkerResponse, SearchOplogRequest,
+    SearchOplogResponse, UpdateWorkerRequest, UpdateWorkerResponse,
+};
 use golem_api_grpc::proto::golem::worker::LogEvent;
 
 use crate::components::component_service::ComponentService;
@@ -232,9 +242,15 @@ pub trait WorkerService {
         Ok(Bytes::from(bytes))
     }
 
-    async fn fork_worker(&self, fork_worker_request: ForkWorkerRequest) -> crate::Result<ForkWorkerResponse> {
-        let response =
-            self.client().await?.fork_worker(fork_worker_request).await?;
+    async fn fork_worker(
+        &self,
+        fork_worker_request: ForkWorkerRequest,
+    ) -> crate::Result<ForkWorkerResponse> {
+        let response = self
+            .client()
+            .await?
+            .fork_worker(fork_worker_request)
+            .await?;
 
         Ok(response.into_inner())
     }

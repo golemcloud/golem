@@ -1210,7 +1210,6 @@ impl WorkerService for WorkerServiceDefault {
             source_worker_id.clone(),
             "fork_worker",
             move |worker_executor_client| {
-                info!("Fork worker");
                 let source_worker_id = source_worker_id.clone();
                 let target_worker_id = target_worker_id.clone();
                 Box::pin(worker_executor_client.fork_worker(ForkWorkerRequest {
