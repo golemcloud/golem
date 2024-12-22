@@ -875,6 +875,7 @@ impl WasmRpcEntryPayload {
         }
     }
 
+    #[allow(clippy::borrowed_box)]
     pub fn demand(&self) -> &Box<dyn RpcDemand> {
         match self {
             Self::Interface { demand, .. } => demand,

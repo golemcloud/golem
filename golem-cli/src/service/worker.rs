@@ -384,6 +384,7 @@ async fn to_invoke_result_view<ProjectContext: Send + Sync>(
     InvokeResultView::try_parse_or_json(res, &component, function)
 }
 
+#[allow(clippy::large_enum_variant)]
 enum AsyncComponentRequest {
     Empty,
     Resolved(Component),
