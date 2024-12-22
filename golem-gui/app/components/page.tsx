@@ -17,11 +17,12 @@ import CreateComponentForm from "@/components/new-component";
 import WidgetsIcon from "@mui/icons-material/Widgets";
 import { Card, CardContent } from "@mui/material";
 import { Component } from "@/types/api";
-import { useRouter } from "next/navigation"; // If using `pages`
+import { useRouter } from "next/navigation";
 import useComponents from "@/lib/hooks/use-component";
 import CustomModal from "@/components/CustomModal";
 import CustomCard from "@/components/ui/custom-card";
 import ComponentCard from "@/components/components-card";
+
 const ComponentsPage = () => {
   const [open, setOpen] = useState(false);
 
@@ -29,8 +30,9 @@ const ComponentsPage = () => {
   const handleClose = () => setOpen(false);
   const router = useRouter();
 
-  const { data: componentData, isLoading } = useComponents();
-  const components = (componentData?.data || []) as Component[];
+  const {components, isLoading } = useComponents();
+
+  // const components = (componentData?.data || []) as Component[];
 
   function handleComponentClick(id: string){
     console.log("Component Clicked")
@@ -145,7 +147,7 @@ const ComponentsPage = () => {
             Create a new component to get started.
           </Typography>
         </Box>
-      )}
+      </Box>)}
       {/* Modal for Creating New API/Component */}
       <CustomModal
         open={open}
