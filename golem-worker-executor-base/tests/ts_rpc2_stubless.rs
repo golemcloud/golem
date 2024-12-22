@@ -29,7 +29,6 @@ static CALLER_COMPONENT_NAME: &str = "caller-ts";
 
 #[test]
 #[tracing::instrument]
-#[ignore]
 async fn counter_resource_test_2(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -65,7 +64,6 @@ async fn counter_resource_test_2(
 
 #[test]
 #[tracing::instrument]
-#[ignore]
 async fn counter_resource_test_2_with_restart(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

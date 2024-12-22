@@ -29,7 +29,6 @@ inherit_test_dep!(Tracing);
 
 #[test]
 #[tracing::instrument]
-#[ignore]
 async fn auction_example_1(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -99,7 +98,6 @@ async fn auction_example_1(
 
 #[test]
 #[tracing::instrument]
-#[ignore]
 async fn auction_example_2(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -169,7 +167,6 @@ async fn auction_example_2(
 
 #[test]
 #[tracing::instrument]
-#[ignore]
 async fn counter_resource_test_1(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -208,7 +205,6 @@ async fn counter_resource_test_1(
 
 #[test]
 #[tracing::instrument]
-#[ignore]
 async fn counter_resource_test_2(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -244,7 +240,6 @@ async fn counter_resource_test_2(
 
 #[test]
 #[tracing::instrument]
-#[ignore]
 async fn counter_resource_test_2_with_restart(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -284,7 +279,6 @@ async fn counter_resource_test_2_with_restart(
 
 #[test]
 #[tracing::instrument]
-#[ignore]
 async fn counter_resource_test_3(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -320,7 +314,6 @@ async fn counter_resource_test_3(
 
 #[test]
 #[tracing::instrument]
-#[ignore]
 async fn counter_resource_test_3_with_restart(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -360,7 +353,6 @@ async fn counter_resource_test_3_with_restart(
 
 #[test]
 #[tracing::instrument]
-#[ignore]
 async fn context_inheritance(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -447,7 +439,6 @@ async fn context_inheritance(
 
 #[test]
 #[tracing::instrument]
-#[ignore]
 async fn counter_resource_test_5(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -488,7 +479,6 @@ async fn counter_resource_test_5(
 
 #[test]
 #[tracing::instrument]
-#[ignore]
 async fn counter_resource_test_5_with_restart(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -547,7 +537,6 @@ async fn counter_resource_test_5_with_restart(
 
 #[test]
 #[tracing::instrument]
-#[ignore]
 async fn wasm_rpc_bug_32_test(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -592,7 +581,6 @@ async fn wasm_rpc_bug_32_test(
 
 #[test]
 #[tracing::instrument]
-#[ignore]
 async fn error_message_invalid_uri(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -648,7 +636,6 @@ async fn error_message_invalid_uri(
 
 #[test]
 #[tracing::instrument]
-#[ignore]
 async fn error_message_non_existing_target_component(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -700,7 +687,6 @@ async fn error_message_non_existing_target_component(
 
 #[test]
 #[tracing::instrument]
-#[ignore]
 async fn ephemeral_worker_invocation_via_rpc1(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
