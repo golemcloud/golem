@@ -4549,6 +4549,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "assert2",
+ "async-dropper-simple",
  "async-fs 2.1.2",
  "async-lock 3.4.0",
  "async-mutex",

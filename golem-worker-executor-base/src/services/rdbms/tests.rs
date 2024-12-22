@@ -117,6 +117,7 @@ async fn postgres_transaction_tests(
         "transaction begin {} failed",
         db_address
     );
+
     let transaction = transaction.unwrap();
 
     let insert_statement = r#"
@@ -157,14 +158,39 @@ async fn postgres_transaction_tests(
         select_statement,
         vec![],
         None,
-        Some(rows),
+        Some(rows.clone()),
     )
     .await;
 
     let commit = transaction.commit().await;
     check!(commit.is_ok(), "transaction commit {} failed", db_address);
 
-    rdbms_service.postgres().remove(&pool_key, &worker_id);
+    let transaction = rdbms.begin(&pool_key, &worker_id).await;
+
+    check!(
+        transaction.is_ok(),
+        "transaction begin {} failed",
+        db_address
+    );
+
+    let transaction = transaction.unwrap();
+    rdbms_query_with_transaction_test(
+        transaction.clone(),
+        select_statement,
+        vec![],
+        None,
+        Some(rows.clone()),
+    )
+    .await;
+
+    let rollback = transaction.rollback().await;
+    check!(
+        rollback.is_ok(),
+        "transaction rollback {} failed",
+        db_address
+    );
+
+    rdbms.remove(&pool_key, &worker_id);
 }
 
 #[test]
@@ -1591,6 +1617,113 @@ async fn mysql_execute_test_select1(mysql: &DockerMysqlRdbs, rdbms_service: &Rdb
 }
 
 #[test]
+async fn mysql_transaction_tests(mysql: &DockerMysqlRdbs, rdbms_service: &RdbmsServiceDefault) {
+    let db_address = mysql.rdbs[1].host_connection_string();
+    let rdbms = rdbms_service.mysql();
+
+    let create_table_statement = r#"
+            CREATE TABLE IF NOT EXISTS test_users
+            (
+                user_id             varchar(25)    NOT NULL,
+                name                varchar(255)    NOT NULL,
+                created_on          timestamp NOT NULL DEFAULT NOW(),
+                PRIMARY KEY (user_id)
+            );
+        "#;
+
+    rdbms_execute_test(
+        rdbms.clone(),
+        &db_address,
+        create_table_statement,
+        vec![],
+        None,
+    )
+    .await;
+
+    let worker_id = new_worker_id();
+    let connection = rdbms.create(&db_address, &worker_id).await;
+    check!(connection.is_ok(), "connection to {} failed", db_address);
+    let pool_key = connection.unwrap();
+
+    let transaction = rdbms.begin(&pool_key, &worker_id).await;
+
+    check!(
+        transaction.is_ok(),
+        "transaction begin {} failed",
+        db_address
+    );
+    let transaction = transaction.unwrap();
+
+    let insert_statement = r#"
+            INSERT INTO test_users
+            (user_id, name)
+            VALUES
+            (?, ?)
+        "#;
+
+    let count = 4;
+
+    let mut rows: Vec<DbRow<mysql_types::DbValue>> = Vec::with_capacity(count);
+
+    for i in 0..count {
+        let params: Vec<mysql_types::DbValue> = vec![
+            mysql_types::DbValue::Varchar(format!("{:03}", i)),
+            mysql_types::DbValue::Varchar(format!("name-{:03}", i)),
+        ];
+        rdbms_execute_with_transaction_test(
+            transaction.clone(),
+            insert_statement,
+            params.clone(),
+            Some(1),
+        )
+        .await;
+
+        rows.push(DbRow { values: params });
+    }
+
+    let select_statement = "SELECT user_id, name FROM test_users ORDER BY user_id ASC";
+
+    rdbms_query_with_transaction_test(
+        transaction.clone(),
+        select_statement,
+        vec![],
+        None,
+        Some(rows.clone()),
+    )
+    .await;
+
+    let commit = transaction.commit().await;
+    check!(commit.is_ok(), "transaction commit {} failed", db_address);
+
+    let transaction = rdbms.begin(&pool_key, &worker_id).await;
+
+    check!(
+        transaction.is_ok(),
+        "transaction begin {} failed",
+        db_address
+    );
+
+    let transaction = transaction.unwrap();
+    rdbms_query_with_transaction_test(
+        transaction.clone(),
+        select_statement,
+        vec![],
+        None,
+        Some(rows.clone()),
+    )
+    .await;
+
+    let rollback = transaction.rollback().await;
+    check!(
+        rollback.is_ok(),
+        "transaction rollback {} failed",
+        db_address
+    );
+
+    rdbms.remove(&pool_key, &worker_id);
+}
+
+#[test]
 async fn mysql_create_insert_select_test(
     mysql: &DockerMysqlRdbs,
     rdbms_service: &RdbmsServiceDefault,
@@ -2068,7 +2201,7 @@ async fn rdbms_query_with_transaction_test<T: RdbmsType>(
         println!("expected: {:#?}", expected);
         check!(
             rows == expected,
-            "query {}- response rows do not match",
+            "query {} - response rows do not match",
             query
         );
     }

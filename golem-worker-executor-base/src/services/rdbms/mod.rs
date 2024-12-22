@@ -254,6 +254,20 @@ pub enum Error {
     Other(String),
 }
 
+impl Error {
+    pub(crate) fn connection_failure<E: Display>(error: E) -> Error {
+        Self::ConnectionFailure(error.to_string())
+    }
+
+    pub(crate) fn query_execution_failure<E: Display>(error: E) -> Error {
+        Self::QueryExecutionFailure(error.to_string())
+    }
+
+    pub(crate) fn query_response_failure<E: Display>(error: E) -> Error {
+        Self::QueryResponseFailure(error.to_string())
+    }
+}
+
 impl Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

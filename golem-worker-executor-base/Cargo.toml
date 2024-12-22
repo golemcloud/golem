@@ -28,6 +28,7 @@ anyhow = { workspace = true }
 async-fs = { workspace = true }
 async-lock = "3.4.0"
 async-mutex = "1.4.0"
+async-dropper-simple = { version = "0.2.6", features = ["no-default-bound"] }
 async-stream = { version = "0.3", optional = true }
 async-trait = { workspace = true }
 aws-config = { workspace = true }
