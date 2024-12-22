@@ -1328,6 +1328,126 @@ async fn search_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 
 #[test]
 #[tracing::instrument]
+#[timeout(120000)]
+async fn fork_worker_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    let component_id = deps.store_component("shopping-cart").await;
+
+    let source_worker_id = WorkerId {
+        component_id: component_id.clone(),
+        worker_name: "searchoplog1".to_string(),
+    };
+
+    let _ = deps
+        .invoke_and_await(
+            &source_worker_id,
+            "golem:it/api.{initialize-cart}",
+            vec![Value::String("test-user-1".to_string())],
+        )
+        .await;
+
+    let _ = deps
+        .invoke_and_await(
+            &source_worker_id,
+            "golem:it/api.{add-item}",
+            vec![Value::Record(vec![
+                Value::String("G1000".to_string()),
+                Value::String("Golem T-Shirt M".to_string()),
+                Value::F32(100.0),
+                Value::U32(5),
+            ])],
+        )
+        .await;
+
+    let _ = deps
+        .invoke_and_await(
+            &source_worker_id,
+            "golem:it/api.{add-item}",
+            vec![Value::Record(vec![
+                Value::String("G1001".to_string()),
+                Value::String("Golem Cloud Subscription 1y".to_string()),
+                Value::F32(999999.0),
+                Value::U32(1),
+            ])],
+        )
+        .await;
+
+    // We will repeat the following invocations in the forked worker and
+    // search oplog should return entries for these invocations
+    let _ = deps
+        .invoke_and_await(
+            &source_worker_id,
+            "golem:it/api.{add-item}",
+            vec![Value::Record(vec![
+                Value::String("G1002".to_string()),
+                Value::String("Mud Golem".to_string()),
+                Value::F32(11.0),
+                Value::U32(10),
+            ])],
+        )
+        .await;
+
+    let _ = deps
+        .invoke_and_await(
+            &source_worker_id,
+            "golem:it/api.{update-item-quantity}",
+            vec![Value::String("G1002".to_string()), Value::U32(20)],
+        )
+        .await;
+
+    let _ = deps
+        .invoke_and_await(&source_worker_id, "golem:it/api.{get-cart-contents}", vec![])
+        .await;
+
+    let _ = deps
+        .invoke_and_await(&source_worker_id, "golem:it/api.{checkout}", vec![])
+        .await;
+
+    let _oplog = deps.get_oplog(&source_worker_id, OplogIndex::INITIAL).await;
+
+    let second_call_oplogs = deps
+        .search_oplog(&source_worker_id, "product-id:G1001")
+        .await;
+
+    let index =
+        second_call_oplogs.last().expect("Expect at least one entry for the product id G1001").oplog_index;
+
+    let target_worker_id = WorkerId {
+        component_id: component_id.clone(),
+        worker_name: "forked-worker".to_string(),
+    };
+
+    let _ =
+        deps.fork_worker(&source_worker_id, &target_worker_id, index).await;
+
+    let _ = deps
+        .invoke_and_await(
+            &target_worker_id,
+            "golem:it/api.{add-item}",
+            vec![Value::Record(vec![
+                Value::String("G1002".to_string()),
+                Value::String("Mud Golem".to_string()),
+                Value::F32(11.0),
+                Value::U32(10),
+            ])],
+        )
+        .await;
+
+    let _ = deps
+        .invoke_and_await(
+            &target_worker_id,
+            "golem:it/api.{update-item-quantity}",
+            vec![Value::String("G1002".to_string()), Value::U32(20)],
+        )
+        .await;
+
+
+    let result1 = deps.search_oplog(&target_worker_id, "G1002").await;
+
+    assert_eq!(result1.len(), 2); // two separate invocations in the forked worker
+}
+
+#[test]
+#[tracing::instrument]
 #[timeout(600000)]
 async fn worker_recreation(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let component_id = deps.store_unique_component("counters").await;
