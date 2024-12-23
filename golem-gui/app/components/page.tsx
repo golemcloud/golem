@@ -23,14 +23,14 @@ import CustomModal from "@/components/CustomModal";
 
 const ComponentsPage = () => {
   const [open, setOpen] = useState(false);
-
   const handleOpen = () => setOpen(true);
   const handleClose = () => setOpen(false);
   const router = useRouter();
   const { components, isLoading } = useComponents();
+
   function handleComponentClick(id: string) {
     console.log("Component Clicked");
-    router.push(`/components/${id}`);
+    router.push(`/components/${id}/overview`);
   }
 
   return (

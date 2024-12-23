@@ -5,9 +5,9 @@ import { useParams } from "next/navigation";
 // import { useRouter } from "next/navigation";
 const ROUTE_PATH = "?path=components";
 
-export async function deleteWorker(componentId:string, workerName:string){
+export async function deleteWorker(componentId: string, workerName: string) {
   const endpoint = `${ROUTE_PATH}/${componentId}/workers/${workerName}`;
-  const response = await fetcher(endpoint, {method: "DELETE"});
+  const response = await fetcher(endpoint, { method: "DELETE" });
   if (response.status !== 200) {
     const error = getErrorMessage(response.data);
     return { success: false, error };
@@ -16,14 +16,15 @@ export async function deleteWorker(componentId:string, workerName:string){
   mutate(`${ROUTE_PATH}/${componentId}/workers`);
 }
 
-export function getStateFromWorkersData(workers: Worker[]){
-  if(!workers){
-    return {}
+export function getStateFromWorkersData(workers: Worker[]) {
+  if (!workers) {
+    return {};
   }
-  console.log("workers---<", workers)
+  console.log("workers---<", workers);
   return workers.reduce<Record<string, number>>((obj, worker) => {
-    const key = worker?.status?.toLowerCase()
-    if (key) { // Ensure `worker.status` exists
+    const key = worker?.status?.toLowerCase();
+    if (key) {
+      // Ensure `worker.status` exists
       obj[key] = (obj[key] || 0) + 1;
     }
     return obj;
@@ -43,7 +44,7 @@ export async function addNewWorker(
   const response = await fetcher(endpoint, {
     method: "POST",
     headers: {
-      "content-type": "application/json"
+      "content-type": "application/json",
     },
     body: JSON.stringify(newWorker),
   });
@@ -53,7 +54,6 @@ export async function addNewWorker(
     return { success: false, error };
   }
 
-
   mutate(endpoint);
   if (path && endpoint !== path) {
     mutate(path);
@@ -61,18 +61,39 @@ export async function addNewWorker(
   return { success: false, error: null };
 }
 
+export function useWorker(componentId: string, workerName: string) {
+  const {
+    data,
+    error: requestError,
+    isLoading,
+  } = useSWR(`${ROUTE_PATH}/${componentId}/workers/${workerName}`, fetcher);
 
-function useWorkers(
-  componentId?: string,
-  version?: string | number,
-) {
+  const error =
+    requestError || (data && data?.status != 200)
+      ? getErrorMessage(data?.data)
+      : "";
+  const worker = data?.data as Worker;
+
+  return {
+    error,
+    worker,
+    isLoading,
+  };
+}
+
+function useWorkers(componentId?: string, version?: string | number) {
   const { compId } = useParams<{ compId: string }>();
-  const path = `${ROUTE_PATH}/${componentId || compId}/workers${version? `?filter=version = ${version}`: ''}`;
-  const {data, error: requestError, isLoading} = useSWR(path, fetcher);
+  const path = `${ROUTE_PATH}/${componentId || compId}/workers${
+    version ? `?filter=version = ${version}` : ""
+  }`;
+  const { data, error: requestError, isLoading } = useSWR(path, fetcher);
 
-  const error = requestError || (data && data?.status!=200) ? getErrorMessage(data?.data) : ""
-  const workers = (data?.data?.workers || []) as Worker[]
-  
+  const error =
+    requestError || (data && data?.status != 200)
+      ? getErrorMessage(data?.data)
+      : "";
+  const workers = (data?.data?.workers || []) as Worker[];
+
   const getWorkerById = (
     id: string
   ): { success: boolean; error?: string | null; data?: Worker } => {
@@ -92,7 +113,7 @@ function useWorkers(
 
   const addWorker = async (
     componentId: string,
-    newWorker: WorkerFormData,
+    newWorker: WorkerFormData
   ): Promise<{
     success: boolean;
     error?: string | null;
@@ -106,7 +127,7 @@ function useWorkers(
     error,
     getWorkerById,
     addWorker,
-    isLoading
+    isLoading,
   };
 }
 
