@@ -348,6 +348,10 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
         }
     }
 
+    pub fn component_name_as_safe_path_elem(&self, component_name: &ComponentName) -> String {
+        component_name.as_str().replace(":", "_")
+    }
+
     pub fn component_source_wit(
         &self,
         component_name: &ComponentName,
@@ -364,7 +368,7 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
     pub fn component_generated_base_wit(&self, component_name: &ComponentName) -> PathBuf {
         self.temp_dir()
             .join("generated-base-wit")
-            .join(component_name.as_str())
+            .join(self.component_name_as_safe_path_elem(component_name))
     }
 
     pub fn component_generated_base_wit_exports_package_dir(
@@ -429,19 +433,19 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
 
     pub fn client_temp_build_dir(&self, component_name: &ComponentName) -> PathBuf {
         self.client_build_dir()
-            .join(component_name.as_str())
+            .join(self.component_name_as_safe_path_elem(component_name))
             .join("temp-build")
     }
 
     pub fn client_wasm(&self, component_name: &ComponentName) -> PathBuf {
         self.client_build_dir()
-            .join(component_name.as_str())
+            .join(self.component_name_as_safe_path_elem(component_name))
             .join("client.wasm")
     }
 
     pub fn client_wit(&self, component_name: &ComponentName) -> PathBuf {
         self.client_build_dir()
-            .join(component_name.as_str())
+            .join(self.component_name_as_safe_path_elem(component_name))
             .join(naming::wit::WIT_DIR)
     }
 }
