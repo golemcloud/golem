@@ -1,10 +1,9 @@
 "use client";
 import { Box, Typography, Stack, List } from "@mui/material";
-import useSWR from "swr";
 import { Loader } from "lucide-react";
-import { fetcher } from "@/lib/utils";
 import { Card } from "@/components/ui/card";
 import { ApiDefinition, ApiRoute } from "../types/api";
+import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 
 export function RouteList({
   apiDefintion,
@@ -69,18 +68,12 @@ export default function RoutePage({
   limit
 }: {
   apiId: string;
-  version?: string;
+  version?: string|null;
   limit?:number
 }) {
   //TODO to move this do separate custom hook so that we can resuse.
-  const { data, isLoading } = useSWR(
-    `?path=api/definitions?api-definition-id=${apiId!}`,
-    fetcher
-  );
-  const apiDefintions = (data?.data || []) as ApiDefinition[];
-  const apiDefintion = version
-    ? apiDefintions.find((api) => api.version === version)
-    : apiDefintions[apiDefintions.length - 1];
+  const {isLoading, getApiDefintion} = useApiDefinitions(apiId, version);
+  const {data:apiDefintion} = getApiDefintion();
 
   return <RouteList isLoading={isLoading} apiDefintion={apiDefintion} limit={limit}/>;
 }

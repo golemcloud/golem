@@ -38,7 +38,7 @@ export default function Overview() {
               Routes
             </Typography>
             {/*TODO: Dynamically update the route Page on version change. currently it is showing latest */}
-            <RoutePage apiId={apiId} limit={5}/>
+            <RoutePage apiId={apiId} limit={5} version={version}/>
 
             {error && (
               <Typography className="text-rose-500">{error}</Typography>

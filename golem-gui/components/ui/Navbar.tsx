@@ -1,16 +1,16 @@
-"use client"
+"use client";
 
 import { AppBar, Toolbar } from "@mui/material";
 import { ModeToggle } from "../toggle-button";
 import Logo from "../../assets/golem-logo";
 import { List, ListItem, ListItemText } from "@mui/material";
 import Link from "next/link";
-import { usePathname } from 'next/navigation';
+import { usePathname } from "next/navigation";
 
 type NAV_LINK = {
   name: string;
   to: string;
-  comingSoon?: boolean
+  comingSoon?: boolean;
 };
 
 const links = [
@@ -19,13 +19,11 @@ const links = [
   { name: "Components", to: "/components" },
   { name: "Workers", to: "/workers" },
   { name: "APIs", to: "/apis" },
-  { name: "Plugins", to: "/plugins", comingSoon:true },
+  { name: "Plugins", to: "/plugins", comingSoon: true },
 ] as NAV_LINK[];
-
 
 export default function Navbar() {
   const pathname = usePathname();
-  
   return (
     <AppBar
       position="static"
@@ -36,26 +34,40 @@ export default function Navbar() {
       <Toolbar className="flex justify-between">
         <Logo />
         <List className="flex gap-4">
-          {links.map((link) => (
-            <Link key={link.name
-            } href={link.comingSoon ? "#" : link.to} style={{ textDecoration: "none", color: "inherit" }}>
-              <ListItem
-                sx={{
-                  padding: "0.3rem 0.8rem", // Reduced padding for smaller background
-                  marginBottom: "0.5rem", 
-                  cursor: "pointer",
-                  borderRadius: "3px",
-                  borderBottom: pathname === link.to ? "1px solid #373737" : "transparent",
-                  "&:hover": {
-                    backgroundColor: "#373737",
-                  },
-                }}
-                className={`dark:hover:bg-[#373737] hover:bg-[#C0C0C0]`}
+          {links.map((link) => {
+            const isActive =
+              pathname === link.to ||
+              (link.to !== "/" && pathname.startsWith(link.to));
+            return (
+              <Link
+                key={link.name}
+                href={link.comingSoon ? "#" : link.to}
+                style={{ textDecoration: "none", color: "inherit" }}
               >
-                <ListItemText primary={`${link.name}${link.comingSoon? "(Comingsoon)": ""}`} />
-              </ListItem>
-            </Link>
-          ))}
+                <ListItem
+                  sx={{
+                    padding: "0.3rem 0.8rem", // Reduced padding for smaller background
+                    marginBottom: "0.5rem",
+                    cursor: "pointer",
+                    borderRadius: "3px",
+                    borderBottom: isActive
+                      ? "1px solid #373737"
+                      : "transparent",
+                    "&:hover": {
+                      backgroundColor: "#373737",
+                    },
+                  }}
+                  className={`dark:hover:bg-[#373737] hover:bg-[#C0C0C0]`}
+                >
+                  <ListItemText
+                    primary={`${link.name}${
+                      link.comingSoon ? "(Comingsoon)" : ""
+                    }`}
+                  />
+                </ListItem>
+              </Link>
+            );
+          })}
         </List>
         <ModeToggle />
       </Toolbar>
