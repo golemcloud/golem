@@ -774,7 +774,11 @@ async fn ephemeral_worker_invocation_via_rpc1(
         .await;
 
     let result = executor
-        .invoke_and_await(&caller_worker_id, "rpc:caller-exports/caller-inline-functions.{ephemeral-test1}", vec![])
+        .invoke_and_await(
+            &caller_worker_id,
+            "rpc:caller-exports/caller-inline-functions.{ephemeral-test1}",
+            vec![],
+        )
         .await
         .unwrap();
 
