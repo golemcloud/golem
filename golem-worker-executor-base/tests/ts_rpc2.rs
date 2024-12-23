@@ -50,10 +50,18 @@ async fn counter_resource_test_2(
         .await;
 
     let result1 = executor
-        .invoke_and_await(&caller_worker_id, "test2", vec![])
+        .invoke_and_await(
+            &caller_worker_id,
+            "rpc:caller-exports/caller-inline-functions.{test2}",
+            vec![],
+        )
         .await;
     let result2 = executor
-        .invoke_and_await(&caller_worker_id, "test2", vec![])
+        .invoke_and_await(
+            &caller_worker_id,
+            "rpc:caller-exports/caller-inline-functions.{test2}",
+            vec![],
+        )
         .await;
 
     drop(executor);
@@ -85,14 +93,22 @@ async fn counter_resource_test_2_with_restart(
         .await;
 
     let result1 = executor
-        .invoke_and_await(&caller_worker_id, "test2", vec![])
+        .invoke_and_await(
+            &caller_worker_id,
+            "rpc:caller-exports/caller-inline-functions.{test2}",
+            vec![],
+        )
         .await;
 
     drop(executor);
     let executor = common::start(deps, &context).await.unwrap();
 
     let result2 = executor
-        .invoke_and_await(&caller_worker_id, "test2", vec![])
+        .invoke_and_await(
+            &caller_worker_id,
+            "rpc:caller-exports/caller-inline-functions.{test2}",
+            vec![],
+        )
         .await;
 
     drop(executor);
