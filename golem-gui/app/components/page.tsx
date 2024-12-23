@@ -15,28 +15,22 @@ import GridViewIcon from "@mui/icons-material/GridView";
 import ListIcon from "@mui/icons-material/List";
 import CreateComponentForm from "@/components/new-component";
 import WidgetsIcon from "@mui/icons-material/Widgets";
-import { Card, CardContent } from "@mui/material";
 import { Component } from "@/types/api";
 import { useRouter } from "next/navigation";
 import useComponents from "@/lib/hooks/use-component";
 import CustomModal from "@/components/CustomModal";
-import CustomCard from "@/components/ui/custom-card";
 import ComponentCard from "@/components/components-card";
 
 const ComponentsPage = () => {
   const [open, setOpen] = useState(false);
-
   const handleOpen = () => setOpen(true);
   const handleClose = () => setOpen(false);
   const router = useRouter();
+  const { components, isLoading } = useComponents();
 
-  const {components, isLoading } = useComponents();
-
-  // const components = (componentData?.data || []) as Component[];
-
-  function handleComponentClick(id: string){
-    console.log("Component Clicked")
-    router.push(`/components/${id}`);
+  function handleComponentClick(id: string) {
+    console.log("Component Clicked");
+    router.push(`/components/${id}/overview`);
   }
 
   function calculateHoursDifference(createdAt: string): number {
@@ -104,6 +98,7 @@ const ComponentsPage = () => {
         <Box sx={{ display: "flex", flexWrap: "wrap", gap: 2 }}>
           {!isLoading && components?.map((item: Component) => (
           <ComponentCard
+            key={item.versionedComponentId.componentId}
             id={item.versionedComponentId.componentId}
             title={item.componentName}
             time={calculateHoursDifference(item.createdAt)}

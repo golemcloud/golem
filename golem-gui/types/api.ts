@@ -8,12 +8,17 @@ export interface VersionedComponentId {
     producers: Producer[];
     memories: Memory[];
   }
+
+  export interface WorkerFunction {
+    name: string;
+    parameters: Parameter[],
+    results: Result[];
+  }
   
   export interface ComponentExport {
-    type: 'Function';
+    type: string;
     name: string;
-    parameters: Parameter[];
-    results: Result[];
+    functions: WorkerFunction[];
   }
   
   export interface Parameter {
@@ -88,9 +93,10 @@ export interface VersionedComponentId {
     targetVersion: number;
   }
 
-  export type WorkerFormData ={
-    workerName: string;
-    workerType: string;
+  export type WorkerFormData = {
+    name: string;
+    args: string[];
+    env: Record<string,string>
   }
   
   export interface WorkerResource {

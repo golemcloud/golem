@@ -36,6 +36,7 @@ const WorkerSettings = () => {
     setActiveTab(newValue);
   };
 
+  //Delete all api is not there. deleting one by one is costly. so not performing deleting all.
   const actions = [
     {
       title: "Delete All Workers",

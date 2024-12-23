@@ -86,7 +86,6 @@ function useComponents(componentId?: string, version?: string | number | null) {
     }
   }, [componentData]);
 
-  //if version is not given. we are providing the current working latest version routes
   const getComponent = (
     id?: string,
     version?: string | number | null
