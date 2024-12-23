@@ -13,6 +13,7 @@ export async function deleteWorker(componentId:string, workerName:string){
     return { success: false, error };
   }
   mutate(endpoint);
+  mutate(`${ROUTE_PATH}/${componentId}/workers`);
 }
 
 export function getStateFromWorkersData(workers: Worker[]){
