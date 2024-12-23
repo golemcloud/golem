@@ -299,7 +299,7 @@ impl<Ctx: WorkerCtx> HostDbTransaction for DurableWorkerCtx<Ctx> {
                         let result = from_db_result(result, self.as_wasi_view().table())
                             .map_err(Error::QueryResponseFailure);
                         Ok(result)
-                    },
+                    }
                     Err(e) => Ok(Err(e.into())),
                 }
             }
@@ -409,10 +409,13 @@ impl<Ctx: WorkerCtx> HostLazyDbColumnType for DurableWorkerCtx<Ctx> {
             .get_mut::<LazyDbColumnTypeEntry>(&self_)?
             .value
             .clone();
-        let (result, new_rep) = from_db_column_type(value.clone(), self.as_wasi_view().table())
-            .map_err(Error::Other)?;
-        if new_rep != value.resource_rep {
-            value.update_resource_rep(new_rep).map_err(Error::Other)?;
+        let (result, new_resource_rep) =
+            from_db_column_type(value.clone(), self.as_wasi_view().table())
+                .map_err(Error::Other)?;
+        if new_resource_rep != value.resource_rep {
+            value
+                .update_resource_rep(new_resource_rep)
+                .map_err(Error::Other)?;
         }
         Ok(result)
     }
@@ -457,11 +460,13 @@ impl<Ctx: WorkerCtx> HostLazyDbValue for DurableWorkerCtx<Ctx> {
             .value
             .clone();
 
-        let (result, new_rep) =
+        let (result, new_resource_rep) =
             from_db_value(value.clone(), self.as_wasi_view().table()).map_err(Error::Other)?;
 
-        if new_rep != value.resource_rep {
-            value.update_resource_rep(new_rep).map_err(Error::Other)?;
+        if new_resource_rep != value.resource_rep {
+            value
+                .update_resource_rep(new_resource_rep)
+                .map_err(Error::Other)?;
         }
 
         Ok(result)
@@ -1862,17 +1867,18 @@ pub mod tests {
 
     fn check_db_value(value: postgres_types::DbValue, resource_table: &mut ResourceTable) {
         let value_with_rep = DbValueWithResourceRep::new_resource_none(value.clone());
-        let (wit, new_reps) = from_db_value(value_with_rep, resource_table).unwrap();
+        let (wit, new_resource_reps) = from_db_value(value_with_rep, resource_table).unwrap();
 
-        let value_with_rep = DbValueWithResourceRep::new(value.clone(), new_reps.clone()).unwrap();
-        let (wit2, new_reps2) = from_db_value(value_with_rep, resource_table).unwrap();
+        let value_with_rep =
+            DbValueWithResourceRep::new(value.clone(), new_resource_reps.clone()).unwrap();
+        let (wit2, new_resource_reps2) = from_db_value(value_with_rep, resource_table).unwrap();
 
-        check!(new_reps == new_reps2);
+        check!(new_resource_reps == new_resource_reps2);
 
         if value.is_complex_type() {
-            check!(new_reps2 != DbValueResourceRep::None);
+            check!(new_resource_reps2 != DbValueResourceRep::None);
         } else {
-            check!(new_reps2 == DbValueResourceRep::None);
+            check!(new_resource_reps2 == DbValueResourceRep::None);
         }
 
         // println!("wit {:?}", wit);
@@ -2132,18 +2138,19 @@ pub mod tests {
         resource_table: &mut ResourceTable,
     ) {
         let value_with_rep = DbColumnTypeWithResourceRep::new_resource_none(value.clone());
-        let (wit, new_reps) = from_db_column_type(value_with_rep, resource_table).unwrap();
+        let (wit, new_resource_reps) = from_db_column_type(value_with_rep, resource_table).unwrap();
 
         let value_with_rep =
-            DbColumnTypeWithResourceRep::new(value.clone(), new_reps.clone()).unwrap();
-        let (wit2, new_reps2) = from_db_column_type(value_with_rep, resource_table).unwrap();
+            DbColumnTypeWithResourceRep::new(value.clone(), new_resource_reps.clone()).unwrap();
+        let (wit2, new_resource_reps2) =
+            from_db_column_type(value_with_rep, resource_table).unwrap();
 
-        check!(new_reps == new_reps2);
+        check!(new_resource_reps == new_resource_reps2);
 
         if value.is_complex_type() {
-            check!(new_reps2 != DbColumnTypeResourceRep::None);
+            check!(new_resource_reps2 != DbColumnTypeResourceRep::None);
         } else {
-            check!(new_reps2 == DbColumnTypeResourceRep::None);
+            check!(new_resource_reps2 == DbColumnTypeResourceRep::None);
         }
 
         // println!("wit {:?}", wit);

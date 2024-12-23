@@ -1,13 +1,13 @@
 package golem:it;
 
 interface api {
-  use wasi:rdbms/postgres@0.0.1.{db-result as postgres-result};
-  use wasi:rdbms/mysql@0.0.1.{db-result as mysql-result};
+  use wasi:rdbms/postgres@0.0.1.{db-result as postgres-db-result};
+  use wasi:rdbms/mysql@0.0.1.{db-result as mysql-db-result};
 
   enum transaction-end {
     commit,
     rollback,
-    nothing
+    none
   }
 
   enum statement-action {
@@ -21,33 +21,26 @@ interface api {
     action: statement-action
   }
 
-  variant mysql-transaction-result {
+  variant mysql-result {
      execute(u64),
-     query(mysql-result)
+     query(mysql-db-result)
   }
 
-  variant postgres-transaction-result {
+  variant postgres-result {
     execute(u64),
-    query(postgres-result)
+    query(postgres-db-result)
   }
 
   check: func() -> string;
 
-  mysql-transaction: func(statements: list<statement>, end: transaction-end) -> result<list<mysql-transaction-result>, string>;
+  mysql-transaction: func(statements: list<statement>, end: transaction-end) -> result<list<result<mysql-result, string>>, string>;
 
-  mysql-executions: func(statements: list<statement>) -> result<list<mysql-transaction-result>, string>;
+  mysql-executions: func(statements: list<statement>) -> result<list<result<mysql-result, string>>, string>;
 
-  mysql-execute: func(statement: string, params: list<string>) -> result<u64, string>;
+  postgres-transaction: func(statements: list<statement>, end: transaction-end) -> result<list<result<postgres-result, string>>, string>;
 
-  mysql-query: func(statement: string, params: list<string>) -> result<mysql-result, string>;
+  postgres-executions: func(statements: list<statement>) -> result<list<result<postgres-result, string>>, string>;
 
-  postgres-transaction: func(statements: list<statement>, end: transaction-end) -> result<list<postgres-transaction-result>, string>;
-
-  postgres-executions: func(statements: list<statement>) -> result<list<postgres-transaction-result>, string>;
-
-  postgres-execute: func(statement: string, params: list<string>) -> result<u64, string>;
-
-  postgres-query: func(statement: string, params: list<string>) -> result<postgres-result, string>;
 }
 
 world rdbms-service {
