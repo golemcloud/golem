@@ -57,8 +57,6 @@ function useApiDeployments(defintionId?: string, version?: string | null) {
     }
   }, [data]);
 
-  //if version is not given. we are providing the current working latest version routes
-
   const addApiDeployment = async (
     newDeploy: ApiDeployment
   ): Promise<{

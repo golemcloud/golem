@@ -1,6 +1,6 @@
-"use client"
+"use client";
 
-import React, { useState } from 'react';
+import React, { useState } from "react";
 import {
   Box,
   TextField,
@@ -11,23 +11,40 @@ import {
   Select,
   MenuItem,
   FormControl,
-  InputLabel,
   ListSubheader,
-} from '@mui/material';
-import RefreshIcon from '@mui/icons-material/Refresh';
-import AddIcon from '@mui/icons-material/Add';
-import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
-import { AdapterDateFns } from '@mui/x-date-pickers/AdapterDateFnsV3';
-import { DatePicker } from '@mui/x-date-pickers/DatePicker';
+  Card,
+} from "@mui/material";
+import RefreshIcon from "@mui/icons-material/Refresh";
+import AddIcon from "@mui/icons-material/Add";
+import { LocalizationProvider } from "@mui/x-date-pickers/LocalizationProvider";
+import { AdapterDateFns } from "@mui/x-date-pickers/AdapterDateFnsV3";
+import { DatePicker } from "@mui/x-date-pickers/DatePicker";
+import useWorkers from "@/lib/hooks/use-worker";
+import { useParams } from "next/navigation";
+import { Loader } from "lucide-react";
+import { Worker } from "@/types/api";
 
 const WorkerListWithDropdowns = () => {
-  const [workerStatus, setWorkerStatus] = useState('');
-  const [version, setVersion] = useState('');
+  const [workerStatus, setWorkerStatus] = useState("");
+  //TO DO: let show filters in url so that user can share the url to others.
+  const { compId } = useParams<{ compId: string }>();
+  const [version, setVersion] = useState("");
   const [createdAfter, setCreatedAfter] = useState<Date | null>(null);
   const [createdBefore, setCreatedBefore] = useState<Date | null>(null);
-  const [searchQuery, setSearchQuery] = useState(''); // For searching statuses
+  const [searchQuery, setSearchQuery] = useState(""); // For searching statuses
 
-  const statuses = ['Running', 'Idle', 'Suspended', 'Interrupted', 'Retrying', 'Failed', 'Exited'];
+  //need to integrate the filter logic here. and pagination or scroll on load needs to implemented or addd show more at the end on click we need to next set of data
+  const { workers, isLoading } = useWorkers(compId);
+
+  const statuses = [
+    "Running",
+    "Idle",
+    "Suspended",
+    "Interrupted",
+    "Retrying",
+    "Failed",
+    "Exited",
+  ];
 
   const filteredStatuses = statuses.filter((status) =>
     status.toLowerCase().includes(searchQuery.toLowerCase())
@@ -39,8 +56,8 @@ const WorkerListWithDropdowns = () => {
         sx={{
           marginBottom: 3,
           padding: 3,
-          display: 'flex',
-          flexDirection: 'column',
+          display: "flex",
+          flexDirection: "column",
         }}
       >
         {/* Search Box */}
@@ -55,15 +72,15 @@ const WorkerListWithDropdowns = () => {
               ),
             }}
           />
-          <IconButton sx={{ color: 'white' }}>
+          <IconButton sx={{ color: "white" }}>
             <RefreshIcon />
           </IconButton>
           <Button
             variant="contained"
             startIcon={<AddIcon />}
             sx={{
-              backgroundColor: '#2962FF',
-              '&:hover': { backgroundColor: '#0039CB' },
+              backgroundColor: "#2962FF",
+              "&:hover": { backgroundColor: "#0039CB" },
             }}
           >
             New
@@ -99,10 +116,7 @@ const WorkerListWithDropdowns = () => {
                   }}
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  sx={{ padding: 1,
-                    borderRadius: 1,
-                    border: '1px solid gray',
-                   }}
+                  sx={{ padding: 1, borderRadius: 1, border: "1px solid gray" }}
                 />
               </ListSubheader>
               {filteredStatuses.map((status) => (
@@ -118,51 +132,52 @@ const WorkerListWithDropdowns = () => {
 
           {/* Version */}
           <FormControl variant="outlined" size="medium" sx={{ minWidth: 150 }}>
-  <Select
-    value={version}
-    onChange={(e) => setVersion(e.target.value)}
-    MenuProps={{
-      PaperProps: {
-        sx: {
-          maxHeight: 300, // Control dropdown height
-        },
-      },
-    }}
-    displayEmpty
-  >
-    <ListSubheader>
-      <TextField
-        placeholder="Search..."
-        variant="standard"
-        fullWidth
-        InputProps={{
-          disableUnderline: true,
-          startAdornment: (
-            <Typography sx={{ marginRight: 1 }}>🔍</Typography>
-          ),
-        }}
-        value={searchQuery}
-        onChange={(e) => setSearchQuery(e.target.value)}
-        sx={{ 
-          padding: 1,
-          borderRadius: 1,
-          border: '1px solid gray',
-         }}
-      />
-    </ListSubheader>
-    {['v1', 'v2', 'v3'].filter((v) =>
-      v.toLowerCase().includes(searchQuery.toLowerCase())
-    ).map((v) => (
-      <MenuItem key={v} value={v}>
-        {v}
-      </MenuItem>
-    ))}
-    {['v1', 'v2', 'v3'].filter((v) =>
-      v.toLowerCase().includes(searchQuery.toLowerCase())
-    ).length === 0 && <MenuItem disabled>No results found</MenuItem>}
-  </Select>
-</FormControl>
-
+            <Select
+              value={version}
+              onChange={(e) => setVersion(e.target.value)}
+              MenuProps={{
+                PaperProps: {
+                  sx: {
+                    maxHeight: 300, // Control dropdown height
+                  },
+                },
+              }}
+              displayEmpty
+            >
+              <ListSubheader>
+                <TextField
+                  placeholder="Search..."
+                  variant="standard"
+                  fullWidth
+                  InputProps={{
+                    disableUnderline: true,
+                    startAdornment: (
+                      <Typography sx={{ marginRight: 1 }}>🔍</Typography>
+                    ),
+                  }}
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  sx={{
+                    padding: 1,
+                    borderRadius: 1,
+                    border: "1px solid gray",
+                  }}
+                />
+              </ListSubheader>
+              {["v1", "v2", "v3"]
+                .filter((v) =>
+                  v.toLowerCase().includes(searchQuery.toLowerCase())
+                )
+                .map((v) => (
+                  <MenuItem key={v} value={v}>
+                    {v}
+                  </MenuItem>
+                ))}
+              {["v1", "v2", "v3"].filter((v) =>
+                v.toLowerCase().includes(searchQuery.toLowerCase())
+              ).length === 0 && <MenuItem disabled>No results found</MenuItem>}
+            </Select>
+          </FormControl>
 
           {/* Created After */}
           <DatePicker
@@ -173,7 +188,7 @@ const WorkerListWithDropdowns = () => {
               <TextField
                 {...params}
                 sx={{
-                  '.MuiOutlinedInput-notchedOutline': { borderColor: 'gray' },
+                  ".MuiOutlinedInput-notchedOutline": { borderColor: "gray" },
                 }}
               />
             )}
@@ -188,7 +203,7 @@ const WorkerListWithDropdowns = () => {
               <TextField
                 {...params}
                 sx={{
-                  '.MuiOutlinedInput-notchedOutline': { borderColor: 'gray' },
+                  ".MuiOutlinedInput-notchedOutline": { borderColor: "gray" },
                 }}
               />
             )}
@@ -196,32 +211,85 @@ const WorkerListWithDropdowns = () => {
         </Stack>
 
         {/* No Workers Found */}
-        <Box
-          className="dark:bg-gray-800 bg-[#E3F2FD] dark:text-white text-black"
-          sx={{
-            flex: 1,
-            display: 'flex',
-            justifyContent: 'center',
-            alignItems: 'center',
-            flexDirection: 'column',
-            padding: 3,
-            borderRadius: 1,
-          }}
-        >
-          <Typography variant="h6" sx={{ mb: 1 }}>
-            No Workers Found
-          </Typography>
-          <Typography variant="body2" sx={{ mb: 2 }}>
-            No workers matched the current search
-          </Typography>
-          <Button
-            variant="contained"
+        {!isLoading && workers.length == 0 && (
+          <Box
+            className="dark:bg-gray-800 bg-[#E3F2FD] dark:text-white text-black"
             sx={{
-              '&:hover': { backgroundColor: '#0039CB' },
+              flex: 1,
+              display: "flex",
+              justifyContent: "center",
+              alignItems: "center",
+              flexDirection: "column",
+              padding: 3,
+              borderRadius: 1,
             }}
           >
-            Retry
-          </Button>
+            <Typography variant="h6" sx={{ mb: 1 }}>
+              No Workers Found
+            </Typography>
+            <Typography variant="body2" sx={{ mb: 2 }}>
+              No workers matched the current search
+            </Typography>
+            <Button
+              variant="contained"
+              sx={{
+                "&:hover": { backgroundColor: "#0039CB" },
+              }}
+            >
+              Retry
+            </Button>
+          </Box>
+        )}
+
+        <Box>
+          {isLoading ? (
+            <Loader />
+          ) : (
+            <Stack gap={4}>
+              {workers?.map((worker: Worker) => {
+                return (
+                  <Card key={worker?.workerId.workerName} className="p-4">
+                    <Stack gap={2}>
+                      <Typography>{worker?.workerId.workerName}</Typography>
+                      <Stack
+                        direction="row"
+                        justifyContent={"space-between"}
+                        alignItems={"center"}
+                      >
+                        <Stack>
+                          <Typography>Status</Typography>
+                          <Typography>{worker.status}</Typography>
+                        </Stack>
+                        <Stack>
+                          <Typography>Memory</Typography>
+                          <Typography>
+                            {worker.totalLinearMemorySize}
+                          </Typography>
+                        </Stack>
+                        <Stack>
+                          <Typography>Pending Invocation</Typography>
+                          <Typography>
+                            {worker.pendingInvocationCount}
+                          </Typography>
+                        </Stack>
+                        <Stack>
+                          <Typography>Resources</Typography>
+                          <Typography>
+                            {Object.values(worker.ownedResources).join(", ")}
+                          </Typography>
+                        </Stack>
+                      </Stack>
+                    </Stack>
+                    <Stack direction="row" gap={4}>
+                      <Typography className="border p-1 px-4">V{worker.componentVersion}</Typography>
+                      <Typography className="border p-1 px-4">Env{" "}{Object.values(worker.env).length}</Typography>
+                      <Typography className="border p-1 px-4">Agrs{" "}{worker.args.length}</Typography>
+                    </Stack>
+                  </Card>
+                );
+              })}
+            </Stack>
+          )}
         </Box>
       </Box>
     </LocalizationProvider>
