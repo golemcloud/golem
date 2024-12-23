@@ -24,3 +24,4 @@ mod custom_http_request_api;
 mod error;
 mod healthcheck;
 mod register_api_definition_api;
+pub mod rib_to_openapi;

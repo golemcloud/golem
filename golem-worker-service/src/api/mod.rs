@@ -3,6 +3,9 @@ pub mod api_deployment;
 mod security_scheme;
 pub mod worker;
 pub mod worker_connect;
+mod openapi_generator;
+pub mod openapi;
+pub mod definition;
 
 use crate::api::worker::WorkerApi;
 use crate::service::Services;
