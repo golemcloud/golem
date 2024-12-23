@@ -43,6 +43,9 @@ pub mod init;
 pub mod model;
 pub mod oss;
 pub mod service;
+pub mod wit_config;
+pub mod openapi;
+pub mod proto;
 
 #[cfg(test)]
 test_r::enable!();

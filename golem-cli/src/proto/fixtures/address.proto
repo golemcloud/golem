@@ -1,0 +1,22 @@
+// address.proto
+
+syntax = "proto3";
+
+package address;
+
+// Import the user.proto file to use User message
+import "user.proto";
+
+message Address {
+    string street = 1;
+    string city = 2;
+    string zip_code = 3;
+    // This field references the User message from user.proto
+    user.User user = 4;  // Here we reference the User message
+}
+
+// Define the AddressService service
+service AddressService {
+    rpc AddAddress (Address) returns (Address);
+    rpc GetAddressForUser (user.User) returns (Address);
+}

@@ -82,6 +82,10 @@ uuid = { workspace = true }
 version-compare = "=0.0.11"
 walkdir = "2.5.0"
 wasm-wave = { workspace = true }
+tailcall-valid = { workspace = true }
+derive_setters = "0.1.6"
+convert_case = "0.6.0"
+protox = "0.7.1"
 
 [dev-dependencies]
 golem-test-framework = { path = "../golem-test-framework", version = "0.0.0" }
@@ -101,3 +105,5 @@ tokio-postgres = { workspace = true }
 tonic = { workspace = true }
 tonic-health = { workspace = true }
 strip-ansi-escapes = "0.2.0"
+insta = "1.41.1"
+wit-parser = { workspace = true }

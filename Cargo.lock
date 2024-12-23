@@ -2755,6 +2755,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "derive_setters"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4e8ef033054e131169b8f0f9a7af8f5533a9436fadf3c500ed547f730f07090d"
+dependencies = [
+ "darling",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.90",
+]
+
+[[package]]
 name = "dialoguer"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3949,7 +3961,9 @@ dependencies = [
  "clap_complete",
  "cli-table",
  "colored",
+ "convert_case 0.6.0",
  "derive_more 1.0.0",
+ "derive_setters",
  "dirs 5.0.1",
  "env_logger 0.11.5",
  "futures-util",
@@ -3968,6 +3982,7 @@ dependencies = [
  "hyper 1.5.2",
  "indoc",
  "inquire",
+ "insta",
  "iso8601",
  "itertools 0.13.0",
  "lenient_bool",
@@ -3976,6 +3991,7 @@ dependencies = [
  "openapiv3",
  "phf",
  "postgres",
+ "protox 0.7.1",
  "rand",
  "redis",
  "regex",
@@ -3987,6 +4003,7 @@ dependencies = [
  "strip-ansi-escapes",
  "strum",
  "strum_macros",
+ "tailcall-valid",
  "tempfile",
  "test-r",
  "testcontainers",
@@ -4007,6 +4024,7 @@ dependencies = [
  "version-compare",
  "walkdir",
  "wasm-wave",
+ "wit-parser 0.221.2",
 ]
 
 [[package]]
@@ -5523,6 +5541,18 @@ dependencies = [
  "once_cell",
  "unicode-segmentation",
  "unicode-width 0.1.14",
+]
+
+[[package]]
+name = "insta"
+version = "1.41.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7e9ffc4d4892617c50a928c52b2961cb5174b6fc6ebf252b2fac9d21955c48b8"
+dependencies = [
+ "console",
+ "lazy_static 1.5.0",
+ "linked-hash-map",
+ "similar",
 ]
 
 [[package]]
@@ -7885,6 +7915,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "prost-reflect"
+version = "0.14.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "20ae544fca2892fd4b7e9ff26cba1090cedf1d4d95c2aded1af15d2f93f270b8"
+dependencies = [
+ "logos",
+ "miette",
+ "once_cell",
+ "prost 0.13.4",
+ "prost-types 0.13.4",
+]
+
+[[package]]
 name = "prost-types"
 version = "0.12.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7917,9 +7960,24 @@ dependencies = [
  "bytes 1.9.0",
  "miette",
  "prost 0.12.6",
- "prost-reflect",
+ "prost-reflect 0.13.1",
  "prost-types 0.12.6",
- "protox-parse",
+ "protox-parse 0.6.1",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "protox"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "873f359bdecdfe6e353752f97cb9ee69368df55b16363ed2216da85e03232a58"
+dependencies = [
+ "bytes 1.9.0",
+ "miette",
+ "prost 0.13.4",
+ "prost-reflect 0.14.3",
+ "prost-types 0.13.4",
+ "protox-parse 0.7.0",
  "thiserror 1.0.69",
 ]
 
@@ -7932,6 +7990,18 @@ dependencies = [
  "logos",
  "miette",
  "prost-types 0.12.6",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "protox-parse"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a3a462d115462c080ae000c29a47f0b3985737e5d3a995fcdbcaa5c782068dde"
+dependencies = [
+ "logos",
+ "miette",
+ "prost-types 0.13.4",
  "thiserror 1.0.69",
 ]
 
@@ -9793,6 +9863,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "tailcall-valid"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8071b2b6ff5cd941f96c743f1cd95043f76381e591d26f4858b5693bca604cee"
+dependencies = [
+ "derive_setters",
+ "http 1.2.0",
+ "regex",
+ "serde 1.0.216",
+ "serde_json",
+ "serde_path_to_error",
+ "thiserror 2.0.8",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "tap"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11004,7 +11090,7 @@ dependencies = [
  "prost 0.12.6",
  "prost-build 0.12.6",
  "prost-types 0.12.6",
- "protox",
+ "protox 0.6.1",
  "regex",
  "serde 1.0.216",
  "warg-crypto",
