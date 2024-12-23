@@ -612,7 +612,7 @@ async fn wasm_rpc_bug_32_test(
     let result = executor
         .invoke_and_await(
             &caller_worker_id,
-            "bug-wasm-rpc-i32",
+            "rpc:caller-exports/caller-inline-functions.{bug-wasm-rpc-i32}",
             vec![Value::Variant {
                 case_idx: 0,
                 case_value: None,
@@ -760,7 +760,7 @@ async fn ephemeral_worker_invocation_via_rpc1(
         .await;
 
     let result = executor
-        .invoke_and_await(&caller_worker_id, "ephemeral-test1", vec![])
+        .invoke_and_await(&caller_worker_id, "rpc:caller-exports/caller-inline-functions.{ephemeral-test1}", vec![])
         .await
         .unwrap();
 
