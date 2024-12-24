@@ -1406,8 +1406,6 @@ async fn fork_worker_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         .invoke_and_await(&source_worker_id, "golem:it/api.{checkout}", vec![])
         .await;
 
-    let _oplog = deps.get_oplog(&source_worker_id, OplogIndex::INITIAL).await;
-
     let second_call_oplogs = deps
         .search_oplog(&source_worker_id, "product-id:G1001")
         .await;
@@ -1472,8 +1470,6 @@ async fn fork_worker_2(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         )
         .await;
 
-    let _oplog = deps.get_oplog(&source_worker_id, OplogIndex::INITIAL).await;
-
     let second_call_oplogs = deps
         .search_oplog(&source_worker_id, "initialize-cart")
         .await;
@@ -1494,6 +1490,74 @@ async fn fork_worker_2(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     .to_string();
 
     assert!(error.contains("WorkerAlreadyExists"));
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout(120000)]
+async fn fork_worker_3(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    let component_id = deps.store_component("shopping-cart").await;
+
+    let source_worker_id = WorkerId {
+        component_id: component_id.clone(),
+        worker_name: "fork".to_string(),
+    };
+
+    let _ = deps
+        .invoke_and_await(
+            &source_worker_id,
+            "golem:it/api.{initialize-cart}",
+            vec![Value::String("test-user-1".to_string())],
+        )
+        .await;
+
+    let target_worker_id = WorkerId {
+        component_id: component_id.clone(),
+        worker_name: "forked-foo".to_string(),
+    };
+
+    let error = golem_test_framework::dsl::TestDsl::fork_worker(
+        deps,
+        &source_worker_id,
+        &target_worker_id,
+        OplogIndex::INITIAL,
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("Invalid oplog index"));
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout(120000)]
+async fn fork_worker_4(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    let component_id = deps.store_component("shopping-cart").await;
+
+    let source_worker_id = WorkerId {
+        component_id: component_id.clone(),
+        worker_name: "fork".to_string(),
+    };
+
+    let target_worker_id = WorkerId {
+        component_id: component_id.clone(),
+        worker_name: "forked-foo".to_string(),
+    };
+
+    let error = golem_test_framework::dsl::TestDsl::fork_worker(
+        deps,
+        &source_worker_id,
+        &target_worker_id,
+        OplogIndex::INITIAL,
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+
+    dbg!(&error);
+
+    assert!(error.contains("WorkerNotFound"));
 }
 
 #[test]

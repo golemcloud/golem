@@ -477,7 +477,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     let source_oplog = source_worker_instance.oplog();
                     let cut_off_index = request.oplog_index_cutoff;
 
-                    if cut_off_index < u64::from(OplogIndex::INITIAL) {
+                    if cut_off_index <= u64::from(OplogIndex::INITIAL) {
                         return Err(GolemError::invalid_request("Invalid oplog index cutoff"));
                     }
 
