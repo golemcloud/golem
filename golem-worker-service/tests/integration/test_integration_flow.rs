@@ -54,25 +54,4 @@ fn test_rib_to_openapi_to_client_flow() {
     let swagger_ui = super::generate_swagger_ui(&swagger_config);
     assert!(swagger_ui.contains("Test API Documentation"));
 
-    // Step 4: Generate and validate a client library
-    let status = Command::new("openapi-generator-cli")
-        .args(&[
-            "generate",
-            "-i",
-            "/path/to/openapi.yaml",
-            "-g",
-            "python",
-            "-o",
-            "/path/to/generated/python-client",
-        ])
-        .status()
-        .expect("Failed to generate client library");
-    assert!(status.success());
-
-    // Step 5: Validate the client library
-    let client_test_status = Command::new("pytest")
-        .arg("/path/to/generated/python-client/tests")
-        .status()
-        .expect("Failed to run client tests");
-    assert!(client_test_status.success());
 }

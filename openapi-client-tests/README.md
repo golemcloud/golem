@@ -25,10 +25,6 @@ openapi-client-tests/
 - Node.js (for TypeScript client testing)
 - Python 3.9+ (for Python client testing)
 - Rust (for Rust client testing)
-- OpenAPI Generator CLI installed globally:
-  ```bash
-  npm install -g @openapitools/openapi-generator-cli
-  ```
 
 ## How to Run Tests
 
@@ -77,22 +73,6 @@ openapi-client-tests/
    ```bash
    cargo run --example test
    ```
-
-## Generating Clients
-
-To regenerate client libraries from the OpenAPI specification:
-
-1. Ensure the OpenAPI Generator CLI is installed:
-   ```bash
-   npm install -g @openapitools/openapi-generator-cli
-   ```
-
-2. Use the `generate` command:
-   ```bash
-   openapi-generator-cli generate -i <path-to-spec>.yaml -g <language> -o <output-dir>
-   ```
-
-Replace `<language>` with `typescript`, `python`, or `rust` depending on the desired client.
 
 ## License
 
