@@ -1,7 +1,16 @@
 "use client";
 
 import { useState } from "react";
-import { AppBar, Toolbar, IconButton, Drawer, List, ListItem, ListItemText, Box } from "@mui/material";
+import {
+  AppBar,
+  Toolbar,
+  IconButton,
+  Drawer,
+  List,
+  ListItem,
+  ListItemText,
+  Box,
+} from "@mui/material";
 import { Menu as MenuIcon } from "@mui/icons-material";
 import { ModeToggle } from "../toggle-button";
 import Logo from "../../assets/golem-logo";
@@ -38,7 +47,7 @@ export default function Navbar() {
       className="dark:bg-[#0a0a0a] bg-white border-b border-gray-300 dark:border-[#3f3f3f]"
       sx={{ boxShadow: "0px 0px" }}
     >
-      <Toolbar className="flex justify-between">
+      <Toolbar className="flex justify-between items-center">
         {/* Logo */}
         <Logo />
 
@@ -52,11 +61,12 @@ export default function Navbar() {
             >
               <ListItem
                 sx={{
-                  padding: "0.3rem 0.8rem", // Reduced padding for smaller background
+                  padding: "0.3rem 0.8rem",
                   marginBottom: "0.5rem",
                   cursor: "pointer",
                   borderRadius: "3px",
-                  borderBottom: pathname === link.to ? "1px solid #373737" : "transparent",
+                  borderBottom:
+                    pathname === link.to ? "1px solid #373737" : "transparent",
                   "&:hover": {
                     backgroundColor: "#373737",
                   },
@@ -64,26 +74,26 @@ export default function Navbar() {
                 className={`dark:hover:bg-[#373737] hover:bg-[#C0C0C0]`}
               >
                 <ListItemText
-                  primary={`${link.name}${link.comingSoon ? " (Coming Soon)" : ""}`}
+                  primary={`${link.name}${link.comingSoon ? "" : ""}`}
                 />
               </ListItem>
             </Link>
           ))}
         </Box>
 
-        {/* Mobile Menu Toggle */}
-        <IconButton
-          edge="start"
-          color="inherit"
-          aria-label="menu"
-          sx={{ display: { xs: "block", md: "none" } }}
-          onClick={toggleDrawer(true)}
-        >
-          <MenuIcon />
-        </IconButton>
-
-        {/* Dark Mode Toggle */}
-        <ModeToggle />
+        {/* Mobile Menu and Dark Mode Toggle */}
+        <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
+          <IconButton
+            edge="start"
+            color="inherit"
+            aria-label="menu"
+            sx={{ display: { xs: "block", md: "none" } }}
+            onClick={toggleDrawer(true)}
+          >
+            <MenuIcon />
+          </IconButton>
+          <ModeToggle />
+        </Box>
       </Toolbar>
 
       {/* Mobile Drawer */}
@@ -109,7 +119,8 @@ export default function Navbar() {
                 button
                 sx={{
                   padding: "0.8rem 1.2rem",
-                  borderBottom: pathname === link.to ? "1px solid #373737" : "transparent",
+                  borderBottom:
+                    pathname === link.to ? "1px solid #373737" : "transparent",
                   "&:hover": {
                     backgroundColor: "#f0f0f0",
                   },
@@ -117,7 +128,9 @@ export default function Navbar() {
                 onClick={toggleDrawer(false)}
               >
                 <ListItemText
-                  primary={`${link.name}${link.comingSoon ? " (Coming Soon)" : ""}`}
+                  primary={`${link.name}${
+                    link.comingSoon ? " (Coming Soon)" : ""
+                  }`}
                 />
               </ListItem>
             </Link>

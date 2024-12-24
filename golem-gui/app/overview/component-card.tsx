@@ -26,13 +26,13 @@ const ComponentCard: React.FC<ComponentCardProps> = ({
         border: "1px solid #555",
         borderRadius: 2,
         display: "flex",
-        flexGrowth: 1,
         flexDirection: "column",
         cursor: "pointer",
         gap: 1,
-        minWidth: "200px",
+        minWidth: "300px",
         "&:hover": { boxShadow: 4 },
       }}
+      className="flex-1"
     >
       <Box
         sx={{

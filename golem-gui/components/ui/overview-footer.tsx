@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, Typography, Grid, Paper,Divider } from '@mui/material';
+import { Box, Typography, Grid, Paper } from '@mui/material';
 import InsertDriveFileOutlinedIcon from '@mui/icons-material/InsertDriveFileOutlined';
 import ViewModuleOutlinedIcon from '@mui/icons-material/ViewModuleOutlined';
 import LanguageOutlinedIcon from '@mui/icons-material/LanguageOutlined';
@@ -24,11 +24,16 @@ const OverviewFooter = () => {
           overflow: 'auto',
         }}
       >
-        <Grid container spacing={3} justifyContent="space-between" alignItems="center" wrap="nowrap">
+        <Grid
+          container
+          spacing={3}
+          justifyContent="center" // Center items on smaller screens
+          alignItems="flex-start"
+        >
           {/* Language Guides */}
-          <Grid item>
+          <Grid item xs={12} sm={6} md={3}>
             <Box display="flex" alignItems="flex-start">
-              <InsertDriveFileOutlinedIcon sx={{fontSize: 32, mr: 2}} />
+              <InsertDriveFileOutlinedIcon sx={{ fontSize: 32, mr: 2 }} />
               <Box>
                 <Typography variant="h6" fontWeight="bold">
                   Language Guides
@@ -41,9 +46,9 @@ const OverviewFooter = () => {
           </Grid>
 
           {/* Components */}
-          <Grid item>
+          <Grid item xs={12} sm={6} md={3}>
             <Box display="flex" alignItems="flex-start">
-              <ViewModuleOutlinedIcon sx={{fontSize: 32, mr: 2 }} />
+              <ViewModuleOutlinedIcon sx={{ fontSize: 32, mr: 2 }} />
               <Box>
                 <Typography variant="h6" fontWeight="bold">
                   Components
@@ -56,9 +61,9 @@ const OverviewFooter = () => {
           </Grid>
 
           {/* APIs */}
-          <Grid item>
+          <Grid item xs={12} sm={6} md={3}>
             <Box display="flex" alignItems="flex-start">
-              <LanguageOutlinedIcon sx={{fontSize: 32, mr: 2 }} />
+              <LanguageOutlinedIcon sx={{ fontSize: 32, mr: 2 }} />
               <Box>
                 <Typography variant="h6" fontWeight="bold">
                   APIs
@@ -71,9 +76,9 @@ const OverviewFooter = () => {
           </Grid>
 
           {/* Workers */}
-          <Grid item>
+          <Grid item xs={12} sm={6} md={3}>
             <Box display="flex" alignItems="flex-start">
-              <BuildOutlinedIcon sx={{fontSize: 32, mr: 2 }} />
+              <BuildOutlinedIcon sx={{ fontSize: 32, mr: 2 }} />
               <Box>
                 <Typography variant="h6" fontWeight="bold">
                   Workers

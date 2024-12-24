@@ -43,22 +43,18 @@ const ProjectDashboard = () => {
 
   return (
     <Box sx={{ minHeight: "100vh", marginTop: 4, px: { xs: 2, md: 10 } }}>
-      <Grid
-        container
-        spacing={3}
-        sx={{
-          flexWrap: "wrap",
-        }}
-      >
+      <Grid container spacing={3} sx={{ flexWrap: "wrap" }}>
         {/* APIs Section */}
         <Grid item xs={12} md={4}>
           <Paper
             elevation={3}
             sx={{
               p: 2,
-              height: { xs: "auto", md: "calc(100vh - 120px)" },
+              minHeight: { xs: "auto", md: "calc(100vh - 120px)" },
+              height: { md: "calc(100vh - 120px)" }, // Ensures height consistency
               borderRadius: 2,
-              overflow: "auto",
+              display: "flex",
+              flexDirection: "column", // For stacking items within
             }}
           >
             <Box className="flex justify-between">
@@ -78,10 +74,10 @@ const ProjectDashboard = () => {
                 </Button>
               )}
             </Box>
-            <Stack marginTop={2}>
+            <Stack marginTop={2} sx={{ flex: 1, overflow: "hidden" }}>
               {!isLoading &&
                 uniquesApis.slice(0, 10).map((api) => (
-                  <>
+                  <React.Fragment key={api.latestVersion.id}>
                     <Divider sx={{ bgcolor: "#555" }} />
                     <Box
                       key={api.id}
@@ -107,7 +103,7 @@ const ProjectDashboard = () => {
                         </Typography>
                       </Box>
                     </Box>
-                  </>
+                  </React.Fragment>
                 ))}
             </Stack>
           </Paper>
@@ -119,9 +115,11 @@ const ProjectDashboard = () => {
             elevation={3}
             sx={{
               p: 2,
-              height: { xs: "auto", md: "calc(100vh - 120px)" },
+              minHeight: { xs: "auto", md: "calc(100vh - 120px)" },
+              height: { md: "calc(100vh - 120px)" },
               borderRadius: 2,
-              overflow: "auto",
+              display: "flex",
+              flexDirection: "column",
             }}
           >
             <Box className="flex justify-between">
@@ -147,23 +145,25 @@ const ProjectDashboard = () => {
                 gap: 2,
                 display: "flex",
                 flexWrap: "wrap",
-                flexGrow: 1,
-                width: "100%",
-                justifyContent: { xs: "center", md: "center" },
+                justifyContent: "center",
+                flex: 1, // Ensures it stretches within its parent
+                overflow: "hidden", // Prevents scrolling
               }}
             >
               {!componentsLoading &&
-                components.map((component) => (
-                  <ComponentCard
-                    key={component.versionedComponentId.componentId}
-                    name="comp1"
-                    date="1 day ago"
-                    version="v2"
-                    exports={6}
-                    size="419 KB"
-                    type="Durable"
-                  />
-                ))}
+                components
+                  .slice(0, 6)
+                  .map((component) => (
+                    <ComponentCard
+                      key={component.versionedComponentId.componentId}
+                      name="comp1"
+                      date="1 day ago"
+                      version="v2"
+                      exports={6}
+                      size="419 KB"
+                      type="Durable"
+                    />
+                  ))}
               {!componentsLoading && components.length === 0 && (
                 <Box
                   textAlign="center"
@@ -197,13 +197,14 @@ const ProjectDashboard = () => {
           </Paper>
         </Grid>
       </Grid>
+
       <CustomModal open={!!open} onClose={handleClose}>
         {open === "api" && <CreateAPI onCreation={handleClose} />}
         {open === "component" && (
           <CreateComponentForm mode="create" onSubmitSuccess={handleClose} />
         )}
       </CustomModal>
-      {/* <OverviewFooter /> */}
+      <OverviewFooter />
     </Box>
   );
 };
