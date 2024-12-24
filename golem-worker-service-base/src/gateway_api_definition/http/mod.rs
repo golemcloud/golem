@@ -12,27 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod http_api_definition;
-pub mod http_api_definition_request;
-pub mod http_oas_api_definition;
-pub mod openapi_converter;
-pub mod openapi_export;
-pub mod path_pattern_parser;
-pub mod place_holder_parser;
-pub mod rib_converter;
-pub mod swagger_ui;
-pub mod handlers;
-
-#[cfg(test)]
-mod tests;
-
 pub use http_api_definition::*;
 pub use http_api_definition_request::*;
 pub use http_oas_api_definition::*;
-pub use openapi_converter::*;
-pub use openapi_export::*;
-pub use path_pattern_parser::*;
-pub use place_holder_parser::*;
-pub use rib_converter::*;
-pub use swagger_ui::*;
-pub use handlers::OpenApiHandler;
+pub use openapi_export::{OpenApiExporter, OpenApiFormat};
+pub use openapi_converter::OpenApiConverter;
+pub use rib_converter::{RibConverter, CustomSchemaType};
+pub use swagger_ui::{
+    SwaggerUiConfig,
+    generate_swagger_ui,
+};
+
+mod http_api_definition;
+mod http_api_definition_request;
+mod http_oas_api_definition;
+mod openapi_export;
+mod openapi_converter;
+mod rib_converter;
+mod swagger_ui;
+pub(crate) mod path_pattern_parser;
+pub(crate) mod place_holder_parser;

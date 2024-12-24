@@ -1,11 +1,12 @@
 use golem_wasm_ast::analysis::AnalysedType;
 use utoipa::openapi::{
-    schema::{Schema, SchemaType, Object, ObjectBuilder, Array, OneOf},
+    schema::{Schema, Object, ObjectBuilder, Array, OneOf},
+    SchemaType,
     RefOr,
 };
 use std::collections::BTreeMap;
-use rib::RibInputTypeInfo;
 use serde_json::Value;
+use rib::RibInputTypeInfo;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CustomSchemaType {
@@ -52,6 +53,7 @@ impl RibConverter {
         }
     }
 
+    #[allow(clippy::only_used_in_recursion)]
     fn convert_type(&self, typ: &AnalysedType) -> Option<Schema> {
         match typ {
             AnalysedType::Bool(_) => {
@@ -188,4 +190,48 @@ impl RibConverter {
             _ => None,
         }
     }
-} 
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_wasm_ast::analysis::{
+        TypeStr,
+        TypeVariant,
+        NameOptionTypePair,
+    };
+    use test_r::test;
+
+    #[test]
+    fn test_convert_type() {
+        let converter = RibConverter;
+        
+        // Test string type
+        let str_type = AnalysedType::Str(TypeStr);
+        let schema = converter.convert_type(&str_type).unwrap();
+        match &schema {
+            Schema::Object(obj) => {
+                assert!(matches!(obj.schema_type, SchemaType::String));
+            }
+            _ => panic!("Expected object schema"),
+        }
+
+        // Test variant type
+        let variant = AnalysedType::Variant(TypeVariant {
+            cases: vec![
+                NameOptionTypePair {
+                    name: "case1".to_string(),
+                    typ: Some(AnalysedType::Str(TypeStr)),
+                },
+            ],
+        });
+        let schema = converter.convert_type(&variant).unwrap();
+        match &schema {
+            Schema::Object(obj) => {
+                assert!(obj.properties.contains_key("discriminator"));
+                assert!(obj.properties.contains_key("value"));
+            }
+            _ => panic!("Expected object schema"),
+        }
+    }
+}
