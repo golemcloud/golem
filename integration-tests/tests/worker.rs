@@ -1483,13 +1483,17 @@ async fn fork_worker_2(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         .expect("Expect at least one entry for the product id G1001")
         .oplog_index;
 
-    let result = deps
-        .fork_worker(&source_worker_id, &source_worker_id, index)
-        .await;
+    let error = golem_test_framework::dsl::TestDsl::fork_worker(
+        deps,
+        &source_worker_id,
+        &source_worker_id,
+        index,
+    )
+    .await
+    .unwrap_err()
+    .to_string();
 
-    dbg!(&result);
-
-    assert_eq!(1, 2);
+    assert!(error.contains("WorkerAlreadyExists"));
 }
 
 #[test]
