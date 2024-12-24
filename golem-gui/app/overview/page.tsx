@@ -77,7 +77,7 @@ const ProjectDashboard = () => {
             <Stack marginTop={2} sx={{ flex: 1, overflow: "hidden" }}>
               {!isLoading &&
                 uniquesApis.slice(0, 10).map((api) => (
-                  <React.Fragment key={api.latestVersion.id}>
+                  <React.Fragment key={api.id}>
                     <Divider sx={{ bgcolor: "#555" }} />
                     <Box
                       key={api.id}
