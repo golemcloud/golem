@@ -424,7 +424,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: ForkWorkerRequest,
     ) -> Result<ForkWorkerResponse, GolemError> {
-        info!("Forking worker at executor side");
         let source_worker_id_proto = request
             .source_worker_id
             .ok_or(GolemError::invalid_request("worker_id not found"))?;
@@ -482,7 +481,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         return Err(GolemError::invalid_request("Invalid oplog index cutoff"));
                     }
 
-                    let oplog_range = 1u64..=cut_off_index;
+                    let second_oplog = OplogIndex::INITIAL.next();
+
+                    let oplog_range = u64::from(second_oplog)..=cut_off_index;
 
                     let initial_oplog_entry = source_oplog.read(OplogIndex::INITIAL).await;
 

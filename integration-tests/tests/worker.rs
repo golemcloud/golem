@@ -1334,7 +1334,7 @@ async fn fork_worker_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 
     let source_worker_id = WorkerId {
         component_id: component_id.clone(),
-        worker_name: "searchoplog1".to_string(),
+        worker_name: "foo".to_string(),
     };
 
     let _ = deps
@@ -1419,7 +1419,7 @@ async fn fork_worker_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 
     let target_worker_id = WorkerId {
         component_id: component_id.clone(),
-        worker_name: "forked-worker".to_string(),
+        worker_name: "forked-foo".to_string(),
     };
 
     let _ = deps
@@ -1451,6 +1451,45 @@ async fn fork_worker_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let result = deps.search_oplog(&target_worker_id, "G1002").await;
 
     assert_eq!(result.len(), 4); //  two invocations for G1002 and two log messages
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout(120000)]
+async fn fork_worker_2(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    let component_id = deps.store_component("shopping-cart").await;
+
+    let source_worker_id = WorkerId {
+        component_id: component_id.clone(),
+        worker_name: "fork".to_string(),
+    };
+
+    let _ = deps
+        .invoke_and_await(
+            &source_worker_id,
+            "golem:it/api.{initialize-cart}",
+            vec![Value::String("test-user-1".to_string())],
+        )
+        .await;
+
+    let _oplog = deps.get_oplog(&source_worker_id, OplogIndex::INITIAL).await;
+
+    let second_call_oplogs = deps
+        .search_oplog(&source_worker_id, "initialize-cart")
+        .await;
+
+    let index = second_call_oplogs
+        .last()
+        .expect("Expect at least one entry for the product id G1001")
+        .oplog_index;
+
+    let result = deps
+        .fork_worker(&source_worker_id, &source_worker_id, index)
+        .await;
+
+    dbg!(&result);
+
+    assert_eq!(1, 2);
 }
 
 #[test]

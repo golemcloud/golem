@@ -77,6 +77,34 @@ impl OplogIndex {
     }
 }
 
+pub struct OplogIndexRange {
+    current: u64,
+    end: u64,
+}
+
+impl Iterator for OplogIndexRange {
+    type Item = OplogIndex;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.current <= self.end {
+            let current = self.current;
+            self.current += 1; // Move forward
+            Some(OplogIndex(current))
+        } else {
+            None
+        }
+    }
+}
+
+impl OplogIndexRange {
+    pub fn new(start: OplogIndex, end: OplogIndex) -> OplogIndexRange {
+        OplogIndexRange {
+            current: start.0,
+            end: end.0,
+        }
+    }
+}
+
 impl Display for OplogIndex {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
