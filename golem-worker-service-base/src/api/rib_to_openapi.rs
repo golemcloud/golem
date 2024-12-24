@@ -81,6 +81,21 @@ impl RibToOpenApi {
         }
     }
 
+    // Security configuration for OpenAPI
+    pub fn generate_security_scheme() -> OpenApiSchema {
+        OpenApiSchema::Object {
+            properties: BTreeMap::from([
+                ("bearerAuth".to_string(), OpenApiSchema::Object {
+                    properties: BTreeMap::new(),
+                    required: Some(vec![]),
+                    additional_properties: None,
+                }),
+            ]),
+            required: None,
+            additional_properties: None,
+        }
+    }
+
     /// Converts an AnalysedType into an OpenAPI schema.
     pub fn convert_type(analysed_type: &AnalysedType) -> Option<OpenApiSchema> {
         match analysed_type {
@@ -204,6 +219,16 @@ impl RibToOpenApi {
 mod tests {
     use super::*;
     use golem_wasm_ast::analysis::{model, AnalysedType};
+
+    #[test]
+    fn test_generate_security_scheme() {
+        let security = RibToOpenApi::generate_security_scheme();
+        if let OpenApiSchema::Object { properties, .. } = security {
+            assert!(properties.contains_key("bearerAuth"));
+        } else {
+            panic!("Security scheme not generated correctly");
+        }
+    }
 
     #[test]
     fn test_convert_simple_types() {
@@ -478,4 +503,100 @@ mod tests {
             "Unsupported type should return None, but got some schema"
         );
     }
+
+    /// Test for complex nested types
+    #[test]
+    fn test_complex_nested_type() {
+        let nested_record = AnalysedType::Record(model::TypeRecord {
+            fields: vec![model::NameTypePair {
+                name: "items".to_string(),
+                typ: AnalysedType::List(model::TypeList {
+                    inner: Box::new(AnalysedType::Record(model::TypeRecord {
+                        fields: vec![
+                            model::NameTypePair {
+                                name: "id".to_string(),
+                                typ: AnalysedType::U64(model::TypeU64),
+                            },
+                            model::NameTypePair {
+                                name: "name".to_string(),
+                                typ: AnalysedType::Option(model::TypeOption {
+                                    inner: Box::new(AnalysedType::Str(model::TypeStr)),
+                                }),
+                            },
+                        ],
+                    })),
+                }),
+            }],
+        });
+
+        let schema = RibToOpenApi::convert_type(&nested_record).unwrap();
+
+        if let OpenApiSchema::Object { properties, .. } = schema {
+            assert!(properties.contains_key("items"));
+
+            if let OpenApiSchema::Array { items } = properties["items"].clone() {
+                if let OpenApiSchema::Object { properties: nested_properties, .. } = *items {
+                    assert!(nested_properties.contains_key("id"));
+                    assert!(nested_properties.contains_key("name"));
+                } else {
+                    panic!("Expected nested object schema");
+                }
+            } else {
+                panic!("Expected array schema");
+            }
+        } else {
+            panic!("Expected object schema");
+        }
+    }
+
+    /// Test for primitive types
+    #[test]
+    fn test_primitive_types() {
+        let bool_type = AnalysedType::Bool(model::TypeBool);
+        let schema = RibToOpenApi::convert_type(&bool_type).unwrap();
+        assert!(matches!(schema, OpenApiSchema::Boolean));
+
+        let int_type = AnalysedType::U32(model::TypeU32);
+        let schema = RibToOpenApi::convert_type(&int_type).unwrap();
+        assert!(matches!(schema, OpenApiSchema::Integer { .. }));
+
+        let float_type = AnalysedType::F64(model::TypeF64);
+        let schema = RibToOpenApi::convert_type(&float_type).unwrap();
+        assert!(matches!(schema, OpenApiSchema::Number { .. }));
+
+        let string_type = AnalysedType::Str(model::TypeStr);
+        let schema = RibToOpenApi::convert_type(&string_type).unwrap();
+        assert!(matches!(schema, OpenApiSchema::String { .. }));
+    }
+
+    /// Test for lists, options and enums
+    #[test]
+    fn test_container_types() {
+        let list_type = AnalysedType::List(model::TypeList {
+            inner: Box::new(AnalysedType::Str(model::TypeStr)),
+        });
+        let schema = RibToOpenApi::convert_type(&list_type).unwrap();
+        assert!(matches!(schema, OpenApiSchema::Array { .. }));
+
+        let option_type = AnalysedType::Option(model::TypeOption {
+            inner: Box::new(AnalysedType::Str(model::TypeStr)),
+        });
+        let schema = RibToOpenApi::convert_type(&option_type).unwrap();
+        if let OpenApiSchema::Object { properties, .. } = schema {
+            assert!(properties.contains_key("value"));
+        } else {
+            panic!("Expected object schema for option type");
+        }
+
+        let enum_type = AnalysedType::Enum(model::TypeEnum {
+            cases: vec!["case1".to_string(), "case2".to_string()],
+        });
+        let schema = RibToOpenApi::convert_type(&enum_type).unwrap();
+        if let OpenApiSchema::Enum { values } = schema {
+            assert_eq!(values, vec!["case1".to_string(), "case2".to_string()]);
+        } else {
+            panic!("Expected enum schema");
+        }
+    }
+
 }

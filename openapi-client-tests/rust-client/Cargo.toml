@@ -1,0 +1,10 @@
+[package]
+name = "rust-client"
+version = "0.1.0"
+edition = "2021"
+
+description = "Generated Rust client library for the test API."
+license = "Apache-2.0"
+
+[dependencies]
+tokio = { version = "1.42.0", features = ["full"] }

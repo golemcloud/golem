@@ -44,7 +44,7 @@ impl OpenApiGenerator {
         routes
             .iter()
             .map(|route| {
-                let path_item = PathItem {
+                let mut path_item = PathItem {
                     get: Some(Operation {
                         summary: Some(route.description.clone()),
                         description: Some(route.description.clone()),
@@ -52,7 +52,7 @@ impl OpenApiGenerator {
                         parameters: Some(Self::generate_parameters(route)),
                         request_body: None,
                         responses: Self::generate_responses(route),
-                        security: None,
+                        security: Some(vec![HashMap::from([("bearerAuth".to_string(), vec![])])]),
                         tags: Some(vec![route.component_name.clone()]),
                     }),
                     post: None,
@@ -63,6 +63,58 @@ impl OpenApiGenerator {
                     trace: None,
                     parameters: None,
                 };
+
+                // Add CORS headers to the responses
+                if let Some(responses) = path_item.get.as_mut().map(|op| &mut op.responses) {
+                    if let Some(cors_response) = responses.get_mut("200") {
+                        cors_response.headers = Some(HashMap::from([
+                            (
+                                "Access-Control-Allow-Origin".to_string(),
+                                Parameter {
+                                    name: "Access-Control-Allow-Origin".to_string(),
+                                    r#in: ParameterLocation::Header,
+                                    description: Some("CORS origin".to_string()),
+                                    required: Some(false),
+                                    schema: Schema::String {
+                                        format: None,
+                                        enum_values: None,
+                                        default: None,
+                                        pattern: None,
+                                        min_length: None,
+                                        max_length: None,
+                                    },
+                                    style: Some("simple".to_string()),
+                                    explode: Some(false),
+                                    example: Some(
+                                        "https://example.com".to_string().parse().unwrap(),
+                                    ),
+                                },
+                            ),
+                            (
+                                "Access-Control-Allow-Methods".to_string(),
+                                Parameter {
+                                    name: "Access-Control-Allow-Methods".to_string(),
+                                    r#in: ParameterLocation::Header,
+                                    description: Some("CORS methods".to_string()),
+                                    required: Some(false),
+                                    schema: Schema::String {
+                                        format: None,
+                                        enum_values: None,
+                                        default: None,
+                                        pattern: None,
+                                        min_length: None,
+                                        max_length: None,
+                                    },
+                                    style: Some("simple".to_string()),
+                                    explode: Some(false),
+                                    example: Some(
+                                        "GET, POST, PUT, DELETE".to_string().parse().unwrap(),
+                                    ),
+                                },
+                            ),
+                        ]));
+                    }
+                }
                 (route.path.clone(), path_item)
             })
             .collect()
@@ -235,6 +287,7 @@ impl OpenApiGenerator {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::api::definition::types::{ApiDefinition, BindingType, HttpMethod, Route};
     use golem_wasm_ast::analysis::{model, AnalysedType, NameTypePair, TypeRecord};
 
@@ -264,7 +317,7 @@ mod tests {
         };
 
         // Generate the OpenAPI specification
-        let openapi = super::OpenApiGenerator::generate(&api_definition);
+        let openapi = OpenApiGenerator::generate(&api_definition);
 
         // Validate basic OpenAPI structure
         assert_eq!(openapi.openapi, "3.0.0");
@@ -283,7 +336,7 @@ mod tests {
         let route = create_route();
 
         // Generate paths for the route
-        let paths = super::OpenApiGenerator::generate_paths(&[route]);
+        let paths = OpenApiGenerator::generate_paths(&[route]);
 
         // Validate the generated path exists
         assert!(paths.contains_key("/example"));
@@ -294,7 +347,10 @@ mod tests {
         let operation = path_item.get.as_ref().unwrap();
         assert_eq!(operation.summary.as_deref(), Some("Example route"));
         assert_eq!(operation.description.as_deref(), Some("Example route"));
-        assert_eq!(operation.operation_id.as_deref(), Some("GET_ExampleComponent"));
+        assert_eq!(
+            operation.operation_id.as_deref(),
+            Some("GET_ExampleComponent")
+        );
         assert!(operation.parameters.is_some());
     }
 
@@ -304,7 +360,7 @@ mod tests {
         let route = create_route();
 
         // Generate responses for the route
-        let responses = super::OpenApiGenerator::generate_responses(&route);
+        let responses = OpenApiGenerator::generate_responses(&route);
 
         // Validate the success response
         assert!(responses.contains_key("200"));
@@ -350,7 +406,7 @@ mod tests {
         ];
 
         // Generate components from the routes
-        let components = super::OpenApiGenerator::generate_components(&routes);
+        let components = OpenApiGenerator::generate_components(&routes);
 
         // Validate the components include the correct schemas
         assert!(components
@@ -392,7 +448,7 @@ mod tests {
         };
 
         // Generate parameters for the route
-        let parameters = super::OpenApiGenerator::generate_parameters(&route);
+        let parameters = OpenApiGenerator::generate_parameters(&route);
 
         // Validate the generated parameters
         assert_eq!(parameters.len(), 2);
@@ -426,10 +482,169 @@ mod tests {
         };
 
         // Generate parameters for the route
-        let parameters = super::OpenApiGenerator::generate_parameters(&route);
+        let parameters = OpenApiGenerator::generate_parameters(&route);
 
         // Validate the generated parameter includes the nested object
         assert_eq!(parameters.len(), 1);
         assert_eq!(parameters[0].name, "nested_object");
+    }
+
+    /// Test for generating paths with multiple HTTP methods
+    #[test]
+    fn test_generate_paths_with_multiple_methods() {
+        let routes = vec![
+            Route {
+                path: "/example".to_string(),
+                method: HttpMethod::Get,
+                description: "GET example".to_string(),
+                component_name: "ExampleComponent".to_string(),
+                binding: BindingType::Default {
+                    input_type: AnalysedType::Str(model::TypeStr {}),
+                    output_type: AnalysedType::Bool(model::TypeBool {}),
+                    function_name: "example_get".to_string(),
+                },
+            },
+            Route {
+                path: "/example".to_string(),
+                method: HttpMethod::Post,
+                description: "POST example".to_string(),
+                component_name: "ExampleComponent".to_string(),
+                binding: BindingType::Default {
+                    input_type: AnalysedType::Str(model::TypeStr {}),
+                    output_type: AnalysedType::Bool(model::TypeBool {}),
+                    function_name: "example_post".to_string(),
+                },
+            },
+        ];
+
+        let paths = OpenApiGenerator::generate_paths(&routes);
+
+        assert!(paths.contains_key("/example"));
+
+        if let Some(PathItem { get, post, .. }) = paths.get("/example") {
+            assert!(get.is_some(), "GET method should be present");
+            assert!(post.is_some(), "POST method should be present");
+        } else {
+            panic!("Expected PathItem for /example");
+        }
+    }
+
+    /// Test for generating paths with CORS headers
+    #[test]
+    fn test_generate_paths_with_cors_headers() {
+        let routes = vec![Route {
+            path: "/example".to_string(),
+            method: HttpMethod::Get,
+            description: "GET example with CORS".to_string(),
+            component_name: "ExampleComponent".to_string(),
+            binding: BindingType::Default {
+                input_type: AnalysedType::Str(model::TypeStr {}),
+                output_type: AnalysedType::Bool(model::TypeBool {}),
+                function_name: "example_cors".to_string(),
+            },
+        }];
+
+        let paths = OpenApiGenerator::generate_paths(&routes);
+
+        if let Some(PathItem { get, .. }) = paths.get("/example") {
+            if let Some(operation) = get {
+                let responses = &operation.responses;
+                if let Some(response) = responses.get("200") {
+                    if let Some(headers) = &response.headers {
+                        assert!(
+                            headers.contains_key("Access-Control-Allow-Origin"),
+                            "CORS header missing"
+                        );
+                    } else {
+                        panic!("Expected headers in response");
+                    }
+                } else {
+                    panic!("Expected 200 response");
+                }
+            } else {
+                panic!("Expected GET operation");
+            }
+        } else {
+            panic!("Expected PathItem for /example");
+        }
+    }
+
+    /// Test for generating components with complex schemas
+    #[test]
+    fn test_generate_components_with_complex_schemas() {
+        let routes = vec![Route {
+            path: "/complex".to_string(),
+            method: HttpMethod::Get,
+            description: "Complex schema route".to_string(),
+            component_name: "ComplexComponent".to_string(),
+            binding: BindingType::Default {
+                input_type: AnalysedType::Record(TypeRecord {
+                    fields: vec![
+                        NameTypePair {
+                            name: "field1".to_string(),
+                            typ: AnalysedType::Str(model::TypeStr {}),
+                        },
+                        NameTypePair {
+                            name: "field2".to_string(),
+                            typ: AnalysedType::List(model::TypeList {
+                                inner: Box::new(AnalysedType::U32(model::TypeU32 {})),
+                            }),
+                        },
+                    ],
+                }),
+                output_type: AnalysedType::Bool(model::TypeBool {}),
+                function_name: "complex_function".to_string(),
+            },
+        }];
+
+        let components = OpenApiGenerator::generate_components(&routes);
+
+        assert!(
+            components.schemas.is_some(),
+            "Expected schemas in components"
+        );
+
+        if let Some(schemas) = components.schemas {
+            assert!(
+                schemas.contains_key("ComplexComponent"),
+                "Missing ComplexComponent schema"
+            );
+        } else {
+            panic!("Expected schemas in components");
+        }
+    }
+
+    /// Test for generating parameters with nested structures
+    #[test]
+    fn test_generate_parameters_with_nested_structures() {
+        let route = Route {
+            path: "/nested".to_string(),
+            method: HttpMethod::Get,
+            description: "Nested parameters route".to_string(),
+            component_name: "NestedComponent".to_string(),
+            binding: BindingType::Default {
+                input_type: AnalysedType::Record(TypeRecord {
+                    fields: vec![NameTypePair {
+                        name: "nested".to_string(),
+                        typ: AnalysedType::Record(TypeRecord {
+                            fields: vec![NameTypePair {
+                                name: "inner_field".to_string(),
+                                typ: AnalysedType::U64(model::TypeU64 {}),
+                            }],
+                        }),
+                    }],
+                }),
+                output_type: AnalysedType::Bool(model::TypeBool {}),
+                function_name: "nested_function".to_string(),
+            },
+        };
+
+        let parameters = OpenApiGenerator::generate_parameters(&route);
+
+        assert_eq!(parameters.len(), 1, "Expected one parameter");
+        assert_eq!(
+            parameters[0].name, "nested",
+            "Expected parameter name 'nested'"
+        );
     }
 }

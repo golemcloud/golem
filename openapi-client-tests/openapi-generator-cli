@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+####
+# This script automates the usage of the OpenAPI Generator CLI.
+# It downloads the latest version of the CLI from Maven or GitHub if not already cached.
+# Features:
+# - Supports setting a specific version via OPENAPI_GENERATOR_VERSION.
+# - Caches JAR files for faster subsequent invocations.
+#
+# Prerequisites:
+# - Requires 'mvn', 'jq', and 'curl' to be installed.
+#
+# Usage:
+#   ./openapi-generator-cli <arguments>
+# Example:
+#   ./openapi-generator-cli generate -i input.yaml -g typescript-fetch -o output/
+####
+
+set -e
+set -o pipefail
+
+# Ensure required commands are available
+for cmd in mvn jq curl; do
+  if ! command -v ${cmd} > /dev/null; then
+    echo "Error: '${cmd}' is required but not installed." >&2
+    exit 1
+  fi
+done
+
+# Function to get the latest stable tag from GitHub
+function latest_tag {
+  local repo_url="https://api.github.com/repos/${1}/releases"
+  # shellcheck disable=SC2155
+  local version=$(curl -s "${repo_url}" | jq -r 'first(.[] | select(.prerelease == false)).tag_name')
+
+  # Remove the leading 'v' from the version tag if present
+  if [[ $version == v* ]]; then
+    version=${version:1}
+  fi
+
+  echo "$version"
+}
+
+# Define variables
+GH_REPO="openapitools/openapi-generator"
+GROUP_ID="org.openapitools"
+ARTIFACT_ID="openapi-generator-cli"
+VERSION=${OPENAPI_GENERATOR_VERSION:-$(latest_tag $GH_REPO)}
+
+JAR_FILE="${ARTIFACT_ID}-${VERSION}.jar"
+CACHE_DIR="${OPENAPI_GENERATOR_DOWNLOAD_CACHE_DIR:-"$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"}"
+
+# Create the cache directory if it doesn't exist
+if [ ! -d "${CACHE_DIR}" ]; then
+  mkdir -p "${CACHE_DIR}"
+fi
+
+# Download the JAR file if it's not already cached
+if [ ! -f "${CACHE_DIR}/${JAR_FILE}" ]; then
+  REPO_URL="https://repo1.maven.org/maven2/"
+
+  # Use snapshot repository for SNAPSHOT versions
+  if [[ ${VERSION} =~ ^.*-SNAPSHOT$ ]]; then
+    REPO_URL="https://oss.sonatype.org/content/repositories/snapshots"
+  fi
+
+  mvn org.apache.maven.plugins:maven-dependency-plugin:3.5.0:get \
+    -DremoteRepositories="central::default::${REPO_URL}"          \
+    -Dartifact="${GROUP_ID}:${ARTIFACT_ID}:${VERSION}"           \
+    -Dtransitive=false                                           \
+    -Ddest="${CACHE_DIR}/${JAR_FILE}"                           || {
+    echo "Error: Failed to download ${ARTIFACT_ID} version ${VERSION}." >&2
+    exit 1
+  }
+fi
+
+# Execute the JAR file with Java
+exec java -ea                          \
+  ${JAVA_OPTS:-"-Xms512M -Xmx1024M"}   \
+  -server                              \
+  -jar "${CACHE_DIR}/${JAR_FILE}" "$@"

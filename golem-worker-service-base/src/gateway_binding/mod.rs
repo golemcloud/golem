@@ -24,6 +24,9 @@ use std::ops::Deref;
 pub(crate) use worker_binding::*;
 pub(crate) use worker_binding_compiled::*;
 
+pub use worker_binding::WorkerBinding;
+
+
 mod gateway_binding_compiled;
 mod static_binding;
 mod worker_binding;

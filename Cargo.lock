@@ -6641,6 +6641,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 
 [[package]]
+name = "openapi-client-tests"
+version = "1.0.0"
+dependencies = [
+ "assert2",
+ "axum",
+ "chrono",
+ "golem-common",
+ "golem-wasm-ast",
+ "golem-worker-service-base",
+ "serde 1.0.216",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "openapiv3"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8413,6 +8429,13 @@ checksum = "c247d24e63230cdb56463ae328478bd5eac8b8faa8c69461a77e8e323afac90e"
 dependencies = [
  "libc",
  "windows-sys 0.48.0",
+]
+
+[[package]]
+name = "rust-client"
+version = "0.1.0"
+dependencies = [
+ "tokio",
 ]
 
 [[package]]

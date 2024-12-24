@@ -19,6 +19,8 @@ members = [
     "golem-worker-service",
     "integration-tests",
     "golem",
+    "openapi-client-tests",
+    "openapi-client-tests/rust-client",
     "wasm-ast",
     "wasm-rpc",
     "wasm-rpc-stubgen",

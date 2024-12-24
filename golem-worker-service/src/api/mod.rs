@@ -6,6 +6,7 @@ pub mod worker_connect;
 mod openapi_generator;
 pub mod openapi;
 pub mod definition;
+mod swagger_ui;
 
 use crate::api::worker::WorkerApi;
 use crate::service::Services;
