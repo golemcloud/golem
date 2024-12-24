@@ -104,6 +104,13 @@ impl StatementTest {
             expected,
         }
     }
+
+    fn with_expected(&self, expected: Option<serde_json::Value>) -> Self {
+        Self {
+            expected,
+            ..self.clone()
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -139,7 +146,7 @@ impl RdbmsTest {
 
 #[test]
 #[tracing::instrument]
-async fn rdbms_postgres_create_insert_select(
+async fn rdbms_postgres_crud(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     postgres: &DockerPostgresRdbs,
@@ -313,7 +320,7 @@ async fn rdbms_postgres_create_insert_select(
         last_unique_id,
         deps,
         db_addresses.clone(),
-        RdbmsTest::new(vec![select_test1], Some(TransactionEnd::Commit)),
+        RdbmsTest::new(vec![select_test1.clone()], Some(TransactionEnd::Commit)),
         3,
     )
     .await;
@@ -327,11 +334,7 @@ async fn rdbms_postgres_create_insert_select(
     )
     .await;
 
-    let select_test = StatementTest::query_test(
-        "SELECT user_id, name, tags FROM test_users ORDER BY created_on ASC",
-        vec![],
-        Some(query_empty_ok_response()),
-    );
+    let select_test = select_test1.with_expected(Some(query_empty_ok_response()));
 
     rdbms_component_test::<PostgresType>(
         last_unique_id,
@@ -395,7 +398,7 @@ async fn rdbms_postgres_select1(
 
 #[test]
 #[tracing::instrument]
-async fn rdbms_mysql_create_insert_select(
+async fn rdbms_mysql_crud(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     mysql: &DockerMysqlRdbs,
@@ -552,7 +555,7 @@ async fn rdbms_mysql_create_insert_select(
         last_unique_id,
         deps,
         db_addresses.clone(),
-        RdbmsTest::new(vec![select_test1], Some(TransactionEnd::Commit)),
+        RdbmsTest::new(vec![select_test1.clone()], Some(TransactionEnd::Commit)),
         3,
     )
     .await;
@@ -566,11 +569,7 @@ async fn rdbms_mysql_create_insert_select(
     )
     .await;
 
-    let select_test = StatementTest::query_test(
-        "SELECT user_id, name FROM test_users ORDER BY user_id ASC",
-        vec![],
-        Some(query_empty_ok_response()),
-    );
+    let select_test = select_test1.with_expected(Some(query_empty_ok_response()));
 
     rdbms_component_test::<MysqlType>(
         last_unique_id,

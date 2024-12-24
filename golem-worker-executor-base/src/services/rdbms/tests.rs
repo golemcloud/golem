@@ -122,7 +122,7 @@ async fn postgres_transaction_tests(
             ($1, $2, $3)
         "#;
 
-    let count = 4;
+    let count = 40;
 
     let mut rows: Vec<DbRow<postgres_types::DbValue>> = Vec::with_capacity(count);
 
@@ -160,28 +160,22 @@ async fn postgres_transaction_tests(
     let commit = transaction.commit().await;
     check!(commit.is_ok(), "transaction commit {} failed", db_address);
 
-    // let transaction = rdbms
-    //     .begin_transaction(&pool_key, &worker_id)
-    //     .await
-    //     .expect("New transaction expected");
-    //
-    // let delete_statement = "DELETE FROM test_users";
-    //
-    // rdbms_query_with_transaction_test(
-    //     transaction.clone(),
-    //     delete_statement,
-    //     vec![],
-    //     None,
-    //     Some(rows.clone()),
-    // )
-    // .await;
-    //
-    // let rollback = transaction.rollback().await;
-    // check!(
-    //     rollback.is_ok(),
-    //     "transaction rollback {} failed",
-    //     db_address
-    // );
+    let transaction = rdbms
+        .begin_transaction(&pool_key, &worker_id)
+        .await
+        .expect("New transaction expected");
+
+    let delete_statement = "DELETE FROM test_users";
+
+    rdbms_query_with_transaction_test(transaction.clone(), delete_statement, vec![], None, None)
+        .await;
+
+    let rollback = transaction.rollback().await;
+    check!(
+        rollback.is_ok(),
+        "transaction rollback {} failed",
+        db_address
+    );
 
     let transaction = rdbms
         .begin_transaction(&pool_key, &worker_id)
@@ -1666,7 +1660,7 @@ async fn mysql_transaction_tests(mysql: &DockerMysqlRdbs, rdbms_service: &RdbmsS
             (?, ?)
         "#;
 
-    let count = 4;
+    let count = 40;
 
     let mut rows: Vec<DbRow<mysql_types::DbValue>> = Vec::with_capacity(count);
 
@@ -1700,28 +1694,22 @@ async fn mysql_transaction_tests(mysql: &DockerMysqlRdbs, rdbms_service: &RdbmsS
     let commit = transaction.commit().await;
     check!(commit.is_ok(), "transaction commit {} failed", db_address);
 
-    // let transaction = rdbms
-    //     .begin_transaction(&pool_key, &worker_id)
-    //     .await
-    //     .expect("New transaction expected");
-    //
-    // let delete_statement = "DELETE FROM test_users";
-    //
-    // rdbms_query_with_transaction_test(
-    //     transaction.clone(),
-    //     delete_statement,
-    //     vec![],
-    //     None,
-    //     Some(rows.clone()),
-    // )
-    // .await;
-    //
-    // let rollback = transaction.rollback().await;
-    // check!(
-    //     rollback.is_ok(),
-    //     "transaction rollback {} failed",
-    //     db_address
-    // );
+    let transaction = rdbms
+        .begin_transaction(&pool_key, &worker_id)
+        .await
+        .expect("New transaction expected");
+
+    let delete_statement = "DELETE FROM test_users";
+
+    rdbms_query_with_transaction_test(transaction.clone(), delete_statement, vec![], None, None)
+        .await;
+
+    let rollback = transaction.rollback().await;
+    check!(
+        rollback.is_ok(),
+        "transaction rollback {} failed",
+        db_address
+    );
 
     let transaction = rdbms
         .begin_transaction(&pool_key, &worker_id)
