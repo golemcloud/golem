@@ -38,8 +38,8 @@ const CustomModal: React.FC<CustomModalProps> = ({ open, onClose, children, head
             sx={{
               position: "sticky",
               top: 0,
-          
-              zIndex: 10,
+              zIndex: 1000,
+              bgcolor:'#1e1e1e',
               px: 2,
               py:1,
               borderBottom: "0.1px solid #333",
@@ -57,7 +57,7 @@ const CustomModal: React.FC<CustomModalProps> = ({ open, onClose, children, head
               </Typography>
               <IconButton
                 onClick={onClose}
-               className="dark:text-[#fff] text-[#333]"
+              className="dark:text-[#fff] text-[#333]"
               >
                 <CloseIcon />
               </IconButton>
@@ -67,7 +67,7 @@ const CustomModal: React.FC<CustomModalProps> = ({ open, onClose, children, head
                 variant="body1"
                 sx={{
                   mt: 1,
-                  color: "#cccccc", // Slightly lighter color for subheading
+                  color: "#cccccc",
                 }}
               >
                 {subheading}
