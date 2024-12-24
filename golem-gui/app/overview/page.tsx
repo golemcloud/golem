@@ -5,8 +5,7 @@ import {
   Typography,
   Button,
   Paper,
-  Grid2,
-  Modal,
+  Grid,
   Stack,
   Divider,
 } from "@mui/material";
@@ -14,10 +13,14 @@ import AddIcon from "@mui/icons-material/Add";
 import OverviewFooter from "@/components/ui/overview-footer";
 import CreateAPI from "@/components/create-api";
 import CreateComponentForm from "@/components/new-component";
+import { fetcher } from "@/lib/utils";
 import { ApiDefinition, Component } from "@/types/api";
+import useSWR from "swr";
 import { useRouter } from "next/navigation";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 import useComponents from "@/lib/hooks/use-component";
+import CustomModal from "@/components/CustomModal";
+import ComponentCard from "./component-card";
 
 const ProjectDashboard = () => {
   const router = useRouter();
@@ -39,159 +42,168 @@ const ProjectDashboard = () => {
   const handleClose = () => setOpen(null);
 
   return (
-    <Box sx={{ minHeight: "100vh", marginTop: "2rem" }} px={10}>
-      <Grid2 container spacing={3}>
+    <Box sx={{ minHeight: "100vh", marginTop: 4, px: { xs: 2, md: 10 } }}>
+      <Grid container spacing={3} sx={{ flexWrap: "wrap" }}>
         {/* APIs Section */}
-        <Grid2 size={4}>
+        <Grid item xs={12} md={4}>
           <Paper
             elevation={3}
             sx={{
               p: 2,
-              height: "calc(100vh - 120px)",
+              minHeight: { xs: "auto", md: "calc(100vh - 120px)" },
+              height: { md: "calc(100vh - 120px)" }, // Ensures height consistency
               borderRadius: 2,
-              // border: '1px solid  #999',
-              position: "relative",
+              display: "flex",
+              flexDirection: "column", // For stacking items within
             }}
           >
-            <Stack
-              direction="row"
-              justifyContent={"space-between"}
-              alignItems={"center"}
-            >
-              <Typography variant="h6" fontWeight="bold">
-                APIs
-              </Typography>
-              {uniquesApis.slice(10)?.length > 0 && (
+            <Box className="flex justify-between">
+              <Typography variant="h5">APIs</Typography>
+              {uniquesApis?.length > 0 && (
                 <Button
                   variant="text"
                   sx={{
-                    position: "absolute",
-                    top: 8,
-                    right: 8,
                     fontSize: "0.8rem",
                     border: "0.1px solid #555",
                     textTransform: "none",
                   }}
                   className="text-[#888] dark:text-gray-400"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    router.push("/apis");
-                  }}
+                  onClick={() => router.push("/apis")}
                 >
                   View All
                 </Button>
               )}
+            </Box>
+            <Stack marginTop={2} sx={{ flex: 1, overflow: "hidden" }}>
+              {!isLoading &&
+                uniquesApis.slice(0, 10).map((api) => (
+                  <React.Fragment key={api.id}>
+                    <Divider sx={{ bgcolor: "#555" }} />
+                    <Box
+                      key={api.id}
+                      padding={3}
+                      className="hover:bg-[#444] cursor-pointer"
+                      onClick={() =>
+                        router.push(
+                          `/apis/${api.id}/overview?version=${api.version}`
+                        )
+                      }
+                    >
+                      <Box display="flex" justifyContent="space-between">
+                        <Typography variant="body1">{api.id}</Typography>
+                        <Typography
+                          variant="body2"
+                          sx={{
+                            px: 1,
+                            border: "1px solid #555",
+                            borderRadius: 1,
+                          }}
+                        >
+                          {api.version}
+                        </Typography>
+                      </Box>
+                    </Box>
+                  </React.Fragment>
+                ))}
             </Stack>
-            <Divider sx={{ my: 2, backgroundColor: "#444" }} />
-            {!isLoading &&
-              uniquesApis.slice(0, 10).map((api) => (
-                <>
-                  <Box>
-                    <Typography>{api.id}</Typography>
-                    <Typography variant="caption" color="gray">
-                      {api.version}
-                    </Typography>
-                  </Box>
-                  <Divider sx={{ my: 1, backgroundColor: "#444" }} />
-                </>
-              ))}
           </Paper>
-        </Grid2>
+        </Grid>
 
         {/* Components Section */}
-        <Grid2 size={8}>
+        <Grid item xs={12} md={8}>
           <Paper
             elevation={3}
             sx={{
-              padding: 4,
-              height: "calc(100vh - 120px)",
+              p: 2,
+              minHeight: { xs: "auto", md: "calc(100vh - 120px)" },
+              height: { md: "calc(100vh - 120px)" },
               borderRadius: 2,
               display: "flex",
-              justifyContent: "center",
-              alignItems: "center",
               flexDirection: "column",
-              color: "white",
-              position: "relative",
             }}
           >
-            {/* View All Button */}
-            <Button
-              variant="text"
+            <Box className="flex justify-between">
+              <Typography variant="h5">Components</Typography>
+              {components.length > 0 && (
+                <Button
+                  variant="text"
+                  sx={{
+                    fontSize: "0.8rem",
+                    border: "0.1px solid #555",
+                    textTransform: "none",
+                  }}
+                  className="text-[#888] dark:text-gray-400"
+                  onClick={() => router.push("/components")}
+                >
+                  View All
+                </Button>
+              )}
+            </Box>
+            <Box
               sx={{
-                position: "absolute",
-                top: 8,
-                right: 8,
-                fontSize: "0.8rem",
-                textTransform: "none",
-                border: "0.1px solid #555",
-              }}
-              className="text-[#888] dark:text-gray-400"
-              onClick={(e) => {
-                e.preventDefault();
-                router.push("/components");
+                mt: 2,
+                gap: 2,
+                display: "flex",
+                flexWrap: "wrap",
+                justifyContent: "center",
+                flex: 1, // Ensures it stretches within its parent
+                overflow: "hidden", // Prevents scrolling
               }}
             >
-              View All
-            </Button>
-            <Stack marginTop={6}>
               {!componentsLoading &&
-                components.map((component: Component) => (
-                  <Box
-                    key={component?.versionedComponentId.componentId}
-                    bgcolor="#444"
-                    marginBottom={1}
-                    padding={1}
-                  >
-                    <Typography variant="body1">
-                      {component.componentName}
-                    </Typography>
-                  </Box>
-                ))}
-            </Stack>
-
-            {!componentsLoading && components.length == 0 && (
-              <Box
-                textAlign="center"
-                sx={{
-                  borderRadius: 2,
-                  border: "2px dashed #444",
-                  padding: "5rem",
-                }}
-              >
-                <Typography
-                  variant="h5"
-                  fontWeight="bold"
-                  className="text-[#888] dark:text-gray-400"
-                >
-                  No Project Components
-                </Typography>
-                <Typography variant="body2" color="gray" mb={2}>
-                  Create your first component to get started
-                </Typography>
-                <Button
-                  variant="contained"
-                  startIcon={<AddIcon />}
+                components
+                  .slice(0, 6)
+                  .map((component) => (
+                    <ComponentCard
+                      key={component.versionedComponentId.componentId}
+                      name="comp1"
+                      date="1 day ago"
+                      version="v2"
+                      exports={6}
+                      size="419 KB"
+                      type="Durable"
+                    />
+                  ))}
+              {!componentsLoading && components.length === 0 && (
+                <Box
+                  textAlign="center"
                   sx={{
-                    backgroundColor: "#444",
-                    color: "white",
-                    "&:hover": { backgroundColor: "#555" },
+                    borderRadius: 2,
+                    border: "2px dashed #444",
+                    py: 6,
+                    px: 2,
                   }}
                 >
-                  Create New
-                </Button>
-              </Box>
-            )}
+                  <Typography variant="h6" color="text.secondary">
+                    No Project Components
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    Create your first component to get started
+                  </Typography>
+                  <Button
+                    variant="contained"
+                    startIcon={<AddIcon />}
+                    sx={{
+                      mt: 2,
+                      bgcolor: "#444",
+                      "&:hover": { bgcolor: "#555" },
+                    }}
+                  >
+                    Create New
+                  </Button>
+                </Box>
+              )}
+            </Box>
           </Paper>
-        </Grid2>
-      </Grid2>
-      {/* Modal for Creating New API/Component */}
-      <Modal open={!!open} onClose={handleClose}>
-        <>
-          {open === "api" && <CreateAPI onCreation={handleClose} />}
-          {open === "component" && <CreateComponentForm mode={"create"} />}
-        </>
-      </Modal>
-      {/* Footer */}
+        </Grid>
+      </Grid>
+
+      <CustomModal open={!!open} onClose={handleClose}>
+        {open === "api" && <CreateAPI onCreation={handleClose} />}
+        {open === "component" && (
+          <CreateComponentForm mode="create" onSubmitSuccess={handleClose} />
+        )}
+      </CustomModal>
       <OverviewFooter />
     </Box>
   );

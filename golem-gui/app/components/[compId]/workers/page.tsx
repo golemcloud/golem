@@ -89,7 +89,6 @@ const WorkerListWithDropdowns = () => {
           </Button>
         </Stack>
 
-        {/* Dropdowns and Date Pickers */}
         <Stack direction="row" spacing={2} mb={3}>
          
           <FormControl variant="outlined" size="medium" sx={{ minWidth: 150 }}>
@@ -206,7 +205,7 @@ const WorkerListWithDropdowns = () => {
           </FormControl>
 
           {/* Created After */}
-          <DatePicker
+          {/* <DatePicker
             label="Created After"
             value={createdAfter}
             onChange={(date) => setCreatedAfter(date)}
@@ -218,10 +217,10 @@ const WorkerListWithDropdowns = () => {
                 }}
               />
             )}
-          />
+          /> */}
 
           {/* Created Before */}
-          <DatePicker
+          {/* <DatePicker
             label="Created Before"
             value={createdBefore}
             onChange={(date) => setCreatedBefore(date)}
@@ -233,7 +232,7 @@ const WorkerListWithDropdowns = () => {
                 }}
               />
             )}
-          />
+          /> */}
         </Stack>
 
         {/* No Workers Found */}

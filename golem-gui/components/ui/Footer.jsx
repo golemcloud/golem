@@ -8,7 +8,6 @@ import MailOutlineIcon from "@mui/icons-material/MailOutline";
 import SportsEsportsIcon from "@mui/icons-material/SportsEsports";
 import Logo from '../../assets/golem-logo';
 
-
 const Footer = () => {
   return (
     <Box
@@ -22,10 +21,15 @@ const Footer = () => {
           justifyContent: "space-between",
           alignItems: "flex-start",
           flexWrap: "wrap",
+          rowGap: 4,
         }}
       >
         {/* Left Section */}
-        <Box>
+        <Box
+          sx={{
+            flexBasis: { xs: "100%", sm: "45%", md: "30%" }, // Responsive width
+          }}
+        >
           <Typography
             variant="h6"
             sx={{
@@ -33,7 +37,7 @@ const Footer = () => {
               marginBottom: 1,
             }}
           >
-            <Logo/>
+            <Logo />
           </Typography>
           <Stack direction="row" spacing={1} marginBottom={1}>
             <IconButton
@@ -63,7 +67,11 @@ const Footer = () => {
         </Box>
 
         {/* Middle Section */}
-        <Box>
+        <Box
+          sx={{
+            flexBasis: { xs: "100%", sm: "25%", md: "20%" }, // Responsive width
+          }}
+        >
           <Typography
             variant="subtitle2"
             sx={{ fontWeight: "bold", marginBottom: 1 }}
@@ -81,7 +89,11 @@ const Footer = () => {
         </Box>
 
         {/* Right Section */}
-        <Box>
+        <Box
+          sx={{
+            flexBasis: { xs: "100%", sm: "25%", md: "20%" }, // Responsive width
+          }}
+        >
           <Typography
             variant="subtitle2"
             sx={{ fontWeight: "bold", marginBottom: 1 }}
