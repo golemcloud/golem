@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::services::rdbms::mysql::types as mysql_types;
-use crate::services::rdbms::postgres::types as postgres_types;
-use crate::services::rdbms::{DbRow, DbTransaction, Error};
+use crate::services::rdbms::mysql::{types as mysql_types, MysqlType};
+use crate::services::rdbms::postgres::{types as postgres_types, PostgresType};
+use crate::services::rdbms::{DbResult, DbRow, Error};
 use crate::services::rdbms::{Rdbms, RdbmsServiceDefault, RdbmsType};
 use crate::services::rdbms::{RdbmsPoolKey, RdbmsService};
 use assert2::check;
@@ -28,6 +28,7 @@ use golem_test_framework::components::rdb::{RdbConnection, RdbsConnections};
 use mac_address::MacAddress;
 use serde_json::json;
 use std::collections::{Bound, HashMap};
+use std::fmt::Debug;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -50,30 +51,117 @@ fn rdbms_service() -> RdbmsServiceDefault {
     RdbmsServiceDefault::default()
 }
 
+#[derive(Clone, Debug)]
+enum StatementAction<T: RdbmsType + Clone + Debug> {
+    Execute(ExpectedExecuteResult),
+    Query(ExpectedQueryResult<T>),
+}
+
+#[derive(Clone, Debug)]
+struct ExpectedQueryResult<T: RdbmsType + Clone + Debug> {
+    expected_columns: Option<Vec<T::DbColumn>>,
+    expected_rows: Option<Vec<DbRow<T::DbValue>>>,
+}
+
+impl<T: RdbmsType + Clone + Debug> ExpectedQueryResult<T> {
+    fn new(
+        expected_columns: Option<Vec<T::DbColumn>>,
+        expected_rows: Option<Vec<DbRow<T::DbValue>>>,
+    ) -> Self {
+        Self {
+            expected_rows,
+            expected_columns,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ExpectedExecuteResult {
+    expected: Option<u64>,
+}
+
+impl ExpectedExecuteResult {
+    fn new(expected: Option<u64>) -> Self {
+        Self { expected }
+    }
+}
+
+#[derive(Clone, Debug)]
+enum StatementResult<T: RdbmsType + Clone + Debug> {
+    Execute(u64),
+    Query(DbResult<T>),
+}
+
+#[derive(Clone, Eq, PartialEq, Debug)]
+enum TransactionEnd {
+    Commit,
+    Rollback,
+    // no transaction end action, drop of transaction resource should do rollback
+    None,
+}
+
+#[derive(Debug, Clone)]
+struct StatementTest<T: RdbmsType + Clone + Debug> {
+    pub action: StatementAction<T>,
+    pub statement: &'static str,
+    pub params: Vec<T::DbValue>,
+}
+
+impl<T: RdbmsType + Clone + Debug> StatementTest<T> {
+    fn execute_test(
+        statement: &'static str,
+        params: Vec<T::DbValue>,
+        expected: Option<u64>,
+    ) -> Self {
+        Self {
+            action: StatementAction::Execute(ExpectedExecuteResult::new(expected)),
+            statement,
+            params,
+        }
+    }
+
+    fn query_test(
+        statement: &'static str,
+        params: Vec<T::DbValue>,
+        expected_columns: Option<Vec<T::DbColumn>>,
+        expected_rows: Option<Vec<DbRow<T::DbValue>>>,
+    ) -> Self {
+        Self {
+            action: StatementAction::Query(ExpectedQueryResult::new(
+                expected_columns,
+                expected_rows,
+            )),
+            statement,
+            params,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct RdbmsTest<T: RdbmsType + Clone + Debug> {
+    statements: Vec<StatementTest<T>>,
+    transaction_end: Option<TransactionEnd>,
+}
+
+impl<T: RdbmsType + Clone + Debug> RdbmsTest<T> {
+    fn new(statements: Vec<StatementTest<T>>, transaction_end: Option<TransactionEnd>) -> Self {
+        Self {
+            statements,
+            transaction_end,
+        }
+    }
+}
+
 #[test]
 async fn postgres_par_test(postgres: &DockerPostgresRdbs, rdbms_service: &RdbmsServiceDefault) {
     rdbms_par_test(
         rdbms_service.postgres(),
         postgres.host_connection_strings(),
         3,
-        "SELECT 1",
-        vec![],
-        Some(1),
-    )
-    .await
-}
-
-#[test]
-async fn postgres_execute_test_select1(
-    postgres: &DockerPostgresRdbs,
-    rdbms_service: &RdbmsServiceDefault,
-) {
-    rdbms_execute_test(
-        rdbms_service.postgres(),
-        &postgres.rdbs[0].host_connection_string(),
-        "SELECT 1",
-        vec![],
-        Some(1),
+        RdbmsTest::new(
+            vec![StatementTest::execute_test("SELECT 1", vec![], Some(1))],
+            None,
+        ),
     )
     .await
 }
@@ -96,24 +184,19 @@ async fn postgres_transaction_tests(
             );
         "#;
 
-    rdbms_execute_test(
+    rdbms_test(
         rdbms.clone(),
         &db_address,
-        create_table_statement,
-        vec![],
-        None,
+        RdbmsTest::new(
+            vec![StatementTest::execute_test(
+                create_table_statement,
+                vec![],
+                None,
+            )],
+            None,
+        ),
     )
     .await;
-
-    let worker_id = new_worker_id();
-    let connection = rdbms.create(&db_address, &worker_id).await;
-    check!(connection.is_ok(), "connection to {} failed", db_address);
-    let pool_key = connection.unwrap();
-
-    let transaction = rdbms
-        .begin_transaction(&pool_key, &worker_id)
-        .await
-        .expect("New transaction expected");
 
     let insert_statement = r#"
             INSERT INTO test_users
@@ -126,6 +209,8 @@ async fn postgres_transaction_tests(
 
     let mut rows: Vec<DbRow<postgres_types::DbValue>> = Vec::with_capacity(count);
 
+    let mut statements: Vec<StatementTest<PostgresType>> = Vec::with_capacity(count);
+
     for i in 0..count {
         let params: Vec<postgres_types::DbValue> = vec![
             postgres_types::DbValue::Text(format!("{:03}", i)),
@@ -135,65 +220,58 @@ async fn postgres_transaction_tests(
                 postgres_types::DbValue::Text(format!("tag-2-{}", i)),
             ]),
         ];
-        rdbms_execute_with_transaction_test(
-            transaction.clone(),
+
+        statements.push(StatementTest::execute_test(
             insert_statement,
             params.clone(),
             Some(1),
-        )
-        .await;
+        ));
 
         rows.push(DbRow { values: params });
     }
 
     let select_statement = "SELECT user_id, name, tags FROM test_users ORDER BY user_id ASC";
 
-    rdbms_query_with_transaction_test(
-        transaction.clone(),
+    statements.push(StatementTest::query_test(
         select_statement,
         vec![],
         None,
         Some(rows.clone()),
+    ));
+
+    rdbms_test(
+        rdbms.clone(),
+        &db_address,
+        RdbmsTest::new(statements, Some(TransactionEnd::Commit)),
     )
     .await;
-
-    let commit = transaction.commit().await;
-    check!(commit.is_ok(), "transaction commit {} failed", db_address);
-
-    let transaction = rdbms
-        .begin_transaction(&pool_key, &worker_id)
-        .await
-        .expect("New transaction expected");
 
     let delete_statement = "DELETE FROM test_users";
 
-    rdbms_query_with_transaction_test(transaction.clone(), delete_statement, vec![], None, None)
-        .await;
-
-    let rollback = transaction.rollback().await;
-    check!(
-        rollback.is_ok(),
-        "transaction rollback {} failed",
-        db_address
-    );
-
-    let transaction = rdbms
-        .begin_transaction(&pool_key, &worker_id)
-        .await
-        .expect("New transaction expected");
-
-    rdbms_query_with_transaction_test(
-        transaction.clone(),
-        select_statement,
-        vec![],
-        None,
-        Some(rows.clone()),
+    rdbms_test(
+        rdbms.clone(),
+        &db_address,
+        RdbmsTest::new(
+            vec![StatementTest::execute_test(delete_statement, vec![], None)],
+            Some(TransactionEnd::Rollback),
+        ),
     )
     .await;
 
-    drop(transaction);
-
-    rdbms.remove(&pool_key, &worker_id);
+    rdbms_test(
+        rdbms.clone(),
+        &db_address,
+        RdbmsTest::new(
+            vec![StatementTest::query_test(
+                select_statement,
+                vec![],
+                None,
+                Some(rows.clone()),
+            )],
+            Some(TransactionEnd::None),
+        ),
+    )
+    .await;
 }
 
 #[test]
@@ -207,16 +285,6 @@ async fn postgres_create_insert_select_test(
     let create_enum_statement = r#"
             CREATE TYPE test_enum AS ENUM ('regular', 'special');
         "#;
-
-    rdbms_execute_test(
-        rdbms.clone(),
-        &db_address,
-        create_enum_statement,
-        vec![],
-        None,
-    )
-    .await;
-
     let create_composite_type_statement = r#"
             CREATE TYPE inventory_item AS (
                 product_id      uuid,
@@ -226,27 +294,9 @@ async fn postgres_create_insert_select_test(
             );
         "#;
 
-    rdbms_execute_test(
-        rdbms.clone(),
-        &db_address,
-        create_composite_type_statement,
-        vec![],
-        None,
-    )
-    .await;
-
     let create_domain_type_statement = r#"
             CREATE DOMAIN posint4 AS INT4 CHECK (VALUE > 0);
         "#;
-
-    rdbms_execute_test(
-        rdbms.clone(),
-        &db_address,
-        create_domain_type_statement,
-        vec![],
-        None,
-    )
-    .await;
 
     let create_table_statement = r#"
             CREATE TABLE data_types (
@@ -293,6 +343,21 @@ async fn postgres_create_insert_select_test(
                 posint4_col posint4
             );
         "#;
+
+    rdbms_test(
+        rdbms.clone(),
+        &db_address,
+        RdbmsTest::new(
+            vec![
+                StatementTest::execute_test(create_enum_statement, vec![], None),
+                StatementTest::execute_test(create_composite_type_statement, vec![], None),
+                StatementTest::execute_test(create_domain_type_statement, vec![], None),
+                StatementTest::execute_test(create_table_statement, vec![], None),
+            ],
+            None,
+        ),
+    )
+    .await;
 
     let insert_statement = r#"
             INSERT INTO data_types
@@ -349,19 +414,10 @@ async fn postgres_create_insert_select_test(
             );
         "#;
 
-    rdbms_execute_test(
-        rdbms.clone(),
-        &db_address,
-        create_table_statement,
-        vec![],
-        None,
-    )
-    .await;
-
     let count = 4;
 
     let mut rows: Vec<DbRow<postgres_types::DbValue>> = Vec::with_capacity(count);
-
+    let mut statements: Vec<StatementTest<PostgresType>> = Vec::with_capacity(count);
     for i in 0..count {
         let mut params: Vec<postgres_types::DbValue> =
             vec![postgres_types::DbValue::Varchar(format!("{:03}", i))];
@@ -494,14 +550,11 @@ async fn postgres_create_insert_select_test(
             }
         }
 
-        rdbms_execute_test(
-            rdbms.clone(),
-            &db_address,
+        statements.push(StatementTest::execute_test(
             insert_statement,
             params.clone(),
             Some(1),
-        )
-        .await;
+        ));
 
         let values = params
             .into_iter()
@@ -513,6 +566,13 @@ async fn postgres_create_insert_select_test(
 
         rows.push(DbRow { values });
     }
+
+    rdbms_test(
+        rdbms.clone(),
+        &db_address,
+        RdbmsTest::new(statements, Some(TransactionEnd::Commit)),
+    )
+    .await;
 
     let expected_columns = vec![
         postgres_types::DbColumn {
@@ -822,22 +882,21 @@ async fn postgres_create_insert_select_test(
            FROM data_types ORDER BY id ASC;
         "#;
 
-    rdbms_query_test(
+    rdbms_test(
         rdbms.clone(),
         &db_address,
-        select_statement,
-        vec![],
-        Some(expected_columns),
-        Some(rows),
-    )
-    .await;
-
-    rdbms_execute_test(
-        rdbms.clone(),
-        &db_address,
-        "DELETE FROM data_types;",
-        vec![],
-        None,
+        RdbmsTest::new(
+            vec![
+                StatementTest::query_test(
+                    select_statement,
+                    vec![],
+                    Some(expected_columns),
+                    Some(rows),
+                ),
+                StatementTest::execute_test("DELETE FROM data_types;", vec![], None),
+            ],
+            None,
+        ),
     )
     .await;
 }
@@ -854,16 +913,7 @@ async fn postgres_create_insert_select_array_test(
             CREATE TYPE a_test_enum AS ENUM ('first', 'second', 'third');
         "#;
 
-    rdbms_execute_test(
-        rdbms.clone(),
-        &db_address,
-        create_enum_statement,
-        vec![],
-        None,
-    )
-    .await;
-
-    let create_custom_type_statement = r#"
+    let create_composite_type_statement = r#"
             CREATE TYPE a_inventory_item AS (
                 product_id      uuid,
                 name            text,
@@ -872,27 +922,9 @@ async fn postgres_create_insert_select_array_test(
             );
         "#;
 
-    rdbms_execute_test(
-        rdbms.clone(),
-        &db_address,
-        create_custom_type_statement,
-        vec![],
-        None,
-    )
-    .await;
-
     let create_domain_type_statement = r#"
             CREATE DOMAIN posint8 AS INT8 CHECK (VALUE > 0);
         "#;
-
-    rdbms_execute_test(
-        rdbms.clone(),
-        &db_address,
-        create_domain_type_statement,
-        vec![],
-        None,
-    )
-    .await;
 
     let create_table_statement = r#"
             CREATE TABLE array_data_types (
@@ -939,6 +971,21 @@ async fn postgres_create_insert_select_array_test(
                 posint8_col posint8[]
             );
         "#;
+
+    rdbms_test(
+        rdbms.clone(),
+        &db_address,
+        RdbmsTest::new(
+            vec![
+                StatementTest::execute_test(create_enum_statement, vec![], None),
+                StatementTest::execute_test(create_composite_type_statement, vec![], None),
+                StatementTest::execute_test(create_domain_type_statement, vec![], None),
+                StatementTest::execute_test(create_table_statement, vec![], None),
+            ],
+            None,
+        ),
+    )
+    .await;
 
     let insert_statement = r#"
             INSERT INTO array_data_types
@@ -995,19 +1042,10 @@ async fn postgres_create_insert_select_array_test(
             );
         "#;
 
-    rdbms_execute_test(
-        rdbms.clone(),
-        &db_address,
-        create_table_statement,
-        vec![],
-        None,
-    )
-    .await;
-
     let count = 4;
 
     let mut rows: Vec<DbRow<postgres_types::DbValue>> = Vec::with_capacity(count);
-
+    let mut statements: Vec<StatementTest<PostgresType>> = Vec::with_capacity(count);
     for i in 0..count {
         let mut params: Vec<postgres_types::DbValue> =
             vec![postgres_types::DbValue::Varchar(format!("{:03}", i))];
@@ -1204,17 +1242,21 @@ async fn postgres_create_insert_select_array_test(
             }
         }
 
-        rdbms_execute_test(
-            rdbms.clone(),
-            &db_address,
+        statements.push(StatementTest::execute_test(
             insert_statement,
             params.clone(),
             Some(1),
-        )
-        .await;
+        ));
 
         rows.push(DbRow { values: params });
     }
+
+    rdbms_test(
+        rdbms.clone(),
+        &db_address,
+        RdbmsTest::new(statements, Some(TransactionEnd::Commit)),
+    )
+    .await;
 
     let expected_columns = vec![
         postgres_types::DbColumn {
@@ -1530,22 +1572,21 @@ async fn postgres_create_insert_select_array_test(
            FROM array_data_types ORDER BY id ASC;
         "#;
 
-    rdbms_query_test(
+    rdbms_test(
         rdbms.clone(),
         &db_address,
-        select_statement,
-        vec![],
-        Some(expected_columns),
-        Some(rows),
-    )
-    .await;
-
-    rdbms_execute_test(
-        rdbms.clone(),
-        &db_address,
-        "DELETE FROM array_data_types;",
-        vec![],
-        None,
+        RdbmsTest::new(
+            vec![
+                StatementTest::query_test(
+                    select_statement,
+                    vec![],
+                    Some(expected_columns),
+                    Some(rows),
+                ),
+                StatementTest::execute_test("DELETE FROM array_data_types;", vec![], None),
+            ],
+            None,
+        ),
     )
     .await;
 }
@@ -1553,45 +1594,35 @@ async fn postgres_create_insert_select_array_test(
 #[test]
 async fn postgres_schema_test(postgres: &DockerPostgresRdbs, rdbms_service: &RdbmsServiceDefault) {
     let rdbms = rdbms_service.postgres();
-    let schema = "test1";
-    let db_address = postgres.rdbs[2].host_connection_string();
-    rdbms_execute_test(
-        rdbms.clone(),
-        &db_address,
-        format!("CREATE SCHEMA IF NOT EXISTS {};", schema).as_str(),
-        vec![],
-        None,
-    )
-    .await;
 
-    let create_table_statement = format!(
-        r#"
-            CREATE TABLE IF NOT EXISTS {schema}.components
+    let db_address = postgres.rdbs[2].host_connection_string();
+
+    let create_table_statement = r#"
+            CREATE TABLE IF NOT EXISTS test1.components
             (
                 component_id        varchar(255)    NOT NULL,
                 namespace           varchar(255)    NOT NULL,
                 name                varchar(255)    NOT NULL,
                 PRIMARY KEY (component_id)
             );
-        "#
-    );
-    rdbms_execute_test(
+        "#;
+    rdbms_test(
         rdbms.clone(),
         &db_address,
-        create_table_statement.as_str(),
-        vec![],
-        None,
+        RdbmsTest::new(
+            vec![
+                StatementTest::execute_test("CREATE SCHEMA IF NOT EXISTS test1;", vec![], None),
+                StatementTest::execute_test(create_table_statement, vec![], None),
+                StatementTest::execute_test(
+                    "SELECT component_id, namespace, name from test1.components",
+                    vec![],
+                    Some(0),
+                ),
+            ],
+            None,
+        ),
     )
     .await;
-
-    rdbms_execute_test(
-        rdbms.clone(),
-        &db_address,
-        format!("SELECT component_id, namespace, name from {schema}.components").as_str(),
-        vec![],
-        Some(0),
-    )
-    .await
 }
 
 #[test]
@@ -1600,21 +1631,10 @@ async fn mysql_par_test(mysql: &DockerMysqlRdbs, rdbms_service: &RdbmsServiceDef
         rdbms_service.mysql(),
         mysql.host_connection_strings(),
         3,
-        "SELECT 1",
-        vec![],
-        Some(0),
-    )
-    .await
-}
-
-#[test]
-async fn mysql_execute_test_select1(mysql: &DockerMysqlRdbs, rdbms_service: &RdbmsServiceDefault) {
-    rdbms_execute_test(
-        rdbms_service.mysql(),
-        &mysql.rdbs[0].host_connection_string(),
-        "SELECT 1",
-        vec![],
-        Some(0),
+        RdbmsTest::new(
+            vec![StatementTest::execute_test("SELECT 1", vec![], Some(0))],
+            None,
+        ),
     )
     .await
 }
@@ -1634,24 +1654,19 @@ async fn mysql_transaction_tests(mysql: &DockerMysqlRdbs, rdbms_service: &RdbmsS
             );
         "#;
 
-    rdbms_execute_test(
+    rdbms_test(
         rdbms.clone(),
         &db_address,
-        create_table_statement,
-        vec![],
-        None,
+        RdbmsTest::new(
+            vec![StatementTest::execute_test(
+                create_table_statement,
+                vec![],
+                None,
+            )],
+            None,
+        ),
     )
     .await;
-
-    let worker_id = new_worker_id();
-    let connection = rdbms.create(&db_address, &worker_id).await;
-    check!(connection.is_ok(), "connection to {} failed", db_address);
-    let pool_key = connection.unwrap();
-
-    let transaction = rdbms
-        .begin_transaction(&pool_key, &worker_id)
-        .await
-        .expect("New transaction expected");
 
     let insert_statement = r#"
             INSERT INTO test_users
@@ -1664,70 +1679,65 @@ async fn mysql_transaction_tests(mysql: &DockerMysqlRdbs, rdbms_service: &RdbmsS
 
     let mut rows: Vec<DbRow<mysql_types::DbValue>> = Vec::with_capacity(count);
 
+    let mut statements: Vec<StatementTest<MysqlType>> = Vec::with_capacity(count);
+
     for i in 0..count {
         let params: Vec<mysql_types::DbValue> = vec![
             mysql_types::DbValue::Varchar(format!("{:03}", i)),
             mysql_types::DbValue::Varchar(format!("name-{:03}", i)),
         ];
-        rdbms_execute_with_transaction_test(
-            transaction.clone(),
+
+        statements.push(StatementTest::execute_test(
             insert_statement,
             params.clone(),
             Some(1),
-        )
-        .await;
+        ));
 
         rows.push(DbRow { values: params });
     }
 
     let select_statement = "SELECT user_id, name FROM test_users ORDER BY user_id ASC";
 
-    rdbms_query_with_transaction_test(
-        transaction.clone(),
+    statements.push(StatementTest::query_test(
         select_statement,
         vec![],
         None,
         Some(rows.clone()),
+    ));
+
+    rdbms_test(
+        rdbms.clone(),
+        &db_address,
+        RdbmsTest::new(statements, Some(TransactionEnd::Commit)),
     )
     .await;
-
-    let commit = transaction.commit().await;
-    check!(commit.is_ok(), "transaction commit {} failed", db_address);
-
-    let transaction = rdbms
-        .begin_transaction(&pool_key, &worker_id)
-        .await
-        .expect("New transaction expected");
 
     let delete_statement = "DELETE FROM test_users";
 
-    rdbms_query_with_transaction_test(transaction.clone(), delete_statement, vec![], None, None)
-        .await;
-
-    let rollback = transaction.rollback().await;
-    check!(
-        rollback.is_ok(),
-        "transaction rollback {} failed",
-        db_address
-    );
-
-    let transaction = rdbms
-        .begin_transaction(&pool_key, &worker_id)
-        .await
-        .expect("New transaction expected");
-
-    rdbms_query_with_transaction_test(
-        transaction.clone(),
-        select_statement,
-        vec![],
-        None,
-        Some(rows.clone()),
+    rdbms_test(
+        rdbms.clone(),
+        &db_address,
+        RdbmsTest::new(
+            vec![StatementTest::execute_test(delete_statement, vec![], None)],
+            Some(TransactionEnd::Rollback),
+        ),
     )
     .await;
 
-    drop(transaction);
-
-    rdbms.remove(&pool_key, &worker_id);
+    rdbms_test(
+        rdbms.clone(),
+        &db_address,
+        RdbmsTest::new(
+            vec![StatementTest::query_test(
+                select_statement,
+                vec![],
+                None,
+                Some(rows.clone()),
+            )],
+            Some(TransactionEnd::None),
+        ),
+    )
+    .await;
 }
 
 #[test]
@@ -1778,6 +1788,20 @@ async fn mysql_create_insert_select_test(
             );
         "#;
 
+    rdbms_test(
+        rdbms.clone(),
+        &db_address,
+        RdbmsTest::new(
+            vec![StatementTest::execute_test(
+                create_table_statement,
+                vec![],
+                None,
+            )],
+            None,
+        ),
+    )
+    .await;
+
     let insert_statement = r#"
             INSERT INTO data_types (
               id,
@@ -1803,19 +1827,10 @@ async fn mysql_create_insert_select_test(
             );
         "#;
 
-    rdbms_execute_test(
-        rdbms.clone(),
-        &db_address,
-        create_table_statement,
-        vec![],
-        None,
-    )
-    .await;
-
-    let count = 2;
+    let count = 4;
 
     let mut rows: Vec<DbRow<mysql_types::DbValue>> = Vec::with_capacity(count);
-
+    let mut statements: Vec<StatementTest<MysqlType>> = Vec::with_capacity(count);
     for i in 0..count {
         let mut params: Vec<mysql_types::DbValue> =
             vec![mysql_types::DbValue::Varchar(format!("{:03}", i))];
@@ -1881,14 +1896,11 @@ async fn mysql_create_insert_select_test(
             }
         };
 
-        rdbms_execute_test(
-            rdbms.clone(),
-            &db_address,
+        statements.push(StatementTest::execute_test(
             insert_statement,
             params.clone(),
             Some(1),
-        )
-        .await;
+        ));
 
         let values = params
             .into_iter()
@@ -1906,6 +1918,13 @@ async fn mysql_create_insert_select_test(
 
         rows.push(DbRow { values });
     }
+
+    rdbms_test(
+        rdbms.clone(),
+        &db_address,
+        RdbmsTest::new(statements, Some(TransactionEnd::Commit)),
+    )
+    .await;
 
     let expected_columns = vec![
         mysql_types::DbColumn {
@@ -2135,195 +2154,160 @@ async fn mysql_create_insert_select_test(
            FROM data_types ORDER BY id ASC;
         "#;
 
-    rdbms_query_test(
+    rdbms_test(
         rdbms.clone(),
         &db_address,
-        select_statement,
-        vec![],
-        Some(expected_columns),
-        Some(rows),
+        RdbmsTest::new(
+            vec![
+                StatementTest::query_test(
+                    select_statement,
+                    vec![],
+                    Some(expected_columns),
+                    Some(rows),
+                ),
+                StatementTest::execute_test("DELETE FROM data_types;", vec![], None),
+            ],
+            None,
+        ),
     )
     .await;
-
-    rdbms_execute_test(
-        rdbms.clone(),
-        &db_address,
-        "DELETE FROM data_types;",
-        vec![],
-        None,
-    )
-    .await;
 }
 
-async fn rdbms_execute_with_transaction_test<T: RdbmsType>(
-    transaction: Arc<dyn DbTransaction<T> + Send + Sync>,
-    query: &str,
-    params: Vec<T::DbValue>,
-    expected: Option<u64>,
-) {
-    let result = transaction.execute(query, params).await;
+async fn execute_rdbms_test<T: RdbmsType + Clone + Debug>(
+    rdbms: Arc<dyn Rdbms<T> + Send + Sync>,
+    pool_key: &RdbmsPoolKey,
+    worker_id: &WorkerId,
+    test: RdbmsTest<T>,
+) -> Vec<Result<StatementResult<T>, Error>> {
+    let mut results: Vec<Result<StatementResult<T>, Error>> =
+        Vec::with_capacity(test.statements.len());
 
-    if result.is_err() {
-        println!("error {}", result.clone().err().unwrap());
+    if let Some(te) = test.transaction_end {
+        let transaction = rdbms
+            .begin_transaction(pool_key, worker_id)
+            .await
+            .expect("New transaction expected");
+        for st in test.statements {
+            match st.action {
+                StatementAction::Execute(_) => {
+                    let result = transaction.execute(st.statement, st.params).await;
+                    results.push(result.map(StatementResult::Execute));
+                }
+                StatementAction::Query(_) => {
+                    let result = transaction.query(st.statement, st.params).await;
+                    results.push(result.map(StatementResult::Query));
+                }
+            }
+        }
+        match te {
+            TransactionEnd::Commit => transaction.commit().await.expect("Transaction commit"),
+            TransactionEnd::Rollback => transaction.rollback().await.expect("Transaction rollback"),
+            TransactionEnd::None => (),
+        }
+    } else {
+        for st in test.statements {
+            match st.action {
+                StatementAction::Execute(_) => {
+                    let result = rdbms
+                        .execute(pool_key, worker_id, st.statement, st.params)
+                        .await;
+                    results.push(result.map(StatementResult::Execute));
+                }
+                StatementAction::Query(_) => {
+                    match rdbms
+                        .query(pool_key, worker_id, st.statement, st.params)
+                        .await
+                    {
+                        Ok(result_set) => {
+                            let result = DbResult::from(result_set).await;
+                            results.push(result.map(StatementResult::Query));
+                        }
+                        Err(e) => {
+                            results.push(Err(e));
+                        }
+                    }
+                }
+            }
+        }
     }
 
-    check!(result.is_ok(), "query {} failed", query);
-    if let Some(expected) = expected {
-        check!(
-            result.unwrap() == expected,
-            "query {} - result do not match",
-            query
-        );
-    }
+    results
 }
 
-async fn rdbms_query_with_transaction_test<T: RdbmsType>(
-    transaction: Arc<dyn DbTransaction<T> + Send + Sync>,
-    query: &str,
-    params: Vec<T::DbValue>,
-    expected_columns: Option<Vec<T::DbColumn>>,
-    expected_rows: Option<Vec<DbRow<T::DbValue>>>,
-) {
-    let result = transaction.query(query, params).await;
-
-    check!(result.is_ok(), "query {} failed", query);
-
-    let result = result.unwrap();
-    let columns = result.columns;
-
-    if let Some(expected) = expected_columns {
-        println!("columns: {:#?}", columns);
-        println!("expected: {:#?}", expected);
-        check!(
-            columns == expected,
-            "query {} - response columns do not match",
-            query
-        );
-    }
-
-    let rows: Vec<DbRow<T::DbValue>> = result.rows;
-
-    if let Some(expected) = expected_rows {
-        println!("rows: {:#?}", rows);
-        println!("expected: {:#?}", expected);
-        check!(
-            rows == expected,
-            "query {} - response rows do not match",
-            query
-        );
-    }
-}
-
-async fn rdbms_execute_test<T: RdbmsType>(
+async fn rdbms_test<T: RdbmsType + Clone + Debug>(
     rdbms: Arc<dyn Rdbms<T> + Send + Sync>,
     db_address: &str,
-    query: &str,
-    params: Vec<T::DbValue>,
-    expected: Option<u64>,
+    test: RdbmsTest<T>,
 ) {
     let worker_id = new_worker_id();
     let connection = rdbms.create(db_address, &worker_id).await;
     check!(connection.is_ok(), "connection to {} failed", db_address);
     let pool_key = connection.unwrap();
+    let results = execute_rdbms_test::<T>(rdbms.clone(), &pool_key, &worker_id, test.clone()).await;
 
-    let result = rdbms.execute(&pool_key, &worker_id, query, params).await;
+    check_test_results::<T>(&worker_id, test, results);
 
-    if result.is_err() {
-        println!("error {}", result.clone().err().unwrap());
-    }
-
-    check!(
-        result.is_ok(),
-        "query {} (executed on {}) failed",
-        query,
-        pool_key
-    );
-    if let Some(expected) = expected {
-        check!(
-            result.unwrap() == expected,
-            "query {} (executed on {}) - result do not match",
-            query,
-            pool_key
-        );
-    }
     let _ = rdbms.remove(&pool_key, &worker_id);
     let exists = rdbms.exists(&pool_key, &worker_id);
     check!(!exists);
 }
 
-async fn rdbms_query_test<T: RdbmsType>(
-    rdbms: Arc<dyn Rdbms<T> + Send + Sync>,
-    db_address: &str,
-    query: &str,
-    params: Vec<T::DbValue>,
-    expected_columns: Option<Vec<T::DbColumn>>,
-    expected_rows: Option<Vec<DbRow<T::DbValue>>>,
+fn check_test_results<T: RdbmsType + Clone + Debug>(
+    worker_id: &WorkerId,
+    test: RdbmsTest<T>,
+    results: Vec<Result<StatementResult<T>, Error>>,
 ) {
-    let worker_id = new_worker_id();
-    let connection = rdbms.create(db_address, &worker_id).await;
-    check!(connection.is_ok(), "connection to {} failed", db_address);
-    let pool_key = connection.unwrap();
-
-    let result = rdbms.query(&pool_key, &worker_id, query, params).await;
-
-    check!(
-        result.is_ok(),
-        "query {} (executed on {}) failed",
-        query,
-        pool_key
-    );
-
-    let result = result.unwrap();
-    let columns = result.get_columns().await.unwrap();
-
-    if let Some(expected) = expected_columns {
-        println!("columns: {:#?}", columns);
-        println!("expected: {:#?}", expected);
-        check!(
-            columns == expected,
-            "query {} (executed on {}) - response columns do not match",
-            query,
-            pool_key
-        );
+    for (i, st) in test.statements.into_iter().enumerate() {
+        match st.action {
+            StatementAction::Execute(expected) if expected.expected.is_some() => {
+                match results.get(i).cloned() {
+                    Some(Ok(StatementResult::Execute(result))) => {
+                        if let Some(expected) = expected.expected {
+                            check!(
+                                result == expected,
+                                "execute result for worker {worker_id} and test statement with index {i} do not match"
+                            );
+                        }
+                    }
+                    _ => {
+                        check!(false, "execute result for worker {worker_id} and test statement with index {i} is error or not found");
+                    }
+                }
+            }
+            StatementAction::Query(expected)
+                if expected.expected_columns.is_some() || expected.expected_rows.is_some() =>
+            {
+                match results.get(i).cloned() {
+                    Some(Ok(StatementResult::Query(result))) => {
+                        if let Some(expected_columns) = expected.expected_columns {
+                            check!(result.columns == expected_columns, "query result columns for worker {worker_id} and test statement with index {i} do not match");
+                        }
+                        if let Some(expected_rows) = expected.expected_rows {
+                            check!(result.rows == expected_rows, "query result rows for worker {worker_id} and test statement with index {i} do not match");
+                        }
+                    }
+                    _ => {
+                        check!(false, "query result for worker {worker_id} and test statement with index {i} is error or not found");
+                    }
+                }
+            }
+            _ => (),
+        }
     }
-
-    let mut rows: Vec<DbRow<T::DbValue>> = vec![];
-
-    while let Some(vs) = result.get_next().await.unwrap() {
-        rows.extend(vs);
-    }
-
-    if let Some(expected) = expected_rows {
-        println!("rows: {:#?}", rows);
-        println!("expected: {:#?}", expected);
-        check!(
-            rows == expected,
-            "query {} (executed on {}) - response rows do not match",
-            query,
-            pool_key
-        );
-    }
-
-    let _ = rdbms.remove(&pool_key, &worker_id);
-
-    let exists = rdbms.exists(&pool_key, &worker_id);
-    check!(!exists);
 }
 
-async fn rdbms_par_test<T: RdbmsType + 'static>(
+async fn rdbms_par_test<T: RdbmsType + Clone + Debug + 'static>(
     rdbms: Arc<dyn Rdbms<T> + Send + Sync>,
     db_addresses: Vec<String>,
     count: u8,
-    query: &'static str,
-    params: Vec<T::DbValue>,
-    expected: Option<u64>,
+    test: RdbmsTest<T>,
 ) {
     let mut fibers = JoinSet::new();
     for db_address in &db_addresses {
         for _ in 0..count {
             let rdbms_clone = rdbms.clone();
             let db_address_clone = db_address.clone();
-            let params_clone = params.clone();
+            let test_clone = test.clone();
             let _ = fibers.spawn(async move {
                 let worker_id = new_worker_id();
 
@@ -2331,16 +2315,17 @@ async fn rdbms_par_test<T: RdbmsType + 'static>(
 
                 let pool_key = connection.unwrap();
 
-                let result: Result<u64, Error> = rdbms_clone
-                    .execute(&pool_key, &worker_id, query, params_clone)
-                    .await;
+                let result =
+                    execute_rdbms_test(rdbms_clone.clone(), &pool_key, &worker_id, test_clone)
+                        .await;
 
                 (worker_id, pool_key, result)
             });
         }
     }
 
-    let mut workers_results: HashMap<WorkerId, Result<u64, Error>> = HashMap::new();
+    let mut workers_results: HashMap<WorkerId, Vec<Result<StatementResult<T>, Error>>> =
+        HashMap::new();
     let mut workers_pools: HashMap<WorkerId, RdbmsPoolKey> = HashMap::new();
 
     while let Some(res) = fibers.join_next().await {
@@ -2367,14 +2352,7 @@ async fn rdbms_par_test<T: RdbmsType + 'static>(
     }
 
     for (worker_id, result) in workers_results {
-        check!(result.is_ok(), "result for worker {worker_id} is error");
-
-        if let Some(expected) = expected {
-            check!(
-                result.unwrap() == expected,
-                "result for worker {worker_id} do not match"
-            );
-        }
+        check_test_results(&worker_id, test.clone(), result);
     }
 }
 

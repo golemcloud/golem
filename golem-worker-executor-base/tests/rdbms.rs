@@ -51,7 +51,7 @@ async fn mysql() -> DockerMysqlRdbs {
 
 #[repr(u8)]
 #[derive(Clone, Copy, Eq, PartialEq, Debug)]
-pub enum StatementAction {
+enum StatementAction {
     Execute,
     Query,
 }
@@ -67,7 +67,7 @@ impl Display for StatementAction {
 
 #[repr(u8)]
 #[derive(Clone, Copy, Eq, PartialEq, Debug)]
-pub enum TransactionEnd {
+enum TransactionEnd {
     Commit,
     Rollback,
     // no transaction end action, drop of transaction resource should do rollback
@@ -115,8 +115,8 @@ impl StatementTest {
 
 #[derive(Debug, Clone)]
 struct RdbmsTest {
-    pub statements: Vec<StatementTest>,
-    pub transaction_end: Option<TransactionEnd>,
+    statements: Vec<StatementTest>,
+    transaction_end: Option<TransactionEnd>,
 }
 
 impl RdbmsTest {

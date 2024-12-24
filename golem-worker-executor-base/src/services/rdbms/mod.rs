@@ -243,6 +243,19 @@ impl<T: RdbmsType> DbResult<T> {
             rows: vec![],
         }
     }
+
+    #[allow(dead_code)]
+    pub(crate) async fn from(
+        result_set: Arc<dyn DbResultSet<T> + Send + Sync>,
+    ) -> Result<DbResult<T>, Error> {
+        let columns = result_set.get_columns().await?;
+        let mut rows: Vec<DbRow<T::DbValue>> = vec![];
+
+        while let Some(vs) = result_set.get_next().await? {
+            rows.extend(vs);
+        }
+        Ok(DbResult::new(columns, rows))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
