@@ -20,7 +20,8 @@ import { useRouter } from "next/navigation";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 import useComponents from "@/lib/hooks/use-component";
 import CustomModal from "@/components/CustomModal";
-import ComponentCard from "./component-card";
+import ComponentCard from "../../components/component-card";
+import { calculateHoursDifference, calculateSizeInMB } from "@/lib/utils";
 
 const ProjectDashboard = () => {
   const router = useRouter();
@@ -37,6 +38,11 @@ const ProjectDashboard = () => {
   );
 
   const uniquesApis = Object.values(apiMap);
+
+  function handleComponentClick(id: string) {
+    console.log("Component Clicked");
+    router.push(`/components/${id}/overview`);
+  }
 
   // const handleOpen = (type: string) => setOpen(type);
   const handleClose = () => setOpen(null);
@@ -145,23 +151,26 @@ const ProjectDashboard = () => {
                 gap: 2,
                 display: "flex",
                 flexWrap: "wrap",
-                justifyContent: "center",
+                // justifyContent: "center",
                 flex: 1, // Ensures it stretches within its parent
                 overflow: "hidden", // Prevents scrolling
               }}
             >
+              
+
               {!componentsLoading &&
                 components
                   .slice(0, 6)
                   .map((component) => (
                     <ComponentCard
                       key={component.versionedComponentId.componentId}
-                      name="comp1"
-                      date="1 day ago"
-                      version="v2"
-                      exports={6}
-                      size="419 KB"
-                      type="Durable"
+                      name={component.componentName}
+                      time={calculateHoursDifference(component.createdAt)}
+                      version={component.versionedComponentId.version}
+                      exports={component.metadata.exports.length}
+                      size={calculateSizeInMB(component.componentSize)}
+                      type={component.componentType}
+                      onClick={() => handleComponentClick(component.versionedComponentId.componentId!)}
                     />
                   ))}
               {!componentsLoading && components.length === 0 && (

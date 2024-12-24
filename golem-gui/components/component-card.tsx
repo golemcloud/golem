@@ -3,20 +3,22 @@ import { Box, Typography, Button, Chip, Stack } from "@mui/material";
 
 interface ComponentCardProps {
   name: string;
-  date: string;
-  version: string;
+  time: string;
+  version: number;
   exports: number;
   size: string;
   type: string;
+  onClick: () => void;
 }
 
 const ComponentCard: React.FC<ComponentCardProps> = ({
   name,
-  date,
+  time,
   version,
   exports,
   size,
   type,
+  onClick,
 }) => {
   return (
     <Box
@@ -25,6 +27,8 @@ const ComponentCard: React.FC<ComponentCardProps> = ({
         mb: 2,
         border: "1px solid #555",
         borderRadius: 2,
+        maxHeight: "fit-content",
+        maxWidth: "400px",
         display: "flex",
         flexDirection: "column",
         cursor: "pointer",
@@ -32,6 +36,7 @@ const ComponentCard: React.FC<ComponentCardProps> = ({
         minWidth: "300px",
         "&:hover": { boxShadow: 4 },
       }}
+      onClick={onClick}
       className="flex-1"
     >
       <Box
@@ -47,12 +52,12 @@ const ComponentCard: React.FC<ComponentCardProps> = ({
                 {name}
             </Typography>
             <Typography variant="caption" color="#888">
-                {date}
+                {time}
             </Typography>
         </Box>
         
         <Chip
-          label={version}
+          label={"v"+version }
           sx={{
             fontSize: "0.8rem",
             fontWeight: 500,
@@ -68,7 +73,7 @@ const ComponentCard: React.FC<ComponentCardProps> = ({
             { exports+" Exports"}
         </Typography>
         <Typography variant="body1" className="border border-[#555] px-2 rounded-md">
-            {size}
+            {size + " MB"}
         </Typography>
         <Typography variant="body1" className="border border-[#555] px-2 rounded-md">
             {type}

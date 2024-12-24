@@ -41,17 +41,18 @@ const Sidebar = ({ id, navigationLinks, variant }: SidebarProps) => {
       }}
       className="dark:bg-[#0a0a0a] bg-white border-r border-gray-300 dark:border-[#3f3f3f]"
     >
-      <Typography
-        variant="subtitle2"
-        sx={{
-          fontWeight: "bold",
-          color: "#AAAAAA",
-          fontSize: "14px",
-        }}
-      >
-        API
-      </Typography>
-
+      {variant == "apis" && (
+        <Typography
+          variant="subtitle2"
+          sx={{
+            fontWeight: "bold",
+            color: "#AAAAAA",
+            fontSize: "14px",
+          }}
+        >
+          API
+        </Typography>
+      )}
       <List>
         {navigationLinks.map((link) => {
           const isActive =
@@ -86,19 +87,21 @@ const Sidebar = ({ id, navigationLinks, variant }: SidebarProps) => {
           );
         })}
       </List>
+      {variant == "apis" && (
+        <Typography
+          variant="subtitle2"
+          sx={{
+            fontWeight: "bold",
+            color: "#AAAAAA",
+            marginTop: 3,
+            marginBottom: 1,
+            fontSize: "14px",
+          }}
+        >
+          Routes
+        </Typography>
+      )}
 
-      <Typography
-        variant="subtitle2"
-        sx={{
-          fontWeight: "bold",
-          color: "#AAAAAA",
-          marginTop: 3,
-          marginBottom: 1,
-          fontSize: "14px",
-        }}
-      >
-        Routes
-      </Typography>
       {variant === "apis" && (
         <Link href={`/apis/${id}/new-route`}>
           <Button
