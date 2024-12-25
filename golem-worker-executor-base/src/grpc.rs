@@ -67,17 +67,17 @@ use crate::model::{
     ExecutionStatus, InterruptKind, LastError, ListDirectoryResult, ReadFileResult,
 };
 use crate::services::events::Event;
+use crate::services::oplog::CommitLevel;
 use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActivator};
 use crate::services::worker_event::WorkerEventReceiver;
 use crate::services::{
-    All, HasActiveWorkers, HasAll, HasComponentService, HasEvents, HasOplogService,
-    HasPlugins, HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService,
-    HasShardService, HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
+    All, HasActiveWorkers, HasAll, HasComponentService, HasEvents, HasOplogService, HasPlugins,
+    HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
+    HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
 };
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use tokio;
-use crate::services::oplog::CommitLevel;
 
 pub enum GrpcError<E> {
     Transport(tonic::transport::Error),
@@ -423,7 +423,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
     async fn validate_worker_forking(
         &self,
-        request: &ForkWorkerRequest
+        request: &ForkWorkerRequest,
     ) -> Result<(OwnedWorkerId, OwnedWorkerId, WorkerMetadata), GolemError> {
         let second_index = u64::from(OplogIndex::INITIAL.next());
 
@@ -434,14 +434,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
 
         let account_id_proto = request
-            .account_id.clone()
+            .account_id
+            .clone()
             .ok_or(GolemError::invalid_request("account_id not found"))?;
 
         let account_id = account_id_proto.into();
 
         // Check if target worker id exists already and if so fail
         let target_worker_id_proto = request
-            .target_worker_id.clone()
+            .target_worker_id
+            .clone()
             .ok_or(GolemError::invalid_request("worker_id not found"))?;
 
         let target_worker_id: WorkerId = target_worker_id_proto
@@ -451,8 +453,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         // We assume the target worker is also owned by the same account
         let owned_target_worker_id = OwnedWorkerId::new(&account_id, &target_worker_id);
 
-        let target_metadata =
-            self.worker_service().get(&owned_target_worker_id).await;
+        let target_metadata = self.worker_service().get(&owned_target_worker_id).await;
 
         // We allow forking only if the target worker does not exist
         if target_metadata.is_some() {
@@ -460,7 +461,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
 
         let source_worker_id_proto = request
-            .source_worker_id.clone()
+            .source_worker_id
+            .clone()
             .ok_or(GolemError::invalid_request("worker_id not found"))?;
 
         let source_worker_id: WorkerId = source_worker_id_proto
@@ -471,7 +473,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let owned_source_worker_id = OwnedWorkerId::new(&account_id, &source_worker_id);
 
-        let metadata = self.worker_service().get(&owned_source_worker_id).await.ok_or(GolemError::worker_not_found(source_worker_id))?;
+        let metadata = self
+            .worker_service()
+            .get(&owned_source_worker_id)
+            .await
+            .ok_or(GolemError::worker_not_found(source_worker_id))?;
 
         Ok((owned_source_worker_id, owned_target_worker_id, metadata))
     }
