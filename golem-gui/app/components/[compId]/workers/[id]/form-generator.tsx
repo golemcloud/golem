@@ -1,7 +1,7 @@
-import React from 'react';
-import { useForm, Controller, Control } from 'react-hook-form';
-import { TextField, Typography, Button, Stack } from '@mui/material';
-import { Parameter } from '@/types/api';
+import React, { useMemo } from "react";
+import { useForm, Controller, Control } from "react-hook-form";
+import { TextField, Typography, Button, Stack } from "@mui/material";
+import { Parameter } from "@/types/api";
 
 type FormData = {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -13,14 +13,14 @@ const generateDefaultValues = (fields: Parameter[]): FormData => {
 
   fields?.forEach((field) => {
     switch (field.typ.type) {
-      case 'Record':
+      case "Record":
         defaults[field.name] = generateDefaultValues(field.typ.fields || []);
         break;
-      case 'Tuple':
+      case "Tuple":
         defaults[field.name] = [generateDefaultValues(field.typ.items || [])];
         break;
       default:
-        defaults[field.name] = '';
+        defaults[field.name] = "";
         break;
     }
   });
@@ -36,10 +36,10 @@ const generateField = (
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   handleChange: (key: string, value: any) => void
 ) => {
-  const finalRootKey = `${rootKey ? `${rootKey}.` : ''}${field.name}`;
-
+  const finalRootKey = `${rootKey ? `${rootKey}.` : ""}${field.name}`;
+  // TODO need to add other types
   switch (field.typ.type) {
-    case 'Str':
+    case "Str":
       return (
         <Controller
           key={index}
@@ -61,8 +61,8 @@ const generateField = (
           )}
         />
       );
-    case 'F32':
-    case 'U32':
+    case "F32":
+    case "U32":
       return (
         <Controller
           key={index}
@@ -79,22 +79,31 @@ const generateField = (
               fullWidth
               placeholder={field.name}
               onChange={(e) => {
-                handleChange(finalRootKey, e.target.value);
+                handleChange(
+                  finalRootKey,
+                  e.target.value ? Number(e.target.value) : ""
+                );
               }}
             />
           )}
         />
       );
-    case 'Record':
+    case "Record":
       return (
         <div key={index}>
           <Typography variant="h6">{field.name}</Typography>
           {field.typ.fields?.map((nestedField, nestedIndex) =>
-            generateField(nestedField, nestedIndex, finalRootKey, control, handleChange)
+            generateField(
+              nestedField,
+              nestedIndex,
+              finalRootKey,
+              control,
+              handleChange
+            )
           )}
         </div>
       );
-    case 'Tuple':
+    case "Tuple":
       return (
         <Controller
           key={index}
@@ -102,7 +111,9 @@ const generateField = (
           control={control}
           render={({ field: { value } }) => {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const tuples = (value || [generateDefaultValues(field.typ.items || [])]) as Array<any>;
+            const tuples = (value || [
+              generateDefaultValues(field.typ.items || []),
+            ]) as Array<any>;
             return (
               <>
                 {tuples.map((tuple, idx) => (
@@ -114,14 +125,23 @@ const generateField = (
                       type="button"
                       onClick={(e) => {
                         e.preventDefault();
-                        const updatedTuples = [...tuples.slice(0, idx), ...tuples.slice(idx + 1)];
+                        const updatedTuples = [
+                          ...tuples.slice(0, idx),
+                          ...tuples.slice(idx + 1),
+                        ];
                         handleChange(finalRootKey, updatedTuples);
                       }}
                     >
                       Remove Tuple
                     </Button>
                     {field.typ.items?.map((item, itemIdx) =>
-                      generateField(item, itemIdx, `${finalRootKey}[${idx}]`, control, handleChange)
+                      generateField(
+                        item,
+                        itemIdx,
+                        `${finalRootKey}[${idx}]`,
+                        control,
+                        handleChange
+                      )
                     )}
                   </fieldset>
                 ))}
@@ -129,7 +149,10 @@ const generateField = (
                   type="button"
                   onClick={(e) => {
                     e.preventDefault();
-                    const newTuples = [...tuples, generateDefaultValues(field.typ.items || [])];
+                    const newTuples = [
+                      ...tuples,
+                      generateDefaultValues(field.typ.items || []),
+                    ];
                     handleChange(finalRootKey, newTuples);
                   }}
                 >
@@ -145,11 +168,17 @@ const generateField = (
   }
 };
 
-const DynamicForm: React.FC<{ config: Parameter[], onSubmit:(data:FormData)=>void }> = ({ config, onSubmit }) => {
-  const { control, handleSubmit, setValue } = useForm<FormData>({
-    defaultValues: generateDefaultValues(config),
-  });
+const DynamicForm: React.FC<{
+  config: Parameter[];
+  onSubmit: (data: FormData) => void;
+}> = ({ config, onSubmit }) => {
+  const defaultValues = useMemo(() => {
+    return generateDefaultValues(config);
+  }, [config]);
 
+  const { control, handleSubmit, setValue } = useForm<FormData>({
+    defaultValues: defaultValues,
+  });
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleChange = (key: string, value: any) => {
@@ -160,7 +189,7 @@ const DynamicForm: React.FC<{ config: Parameter[], onSubmit:(data:FormData)=>voi
     <form onSubmit={handleSubmit(onSubmit)}>
       <Stack gap={2}>
         {config.map((field, index) =>
-          generateField(field, index, '', control, handleChange)
+          generateField(field, index, "", control, handleChange)
         )}
       </Stack>
       <Button type="submit" variant="contained" color="primary">
@@ -168,7 +197,6 @@ const DynamicForm: React.FC<{ config: Parameter[], onSubmit:(data:FormData)=>voi
       </Button>
     </form>
   );
-
 };
 
 export default DynamicForm;
