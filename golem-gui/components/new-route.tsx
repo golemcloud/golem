@@ -46,7 +46,7 @@ const NewRouteForm = ({
   defaultRoute?: ApiRoute | null
 }) => {
 
-  const { control, handleSubmit, reset, watch } = useForm<FormData>({
+  const { control, handleSubmit, reset, watch,  formState: { errors }, } = useForm<FormData>({
     defaultValues: {
       path: defaultRoute?.path || "",
       workerName: defaultRoute?.binding?.workerName || "",
@@ -171,7 +171,7 @@ const NewRouteForm = ({
               key={method}
               name="method"
               control={control}
-              rules={{ required: "Method is mandatory" }}
+              rules={{ required: "Method is mandatory!" }}
               render={({ field }) => (
                 <Button
                   {...field}
@@ -199,11 +199,12 @@ const NewRouteForm = ({
             />
           ))}
         </Box>
+        {errors && errors.method && <Typography variant="inherit" color="error">{errors.method.message?.toString()}</Typography>}
         <Controller
           name="path"
           control={control}
           //we can add regex for path
-          rules={{ required: "path is mandatory" }}
+          rules={{ required: "path is mandatory!" }}
           render={({ field }) => (
             <TextField
               {...field}
@@ -214,6 +215,7 @@ const NewRouteForm = ({
             />
           )}
         />
+        {errors && errors.path && <Typography variant="inherit" color="error">{errors.path.message?.toString()}</Typography>}
       </Box>
 
       {/* Worker Binding */}
@@ -227,7 +229,7 @@ const NewRouteForm = ({
             <Controller
               name="component"
               control={control}
-              rules={{ required: "Component is mandatory" }}
+              rules={{ required: "Component is mandatory!" }}
               render={({ field }) => (
                 <Select
                   {...field}
@@ -246,6 +248,7 @@ const NewRouteForm = ({
                 </Select>
               )}
             />
+            {errors && errors.component && <Typography variant="inherit" color="error">{errors.component.message?.toString()}</Typography>}
           </FormControl>
 
           <FormControl fullWidth>
@@ -253,7 +256,7 @@ const NewRouteForm = ({
             <Controller
               name="version"
               control={control}
-              rules={{ required: "Component is mandatory" }}
+              rules={{ required: "Component is mandatory!" }}
               render={({ field }) => (
                 <Select
                   {...field}
@@ -276,6 +279,7 @@ const NewRouteForm = ({
                 </Select>
               )}
             />
+            {errors && errors.version && <Typography variant="inherit" color="error">{errors.version.message?.toString()}</Typography>}
           </FormControl>
         </Box>
         <Box sx={{ marginTop: 4 }}>
@@ -286,7 +290,7 @@ const NewRouteForm = ({
             name="workerName"
             control={control}
             // TODO: need to add the rib expression sysntax regex.
-            rules={{ required: "workername is mandatory" }}
+            rules={{ required: "workername is mandatory!" }}
             render={({ field }) => (
               <TextField
                 {...field}
@@ -298,6 +302,7 @@ const NewRouteForm = ({
               />
             )}
           />
+          {errors && errors.workerName && <Typography variant="inherit" color="error">{errors.workerName.message?.toString()}</Typography>}
         </Box>
       </Box>
 
@@ -309,7 +314,7 @@ const NewRouteForm = ({
         <Controller
           name="response"
           // TODO: need to add the rib expression sysntax regex.
-          rules={{ required: "response is mandatory" }}
+          rules={{ required: "response is mandatory!" }}
           control={control}
           render={({ field }) => (
             <TextField
@@ -326,10 +331,11 @@ const NewRouteForm = ({
             />
           )}
         />
+        {errors && errors.response && <Typography variant="inherit" color="error">{errors.response.message?.toString()}</Typography>}
       </Box>
       {(versionNotFound || error) && (
         // TODO we need error type veraint as we are using it many places
-        <Typography className="text-red-500 text-sm">
+        <Typography color="error">
           {versionNotFound || error}
         </Typography>
       )}

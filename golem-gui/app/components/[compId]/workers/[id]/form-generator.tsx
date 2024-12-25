@@ -1,7 +1,8 @@
 import React, { useMemo } from "react";
-import { useForm, Controller, Control } from "react-hook-form";
+import { useForm, Controller, Control, FieldErrors } from "react-hook-form";
 import { TextField, Typography, Button, Stack } from "@mui/material";
 import { Parameter } from "@/types/api";
+import {getFormErrorMessage} from "@/lib/utils"
 
 type FormData = {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -34,74 +35,102 @@ const generateField = (
   rootKey: string,
   control: Control<FormData>,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  handleChange: (key: string, value: any) => void
+  handleChange: (key: string, value: any) => void,
+  errors: FieldErrors<FormData>
 ) => {
   const finalRootKey = `${rootKey ? `${rootKey}.` : ""}${field.name}`;
   // TODO need to add other types
+
   switch (field.typ.type) {
     case "Str":
       return (
-        <Controller
-          key={index}
-          name={finalRootKey}
-          control={control}
-          render={({ field }) => (
-            <TextField
-              {...field}
-              label={field.name}
-              required
-              variant="outlined"
-              fullWidth
-              placeholder={field.name}
-              className="mt-2"
-              onChange={(e) => {
-                handleChange(finalRootKey, e.target.value);
-              }}
-            />
-          )}
-        />
+        <>
+          <Controller
+            key={index}
+            name={finalRootKey}
+            control={control}
+            rules={{ required: `${field.name} is Mandatory` }}
+            render={({ field: _field }) => (
+              <TextField
+                {..._field}
+                label={field.name}
+                variant="outlined"
+                fullWidth
+                placeholder={field.name}
+                className="mt-2"
+                onChange={(e) => {
+                  handleChange(finalRootKey, e.target.value);
+                }}
+              />
+            )}
+          />
+          <Typography variant="caption" color="error">
+            {getFormErrorMessage(finalRootKey, errors)}
+          </Typography>
+        </>
       );
     case "F32":
+    case "F64":
+    case "F16":
     case "U32":
+    case "U64":
+    case "U16":
       return (
-        <Controller
-          key={index}
-          name={finalRootKey}
-          control={control}
-          render={({ field }) => (
-            <TextField
-              {...field}
-              label={field.name}
-              type="number"
-              required
-              variant="outlined"
-              className="mt-2"
-              fullWidth
-              placeholder={field.name}
-              onChange={(e) => {
-                handleChange(
-                  finalRootKey,
-                  e.target.value ? Number(e.target.value) : ""
-                );
-              }}
-            />
-          )}
-        />
+        <>
+          <Controller
+            key={index}
+            name={finalRootKey}
+            rules={{ required: `${field.name} is Mandatory` }}
+            control={control}
+            render={({ field: _field }) => (
+              <TextField
+                {..._field}
+                label={field.name}
+                type="number"
+                variant="outlined"
+                className="mt-2"
+                fullWidth
+                placeholder={field.name}
+                onChange={(e) => {
+                  handleChange(
+                    finalRootKey,
+                    e.target.value ? Number(e.target.value) : ""
+                  );
+                }}
+              />
+            )}
+          />
+
+          <Typography variant="caption" color="error">
+            {getFormErrorMessage(finalRootKey, errors)}
+          </Typography>
+        </>
       );
     case "Record":
       return (
-        <div key={index}>
-          <Typography variant="h6">{field.name}</Typography>
-          {field.typ.fields?.map((nestedField, nestedIndex) =>
-            generateField(
-              nestedField,
-              nestedIndex,
-              finalRootKey,
-              control,
-              handleChange
-            )
-          )}
-        </div>
+        <>
+          <Controller
+            key={index}
+            name={finalRootKey}
+            rules={{ required: `${field.name} is Mandatory` }}
+            control={control}
+            render={({}) => (
+              <div key={index}>
+                <Typography variant="h6">{field.name}</Typography>
+                {field?.typ?.fields?.map((nestedField, nestedIndex) =>
+                  generateField(
+                    nestedField,
+                    nestedIndex,
+                    finalRootKey,
+                    control,
+                    handleChange,
+                    errors
+                  )
+                )}
+              </div>
+            )}
+          />
+        </>
       );
     case "Tuple":
       return (
@@ -140,7 +169,8 @@ const generateField = (
                         itemIdx,
                         `${finalRootKey}[${idx}]`,
                         control,
-                        handleChange
+                        handleChange,
+                        errors
                       )
                     )}
                   </fieldset>
@@ -164,7 +194,7 @@ const generateField = (
         />
       );
     default:
-      return null;
+      return <Typography>Some Data types were not configued.</Typography>;
   }
 };
 
@@ -176,7 +206,12 @@ const DynamicForm: React.FC<{
     return generateDefaultValues(config);
   }, [config]);
 
-  const { control, handleSubmit, setValue } = useForm<FormData>({
+  const {
+    control,
+    handleSubmit,
+    setValue,
+    formState: { errors },
+  } = useForm<FormData>({
     defaultValues: defaultValues,
   });
 
@@ -187,12 +222,17 @@ const DynamicForm: React.FC<{
 
   return (
     <form onSubmit={handleSubmit(onSubmit)}>
-      <Stack gap={2}>
+      <Stack>
         {config.map((field, index) =>
-          generateField(field, index, "", control, handleChange)
+          generateField(field, index, "", control, handleChange, errors)
         )}
       </Stack>
-      <Button type="submit" variant="contained" color="primary">
+      <Button
+        type="submit"
+        variant="contained"
+        color="primary"
+        className="mt-2"
+      >
         Submit
       </Button>
     </form>

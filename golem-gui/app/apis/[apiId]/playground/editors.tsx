@@ -31,10 +31,10 @@ export default function Editors() {
           {trigger?.type === "api" && (
             <>
               {trigger?.operation === "new_version" && (
-                <CreateNewApiVersion onSuccees={handleClose} apiId={apiId}  isExperimental={true} />
+                <CreateNewApiVersion onSuccess={handleClose} apiId={apiId}  isExperimental={true} />
               )}
               {trigger?.operation === "create" && (
-                <CreateNewApiVersion onSuccees={handleClose} apiId={apiId}  isExperimental={true} />
+                <CreateNewApiVersion onSuccess={handleClose} apiId={apiId}  isExperimental={true} />
               )}
               {trigger?.operation === "delete" && (
                 // Chnage it to delete modal. work in progress

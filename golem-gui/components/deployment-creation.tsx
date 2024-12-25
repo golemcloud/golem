@@ -16,6 +16,8 @@ import { ApiDefinition, ApiDeployment } from "@/types/api";
 import { useForm, Controller } from "react-hook-form";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 import { addNewApiDeployment } from "@/lib/hooks/use-api-deployments";
+import { getFormErrorMessage } from "@/lib/utils";
+import { toast } from "react-toastify";
 
 interface KeyValue {
   id: string;
@@ -29,11 +31,11 @@ interface FormValues {
 }
 
 export default function DeploymentCreationPage({
-  onCreation,
   addDeployment,
   apiId,
+  onSuccess
 }: {
-  onCreation?: () => void;
+  onSuccess?: () => void;
   apiId?: string;
   addDeployment?: (newDeploy: ApiDeployment) => Promise<{
     success: boolean;
@@ -45,7 +47,7 @@ export default function DeploymentCreationPage({
   const { apiDefinitions: data, isLoading } = useApiDefinitions(apiId);
   const apiDefinitions = data.filter((api) => api.draft);
 
-  const { control, handleSubmit, register, watch, setValue } =
+  const { control, handleSubmit, watch, setValue, formState:{errors} } =
     useForm<FormValues>({
       defaultValues: {
         domain: "",
@@ -72,7 +74,11 @@ export default function DeploymentCreationPage({
     }
     const { error } = await addNewApiDeployment(newDeploy);
     setError(error || null);
-    onCreation?.();
+    if(error){
+      return toast.error(`Failed to deployed ${error}`)
+    }
+    toast.success("Sucessfully deployed.")
+    onSuccess?.();
   };
 
   return (
@@ -83,12 +89,29 @@ export default function DeploymentCreationPage({
       <Typography gutterBottom>Deploy your API on Golem Cloud</Typography>
 
       <form onSubmit={handleSubmit(onSubmit)}>
-        <Stack className="w-full">
+      <Stack className="w-full">
           <InputLabel>Domain</InputLabel>
-          <TextField {...register("domain")} name="domain" required />
+          <Controller
+            name="domain"
+            control={control}
+            rules={{ required: "Domain is required." }}
+            render={({ field }) => (
+              <TextField {...field} />
+            )}
+          />
+          <Typography variant="caption" color="error">{getFormErrorMessage("domain", errors)}</Typography>
+          
 
           <InputLabel>Subdomain</InputLabel>
-          <TextField {...register("subdomain")} name="subdomain" required />
+          <Controller
+            name="subdomain"
+            control={control}
+            rules={{ required: "Subdomain is required." }}
+            render={({ field }) => (
+              <TextField {...field} />
+            )}
+          />
+          <Typography variant="caption" color="error">{getFormErrorMessage("subdomain", errors)}</Typography>
         </Stack>
 
         <Typography gutterBottom className="font-bold" marginTop={2}>
@@ -223,6 +246,7 @@ export default function DeploymentCreationPage({
               );
             }}
           />
+          <Typography variant="caption" color="error">{getFormErrorMessage("definitions", errors)}</Typography>
         </Stack>
         {error && <Typography className="text-red-500">{error}</Typography>}
         <Stack>

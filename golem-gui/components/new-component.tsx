@@ -20,6 +20,7 @@ import CloudUploadIcon from "@mui/icons-material/CloudUpload";
 import { fetcher, getErrorMessage } from "@/lib/utils";
 import { toast } from "react-toastify";
 import { addNewcomponent } from "@/lib/hooks/use-component";
+import { getFormErrorMessage } from "../lib/utils";
 
 type FormData = {
   name: string;
@@ -45,20 +46,26 @@ export default function ComponentForm({
 }: Props) {
   const isCreateMode = mode === "create";
 
-  const { handleSubmit, control, watch, setValue, getValues } =
-    useForm<FormData>({
-      defaultValues: {
-        name: "",
-        component_type: "0",
-        component: null,
-        files: [],
-        ...initialValues,
-      },
-    });
+  const {
+    handleSubmit,
+    control,
+    watch,
+    setValue,
+    getValues,
+    formState: { errors },
+  } = useForm<FormData>({
+    defaultValues: {
+      name: "",
+      component_type: "0",
+      component: null,
+      files: [],
+      ...initialValues,
+    },
+  });
 
   const wasmFile = watch("component");
   const files = watch("files");
-  const [error, setError] = React.useState<string|null>(null);
+  const [error, setError] = React.useState<string | null>(null);
 
   const handleWasmUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
@@ -96,12 +103,8 @@ export default function ComponentForm({
         });
       }
 
-      const { error} = await addNewcomponent(
-        formData,
-        componentId,
-        mode
-      );
-      setError(error||null); // Clear previous error
+      const { error } = await addNewcomponent(formData, componentId, mode);
+      setError(error || null); // Clear previous error
       onSubmitSuccess?.();
       if (isCreateMode) toast.success("Component created successfully");
       else toast.success("Component updated successfully");
@@ -121,9 +124,11 @@ export default function ComponentForm({
     >
       <form onSubmit={handleSubmit(onSubmit)}>
         {isCreateMode && (
-          <Box display="flex" gap={2} mb={3}>
+          <>
+          <Box display="flex" gap={2}>
             <Controller
               name="name"
+              rules={{ required: "Name is mandatory!" }}
               control={control}
               render={({ field }) => (
                 <TextField
@@ -135,11 +140,15 @@ export default function ComponentForm({
               )}
             />
           </Box>
+            <Typography variant="caption" color="error">
+            {getFormErrorMessage("component", errors)}
+          </Typography>
+          </>
         )}
 
         {/* Type Selection */}
         {isCreateMode && (
-          <Box mb={3}>
+          <Box my={3}>
             <Typography variant="body1" mb={1}>
               Type
             </Typography>
@@ -182,34 +191,52 @@ export default function ComponentForm({
             />
           </Box>
         )}
-
-        {/* WASM Binary Upload */}
-        {
-          <Box
-            mb={3}
-            textAlign="center"
-            p={2}
-            border="2px dashed #444"
-            borderRadius="8px"
-            sx={{ cursor: "pointer" }}
-          >
-            <input
-              type="file"
-              hidden
-              id="wasm-upload"
-              onChange={handleWasmUpload}
-              accept=".wasm"
-              name="component"
-            />
-            <label htmlFor="wasm-upload">
-              <UploadFileIcon sx={{ fontSize: 50 }} />
-              <Typography variant="body2" sx={{ mt: 1 }}>
-                {wasmFile ? wasmFile.name : "Upload Component WASM"}
-              </Typography>
-              <Typography variant="caption">File up to 50MB</Typography>
-            </label>
-          </Box>
-        }
+        {/* WASM File Upload */}
+        <Box mb={3}>
+          <Typography variant="body1" mb={1}>
+            Upload WASM File
+          </Typography>
+          <Controller
+            name="component"
+            rules={{
+              required: "WASM file is mandatory!",
+              validate: (value) =>
+                value?.type === "application/wasm" || "Invalid file type!",
+            }}
+            control={control}
+            render={({ field }) => (
+              <>
+                <input
+                  type="file"
+                  accept=".wasm"
+                  hidden
+                  id="wasm-upload"
+                  onChange={(e) =>
+                    field.onChange(e.target.files ? e.target.files[0] : null)
+                  }
+                />
+                <label htmlFor="wasm-upload">
+                  <Box
+                    textAlign="center"
+                    p={2}
+                    border="2px dashed #444"
+                    borderRadius="8px"
+                    sx={{ cursor: "pointer" }}
+                  >
+                    <UploadFileIcon sx={{ fontSize: 50 }} />
+                    <Typography variant="body2" sx={{ mt: 1 }}>
+                      {field.value ? field.value.name : "Upload Component WASM"}
+                    </Typography>
+                    <Typography variant="caption">File up to 50MB</Typography>
+                  </Box>
+                </label>
+                <Typography variant="caption" color="error">
+                  {getFormErrorMessage("component", errors)}
+                </Typography>
+              </>
+            )}
+          />
+        </Box>
 
         {/* Initial Files Upload */}
         <Box

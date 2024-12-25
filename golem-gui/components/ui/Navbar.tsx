@@ -114,22 +114,23 @@ export default function Navbar() {
         }}
       >
         <List>
-          {links.map((link) => (
+          {links.map((link) => {
+            const isActive =
+            pathname === link.to ||
+            (link.to !== "/" && pathname.startsWith(link.to));
+            return (
             <Link
               key={link.name}
               href={link.comingSoon ? "#" : link.to}
               style={{ textDecoration: "none", color: "inherit" }}
             >
               <ListItem
-                button
                 sx={{
                   padding: "0.8rem 1.2rem",
                   borderBottom:
-                    pathname === link.to ? "1px solid #373737" : "transparent",
-                  "&:hover": {
-                    backgroundColor: "#f0f0f0",
-                  },
+                  isActive ? "1px solid #373737" : "transparent",
                 }}
+                className={`dark:hover:bg-[#373737] hover:bg-[#C0C0C0]`}
                 onClick={toggleDrawer(false)}
               >
                 <ListItemText
@@ -139,7 +140,7 @@ export default function Navbar() {
                 />
               </ListItem>
             </Link>
-          ))}
+          )})}
         </List>
       </Drawer>
     </AppBar>

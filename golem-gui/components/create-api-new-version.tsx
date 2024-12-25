@@ -1,32 +1,52 @@
-import React, { useState } from "react";
+import React from "react";
 import {
   Box,
   Button,
   TextField,
   Typography,
-  Paper,
   Stack,
 } from "@mui/material";
-import useApiDefinitions, {
-  addNewApiDefinition,
-} from "@/lib/hooks/use-api-definitons";
-import { ApiDefinition } from "@/types/api";
+import { useForm, Controller } from "react-hook-form";
+import useApiDefinitions from "@/lib/hooks/use-api-definitons";
+import { getFormErrorMessage } from "@/lib/utils";
+
+type FormData = {
+  version: string;
+};
 
 const CreateNewApiVersion = ({
   apiId,
   version,
   isExperimental,
-  onSuccees,
+  onSuccess,
 }: {
   apiId: string;
   version?: string;
   isExperimental?: boolean;
-  onSuccees?: () => void;
+  onSuccess?: () => void;
 }) => {
-  const [newVersion, setNewVersion] = useState("");
   const { addNewApiVersionDefinition } = useApiDefinitions(apiId, version);
+
+  // Initialize react-hook-form
+  const {
+    control,
+    handleSubmit,
+    formState: { errors },
+  } = useForm<FormData>();
+
+  const onSubmit = async (data: FormData) => {
+    if (isExperimental) return; // Block submission if experimental
+    await addNewApiVersionDefinition(
+      { version: data.version },
+      apiId,
+      version,
+      isExperimental
+    );
+    onSuccess?.(); // Call success callback if provided
+  };
+
   return (
-    <Paper elevation={4} sx={{ p: 2 }}>
+    <Box sx={{ p: 2 }}>
       {isExperimental && (
         <Typography
           variant="h5"
@@ -37,45 +57,50 @@ const CreateNewApiVersion = ({
           Experimental. Coming soon!
         </Typography>
       )}
-      {/* <Typography variant="h5" fontWeight="bold" mb={2}>
-        Create a new API
-      </Typography>
-      <Typography variant="body2" mb={3}>
-        Export worker functions as a REST API
-      </Typography> */}
 
-      {/* API Name Input */}
-      <TextField
-        placeholder="Version"
-        name="version"
-        label="version"
-        required
-        onChange={(e) => {
-          setNewVersion(e.target.value);
-        }}
-      />
-      <Typography>Create new version from api {version}</Typography>
-      <Stack>
-        <Button
-          onClick={async (e) => {
-            e.preventDefault();
-            // if(isExperimental){
-            //     return;
-            // }
-            await addNewApiVersionDefinition(
-              { version: newVersion },
-              apiId,
-              version,
-              isExperimental
-            );
-            onSuccees?.();
+      <form onSubmit={handleSubmit(onSubmit)}>
+        {/* API Version Input */}
+        <Controller
+          name="version"
+          control={control}
+          rules={{
+            required: "Version is required",
+            pattern: {
+              value: /^[0-9]+\.[0-9]+\.[0-9]+$/, // Semantic version pattern
+              message: "Version must be in semantic format (e.g., 1.0.0)",
+            },
           }}
-          className="self-end"
-        >
-          Create New
-        </Button>
-      </Stack>
-    </Paper>
+          render={({ field }) => (
+            <TextField
+              {...field}
+              label="Version"
+              placeholder="Enter API version (e.g., 1.0.0)"
+              fullWidth
+              margin="normal"
+            />
+          )}
+        />
+        <Typography mb={3} variant="caption">
+          Create new version from API <strong>{version}</strong>
+        </Typography>
+        <Typography variant="caption" color="error">
+                    {getFormErrorMessage("version", errors)}
+                  </Typography>
+
+        {/* Submit Button */}
+        <Stack>
+          <Button
+            type="submit"
+            className="self-end"
+            variant="contained"
+            color={isExperimental ? "error" : "primary"}
+            disabled={isExperimental}
+          >
+            {isExperimental ? "Experimental Feature" : "Create New"}
+          </Button>
+        </Stack>
+      </form>
+    </Box>
   );
 };
 

@@ -16,6 +16,7 @@ import AddIcon from "@mui/icons-material/Add";
 import { useState } from "react";
 import DeploymentCreationPage from "@/components/deployment-creation";
 import useApiDeployments from "@/lib/hooks/use-api-deployments";
+import CustomModal from "./CustomModal";
 
 export default function DeploymentPage({
   apiId,
@@ -45,6 +46,7 @@ export default function DeploymentPage({
   );
 
   return (
+    <>
     <Box>
       {/* Active Deployments Section */}
       <Paper
@@ -125,16 +127,14 @@ export default function DeploymentPage({
           </List>
         )}
       </Paper>
-      <Modal open={open} onClose={handleClose}>
-        <Container className="p-2">
-          <Paper className={"m-auto w-[80%] md:max-w-[45%] lg:max-w-[45%] p-4"}>
-            <DeploymentCreationPage
+    </Box>
+    <CustomModal open={open} onClose={handleClose} heading={"Create deployment"}>
+      <DeploymentCreationPage
               addDeployment={addApiDeployment}
               apiId={apiId}
+              onSuccess={handleClose}
             />
-          </Paper>
-        </Container>
-      </Modal>
-    </Box>
+    </CustomModal>
+    </>
   );
 }
