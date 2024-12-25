@@ -28,7 +28,6 @@ const ComponentCard: React.FC<ComponentCardProps> = ({
         border: "1px solid #555",
         borderRadius: 2,
         maxHeight: "fit-content",
-        maxWidth: "400px",
         display: "flex",
         flexDirection: "column",
         cursor: "pointer",

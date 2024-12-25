@@ -233,6 +233,7 @@ const DynamicForm: React.FC<{
         color="primary"
         className="mt-2"
       >
+
         Submit
       </Button>
     </form>

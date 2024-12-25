@@ -25,18 +25,6 @@ import clsx from "clsx";
 import ComponentTable from "@/components/ui/generic-table";
 
 
-type ComponentTableProps<T> = {
-  data: T[];
-  columns: Column<T>[];
-  onRowClick: (item: T) => void;
-};
-
-type Column<T> = {
-  key: keyof T;
-  label: string;
-  accessor: (item: T) => React.ReactNode;
-};
-
 
 const ComponentsPage = () => {
   const [open, setOpen] = useState(false);
@@ -44,6 +32,7 @@ const ComponentsPage = () => {
   const handleOpen = () => setOpen(true);
   const handleClose = () => setOpen(false);
   const [viewMode, setViewMode] = useState("card");
+  const [searchQuery, setSearchQuery] = useState("");
 
   const handleActiveButton = (button: string) => {
     setActiveButton(button);
@@ -56,6 +45,11 @@ const ComponentsPage = () => {
     console.log("Component Clicked");
     router.push(`/components/${id}/overview`);
   }
+
+  // Filter APIs based on search query
+  const filteredComponents = components?.filter((component: Component) =>
+    component.componentName.toLowerCase().includes(searchQuery.toLowerCase())
+  );
 
   return (
     <Container maxWidth="lg" sx={{ mt: 5}}>
@@ -71,7 +65,9 @@ const ComponentsPage = () => {
         <TextField
           placeholder="Search Components..."
           variant="outlined"
+          value={searchQuery}
           size="small"
+          onChange={(e) => setSearchQuery(e.target.value)}
           InputProps={{
             startAdornment: (
               <InputAdornment position="start">
@@ -120,11 +116,11 @@ const ComponentsPage = () => {
         </Button>
       </Box>
 
-      {components.length > 0 ? (
+      {filteredComponents.length > 0 ? (
         viewMode === "card" ? (
           <Box sx={{ display: "flex", flexWrap: "wrap", gap: 2 }}>
             {!isLoading &&
-              components.map((item) => (
+              filteredComponents.map((item) => (
                 <ComponentCard
                   key={item.versionedComponentId.componentId}
                   id={item.versionedComponentId.componentId}
@@ -142,7 +138,7 @@ const ComponentsPage = () => {
           </Box>
         ) : (
           <ComponentTable<Component>
-              data={components}
+              data={filteredComponents}
               columns={[
                 {
                   key: "componentName",

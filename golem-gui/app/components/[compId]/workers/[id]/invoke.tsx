@@ -12,6 +12,7 @@ import {
   List,
   Stack,
   Grid,
+  Box,
 } from "@mui/material";
 import DynamicForm from "./form-generator";
 import { useWorkerInvocation } from "@/lib/hooks/use-worker";
@@ -22,46 +23,78 @@ export function InvokeForm({
   invoke: { fun?: WorkerFunction; instanceName?: string };
 }) {
   const { result, error, invokeFunction } = useWorkerInvocation(invoke);
-  const paramsConfig = useMemo(() => {
-    return invoke?.fun?.parameters || [];
-  }, [invoke]);
+  const paramsConfig = useMemo(() => invoke?.fun?.parameters || [], [invoke]);
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const onSubmit = async (data: any) => {
     invokeFunction(data);
   };
+
   return (
-    <>
-      <Typography variant="h6" gutterBottom>
-        {invoke?.fun?.name}
+    <Box>
+      <Typography variant="h5" fontWeight="bold" gutterBottom>
+        {invoke?.fun?.name || "Invoke Function"}
       </Typography>
       {error && (
-        <Typography className="text-red-500 text-sm">{error}</Typography>
+        <Typography variant="body2" color="error" sx={{ marginBottom: 2 }}>
+          {error}
+        </Typography>
       )}
       <DynamicForm config={paramsConfig} onSubmit={onSubmit} />
-      {result && <>{JSON.stringify(result)}</>}
-    </>
+      {result && (
+        <Box
+          mt={2}
+          p={1}
+          bgcolor="#c0c0c0"
+          borderRadius={2}
+          overflow="auto"
+          sx={{
+            whiteSpace: "pre-wrap",
+            fontFamily: "monospace",
+            color: "black",
+            fontSize: "0.9rem",
+          }}
+          className="dark:bg-[#555] dark:text-white"
+          
+        >
+          <Typography variant="subtitle1" sx={{ fontWeight: "bold" }}>
+            Result:
+          </Typography>
+          <Box
+            component="pre"
+            sx={{
+              backgroundColor: "#f5f5f5",
+              padding: "10px",
+              borderRadius: "5px",
+              overflowX: "auto",
+              marginTop: "8px",
+            }}
+            className="dark:bg-[#1e1e1e] dark:text-[#f5f5f5]"
+          >
+            {JSON.stringify(result, null, 2)}
+          </Box>
+        </Box>
+      )}
+    </Box>
   );
 }
 
 export default function InvokePage() {
-  const { compId } = useParams<{
-    compId: string;
-  }>();
+  const { compId } = useParams<{ compId: string }>();
   const { components, isLoading } = useComponents(compId, "latest");
   const [latestComponent] = components;
   const [invoke, setInvoke] = useState<{
     fun?: WorkerFunction;
     instanceName?: string;
   } | null>(null);
+
   const exports = useMemo(() => {
-    const exports = latestComponent?.metadata?.exports || [];
+    const componentExports = latestComponent?.metadata?.exports || [];
     setInvoke(
-      exports[0]
-        ? { fun: exports[0]?.functions?.[0], instanceName: exports[0]?.name }
+      componentExports[0]
+        ? { fun: componentExports[0]?.functions?.[0], instanceName: componentExports[0]?.name }
         : null
     );
-    return exports;
+    return componentExports;
   }, [latestComponent?.metadata?.exports]);
 
   if (isLoading) {
@@ -69,18 +102,29 @@ export default function InvokePage() {
   }
 
   return (
-    <Grid container spacing={4} columns={12} marginTop={4}>
+    <Grid container spacing={4} marginTop={4}>
       {/* Exports Section */}
-      <Grid xs={4}>
-        <Paper sx={{ padding: 3, bgcolor: "#1E1E1E" }}>
-          <Typography variant="h6">Exports</Typography>
-          <Divider sx={{ bgcolor: "#424242", marginY: 1 }} />
+      <Grid item xs={12} md={3}>
+        <Paper
+          sx={{
+            padding: 3,
+            bgcolor: "background.paper",
+            boxShadow: 3,
+            borderRadius: 2,
+          }}
+        >
+          <Typography variant="h6" fontWeight="bold" gutterBottom>
+            Exports
+          </Typography>
+          <Divider sx={{ marginY: 2,bgcolor:'#555' }} />
           <List>
             {exports.map((item, index) => (
-              <Stack key={index}>
-                <Typography>{item.name}</Typography>
+              <Stack key={index} spacing={1}>
+                <Typography variant="subtitle1" fontWeight="bold">
+                  {item.name}
+                </Typography>
                 <ListItem disableGutters>
-                  <List sx={{ marginLeft: 2 }}>
+                  <List sx={{ paddingLeft: 2 }}>
                     {item.functions.map((fun) => {
                       const isActive = invoke?.fun?.name === fun.name;
                       return (
@@ -91,19 +135,13 @@ export default function InvokePage() {
                             setInvoke({ fun: fun, instanceName: item.name })
                           }
                           sx={{
-                            marginBottom: "0.8rem",
+                            px: 2,
+                            marginBottom: "0.2rem",
                             cursor: "pointer",
                             borderRadius: "10px",
-                            backgroundColor: isActive
-                              ? "#373737"
-                              : "transparent",
-                            "&:hover": { backgroundColor: "#373737" },
                           }}
-                          className={`dark:hover:bg-[#373737] hover:bg-[#C0C0C0] ${
-                            isActive
-                              ? "dark:bg-[#373737] bg-[#C0C0C0]"
-                              : "transparent"
-                          }`}
+                          className={`dark:hover:bg-[#1e1e1e] hover:bg-[#C0C0C0]
+                          ${isActive ? "dark:bg-[#1e1e1e] bg-[#C0C0C0]" : "transparent"}`}
                         >
                           <ListItemText primary={fun.name} />
                         </ListItem>
@@ -118,13 +156,19 @@ export default function InvokePage() {
       </Grid>
 
       {/* Form Section */}
-      <Grid xs={8}>
-        <Paper sx={{ padding: 3 }}>
+      <Grid item xs={12} md={9}>
+        <Paper
+          sx={{
+            padding: 3,
+            boxShadow: 3,
+            borderRadius: 2,
+            bgcolor: "background.paper",
+          }}
+        >
           {invoke ? (
-            //TODOD: basic creation of form with validations were implemented to integrate with backend. need lots of improvement on stylinng part
             <InvokeForm invoke={invoke} />
           ) : (
-            <Typography variant="body1">
+            <Typography variant="body1" color="textSecondary">
               Select a function to invoke.
             </Typography>
           )}
