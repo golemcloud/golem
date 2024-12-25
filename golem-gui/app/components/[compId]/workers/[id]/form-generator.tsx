@@ -192,6 +192,7 @@ const DynamicForm: React.FC<{
           generateField(field, index, "", control, handleChange)
         )}
       </Stack>
+      <br />
       <Button type="submit" variant="contained" color="primary">
         Submit
       </Button>
