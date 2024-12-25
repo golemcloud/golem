@@ -12,13 +12,10 @@ const GenericCard: React.FC<GenericCardProps> = ({ title, content, emptyMessage 
     <Paper
       elevation={2}
       sx={{
-        backgroundColor: "#1E1E1E",
-        color: "#FFFFFF",
         padding: 3,
         borderRadius: 2,
       }}
     >
-      {/* Title */}
       <Typography
         variant="h6"
         sx={{
@@ -29,8 +26,6 @@ const GenericCard: React.FC<GenericCardProps> = ({ title, content, emptyMessage 
       >
         {title}
       </Typography>
-
-      {/* Content or Empty State */}
       <Box
         sx={{
           minHeight: "300px",
