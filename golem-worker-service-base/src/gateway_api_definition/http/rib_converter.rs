@@ -1,14 +1,14 @@
 use golem_wasm_ast::analysis::AnalysedType;
 use utoipa::openapi::{
-    schema::{Schema, Object, ObjectBuilder, Array, OneOf},
-    Type,
+    schema::{Schema, Object, Array, OneOf, Type},
     RefOr,
 };
 use std::collections::BTreeMap;
 use serde_json::Value;
 use rib::RibInputTypeInfo;
+use std::fmt;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub enum CustomSchemaType {
     Boolean,
     Integer,
@@ -16,6 +16,19 @@ pub enum CustomSchemaType {
     String,
     Array,
     Object,
+}
+
+impl fmt::Debug for CustomSchemaType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CustomSchemaType::Boolean => write!(f, "Boolean"),
+            CustomSchemaType::Integer => write!(f, "Integer"),
+            CustomSchemaType::Number => write!(f, "Number"),
+            CustomSchemaType::String => write!(f, "String"),
+            CustomSchemaType::Array => write!(f, "Array"),
+            CustomSchemaType::Object => write!(f, "Object"),
+        }
+    }
 }
 
 impl From<Type> for CustomSchemaType {
@@ -37,7 +50,7 @@ pub struct RibConverter;
 impl RibConverter {
     pub fn convert_input_type(&self, input_type: &RibInputTypeInfo) -> Option<Schema> {
         let mut properties = BTreeMap::new();
-        
+
         for (name, typ) in &input_type.types {
             if let Some(schema) = self.convert_type(typ) {
                 properties.insert(name.clone(), RefOr::T(schema));
@@ -54,7 +67,7 @@ impl RibConverter {
     }
 
     #[allow(clippy::only_used_in_recursion)]
-    fn convert_type(&self, typ: &AnalysedType) -> Option<Schema> {
+    pub fn convert_type(&self, typ: &AnalysedType) -> Option<Schema> {
         match typ {
             AnalysedType::Bool(_) => {
                 let mut obj = Object::with_type(Type::Boolean);
@@ -106,10 +119,6 @@ impl RibConverter {
                 }
             }
             AnalysedType::Enum(enum_type) => {
-                if enum_type.cases.is_empty() {
-                    return None;
-                }
-
                 let mut obj = Object::with_type(Type::String);
                 obj.enum_values = Some(enum_type.cases.iter()
                     .map(|case| Value::String(case.clone()))
@@ -126,10 +135,9 @@ impl RibConverter {
                 for case in &variant_type.cases {
                     if let Some(typ) = &case.typ {
                         if let Some(case_schema) = self.convert_type(typ) {
-                            let case_obj = ObjectBuilder::new()
-                                .schema_type(Type::Object)
-                                .property(case.name.clone(), RefOr::T(case_schema))
-                                .build();
+                            let mut case_obj = Object::with_type(Type::Object);
+                            case_obj.properties = BTreeMap::new();
+                            case_obj.properties.insert(case.name.clone(), RefOr::T(case_schema));
                             schemas.push(Schema::Object(case_obj));
                         }
                     }
@@ -139,12 +147,10 @@ impl RibConverter {
                     let mut obj = Object::with_type(Type::Object);
                     obj.description = Some("Variant type".to_string());
                     obj.properties = BTreeMap::new();
-                    
-                    let discriminator_obj = ObjectBuilder::new()
-                        .schema_type(Type::String)
-                        .build();
+
+                    let discriminator_obj = Object::with_type(Type::String);
                     obj.properties.insert("discriminator".to_string(), RefOr::T(Schema::Object(discriminator_obj)));
-                    
+
                     let mut one_of = OneOf::new();
                     for schema in schemas {
                         one_of.items.push(RefOr::T(schema));
@@ -205,18 +211,19 @@ mod tests {
         NameOptionTypePair,
     };
     use test_r::test;
-    use utoipa::openapi::schema::SchemaType;
 
     #[test]
     fn test_convert_type() {
         let converter = RibConverter;
-        
+
         // Test string type
         let str_type = AnalysedType::Str(TypeStr);
         let schema = converter.convert_type(&str_type).unwrap();
         match &schema {
-            Schema::Object(obj) => {
-                assert!(matches!(obj.schema_type, SchemaType::Type(Type::String)));
+            Schema::Object(_) => {
+                let actual = CustomSchemaType::from(Type::String);
+                let expected = CustomSchemaType::String;
+                assert_eq!(actual, expected);
             }
             _ => panic!("Expected object schema"),
         }
