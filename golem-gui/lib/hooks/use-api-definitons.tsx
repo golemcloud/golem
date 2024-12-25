@@ -81,7 +81,7 @@ function useApiDefinitions(defintionId?: string, version?: string | null) {
   const addNewApiVersionDefinition = async (
     update: { version: string },
     id: string,
-    version: string | null
+    version?: string | null
   ) => {
     const { data, error, success } = getApiDefintion(id, version);
 

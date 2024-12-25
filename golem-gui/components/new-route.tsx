@@ -294,6 +294,7 @@ const NewRouteForm = ({
                 variant="outlined"
                 label="Worker Name"
                 placeholder="Worker name in Rib expression"
+                multiline
               />
             )}
           />

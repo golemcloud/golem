@@ -23,6 +23,7 @@ import {
   Container,
   Paper,
 } from "@mui/material";
+import CreateNewApiVersion from "@/components/create-api-new-version";
 
 export default function APISLayout({
   children,
@@ -36,7 +37,7 @@ export default function APISLayout({
   const [newVersion, setNewVersion] = useState("");
   const [open, setOpen] = useState(false);
   const router = useRouter();
-  const { apiDefinitions, getApiDefintion, isLoading, addNewApiVersionDefinition } =
+  const { apiDefinitions, getApiDefintion, isLoading } =
     useApiDefinitions(apiId);
   const { data: apiDefinition } = getApiDefintion(apiId, version);
   const versions = useMemo(() => {
@@ -132,30 +133,7 @@ export default function APISLayout({
         <Modal open={open} onClose={() => setOpen(false)}>
           <>
             <Container maxWidth="sm" sx={{ mt: 4 }}>
-              <Paper elevation={3} sx={{ p: 4, borderRadius: 2 }}>
-                <TextField
-                  placeholder="Version"
-                  name="version"
-                  label="version"
-                  required
-                  onChange={(e) => {
-                    setNewVersion(e.target.value);
-                  }}
-                />
-                <Typography>Create new version from api {version}</Typography>
-                <Stack>
-                <Button
-                  onClick={async(e) => {
-                    e.preventDefault();
-                    await addNewApiVersionDefinition({ version: newVersion }, apiId, version);
-                    setOpen(false);
-                  }}
-                  className="self-end"
-                >
-                  Create New
-                </Button>
-                </Stack>
-              </Paper>
+              {apiDefinition && <CreateNewApiVersion apiId={apiId} version={apiDefinition.version} onSuccees={()=>setOpen(false)}/>}
             </Container>
           </>
         </Modal>

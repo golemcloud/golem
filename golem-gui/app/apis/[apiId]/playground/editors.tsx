@@ -6,6 +6,7 @@ import CreateAPI from "@/components/create-api";
 import { useParams } from "next/navigation";
 import NewRouteForm from "@/components/new-route";
 import CustomModal from "@/components/CustomModal";
+import CreateNewApiVersion from "@/components/create-api-new-version";
 
 export default function Editors() {
   const [open, setOpen] = useState<string | null>(null);
@@ -29,7 +30,7 @@ export default function Editors() {
           {trigger?.type === "api" && (
             <>
               {trigger?.operation === "new_version" && (
-                <CreateAPI onCreation={handleClose} isExperimental={true} />
+                <CreateNewApiVersion onSuccees={handleClose} apiId={apiId}  isExperimental={true} />
               )}
               {trigger?.operation === "create" && (
                 <CreateAPI onCreation={handleClose} isExperimental={true} />
@@ -52,19 +53,19 @@ export default function Editors() {
           {trigger?.type === "route" && (
               <Paper elevation={4}>
                 {trigger?.operation === "create" && (
-                <NewRouteForm apiId={apiId} onCreation={handleClose} isExperimental={true} />
+                <NewRouteForm apiId={apiId} onSuccess={handleClose} isExperimental={true} />
               )}
                {trigger?.operation === "delete" && (
                 // Chnage it to delete modal. work in progress
-                <NewRouteForm apiId={apiId} onCreation={handleClose} isExperimental={true} />
+                <NewRouteForm apiId={apiId} onSuccess={handleClose} isExperimental={true} />
               )}
               {trigger?.operation === "update" && (
                 // Chnage it to update modal. work in progress
-                <NewRouteForm apiId={apiId} onCreation={handleClose} isExperimental={true} />
+                <NewRouteForm apiId={apiId} onSuccess={handleClose} isExperimental={true}/>
               )}
                {trigger?.operation === "view" && (
                 // Chnage it to view modal. work in progress
-                <NewRouteForm apiId={apiId} onCreation={handleClose} isExperimental={true} />
+                <NewRouteForm apiId={apiId} onSuccess={handleClose} isExperimental={true} />
               )}
               </Paper>
           )}
