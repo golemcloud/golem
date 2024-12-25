@@ -1,5 +1,5 @@
 "use client";
-import { Container, Modal, Paper, Typography } from "@mui/material";
+import { Container, Modal, Paper, TextField, Typography } from "@mui/material";
 import React, { useEffect, useState } from "react";
 import useStore from "@/lib/hooks/use-react-flow-store";
 import CreateAPI from "@/components/create-api";
@@ -7,6 +7,7 @@ import { useParams } from "next/navigation";
 import NewRouteForm from "@/components/new-route";
 import CustomModal from "@/components/CustomModal";
 import CreateNewApiVersion from "@/components/create-api-new-version";
+
 
 export default function Editors() {
   const [open, setOpen] = useState<string | null>(null);
@@ -25,7 +26,7 @@ export default function Editors() {
 
   return (
     <div>
-      <CustomModal open={(open==null?false:true)} onClose={handleClose} heading={`Create New ${(trigger?.type=='route'?"Route":"API")}`}>
+      <CustomModal open={(open==null?false:true)} onClose={handleClose} heading={`${trigger?.operation} ${(trigger?.type=='route'?"Route":"API")}`}>
         <>
           {trigger?.type === "api" && (
             <>
@@ -33,11 +34,11 @@ export default function Editors() {
                 <CreateNewApiVersion onSuccees={handleClose} apiId={apiId}  isExperimental={true} />
               )}
               {trigger?.operation === "create" && (
-                <CreateAPI onCreation={handleClose} isExperimental={true} />
+                <CreateNewApiVersion onSuccees={handleClose} apiId={apiId}  isExperimental={true} />
               )}
               {trigger?.operation === "delete" && (
                 // Chnage it to delete modal. work in progress
-                <CreateAPI onCreation={handleClose} isExperimental={true} />
+                <TextField placeholder="enter api version"/>
               )}
               {trigger?.operation === "update" && (
                 // Chnage it to update modal. work in progress

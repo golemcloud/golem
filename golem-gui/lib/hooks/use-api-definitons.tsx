@@ -81,7 +81,8 @@ function useApiDefinitions(defintionId?: string, version?: string | null) {
   const addNewApiVersionDefinition = async (
     update: { version: string },
     id: string,
-    version?: string | null
+    version?: string | null,
+    noRedirect?:boolean
   ) => {
     const { data, error, success } = getApiDefintion(id, version);
 
@@ -108,7 +109,7 @@ function useApiDefinitions(defintionId?: string, version?: string | null) {
     mutate(`${ROUTE_PATH}?api-definition-id=${newData.id}`);
     mutate(`${ROUTE_PATH}/${data.id}/${update.version}`);
     mutate(`${ROUTE_PATH}`);
-    if (update.version !== data.version) {
+    if (!noRedirect && update.version !== data.version) {
       router.push(`/apis/${newData.id}/overview?version=${newData.version}`);
     }
   };

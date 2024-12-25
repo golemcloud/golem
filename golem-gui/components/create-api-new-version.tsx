@@ -59,13 +59,14 @@ const CreateNewApiVersion = ({
         <Button
           onClick={async (e) => {
             e.preventDefault();
-            if(isExperimental){
-                return;
-            }
+            // if(isExperimental){
+            //     return;
+            // }
             await addNewApiVersionDefinition(
               { version: newVersion },
               apiId,
-              version
+              version,
+              isExperimental
             );
             onSuccees?.();
           }}

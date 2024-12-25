@@ -174,7 +174,7 @@ const useApiInitialization = (
       setIsLoading(false);
     };
     initializeWorkflow();
-  }, []);
+  }, [apiDefnitions]);
 
   return {
     nodes: finalNodes,
