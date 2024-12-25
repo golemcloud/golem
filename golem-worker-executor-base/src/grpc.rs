@@ -77,6 +77,7 @@ use crate::services::{
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use tokio;
+use golem_wasm_ast::analysis::analysed_type::u64;
 
 pub enum GrpcError<E> {
     Transport(tonic::transport::Error),
@@ -442,7 +443,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let owned_source_worker_id = OwnedWorkerId::new(&account_id, &source_worker_id);
 
-        let source_worker_metadata = self.worker_service().get(&owned_source_worker_id).await;
+        let source_worker_metadata =
+            self.worker_service().get(&owned_source_worker_id).await;
 
         match source_worker_metadata {
             Some(source_worker_metadata) => {
@@ -456,44 +458,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .map_err(GolemError::invalid_request)?;
 
                 // We assume the target worker is also owned by the same account
-                let owned_target_worker_id = OwnedWorkerId::new(&account_id, &target_worker_id);
+                let owned_target_worker_id =
+                    OwnedWorkerId::new(&account_id, &target_worker_id);
 
-                let target_metadata = self.worker_service().get(&owned_target_worker_id).await;
+                let target_metadata =
+                    self.worker_service().get(&owned_target_worker_id).await;
 
                 // We allow forking only if the target worker does not exist
                 if target_metadata.is_some() {
                     Err(GolemError::worker_already_exists(target_worker_id))
                 } else {
-                    let source_worker_instance = Worker::get_or_create_suspended(
-                        self,
-                        &owned_source_worker_id,
-                        Some(source_worker_metadata.args.clone()),
-                        Some(source_worker_metadata.env.clone()),
-                        None,
-                        None,
-                    )
-                    .await?;
-
-                    let source_oplog = source_worker_instance.oplog();
-                    let cut_off_index = request.oplog_index_cutoff;
-
-                    if cut_off_index <= u64::from(OplogIndex::INITIAL) {
-                        return Err(GolemError::invalid_request("Invalid oplog index cutoff"));
-                    }
-
-                    let second_oplog = OplogIndex::INITIAL.next();
-
-                    let oplog_range = u64::from(second_oplog)..=cut_off_index;
-
-                    let initial_oplog_entry = source_oplog.read(OplogIndex::INITIAL).await;
-
-                    // Update the oplog initial entry with the new worker
-                    let target_initial_oplog_entry = initial_oplog_entry
-                        .update_worker_id(&target_worker_id)
-                        .ok_or(GolemError::unknown(
-                            "Failed to update worker id in oplog entry",
-                        ))?;
-
                     // It's not opening an existing oplog but `create` a new one
                     let target_owned_worker_id = OwnedWorkerId::new(&account_id, &target_worker_id);
 
@@ -507,6 +481,22 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         parent: source_worker_metadata.parent.clone(),
                         last_known_status: WorkerStatusRecord::default(),
                     };
+
+                    let range = self.oplog_service().read_range(
+                        &owned_source_worker_id,
+                        OplogIndex::INITIAL,
+                        OplogIndex::from_u64(request.oplog_index_cutoff),
+                    ).await;
+
+                    let initial_oplog_entry = range.get(&OplogIndex::INITIAL)
+                        .ok_or(GolemError::unknown("Failed to get initial oplog entry"))?;
+
+                    // Update the oplog initial entry with the new worker
+                    let target_initial_oplog_entry = initial_oplog_entry
+                        .update_worker_id(&target_worker_id)
+                        .ok_or(GolemError::unknown(
+                            "Failed to update worker id in oplog entry",
+                        ))?;
 
                     let new_oplog = self
                         .oplog_service()
@@ -522,10 +512,19 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         )
                         .await;
 
+
+                    let second_index =
+                        u64::from(OplogIndex::INITIAL.next());
+                    
+                    if request.oplog_index_cutoff < second_index {
+                        return Err(GolemError::invalid_request("Invalid oplog_index_cutoff. It should be at least 1"));
+                    }
+
                     // Copy the oplog as is until the range of the cut off index
-                    for index in oplog_range {
-                        let update = source_oplog.read(OplogIndex::from_u64(index)).await;
-                        new_oplog.add(update).await;
+                    for index in second_index..=request.oplog_index_cutoff {
+                        let entry = range.get(&OplogIndex::from_u64(index))
+                            .ok_or(GolemError::unknown("Failed to get oplog entry"))?;
+                        new_oplog.add(entry.clone()).await;
                     }
 
                     // We go through worker proxy to resume the worker
