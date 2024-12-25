@@ -1,86 +1,88 @@
 import { Worker } from "@/types/api";
-import { CheckCircleOutline, RocketLaunch, ErrorOutline } from "@mui/icons-material";
+import {
+  CheckCircleOutline,
+  RocketLaunch,
+  ErrorOutline,
+} from "@mui/icons-material";
+import AccessTimeIcon from "@mui/icons-material/AccessTime";
 import { Box, Button, Grid, Paper, Typography } from "@mui/material";
 import React, { useMemo } from "react";
+import { calculateHoursDifference, calculateSizeInMB } from "@/lib/utils";
+import GenericCard from "@/components/ui/generic-card";
 
-export default function Overview({
-  worker,
-  isLoading,
-}: {
-  worker: Worker;
-  isLoading: boolean;
-}) {
+const cardStyle = {
+  padding: 3,
+  textAlign: "center",
+  bgcolor: "#1E1E1E",
+};
+
+const Overview = ({ worker, isLoading }: { worker: Worker; isLoading: boolean }) => {
   const workerStats = useMemo(() => {
     return [
       {
         label: "Status",
         value: worker?.status,
-        icon: <CheckCircleOutline fontSize="large" />,
-        isLoading: isLoading,
+        icon: <CheckCircleOutline fontSize="small" />,
       },
       {
         label: "Memory Usage",
-        value: `${worker?.totalLinearMemorySize}`,
-        icon: <RocketLaunch fontSize="large" />,
-        isLoading: isLoading,
+        value: `${calculateSizeInMB(worker?.totalLinearMemorySize)} MB`,
+        icon: <RocketLaunch fontSize="small" />,
       },
       {
         label: "Resource Count",
         value: `${worker?.ownedResources?.length ?? 0}`,
-        icon: <ErrorOutline fontSize="large" />,
-        isLoading: isLoading,
+        icon: <ErrorOutline fontSize="small" />,
+      },
+      {
+        label: "Created",
+        value: calculateHoursDifference(worker?.createdAt),
+        icon: <AccessTimeIcon fontSize="small" />,
       },
     ];
   }, [worker]);
+
+  if (isLoading) {
+    return <Typography>Loading...</Typography>;
+  }
+
   return (
-    <Box
-      sx={{
-        marginBottom: 3,
-        padding: 3,
-        display: "flex",
-        flexDirection: "column",
-      }}
-    >
-      {/* No Workers Found */}
-
-      <Box>
-        {!isLoading && worker && (
-          <Grid container spacing={4}>
-            {/* Stats Section */}
-            {workerStats.map((stat, index) => (
-              <Grid item xs={12} sm={6} md={3} key={index}>
-                <Paper
-                  sx={{
-                    padding: 3,
-                    textAlign: "center",
-                    bgcolor: "#1E1E1E",
-                  }}
-                >
-                  {stat.icon}
-                  <Typography variant="h5" sx={{ marginTop: 1 }}>
-                    {stat?.isLoading ? "Loading..." : stat.value}
-                  </Typography>
+    <Box sx={{ marginBottom: 3, padding: 3, display: "flex", flexDirection: "column" }}>
+      {worker ? (
+        <Grid container spacing={4}>
+          {/* Top Stats Section */}
+          {workerStats.map((stat, index) => (
+            <Grid item xs={12} sm={6} md={3} key={index}>
+              <Paper sx={cardStyle}>
+                <Box sx={{ display: "flex", justifyContent: "space-between" }}>
                   <Typography variant="body1">{stat.label}</Typography>
-                </Paper>
-              </Grid>
-            ))}
-
-            {/* Exports Section */}
-            <Grid item xs={12} md={6}>
-              <Paper sx={{ padding: 3, bgcolor: "#1E1E1E" }}>
-                {/* <List>
-              {exports.map((item, index) => (
-                <ListItem key={index} disableGutters>
-                  <ListItemText primary={item} />
-                </ListItem>
-              ))}
-            </List> */}
+                  {stat.icon}
+                </Box>
+                <Box sx={{display:"flex"}}>
+                <Typography variant="body1" sx={{ marginTop: 1 }}>
+                  {stat.value || "N/A"}
+                </Typography>
+                </Box>
+            
               </Paper>
             </Grid>
+          ))}
+
+         
+          <Grid item xs={12}>
+            <GenericCard
+              title="Invocations"
+              emptyMessage="No data available here"
+            />
           </Grid>
-        )}
-      </Box>
-      {!isLoading && !worker && (
+          <Grid item xs={12}>
+            <GenericCard
+              title="Terminal"
+              emptyMessage="No data available here"
+            />
+          </Grid>
+        </Grid>
+      ) : (
         <Box
           className="dark:bg-gray-800 bg-[#E3F2FD] dark:text-white text-black"
           sx={{
@@ -111,4 +113,6 @@ export default function Overview({
       )}
     </Box>
   );
-}
+};
+
+export default Overview;

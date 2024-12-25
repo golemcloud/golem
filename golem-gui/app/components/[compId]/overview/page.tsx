@@ -11,6 +11,7 @@ import {
   ListItem,
   ListItemText,
   Button,
+  CircularProgress,
 } from "@mui/material";
 import {
   InsertChart,
@@ -127,16 +128,52 @@ const Overview = () => {
           </Paper>
         </Grid>
 
-        {/* Worker Status */}
-        <Grid item xs={12} md={6}>
-          <Paper sx={{ padding: 3, bgcolor: "#1E1E1E" }}>
-            <Typography variant="h6">Worker Status</Typography>
-            <Divider sx={{ bgcolor: "#424242", marginY: 1 }} />
+           {/* Worker Status */}
+              <Grid item xs={12} md={6}>
+                <Paper    sx={{
+              padding: 4,
+              bgcolor: "#1E1E1E",
+              height: 550,
+            }}
+>
+          <Typography variant="h6" sx={{ marginBottom: 2 }}>
+            Worker Status
+          </Typography>
+          <Divider sx={{ bgcolor: "#424242", marginY: 1 }} />
+          {workerStats.reduce((acc, stat) => acc + stat.value, 0) > 0 ? (
+            <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', position: 'relative', height: 200,marginTop:15 }}>
+              <CircularProgress
+                variant="determinate"
+                value={((workerStats[0]?.value || 0) / workerStats.reduce((acc, stat) => acc + stat.value, 0)) * 100}
+                size={300}
+                thickness={10}
+                sx={{
+                  color: '#36b4a5',
+                  position: 'absolute',
+                }}
+              />
+              {/* Center Text */}
+              <Box
+                sx={{
+                  position: 'absolute',
+                  textAlign: 'center',
+                  color: '#fff',
+                }}
+              >
+                <Typography variant="h4" sx={{ fontWeight: 'bold' }}>
+                  {workerStats.reduce((acc, stat) => acc + stat.value, 0)}
+                </Typography>
+                <Typography variant="body2" sx={{ color: '#ccc' }}>
+                  Total Workers
+                </Typography>
+              </Box>
+            </Box>
+          ) : (
             <Typography>No workers found</Typography>
-          </Paper>
-        </Grid>
+          )}
+        </Paper>
       </Grid>
-
+    </Grid>
       <CustomModal open={isOpen} onClose={handleClose} heading="Create Worker">
         <CreateWorker compId={compId} version={latestComponent?.versionedComponentId?.version}/>
       </CustomModal>
