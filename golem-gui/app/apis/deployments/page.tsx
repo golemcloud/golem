@@ -19,10 +19,11 @@ import {
   DropdownMenuItem,
 } from "@radix-ui/react-dropdown-menu";
 import { Button as CustomButton } from "@/components/ui/button";
-import { Deployment } from "@/types/api";
+import { ApiDeployment as Deployment} from "@/types/api";
 import { Card } from "@/components/ui/card";
 import DeploymentCreationPage from "@/components/deployment-creation";
 import { useState } from "react";
+import CustomModal from "@/components/CustomModal";
 
 function DeploymentApiVersionDropDown({
   deployments,
@@ -206,11 +207,9 @@ export default function Page() {
         )}
       </Paper>
        {/* Modal for Creating New Deployment */}
-       <Modal open={!!open} onClose={handleClose}>
-        <>
-          <DeploymentCreationPage onCreation={handleClose}/>
-        </>
-      </Modal>
+       <CustomModal open={!!open} onClose={handleClose} heading="Create Deployment">
+          <DeploymentCreationPage onSuccess={handleClose}/>
+      </CustomModal>
     </Box>
   );
 }

@@ -20,6 +20,8 @@ import useComponents from "@/lib/hooks/use-component";
 import { Component, WorkerFormData } from "@/types/api";
 import { v4 as uuidv4 } from 'uuid';
 import { addNewWorker } from "@/lib/hooks/use-worker";
+import {getFormErrorMessage} from "@/lib/utils"
+
 
 interface FormData {
   component: string;
@@ -109,7 +111,7 @@ const removeArgumentVar = (index: number) => {
           <Controller
             name="component"
             control={control}
-            defaultValue=""
+            rules={{required: 'Component is required!'}}
             render={({ field }) => (
               <Select {...field}>
                 {components?.map((component: Component) => (
@@ -125,6 +127,7 @@ const removeArgumentVar = (index: number) => {
           />
         </FormControl>
       </Box>
+      <Typography variant="caption" color="error">{getFormErrorMessage("component", errors)}</Typography>{}
 
       {/* Worker Name */}
       <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 3 }}>
@@ -138,7 +141,6 @@ const removeArgumentVar = (index: number) => {
               fullWidth
               label="Worker Name"
               variant="outlined"
-              error={!!errors.workerName}
             />
           )}
         />
@@ -152,7 +154,7 @@ const removeArgumentVar = (index: number) => {
           Generate
         </Button>
       </Box>
-
+      <Typography variant="caption" color="error">{getFormErrorMessage("workerName", errors)}</Typography>{}
       {/* Environment Variables */}
       <Box sx={{ mb: 3 }}>
         <Box
@@ -258,7 +260,7 @@ const removeArgumentVar = (index: number) => {
           </Box>
         ))}
       </Box>
-      {error && <Typography className="text-red-500 text-sm">{error}</Typography>}  
+      {error && <Typography variant="caption" color="error">{error}</Typography>}  
       {/* Create Worker Button */}
       <Box sx={{ textAlign: "center" }}>
         <Button

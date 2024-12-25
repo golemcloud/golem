@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React from "react";
 import {
   Box,
   Button,
@@ -6,8 +6,11 @@ import {
   Typography,
   Paper,
 } from "@mui/material";
+import { useForm, Controller } from "react-hook-form";
 import { addNewApiDefinition } from "@/lib/hooks/use-api-definitons";
 import { ApiDefinition } from "@/types/api";
+import { toast } from "react-toastify";
+import { getFormErrorMessage } from '../lib/utils';
 
 const CreateAPI = ({
   onCreation,
@@ -16,26 +19,35 @@ const CreateAPI = ({
   onCreation?: () => void;
   isExperimental?: boolean;
 }) => {
-  const [apiName, setApiName] = useState("");
-  const [version, setVersion] = useState("0.1.0");
-  const [error, setError] = useState<string | null>(null);
+  const {
+    control,
+    handleSubmit,
+    formState: { errors },
+  } = useForm({
+    defaultValues: {
+      apiName: "",
+      version: "0.1.0",
+    },
+  });
 
-  const handleCreateAPI = async () => {
+  const handleCreateAPI = async (data: { apiName: string; version: string }) => {
     if (isExperimental) {
       return;
     }
+
     const newApi: ApiDefinition = {
-      id: apiName,
-      version: version,
+      id: data.apiName,
+      version: data.version,
       routes: [],
       draft: true,
     };
     const { error } = await addNewApiDefinition(newApi);
 
-    setError(error || null);
-    //TODO: Add mutation logic and toast
+    if (error) {
+      return toast.error(`Api Creation failed! ${error}`)
+    }
+    toast.success(`Successfully created Api!`)
     onCreation?.();
-    return;
   };
 
   return (
@@ -50,49 +62,71 @@ const CreateAPI = ({
           Experimental. Coming soon!
         </Typography>
       )}
-      {/* <Typography variant="h5" fontWeight="bold" mb={2}>
-        Create a new API
-      </Typography>
-      <Typography variant="body2" mb={3}>
-        Export worker functions as a REST API
-      </Typography> */}
 
-      {/* API Name Input */}
-      <TextField
-        label="API Name"
-        placeholder="Enter API name"
-        fullWidth
-        margin="normal"
-        value={apiName}
-        onChange={(e) => setApiName(e.target.value)}
-      />
-      <Typography variant="caption">Must be unique per project</Typography>
+      <form onSubmit={handleSubmit(handleCreateAPI)}>
+        {/* API Name Input */}
+        <Controller
+          name="apiName"
+          control={control}
+          rules={{
+            required: "API Name is required",
+            maxLength: {
+              value: 50,
+              message: "API Name cannot exceed 50 characters",
+            },
+          }}
+          render={({ field }) => (
+            <TextField
+              {...field}
+              label="API Name"
+              placeholder="Enter API name"
+              fullWidth
+              margin="normal"
+            />
+          )}
+        />
+        <Typography variant="caption">Must be unique per project</Typography>
+        <Typography variant="caption" color="error">{getFormErrorMessage("apiName", errors)}</Typography>
 
-      {/* Version Input */}
-      <TextField
-        label="Version"
-        placeholder="0.1.0"
-        fullWidth
-        margin="normal"
-        value={version}
-        onChange={(e) => setVersion(e.target.value)}
-      />
-      <Typography variant="caption">Version prefix for your API</Typography>
-      {error && <Typography className="text-red-500">{error}</Typography>}
+        {/* Version Input */}
+        <Controller
+          name="version"
+          control={control}
+          rules={{
+            required: "Version is required",
+            pattern: {
+              value: /^\d+\.\d+\.\d+$/,
+              message: "Version must follow semantic versioning (e.g., 1.0.0)",
+            },
+          }}
+          render={({ field }) => (
+            <TextField
+              {...field}
+              label="Version"
+              placeholder="0.1.0"
+              fullWidth
+              margin="normal"
+            />
+          )}
+        />
+        <Typography variant="caption">Version prefix for your API</Typography>
+        <Typography variant="caption" color="error">{getFormErrorMessage("version", errors)}</Typography>
 
-      {/* Create API Button */}
-      <Box display="flex" justifyContent="flex-end" mt={3}>
-        <Button
-          variant="contained"
-          color="primary"
-          onClick={handleCreateAPI}
-          sx={{ textTransform: "none", fontWeight: "bold" }}
-        >
-          Create
-        </Button>
-      </Box>
+        {/* Create API Button */}
+        <Box display="flex" justifyContent="flex-end" mt={3}>
+          <Button
+            type="submit"
+            variant="contained"
+            color="primary"
+            sx={{ textTransform: "none", fontWeight: "bold" }}
+          >
+            Create
+          </Button>
+        </Box>
+      </form>
     </Paper>
   );
 };
 
 export default CreateAPI;
+

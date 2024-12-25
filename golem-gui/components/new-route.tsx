@@ -19,14 +19,15 @@ import { fetcher } from "@/lib/utils";
 import { ApiRoute, Component } from "@/types/api";
 import { Loader } from "lucide-react";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
+import { DeleteForever } from "@mui/icons-material";
 
 type FormData = {
-  path: "";
-  workerName: "";
-  response: "";
-  method: "Get";
-  component: "";
-  version: "";
+  path: string;
+  workerName: string;
+  response: string;
+  method: string;
+  component: string;
+  version: string;
 };
 
 const NewRouteForm = ({
@@ -34,29 +35,33 @@ const NewRouteForm = ({
   version,
   isModal,
   isExperimental,
+  defaultRoute,
+  onSuccess
 }: {
   apiId: string;
   version?: string;
-  onCreation?: () => void;
+  onSuccess?: () => void;
   isModal?: boolean;
   isExperimental?: boolean;
+  defaultRoute?: ApiRoute | null
 }) => {
-  const { control, handleSubmit, reset, watch } = useForm<FormData>({
+
+  const { control, handleSubmit, reset, watch,  formState: { errors }, } = useForm<FormData>({
     defaultValues: {
-      path: "",
-      workerName: "",
-      response: "",
-      method: "Get",
-      component: "",
-      version: "",
+      path: defaultRoute?.path || "",
+      workerName: defaultRoute?.binding?.workerName || "",
+      response: defaultRoute?.binding?.response || "",
+      method: defaultRoute?.method || "Get",
+      component: defaultRoute?.binding?.componentId.componentId || "",
+      version: defaultRoute?.binding?.componentId.version?.toString() || "",
     },
   });
 
   const component = watch("component");
   const [error, setError] = useState<string | null>(null);
   const { data, isLoading } = useSWR("?path=components", fetcher);
-  const {getApiDefintion,isLoading: apiDefinitonLoading, upsertRoute} = useApiDefinitions();
-  const {error: apiDefintionError} = getApiDefintion(apiId, version);
+  const { getApiDefintion, isLoading: apiDefinitonLoading, upsertRoute, deleteRoute } = useApiDefinitions(apiId, version);
+  const { error: apiDefintionError } = getApiDefintion(apiId, version);
   const components = (data?.data || null) as Component[];
 
   if (apiDefinitonLoading || isLoading) {
@@ -77,7 +82,7 @@ const NewRouteForm = ({
           bindingType: "default",
           componentId: {
             componentId: formData.component,
-            version: formData.version,
+            version: Number(formData.version),
           },
           corsPreflight: null,
           idempotencyKey: null,
@@ -93,14 +98,20 @@ const NewRouteForm = ({
           },
         },
       };
-      const {success, error} = await upsertRoute(apiId, newRoute, version)
+      const { success, error } = await upsertRoute(apiId, newRoute, version)
 
       if (!success) {
         return setError(error!);
       }
+      onSuccess?.();
     } catch (error) {
       console.error("Error creating route:", error);
     }
+  };
+
+  const handleDelete = async () => {
+     await deleteRoute(defaultRoute!);
+    onSuccess?.();
   };
 
   return (
@@ -123,10 +134,15 @@ const NewRouteForm = ({
       )}
 
       {/* Title */}
-      <Box className="flex">
+      <Box className="flex justify-between">
         <Typography variant="h5" gutterBottom>
-          New Route
+          {defaultRoute ? "Update" : "New"} Route
         </Typography>
+        {defaultRoute && <Button
+          onClick={handleDelete}
+        >
+          <DeleteForever />
+        </Button>}
       </Box>
 
       <Divider sx={{ borderColor: "#555" }} />
@@ -155,6 +171,7 @@ const NewRouteForm = ({
               key={method}
               name="method"
               control={control}
+              rules={{ required: "Method is mandatory!" }}
               render={({ field }) => (
                 <Button
                   {...field}
@@ -182,9 +199,12 @@ const NewRouteForm = ({
             />
           ))}
         </Box>
+        {errors && errors.method && <Typography variant="inherit" color="error">{errors.method.message?.toString()}</Typography>}
         <Controller
           name="path"
           control={control}
+          //we can add regex for path
+          rules={{ required: "path is mandatory!" }}
           render={({ field }) => (
             <TextField
               {...field}
@@ -195,6 +215,7 @@ const NewRouteForm = ({
             />
           )}
         />
+        {errors && errors.path && <Typography variant="inherit" color="error">{errors.path.message?.toString()}</Typography>}
       </Box>
 
       {/* Worker Binding */}
@@ -208,6 +229,7 @@ const NewRouteForm = ({
             <Controller
               name="component"
               control={control}
+              rules={{ required: "Component is mandatory!" }}
               render={({ field }) => (
                 <Select
                   {...field}
@@ -226,6 +248,7 @@ const NewRouteForm = ({
                 </Select>
               )}
             />
+            {errors && errors.component && <Typography variant="inherit" color="error">{errors.component.message?.toString()}</Typography>}
           </FormControl>
 
           <FormControl fullWidth>
@@ -233,6 +256,7 @@ const NewRouteForm = ({
             <Controller
               name="version"
               control={control}
+              rules={{ required: "Component is mandatory!" }}
               render={({ field }) => (
                 <Select
                   {...field}
@@ -255,6 +279,7 @@ const NewRouteForm = ({
                 </Select>
               )}
             />
+            {errors && errors.version && <Typography variant="inherit" color="error">{errors.version.message?.toString()}</Typography>}
           </FormControl>
         </Box>
         <Box sx={{ marginTop: 4 }}>
@@ -264,6 +289,8 @@ const NewRouteForm = ({
           <Controller
             name="workerName"
             control={control}
+            // TODO: need to add the rib expression sysntax regex.
+            rules={{ required: "workername is mandatory!" }}
             render={({ field }) => (
               <TextField
                 {...field}
@@ -271,9 +298,11 @@ const NewRouteForm = ({
                 variant="outlined"
                 label="Worker Name"
                 placeholder="Worker name in Rib expression"
+                multiline
               />
             )}
           />
+          {errors && errors.workerName && <Typography variant="inherit" color="error">{errors.workerName.message?.toString()}</Typography>}
         </Box>
       </Box>
 
@@ -284,6 +313,8 @@ const NewRouteForm = ({
         </Typography>
         <Controller
           name="response"
+          // TODO: need to add the rib expression sysntax regex.
+          rules={{ required: "response is mandatory!" }}
           control={control}
           render={({ field }) => (
             <TextField
@@ -300,9 +331,11 @@ const NewRouteForm = ({
             />
           )}
         />
+        {errors && errors.response && <Typography variant="inherit" color="error">{errors.response.message?.toString()}</Typography>}
       </Box>
       {(versionNotFound || error) && (
-        <Typography className="text-red-500 text-sm">
+        // TODO we need error type veraint as we are using it many places
+        <Typography color="error">
           {versionNotFound || error}
         </Typography>
       )}
@@ -324,7 +357,7 @@ const NewRouteForm = ({
           onClick={handleSubmit(onSubmit)}
           disabled={!!versionNotFound}
         >
-          Create Route
+          {defaultRoute ? 'Update' : 'Create'} Route
         </Button>
       </Box>
     </Box>
