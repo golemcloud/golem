@@ -86,13 +86,23 @@ pub trait Rdbms<T: RdbmsType> {
     where
         <T as RdbmsType>::DbValue: 'async_trait;
 
+    async fn query_stream(
+        &self,
+        key: &RdbmsPoolKey,
+        worker_id: &WorkerId,
+        statement: &str,
+        params: Vec<T::DbValue>,
+    ) -> Result<Arc<dyn DbResultStream<T> + Send + Sync>, Error>
+    where
+        <T as RdbmsType>::DbValue: 'async_trait;
+
     async fn query(
         &self,
         key: &RdbmsPoolKey,
         worker_id: &WorkerId,
         statement: &str,
         params: Vec<T::DbValue>,
-    ) -> Result<Arc<dyn DbResultSet<T> + Send + Sync>, Error>
+    ) -> Result<DbResult<T>, Error>
     where
         <T as RdbmsType>::DbValue: 'async_trait;
 
@@ -220,7 +230,7 @@ pub struct DbRow<V> {
 }
 
 #[async_trait]
-pub trait DbResultSet<T: RdbmsType> {
+pub trait DbResultStream<T: RdbmsType> {
     async fn get_columns(&self) -> Result<Vec<T::DbColumn>, Error>;
 
     async fn get_next(&self) -> Result<Option<Vec<DbRow<T::DbValue>>>, Error>;
@@ -246,7 +256,7 @@ impl<T: RdbmsType> DbResult<T> {
 
     #[allow(dead_code)]
     pub(crate) async fn from(
-        result_set: Arc<dyn DbResultSet<T> + Send + Sync>,
+        result_set: Arc<dyn DbResultStream<T> + Send + Sync>,
     ) -> Result<DbResult<T>, Error> {
         let columns = result_set.get_columns().await?;
         let mut rows: Vec<DbRow<T::DbValue>> = vec![];

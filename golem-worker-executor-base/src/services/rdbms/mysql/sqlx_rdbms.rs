@@ -16,9 +16,9 @@ use crate::services::golem_config::{RdbmsConfig, RdbmsPoolConfig};
 use crate::services::rdbms::mysql::types::{DbColumn, DbColumnType, DbValue};
 use crate::services::rdbms::mysql::{MysqlType, MYSQL};
 use crate::services::rdbms::sqlx_common::{
-    create_db_result, PoolCreator, QueryExecutor, QueryParamsBinder, SqlxDbResultSet, SqlxRdbms,
+    create_db_result, PoolCreator, QueryExecutor, QueryParamsBinder, SqlxDbResultStream, SqlxRdbms,
 };
-use crate::services::rdbms::{DbResult, DbResultSet, DbRow, Error, Rdbms, RdbmsPoolKey};
+use crate::services::rdbms::{DbResult, DbResultStream, DbRow, Error, Rdbms, RdbmsPoolKey};
 use async_trait::async_trait;
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
@@ -93,7 +93,7 @@ impl QueryExecutor<MysqlType, sqlx::MySql> for MysqlType {
         params: Vec<DbValue>,
         batch: usize,
         executor: E,
-    ) -> Result<Arc<dyn DbResultSet<MysqlType> + Send + Sync + 'c>, Error>
+    ) -> Result<Arc<dyn DbResultStream<MysqlType> + Send + Sync + 'c>, Error>
     where
         E: sqlx::Executor<'c, Database = sqlx::MySql>,
     {
@@ -102,8 +102,8 @@ impl QueryExecutor<MysqlType, sqlx::MySql> for MysqlType {
 
         let stream: BoxStream<Result<sqlx::mysql::MySqlRow, sqlx::Error>> = query.fetch(executor);
 
-        let response: SqlxDbResultSet<'c, MysqlType, sqlx::mysql::MySql> =
-            SqlxDbResultSet::create(stream, batch).await?;
+        let response: SqlxDbResultStream<'c, MysqlType, sqlx::mysql::MySql> =
+            SqlxDbResultStream::create(stream, batch).await?;
         Ok(Arc::new(response))
     }
 }

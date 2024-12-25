@@ -17,7 +17,7 @@ use crate::metrics::wasm::record_host_function_call;
 use crate::preview2::wasi::rdbms::postgres::{
     Composite, CompositeType, Date, Datebound, Daterange, DbColumn, DbColumnType, DbResult, DbRow,
     DbValue, Domain, DomainType, Enumeration, EnumerationType, Error, Host, HostDbConnection,
-    HostDbResultSet, HostDbTransaction, HostLazyDbColumnType, HostLazyDbValue, Int4bound,
+    HostDbResultStream, HostDbTransaction, HostLazyDbColumnType, HostLazyDbValue, Int4bound,
     Int4range, Int8bound, Int8range, Interval, IpAddress, MacAddress, Numbound, Numrange, Time,
     Timestamp, Timestamptz, Timetz, Tsbound, Tsrange, Tstzbound, Tstzrange, Uuid,
 };
@@ -75,12 +75,49 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
         }
     }
 
+    async fn query_stream(
+        &mut self,
+        self_: Resource<PostgresDbConnection>,
+        statement: String,
+        params: Vec<DbValue>,
+    ) -> anyhow::Result<Result<Resource<DbResultStreamEntry>, Error>> {
+        record_host_function_call("rdbms::postgres::db-connection", "query-stream");
+        let worker_id = self.state.owned_worker_id.worker_id.clone();
+        let pool_key = self
+            .as_wasi_view()
+            .table()
+            .get::<PostgresDbConnection>(&self_)?
+            .pool_key
+            .clone();
+
+        match to_db_values(params, self.as_wasi_view().table()) {
+            Ok(params) => {
+                let result = self
+                    .state
+                    .rdbms_service
+                    .postgres()
+                    .query_stream(&pool_key, &worker_id, &statement, params)
+                    .await;
+
+                match result {
+                    Ok(result) => {
+                        let entry = DbResultStreamEntry::new(result);
+                        let resource = self.as_wasi_view().table().push(entry)?;
+                        Ok(Ok(resource))
+                    }
+                    Err(e) => Ok(Err(e.into())),
+                }
+            }
+            Err(error) => Ok(Err(Error::QueryParameterFailure(error))),
+        }
+    }
+
     async fn query(
         &mut self,
         self_: Resource<PostgresDbConnection>,
         statement: String,
         params: Vec<DbValue>,
-    ) -> anyhow::Result<Result<Resource<DbResultSetEntry>, Error>> {
+    ) -> anyhow::Result<Result<DbResult, Error>> {
         record_host_function_call("rdbms::postgres::db-connection", "query");
         let worker_id = self.state.owned_worker_id.worker_id.clone();
         let pool_key = self
@@ -101,9 +138,9 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
 
                 match result {
                     Ok(result) => {
-                        let entry = DbResultSetEntry::new(result);
-                        let resource = self.as_wasi_view().table().push(entry)?;
-                        Ok(Ok(resource))
+                        let result = from_db_result(result, self.as_wasi_view().table())
+                            .map_err(Error::QueryResponseFailure);
+                        Ok(result)
                     }
                     Err(e) => Ok(Err(e.into())),
                 }
@@ -196,30 +233,30 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
     }
 }
 
-pub struct DbResultSetEntry {
-    pub internal: Arc<dyn crate::services::rdbms::DbResultSet<PostgresType> + Send + Sync>,
+pub struct DbResultStreamEntry {
+    pub internal: Arc<dyn crate::services::rdbms::DbResultStream<PostgresType> + Send + Sync>,
 }
 
-impl DbResultSetEntry {
+impl DbResultStreamEntry {
     pub fn new(
-        internal: Arc<dyn crate::services::rdbms::DbResultSet<PostgresType> + Send + Sync>,
+        internal: Arc<dyn crate::services::rdbms::DbResultStream<PostgresType> + Send + Sync>,
     ) -> Self {
         Self { internal }
     }
 }
 
 #[async_trait]
-impl<Ctx: WorkerCtx> HostDbResultSet for DurableWorkerCtx<Ctx> {
+impl<Ctx: WorkerCtx> HostDbResultStream for DurableWorkerCtx<Ctx> {
     async fn get_columns(
         &mut self,
-        self_: Resource<DbResultSetEntry>,
+        self_: Resource<DbResultStreamEntry>,
     ) -> anyhow::Result<Vec<DbColumn>> {
-        record_host_function_call("rdbms::postgres::db-result-set", "get-columns");
+        record_host_function_call("rdbms::postgres::db-result-stream", "get-columns");
 
         let internal = self
             .as_wasi_view()
             .table()
-            .get::<DbResultSetEntry>(&self_)?
+            .get::<DbResultStreamEntry>(&self_)?
             .internal
             .clone();
 
@@ -232,13 +269,13 @@ impl<Ctx: WorkerCtx> HostDbResultSet for DurableWorkerCtx<Ctx> {
 
     async fn get_next(
         &mut self,
-        self_: Resource<DbResultSetEntry>,
+        self_: Resource<DbResultStreamEntry>,
     ) -> anyhow::Result<Option<Vec<DbRow>>> {
-        record_host_function_call("rdbms::postgres::db-result-set", "get-next");
+        record_host_function_call("rdbms::postgres::db-result-stream", "get-next");
         let internal = self
             .as_wasi_view()
             .table()
-            .get::<DbResultSetEntry>(&self_)?
+            .get::<DbResultStreamEntry>(&self_)?
             .internal
             .clone();
 
@@ -255,11 +292,11 @@ impl<Ctx: WorkerCtx> HostDbResultSet for DurableWorkerCtx<Ctx> {
         Ok(rows)
     }
 
-    async fn drop(&mut self, rep: Resource<DbResultSetEntry>) -> anyhow::Result<()> {
-        record_host_function_call("rdbms::postgres::db-result-set", "drop");
+    async fn drop(&mut self, rep: Resource<DbResultStreamEntry>) -> anyhow::Result<()> {
+        record_host_function_call("rdbms::postgres::db-result-stream", "drop");
         self.as_wasi_view()
             .table()
-            .delete::<DbResultSetEntry>(rep)?;
+            .delete::<DbResultStreamEntry>(rep)?;
         Ok(())
     }
 }
@@ -363,7 +400,7 @@ impl<Ctx: WorkerCtx> HostDbTransaction for DurableWorkerCtx<Ctx> {
     }
 
     async fn drop(&mut self, rep: Resource<DbTransactionEntry>) -> anyhow::Result<()> {
-        record_host_function_call("rdbms::postgres::db-result-set", "drop");
+        record_host_function_call("rdbms::postgres::db-result-stream", "drop");
         let entry = self
             .as_wasi_view()
             .table()

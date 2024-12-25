@@ -94,33 +94,33 @@ interface postgres {
   }
 
   record int4range {
-   start: int4bound,
-   end: int4bound
+    start: int4bound,
+    end: int4bound
   }
 
   record int8range {
-   start: int8bound,
-   end: int8bound
+    start: int8bound,
+    end: int8bound
   }
 
   record numrange {
-   start: numbound,
-   end: numbound
+    start: numbound,
+    end: numbound
   }
 
   record tsrange {
-   start: tsbound,
-   end: tsbound
+    start: tsbound,
+    end: tsbound
   }
 
   record tstzrange {
-   start: tstzbound,
-   end: tstzbound
+    start: tstzbound,
+    end: tstzbound
   }
 
   record daterange {
-   start: datebound,
-   end: datebound
+    start: datebound,
+    end: datebound
   }
 
   record enumeration-type {
@@ -267,7 +267,7 @@ interface postgres {
   }
 
   /// A potentially very large and lazy stream of rows:
-  resource db-result-set {
+  resource db-result-stream {
     get-columns: func() -> list<db-column>;
     get-next: func() -> option<list<db-row>>;
   }
@@ -275,7 +275,9 @@ interface postgres {
   resource db-connection {
     open: static func(address: string) -> result<db-connection, error>;
 
-    query: func(statement: string, params: list<db-value>) -> result<db-result-set, error>;
+    query-stream: func(statement: string, params: list<db-value>) -> result<db-result-stream, error>;
+
+    query: func(statement: string, params: list<db-value>) -> result<db-result, error>;
 
     execute: func(statement: string, params: list<db-value>) -> result<u64, error>;
 

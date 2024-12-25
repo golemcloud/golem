@@ -54,6 +54,7 @@ async fn mysql() -> DockerMysqlRdbs {
 enum StatementAction {
     Execute,
     Query,
+    QueryStream,
 }
 
 impl Display for StatementAction {
@@ -61,6 +62,7 @@ impl Display for StatementAction {
         match self {
             StatementAction::Execute => write!(f, "execute"),
             StatementAction::Query => write!(f, "query"),
+            StatementAction::QueryStream => write!(f, "query-stream"),
         }
     }
 }
@@ -102,6 +104,26 @@ impl StatementTest {
             statement,
             params,
             expected,
+        }
+    }
+
+    fn query_stream_test(
+        statement: &'static str,
+        params: Vec<String>,
+        expected: Option<serde_json::Value>,
+    ) -> Self {
+        Self {
+            action: StatementAction::QueryStream,
+            statement,
+            params,
+            expected,
+        }
+    }
+
+    fn with_action(&self, action: StatementAction) -> Self {
+        Self {
+            action,
+            ..self.clone()
         }
     }
 
@@ -274,7 +296,7 @@ async fn rdbms_postgres_crud(
     }
 
     let expected = get_expected(expected_values.clone());
-    let select_test1 = StatementTest::query_test(
+    let select_test1 = StatementTest::query_stream_test(
         "SELECT user_id, name, tags FROM test_users ORDER BY created_on ASC",
         vec![],
         Some(expected),
@@ -316,11 +338,13 @@ async fn rdbms_postgres_crud(
     )
     .await;
 
+    let select_test = select_test1.with_action(StatementAction::Query);
+
     rdbms_component_test::<PostgresType>(
         last_unique_id,
         deps,
         db_addresses.clone(),
-        RdbmsTest::new(vec![select_test1.clone()], Some(TransactionEnd::Commit)),
+        RdbmsTest::new(vec![select_test.clone()], Some(TransactionEnd::Commit)),
         3,
     )
     .await;
@@ -334,7 +358,7 @@ async fn rdbms_postgres_crud(
     )
     .await;
 
-    let select_test = select_test1.with_expected(Some(query_empty_ok_response()));
+    let select_test = select_test.with_expected(Some(query_empty_ok_response()));
 
     rdbms_component_test::<PostgresType>(
         last_unique_id,
@@ -509,7 +533,7 @@ async fn rdbms_mysql_crud(
     }
 
     let expected = get_expected(expected_values.clone());
-    let select_test1 = StatementTest::query_test(
+    let select_test1 = StatementTest::query_stream_test(
         "SELECT user_id, name FROM test_users ORDER BY user_id ASC",
         vec![],
         Some(expected),
@@ -551,11 +575,13 @@ async fn rdbms_mysql_crud(
     )
     .await;
 
+    let select_test = select_test1.with_action(StatementAction::Query);
+
     rdbms_component_test::<MysqlType>(
         last_unique_id,
         deps,
         db_addresses.clone(),
-        RdbmsTest::new(vec![select_test1.clone()], Some(TransactionEnd::Commit)),
+        RdbmsTest::new(vec![select_test.clone()], Some(TransactionEnd::Commit)),
         3,
     )
     .await;
@@ -569,7 +595,7 @@ async fn rdbms_mysql_crud(
     )
     .await;
 
-    let select_test = select_test1.with_expected(Some(query_empty_ok_response()));
+    let select_test = select_test.with_expected(Some(query_empty_ok_response()));
 
     rdbms_component_test::<MysqlType>(
         last_unique_id,

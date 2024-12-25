@@ -19,9 +19,9 @@ use crate::services::rdbms::postgres::types::{
 };
 use crate::services::rdbms::postgres::{PostgresType, POSTGRES};
 use crate::services::rdbms::sqlx_common::{
-    create_db_result, PoolCreator, QueryExecutor, QueryParamsBinder, SqlxDbResultSet, SqlxRdbms,
+    create_db_result, PoolCreator, QueryExecutor, QueryParamsBinder, SqlxDbResultStream, SqlxRdbms,
 };
-use crate::services::rdbms::{DbResult, DbResultSet, DbRow, Error, Rdbms, RdbmsPoolKey};
+use crate::services::rdbms::{DbResult, DbResultStream, DbRow, Error, Rdbms, RdbmsPoolKey};
 use async_trait::async_trait;
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
@@ -101,7 +101,7 @@ impl QueryExecutor<PostgresType, sqlx::Postgres> for PostgresType {
         params: Vec<DbValue>,
         batch: usize,
         executor: E,
-    ) -> Result<Arc<dyn DbResultSet<PostgresType> + Send + Sync + 'c>, Error>
+    ) -> Result<Arc<dyn DbResultStream<PostgresType> + Send + Sync + 'c>, Error>
     where
         E: sqlx::Executor<'c, Database = sqlx::Postgres>,
     {
@@ -110,8 +110,8 @@ impl QueryExecutor<PostgresType, sqlx::Postgres> for PostgresType {
 
         let stream: BoxStream<Result<sqlx::postgres::PgRow, sqlx::Error>> = query.fetch(executor);
 
-        let response: SqlxDbResultSet<'c, PostgresType, sqlx::postgres::Postgres> =
-            SqlxDbResultSet::create(stream, batch).await?;
+        let response: SqlxDbResultStream<'c, PostgresType, sqlx::postgres::Postgres> =
+            SqlxDbResultStream::create(stream, batch).await?;
         Ok(Arc::new(response))
     }
 }

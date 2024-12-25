@@ -15,7 +15,8 @@
 use crate::services::golem_config::{RdbmsConfig, RdbmsPoolConfig};
 use crate::services::rdbms::metrics::record_rdbms_metrics;
 use crate::services::rdbms::{
-    DbResult, DbResultSet, DbRow, DbTransaction, Error, Rdbms, RdbmsPoolKey, RdbmsStatus, RdbmsType,
+    DbResult, DbResultStream, DbRow, DbTransaction, Error, Rdbms, RdbmsPoolKey, RdbmsStatus,
+    RdbmsType,
 };
 use async_dropper_simple::AsyncDrop;
 use async_trait::async_trait;
@@ -213,13 +214,56 @@ where
         self.record_metrics("execute", start, result)
     }
 
+    async fn query_stream(
+        &self,
+        key: &RdbmsPoolKey,
+        worker_id: &WorkerId,
+        statement: &str,
+        params: Vec<T::DbValue>,
+    ) -> Result<Arc<dyn DbResultStream<T> + Send + Sync>, Error>
+    where
+        <T as RdbmsType>::DbValue: 'async_trait,
+    {
+        let start = Instant::now();
+        debug!(
+            rdbms_type = self.rdbms_type.to_string(),
+            pool_key = key.to_string(),
+            "query stream - statement: {}, params count: {}",
+            statement,
+            params.len()
+        );
+
+        let result = {
+            let pool = self.get_or_create(key, worker_id).await?;
+            T::query_stream(
+                statement,
+                params,
+                self.config.query.query_batch,
+                pool.deref(),
+            )
+            .await
+        };
+
+        let result = result.map_err(|e| {
+            error!(
+                rdbms_type = self.rdbms_type.to_string(),
+                pool_key = key.to_string(),
+                "query stream - statement: {}, error: {}",
+                statement,
+                e
+            );
+            e
+        });
+        self.record_metrics("query-stream", start, result)
+    }
+
     async fn query(
         &self,
         key: &RdbmsPoolKey,
         worker_id: &WorkerId,
         statement: &str,
         params: Vec<T::DbValue>,
-    ) -> Result<Arc<dyn DbResultSet<T> + Send + Sync>, Error>
+    ) -> Result<DbResult<T>, Error>
     where
         <T as RdbmsType>::DbValue: 'async_trait,
     {
@@ -234,13 +278,7 @@ where
 
         let result = {
             let pool = self.get_or_create(key, worker_id).await?;
-            T::query_stream(
-                statement,
-                params,
-                self.config.query.query_batch,
-                pool.deref(),
-            )
-            .await
+            T::query(statement, params, pool.deref()).await
         };
 
         let result = result.map_err(|e| {
@@ -336,7 +374,7 @@ pub(crate) trait QueryExecutor<T: RdbmsType, DB: Database> {
         params: Vec<T::DbValue>,
         batch: usize,
         executor: E,
-    ) -> Result<Arc<dyn DbResultSet<T> + Send + Sync + 'c>, Error>
+    ) -> Result<Arc<dyn DbResultStream<T> + Send + Sync + 'c>, Error>
     where
         E: sqlx::Executor<'c, Database = DB>;
 }
@@ -529,14 +567,14 @@ where
 
 #[derive(Clone)]
 #[allow(clippy::type_complexity)]
-pub struct SqlxDbResultSet<'q, T: RdbmsType, DB: Database> {
+pub struct SqlxDbResultStream<'q, T: RdbmsType, DB: Database> {
     rdbms_type: T,
     columns: Vec<T::DbColumn>,
     first_rows: Arc<async_mutex::Mutex<Option<Vec<DbRow<T::DbValue>>>>>,
     row_stream: Arc<async_mutex::Mutex<BoxStream<'q, Vec<Result<DB::Row, sqlx::Error>>>>>,
 }
 
-impl<'q, T, DB> SqlxDbResultSet<'q, T, DB>
+impl<'q, T, DB> SqlxDbResultStream<'q, T, DB>
 where
     T: RdbmsType + Display + Default + Send + Sync,
     DB: Database,
@@ -561,7 +599,7 @@ where
     pub(crate) async fn create(
         stream: BoxStream<'q, Result<DB::Row, sqlx::Error>>,
         batch: usize,
-    ) -> Result<SqlxDbResultSet<'q, T, DB>, Error> {
+    ) -> Result<SqlxDbResultStream<'q, T, DB>, Error> {
         let mut row_stream: BoxStream<'q, Vec<Result<DB::Row, sqlx::Error>>> =
             Box::pin(stream.chunks(batch));
 
@@ -576,19 +614,19 @@ where
 
                 let result = create_db_result::<T, DB>(rows)?;
 
-                Ok(SqlxDbResultSet::new(
+                Ok(SqlxDbResultStream::new(
                     result.columns,
                     result.rows,
                     row_stream,
                 ))
             }
-            _ => Ok(SqlxDbResultSet::new(vec![], vec![], row_stream)),
+            _ => Ok(SqlxDbResultStream::new(vec![], vec![], row_stream)),
         }
     }
 }
 
 #[async_trait]
-impl<T, DB> DbResultSet<T> for SqlxDbResultSet<'_, T, DB>
+impl<T, DB> DbResultStream<T> for SqlxDbResultStream<'_, T, DB>
 where
     T: RdbmsType + Display + Default + Send + Sync,
     DB: Database,

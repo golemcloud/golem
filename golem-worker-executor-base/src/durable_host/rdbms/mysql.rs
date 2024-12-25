@@ -16,7 +16,7 @@ use crate::durable_host::DurableWorkerCtx;
 use crate::metrics::wasm::record_host_function_call;
 use crate::preview2::wasi::rdbms::mysql::{
     Date, DbColumn, DbColumnType, DbResult, DbRow, DbValue, Error, Host, HostDbConnection,
-    HostDbResultSet, HostDbTransaction, Time, Timestamp,
+    HostDbResultStream, HostDbTransaction, Time, Timestamp,
 };
 use crate::services::rdbms::mysql::types as mysql_types;
 use crate::services::rdbms::mysql::MysqlType;
@@ -70,12 +70,52 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
         }
     }
 
+    async fn query_stream(
+        &mut self,
+        self_: Resource<MysqlDbConnection>,
+        statement: String,
+        params: Vec<DbValue>,
+    ) -> anyhow::Result<Result<Resource<DbResultStreamEntry>, Error>> {
+        record_host_function_call("rdbms::mysql::db-connection", "query-stream");
+        let worker_id = self.state.owned_worker_id.worker_id.clone();
+        let pool_key = self
+            .as_wasi_view()
+            .table()
+            .get::<MysqlDbConnection>(&self_)?
+            .pool_key
+            .clone();
+        match params
+            .into_iter()
+            .map(|v| v.try_into())
+            .collect::<Result<Vec<_>, String>>()
+        {
+            Ok(params) => {
+                let result = self
+                    .state
+                    .rdbms_service
+                    .mysql()
+                    .query_stream(&pool_key, &worker_id, &statement, params)
+                    .await;
+
+                match result {
+                    Ok(result) => {
+                        let entry = DbResultStreamEntry::new(result);
+                        let resource = self.as_wasi_view().table().push(entry)?;
+                        Ok(Ok(resource))
+                    }
+                    Err(e) => Ok(Err(e.into())),
+                }
+            }
+            Err(error) => Ok(Err(Error::QueryParameterFailure(error))),
+        }
+    }
+
     async fn query(
         &mut self,
         self_: Resource<MysqlDbConnection>,
         statement: String,
         params: Vec<DbValue>,
-    ) -> anyhow::Result<Result<Resource<DbResultSetEntry>, Error>> {
+    ) -> anyhow::Result<Result<DbResult, Error>> {
         record_host_function_call("rdbms::mysql::db-connection", "query");
         let worker_id = self.state.owned_worker_id.worker_id.clone();
         let pool_key = self
@@ -95,16 +135,10 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
                     .rdbms_service
                     .mysql()
                     .query(&pool_key, &worker_id, &statement, params)
-                    .await;
-
-                match result {
-                    Ok(result) => {
-                        let entry = DbResultSetEntry::new(result);
-                        let resource = self.as_wasi_view().table().push(entry)?;
-                        Ok(Ok(resource))
-                    }
-                    Err(e) => Ok(Err(e.into())),
-                }
+                    .await
+                    .map(DbResult::from)
+                    .map_err(Error::from);
+                Ok(result)
             }
             Err(error) => Ok(Err(Error::QueryParameterFailure(error))),
         }
@@ -199,30 +233,30 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
     }
 }
 
-pub struct DbResultSetEntry {
-    pub internal: Arc<dyn crate::services::rdbms::DbResultSet<MysqlType> + Send + Sync>,
+pub struct DbResultStreamEntry {
+    pub internal: Arc<dyn crate::services::rdbms::DbResultStream<MysqlType> + Send + Sync>,
 }
 
-impl DbResultSetEntry {
+impl DbResultStreamEntry {
     pub fn new(
-        internal: Arc<dyn crate::services::rdbms::DbResultSet<MysqlType> + Send + Sync>,
+        internal: Arc<dyn crate::services::rdbms::DbResultStream<MysqlType> + Send + Sync>,
     ) -> Self {
         Self { internal }
     }
 }
 
 #[async_trait]
-impl<Ctx: WorkerCtx> HostDbResultSet for DurableWorkerCtx<Ctx> {
+impl<Ctx: WorkerCtx> HostDbResultStream for DurableWorkerCtx<Ctx> {
     async fn get_columns(
         &mut self,
-        self_: Resource<DbResultSetEntry>,
+        self_: Resource<DbResultStreamEntry>,
     ) -> anyhow::Result<Vec<DbColumn>> {
-        record_host_function_call("rdbms::mysql::db-result-set", "get-columns");
+        record_host_function_call("rdbms::mysql::db-result-stream", "get-columns");
 
         let internal = self
             .as_wasi_view()
             .table()
-            .get::<DbResultSetEntry>(&self_)?
+            .get::<DbResultStreamEntry>(&self_)?
             .internal
             .clone();
 
@@ -235,13 +269,13 @@ impl<Ctx: WorkerCtx> HostDbResultSet for DurableWorkerCtx<Ctx> {
 
     async fn get_next(
         &mut self,
-        self_: Resource<DbResultSetEntry>,
+        self_: Resource<DbResultStreamEntry>,
     ) -> anyhow::Result<Option<Vec<DbRow>>> {
-        record_host_function_call("rdbms::mysql::db-result-set", "get-next");
+        record_host_function_call("rdbms::mysql::db-result-stream", "get-next");
         let internal = self
             .as_wasi_view()
             .table()
-            .get::<DbResultSetEntry>(&self_)?
+            .get::<DbResultStreamEntry>(&self_)?
             .internal
             .clone();
 
@@ -252,11 +286,11 @@ impl<Ctx: WorkerCtx> HostDbResultSet for DurableWorkerCtx<Ctx> {
         Ok(rows)
     }
 
-    async fn drop(&mut self, rep: Resource<DbResultSetEntry>) -> anyhow::Result<()> {
-        record_host_function_call("rdbms::mysql::db-result-set", "drop");
+    async fn drop(&mut self, rep: Resource<DbResultStreamEntry>) -> anyhow::Result<()> {
+        record_host_function_call("rdbms::mysql::db-result-stream", "drop");
         self.as_wasi_view()
             .table()
-            .delete::<DbResultSetEntry>(rep)?;
+            .delete::<DbResultStreamEntry>(rep)?;
         Ok(())
     }
 }
@@ -365,7 +399,7 @@ impl<Ctx: WorkerCtx> HostDbTransaction for DurableWorkerCtx<Ctx> {
     }
 
     async fn drop(&mut self, rep: Resource<DbTransactionEntry>) -> anyhow::Result<()> {
-        record_host_function_call("rdbms::mysql::db-result-set", "drop");
+        record_host_function_call("rdbms::mysql::db-result-stream", "drop");
         let entry = self
             .as_wasi_view()
             .table()

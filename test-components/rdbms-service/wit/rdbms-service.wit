@@ -12,7 +12,8 @@ interface api {
 
   enum statement-action {
     execute,
-    query
+    query,
+    query-stream
   }
 
   record statement {

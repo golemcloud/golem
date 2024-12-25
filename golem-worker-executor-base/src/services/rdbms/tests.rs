@@ -55,6 +55,7 @@ fn rdbms_service() -> RdbmsServiceDefault {
 enum StatementAction<T: RdbmsType + Clone + Debug> {
     Execute(ExpectedExecuteResult),
     Query(ExpectedQueryResult<T>),
+    QueryStream(ExpectedQueryResult<T>),
 }
 
 #[derive(Clone, Debug)]
@@ -136,10 +137,19 @@ impl<T: RdbmsType + Clone + Debug> StatementTest<T> {
         }
     }
 
-    fn with_execute_expected(&self, expected: Option<u64>) -> Self {
+    fn query_stream_test(
+        statement: &'static str,
+        params: Vec<T::DbValue>,
+        expected_columns: Option<Vec<T::DbColumn>>,
+        expected_rows: Option<Vec<DbRow<T::DbValue>>>,
+    ) -> Self {
         Self {
-            action: StatementAction::Execute(ExpectedExecuteResult::new(expected)),
-            ..self.clone()
+            action: StatementAction::QueryStream(ExpectedQueryResult::new(
+                expected_columns,
+                expected_rows,
+            )),
+            statement,
+            params,
         }
     }
 
@@ -150,6 +160,20 @@ impl<T: RdbmsType + Clone + Debug> StatementTest<T> {
     ) -> Self {
         Self {
             action: StatementAction::Query(ExpectedQueryResult::new(
+                expected_columns,
+                expected_rows,
+            )),
+            ..self.clone()
+        }
+    }
+
+    fn with_query_stream_expected(
+        &self,
+        expected_columns: Option<Vec<T::DbColumn>>,
+        expected_rows: Option<Vec<DbRow<T::DbValue>>>,
+    ) -> Self {
+        Self {
+            action: StatementAction::QueryStream(ExpectedQueryResult::new(
                 expected_columns,
                 expected_rows,
             )),
@@ -283,8 +307,8 @@ async fn postgres_transaction_tests(
         rdbms.clone(),
         &db_address,
         RdbmsTest::new(
-            vec![select_statement_test.clone()],
-            Some(TransactionEnd::None),
+            vec![select_statement_test.with_query_stream_expected(None, Some(rows.clone()))],
+            None,
         ),
     )
     .await;
@@ -301,7 +325,7 @@ async fn postgres_transaction_tests(
         &db_address,
         RdbmsTest::new(
             vec![select_statement_test.with_query_expected(Some(vec![]), Some(vec![]))],
-            None,
+            Some(TransactionEnd::None),
         ),
     )
     .await;
@@ -920,7 +944,7 @@ async fn postgres_create_insert_select_test(
         &db_address,
         RdbmsTest::new(
             vec![
-                StatementTest::query_test(
+                StatementTest::query_stream_test(
                     select_statement,
                     vec![],
                     Some(expected_columns),
@@ -1610,7 +1634,7 @@ async fn postgres_create_insert_select_array_test(
         &db_address,
         RdbmsTest::new(
             vec![
-                StatementTest::query_test(
+                StatementTest::query_stream_test(
                     select_statement,
                     vec![],
                     Some(expected_columns),
@@ -1761,8 +1785,8 @@ async fn mysql_transaction_tests(mysql: &DockerMysqlRdbs, rdbms_service: &RdbmsS
         rdbms.clone(),
         &db_address,
         RdbmsTest::new(
-            vec![select_statement_test.clone()],
-            Some(TransactionEnd::None),
+            vec![select_statement_test.with_query_stream_expected(None, Some(rows.clone()))],
+            None,
         ),
     )
     .await;
@@ -1779,7 +1803,7 @@ async fn mysql_transaction_tests(mysql: &DockerMysqlRdbs, rdbms_service: &RdbmsS
         &db_address,
         RdbmsTest::new(
             vec![select_statement_test.with_query_expected(Some(vec![]), Some(vec![]))],
-            None,
+            Some(TransactionEnd::None),
         ),
     )
     .await;
@@ -2204,7 +2228,7 @@ async fn mysql_create_insert_select_test(
         &db_address,
         RdbmsTest::new(
             vec![
-                StatementTest::query_test(
+                StatementTest::query_stream_test(
                     select_statement,
                     vec![],
                     Some(expected_columns),
@@ -2242,6 +2266,11 @@ async fn execute_rdbms_test<T: RdbmsType + Clone + Debug>(
                     let result = transaction.query(st.statement, st.params).await;
                     results.push(result.map(StatementResult::Query));
                 }
+                StatementAction::QueryStream(_) => {
+                    results.push(Err(Error::Other(
+                        "Query Stream is not supported for transactions".to_string(),
+                    )));
+                }
             }
         }
         match te {
@@ -2259,8 +2288,14 @@ async fn execute_rdbms_test<T: RdbmsType + Clone + Debug>(
                     results.push(result.map(StatementResult::Execute));
                 }
                 StatementAction::Query(_) => {
-                    match rdbms
+                    let result = rdbms
                         .query(pool_key, worker_id, st.statement, st.params)
+                        .await;
+                    results.push(result.map(StatementResult::Query));
+                }
+                StatementAction::QueryStream(_) => {
+                    match rdbms
+                        .query_stream(pool_key, worker_id, st.statement, st.params)
                         .await
                     {
                         Ok(result_set) => {
@@ -2333,6 +2368,23 @@ fn check_test_results<T: RdbmsType + Clone + Debug>(
                     }
                     _ => {
                         check!(false, "query result for worker {worker_id} and test statement with index {i} is error or not found");
+                    }
+                }
+            }
+            StatementAction::QueryStream(expected)
+                if expected.expected_columns.is_some() || expected.expected_rows.is_some() =>
+            {
+                match results.get(i).cloned() {
+                    Some(Ok(StatementResult::Query(result))) => {
+                        if let Some(expected_columns) = expected.expected_columns {
+                            check!(result.columns == expected_columns, "query stream result columns for worker {worker_id} and test statement with index {i} do not match");
+                        }
+                        if let Some(expected_rows) = expected.expected_rows {
+                            check!(result.rows == expected_rows, "query stream result rows for worker {worker_id} and test statement with index {i} do not match");
+                        }
+                    }
+                    _ => {
+                        check!(false, "query stream result for worker {worker_id} and test statement with index {i} is error or not found");
                     }
                 }
             }
@@ -2586,7 +2638,9 @@ async fn rdbms_query_err_test<T: RdbmsType>(
     check!(connection.is_ok(), "connection to {} failed", db_address);
     let pool_key = connection.unwrap();
 
-    let result = rdbms.query(&pool_key, &worker_id, query, params).await;
+    let result = rdbms
+        .query_stream(&pool_key, &worker_id, query, params)
+        .await;
 
     check!(
         result.is_err(),

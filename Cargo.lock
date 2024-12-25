@@ -4502,7 +4502,7 @@ dependencies = [
 [[package]]
 name = "golem-wit"
 version = "0.0.0"
-source = "git+https://github.com/justcoon/golem-wit.git?branch=rdbms#6a93cf429db4d8868cd22faa5bb14027e3cbe283"
+source = "git+https://github.com/justcoon/golem-wit.git?branch=rdbms#2495d953054c6f7b515c474d6bf6d93f3bf3178b"
 
 [[package]]
 name = "golem-wit"

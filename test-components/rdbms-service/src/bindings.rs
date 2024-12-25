@@ -806,11 +806,11 @@ pub mod wasi {
 
             #[derive(Debug)]
             #[repr(transparent)]
-            pub struct DbResultSet {
-                handle: _rt::Resource<DbResultSet>,
+            pub struct DbResultStream {
+                handle: _rt::Resource<DbResultStream>,
             }
 
-            impl DbResultSet {
+            impl DbResultStream {
                 #[doc(hidden)]
                 pub unsafe fn from_handle(handle: u32) -> Self {
                     Self {
@@ -829,7 +829,7 @@ pub mod wasi {
                 }
             }
 
-            unsafe impl _rt::WasmResource for DbResultSet {
+            unsafe impl _rt::WasmResource for DbResultStream {
                 #[inline]
                 unsafe fn drop(_handle: u32) {
                     #[cfg(not(target_arch = "wasm32"))]
@@ -839,7 +839,7 @@ pub mod wasi {
                     {
                         #[link(wasm_import_module = "wasi:rdbms/postgres@0.0.1")]
                         extern "C" {
-                            #[link_name = "[resource-drop]db-result-set"]
+                            #[link_name = "[resource-drop]db-result-stream"]
                             fn drop(_: u32);
                         }
 
@@ -3495,7 +3495,7 @@ pub mod wasi {
                     }
                 }
             }
-            impl DbResultSet {
+            impl DbResultStream {
                 #[allow(unused_unsafe, clippy::all)]
                 pub fn get_columns(&self) -> _rt::Vec<DbColumn> {
                     unsafe {
@@ -3506,7 +3506,7 @@ pub mod wasi {
                         #[cfg(target_arch = "wasm32")]
                         #[link(wasm_import_module = "wasi:rdbms/postgres@0.0.1")]
                         extern "C" {
-                            #[link_name = "[method]db-result-set.get-columns"]
+                            #[link_name = "[method]db-result-stream.get-columns"]
                             fn wit_import(_: i32, _: *mut u8);
                         }
 
@@ -3668,7 +3668,7 @@ pub mod wasi {
                     }
                 }
             }
-            impl DbResultSet {
+            impl DbResultStream {
                 #[allow(unused_unsafe, clippy::all)]
                 pub fn get_next(&self) -> Option<_rt::Vec<DbRow>> {
                     unsafe {
@@ -3679,7 +3679,7 @@ pub mod wasi {
                         #[cfg(target_arch = "wasm32")]
                         #[link(wasm_import_module = "wasi:rdbms/postgres@0.0.1")]
                         extern "C" {
-                            #[link_name = "[method]db-result-set.get-next"]
+                            #[link_name = "[method]db-result-stream.get-next"]
                             fn wit_import(_: i32, _: *mut u8);
                         }
 
@@ -5589,16 +5589,1187 @@ pub mod wasi {
             }
             impl DbConnection {
                 #[allow(unused_unsafe, clippy::all)]
-                pub fn query(
+                pub fn query_stream(
                     &self,
                     statement: &str,
                     params: _rt::Vec<DbValue>,
-                ) -> Result<DbResultSet, Error> {
+                ) -> Result<DbResultStream, Error> {
                     unsafe {
                         let mut cleanup_list = _rt::Vec::new();
                         #[repr(align(4))]
                         struct RetArea([::core::mem::MaybeUninit<u8>; 16]);
                         let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 16]);
+                        let vec0 = statement;
+                        let ptr0 = vec0.as_ptr().cast::<u8>();
+                        let len0 = vec0.len();
+                        let vec82 = &params;
+                        let len82 = vec82.len();
+                        let layout82 =
+                            _rt::alloc::Layout::from_size_align_unchecked(vec82.len() * 56, 8);
+                        let result82 = if layout82.size() != 0 {
+                            let ptr = _rt::alloc::alloc(layout82).cast::<u8>();
+                            if ptr.is_null() {
+                                _rt::alloc::handle_alloc_error(layout82);
+                            }
+                            ptr
+                        } else {
+                            {
+                                ::core::ptr::null_mut()
+                            }
+                        };
+                        for (i, e) in vec82.into_iter().enumerate() {
+                            let base = result82.add(i * 56);
+                            {
+                                match e {
+                                    DbValue::Character(e) => {
+                                        *base.add(0).cast::<u8>() = (0i32) as u8;
+                                        *base.add(8).cast::<u8>() = (_rt::as_i32(e)) as u8;
+                                    }
+                                    DbValue::Int2(e) => {
+                                        *base.add(0).cast::<u8>() = (1i32) as u8;
+                                        *base.add(8).cast::<u16>() = (_rt::as_i32(e)) as u16;
+                                    }
+                                    DbValue::Int4(e) => {
+                                        *base.add(0).cast::<u8>() = (2i32) as u8;
+                                        *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                    }
+                                    DbValue::Int8(e) => {
+                                        *base.add(0).cast::<u8>() = (3i32) as u8;
+                                        *base.add(8).cast::<i64>() = _rt::as_i64(e);
+                                    }
+                                    DbValue::Float4(e) => {
+                                        *base.add(0).cast::<u8>() = (4i32) as u8;
+                                        *base.add(8).cast::<f32>() = _rt::as_f32(e);
+                                    }
+                                    DbValue::Float8(e) => {
+                                        *base.add(0).cast::<u8>() = (5i32) as u8;
+                                        *base.add(8).cast::<f64>() = _rt::as_f64(e);
+                                    }
+                                    DbValue::Numeric(e) => {
+                                        *base.add(0).cast::<u8>() = (6i32) as u8;
+                                        let vec1 = e;
+                                        let ptr1 = vec1.as_ptr().cast::<u8>();
+                                        let len1 = vec1.len();
+                                        *base.add(12).cast::<usize>() = len1;
+                                        *base.add(8).cast::<*mut u8>() = ptr1.cast_mut();
+                                    }
+                                    DbValue::Boolean(e) => {
+                                        *base.add(0).cast::<u8>() = (7i32) as u8;
+                                        *base.add(8).cast::<u8>() = (match e {
+                                            true => 1,
+                                            false => 0,
+                                        })
+                                            as u8;
+                                    }
+                                    DbValue::Text(e) => {
+                                        *base.add(0).cast::<u8>() = (8i32) as u8;
+                                        let vec2 = e;
+                                        let ptr2 = vec2.as_ptr().cast::<u8>();
+                                        let len2 = vec2.len();
+                                        *base.add(12).cast::<usize>() = len2;
+                                        *base.add(8).cast::<*mut u8>() = ptr2.cast_mut();
+                                    }
+                                    DbValue::Varchar(e) => {
+                                        *base.add(0).cast::<u8>() = (9i32) as u8;
+                                        let vec3 = e;
+                                        let ptr3 = vec3.as_ptr().cast::<u8>();
+                                        let len3 = vec3.len();
+                                        *base.add(12).cast::<usize>() = len3;
+                                        *base.add(8).cast::<*mut u8>() = ptr3.cast_mut();
+                                    }
+                                    DbValue::Bpchar(e) => {
+                                        *base.add(0).cast::<u8>() = (10i32) as u8;
+                                        let vec4 = e;
+                                        let ptr4 = vec4.as_ptr().cast::<u8>();
+                                        let len4 = vec4.len();
+                                        *base.add(12).cast::<usize>() = len4;
+                                        *base.add(8).cast::<*mut u8>() = ptr4.cast_mut();
+                                    }
+                                    DbValue::Timestamp(e) => {
+                                        *base.add(0).cast::<u8>() = (11i32) as u8;
+                                        let Timestamp {
+                                            date: date5,
+                                            time: time5,
+                                        } = e;
+                                        let Date {
+                                            year: year6,
+                                            month: month6,
+                                            day: day6,
+                                        } = date5;
+                                        *base.add(8).cast::<i32>() = _rt::as_i32(year6);
+                                        *base.add(12).cast::<u8>() = (_rt::as_i32(month6)) as u8;
+                                        *base.add(13).cast::<u8>() = (_rt::as_i32(day6)) as u8;
+                                        let Time {
+                                            hour: hour7,
+                                            minute: minute7,
+                                            second: second7,
+                                            nanosecond: nanosecond7,
+                                        } = time5;
+                                        *base.add(16).cast::<u8>() = (_rt::as_i32(hour7)) as u8;
+                                        *base.add(17).cast::<u8>() = (_rt::as_i32(minute7)) as u8;
+                                        *base.add(18).cast::<u8>() = (_rt::as_i32(second7)) as u8;
+                                        *base.add(20).cast::<i32>() = _rt::as_i32(nanosecond7);
+                                    }
+                                    DbValue::Timestamptz(e) => {
+                                        *base.add(0).cast::<u8>() = (12i32) as u8;
+                                        let Timestamptz {
+                                            timestamp: timestamp8,
+                                            offset: offset8,
+                                        } = e;
+                                        let Timestamp {
+                                            date: date9,
+                                            time: time9,
+                                        } = timestamp8;
+                                        let Date {
+                                            year: year10,
+                                            month: month10,
+                                            day: day10,
+                                        } = date9;
+                                        *base.add(8).cast::<i32>() = _rt::as_i32(year10);
+                                        *base.add(12).cast::<u8>() = (_rt::as_i32(month10)) as u8;
+                                        *base.add(13).cast::<u8>() = (_rt::as_i32(day10)) as u8;
+                                        let Time {
+                                            hour: hour11,
+                                            minute: minute11,
+                                            second: second11,
+                                            nanosecond: nanosecond11,
+                                        } = time9;
+                                        *base.add(16).cast::<u8>() = (_rt::as_i32(hour11)) as u8;
+                                        *base.add(17).cast::<u8>() = (_rt::as_i32(minute11)) as u8;
+                                        *base.add(18).cast::<u8>() = (_rt::as_i32(second11)) as u8;
+                                        *base.add(20).cast::<i32>() = _rt::as_i32(nanosecond11);
+                                        *base.add(24).cast::<i32>() = _rt::as_i32(offset8);
+                                    }
+                                    DbValue::Date(e) => {
+                                        *base.add(0).cast::<u8>() = (13i32) as u8;
+                                        let Date {
+                                            year: year12,
+                                            month: month12,
+                                            day: day12,
+                                        } = e;
+                                        *base.add(8).cast::<i32>() = _rt::as_i32(year12);
+                                        *base.add(12).cast::<u8>() = (_rt::as_i32(month12)) as u8;
+                                        *base.add(13).cast::<u8>() = (_rt::as_i32(day12)) as u8;
+                                    }
+                                    DbValue::Time(e) => {
+                                        *base.add(0).cast::<u8>() = (14i32) as u8;
+                                        let Time {
+                                            hour: hour13,
+                                            minute: minute13,
+                                            second: second13,
+                                            nanosecond: nanosecond13,
+                                        } = e;
+                                        *base.add(8).cast::<u8>() = (_rt::as_i32(hour13)) as u8;
+                                        *base.add(9).cast::<u8>() = (_rt::as_i32(minute13)) as u8;
+                                        *base.add(10).cast::<u8>() = (_rt::as_i32(second13)) as u8;
+                                        *base.add(12).cast::<i32>() = _rt::as_i32(nanosecond13);
+                                    }
+                                    DbValue::Timetz(e) => {
+                                        *base.add(0).cast::<u8>() = (15i32) as u8;
+                                        let Timetz {
+                                            time: time14,
+                                            offset: offset14,
+                                        } = e;
+                                        let Time {
+                                            hour: hour15,
+                                            minute: minute15,
+                                            second: second15,
+                                            nanosecond: nanosecond15,
+                                        } = time14;
+                                        *base.add(8).cast::<u8>() = (_rt::as_i32(hour15)) as u8;
+                                        *base.add(9).cast::<u8>() = (_rt::as_i32(minute15)) as u8;
+                                        *base.add(10).cast::<u8>() = (_rt::as_i32(second15)) as u8;
+                                        *base.add(12).cast::<i32>() = _rt::as_i32(nanosecond15);
+                                        *base.add(16).cast::<i32>() = _rt::as_i32(offset14);
+                                    }
+                                    DbValue::Interval(e) => {
+                                        *base.add(0).cast::<u8>() = (16i32) as u8;
+                                        let Interval {
+                                            months: months16,
+                                            days: days16,
+                                            microseconds: microseconds16,
+                                        } = e;
+                                        *base.add(8).cast::<i32>() = _rt::as_i32(months16);
+                                        *base.add(12).cast::<i32>() = _rt::as_i32(days16);
+                                        *base.add(16).cast::<i64>() = _rt::as_i64(microseconds16);
+                                    }
+                                    DbValue::Bytea(e) => {
+                                        *base.add(0).cast::<u8>() = (17i32) as u8;
+                                        let vec17 = e;
+                                        let ptr17 = vec17.as_ptr().cast::<u8>();
+                                        let len17 = vec17.len();
+                                        *base.add(12).cast::<usize>() = len17;
+                                        *base.add(8).cast::<*mut u8>() = ptr17.cast_mut();
+                                    }
+                                    DbValue::Json(e) => {
+                                        *base.add(0).cast::<u8>() = (18i32) as u8;
+                                        let vec18 = e;
+                                        let ptr18 = vec18.as_ptr().cast::<u8>();
+                                        let len18 = vec18.len();
+                                        *base.add(12).cast::<usize>() = len18;
+                                        *base.add(8).cast::<*mut u8>() = ptr18.cast_mut();
+                                    }
+                                    DbValue::Jsonb(e) => {
+                                        *base.add(0).cast::<u8>() = (19i32) as u8;
+                                        let vec19 = e;
+                                        let ptr19 = vec19.as_ptr().cast::<u8>();
+                                        let len19 = vec19.len();
+                                        *base.add(12).cast::<usize>() = len19;
+                                        *base.add(8).cast::<*mut u8>() = ptr19.cast_mut();
+                                    }
+                                    DbValue::Jsonpath(e) => {
+                                        *base.add(0).cast::<u8>() = (20i32) as u8;
+                                        let vec20 = e;
+                                        let ptr20 = vec20.as_ptr().cast::<u8>();
+                                        let len20 = vec20.len();
+                                        *base.add(12).cast::<usize>() = len20;
+                                        *base.add(8).cast::<*mut u8>() = ptr20.cast_mut();
+                                    }
+                                    DbValue::Xml(e) => {
+                                        *base.add(0).cast::<u8>() = (21i32) as u8;
+                                        let vec21 = e;
+                                        let ptr21 = vec21.as_ptr().cast::<u8>();
+                                        let len21 = vec21.len();
+                                        *base.add(12).cast::<usize>() = len21;
+                                        *base.add(8).cast::<*mut u8>() = ptr21.cast_mut();
+                                    }
+                                    DbValue::Uuid(e) => {
+                                        *base.add(0).cast::<u8>() = (22i32) as u8;
+                                        let Uuid {
+                                            high_bits: high_bits22,
+                                            low_bits: low_bits22,
+                                        } = e;
+                                        *base.add(8).cast::<i64>() = _rt::as_i64(high_bits22);
+                                        *base.add(16).cast::<i64>() = _rt::as_i64(low_bits22);
+                                    }
+                                    DbValue::Inet(e) => {
+                                        *base.add(0).cast::<u8>() = (23i32) as u8;
+                                        match e {
+                                            IpAddress::Ipv4(e) => {
+                                                *base.add(8).cast::<u8>() = (0i32) as u8;
+                                                let (t23_0, t23_1, t23_2, t23_3) = e;
+                                                *base.add(10).cast::<u8>() =
+                                                    (_rt::as_i32(t23_0)) as u8;
+                                                *base.add(11).cast::<u8>() =
+                                                    (_rt::as_i32(t23_1)) as u8;
+                                                *base.add(12).cast::<u8>() =
+                                                    (_rt::as_i32(t23_2)) as u8;
+                                                *base.add(13).cast::<u8>() =
+                                                    (_rt::as_i32(t23_3)) as u8;
+                                            }
+                                            IpAddress::Ipv6(e) => {
+                                                *base.add(8).cast::<u8>() = (1i32) as u8;
+                                                let (
+                                                    t24_0,
+                                                    t24_1,
+                                                    t24_2,
+                                                    t24_3,
+                                                    t24_4,
+                                                    t24_5,
+                                                    t24_6,
+                                                    t24_7,
+                                                ) = e;
+                                                *base.add(10).cast::<u16>() =
+                                                    (_rt::as_i32(t24_0)) as u16;
+                                                *base.add(12).cast::<u16>() =
+                                                    (_rt::as_i32(t24_1)) as u16;
+                                                *base.add(14).cast::<u16>() =
+                                                    (_rt::as_i32(t24_2)) as u16;
+                                                *base.add(16).cast::<u16>() =
+                                                    (_rt::as_i32(t24_3)) as u16;
+                                                *base.add(18).cast::<u16>() =
+                                                    (_rt::as_i32(t24_4)) as u16;
+                                                *base.add(20).cast::<u16>() =
+                                                    (_rt::as_i32(t24_5)) as u16;
+                                                *base.add(22).cast::<u16>() =
+                                                    (_rt::as_i32(t24_6)) as u16;
+                                                *base.add(24).cast::<u16>() =
+                                                    (_rt::as_i32(t24_7)) as u16;
+                                            }
+                                        }
+                                    }
+                                    DbValue::Cidr(e) => {
+                                        *base.add(0).cast::<u8>() = (24i32) as u8;
+                                        match e {
+                                            IpAddress::Ipv4(e) => {
+                                                *base.add(8).cast::<u8>() = (0i32) as u8;
+                                                let (t25_0, t25_1, t25_2, t25_3) = e;
+                                                *base.add(10).cast::<u8>() =
+                                                    (_rt::as_i32(t25_0)) as u8;
+                                                *base.add(11).cast::<u8>() =
+                                                    (_rt::as_i32(t25_1)) as u8;
+                                                *base.add(12).cast::<u8>() =
+                                                    (_rt::as_i32(t25_2)) as u8;
+                                                *base.add(13).cast::<u8>() =
+                                                    (_rt::as_i32(t25_3)) as u8;
+                                            }
+                                            IpAddress::Ipv6(e) => {
+                                                *base.add(8).cast::<u8>() = (1i32) as u8;
+                                                let (
+                                                    t26_0,
+                                                    t26_1,
+                                                    t26_2,
+                                                    t26_3,
+                                                    t26_4,
+                                                    t26_5,
+                                                    t26_6,
+                                                    t26_7,
+                                                ) = e;
+                                                *base.add(10).cast::<u16>() =
+                                                    (_rt::as_i32(t26_0)) as u16;
+                                                *base.add(12).cast::<u16>() =
+                                                    (_rt::as_i32(t26_1)) as u16;
+                                                *base.add(14).cast::<u16>() =
+                                                    (_rt::as_i32(t26_2)) as u16;
+                                                *base.add(16).cast::<u16>() =
+                                                    (_rt::as_i32(t26_3)) as u16;
+                                                *base.add(18).cast::<u16>() =
+                                                    (_rt::as_i32(t26_4)) as u16;
+                                                *base.add(20).cast::<u16>() =
+                                                    (_rt::as_i32(t26_5)) as u16;
+                                                *base.add(22).cast::<u16>() =
+                                                    (_rt::as_i32(t26_6)) as u16;
+                                                *base.add(24).cast::<u16>() =
+                                                    (_rt::as_i32(t26_7)) as u16;
+                                            }
+                                        }
+                                    }
+                                    DbValue::Macaddr(e) => {
+                                        *base.add(0).cast::<u8>() = (25i32) as u8;
+                                        let MacAddress { octets: octets27 } = e;
+                                        let (t28_0, t28_1, t28_2, t28_3, t28_4, t28_5) = octets27;
+                                        *base.add(8).cast::<u8>() = (_rt::as_i32(t28_0)) as u8;
+                                        *base.add(9).cast::<u8>() = (_rt::as_i32(t28_1)) as u8;
+                                        *base.add(10).cast::<u8>() = (_rt::as_i32(t28_2)) as u8;
+                                        *base.add(11).cast::<u8>() = (_rt::as_i32(t28_3)) as u8;
+                                        *base.add(12).cast::<u8>() = (_rt::as_i32(t28_4)) as u8;
+                                        *base.add(13).cast::<u8>() = (_rt::as_i32(t28_5)) as u8;
+                                    }
+                                    DbValue::Bit(e) => {
+                                        *base.add(0).cast::<u8>() = (26i32) as u8;
+                                        let vec29 = e;
+                                        let len29 = vec29.len();
+                                        let layout29 =
+                                            _rt::alloc::Layout::from_size_align_unchecked(
+                                                vec29.len() * 1,
+                                                1,
+                                            );
+                                        let result29 = if layout29.size() != 0 {
+                                            let ptr = _rt::alloc::alloc(layout29).cast::<u8>();
+                                            if ptr.is_null() {
+                                                _rt::alloc::handle_alloc_error(layout29);
+                                            }
+                                            ptr
+                                        } else {
+                                            {
+                                                ::core::ptr::null_mut()
+                                            }
+                                        };
+                                        for (i, e) in vec29.into_iter().enumerate() {
+                                            let base = result29.add(i * 1);
+                                            {
+                                                *base.add(0).cast::<u8>() = (match e {
+                                                    true => 1,
+                                                    false => 0,
+                                                })
+                                                    as u8;
+                                            }
+                                        }
+                                        *base.add(12).cast::<usize>() = len29;
+                                        *base.add(8).cast::<*mut u8>() = result29;
+                                        cleanup_list.extend_from_slice(&[(result29, layout29)]);
+                                    }
+                                    DbValue::Varbit(e) => {
+                                        *base.add(0).cast::<u8>() = (27i32) as u8;
+                                        let vec30 = e;
+                                        let len30 = vec30.len();
+                                        let layout30 =
+                                            _rt::alloc::Layout::from_size_align_unchecked(
+                                                vec30.len() * 1,
+                                                1,
+                                            );
+                                        let result30 = if layout30.size() != 0 {
+                                            let ptr = _rt::alloc::alloc(layout30).cast::<u8>();
+                                            if ptr.is_null() {
+                                                _rt::alloc::handle_alloc_error(layout30);
+                                            }
+                                            ptr
+                                        } else {
+                                            {
+                                                ::core::ptr::null_mut()
+                                            }
+                                        };
+                                        for (i, e) in vec30.into_iter().enumerate() {
+                                            let base = result30.add(i * 1);
+                                            {
+                                                *base.add(0).cast::<u8>() = (match e {
+                                                    true => 1,
+                                                    false => 0,
+                                                })
+                                                    as u8;
+                                            }
+                                        }
+                                        *base.add(12).cast::<usize>() = len30;
+                                        *base.add(8).cast::<*mut u8>() = result30;
+                                        cleanup_list.extend_from_slice(&[(result30, layout30)]);
+                                    }
+                                    DbValue::Int4range(e) => {
+                                        *base.add(0).cast::<u8>() = (28i32) as u8;
+                                        let Int4range {
+                                            start: start31,
+                                            end: end31,
+                                        } = e;
+                                        match start31 {
+                                            Int4bound::Included(e) => {
+                                                *base.add(8).cast::<u8>() = (0i32) as u8;
+                                                *base.add(12).cast::<i32>() = _rt::as_i32(e);
+                                            }
+                                            Int4bound::Excluded(e) => {
+                                                *base.add(8).cast::<u8>() = (1i32) as u8;
+                                                *base.add(12).cast::<i32>() = _rt::as_i32(e);
+                                            }
+                                            Int4bound::Unbounded => {
+                                                *base.add(8).cast::<u8>() = (2i32) as u8;
+                                            }
+                                        }
+                                        match end31 {
+                                            Int4bound::Included(e) => {
+                                                *base.add(16).cast::<u8>() = (0i32) as u8;
+                                                *base.add(20).cast::<i32>() = _rt::as_i32(e);
+                                            }
+                                            Int4bound::Excluded(e) => {
+                                                *base.add(16).cast::<u8>() = (1i32) as u8;
+                                                *base.add(20).cast::<i32>() = _rt::as_i32(e);
+                                            }
+                                            Int4bound::Unbounded => {
+                                                *base.add(16).cast::<u8>() = (2i32) as u8;
+                                            }
+                                        }
+                                    }
+                                    DbValue::Int8range(e) => {
+                                        *base.add(0).cast::<u8>() = (29i32) as u8;
+                                        let Int8range {
+                                            start: start32,
+                                            end: end32,
+                                        } = e;
+                                        match start32 {
+                                            Int8bound::Included(e) => {
+                                                *base.add(8).cast::<u8>() = (0i32) as u8;
+                                                *base.add(16).cast::<i64>() = _rt::as_i64(e);
+                                            }
+                                            Int8bound::Excluded(e) => {
+                                                *base.add(8).cast::<u8>() = (1i32) as u8;
+                                                *base.add(16).cast::<i64>() = _rt::as_i64(e);
+                                            }
+                                            Int8bound::Unbounded => {
+                                                *base.add(8).cast::<u8>() = (2i32) as u8;
+                                            }
+                                        }
+                                        match end32 {
+                                            Int8bound::Included(e) => {
+                                                *base.add(24).cast::<u8>() = (0i32) as u8;
+                                                *base.add(32).cast::<i64>() = _rt::as_i64(e);
+                                            }
+                                            Int8bound::Excluded(e) => {
+                                                *base.add(24).cast::<u8>() = (1i32) as u8;
+                                                *base.add(32).cast::<i64>() = _rt::as_i64(e);
+                                            }
+                                            Int8bound::Unbounded => {
+                                                *base.add(24).cast::<u8>() = (2i32) as u8;
+                                            }
+                                        }
+                                    }
+                                    DbValue::Numrange(e) => {
+                                        *base.add(0).cast::<u8>() = (30i32) as u8;
+                                        let Numrange {
+                                            start: start33,
+                                            end: end33,
+                                        } = e;
+                                        match start33 {
+                                            Numbound::Included(e) => {
+                                                *base.add(8).cast::<u8>() = (0i32) as u8;
+                                                let vec34 = e;
+                                                let ptr34 = vec34.as_ptr().cast::<u8>();
+                                                let len34 = vec34.len();
+                                                *base.add(16).cast::<usize>() = len34;
+                                                *base.add(12).cast::<*mut u8>() = ptr34.cast_mut();
+                                            }
+                                            Numbound::Excluded(e) => {
+                                                *base.add(8).cast::<u8>() = (1i32) as u8;
+                                                let vec35 = e;
+                                                let ptr35 = vec35.as_ptr().cast::<u8>();
+                                                let len35 = vec35.len();
+                                                *base.add(16).cast::<usize>() = len35;
+                                                *base.add(12).cast::<*mut u8>() = ptr35.cast_mut();
+                                            }
+                                            Numbound::Unbounded => {
+                                                *base.add(8).cast::<u8>() = (2i32) as u8;
+                                            }
+                                        }
+                                        match end33 {
+                                            Numbound::Included(e) => {
+                                                *base.add(20).cast::<u8>() = (0i32) as u8;
+                                                let vec36 = e;
+                                                let ptr36 = vec36.as_ptr().cast::<u8>();
+                                                let len36 = vec36.len();
+                                                *base.add(28).cast::<usize>() = len36;
+                                                *base.add(24).cast::<*mut u8>() = ptr36.cast_mut();
+                                            }
+                                            Numbound::Excluded(e) => {
+                                                *base.add(20).cast::<u8>() = (1i32) as u8;
+                                                let vec37 = e;
+                                                let ptr37 = vec37.as_ptr().cast::<u8>();
+                                                let len37 = vec37.len();
+                                                *base.add(28).cast::<usize>() = len37;
+                                                *base.add(24).cast::<*mut u8>() = ptr37.cast_mut();
+                                            }
+                                            Numbound::Unbounded => {
+                                                *base.add(20).cast::<u8>() = (2i32) as u8;
+                                            }
+                                        }
+                                    }
+                                    DbValue::Tsrange(e) => {
+                                        *base.add(0).cast::<u8>() = (31i32) as u8;
+                                        let Tsrange {
+                                            start: start38,
+                                            end: end38,
+                                        } = e;
+                                        match start38 {
+                                            Tsbound::Included(e) => {
+                                                *base.add(8).cast::<u8>() = (0i32) as u8;
+                                                let Timestamp {
+                                                    date: date39,
+                                                    time: time39,
+                                                } = e;
+                                                let Date {
+                                                    year: year40,
+                                                    month: month40,
+                                                    day: day40,
+                                                } = date39;
+                                                *base.add(12).cast::<i32>() = _rt::as_i32(year40);
+                                                *base.add(16).cast::<u8>() =
+                                                    (_rt::as_i32(month40)) as u8;
+                                                *base.add(17).cast::<u8>() =
+                                                    (_rt::as_i32(day40)) as u8;
+                                                let Time {
+                                                    hour: hour41,
+                                                    minute: minute41,
+                                                    second: second41,
+                                                    nanosecond: nanosecond41,
+                                                } = time39;
+                                                *base.add(20).cast::<u8>() =
+                                                    (_rt::as_i32(hour41)) as u8;
+                                                *base.add(21).cast::<u8>() =
+                                                    (_rt::as_i32(minute41)) as u8;
+                                                *base.add(22).cast::<u8>() =
+                                                    (_rt::as_i32(second41)) as u8;
+                                                *base.add(24).cast::<i32>() =
+                                                    _rt::as_i32(nanosecond41);
+                                            }
+                                            Tsbound::Excluded(e) => {
+                                                *base.add(8).cast::<u8>() = (1i32) as u8;
+                                                let Timestamp {
+                                                    date: date42,
+                                                    time: time42,
+                                                } = e;
+                                                let Date {
+                                                    year: year43,
+                                                    month: month43,
+                                                    day: day43,
+                                                } = date42;
+                                                *base.add(12).cast::<i32>() = _rt::as_i32(year43);
+                                                *base.add(16).cast::<u8>() =
+                                                    (_rt::as_i32(month43)) as u8;
+                                                *base.add(17).cast::<u8>() =
+                                                    (_rt::as_i32(day43)) as u8;
+                                                let Time {
+                                                    hour: hour44,
+                                                    minute: minute44,
+                                                    second: second44,
+                                                    nanosecond: nanosecond44,
+                                                } = time42;
+                                                *base.add(20).cast::<u8>() =
+                                                    (_rt::as_i32(hour44)) as u8;
+                                                *base.add(21).cast::<u8>() =
+                                                    (_rt::as_i32(minute44)) as u8;
+                                                *base.add(22).cast::<u8>() =
+                                                    (_rt::as_i32(second44)) as u8;
+                                                *base.add(24).cast::<i32>() =
+                                                    _rt::as_i32(nanosecond44);
+                                            }
+                                            Tsbound::Unbounded => {
+                                                *base.add(8).cast::<u8>() = (2i32) as u8;
+                                            }
+                                        }
+                                        match end38 {
+                                            Tsbound::Included(e) => {
+                                                *base.add(28).cast::<u8>() = (0i32) as u8;
+                                                let Timestamp {
+                                                    date: date45,
+                                                    time: time45,
+                                                } = e;
+                                                let Date {
+                                                    year: year46,
+                                                    month: month46,
+                                                    day: day46,
+                                                } = date45;
+                                                *base.add(32).cast::<i32>() = _rt::as_i32(year46);
+                                                *base.add(36).cast::<u8>() =
+                                                    (_rt::as_i32(month46)) as u8;
+                                                *base.add(37).cast::<u8>() =
+                                                    (_rt::as_i32(day46)) as u8;
+                                                let Time {
+                                                    hour: hour47,
+                                                    minute: minute47,
+                                                    second: second47,
+                                                    nanosecond: nanosecond47,
+                                                } = time45;
+                                                *base.add(40).cast::<u8>() =
+                                                    (_rt::as_i32(hour47)) as u8;
+                                                *base.add(41).cast::<u8>() =
+                                                    (_rt::as_i32(minute47)) as u8;
+                                                *base.add(42).cast::<u8>() =
+                                                    (_rt::as_i32(second47)) as u8;
+                                                *base.add(44).cast::<i32>() =
+                                                    _rt::as_i32(nanosecond47);
+                                            }
+                                            Tsbound::Excluded(e) => {
+                                                *base.add(28).cast::<u8>() = (1i32) as u8;
+                                                let Timestamp {
+                                                    date: date48,
+                                                    time: time48,
+                                                } = e;
+                                                let Date {
+                                                    year: year49,
+                                                    month: month49,
+                                                    day: day49,
+                                                } = date48;
+                                                *base.add(32).cast::<i32>() = _rt::as_i32(year49);
+                                                *base.add(36).cast::<u8>() =
+                                                    (_rt::as_i32(month49)) as u8;
+                                                *base.add(37).cast::<u8>() =
+                                                    (_rt::as_i32(day49)) as u8;
+                                                let Time {
+                                                    hour: hour50,
+                                                    minute: minute50,
+                                                    second: second50,
+                                                    nanosecond: nanosecond50,
+                                                } = time48;
+                                                *base.add(40).cast::<u8>() =
+                                                    (_rt::as_i32(hour50)) as u8;
+                                                *base.add(41).cast::<u8>() =
+                                                    (_rt::as_i32(minute50)) as u8;
+                                                *base.add(42).cast::<u8>() =
+                                                    (_rt::as_i32(second50)) as u8;
+                                                *base.add(44).cast::<i32>() =
+                                                    _rt::as_i32(nanosecond50);
+                                            }
+                                            Tsbound::Unbounded => {
+                                                *base.add(28).cast::<u8>() = (2i32) as u8;
+                                            }
+                                        }
+                                    }
+                                    DbValue::Tstzrange(e) => {
+                                        *base.add(0).cast::<u8>() = (32i32) as u8;
+                                        let Tstzrange {
+                                            start: start51,
+                                            end: end51,
+                                        } = e;
+                                        match start51 {
+                                            Tstzbound::Included(e) => {
+                                                *base.add(8).cast::<u8>() = (0i32) as u8;
+                                                let Timestamptz {
+                                                    timestamp: timestamp52,
+                                                    offset: offset52,
+                                                } = e;
+                                                let Timestamp {
+                                                    date: date53,
+                                                    time: time53,
+                                                } = timestamp52;
+                                                let Date {
+                                                    year: year54,
+                                                    month: month54,
+                                                    day: day54,
+                                                } = date53;
+                                                *base.add(12).cast::<i32>() = _rt::as_i32(year54);
+                                                *base.add(16).cast::<u8>() =
+                                                    (_rt::as_i32(month54)) as u8;
+                                                *base.add(17).cast::<u8>() =
+                                                    (_rt::as_i32(day54)) as u8;
+                                                let Time {
+                                                    hour: hour55,
+                                                    minute: minute55,
+                                                    second: second55,
+                                                    nanosecond: nanosecond55,
+                                                } = time53;
+                                                *base.add(20).cast::<u8>() =
+                                                    (_rt::as_i32(hour55)) as u8;
+                                                *base.add(21).cast::<u8>() =
+                                                    (_rt::as_i32(minute55)) as u8;
+                                                *base.add(22).cast::<u8>() =
+                                                    (_rt::as_i32(second55)) as u8;
+                                                *base.add(24).cast::<i32>() =
+                                                    _rt::as_i32(nanosecond55);
+                                                *base.add(28).cast::<i32>() = _rt::as_i32(offset52);
+                                            }
+                                            Tstzbound::Excluded(e) => {
+                                                *base.add(8).cast::<u8>() = (1i32) as u8;
+                                                let Timestamptz {
+                                                    timestamp: timestamp56,
+                                                    offset: offset56,
+                                                } = e;
+                                                let Timestamp {
+                                                    date: date57,
+                                                    time: time57,
+                                                } = timestamp56;
+                                                let Date {
+                                                    year: year58,
+                                                    month: month58,
+                                                    day: day58,
+                                                } = date57;
+                                                *base.add(12).cast::<i32>() = _rt::as_i32(year58);
+                                                *base.add(16).cast::<u8>() =
+                                                    (_rt::as_i32(month58)) as u8;
+                                                *base.add(17).cast::<u8>() =
+                                                    (_rt::as_i32(day58)) as u8;
+                                                let Time {
+                                                    hour: hour59,
+                                                    minute: minute59,
+                                                    second: second59,
+                                                    nanosecond: nanosecond59,
+                                                } = time57;
+                                                *base.add(20).cast::<u8>() =
+                                                    (_rt::as_i32(hour59)) as u8;
+                                                *base.add(21).cast::<u8>() =
+                                                    (_rt::as_i32(minute59)) as u8;
+                                                *base.add(22).cast::<u8>() =
+                                                    (_rt::as_i32(second59)) as u8;
+                                                *base.add(24).cast::<i32>() =
+                                                    _rt::as_i32(nanosecond59);
+                                                *base.add(28).cast::<i32>() = _rt::as_i32(offset56);
+                                            }
+                                            Tstzbound::Unbounded => {
+                                                *base.add(8).cast::<u8>() = (2i32) as u8;
+                                            }
+                                        }
+                                        match end51 {
+                                            Tstzbound::Included(e) => {
+                                                *base.add(32).cast::<u8>() = (0i32) as u8;
+                                                let Timestamptz {
+                                                    timestamp: timestamp60,
+                                                    offset: offset60,
+                                                } = e;
+                                                let Timestamp {
+                                                    date: date61,
+                                                    time: time61,
+                                                } = timestamp60;
+                                                let Date {
+                                                    year: year62,
+                                                    month: month62,
+                                                    day: day62,
+                                                } = date61;
+                                                *base.add(36).cast::<i32>() = _rt::as_i32(year62);
+                                                *base.add(40).cast::<u8>() =
+                                                    (_rt::as_i32(month62)) as u8;
+                                                *base.add(41).cast::<u8>() =
+                                                    (_rt::as_i32(day62)) as u8;
+                                                let Time {
+                                                    hour: hour63,
+                                                    minute: minute63,
+                                                    second: second63,
+                                                    nanosecond: nanosecond63,
+                                                } = time61;
+                                                *base.add(44).cast::<u8>() =
+                                                    (_rt::as_i32(hour63)) as u8;
+                                                *base.add(45).cast::<u8>() =
+                                                    (_rt::as_i32(minute63)) as u8;
+                                                *base.add(46).cast::<u8>() =
+                                                    (_rt::as_i32(second63)) as u8;
+                                                *base.add(48).cast::<i32>() =
+                                                    _rt::as_i32(nanosecond63);
+                                                *base.add(52).cast::<i32>() = _rt::as_i32(offset60);
+                                            }
+                                            Tstzbound::Excluded(e) => {
+                                                *base.add(32).cast::<u8>() = (1i32) as u8;
+                                                let Timestamptz {
+                                                    timestamp: timestamp64,
+                                                    offset: offset64,
+                                                } = e;
+                                                let Timestamp {
+                                                    date: date65,
+                                                    time: time65,
+                                                } = timestamp64;
+                                                let Date {
+                                                    year: year66,
+                                                    month: month66,
+                                                    day: day66,
+                                                } = date65;
+                                                *base.add(36).cast::<i32>() = _rt::as_i32(year66);
+                                                *base.add(40).cast::<u8>() =
+                                                    (_rt::as_i32(month66)) as u8;
+                                                *base.add(41).cast::<u8>() =
+                                                    (_rt::as_i32(day66)) as u8;
+                                                let Time {
+                                                    hour: hour67,
+                                                    minute: minute67,
+                                                    second: second67,
+                                                    nanosecond: nanosecond67,
+                                                } = time65;
+                                                *base.add(44).cast::<u8>() =
+                                                    (_rt::as_i32(hour67)) as u8;
+                                                *base.add(45).cast::<u8>() =
+                                                    (_rt::as_i32(minute67)) as u8;
+                                                *base.add(46).cast::<u8>() =
+                                                    (_rt::as_i32(second67)) as u8;
+                                                *base.add(48).cast::<i32>() =
+                                                    _rt::as_i32(nanosecond67);
+                                                *base.add(52).cast::<i32>() = _rt::as_i32(offset64);
+                                            }
+                                            Tstzbound::Unbounded => {
+                                                *base.add(32).cast::<u8>() = (2i32) as u8;
+                                            }
+                                        }
+                                    }
+                                    DbValue::Daterange(e) => {
+                                        *base.add(0).cast::<u8>() = (33i32) as u8;
+                                        let Daterange {
+                                            start: start68,
+                                            end: end68,
+                                        } = e;
+                                        match start68 {
+                                            Datebound::Included(e) => {
+                                                *base.add(8).cast::<u8>() = (0i32) as u8;
+                                                let Date {
+                                                    year: year69,
+                                                    month: month69,
+                                                    day: day69,
+                                                } = e;
+                                                *base.add(12).cast::<i32>() = _rt::as_i32(year69);
+                                                *base.add(16).cast::<u8>() =
+                                                    (_rt::as_i32(month69)) as u8;
+                                                *base.add(17).cast::<u8>() =
+                                                    (_rt::as_i32(day69)) as u8;
+                                            }
+                                            Datebound::Excluded(e) => {
+                                                *base.add(8).cast::<u8>() = (1i32) as u8;
+                                                let Date {
+                                                    year: year70,
+                                                    month: month70,
+                                                    day: day70,
+                                                } = e;
+                                                *base.add(12).cast::<i32>() = _rt::as_i32(year70);
+                                                *base.add(16).cast::<u8>() =
+                                                    (_rt::as_i32(month70)) as u8;
+                                                *base.add(17).cast::<u8>() =
+                                                    (_rt::as_i32(day70)) as u8;
+                                            }
+                                            Datebound::Unbounded => {
+                                                *base.add(8).cast::<u8>() = (2i32) as u8;
+                                            }
+                                        }
+                                        match end68 {
+                                            Datebound::Included(e) => {
+                                                *base.add(20).cast::<u8>() = (0i32) as u8;
+                                                let Date {
+                                                    year: year71,
+                                                    month: month71,
+                                                    day: day71,
+                                                } = e;
+                                                *base.add(24).cast::<i32>() = _rt::as_i32(year71);
+                                                *base.add(28).cast::<u8>() =
+                                                    (_rt::as_i32(month71)) as u8;
+                                                *base.add(29).cast::<u8>() =
+                                                    (_rt::as_i32(day71)) as u8;
+                                            }
+                                            Datebound::Excluded(e) => {
+                                                *base.add(20).cast::<u8>() = (1i32) as u8;
+                                                let Date {
+                                                    year: year72,
+                                                    month: month72,
+                                                    day: day72,
+                                                } = e;
+                                                *base.add(24).cast::<i32>() = _rt::as_i32(year72);
+                                                *base.add(28).cast::<u8>() =
+                                                    (_rt::as_i32(month72)) as u8;
+                                                *base.add(29).cast::<u8>() =
+                                                    (_rt::as_i32(day72)) as u8;
+                                            }
+                                            Datebound::Unbounded => {
+                                                *base.add(20).cast::<u8>() = (2i32) as u8;
+                                            }
+                                        }
+                                    }
+                                    DbValue::Money(e) => {
+                                        *base.add(0).cast::<u8>() = (34i32) as u8;
+                                        *base.add(8).cast::<i64>() = _rt::as_i64(e);
+                                    }
+                                    DbValue::Oid(e) => {
+                                        *base.add(0).cast::<u8>() = (35i32) as u8;
+                                        *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                    }
+                                    DbValue::Enumeration(e) => {
+                                        *base.add(0).cast::<u8>() = (36i32) as u8;
+                                        let Enumeration {
+                                            name: name73,
+                                            value: value73,
+                                        } = e;
+                                        let vec74 = name73;
+                                        let ptr74 = vec74.as_ptr().cast::<u8>();
+                                        let len74 = vec74.len();
+                                        *base.add(12).cast::<usize>() = len74;
+                                        *base.add(8).cast::<*mut u8>() = ptr74.cast_mut();
+                                        let vec75 = value73;
+                                        let ptr75 = vec75.as_ptr().cast::<u8>();
+                                        let len75 = vec75.len();
+                                        *base.add(20).cast::<usize>() = len75;
+                                        *base.add(16).cast::<*mut u8>() = ptr75.cast_mut();
+                                    }
+                                    DbValue::Composite(e) => {
+                                        *base.add(0).cast::<u8>() = (37i32) as u8;
+                                        let Composite {
+                                            name: name76,
+                                            values: values76,
+                                        } = e;
+                                        let vec77 = name76;
+                                        let ptr77 = vec77.as_ptr().cast::<u8>();
+                                        let len77 = vec77.len();
+                                        *base.add(12).cast::<usize>() = len77;
+                                        *base.add(8).cast::<*mut u8>() = ptr77.cast_mut();
+                                        let vec78 = values76;
+                                        let len78 = vec78.len();
+                                        let layout78 =
+                                            _rt::alloc::Layout::from_size_align_unchecked(
+                                                vec78.len() * 4,
+                                                4,
+                                            );
+                                        let result78 = if layout78.size() != 0 {
+                                            let ptr = _rt::alloc::alloc(layout78).cast::<u8>();
+                                            if ptr.is_null() {
+                                                _rt::alloc::handle_alloc_error(layout78);
+                                            }
+                                            ptr
+                                        } else {
+                                            {
+                                                ::core::ptr::null_mut()
+                                            }
+                                        };
+                                        for (i, e) in vec78.into_iter().enumerate() {
+                                            let base = result78.add(i * 4);
+                                            {
+                                                *base.add(0).cast::<i32>() =
+                                                    (e).take_handle() as i32;
+                                            }
+                                        }
+                                        *base.add(20).cast::<usize>() = len78;
+                                        *base.add(16).cast::<*mut u8>() = result78;
+                                        cleanup_list.extend_from_slice(&[(result78, layout78)]);
+                                    }
+                                    DbValue::Domain(e) => {
+                                        *base.add(0).cast::<u8>() = (38i32) as u8;
+                                        let Domain {
+                                            name: name79,
+                                            value: value79,
+                                        } = e;
+                                        let vec80 = name79;
+                                        let ptr80 = vec80.as_ptr().cast::<u8>();
+                                        let len80 = vec80.len();
+                                        *base.add(12).cast::<usize>() = len80;
+                                        *base.add(8).cast::<*mut u8>() = ptr80.cast_mut();
+                                        *base.add(16).cast::<i32>() =
+                                            (value79).take_handle() as i32;
+                                    }
+                                    DbValue::Array(e) => {
+                                        *base.add(0).cast::<u8>() = (39i32) as u8;
+                                        let vec81 = e;
+                                        let len81 = vec81.len();
+                                        let layout81 =
+                                            _rt::alloc::Layout::from_size_align_unchecked(
+                                                vec81.len() * 4,
+                                                4,
+                                            );
+                                        let result81 = if layout81.size() != 0 {
+                                            let ptr = _rt::alloc::alloc(layout81).cast::<u8>();
+                                            if ptr.is_null() {
+                                                _rt::alloc::handle_alloc_error(layout81);
+                                            }
+                                            ptr
+                                        } else {
+                                            {
+                                                ::core::ptr::null_mut()
+                                            }
+                                        };
+                                        for (i, e) in vec81.into_iter().enumerate() {
+                                            let base = result81.add(i * 4);
+                                            {
+                                                *base.add(0).cast::<i32>() =
+                                                    (e).take_handle() as i32;
+                                            }
+                                        }
+                                        *base.add(12).cast::<usize>() = len81;
+                                        *base.add(8).cast::<*mut u8>() = result81;
+                                        cleanup_list.extend_from_slice(&[(result81, layout81)]);
+                                    }
+                                    DbValue::Null => {
+                                        *base.add(0).cast::<u8>() = (40i32) as u8;
+                                    }
+                                }
+                            }
+                        }
+                        let ptr83 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:rdbms/postgres@0.0.1")]
+                        extern "C" {
+                            #[link_name = "[method]db-connection.query-stream"]
+                            fn wit_import(
+                                _: i32,
+                                _: *mut u8,
+                                _: usize,
+                                _: *mut u8,
+                                _: usize,
+                                _: *mut u8,
+                            );
+                        }
+
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(
+                            _: i32,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                        ) {
+                            unreachable!()
+                        }
+                        wit_import(
+                            (self).handle() as i32,
+                            ptr0.cast_mut(),
+                            len0,
+                            result82,
+                            len82,
+                            ptr83,
+                        );
+                        let l84 = i32::from(*ptr83.add(0).cast::<u8>());
+                        if layout82.size() != 0 {
+                            _rt::alloc::dealloc(result82.cast(), layout82);
+                        }
+                        for (ptr, layout) in cleanup_list {
+                            if layout.size() != 0 {
+                                _rt::alloc::dealloc(ptr.cast(), layout);
+                            }
+                        }
+                        match l84 {
+                            0 => {
+                                let e = {
+                                    let l85 = *ptr83.add(4).cast::<i32>();
+
+                                    DbResultStream::from_handle(l85 as u32)
+                                };
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = {
+                                    let l86 = i32::from(*ptr83.add(4).cast::<u8>());
+                                    let v102 = match l86 {
+                                        0 => {
+                                            let e102 = {
+                                                let l87 = *ptr83.add(8).cast::<*mut u8>();
+                                                let l88 = *ptr83.add(12).cast::<usize>();
+                                                let len89 = l88;
+                                                let bytes89 = _rt::Vec::from_raw_parts(
+                                                    l87.cast(),
+                                                    len89,
+                                                    len89,
+                                                );
+
+                                                _rt::string_lift(bytes89)
+                                            };
+                                            Error::ConnectionFailure(e102)
+                                        }
+                                        1 => {
+                                            let e102 = {
+                                                let l90 = *ptr83.add(8).cast::<*mut u8>();
+                                                let l91 = *ptr83.add(12).cast::<usize>();
+                                                let len92 = l91;
+                                                let bytes92 = _rt::Vec::from_raw_parts(
+                                                    l90.cast(),
+                                                    len92,
+                                                    len92,
+                                                );
+
+                                                _rt::string_lift(bytes92)
+                                            };
+                                            Error::QueryParameterFailure(e102)
+                                        }
+                                        2 => {
+                                            let e102 = {
+                                                let l93 = *ptr83.add(8).cast::<*mut u8>();
+                                                let l94 = *ptr83.add(12).cast::<usize>();
+                                                let len95 = l94;
+                                                let bytes95 = _rt::Vec::from_raw_parts(
+                                                    l93.cast(),
+                                                    len95,
+                                                    len95,
+                                                );
+
+                                                _rt::string_lift(bytes95)
+                                            };
+                                            Error::QueryExecutionFailure(e102)
+                                        }
+                                        3 => {
+                                            let e102 = {
+                                                let l96 = *ptr83.add(8).cast::<*mut u8>();
+                                                let l97 = *ptr83.add(12).cast::<usize>();
+                                                let len98 = l97;
+                                                let bytes98 = _rt::Vec::from_raw_parts(
+                                                    l96.cast(),
+                                                    len98,
+                                                    len98,
+                                                );
+
+                                                _rt::string_lift(bytes98)
+                                            };
+                                            Error::QueryResponseFailure(e102)
+                                        }
+                                        n => {
+                                            debug_assert_eq!(n, 4, "invalid enum discriminant");
+                                            let e102 = {
+                                                let l99 = *ptr83.add(8).cast::<*mut u8>();
+                                                let l100 = *ptr83.add(12).cast::<usize>();
+                                                let len101 = l100;
+                                                let bytes101 = _rt::Vec::from_raw_parts(
+                                                    l99.cast(),
+                                                    len101,
+                                                    len101,
+                                                );
+
+                                                _rt::string_lift(bytes101)
+                                            };
+                                            Error::Other(e102)
+                                        }
+                                    };
+
+                                    v102
+                                };
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl DbConnection {
+                #[allow(unused_unsafe, clippy::all)]
+                pub fn query(
+                    &self,
+                    statement: &str,
+                    params: _rt::Vec<DbValue>,
+                ) -> Result<DbResult, Error> {
+                    unsafe {
+                        let mut cleanup_list = _rt::Vec::new();
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 20]);
+                        let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 20]);
                         let vec0 = statement;
                         let ptr0 = vec0.as_ptr().cast::<u8>();
                         let len0 = vec0.len();
@@ -6661,95 +7832,2035 @@ pub mod wasi {
                         match l84 {
                             0 => {
                                 let e = {
-                                    let l85 = *ptr83.add(4).cast::<i32>();
+                                    let l85 = *ptr83.add(4).cast::<*mut u8>();
+                                    let l86 = *ptr83.add(8).cast::<usize>();
+                                    let base114 = l85;
+                                    let len114 = l86;
+                                    let mut result114 = _rt::Vec::with_capacity(len114);
+                                    for i in 0..len114 {
+                                        let base = base114.add(i * 48);
+                                        let e114 = {
+                                            let l87 = *base.add(0).cast::<i64>();
+                                            let l88 = *base.add(8).cast::<*mut u8>();
+                                            let l89 = *base.add(12).cast::<usize>();
+                                            let len90 = l89;
+                                            let bytes90 =
+                                                _rt::Vec::from_raw_parts(l88.cast(), len90, len90);
+                                            let l91 = i32::from(*base.add(16).cast::<u8>());
+                                            let v110 = match l91 {
+                                                0 => DbColumnType::Character,
+                                                1 => DbColumnType::Int2,
+                                                2 => DbColumnType::Int4,
+                                                3 => DbColumnType::Int8,
+                                                4 => DbColumnType::Float4,
+                                                5 => DbColumnType::Float8,
+                                                6 => DbColumnType::Numeric,
+                                                7 => DbColumnType::Boolean,
+                                                8 => DbColumnType::Text,
+                                                9 => DbColumnType::Varchar,
+                                                10 => DbColumnType::Bpchar,
+                                                11 => DbColumnType::Timestamp,
+                                                12 => DbColumnType::Timestamptz,
+                                                13 => DbColumnType::Date,
+                                                14 => DbColumnType::Time,
+                                                15 => DbColumnType::Timetz,
+                                                16 => DbColumnType::Interval,
+                                                17 => DbColumnType::Bytea,
+                                                18 => DbColumnType::Uuid,
+                                                19 => DbColumnType::Xml,
+                                                20 => DbColumnType::Json,
+                                                21 => DbColumnType::Jsonb,
+                                                22 => DbColumnType::Jsonpath,
+                                                23 => DbColumnType::Inet,
+                                                24 => DbColumnType::Cidr,
+                                                25 => DbColumnType::Macaddr,
+                                                26 => DbColumnType::Bit,
+                                                27 => DbColumnType::Varbit,
+                                                28 => DbColumnType::Int4range,
+                                                29 => DbColumnType::Int8range,
+                                                30 => DbColumnType::Numrange,
+                                                31 => DbColumnType::Tsrange,
+                                                32 => DbColumnType::Tstzrange,
+                                                33 => DbColumnType::Daterange,
+                                                34 => DbColumnType::Money,
+                                                35 => DbColumnType::Oid,
+                                                36 => {
+                                                    let e110 = {
+                                                        let l92 = *base.add(20).cast::<*mut u8>();
+                                                        let l93 = *base.add(24).cast::<usize>();
+                                                        let len94 = l93;
+                                                        let bytes94 = _rt::Vec::from_raw_parts(
+                                                            l92.cast(),
+                                                            len94,
+                                                            len94,
+                                                        );
 
-                                    DbResultSet::from_handle(l85 as u32)
+                                                        EnumerationType {
+                                                            name: _rt::string_lift(bytes94),
+                                                        }
+                                                    };
+                                                    DbColumnType::Enumeration(e110)
+                                                }
+                                                37 => {
+                                                    let e110 = {
+                                                        let l95 = *base.add(20).cast::<*mut u8>();
+                                                        let l96 = *base.add(24).cast::<usize>();
+                                                        let len97 = l96;
+                                                        let bytes97 = _rt::Vec::from_raw_parts(
+                                                            l95.cast(),
+                                                            len97,
+                                                            len97,
+                                                        );
+                                                        let l98 = *base.add(28).cast::<*mut u8>();
+                                                        let l99 = *base.add(32).cast::<usize>();
+                                                        let base104 = l98;
+                                                        let len104 = l99;
+                                                        let mut result104 =
+                                                            _rt::Vec::with_capacity(len104);
+                                                        for i in 0..len104 {
+                                                            let base = base104.add(i * 12);
+                                                            let e104 = {
+                                                                let l100 =
+                                                                    *base.add(0).cast::<*mut u8>();
+                                                                let l101 =
+                                                                    *base.add(4).cast::<usize>();
+                                                                let len102 = l101;
+                                                                let bytes102 =
+                                                                    _rt::Vec::from_raw_parts(
+                                                                        l100.cast(),
+                                                                        len102,
+                                                                        len102,
+                                                                    );
+                                                                let l103 =
+                                                                    *base.add(8).cast::<i32>();
+
+                                                                (
+                                                                    _rt::string_lift(bytes102),
+                                                                    LazyDbColumnType::from_handle(
+                                                                        l103 as u32,
+                                                                    ),
+                                                                )
+                                                            };
+                                                            result104.push(e104);
+                                                        }
+                                                        _rt::cabi_dealloc(base104, len104 * 12, 4);
+
+                                                        CompositeType {
+                                                            name: _rt::string_lift(bytes97),
+                                                            attributes: result104,
+                                                        }
+                                                    };
+                                                    DbColumnType::Composite(e110)
+                                                }
+                                                38 => {
+                                                    let e110 = {
+                                                        let l105 = *base.add(20).cast::<*mut u8>();
+                                                        let l106 = *base.add(24).cast::<usize>();
+                                                        let len107 = l106;
+                                                        let bytes107 = _rt::Vec::from_raw_parts(
+                                                            l105.cast(),
+                                                            len107,
+                                                            len107,
+                                                        );
+                                                        let l108 = *base.add(28).cast::<i32>();
+
+                                                        DomainType {
+                                                            name: _rt::string_lift(bytes107),
+                                                            base_type:
+                                                                LazyDbColumnType::from_handle(
+                                                                    l108 as u32,
+                                                                ),
+                                                        }
+                                                    };
+                                                    DbColumnType::Domain(e110)
+                                                }
+                                                n => {
+                                                    debug_assert_eq!(
+                                                        n, 39,
+                                                        "invalid enum discriminant"
+                                                    );
+                                                    let e110 = {
+                                                        let l109 = *base.add(20).cast::<i32>();
+
+                                                        LazyDbColumnType::from_handle(l109 as u32)
+                                                    };
+                                                    DbColumnType::Array(e110)
+                                                }
+                                            };
+                                            let l111 = *base.add(36).cast::<*mut u8>();
+                                            let l112 = *base.add(40).cast::<usize>();
+                                            let len113 = l112;
+                                            let bytes113 = _rt::Vec::from_raw_parts(
+                                                l111.cast(),
+                                                len113,
+                                                len113,
+                                            );
+
+                                            DbColumn {
+                                                ordinal: l87 as u64,
+                                                name: _rt::string_lift(bytes90),
+                                                db_type: v110,
+                                                db_type_name: _rt::string_lift(bytes113),
+                                            }
+                                        };
+                                        result114.push(e114);
+                                    }
+                                    _rt::cabi_dealloc(base114, len114 * 48, 8);
+                                    let l115 = *ptr83.add(12).cast::<*mut u8>();
+                                    let l116 = *ptr83.add(16).cast::<usize>();
+                                    let base369 = l115;
+                                    let len369 = l116;
+                                    let mut result369 = _rt::Vec::with_capacity(len369);
+                                    for i in 0..len369 {
+                                        let base = base369.add(i * 8);
+                                        let e369 = {
+                                            let l117 = *base.add(0).cast::<*mut u8>();
+                                            let l118 = *base.add(4).cast::<usize>();
+                                            let base368 = l117;
+                                            let len368 = l118;
+                                            let mut result368 = _rt::Vec::with_capacity(len368);
+                                            for i in 0..len368 {
+                                                let base = base368.add(i * 56);
+                                                let e368 = {
+                                                    let l119 = i32::from(*base.add(0).cast::<u8>());
+                                                    let v367 = match l119 {
+                                                        0 => {
+                                                            let e367 = {
+                                                                let l120 = i32::from(
+                                                                    *base.add(8).cast::<i8>(),
+                                                                );
+
+                                                                l120 as i8
+                                                            };
+                                                            DbValue::Character(e367)
+                                                        }
+                                                        1 => {
+                                                            let e367 = {
+                                                                let l121 = i32::from(
+                                                                    *base.add(8).cast::<i16>(),
+                                                                );
+
+                                                                l121 as i16
+                                                            };
+                                                            DbValue::Int2(e367)
+                                                        }
+                                                        2 => {
+                                                            let e367 = {
+                                                                let l122 =
+                                                                    *base.add(8).cast::<i32>();
+
+                                                                l122
+                                                            };
+                                                            DbValue::Int4(e367)
+                                                        }
+                                                        3 => {
+                                                            let e367 = {
+                                                                let l123 =
+                                                                    *base.add(8).cast::<i64>();
+
+                                                                l123
+                                                            };
+                                                            DbValue::Int8(e367)
+                                                        }
+                                                        4 => {
+                                                            let e367 = {
+                                                                let l124 =
+                                                                    *base.add(8).cast::<f32>();
+
+                                                                l124
+                                                            };
+                                                            DbValue::Float4(e367)
+                                                        }
+                                                        5 => {
+                                                            let e367 = {
+                                                                let l125 =
+                                                                    *base.add(8).cast::<f64>();
+
+                                                                l125
+                                                            };
+                                                            DbValue::Float8(e367)
+                                                        }
+                                                        6 => {
+                                                            let e367 = {
+                                                                let l126 =
+                                                                    *base.add(8).cast::<*mut u8>();
+                                                                let l127 =
+                                                                    *base.add(12).cast::<usize>();
+                                                                let len128 = l127;
+                                                                let bytes128 =
+                                                                    _rt::Vec::from_raw_parts(
+                                                                        l126.cast(),
+                                                                        len128,
+                                                                        len128,
+                                                                    );
+
+                                                                _rt::string_lift(bytes128)
+                                                            };
+                                                            DbValue::Numeric(e367)
+                                                        }
+                                                        7 => {
+                                                            let e367 = {
+                                                                let l129 = i32::from(
+                                                                    *base.add(8).cast::<u8>(),
+                                                                );
+
+                                                                _rt::bool_lift(l129 as u8)
+                                                            };
+                                                            DbValue::Boolean(e367)
+                                                        }
+                                                        8 => {
+                                                            let e367 = {
+                                                                let l130 =
+                                                                    *base.add(8).cast::<*mut u8>();
+                                                                let l131 =
+                                                                    *base.add(12).cast::<usize>();
+                                                                let len132 = l131;
+                                                                let bytes132 =
+                                                                    _rt::Vec::from_raw_parts(
+                                                                        l130.cast(),
+                                                                        len132,
+                                                                        len132,
+                                                                    );
+
+                                                                _rt::string_lift(bytes132)
+                                                            };
+                                                            DbValue::Text(e367)
+                                                        }
+                                                        9 => {
+                                                            let e367 = {
+                                                                let l133 =
+                                                                    *base.add(8).cast::<*mut u8>();
+                                                                let l134 =
+                                                                    *base.add(12).cast::<usize>();
+                                                                let len135 = l134;
+                                                                let bytes135 =
+                                                                    _rt::Vec::from_raw_parts(
+                                                                        l133.cast(),
+                                                                        len135,
+                                                                        len135,
+                                                                    );
+
+                                                                _rt::string_lift(bytes135)
+                                                            };
+                                                            DbValue::Varchar(e367)
+                                                        }
+                                                        10 => {
+                                                            let e367 = {
+                                                                let l136 =
+                                                                    *base.add(8).cast::<*mut u8>();
+                                                                let l137 =
+                                                                    *base.add(12).cast::<usize>();
+                                                                let len138 = l137;
+                                                                let bytes138 =
+                                                                    _rt::Vec::from_raw_parts(
+                                                                        l136.cast(),
+                                                                        len138,
+                                                                        len138,
+                                                                    );
+
+                                                                _rt::string_lift(bytes138)
+                                                            };
+                                                            DbValue::Bpchar(e367)
+                                                        }
+                                                        11 => {
+                                                            let e367 = {
+                                                                let l139 =
+                                                                    *base.add(8).cast::<i32>();
+                                                                let l140 = i32::from(
+                                                                    *base.add(12).cast::<u8>(),
+                                                                );
+                                                                let l141 = i32::from(
+                                                                    *base.add(13).cast::<u8>(),
+                                                                );
+                                                                let l142 = i32::from(
+                                                                    *base.add(16).cast::<u8>(),
+                                                                );
+                                                                let l143 = i32::from(
+                                                                    *base.add(17).cast::<u8>(),
+                                                                );
+                                                                let l144 = i32::from(
+                                                                    *base.add(18).cast::<u8>(),
+                                                                );
+                                                                let l145 =
+                                                                    *base.add(20).cast::<i32>();
+
+                                                                Timestamp {
+                                                                    date: Date {
+                                                                        year: l139,
+                                                                        month: l140 as u8,
+                                                                        day: l141 as u8,
+                                                                    },
+                                                                    time: Time {
+                                                                        hour: l142 as u8,
+                                                                        minute: l143 as u8,
+                                                                        second: l144 as u8,
+                                                                        nanosecond: l145 as u32,
+                                                                    },
+                                                                }
+                                                            };
+                                                            DbValue::Timestamp(e367)
+                                                        }
+                                                        12 => {
+                                                            let e367 = {
+                                                                let l146 =
+                                                                    *base.add(8).cast::<i32>();
+                                                                let l147 = i32::from(
+                                                                    *base.add(12).cast::<u8>(),
+                                                                );
+                                                                let l148 = i32::from(
+                                                                    *base.add(13).cast::<u8>(),
+                                                                );
+                                                                let l149 = i32::from(
+                                                                    *base.add(16).cast::<u8>(),
+                                                                );
+                                                                let l150 = i32::from(
+                                                                    *base.add(17).cast::<u8>(),
+                                                                );
+                                                                let l151 = i32::from(
+                                                                    *base.add(18).cast::<u8>(),
+                                                                );
+                                                                let l152 =
+                                                                    *base.add(20).cast::<i32>();
+                                                                let l153 =
+                                                                    *base.add(24).cast::<i32>();
+
+                                                                Timestamptz {
+                                                                    timestamp: Timestamp {
+                                                                        date: Date {
+                                                                            year: l146,
+                                                                            month: l147 as u8,
+                                                                            day: l148 as u8,
+                                                                        },
+                                                                        time: Time {
+                                                                            hour: l149 as u8,
+                                                                            minute: l150 as u8,
+                                                                            second: l151 as u8,
+                                                                            nanosecond: l152 as u32,
+                                                                        },
+                                                                    },
+                                                                    offset: l153,
+                                                                }
+                                                            };
+                                                            DbValue::Timestamptz(e367)
+                                                        }
+                                                        13 => {
+                                                            let e367 = {
+                                                                let l154 =
+                                                                    *base.add(8).cast::<i32>();
+                                                                let l155 = i32::from(
+                                                                    *base.add(12).cast::<u8>(),
+                                                                );
+                                                                let l156 = i32::from(
+                                                                    *base.add(13).cast::<u8>(),
+                                                                );
+
+                                                                Date {
+                                                                    year: l154,
+                                                                    month: l155 as u8,
+                                                                    day: l156 as u8,
+                                                                }
+                                                            };
+                                                            DbValue::Date(e367)
+                                                        }
+                                                        14 => {
+                                                            let e367 = {
+                                                                let l157 = i32::from(
+                                                                    *base.add(8).cast::<u8>(),
+                                                                );
+                                                                let l158 = i32::from(
+                                                                    *base.add(9).cast::<u8>(),
+                                                                );
+                                                                let l159 = i32::from(
+                                                                    *base.add(10).cast::<u8>(),
+                                                                );
+                                                                let l160 =
+                                                                    *base.add(12).cast::<i32>();
+
+                                                                Time {
+                                                                    hour: l157 as u8,
+                                                                    minute: l158 as u8,
+                                                                    second: l159 as u8,
+                                                                    nanosecond: l160 as u32,
+                                                                }
+                                                            };
+                                                            DbValue::Time(e367)
+                                                        }
+                                                        15 => {
+                                                            let e367 = {
+                                                                let l161 = i32::from(
+                                                                    *base.add(8).cast::<u8>(),
+                                                                );
+                                                                let l162 = i32::from(
+                                                                    *base.add(9).cast::<u8>(),
+                                                                );
+                                                                let l163 = i32::from(
+                                                                    *base.add(10).cast::<u8>(),
+                                                                );
+                                                                let l164 =
+                                                                    *base.add(12).cast::<i32>();
+                                                                let l165 =
+                                                                    *base.add(16).cast::<i32>();
+
+                                                                Timetz {
+                                                                    time: Time {
+                                                                        hour: l161 as u8,
+                                                                        minute: l162 as u8,
+                                                                        second: l163 as u8,
+                                                                        nanosecond: l164 as u32,
+                                                                    },
+                                                                    offset: l165,
+                                                                }
+                                                            };
+                                                            DbValue::Timetz(e367)
+                                                        }
+                                                        16 => {
+                                                            let e367 = {
+                                                                let l166 =
+                                                                    *base.add(8).cast::<i32>();
+                                                                let l167 =
+                                                                    *base.add(12).cast::<i32>();
+                                                                let l168 =
+                                                                    *base.add(16).cast::<i64>();
+
+                                                                Interval {
+                                                                    months: l166,
+                                                                    days: l167,
+                                                                    microseconds: l168,
+                                                                }
+                                                            };
+                                                            DbValue::Interval(e367)
+                                                        }
+                                                        17 => {
+                                                            let e367 = {
+                                                                let l169 =
+                                                                    *base.add(8).cast::<*mut u8>();
+                                                                let l170 =
+                                                                    *base.add(12).cast::<usize>();
+                                                                let len171 = l170;
+
+                                                                _rt::Vec::from_raw_parts(
+                                                                    l169.cast(),
+                                                                    len171,
+                                                                    len171,
+                                                                )
+                                                            };
+                                                            DbValue::Bytea(e367)
+                                                        }
+                                                        18 => {
+                                                            let e367 = {
+                                                                let l172 =
+                                                                    *base.add(8).cast::<*mut u8>();
+                                                                let l173 =
+                                                                    *base.add(12).cast::<usize>();
+                                                                let len174 = l173;
+                                                                let bytes174 =
+                                                                    _rt::Vec::from_raw_parts(
+                                                                        l172.cast(),
+                                                                        len174,
+                                                                        len174,
+                                                                    );
+
+                                                                _rt::string_lift(bytes174)
+                                                            };
+                                                            DbValue::Json(e367)
+                                                        }
+                                                        19 => {
+                                                            let e367 = {
+                                                                let l175 =
+                                                                    *base.add(8).cast::<*mut u8>();
+                                                                let l176 =
+                                                                    *base.add(12).cast::<usize>();
+                                                                let len177 = l176;
+                                                                let bytes177 =
+                                                                    _rt::Vec::from_raw_parts(
+                                                                        l175.cast(),
+                                                                        len177,
+                                                                        len177,
+                                                                    );
+
+                                                                _rt::string_lift(bytes177)
+                                                            };
+                                                            DbValue::Jsonb(e367)
+                                                        }
+                                                        20 => {
+                                                            let e367 = {
+                                                                let l178 =
+                                                                    *base.add(8).cast::<*mut u8>();
+                                                                let l179 =
+                                                                    *base.add(12).cast::<usize>();
+                                                                let len180 = l179;
+                                                                let bytes180 =
+                                                                    _rt::Vec::from_raw_parts(
+                                                                        l178.cast(),
+                                                                        len180,
+                                                                        len180,
+                                                                    );
+
+                                                                _rt::string_lift(bytes180)
+                                                            };
+                                                            DbValue::Jsonpath(e367)
+                                                        }
+                                                        21 => {
+                                                            let e367 = {
+                                                                let l181 =
+                                                                    *base.add(8).cast::<*mut u8>();
+                                                                let l182 =
+                                                                    *base.add(12).cast::<usize>();
+                                                                let len183 = l182;
+                                                                let bytes183 =
+                                                                    _rt::Vec::from_raw_parts(
+                                                                        l181.cast(),
+                                                                        len183,
+                                                                        len183,
+                                                                    );
+
+                                                                _rt::string_lift(bytes183)
+                                                            };
+                                                            DbValue::Xml(e367)
+                                                        }
+                                                        22 => {
+                                                            let e367 = {
+                                                                let l184 =
+                                                                    *base.add(8).cast::<i64>();
+                                                                let l185 =
+                                                                    *base.add(16).cast::<i64>();
+
+                                                                Uuid {
+                                                                    high_bits: l184 as u64,
+                                                                    low_bits: l185 as u64,
+                                                                }
+                                                            };
+                                                            DbValue::Uuid(e367)
+                                                        }
+                                                        23 => {
+                                                            let e367 = {
+                                                                let l186 = i32::from(
+                                                                    *base.add(8).cast::<u8>(),
+                                                                );
+                                                                let v199 = match l186 {
+                                                                    0 => {
+                                                                        let e199 = {
+                                                                            let l187 = i32::from(
+                                                                                *base
+                                                                                    .add(10)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l188 = i32::from(
+                                                                                *base
+                                                                                    .add(11)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l189 = i32::from(
+                                                                                *base
+                                                                                    .add(12)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l190 = i32::from(
+                                                                                *base
+                                                                                    .add(13)
+                                                                                    .cast::<u8>(),
+                                                                            );
+
+                                                                            (
+                                                                                l187 as u8,
+                                                                                l188 as u8,
+                                                                                l189 as u8,
+                                                                                l190 as u8,
+                                                                            )
+                                                                        };
+                                                                        IpAddress::Ipv4(e199)
+                                                                    }
+                                                                    n => {
+                                                                        debug_assert_eq!(n, 1, "invalid enum discriminant");
+                                                                        let e199 = {
+                                                                            let l191 = i32::from(
+                                                                                *base
+                                                                                    .add(10)
+                                                                                    .cast::<u16>(),
+                                                                            );
+                                                                            let l192 = i32::from(
+                                                                                *base
+                                                                                    .add(12)
+                                                                                    .cast::<u16>(),
+                                                                            );
+                                                                            let l193 = i32::from(
+                                                                                *base
+                                                                                    .add(14)
+                                                                                    .cast::<u16>(),
+                                                                            );
+                                                                            let l194 = i32::from(
+                                                                                *base
+                                                                                    .add(16)
+                                                                                    .cast::<u16>(),
+                                                                            );
+                                                                            let l195 = i32::from(
+                                                                                *base
+                                                                                    .add(18)
+                                                                                    .cast::<u16>(),
+                                                                            );
+                                                                            let l196 = i32::from(
+                                                                                *base
+                                                                                    .add(20)
+                                                                                    .cast::<u16>(),
+                                                                            );
+                                                                            let l197 = i32::from(
+                                                                                *base
+                                                                                    .add(22)
+                                                                                    .cast::<u16>(),
+                                                                            );
+                                                                            let l198 = i32::from(
+                                                                                *base
+                                                                                    .add(24)
+                                                                                    .cast::<u16>(),
+                                                                            );
+
+                                                                            (
+                                                                                l191 as u16,
+                                                                                l192 as u16,
+                                                                                l193 as u16,
+                                                                                l194 as u16,
+                                                                                l195 as u16,
+                                                                                l196 as u16,
+                                                                                l197 as u16,
+                                                                                l198 as u16,
+                                                                            )
+                                                                        };
+                                                                        IpAddress::Ipv6(e199)
+                                                                    }
+                                                                };
+
+                                                                v199
+                                                            };
+                                                            DbValue::Inet(e367)
+                                                        }
+                                                        24 => {
+                                                            let e367 = {
+                                                                let l200 = i32::from(
+                                                                    *base.add(8).cast::<u8>(),
+                                                                );
+                                                                let v213 = match l200 {
+                                                                    0 => {
+                                                                        let e213 = {
+                                                                            let l201 = i32::from(
+                                                                                *base
+                                                                                    .add(10)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l202 = i32::from(
+                                                                                *base
+                                                                                    .add(11)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l203 = i32::from(
+                                                                                *base
+                                                                                    .add(12)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l204 = i32::from(
+                                                                                *base
+                                                                                    .add(13)
+                                                                                    .cast::<u8>(),
+                                                                            );
+
+                                                                            (
+                                                                                l201 as u8,
+                                                                                l202 as u8,
+                                                                                l203 as u8,
+                                                                                l204 as u8,
+                                                                            )
+                                                                        };
+                                                                        IpAddress::Ipv4(e213)
+                                                                    }
+                                                                    n => {
+                                                                        debug_assert_eq!(n, 1, "invalid enum discriminant");
+                                                                        let e213 = {
+                                                                            let l205 = i32::from(
+                                                                                *base
+                                                                                    .add(10)
+                                                                                    .cast::<u16>(),
+                                                                            );
+                                                                            let l206 = i32::from(
+                                                                                *base
+                                                                                    .add(12)
+                                                                                    .cast::<u16>(),
+                                                                            );
+                                                                            let l207 = i32::from(
+                                                                                *base
+                                                                                    .add(14)
+                                                                                    .cast::<u16>(),
+                                                                            );
+                                                                            let l208 = i32::from(
+                                                                                *base
+                                                                                    .add(16)
+                                                                                    .cast::<u16>(),
+                                                                            );
+                                                                            let l209 = i32::from(
+                                                                                *base
+                                                                                    .add(18)
+                                                                                    .cast::<u16>(),
+                                                                            );
+                                                                            let l210 = i32::from(
+                                                                                *base
+                                                                                    .add(20)
+                                                                                    .cast::<u16>(),
+                                                                            );
+                                                                            let l211 = i32::from(
+                                                                                *base
+                                                                                    .add(22)
+                                                                                    .cast::<u16>(),
+                                                                            );
+                                                                            let l212 = i32::from(
+                                                                                *base
+                                                                                    .add(24)
+                                                                                    .cast::<u16>(),
+                                                                            );
+
+                                                                            (
+                                                                                l205 as u16,
+                                                                                l206 as u16,
+                                                                                l207 as u16,
+                                                                                l208 as u16,
+                                                                                l209 as u16,
+                                                                                l210 as u16,
+                                                                                l211 as u16,
+                                                                                l212 as u16,
+                                                                            )
+                                                                        };
+                                                                        IpAddress::Ipv6(e213)
+                                                                    }
+                                                                };
+
+                                                                v213
+                                                            };
+                                                            DbValue::Cidr(e367)
+                                                        }
+                                                        25 => {
+                                                            let e367 = {
+                                                                let l214 = i32::from(
+                                                                    *base.add(8).cast::<u8>(),
+                                                                );
+                                                                let l215 = i32::from(
+                                                                    *base.add(9).cast::<u8>(),
+                                                                );
+                                                                let l216 = i32::from(
+                                                                    *base.add(10).cast::<u8>(),
+                                                                );
+                                                                let l217 = i32::from(
+                                                                    *base.add(11).cast::<u8>(),
+                                                                );
+                                                                let l218 = i32::from(
+                                                                    *base.add(12).cast::<u8>(),
+                                                                );
+                                                                let l219 = i32::from(
+                                                                    *base.add(13).cast::<u8>(),
+                                                                );
+
+                                                                MacAddress {
+                                                                    octets: (
+                                                                        l214 as u8, l215 as u8,
+                                                                        l216 as u8, l217 as u8,
+                                                                        l218 as u8, l219 as u8,
+                                                                    ),
+                                                                }
+                                                            };
+                                                            DbValue::Macaddr(e367)
+                                                        }
+                                                        26 => {
+                                                            let e367 = {
+                                                                let l220 =
+                                                                    *base.add(8).cast::<*mut u8>();
+                                                                let l221 =
+                                                                    *base.add(12).cast::<usize>();
+                                                                let base223 = l220;
+                                                                let len223 = l221;
+                                                                let mut result223 =
+                                                                    _rt::Vec::with_capacity(len223);
+                                                                for i in 0..len223 {
+                                                                    let base = base223.add(i * 1);
+                                                                    let e223 = {
+                                                                        let l222 = i32::from(
+                                                                            *base
+                                                                                .add(0)
+                                                                                .cast::<u8>(),
+                                                                        );
+
+                                                                        _rt::bool_lift(l222 as u8)
+                                                                    };
+                                                                    result223.push(e223);
+                                                                }
+                                                                _rt::cabi_dealloc(
+                                                                    base223,
+                                                                    len223 * 1,
+                                                                    1,
+                                                                );
+
+                                                                result223
+                                                            };
+                                                            DbValue::Bit(e367)
+                                                        }
+                                                        27 => {
+                                                            let e367 = {
+                                                                let l224 =
+                                                                    *base.add(8).cast::<*mut u8>();
+                                                                let l225 =
+                                                                    *base.add(12).cast::<usize>();
+                                                                let base227 = l224;
+                                                                let len227 = l225;
+                                                                let mut result227 =
+                                                                    _rt::Vec::with_capacity(len227);
+                                                                for i in 0..len227 {
+                                                                    let base = base227.add(i * 1);
+                                                                    let e227 = {
+                                                                        let l226 = i32::from(
+                                                                            *base
+                                                                                .add(0)
+                                                                                .cast::<u8>(),
+                                                                        );
+
+                                                                        _rt::bool_lift(l226 as u8)
+                                                                    };
+                                                                    result227.push(e227);
+                                                                }
+                                                                _rt::cabi_dealloc(
+                                                                    base227,
+                                                                    len227 * 1,
+                                                                    1,
+                                                                );
+
+                                                                result227
+                                                            };
+                                                            DbValue::Varbit(e367)
+                                                        }
+                                                        28 => {
+                                                            let e367 = {
+                                                                let l228 = i32::from(
+                                                                    *base.add(8).cast::<u8>(),
+                                                                );
+                                                                let v231 = match l228 {
+                                                                    0 => {
+                                                                        let e231 = {
+                                                                            let l229 = *base
+                                                                                .add(12)
+                                                                                .cast::<i32>();
+
+                                                                            l229
+                                                                        };
+                                                                        Int4bound::Included(e231)
+                                                                    }
+                                                                    1 => {
+                                                                        let e231 = {
+                                                                            let l230 = *base
+                                                                                .add(12)
+                                                                                .cast::<i32>();
+
+                                                                            l230
+                                                                        };
+                                                                        Int4bound::Excluded(e231)
+                                                                    }
+                                                                    n => {
+                                                                        debug_assert_eq!(n, 2, "invalid enum discriminant");
+                                                                        Int4bound::Unbounded
+                                                                    }
+                                                                };
+                                                                let l232 = i32::from(
+                                                                    *base.add(16).cast::<u8>(),
+                                                                );
+                                                                let v235 = match l232 {
+                                                                    0 => {
+                                                                        let e235 = {
+                                                                            let l233 = *base
+                                                                                .add(20)
+                                                                                .cast::<i32>();
+
+                                                                            l233
+                                                                        };
+                                                                        Int4bound::Included(e235)
+                                                                    }
+                                                                    1 => {
+                                                                        let e235 = {
+                                                                            let l234 = *base
+                                                                                .add(20)
+                                                                                .cast::<i32>();
+
+                                                                            l234
+                                                                        };
+                                                                        Int4bound::Excluded(e235)
+                                                                    }
+                                                                    n => {
+                                                                        debug_assert_eq!(n, 2, "invalid enum discriminant");
+                                                                        Int4bound::Unbounded
+                                                                    }
+                                                                };
+
+                                                                Int4range {
+                                                                    start: v231,
+                                                                    end: v235,
+                                                                }
+                                                            };
+                                                            DbValue::Int4range(e367)
+                                                        }
+                                                        29 => {
+                                                            let e367 = {
+                                                                let l236 = i32::from(
+                                                                    *base.add(8).cast::<u8>(),
+                                                                );
+                                                                let v239 = match l236 {
+                                                                    0 => {
+                                                                        let e239 = {
+                                                                            let l237 = *base
+                                                                                .add(16)
+                                                                                .cast::<i64>();
+
+                                                                            l237
+                                                                        };
+                                                                        Int8bound::Included(e239)
+                                                                    }
+                                                                    1 => {
+                                                                        let e239 = {
+                                                                            let l238 = *base
+                                                                                .add(16)
+                                                                                .cast::<i64>();
+
+                                                                            l238
+                                                                        };
+                                                                        Int8bound::Excluded(e239)
+                                                                    }
+                                                                    n => {
+                                                                        debug_assert_eq!(n, 2, "invalid enum discriminant");
+                                                                        Int8bound::Unbounded
+                                                                    }
+                                                                };
+                                                                let l240 = i32::from(
+                                                                    *base.add(24).cast::<u8>(),
+                                                                );
+                                                                let v243 = match l240 {
+                                                                    0 => {
+                                                                        let e243 = {
+                                                                            let l241 = *base
+                                                                                .add(32)
+                                                                                .cast::<i64>();
+
+                                                                            l241
+                                                                        };
+                                                                        Int8bound::Included(e243)
+                                                                    }
+                                                                    1 => {
+                                                                        let e243 = {
+                                                                            let l242 = *base
+                                                                                .add(32)
+                                                                                .cast::<i64>();
+
+                                                                            l242
+                                                                        };
+                                                                        Int8bound::Excluded(e243)
+                                                                    }
+                                                                    n => {
+                                                                        debug_assert_eq!(n, 2, "invalid enum discriminant");
+                                                                        Int8bound::Unbounded
+                                                                    }
+                                                                };
+
+                                                                Int8range {
+                                                                    start: v239,
+                                                                    end: v243,
+                                                                }
+                                                            };
+                                                            DbValue::Int8range(e367)
+                                                        }
+                                                        30 => {
+                                                            let e367 = {
+                                                                let l244 = i32::from(
+                                                                    *base.add(8).cast::<u8>(),
+                                                                );
+                                                                let v251 = match l244 {
+                                                                    0 => {
+                                                                        let e251 = {
+                                                                            let l245 = *base
+                                                                                .add(12)
+                                                                                .cast::<*mut u8>();
+                                                                            let l246 = *base
+                                                                                .add(16)
+                                                                                .cast::<usize>();
+                                                                            let len247 = l246;
+                                                                            let bytes247 = _rt::Vec::from_raw_parts(l245.cast(), len247, len247);
+
+                                                                            _rt::string_lift(
+                                                                                bytes247,
+                                                                            )
+                                                                        };
+                                                                        Numbound::Included(e251)
+                                                                    }
+                                                                    1 => {
+                                                                        let e251 = {
+                                                                            let l248 = *base
+                                                                                .add(12)
+                                                                                .cast::<*mut u8>();
+                                                                            let l249 = *base
+                                                                                .add(16)
+                                                                                .cast::<usize>();
+                                                                            let len250 = l249;
+                                                                            let bytes250 = _rt::Vec::from_raw_parts(l248.cast(), len250, len250);
+
+                                                                            _rt::string_lift(
+                                                                                bytes250,
+                                                                            )
+                                                                        };
+                                                                        Numbound::Excluded(e251)
+                                                                    }
+                                                                    n => {
+                                                                        debug_assert_eq!(n, 2, "invalid enum discriminant");
+                                                                        Numbound::Unbounded
+                                                                    }
+                                                                };
+                                                                let l252 = i32::from(
+                                                                    *base.add(20).cast::<u8>(),
+                                                                );
+                                                                let v259 = match l252 {
+                                                                    0 => {
+                                                                        let e259 = {
+                                                                            let l253 = *base
+                                                                                .add(24)
+                                                                                .cast::<*mut u8>();
+                                                                            let l254 = *base
+                                                                                .add(28)
+                                                                                .cast::<usize>();
+                                                                            let len255 = l254;
+                                                                            let bytes255 = _rt::Vec::from_raw_parts(l253.cast(), len255, len255);
+
+                                                                            _rt::string_lift(
+                                                                                bytes255,
+                                                                            )
+                                                                        };
+                                                                        Numbound::Included(e259)
+                                                                    }
+                                                                    1 => {
+                                                                        let e259 = {
+                                                                            let l256 = *base
+                                                                                .add(24)
+                                                                                .cast::<*mut u8>();
+                                                                            let l257 = *base
+                                                                                .add(28)
+                                                                                .cast::<usize>();
+                                                                            let len258 = l257;
+                                                                            let bytes258 = _rt::Vec::from_raw_parts(l256.cast(), len258, len258);
+
+                                                                            _rt::string_lift(
+                                                                                bytes258,
+                                                                            )
+                                                                        };
+                                                                        Numbound::Excluded(e259)
+                                                                    }
+                                                                    n => {
+                                                                        debug_assert_eq!(n, 2, "invalid enum discriminant");
+                                                                        Numbound::Unbounded
+                                                                    }
+                                                                };
+
+                                                                Numrange {
+                                                                    start: v251,
+                                                                    end: v259,
+                                                                }
+                                                            };
+                                                            DbValue::Numrange(e367)
+                                                        }
+                                                        31 => {
+                                                            let e367 = {
+                                                                let l260 = i32::from(
+                                                                    *base.add(8).cast::<u8>(),
+                                                                );
+                                                                let v275 = match l260 {
+                                                                    0 => {
+                                                                        let e275 = {
+                                                                            let l261 = *base
+                                                                                .add(12)
+                                                                                .cast::<i32>();
+                                                                            let l262 = i32::from(
+                                                                                *base
+                                                                                    .add(16)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l263 = i32::from(
+                                                                                *base
+                                                                                    .add(17)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l264 = i32::from(
+                                                                                *base
+                                                                                    .add(20)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l265 = i32::from(
+                                                                                *base
+                                                                                    .add(21)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l266 = i32::from(
+                                                                                *base
+                                                                                    .add(22)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l267 = *base
+                                                                                .add(24)
+                                                                                .cast::<i32>();
+
+                                                                            Timestamp {
+                                                                                date: Date {
+                                                                                    year: l261,
+                                                                                    month: l262
+                                                                                        as u8,
+                                                                                    day: l263 as u8,
+                                                                                },
+                                                                                time: Time {
+                                                                                    hour: l264
+                                                                                        as u8,
+                                                                                    minute: l265
+                                                                                        as u8,
+                                                                                    second: l266
+                                                                                        as u8,
+                                                                                    nanosecond: l267
+                                                                                        as u32,
+                                                                                },
+                                                                            }
+                                                                        };
+                                                                        Tsbound::Included(e275)
+                                                                    }
+                                                                    1 => {
+                                                                        let e275 = {
+                                                                            let l268 = *base
+                                                                                .add(12)
+                                                                                .cast::<i32>();
+                                                                            let l269 = i32::from(
+                                                                                *base
+                                                                                    .add(16)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l270 = i32::from(
+                                                                                *base
+                                                                                    .add(17)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l271 = i32::from(
+                                                                                *base
+                                                                                    .add(20)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l272 = i32::from(
+                                                                                *base
+                                                                                    .add(21)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l273 = i32::from(
+                                                                                *base
+                                                                                    .add(22)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l274 = *base
+                                                                                .add(24)
+                                                                                .cast::<i32>();
+
+                                                                            Timestamp {
+                                                                                date: Date {
+                                                                                    year: l268,
+                                                                                    month: l269
+                                                                                        as u8,
+                                                                                    day: l270 as u8,
+                                                                                },
+                                                                                time: Time {
+                                                                                    hour: l271
+                                                                                        as u8,
+                                                                                    minute: l272
+                                                                                        as u8,
+                                                                                    second: l273
+                                                                                        as u8,
+                                                                                    nanosecond: l274
+                                                                                        as u32,
+                                                                                },
+                                                                            }
+                                                                        };
+                                                                        Tsbound::Excluded(e275)
+                                                                    }
+                                                                    n => {
+                                                                        debug_assert_eq!(n, 2, "invalid enum discriminant");
+                                                                        Tsbound::Unbounded
+                                                                    }
+                                                                };
+                                                                let l276 = i32::from(
+                                                                    *base.add(28).cast::<u8>(),
+                                                                );
+                                                                let v291 = match l276 {
+                                                                    0 => {
+                                                                        let e291 = {
+                                                                            let l277 = *base
+                                                                                .add(32)
+                                                                                .cast::<i32>();
+                                                                            let l278 = i32::from(
+                                                                                *base
+                                                                                    .add(36)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l279 = i32::from(
+                                                                                *base
+                                                                                    .add(37)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l280 = i32::from(
+                                                                                *base
+                                                                                    .add(40)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l281 = i32::from(
+                                                                                *base
+                                                                                    .add(41)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l282 = i32::from(
+                                                                                *base
+                                                                                    .add(42)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l283 = *base
+                                                                                .add(44)
+                                                                                .cast::<i32>();
+
+                                                                            Timestamp {
+                                                                                date: Date {
+                                                                                    year: l277,
+                                                                                    month: l278
+                                                                                        as u8,
+                                                                                    day: l279 as u8,
+                                                                                },
+                                                                                time: Time {
+                                                                                    hour: l280
+                                                                                        as u8,
+                                                                                    minute: l281
+                                                                                        as u8,
+                                                                                    second: l282
+                                                                                        as u8,
+                                                                                    nanosecond: l283
+                                                                                        as u32,
+                                                                                },
+                                                                            }
+                                                                        };
+                                                                        Tsbound::Included(e291)
+                                                                    }
+                                                                    1 => {
+                                                                        let e291 = {
+                                                                            let l284 = *base
+                                                                                .add(32)
+                                                                                .cast::<i32>();
+                                                                            let l285 = i32::from(
+                                                                                *base
+                                                                                    .add(36)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l286 = i32::from(
+                                                                                *base
+                                                                                    .add(37)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l287 = i32::from(
+                                                                                *base
+                                                                                    .add(40)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l288 = i32::from(
+                                                                                *base
+                                                                                    .add(41)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l289 = i32::from(
+                                                                                *base
+                                                                                    .add(42)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l290 = *base
+                                                                                .add(44)
+                                                                                .cast::<i32>();
+
+                                                                            Timestamp {
+                                                                                date: Date {
+                                                                                    year: l284,
+                                                                                    month: l285
+                                                                                        as u8,
+                                                                                    day: l286 as u8,
+                                                                                },
+                                                                                time: Time {
+                                                                                    hour: l287
+                                                                                        as u8,
+                                                                                    minute: l288
+                                                                                        as u8,
+                                                                                    second: l289
+                                                                                        as u8,
+                                                                                    nanosecond: l290
+                                                                                        as u32,
+                                                                                },
+                                                                            }
+                                                                        };
+                                                                        Tsbound::Excluded(e291)
+                                                                    }
+                                                                    n => {
+                                                                        debug_assert_eq!(n, 2, "invalid enum discriminant");
+                                                                        Tsbound::Unbounded
+                                                                    }
+                                                                };
+
+                                                                Tsrange {
+                                                                    start: v275,
+                                                                    end: v291,
+                                                                }
+                                                            };
+                                                            DbValue::Tsrange(e367)
+                                                        }
+                                                        32 => {
+                                                            let e367 = {
+                                                                let l292 = i32::from(
+                                                                    *base.add(8).cast::<u8>(),
+                                                                );
+                                                                let v309 = match l292 {
+                                                                    0 => {
+                                                                        let e309 = {
+                                                                            let l293 = *base
+                                                                                .add(12)
+                                                                                .cast::<i32>();
+                                                                            let l294 = i32::from(
+                                                                                *base
+                                                                                    .add(16)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l295 = i32::from(
+                                                                                *base
+                                                                                    .add(17)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l296 = i32::from(
+                                                                                *base
+                                                                                    .add(20)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l297 = i32::from(
+                                                                                *base
+                                                                                    .add(21)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l298 = i32::from(
+                                                                                *base
+                                                                                    .add(22)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l299 = *base
+                                                                                .add(24)
+                                                                                .cast::<i32>();
+                                                                            let l300 = *base
+                                                                                .add(28)
+                                                                                .cast::<i32>();
+
+                                                                            Timestamptz{
+                                        timestamp: Timestamp{
+                                          date: Date{
+                                            year: l293,
+                                            month: l294 as u8,
+                                            day: l295 as u8,
+                                          },
+                                          time: Time{
+                                            hour: l296 as u8,
+                                            minute: l297 as u8,
+                                            second: l298 as u8,
+                                            nanosecond: l299 as u32,
+                                          },
+                                        },
+                                        offset: l300,
+                                      }
+                                                                        };
+                                                                        Tstzbound::Included(e309)
+                                                                    }
+                                                                    1 => {
+                                                                        let e309 = {
+                                                                            let l301 = *base
+                                                                                .add(12)
+                                                                                .cast::<i32>();
+                                                                            let l302 = i32::from(
+                                                                                *base
+                                                                                    .add(16)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l303 = i32::from(
+                                                                                *base
+                                                                                    .add(17)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l304 = i32::from(
+                                                                                *base
+                                                                                    .add(20)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l305 = i32::from(
+                                                                                *base
+                                                                                    .add(21)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l306 = i32::from(
+                                                                                *base
+                                                                                    .add(22)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l307 = *base
+                                                                                .add(24)
+                                                                                .cast::<i32>();
+                                                                            let l308 = *base
+                                                                                .add(28)
+                                                                                .cast::<i32>();
+
+                                                                            Timestamptz{
+                                        timestamp: Timestamp{
+                                          date: Date{
+                                            year: l301,
+                                            month: l302 as u8,
+                                            day: l303 as u8,
+                                          },
+                                          time: Time{
+                                            hour: l304 as u8,
+                                            minute: l305 as u8,
+                                            second: l306 as u8,
+                                            nanosecond: l307 as u32,
+                                          },
+                                        },
+                                        offset: l308,
+                                      }
+                                                                        };
+                                                                        Tstzbound::Excluded(e309)
+                                                                    }
+                                                                    n => {
+                                                                        debug_assert_eq!(n, 2, "invalid enum discriminant");
+                                                                        Tstzbound::Unbounded
+                                                                    }
+                                                                };
+                                                                let l310 = i32::from(
+                                                                    *base.add(32).cast::<u8>(),
+                                                                );
+                                                                let v327 = match l310 {
+                                                                    0 => {
+                                                                        let e327 = {
+                                                                            let l311 = *base
+                                                                                .add(36)
+                                                                                .cast::<i32>();
+                                                                            let l312 = i32::from(
+                                                                                *base
+                                                                                    .add(40)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l313 = i32::from(
+                                                                                *base
+                                                                                    .add(41)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l314 = i32::from(
+                                                                                *base
+                                                                                    .add(44)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l315 = i32::from(
+                                                                                *base
+                                                                                    .add(45)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l316 = i32::from(
+                                                                                *base
+                                                                                    .add(46)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l317 = *base
+                                                                                .add(48)
+                                                                                .cast::<i32>();
+                                                                            let l318 = *base
+                                                                                .add(52)
+                                                                                .cast::<i32>();
+
+                                                                            Timestamptz{
+                                        timestamp: Timestamp{
+                                          date: Date{
+                                            year: l311,
+                                            month: l312 as u8,
+                                            day: l313 as u8,
+                                          },
+                                          time: Time{
+                                            hour: l314 as u8,
+                                            minute: l315 as u8,
+                                            second: l316 as u8,
+                                            nanosecond: l317 as u32,
+                                          },
+                                        },
+                                        offset: l318,
+                                      }
+                                                                        };
+                                                                        Tstzbound::Included(e327)
+                                                                    }
+                                                                    1 => {
+                                                                        let e327 = {
+                                                                            let l319 = *base
+                                                                                .add(36)
+                                                                                .cast::<i32>();
+                                                                            let l320 = i32::from(
+                                                                                *base
+                                                                                    .add(40)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l321 = i32::from(
+                                                                                *base
+                                                                                    .add(41)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l322 = i32::from(
+                                                                                *base
+                                                                                    .add(44)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l323 = i32::from(
+                                                                                *base
+                                                                                    .add(45)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l324 = i32::from(
+                                                                                *base
+                                                                                    .add(46)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l325 = *base
+                                                                                .add(48)
+                                                                                .cast::<i32>();
+                                                                            let l326 = *base
+                                                                                .add(52)
+                                                                                .cast::<i32>();
+
+                                                                            Timestamptz{
+                                        timestamp: Timestamp{
+                                          date: Date{
+                                            year: l319,
+                                            month: l320 as u8,
+                                            day: l321 as u8,
+                                          },
+                                          time: Time{
+                                            hour: l322 as u8,
+                                            minute: l323 as u8,
+                                            second: l324 as u8,
+                                            nanosecond: l325 as u32,
+                                          },
+                                        },
+                                        offset: l326,
+                                      }
+                                                                        };
+                                                                        Tstzbound::Excluded(e327)
+                                                                    }
+                                                                    n => {
+                                                                        debug_assert_eq!(n, 2, "invalid enum discriminant");
+                                                                        Tstzbound::Unbounded
+                                                                    }
+                                                                };
+
+                                                                Tstzrange {
+                                                                    start: v309,
+                                                                    end: v327,
+                                                                }
+                                                            };
+                                                            DbValue::Tstzrange(e367)
+                                                        }
+                                                        33 => {
+                                                            let e367 = {
+                                                                let l328 = i32::from(
+                                                                    *base.add(8).cast::<u8>(),
+                                                                );
+                                                                let v335 = match l328 {
+                                                                    0 => {
+                                                                        let e335 = {
+                                                                            let l329 = *base
+                                                                                .add(12)
+                                                                                .cast::<i32>();
+                                                                            let l330 = i32::from(
+                                                                                *base
+                                                                                    .add(16)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l331 = i32::from(
+                                                                                *base
+                                                                                    .add(17)
+                                                                                    .cast::<u8>(),
+                                                                            );
+
+                                                                            Date {
+                                                                                year: l329,
+                                                                                month: l330 as u8,
+                                                                                day: l331 as u8,
+                                                                            }
+                                                                        };
+                                                                        Datebound::Included(e335)
+                                                                    }
+                                                                    1 => {
+                                                                        let e335 = {
+                                                                            let l332 = *base
+                                                                                .add(12)
+                                                                                .cast::<i32>();
+                                                                            let l333 = i32::from(
+                                                                                *base
+                                                                                    .add(16)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l334 = i32::from(
+                                                                                *base
+                                                                                    .add(17)
+                                                                                    .cast::<u8>(),
+                                                                            );
+
+                                                                            Date {
+                                                                                year: l332,
+                                                                                month: l333 as u8,
+                                                                                day: l334 as u8,
+                                                                            }
+                                                                        };
+                                                                        Datebound::Excluded(e335)
+                                                                    }
+                                                                    n => {
+                                                                        debug_assert_eq!(n, 2, "invalid enum discriminant");
+                                                                        Datebound::Unbounded
+                                                                    }
+                                                                };
+                                                                let l336 = i32::from(
+                                                                    *base.add(20).cast::<u8>(),
+                                                                );
+                                                                let v343 = match l336 {
+                                                                    0 => {
+                                                                        let e343 = {
+                                                                            let l337 = *base
+                                                                                .add(24)
+                                                                                .cast::<i32>();
+                                                                            let l338 = i32::from(
+                                                                                *base
+                                                                                    .add(28)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l339 = i32::from(
+                                                                                *base
+                                                                                    .add(29)
+                                                                                    .cast::<u8>(),
+                                                                            );
+
+                                                                            Date {
+                                                                                year: l337,
+                                                                                month: l338 as u8,
+                                                                                day: l339 as u8,
+                                                                            }
+                                                                        };
+                                                                        Datebound::Included(e343)
+                                                                    }
+                                                                    1 => {
+                                                                        let e343 = {
+                                                                            let l340 = *base
+                                                                                .add(24)
+                                                                                .cast::<i32>();
+                                                                            let l341 = i32::from(
+                                                                                *base
+                                                                                    .add(28)
+                                                                                    .cast::<u8>(),
+                                                                            );
+                                                                            let l342 = i32::from(
+                                                                                *base
+                                                                                    .add(29)
+                                                                                    .cast::<u8>(),
+                                                                            );
+
+                                                                            Date {
+                                                                                year: l340,
+                                                                                month: l341 as u8,
+                                                                                day: l342 as u8,
+                                                                            }
+                                                                        };
+                                                                        Datebound::Excluded(e343)
+                                                                    }
+                                                                    n => {
+                                                                        debug_assert_eq!(n, 2, "invalid enum discriminant");
+                                                                        Datebound::Unbounded
+                                                                    }
+                                                                };
+
+                                                                Daterange {
+                                                                    start: v335,
+                                                                    end: v343,
+                                                                }
+                                                            };
+                                                            DbValue::Daterange(e367)
+                                                        }
+                                                        34 => {
+                                                            let e367 = {
+                                                                let l344 =
+                                                                    *base.add(8).cast::<i64>();
+
+                                                                l344
+                                                            };
+                                                            DbValue::Money(e367)
+                                                        }
+                                                        35 => {
+                                                            let e367 = {
+                                                                let l345 =
+                                                                    *base.add(8).cast::<i32>();
+
+                                                                l345 as u32
+                                                            };
+                                                            DbValue::Oid(e367)
+                                                        }
+                                                        36 => {
+                                                            let e367 = {
+                                                                let l346 =
+                                                                    *base.add(8).cast::<*mut u8>();
+                                                                let l347 =
+                                                                    *base.add(12).cast::<usize>();
+                                                                let len348 = l347;
+                                                                let bytes348 =
+                                                                    _rt::Vec::from_raw_parts(
+                                                                        l346.cast(),
+                                                                        len348,
+                                                                        len348,
+                                                                    );
+                                                                let l349 =
+                                                                    *base.add(16).cast::<*mut u8>();
+                                                                let l350 =
+                                                                    *base.add(20).cast::<usize>();
+                                                                let len351 = l350;
+                                                                let bytes351 =
+                                                                    _rt::Vec::from_raw_parts(
+                                                                        l349.cast(),
+                                                                        len351,
+                                                                        len351,
+                                                                    );
+
+                                                                Enumeration {
+                                                                    name: _rt::string_lift(
+                                                                        bytes348,
+                                                                    ),
+                                                                    value: _rt::string_lift(
+                                                                        bytes351,
+                                                                    ),
+                                                                }
+                                                            };
+                                                            DbValue::Enumeration(e367)
+                                                        }
+                                                        37 => {
+                                                            let e367 = {
+                                                                let l352 =
+                                                                    *base.add(8).cast::<*mut u8>();
+                                                                let l353 =
+                                                                    *base.add(12).cast::<usize>();
+                                                                let len354 = l353;
+                                                                let bytes354 =
+                                                                    _rt::Vec::from_raw_parts(
+                                                                        l352.cast(),
+                                                                        len354,
+                                                                        len354,
+                                                                    );
+                                                                let l355 =
+                                                                    *base.add(16).cast::<*mut u8>();
+                                                                let l356 =
+                                                                    *base.add(20).cast::<usize>();
+                                                                let base358 = l355;
+                                                                let len358 = l356;
+                                                                let mut result358 =
+                                                                    _rt::Vec::with_capacity(len358);
+                                                                for i in 0..len358 {
+                                                                    let base = base358.add(i * 4);
+                                                                    let e358 = {
+                                                                        let l357 = *base
+                                                                            .add(0)
+                                                                            .cast::<i32>();
+
+                                                                        LazyDbValue::from_handle(
+                                                                            l357 as u32,
+                                                                        )
+                                                                    };
+                                                                    result358.push(e358);
+                                                                }
+                                                                _rt::cabi_dealloc(
+                                                                    base358,
+                                                                    len358 * 4,
+                                                                    4,
+                                                                );
+
+                                                                Composite {
+                                                                    name: _rt::string_lift(
+                                                                        bytes354,
+                                                                    ),
+                                                                    values: result358,
+                                                                }
+                                                            };
+                                                            DbValue::Composite(e367)
+                                                        }
+                                                        38 => {
+                                                            let e367 = {
+                                                                let l359 =
+                                                                    *base.add(8).cast::<*mut u8>();
+                                                                let l360 =
+                                                                    *base.add(12).cast::<usize>();
+                                                                let len361 = l360;
+                                                                let bytes361 =
+                                                                    _rt::Vec::from_raw_parts(
+                                                                        l359.cast(),
+                                                                        len361,
+                                                                        len361,
+                                                                    );
+                                                                let l362 =
+                                                                    *base.add(16).cast::<i32>();
+
+                                                                Domain {
+                                                                    name: _rt::string_lift(
+                                                                        bytes361,
+                                                                    ),
+                                                                    value: LazyDbValue::from_handle(
+                                                                        l362 as u32,
+                                                                    ),
+                                                                }
+                                                            };
+                                                            DbValue::Domain(e367)
+                                                        }
+                                                        39 => {
+                                                            let e367 = {
+                                                                let l363 =
+                                                                    *base.add(8).cast::<*mut u8>();
+                                                                let l364 =
+                                                                    *base.add(12).cast::<usize>();
+                                                                let base366 = l363;
+                                                                let len366 = l364;
+                                                                let mut result366 =
+                                                                    _rt::Vec::with_capacity(len366);
+                                                                for i in 0..len366 {
+                                                                    let base = base366.add(i * 4);
+                                                                    let e366 = {
+                                                                        let l365 = *base
+                                                                            .add(0)
+                                                                            .cast::<i32>();
+
+                                                                        LazyDbValue::from_handle(
+                                                                            l365 as u32,
+                                                                        )
+                                                                    };
+                                                                    result366.push(e366);
+                                                                }
+                                                                _rt::cabi_dealloc(
+                                                                    base366,
+                                                                    len366 * 4,
+                                                                    4,
+                                                                );
+
+                                                                result366
+                                                            };
+                                                            DbValue::Array(e367)
+                                                        }
+                                                        n => {
+                                                            debug_assert_eq!(
+                                                                n, 40,
+                                                                "invalid enum discriminant"
+                                                            );
+                                                            DbValue::Null
+                                                        }
+                                                    };
+
+                                                    v367
+                                                };
+                                                result368.push(e368);
+                                            }
+                                            _rt::cabi_dealloc(base368, len368 * 56, 8);
+
+                                            DbRow { values: result368 }
+                                        };
+                                        result369.push(e369);
+                                    }
+                                    _rt::cabi_dealloc(base369, len369 * 8, 4);
+
+                                    DbResult {
+                                        columns: result114,
+                                        rows: result369,
+                                    }
                                 };
                                 Ok(e)
                             }
                             1 => {
                                 let e = {
-                                    let l86 = i32::from(*ptr83.add(4).cast::<u8>());
-                                    let v102 = match l86 {
+                                    let l370 = i32::from(*ptr83.add(4).cast::<u8>());
+                                    let v386 = match l370 {
                                         0 => {
-                                            let e102 = {
-                                                let l87 = *ptr83.add(8).cast::<*mut u8>();
-                                                let l88 = *ptr83.add(12).cast::<usize>();
-                                                let len89 = l88;
-                                                let bytes89 = _rt::Vec::from_raw_parts(
-                                                    l87.cast(),
-                                                    len89,
-                                                    len89,
+                                            let e386 = {
+                                                let l371 = *ptr83.add(8).cast::<*mut u8>();
+                                                let l372 = *ptr83.add(12).cast::<usize>();
+                                                let len373 = l372;
+                                                let bytes373 = _rt::Vec::from_raw_parts(
+                                                    l371.cast(),
+                                                    len373,
+                                                    len373,
                                                 );
 
-                                                _rt::string_lift(bytes89)
+                                                _rt::string_lift(bytes373)
                                             };
-                                            Error::ConnectionFailure(e102)
+                                            Error::ConnectionFailure(e386)
                                         }
                                         1 => {
-                                            let e102 = {
-                                                let l90 = *ptr83.add(8).cast::<*mut u8>();
-                                                let l91 = *ptr83.add(12).cast::<usize>();
-                                                let len92 = l91;
-                                                let bytes92 = _rt::Vec::from_raw_parts(
-                                                    l90.cast(),
-                                                    len92,
-                                                    len92,
+                                            let e386 = {
+                                                let l374 = *ptr83.add(8).cast::<*mut u8>();
+                                                let l375 = *ptr83.add(12).cast::<usize>();
+                                                let len376 = l375;
+                                                let bytes376 = _rt::Vec::from_raw_parts(
+                                                    l374.cast(),
+                                                    len376,
+                                                    len376,
                                                 );
 
-                                                _rt::string_lift(bytes92)
+                                                _rt::string_lift(bytes376)
                                             };
-                                            Error::QueryParameterFailure(e102)
+                                            Error::QueryParameterFailure(e386)
                                         }
                                         2 => {
-                                            let e102 = {
-                                                let l93 = *ptr83.add(8).cast::<*mut u8>();
-                                                let l94 = *ptr83.add(12).cast::<usize>();
-                                                let len95 = l94;
-                                                let bytes95 = _rt::Vec::from_raw_parts(
-                                                    l93.cast(),
-                                                    len95,
-                                                    len95,
+                                            let e386 = {
+                                                let l377 = *ptr83.add(8).cast::<*mut u8>();
+                                                let l378 = *ptr83.add(12).cast::<usize>();
+                                                let len379 = l378;
+                                                let bytes379 = _rt::Vec::from_raw_parts(
+                                                    l377.cast(),
+                                                    len379,
+                                                    len379,
                                                 );
 
-                                                _rt::string_lift(bytes95)
+                                                _rt::string_lift(bytes379)
                                             };
-                                            Error::QueryExecutionFailure(e102)
+                                            Error::QueryExecutionFailure(e386)
                                         }
                                         3 => {
-                                            let e102 = {
-                                                let l96 = *ptr83.add(8).cast::<*mut u8>();
-                                                let l97 = *ptr83.add(12).cast::<usize>();
-                                                let len98 = l97;
-                                                let bytes98 = _rt::Vec::from_raw_parts(
-                                                    l96.cast(),
-                                                    len98,
-                                                    len98,
+                                            let e386 = {
+                                                let l380 = *ptr83.add(8).cast::<*mut u8>();
+                                                let l381 = *ptr83.add(12).cast::<usize>();
+                                                let len382 = l381;
+                                                let bytes382 = _rt::Vec::from_raw_parts(
+                                                    l380.cast(),
+                                                    len382,
+                                                    len382,
                                                 );
 
-                                                _rt::string_lift(bytes98)
+                                                _rt::string_lift(bytes382)
                                             };
-                                            Error::QueryResponseFailure(e102)
+                                            Error::QueryResponseFailure(e386)
                                         }
                                         n => {
                                             debug_assert_eq!(n, 4, "invalid enum discriminant");
-                                            let e102 = {
-                                                let l99 = *ptr83.add(8).cast::<*mut u8>();
-                                                let l100 = *ptr83.add(12).cast::<usize>();
-                                                let len101 = l100;
-                                                let bytes101 = _rt::Vec::from_raw_parts(
-                                                    l99.cast(),
-                                                    len101,
-                                                    len101,
+                                            let e386 = {
+                                                let l383 = *ptr83.add(8).cast::<*mut u8>();
+                                                let l384 = *ptr83.add(12).cast::<usize>();
+                                                let len385 = l384;
+                                                let bytes385 = _rt::Vec::from_raw_parts(
+                                                    l383.cast(),
+                                                    len385,
+                                                    len385,
                                                 );
 
-                                                _rt::string_lift(bytes101)
+                                                _rt::string_lift(bytes385)
                                             };
-                                            Error::Other(e102)
+                                            Error::Other(e386)
                                         }
                                     };
 
-                                    v102
+                                    v386
                                 };
                                 Err(e)
                             }
@@ -12909,11 +16020,11 @@ pub mod wasi {
 
             #[derive(Debug)]
             #[repr(transparent)]
-            pub struct DbResultSet {
-                handle: _rt::Resource<DbResultSet>,
+            pub struct DbResultStream {
+                handle: _rt::Resource<DbResultStream>,
             }
 
-            impl DbResultSet {
+            impl DbResultStream {
                 #[doc(hidden)]
                 pub unsafe fn from_handle(handle: u32) -> Self {
                     Self {
@@ -12932,7 +16043,7 @@ pub mod wasi {
                 }
             }
 
-            unsafe impl _rt::WasmResource for DbResultSet {
+            unsafe impl _rt::WasmResource for DbResultStream {
                 #[inline]
                 unsafe fn drop(_handle: u32) {
                     #[cfg(not(target_arch = "wasm32"))]
@@ -12942,7 +16053,7 @@ pub mod wasi {
                     {
                         #[link(wasm_import_module = "wasi:rdbms/mysql@0.0.1")]
                         extern "C" {
-                            #[link_name = "[resource-drop]db-result-set"]
+                            #[link_name = "[resource-drop]db-result-stream"]
                             fn drop(_: u32);
                         }
 
@@ -13039,7 +16150,7 @@ pub mod wasi {
                 }
             }
 
-            impl DbResultSet {
+            impl DbResultStream {
                 #[allow(unused_unsafe, clippy::all)]
                 pub fn get_columns(&self) -> _rt::Vec<DbColumn> {
                     unsafe {
@@ -13050,7 +16161,7 @@ pub mod wasi {
                         #[cfg(target_arch = "wasm32")]
                         #[link(wasm_import_module = "wasi:rdbms/mysql@0.0.1")]
                         extern "C" {
-                            #[link_name = "[method]db-result-set.get-columns"]
+                            #[link_name = "[method]db-result-stream.get-columns"]
                             fn wit_import(_: i32, _: *mut u8);
                         }
 
@@ -13132,7 +16243,7 @@ pub mod wasi {
                     }
                 }
             }
-            impl DbResultSet {
+            impl DbResultStream {
                 #[allow(unused_unsafe, clippy::all)]
                 pub fn get_next(&self) -> Option<_rt::Vec<DbRow>> {
                     unsafe {
@@ -13143,7 +16254,7 @@ pub mod wasi {
                         #[cfg(target_arch = "wasm32")]
                         #[link(wasm_import_module = "wasi:rdbms/mysql@0.0.1")]
                         extern "C" {
-                            #[link_name = "[method]db-result-set.get-next"]
+                            #[link_name = "[method]db-result-stream.get-next"]
                             fn wit_import(_: i32, _: *mut u8);
                         }
 
@@ -13887,16 +16998,495 @@ pub mod wasi {
             }
             impl DbConnection {
                 #[allow(unused_unsafe, clippy::all)]
-                pub fn query(
+                pub fn query_stream(
                     &self,
                     statement: &str,
                     params: &[DbValue],
-                ) -> Result<DbResultSet, Error> {
+                ) -> Result<DbResultStream, Error> {
                     unsafe {
                         let mut cleanup_list = _rt::Vec::new();
                         #[repr(align(4))]
                         struct RetArea([::core::mem::MaybeUninit<u8>; 16]);
                         let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 16]);
+                        let vec0 = statement;
+                        let ptr0 = vec0.as_ptr().cast::<u8>();
+                        let len0 = vec0.len();
+                        let vec26 = params;
+                        let len26 = vec26.len();
+                        let layout26 =
+                            _rt::alloc::Layout::from_size_align_unchecked(vec26.len() * 24, 8);
+                        let result26 = if layout26.size() != 0 {
+                            let ptr = _rt::alloc::alloc(layout26).cast::<u8>();
+                            if ptr.is_null() {
+                                _rt::alloc::handle_alloc_error(layout26);
+                            }
+                            ptr
+                        } else {
+                            {
+                                ::core::ptr::null_mut()
+                            }
+                        };
+                        for (i, e) in vec26.into_iter().enumerate() {
+                            let base = result26.add(i * 24);
+                            {
+                                match e {
+                                    DbValue::Boolean(e) => {
+                                        *base.add(0).cast::<u8>() = (0i32) as u8;
+                                        *base.add(8).cast::<u8>() = (match e {
+                                            true => 1,
+                                            false => 0,
+                                        })
+                                            as u8;
+                                    }
+                                    DbValue::Tinyint(e) => {
+                                        *base.add(0).cast::<u8>() = (1i32) as u8;
+                                        *base.add(8).cast::<u8>() = (_rt::as_i32(e)) as u8;
+                                    }
+                                    DbValue::Smallint(e) => {
+                                        *base.add(0).cast::<u8>() = (2i32) as u8;
+                                        *base.add(8).cast::<u16>() = (_rt::as_i32(e)) as u16;
+                                    }
+                                    DbValue::Mediumint(e) => {
+                                        *base.add(0).cast::<u8>() = (3i32) as u8;
+                                        *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                    }
+                                    DbValue::Int(e) => {
+                                        *base.add(0).cast::<u8>() = (4i32) as u8;
+                                        *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                    }
+                                    DbValue::Bigint(e) => {
+                                        *base.add(0).cast::<u8>() = (5i32) as u8;
+                                        *base.add(8).cast::<i64>() = _rt::as_i64(e);
+                                    }
+                                    DbValue::TinyintUnsigned(e) => {
+                                        *base.add(0).cast::<u8>() = (6i32) as u8;
+                                        *base.add(8).cast::<u8>() = (_rt::as_i32(e)) as u8;
+                                    }
+                                    DbValue::SmallintUnsigned(e) => {
+                                        *base.add(0).cast::<u8>() = (7i32) as u8;
+                                        *base.add(8).cast::<u16>() = (_rt::as_i32(e)) as u16;
+                                    }
+                                    DbValue::MediumintUnsigned(e) => {
+                                        *base.add(0).cast::<u8>() = (8i32) as u8;
+                                        *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                    }
+                                    DbValue::IntUnsigned(e) => {
+                                        *base.add(0).cast::<u8>() = (9i32) as u8;
+                                        *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                    }
+                                    DbValue::BigintUnsigned(e) => {
+                                        *base.add(0).cast::<u8>() = (10i32) as u8;
+                                        *base.add(8).cast::<i64>() = _rt::as_i64(e);
+                                    }
+                                    DbValue::Float(e) => {
+                                        *base.add(0).cast::<u8>() = (11i32) as u8;
+                                        *base.add(8).cast::<f32>() = _rt::as_f32(e);
+                                    }
+                                    DbValue::Double(e) => {
+                                        *base.add(0).cast::<u8>() = (12i32) as u8;
+                                        *base.add(8).cast::<f64>() = _rt::as_f64(e);
+                                    }
+                                    DbValue::Decimal(e) => {
+                                        *base.add(0).cast::<u8>() = (13i32) as u8;
+                                        let vec1 = e;
+                                        let ptr1 = vec1.as_ptr().cast::<u8>();
+                                        let len1 = vec1.len();
+                                        *base.add(12).cast::<usize>() = len1;
+                                        *base.add(8).cast::<*mut u8>() = ptr1.cast_mut();
+                                    }
+                                    DbValue::Date(e) => {
+                                        *base.add(0).cast::<u8>() = (14i32) as u8;
+                                        let Date {
+                                            year: year2,
+                                            month: month2,
+                                            day: day2,
+                                        } = e;
+                                        *base.add(8).cast::<i32>() = _rt::as_i32(year2);
+                                        *base.add(12).cast::<u8>() = (_rt::as_i32(month2)) as u8;
+                                        *base.add(13).cast::<u8>() = (_rt::as_i32(day2)) as u8;
+                                    }
+                                    DbValue::Datetime(e) => {
+                                        *base.add(0).cast::<u8>() = (15i32) as u8;
+                                        let Timestamp {
+                                            date: date3,
+                                            time: time3,
+                                        } = e;
+                                        let Date {
+                                            year: year4,
+                                            month: month4,
+                                            day: day4,
+                                        } = date3;
+                                        *base.add(8).cast::<i32>() = _rt::as_i32(year4);
+                                        *base.add(12).cast::<u8>() = (_rt::as_i32(month4)) as u8;
+                                        *base.add(13).cast::<u8>() = (_rt::as_i32(day4)) as u8;
+                                        let Time {
+                                            hour: hour5,
+                                            minute: minute5,
+                                            second: second5,
+                                            nanosecond: nanosecond5,
+                                        } = time3;
+                                        *base.add(16).cast::<u8>() = (_rt::as_i32(hour5)) as u8;
+                                        *base.add(17).cast::<u8>() = (_rt::as_i32(minute5)) as u8;
+                                        *base.add(18).cast::<u8>() = (_rt::as_i32(second5)) as u8;
+                                        *base.add(20).cast::<i32>() = _rt::as_i32(nanosecond5);
+                                    }
+                                    DbValue::Timestamp(e) => {
+                                        *base.add(0).cast::<u8>() = (16i32) as u8;
+                                        let Timestamp {
+                                            date: date6,
+                                            time: time6,
+                                        } = e;
+                                        let Date {
+                                            year: year7,
+                                            month: month7,
+                                            day: day7,
+                                        } = date6;
+                                        *base.add(8).cast::<i32>() = _rt::as_i32(year7);
+                                        *base.add(12).cast::<u8>() = (_rt::as_i32(month7)) as u8;
+                                        *base.add(13).cast::<u8>() = (_rt::as_i32(day7)) as u8;
+                                        let Time {
+                                            hour: hour8,
+                                            minute: minute8,
+                                            second: second8,
+                                            nanosecond: nanosecond8,
+                                        } = time6;
+                                        *base.add(16).cast::<u8>() = (_rt::as_i32(hour8)) as u8;
+                                        *base.add(17).cast::<u8>() = (_rt::as_i32(minute8)) as u8;
+                                        *base.add(18).cast::<u8>() = (_rt::as_i32(second8)) as u8;
+                                        *base.add(20).cast::<i32>() = _rt::as_i32(nanosecond8);
+                                    }
+                                    DbValue::Time(e) => {
+                                        *base.add(0).cast::<u8>() = (17i32) as u8;
+                                        let Time {
+                                            hour: hour9,
+                                            minute: minute9,
+                                            second: second9,
+                                            nanosecond: nanosecond9,
+                                        } = e;
+                                        *base.add(8).cast::<u8>() = (_rt::as_i32(hour9)) as u8;
+                                        *base.add(9).cast::<u8>() = (_rt::as_i32(minute9)) as u8;
+                                        *base.add(10).cast::<u8>() = (_rt::as_i32(second9)) as u8;
+                                        *base.add(12).cast::<i32>() = _rt::as_i32(nanosecond9);
+                                    }
+                                    DbValue::Year(e) => {
+                                        *base.add(0).cast::<u8>() = (18i32) as u8;
+                                        *base.add(8).cast::<u16>() = (_rt::as_i32(e)) as u16;
+                                    }
+                                    DbValue::Fixchar(e) => {
+                                        *base.add(0).cast::<u8>() = (19i32) as u8;
+                                        let vec10 = e;
+                                        let ptr10 = vec10.as_ptr().cast::<u8>();
+                                        let len10 = vec10.len();
+                                        *base.add(12).cast::<usize>() = len10;
+                                        *base.add(8).cast::<*mut u8>() = ptr10.cast_mut();
+                                    }
+                                    DbValue::Varchar(e) => {
+                                        *base.add(0).cast::<u8>() = (20i32) as u8;
+                                        let vec11 = e;
+                                        let ptr11 = vec11.as_ptr().cast::<u8>();
+                                        let len11 = vec11.len();
+                                        *base.add(12).cast::<usize>() = len11;
+                                        *base.add(8).cast::<*mut u8>() = ptr11.cast_mut();
+                                    }
+                                    DbValue::Tinytext(e) => {
+                                        *base.add(0).cast::<u8>() = (21i32) as u8;
+                                        let vec12 = e;
+                                        let ptr12 = vec12.as_ptr().cast::<u8>();
+                                        let len12 = vec12.len();
+                                        *base.add(12).cast::<usize>() = len12;
+                                        *base.add(8).cast::<*mut u8>() = ptr12.cast_mut();
+                                    }
+                                    DbValue::Text(e) => {
+                                        *base.add(0).cast::<u8>() = (22i32) as u8;
+                                        let vec13 = e;
+                                        let ptr13 = vec13.as_ptr().cast::<u8>();
+                                        let len13 = vec13.len();
+                                        *base.add(12).cast::<usize>() = len13;
+                                        *base.add(8).cast::<*mut u8>() = ptr13.cast_mut();
+                                    }
+                                    DbValue::Mediumtext(e) => {
+                                        *base.add(0).cast::<u8>() = (23i32) as u8;
+                                        let vec14 = e;
+                                        let ptr14 = vec14.as_ptr().cast::<u8>();
+                                        let len14 = vec14.len();
+                                        *base.add(12).cast::<usize>() = len14;
+                                        *base.add(8).cast::<*mut u8>() = ptr14.cast_mut();
+                                    }
+                                    DbValue::Longtext(e) => {
+                                        *base.add(0).cast::<u8>() = (24i32) as u8;
+                                        let vec15 = e;
+                                        let ptr15 = vec15.as_ptr().cast::<u8>();
+                                        let len15 = vec15.len();
+                                        *base.add(12).cast::<usize>() = len15;
+                                        *base.add(8).cast::<*mut u8>() = ptr15.cast_mut();
+                                    }
+                                    DbValue::Binary(e) => {
+                                        *base.add(0).cast::<u8>() = (25i32) as u8;
+                                        let vec16 = e;
+                                        let ptr16 = vec16.as_ptr().cast::<u8>();
+                                        let len16 = vec16.len();
+                                        *base.add(12).cast::<usize>() = len16;
+                                        *base.add(8).cast::<*mut u8>() = ptr16.cast_mut();
+                                    }
+                                    DbValue::Varbinary(e) => {
+                                        *base.add(0).cast::<u8>() = (26i32) as u8;
+                                        let vec17 = e;
+                                        let ptr17 = vec17.as_ptr().cast::<u8>();
+                                        let len17 = vec17.len();
+                                        *base.add(12).cast::<usize>() = len17;
+                                        *base.add(8).cast::<*mut u8>() = ptr17.cast_mut();
+                                    }
+                                    DbValue::Tinyblob(e) => {
+                                        *base.add(0).cast::<u8>() = (27i32) as u8;
+                                        let vec18 = e;
+                                        let ptr18 = vec18.as_ptr().cast::<u8>();
+                                        let len18 = vec18.len();
+                                        *base.add(12).cast::<usize>() = len18;
+                                        *base.add(8).cast::<*mut u8>() = ptr18.cast_mut();
+                                    }
+                                    DbValue::Blob(e) => {
+                                        *base.add(0).cast::<u8>() = (28i32) as u8;
+                                        let vec19 = e;
+                                        let ptr19 = vec19.as_ptr().cast::<u8>();
+                                        let len19 = vec19.len();
+                                        *base.add(12).cast::<usize>() = len19;
+                                        *base.add(8).cast::<*mut u8>() = ptr19.cast_mut();
+                                    }
+                                    DbValue::Mediumblob(e) => {
+                                        *base.add(0).cast::<u8>() = (29i32) as u8;
+                                        let vec20 = e;
+                                        let ptr20 = vec20.as_ptr().cast::<u8>();
+                                        let len20 = vec20.len();
+                                        *base.add(12).cast::<usize>() = len20;
+                                        *base.add(8).cast::<*mut u8>() = ptr20.cast_mut();
+                                    }
+                                    DbValue::Longblob(e) => {
+                                        *base.add(0).cast::<u8>() = (30i32) as u8;
+                                        let vec21 = e;
+                                        let ptr21 = vec21.as_ptr().cast::<u8>();
+                                        let len21 = vec21.len();
+                                        *base.add(12).cast::<usize>() = len21;
+                                        *base.add(8).cast::<*mut u8>() = ptr21.cast_mut();
+                                    }
+                                    DbValue::Enumeration(e) => {
+                                        *base.add(0).cast::<u8>() = (31i32) as u8;
+                                        let vec22 = e;
+                                        let ptr22 = vec22.as_ptr().cast::<u8>();
+                                        let len22 = vec22.len();
+                                        *base.add(12).cast::<usize>() = len22;
+                                        *base.add(8).cast::<*mut u8>() = ptr22.cast_mut();
+                                    }
+                                    DbValue::Set(e) => {
+                                        *base.add(0).cast::<u8>() = (32i32) as u8;
+                                        let vec23 = e;
+                                        let ptr23 = vec23.as_ptr().cast::<u8>();
+                                        let len23 = vec23.len();
+                                        *base.add(12).cast::<usize>() = len23;
+                                        *base.add(8).cast::<*mut u8>() = ptr23.cast_mut();
+                                    }
+                                    DbValue::Bit(e) => {
+                                        *base.add(0).cast::<u8>() = (33i32) as u8;
+                                        let vec24 = e;
+                                        let len24 = vec24.len();
+                                        let layout24 =
+                                            _rt::alloc::Layout::from_size_align_unchecked(
+                                                vec24.len() * 1,
+                                                1,
+                                            );
+                                        let result24 = if layout24.size() != 0 {
+                                            let ptr = _rt::alloc::alloc(layout24).cast::<u8>();
+                                            if ptr.is_null() {
+                                                _rt::alloc::handle_alloc_error(layout24);
+                                            }
+                                            ptr
+                                        } else {
+                                            {
+                                                ::core::ptr::null_mut()
+                                            }
+                                        };
+                                        for (i, e) in vec24.into_iter().enumerate() {
+                                            let base = result24.add(i * 1);
+                                            {
+                                                *base.add(0).cast::<u8>() = (match e {
+                                                    true => 1,
+                                                    false => 0,
+                                                })
+                                                    as u8;
+                                            }
+                                        }
+                                        *base.add(12).cast::<usize>() = len24;
+                                        *base.add(8).cast::<*mut u8>() = result24;
+                                        cleanup_list.extend_from_slice(&[(result24, layout24)]);
+                                    }
+                                    DbValue::Json(e) => {
+                                        *base.add(0).cast::<u8>() = (34i32) as u8;
+                                        let vec25 = e;
+                                        let ptr25 = vec25.as_ptr().cast::<u8>();
+                                        let len25 = vec25.len();
+                                        *base.add(12).cast::<usize>() = len25;
+                                        *base.add(8).cast::<*mut u8>() = ptr25.cast_mut();
+                                    }
+                                    DbValue::Null => {
+                                        *base.add(0).cast::<u8>() = (35i32) as u8;
+                                    }
+                                }
+                            }
+                        }
+                        let ptr27 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:rdbms/mysql@0.0.1")]
+                        extern "C" {
+                            #[link_name = "[method]db-connection.query-stream"]
+                            fn wit_import(
+                                _: i32,
+                                _: *mut u8,
+                                _: usize,
+                                _: *mut u8,
+                                _: usize,
+                                _: *mut u8,
+                            );
+                        }
+
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(
+                            _: i32,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                        ) {
+                            unreachable!()
+                        }
+                        wit_import(
+                            (self).handle() as i32,
+                            ptr0.cast_mut(),
+                            len0,
+                            result26,
+                            len26,
+                            ptr27,
+                        );
+                        let l28 = i32::from(*ptr27.add(0).cast::<u8>());
+                        if layout26.size() != 0 {
+                            _rt::alloc::dealloc(result26.cast(), layout26);
+                        }
+                        for (ptr, layout) in cleanup_list {
+                            if layout.size() != 0 {
+                                _rt::alloc::dealloc(ptr.cast(), layout);
+                            }
+                        }
+                        match l28 {
+                            0 => {
+                                let e = {
+                                    let l29 = *ptr27.add(4).cast::<i32>();
+
+                                    DbResultStream::from_handle(l29 as u32)
+                                };
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = {
+                                    let l30 = i32::from(*ptr27.add(4).cast::<u8>());
+                                    let v46 = match l30 {
+                                        0 => {
+                                            let e46 = {
+                                                let l31 = *ptr27.add(8).cast::<*mut u8>();
+                                                let l32 = *ptr27.add(12).cast::<usize>();
+                                                let len33 = l32;
+                                                let bytes33 = _rt::Vec::from_raw_parts(
+                                                    l31.cast(),
+                                                    len33,
+                                                    len33,
+                                                );
+
+                                                _rt::string_lift(bytes33)
+                                            };
+                                            Error::ConnectionFailure(e46)
+                                        }
+                                        1 => {
+                                            let e46 = {
+                                                let l34 = *ptr27.add(8).cast::<*mut u8>();
+                                                let l35 = *ptr27.add(12).cast::<usize>();
+                                                let len36 = l35;
+                                                let bytes36 = _rt::Vec::from_raw_parts(
+                                                    l34.cast(),
+                                                    len36,
+                                                    len36,
+                                                );
+
+                                                _rt::string_lift(bytes36)
+                                            };
+                                            Error::QueryParameterFailure(e46)
+                                        }
+                                        2 => {
+                                            let e46 = {
+                                                let l37 = *ptr27.add(8).cast::<*mut u8>();
+                                                let l38 = *ptr27.add(12).cast::<usize>();
+                                                let len39 = l38;
+                                                let bytes39 = _rt::Vec::from_raw_parts(
+                                                    l37.cast(),
+                                                    len39,
+                                                    len39,
+                                                );
+
+                                                _rt::string_lift(bytes39)
+                                            };
+                                            Error::QueryExecutionFailure(e46)
+                                        }
+                                        3 => {
+                                            let e46 = {
+                                                let l40 = *ptr27.add(8).cast::<*mut u8>();
+                                                let l41 = *ptr27.add(12).cast::<usize>();
+                                                let len42 = l41;
+                                                let bytes42 = _rt::Vec::from_raw_parts(
+                                                    l40.cast(),
+                                                    len42,
+                                                    len42,
+                                                );
+
+                                                _rt::string_lift(bytes42)
+                                            };
+                                            Error::QueryResponseFailure(e46)
+                                        }
+                                        n => {
+                                            debug_assert_eq!(n, 4, "invalid enum discriminant");
+                                            let e46 = {
+                                                let l43 = *ptr27.add(8).cast::<*mut u8>();
+                                                let l44 = *ptr27.add(12).cast::<usize>();
+                                                let len45 = l44;
+                                                let bytes45 = _rt::Vec::from_raw_parts(
+                                                    l43.cast(),
+                                                    len45,
+                                                    len45,
+                                                );
+
+                                                _rt::string_lift(bytes45)
+                                            };
+                                            Error::Other(e46)
+                                        }
+                                    };
+
+                                    v46
+                                };
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl DbConnection {
+                #[allow(unused_unsafe, clippy::all)]
+                pub fn query(
+                    &self,
+                    statement: &str,
+                    params: &[DbValue],
+                ) -> Result<DbResult, Error> {
+                    unsafe {
+                        let mut cleanup_list = _rt::Vec::new();
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 20]);
+                        let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 20]);
                         let vec0 = statement;
                         let ptr0 = vec0.as_ptr().cast::<u8>();
                         let len0 = vec0.len();
@@ -14267,95 +17857,768 @@ pub mod wasi {
                         match l28 {
                             0 => {
                                 let e = {
-                                    let l29 = *ptr27.add(4).cast::<i32>();
+                                    let l29 = *ptr27.add(4).cast::<*mut u8>();
+                                    let l30 = *ptr27.add(8).cast::<usize>();
+                                    let base40 = l29;
+                                    let len40 = l30;
+                                    let mut result40 = _rt::Vec::with_capacity(len40);
+                                    for i in 0..len40 {
+                                        let base = base40.add(i * 32);
+                                        let e40 = {
+                                            let l31 = *base.add(0).cast::<i64>();
+                                            let l32 = *base.add(8).cast::<*mut u8>();
+                                            let l33 = *base.add(12).cast::<usize>();
+                                            let len34 = l33;
+                                            let bytes34 =
+                                                _rt::Vec::from_raw_parts(l32.cast(), len34, len34);
+                                            let l35 = i32::from(*base.add(16).cast::<u8>());
+                                            let v36 = match l35 {
+                                                0 => DbColumnType::Boolean,
+                                                1 => DbColumnType::Tinyint,
+                                                2 => DbColumnType::Smallint,
+                                                3 => DbColumnType::Mediumint,
+                                                4 => DbColumnType::Int,
+                                                5 => DbColumnType::Bigint,
+                                                6 => DbColumnType::TinyintUnsigned,
+                                                7 => DbColumnType::SmallintUnsigned,
+                                                8 => DbColumnType::MediumintUnsigned,
+                                                9 => DbColumnType::IntUnsigned,
+                                                10 => DbColumnType::BigintUnsigned,
+                                                11 => DbColumnType::Float,
+                                                12 => DbColumnType::Double,
+                                                13 => DbColumnType::Decimal,
+                                                14 => DbColumnType::Date,
+                                                15 => DbColumnType::Datetime,
+                                                16 => DbColumnType::Timestamp,
+                                                17 => DbColumnType::Time,
+                                                18 => DbColumnType::Year,
+                                                19 => DbColumnType::Fixchar,
+                                                20 => DbColumnType::Varchar,
+                                                21 => DbColumnType::Tinytext,
+                                                22 => DbColumnType::Text,
+                                                23 => DbColumnType::Mediumtext,
+                                                24 => DbColumnType::Longtext,
+                                                25 => DbColumnType::Binary,
+                                                26 => DbColumnType::Varbinary,
+                                                27 => DbColumnType::Tinyblob,
+                                                28 => DbColumnType::Blob,
+                                                29 => DbColumnType::Mediumblob,
+                                                30 => DbColumnType::Longblob,
+                                                31 => DbColumnType::Enumeration,
+                                                32 => DbColumnType::Set,
+                                                33 => DbColumnType::Bit,
+                                                n => {
+                                                    debug_assert_eq!(
+                                                        n, 34,
+                                                        "invalid enum discriminant"
+                                                    );
+                                                    DbColumnType::Json
+                                                }
+                                            };
+                                            let l37 = *base.add(20).cast::<*mut u8>();
+                                            let l38 = *base.add(24).cast::<usize>();
+                                            let len39 = l38;
+                                            let bytes39 =
+                                                _rt::Vec::from_raw_parts(l37.cast(), len39, len39);
 
-                                    DbResultSet::from_handle(l29 as u32)
+                                            DbColumn {
+                                                ordinal: l31 as u64,
+                                                name: _rt::string_lift(bytes34),
+                                                db_type: v36,
+                                                db_type_name: _rt::string_lift(bytes39),
+                                            }
+                                        };
+                                        result40.push(e40);
+                                    }
+                                    _rt::cabi_dealloc(base40, len40 * 32, 8);
+                                    let l41 = *ptr27.add(12).cast::<*mut u8>();
+                                    let l42 = *ptr27.add(16).cast::<usize>();
+                                    let base135 = l41;
+                                    let len135 = l42;
+                                    let mut result135 = _rt::Vec::with_capacity(len135);
+                                    for i in 0..len135 {
+                                        let base = base135.add(i * 8);
+                                        let e135 = {
+                                            let l43 = *base.add(0).cast::<*mut u8>();
+                                            let l44 = *base.add(4).cast::<usize>();
+                                            let base134 = l43;
+                                            let len134 = l44;
+                                            let mut result134 = _rt::Vec::with_capacity(len134);
+                                            for i in 0..len134 {
+                                                let base = base134.add(i * 24);
+                                                let e134 = {
+                                                    let l45 = i32::from(*base.add(0).cast::<u8>());
+                                                    let v133 = match l45 {
+                                                        0 => {
+                                                            let e133 = {
+                                                                let l46 = i32::from(
+                                                                    *base.add(8).cast::<u8>(),
+                                                                );
+
+                                                                _rt::bool_lift(l46 as u8)
+                                                            };
+                                                            DbValue::Boolean(e133)
+                                                        }
+                                                        1 => {
+                                                            let e133 = {
+                                                                let l47 = i32::from(
+                                                                    *base.add(8).cast::<i8>(),
+                                                                );
+
+                                                                l47 as i8
+                                                            };
+                                                            DbValue::Tinyint(e133)
+                                                        }
+                                                        2 => {
+                                                            let e133 = {
+                                                                let l48 = i32::from(
+                                                                    *base.add(8).cast::<i16>(),
+                                                                );
+
+                                                                l48 as i16
+                                                            };
+                                                            DbValue::Smallint(e133)
+                                                        }
+                                                        3 => {
+                                                            let e133 = {
+                                                                let l49 =
+                                                                    *base.add(8).cast::<i32>();
+
+                                                                l49
+                                                            };
+                                                            DbValue::Mediumint(e133)
+                                                        }
+                                                        4 => {
+                                                            let e133 = {
+                                                                let l50 =
+                                                                    *base.add(8).cast::<i32>();
+
+                                                                l50
+                                                            };
+                                                            DbValue::Int(e133)
+                                                        }
+                                                        5 => {
+                                                            let e133 = {
+                                                                let l51 =
+                                                                    *base.add(8).cast::<i64>();
+
+                                                                l51
+                                                            };
+                                                            DbValue::Bigint(e133)
+                                                        }
+                                                        6 => {
+                                                            let e133 = {
+                                                                let l52 = i32::from(
+                                                                    *base.add(8).cast::<u8>(),
+                                                                );
+
+                                                                l52 as u8
+                                                            };
+                                                            DbValue::TinyintUnsigned(e133)
+                                                        }
+                                                        7 => {
+                                                            let e133 = {
+                                                                let l53 = i32::from(
+                                                                    *base.add(8).cast::<u16>(),
+                                                                );
+
+                                                                l53 as u16
+                                                            };
+                                                            DbValue::SmallintUnsigned(e133)
+                                                        }
+                                                        8 => {
+                                                            let e133 = {
+                                                                let l54 =
+                                                                    *base.add(8).cast::<i32>();
+
+                                                                l54 as u32
+                                                            };
+                                                            DbValue::MediumintUnsigned(e133)
+                                                        }
+                                                        9 => {
+                                                            let e133 = {
+                                                                let l55 =
+                                                                    *base.add(8).cast::<i32>();
+
+                                                                l55 as u32
+                                                            };
+                                                            DbValue::IntUnsigned(e133)
+                                                        }
+                                                        10 => {
+                                                            let e133 = {
+                                                                let l56 =
+                                                                    *base.add(8).cast::<i64>();
+
+                                                                l56 as u64
+                                                            };
+                                                            DbValue::BigintUnsigned(e133)
+                                                        }
+                                                        11 => {
+                                                            let e133 = {
+                                                                let l57 =
+                                                                    *base.add(8).cast::<f32>();
+
+                                                                l57
+                                                            };
+                                                            DbValue::Float(e133)
+                                                        }
+                                                        12 => {
+                                                            let e133 = {
+                                                                let l58 =
+                                                                    *base.add(8).cast::<f64>();
+
+                                                                l58
+                                                            };
+                                                            DbValue::Double(e133)
+                                                        }
+                                                        13 => {
+                                                            let e133 = {
+                                                                let l59 =
+                                                                    *base.add(8).cast::<*mut u8>();
+                                                                let l60 =
+                                                                    *base.add(12).cast::<usize>();
+                                                                let len61 = l60;
+                                                                let bytes61 =
+                                                                    _rt::Vec::from_raw_parts(
+                                                                        l59.cast(),
+                                                                        len61,
+                                                                        len61,
+                                                                    );
+
+                                                                _rt::string_lift(bytes61)
+                                                            };
+                                                            DbValue::Decimal(e133)
+                                                        }
+                                                        14 => {
+                                                            let e133 = {
+                                                                let l62 =
+                                                                    *base.add(8).cast::<i32>();
+                                                                let l63 = i32::from(
+                                                                    *base.add(12).cast::<u8>(),
+                                                                );
+                                                                let l64 = i32::from(
+                                                                    *base.add(13).cast::<u8>(),
+                                                                );
+
+                                                                Date {
+                                                                    year: l62,
+                                                                    month: l63 as u8,
+                                                                    day: l64 as u8,
+                                                                }
+                                                            };
+                                                            DbValue::Date(e133)
+                                                        }
+                                                        15 => {
+                                                            let e133 = {
+                                                                let l65 =
+                                                                    *base.add(8).cast::<i32>();
+                                                                let l66 = i32::from(
+                                                                    *base.add(12).cast::<u8>(),
+                                                                );
+                                                                let l67 = i32::from(
+                                                                    *base.add(13).cast::<u8>(),
+                                                                );
+                                                                let l68 = i32::from(
+                                                                    *base.add(16).cast::<u8>(),
+                                                                );
+                                                                let l69 = i32::from(
+                                                                    *base.add(17).cast::<u8>(),
+                                                                );
+                                                                let l70 = i32::from(
+                                                                    *base.add(18).cast::<u8>(),
+                                                                );
+                                                                let l71 =
+                                                                    *base.add(20).cast::<i32>();
+
+                                                                Timestamp {
+                                                                    date: Date {
+                                                                        year: l65,
+                                                                        month: l66 as u8,
+                                                                        day: l67 as u8,
+                                                                    },
+                                                                    time: Time {
+                                                                        hour: l68 as u8,
+                                                                        minute: l69 as u8,
+                                                                        second: l70 as u8,
+                                                                        nanosecond: l71 as u32,
+                                                                    },
+                                                                }
+                                                            };
+                                                            DbValue::Datetime(e133)
+                                                        }
+                                                        16 => {
+                                                            let e133 = {
+                                                                let l72 =
+                                                                    *base.add(8).cast::<i32>();
+                                                                let l73 = i32::from(
+                                                                    *base.add(12).cast::<u8>(),
+                                                                );
+                                                                let l74 = i32::from(
+                                                                    *base.add(13).cast::<u8>(),
+                                                                );
+                                                                let l75 = i32::from(
+                                                                    *base.add(16).cast::<u8>(),
+                                                                );
+                                                                let l76 = i32::from(
+                                                                    *base.add(17).cast::<u8>(),
+                                                                );
+                                                                let l77 = i32::from(
+                                                                    *base.add(18).cast::<u8>(),
+                                                                );
+                                                                let l78 =
+                                                                    *base.add(20).cast::<i32>();
+
+                                                                Timestamp {
+                                                                    date: Date {
+                                                                        year: l72,
+                                                                        month: l73 as u8,
+                                                                        day: l74 as u8,
+                                                                    },
+                                                                    time: Time {
+                                                                        hour: l75 as u8,
+                                                                        minute: l76 as u8,
+                                                                        second: l77 as u8,
+                                                                        nanosecond: l78 as u32,
+                                                                    },
+                                                                }
+                                                            };
+                                                            DbValue::Timestamp(e133)
+                                                        }
+                                                        17 => {
+                                                            let e133 = {
+                                                                let l79 = i32::from(
+                                                                    *base.add(8).cast::<u8>(),
+                                                                );
+                                                                let l80 = i32::from(
+                                                                    *base.add(9).cast::<u8>(),
+                                                                );
+                                                                let l81 = i32::from(
+                                                                    *base.add(10).cast::<u8>(),
+                                                                );
+                                                                let l82 =
+                                                                    *base.add(12).cast::<i32>();
+
+                                                                Time {
+                                                                    hour: l79 as u8,
+                                                                    minute: l80 as u8,
+                                                                    second: l81 as u8,
+                                                                    nanosecond: l82 as u32,
+                                                                }
+                                                            };
+                                                            DbValue::Time(e133)
+                                                        }
+                                                        18 => {
+                                                            let e133 = {
+                                                                let l83 = i32::from(
+                                                                    *base.add(8).cast::<u16>(),
+                                                                );
+
+                                                                l83 as u16
+                                                            };
+                                                            DbValue::Year(e133)
+                                                        }
+                                                        19 => {
+                                                            let e133 = {
+                                                                let l84 =
+                                                                    *base.add(8).cast::<*mut u8>();
+                                                                let l85 =
+                                                                    *base.add(12).cast::<usize>();
+                                                                let len86 = l85;
+                                                                let bytes86 =
+                                                                    _rt::Vec::from_raw_parts(
+                                                                        l84.cast(),
+                                                                        len86,
+                                                                        len86,
+                                                                    );
+
+                                                                _rt::string_lift(bytes86)
+                                                            };
+                                                            DbValue::Fixchar(e133)
+                                                        }
+                                                        20 => {
+                                                            let e133 = {
+                                                                let l87 =
+                                                                    *base.add(8).cast::<*mut u8>();
+                                                                let l88 =
+                                                                    *base.add(12).cast::<usize>();
+                                                                let len89 = l88;
+                                                                let bytes89 =
+                                                                    _rt::Vec::from_raw_parts(
+                                                                        l87.cast(),
+                                                                        len89,
+                                                                        len89,
+                                                                    );
+
+                                                                _rt::string_lift(bytes89)
+                                                            };
+                                                            DbValue::Varchar(e133)
+                                                        }
+                                                        21 => {
+                                                            let e133 = {
+                                                                let l90 =
+                                                                    *base.add(8).cast::<*mut u8>();
+                                                                let l91 =
+                                                                    *base.add(12).cast::<usize>();
+                                                                let len92 = l91;
+                                                                let bytes92 =
+                                                                    _rt::Vec::from_raw_parts(
+                                                                        l90.cast(),
+                                                                        len92,
+                                                                        len92,
+                                                                    );
+
+                                                                _rt::string_lift(bytes92)
+                                                            };
+                                                            DbValue::Tinytext(e133)
+                                                        }
+                                                        22 => {
+                                                            let e133 = {
+                                                                let l93 =
+                                                                    *base.add(8).cast::<*mut u8>();
+                                                                let l94 =
+                                                                    *base.add(12).cast::<usize>();
+                                                                let len95 = l94;
+                                                                let bytes95 =
+                                                                    _rt::Vec::from_raw_parts(
+                                                                        l93.cast(),
+                                                                        len95,
+                                                                        len95,
+                                                                    );
+
+                                                                _rt::string_lift(bytes95)
+                                                            };
+                                                            DbValue::Text(e133)
+                                                        }
+                                                        23 => {
+                                                            let e133 = {
+                                                                let l96 =
+                                                                    *base.add(8).cast::<*mut u8>();
+                                                                let l97 =
+                                                                    *base.add(12).cast::<usize>();
+                                                                let len98 = l97;
+                                                                let bytes98 =
+                                                                    _rt::Vec::from_raw_parts(
+                                                                        l96.cast(),
+                                                                        len98,
+                                                                        len98,
+                                                                    );
+
+                                                                _rt::string_lift(bytes98)
+                                                            };
+                                                            DbValue::Mediumtext(e133)
+                                                        }
+                                                        24 => {
+                                                            let e133 = {
+                                                                let l99 =
+                                                                    *base.add(8).cast::<*mut u8>();
+                                                                let l100 =
+                                                                    *base.add(12).cast::<usize>();
+                                                                let len101 = l100;
+                                                                let bytes101 =
+                                                                    _rt::Vec::from_raw_parts(
+                                                                        l99.cast(),
+                                                                        len101,
+                                                                        len101,
+                                                                    );
+
+                                                                _rt::string_lift(bytes101)
+                                                            };
+                                                            DbValue::Longtext(e133)
+                                                        }
+                                                        25 => {
+                                                            let e133 = {
+                                                                let l102 =
+                                                                    *base.add(8).cast::<*mut u8>();
+                                                                let l103 =
+                                                                    *base.add(12).cast::<usize>();
+                                                                let len104 = l103;
+
+                                                                _rt::Vec::from_raw_parts(
+                                                                    l102.cast(),
+                                                                    len104,
+                                                                    len104,
+                                                                )
+                                                            };
+                                                            DbValue::Binary(e133)
+                                                        }
+                                                        26 => {
+                                                            let e133 = {
+                                                                let l105 =
+                                                                    *base.add(8).cast::<*mut u8>();
+                                                                let l106 =
+                                                                    *base.add(12).cast::<usize>();
+                                                                let len107 = l106;
+
+                                                                _rt::Vec::from_raw_parts(
+                                                                    l105.cast(),
+                                                                    len107,
+                                                                    len107,
+                                                                )
+                                                            };
+                                                            DbValue::Varbinary(e133)
+                                                        }
+                                                        27 => {
+                                                            let e133 = {
+                                                                let l108 =
+                                                                    *base.add(8).cast::<*mut u8>();
+                                                                let l109 =
+                                                                    *base.add(12).cast::<usize>();
+                                                                let len110 = l109;
+
+                                                                _rt::Vec::from_raw_parts(
+                                                                    l108.cast(),
+                                                                    len110,
+                                                                    len110,
+                                                                )
+                                                            };
+                                                            DbValue::Tinyblob(e133)
+                                                        }
+                                                        28 => {
+                                                            let e133 = {
+                                                                let l111 =
+                                                                    *base.add(8).cast::<*mut u8>();
+                                                                let l112 =
+                                                                    *base.add(12).cast::<usize>();
+                                                                let len113 = l112;
+
+                                                                _rt::Vec::from_raw_parts(
+                                                                    l111.cast(),
+                                                                    len113,
+                                                                    len113,
+                                                                )
+                                                            };
+                                                            DbValue::Blob(e133)
+                                                        }
+                                                        29 => {
+                                                            let e133 = {
+                                                                let l114 =
+                                                                    *base.add(8).cast::<*mut u8>();
+                                                                let l115 =
+                                                                    *base.add(12).cast::<usize>();
+                                                                let len116 = l115;
+
+                                                                _rt::Vec::from_raw_parts(
+                                                                    l114.cast(),
+                                                                    len116,
+                                                                    len116,
+                                                                )
+                                                            };
+                                                            DbValue::Mediumblob(e133)
+                                                        }
+                                                        30 => {
+                                                            let e133 = {
+                                                                let l117 =
+                                                                    *base.add(8).cast::<*mut u8>();
+                                                                let l118 =
+                                                                    *base.add(12).cast::<usize>();
+                                                                let len119 = l118;
+
+                                                                _rt::Vec::from_raw_parts(
+                                                                    l117.cast(),
+                                                                    len119,
+                                                                    len119,
+                                                                )
+                                                            };
+                                                            DbValue::Longblob(e133)
+                                                        }
+                                                        31 => {
+                                                            let e133 = {
+                                                                let l120 =
+                                                                    *base.add(8).cast::<*mut u8>();
+                                                                let l121 =
+                                                                    *base.add(12).cast::<usize>();
+                                                                let len122 = l121;
+                                                                let bytes122 =
+                                                                    _rt::Vec::from_raw_parts(
+                                                                        l120.cast(),
+                                                                        len122,
+                                                                        len122,
+                                                                    );
+
+                                                                _rt::string_lift(bytes122)
+                                                            };
+                                                            DbValue::Enumeration(e133)
+                                                        }
+                                                        32 => {
+                                                            let e133 = {
+                                                                let l123 =
+                                                                    *base.add(8).cast::<*mut u8>();
+                                                                let l124 =
+                                                                    *base.add(12).cast::<usize>();
+                                                                let len125 = l124;
+                                                                let bytes125 =
+                                                                    _rt::Vec::from_raw_parts(
+                                                                        l123.cast(),
+                                                                        len125,
+                                                                        len125,
+                                                                    );
+
+                                                                _rt::string_lift(bytes125)
+                                                            };
+                                                            DbValue::Set(e133)
+                                                        }
+                                                        33 => {
+                                                            let e133 = {
+                                                                let l126 =
+                                                                    *base.add(8).cast::<*mut u8>();
+                                                                let l127 =
+                                                                    *base.add(12).cast::<usize>();
+                                                                let base129 = l126;
+                                                                let len129 = l127;
+                                                                let mut result129 =
+                                                                    _rt::Vec::with_capacity(len129);
+                                                                for i in 0..len129 {
+                                                                    let base = base129.add(i * 1);
+                                                                    let e129 = {
+                                                                        let l128 = i32::from(
+                                                                            *base
+                                                                                .add(0)
+                                                                                .cast::<u8>(),
+                                                                        );
+
+                                                                        _rt::bool_lift(l128 as u8)
+                                                                    };
+                                                                    result129.push(e129);
+                                                                }
+                                                                _rt::cabi_dealloc(
+                                                                    base129,
+                                                                    len129 * 1,
+                                                                    1,
+                                                                );
+
+                                                                result129
+                                                            };
+                                                            DbValue::Bit(e133)
+                                                        }
+                                                        34 => {
+                                                            let e133 = {
+                                                                let l130 =
+                                                                    *base.add(8).cast::<*mut u8>();
+                                                                let l131 =
+                                                                    *base.add(12).cast::<usize>();
+                                                                let len132 = l131;
+                                                                let bytes132 =
+                                                                    _rt::Vec::from_raw_parts(
+                                                                        l130.cast(),
+                                                                        len132,
+                                                                        len132,
+                                                                    );
+
+                                                                _rt::string_lift(bytes132)
+                                                            };
+                                                            DbValue::Json(e133)
+                                                        }
+                                                        n => {
+                                                            debug_assert_eq!(
+                                                                n, 35,
+                                                                "invalid enum discriminant"
+                                                            );
+                                                            DbValue::Null
+                                                        }
+                                                    };
+
+                                                    v133
+                                                };
+                                                result134.push(e134);
+                                            }
+                                            _rt::cabi_dealloc(base134, len134 * 24, 8);
+
+                                            DbRow { values: result134 }
+                                        };
+                                        result135.push(e135);
+                                    }
+                                    _rt::cabi_dealloc(base135, len135 * 8, 4);
+
+                                    DbResult {
+                                        columns: result40,
+                                        rows: result135,
+                                    }
                                 };
                                 Ok(e)
                             }
                             1 => {
                                 let e = {
-                                    let l30 = i32::from(*ptr27.add(4).cast::<u8>());
-                                    let v46 = match l30 {
+                                    let l136 = i32::from(*ptr27.add(4).cast::<u8>());
+                                    let v152 = match l136 {
                                         0 => {
-                                            let e46 = {
-                                                let l31 = *ptr27.add(8).cast::<*mut u8>();
-                                                let l32 = *ptr27.add(12).cast::<usize>();
-                                                let len33 = l32;
-                                                let bytes33 = _rt::Vec::from_raw_parts(
-                                                    l31.cast(),
-                                                    len33,
-                                                    len33,
+                                            let e152 = {
+                                                let l137 = *ptr27.add(8).cast::<*mut u8>();
+                                                let l138 = *ptr27.add(12).cast::<usize>();
+                                                let len139 = l138;
+                                                let bytes139 = _rt::Vec::from_raw_parts(
+                                                    l137.cast(),
+                                                    len139,
+                                                    len139,
                                                 );
 
-                                                _rt::string_lift(bytes33)
+                                                _rt::string_lift(bytes139)
                                             };
-                                            Error::ConnectionFailure(e46)
+                                            Error::ConnectionFailure(e152)
                                         }
                                         1 => {
-                                            let e46 = {
-                                                let l34 = *ptr27.add(8).cast::<*mut u8>();
-                                                let l35 = *ptr27.add(12).cast::<usize>();
-                                                let len36 = l35;
-                                                let bytes36 = _rt::Vec::from_raw_parts(
-                                                    l34.cast(),
-                                                    len36,
-                                                    len36,
+                                            let e152 = {
+                                                let l140 = *ptr27.add(8).cast::<*mut u8>();
+                                                let l141 = *ptr27.add(12).cast::<usize>();
+                                                let len142 = l141;
+                                                let bytes142 = _rt::Vec::from_raw_parts(
+                                                    l140.cast(),
+                                                    len142,
+                                                    len142,
                                                 );
 
-                                                _rt::string_lift(bytes36)
+                                                _rt::string_lift(bytes142)
                                             };
-                                            Error::QueryParameterFailure(e46)
+                                            Error::QueryParameterFailure(e152)
                                         }
                                         2 => {
-                                            let e46 = {
-                                                let l37 = *ptr27.add(8).cast::<*mut u8>();
-                                                let l38 = *ptr27.add(12).cast::<usize>();
-                                                let len39 = l38;
-                                                let bytes39 = _rt::Vec::from_raw_parts(
-                                                    l37.cast(),
-                                                    len39,
-                                                    len39,
+                                            let e152 = {
+                                                let l143 = *ptr27.add(8).cast::<*mut u8>();
+                                                let l144 = *ptr27.add(12).cast::<usize>();
+                                                let len145 = l144;
+                                                let bytes145 = _rt::Vec::from_raw_parts(
+                                                    l143.cast(),
+                                                    len145,
+                                                    len145,
                                                 );
 
-                                                _rt::string_lift(bytes39)
+                                                _rt::string_lift(bytes145)
                                             };
-                                            Error::QueryExecutionFailure(e46)
+                                            Error::QueryExecutionFailure(e152)
                                         }
                                         3 => {
-                                            let e46 = {
-                                                let l40 = *ptr27.add(8).cast::<*mut u8>();
-                                                let l41 = *ptr27.add(12).cast::<usize>();
-                                                let len42 = l41;
-                                                let bytes42 = _rt::Vec::from_raw_parts(
-                                                    l40.cast(),
-                                                    len42,
-                                                    len42,
+                                            let e152 = {
+                                                let l146 = *ptr27.add(8).cast::<*mut u8>();
+                                                let l147 = *ptr27.add(12).cast::<usize>();
+                                                let len148 = l147;
+                                                let bytes148 = _rt::Vec::from_raw_parts(
+                                                    l146.cast(),
+                                                    len148,
+                                                    len148,
                                                 );
 
-                                                _rt::string_lift(bytes42)
+                                                _rt::string_lift(bytes148)
                                             };
-                                            Error::QueryResponseFailure(e46)
+                                            Error::QueryResponseFailure(e152)
                                         }
                                         n => {
                                             debug_assert_eq!(n, 4, "invalid enum discriminant");
-                                            let e46 = {
-                                                let l43 = *ptr27.add(8).cast::<*mut u8>();
-                                                let l44 = *ptr27.add(12).cast::<usize>();
-                                                let len45 = l44;
-                                                let bytes45 = _rt::Vec::from_raw_parts(
-                                                    l43.cast(),
-                                                    len45,
-                                                    len45,
+                                            let e152 = {
+                                                let l149 = *ptr27.add(8).cast::<*mut u8>();
+                                                let l150 = *ptr27.add(12).cast::<usize>();
+                                                let len151 = l150;
+                                                let bytes151 = _rt::Vec::from_raw_parts(
+                                                    l149.cast(),
+                                                    len151,
+                                                    len151,
                                                 );
 
-                                                _rt::string_lift(bytes45)
+                                                _rt::string_lift(bytes151)
                                             };
-                                            Error::Other(e46)
+                                            Error::Other(e152)
                                         }
                                     };
 
-                                    v46
+                                    v152
                                 };
                                 Err(e)
                             }
@@ -16866,6 +21129,7 @@ pub mod exports {
                 pub enum StatementAction {
                     Execute,
                     Query,
+                    QueryStream,
                 }
                 impl ::core::fmt::Debug for StatementAction {
                     fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
@@ -16875,6 +21139,9 @@ pub mod exports {
                             }
                             StatementAction::Query => {
                                 f.debug_tuple("StatementAction::Query").finish()
+                            }
+                            StatementAction::QueryStream => {
+                                f.debug_tuple("StatementAction::QueryStream").finish()
                             }
                         }
                     }
@@ -16890,6 +21157,7 @@ pub mod exports {
                         match val {
                             0 => StatementAction::Execute,
                             1 => StatementAction::Query,
+                            2 => StatementAction::QueryStream,
 
                             _ => panic!("invalid enum discriminant"),
                         }
@@ -25223,126 +29491,129 @@ pub(crate) use __export_rdbms_service_impl as export;
 #[cfg(target_arch = "wasm32")]
 #[link_section = "component-type:wit-bindgen:0.25.0:rdbms-service:encoded world"]
 #[doc(hidden)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 5665] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\x9d+\x01A\x02\x01A\x08\
-\x01B~\x01q\x05\x12connection-failure\x01s\0\x17query-parameter-failure\x01s\0\x17\
-query-execution-failure\x01s\0\x16query-response-failure\x01s\0\x05other\x01s\0\x04\
-\0\x05error\x03\0\0\x01r\x02\x09high-bitsw\x08low-bitsw\x04\0\x04uuid\x03\0\x02\x01\
-o\x04}}}}\x01o\x08{{{{{{{{\x01q\x02\x04ipv4\x01\x04\0\x04ipv6\x01\x05\0\x04\0\x0a\
-ip-address\x03\0\x06\x01o\x06}}}}}}\x01r\x01\x06octets\x08\x04\0\x0bmac-address\x03\
-\0\x09\x01r\x03\x04yearz\x05month}\x03day}\x04\0\x04date\x03\0\x0b\x01r\x04\x04h\
-our}\x06minute}\x06second}\x0ananosecondy\x04\0\x04time\x03\0\x0d\x01r\x02\x04da\
-te\x0c\x04time\x0e\x04\0\x09timestamp\x03\0\x0f\x01r\x02\x09timestamp\x10\x06off\
-setz\x04\0\x0btimestamptz\x03\0\x11\x01r\x02\x04time\x0e\x06offsetz\x04\0\x06tim\
-etz\x03\0\x13\x01r\x03\x06monthsz\x04daysz\x0cmicrosecondsx\x04\0\x08interval\x03\
-\0\x15\x01q\x03\x08included\x01z\0\x08excluded\x01z\0\x09unbounded\0\0\x04\0\x09\
-int4bound\x03\0\x17\x01q\x03\x08included\x01x\0\x08excluded\x01x\0\x09unbounded\0\
-\0\x04\0\x09int8bound\x03\0\x19\x01q\x03\x08included\x01s\0\x08excluded\x01s\0\x09\
-unbounded\0\0\x04\0\x08numbound\x03\0\x1b\x01q\x03\x08included\x01\x10\0\x08excl\
-uded\x01\x10\0\x09unbounded\0\0\x04\0\x07tsbound\x03\0\x1d\x01q\x03\x08included\x01\
-\x12\0\x08excluded\x01\x12\0\x09unbounded\0\0\x04\0\x09tstzbound\x03\0\x1f\x01q\x03\
-\x08included\x01\x0c\0\x08excluded\x01\x0c\0\x09unbounded\0\0\x04\0\x09datebound\
-\x03\0!\x01r\x02\x05start\x18\x03end\x18\x04\0\x09int4range\x03\0#\x01r\x02\x05s\
-tart\x1a\x03end\x1a\x04\0\x09int8range\x03\0%\x01r\x02\x05start\x1c\x03end\x1c\x04\
-\0\x08numrange\x03\0'\x01r\x02\x05start\x1e\x03end\x1e\x04\0\x07tsrange\x03\0)\x01\
-r\x02\x05start\x20\x03end\x20\x04\0\x09tstzrange\x03\0+\x01r\x02\x05start\"\x03e\
-nd\"\x04\0\x09daterange\x03\0-\x01r\x01\x04names\x04\0\x10enumeration-type\x03\0\
-/\x01r\x02\x04names\x05values\x04\0\x0benumeration\x03\01\x04\0\x0dlazy-db-value\
-\x03\x01\x01i3\x01p4\x01r\x02\x04names\x06values5\x04\0\x09composite\x03\06\x01r\
-\x02\x04names\x05value4\x04\0\x06domain\x03\08\x01p}\x01p\x7f\x01q)\x09character\
-\x01~\0\x04int2\x01|\0\x04int4\x01z\0\x04int8\x01x\0\x06float4\x01v\0\x06float8\x01\
-u\0\x07numeric\x01s\0\x07boolean\x01\x7f\0\x04text\x01s\0\x07varchar\x01s\0\x06b\
-pchar\x01s\0\x09timestamp\x01\x10\0\x0btimestamptz\x01\x12\0\x04date\x01\x0c\0\x04\
-time\x01\x0e\0\x06timetz\x01\x14\0\x08interval\x01\x16\0\x05bytea\x01:\0\x04json\
-\x01s\0\x05jsonb\x01s\0\x08jsonpath\x01s\0\x03xml\x01s\0\x04uuid\x01\x03\0\x04in\
-et\x01\x07\0\x04cidr\x01\x07\0\x07macaddr\x01\x0a\0\x03bit\x01;\0\x06varbit\x01;\
-\0\x09int4range\x01$\0\x09int8range\x01&\0\x08numrange\x01(\0\x07tsrange\x01*\0\x09\
-tstzrange\x01,\0\x09daterange\x01.\0\x05money\x01x\0\x03oid\x01y\0\x0benumeratio\
-n\x012\0\x09composite\x017\0\x06domain\x019\0\x05array\x015\0\x04null\0\0\x04\0\x08\
-db-value\x03\0<\x04\0\x13lazy-db-column-type\x03\x01\x01i>\x01o\x02s?\x01p\xc0\0\
-\x01r\x02\x04names\x0aattributes\xc1\0\x04\0\x0ecomposite-type\x03\0B\x01r\x02\x04\
-names\x09base-type?\x04\0\x0bdomain-type\x03\0D\x01q(\x09character\0\0\x04int2\0\
-\0\x04int4\0\0\x04int8\0\0\x06float4\0\0\x06float8\0\0\x07numeric\0\0\x07boolean\
-\0\0\x04text\0\0\x07varchar\0\0\x06bpchar\0\0\x09timestamp\0\0\x0btimestamptz\0\0\
-\x04date\0\0\x04time\0\0\x06timetz\0\0\x08interval\0\0\x05bytea\0\0\x04uuid\0\0\x03\
-xml\0\0\x04json\0\0\x05jsonb\0\0\x08jsonpath\0\0\x04inet\0\0\x04cidr\0\0\x07maca\
-ddr\0\0\x03bit\0\0\x06varbit\0\0\x09int4range\0\0\x09int8range\0\0\x08numrange\0\
-\0\x07tsrange\0\0\x09tstzrange\0\0\x09daterange\0\0\x05money\0\0\x03oid\0\0\x0be\
-numeration\x010\0\x09composite\x01\xc3\0\0\x06domain\x01\xc5\0\0\x05array\x01?\0\
-\x04\0\x0edb-column-type\x03\0F\x01r\x04\x07ordinalw\x04names\x07db-type\xc7\0\x0c\
-db-type-names\x04\0\x09db-column\x03\0H\x01p=\x01r\x01\x06values\xca\0\x04\0\x06\
-db-row\x03\0K\x01p\xc9\0\x01p\xcc\0\x01r\x02\x07columns\xcd\0\x04rows\xce\0\x04\0\
-\x09db-result\x03\0O\x04\0\x0ddb-result-set\x03\x01\x04\0\x0ddb-connection\x03\x01\
-\x04\0\x0edb-transaction\x03\x01\x01@\x01\x05value=\04\x04\0\x1c[static]lazy-db-\
-value.create\x01T\x01h3\x01@\x01\x04self\xd5\0\0=\x04\0\x19[method]lazy-db-value\
-.get\x01V\x01@\x01\x05value\xc7\0\0?\x04\0\"[static]lazy-db-column-type.create\x01\
-W\x01h>\x01@\x01\x04self\xd8\0\0\xc7\0\x04\0\x1f[method]lazy-db-column-type.get\x01\
-Y\x01hQ\x01@\x01\x04self\xda\0\0\xcd\0\x04\0![method]db-result-set.get-columns\x01\
-[\x01k\xce\0\x01@\x01\x04self\xda\0\0\xdc\0\x04\0\x1e[method]db-result-set.get-n\
-ext\x01]\x01iR\x01j\x01\xde\0\x01\x01\x01@\x01\x07addresss\0\xdf\0\x04\0\x1a[sta\
-tic]db-connection.open\x01`\x01hR\x01iQ\x01j\x01\xe2\0\x01\x01\x01@\x03\x04self\xe1\
-\0\x09statements\x06params\xca\0\0\xe3\0\x04\0\x1b[method]db-connection.query\x01\
-d\x01j\x01w\x01\x01\x01@\x03\x04self\xe1\0\x09statements\x06params\xca\0\0\xe5\0\
-\x04\0\x1d[method]db-connection.execute\x01f\x01iS\x01j\x01\xe7\0\x01\x01\x01@\x01\
-\x04self\xe1\0\0\xe8\0\x04\0'[method]db-connection.begin-transaction\x01i\x01hS\x01\
-j\x01\xd0\0\x01\x01\x01@\x03\x04self\xea\0\x09statements\x06params\xca\0\0\xeb\0\
-\x04\0\x1c[method]db-transaction.query\x01l\x01@\x03\x04self\xea\0\x09statements\
-\x06params\xca\0\0\xe5\0\x04\0\x1e[method]db-transaction.execute\x01m\x01j\0\x01\
-\x01\x01@\x01\x04self\xea\0\0\xee\0\x04\0\x1d[method]db-transaction.commit\x01o\x04\
-\0\x1f[method]db-transaction.rollback\x01o\x03\x01\x19wasi:rdbms/postgres@0.0.1\x05\
-\0\x01B:\x01q\x05\x12connection-failure\x01s\0\x17query-parameter-failure\x01s\0\
-\x17query-execution-failure\x01s\0\x16query-response-failure\x01s\0\x05other\x01\
-s\0\x04\0\x05error\x03\0\0\x01r\x03\x04yearz\x05month}\x03day}\x04\0\x04date\x03\
-\0\x02\x01r\x04\x04hour}\x06minute}\x06second}\x0ananosecondy\x04\0\x04time\x03\0\
-\x04\x01r\x02\x04date\x03\x04time\x05\x04\0\x09timestamp\x03\0\x06\x01q#\x07bool\
-ean\0\0\x07tinyint\0\0\x08smallint\0\0\x09mediumint\0\0\x03int\0\0\x06bigint\0\0\
-\x10tinyint-unsigned\0\0\x11smallint-unsigned\0\0\x12mediumint-unsigned\0\0\x0ci\
-nt-unsigned\0\0\x0fbigint-unsigned\0\0\x05float\0\0\x06double\0\0\x07decimal\0\0\
-\x04date\0\0\x08datetime\0\0\x09timestamp\0\0\x04time\0\0\x04year\0\0\x07fixchar\
-\0\0\x07varchar\0\0\x08tinytext\0\0\x04text\0\0\x0amediumtext\0\0\x08longtext\0\0\
-\x06binary\0\0\x09varbinary\0\0\x08tinyblob\0\0\x04blob\0\0\x0amediumblob\0\0\x08\
-longblob\0\0\x0benumeration\0\0\x03set\0\0\x03bit\0\0\x04json\0\0\x04\0\x0edb-co\
-lumn-type\x03\0\x08\x01r\x04\x07ordinalw\x04names\x07db-type\x09\x0cdb-type-name\
-s\x04\0\x09db-column\x03\0\x0a\x01p}\x01p\x7f\x01q$\x07boolean\x01\x7f\0\x07tiny\
-int\x01~\0\x08smallint\x01|\0\x09mediumint\x01z\0\x03int\x01z\0\x06bigint\x01x\0\
-\x10tinyint-unsigned\x01}\0\x11smallint-unsigned\x01{\0\x12mediumint-unsigned\x01\
-y\0\x0cint-unsigned\x01y\0\x0fbigint-unsigned\x01w\0\x05float\x01v\0\x06double\x01\
-u\0\x07decimal\x01s\0\x04date\x01\x03\0\x08datetime\x01\x07\0\x09timestamp\x01\x07\
-\0\x04time\x01\x05\0\x04year\x01{\0\x07fixchar\x01s\0\x07varchar\x01s\0\x08tinyt\
-ext\x01s\0\x04text\x01s\0\x0amediumtext\x01s\0\x08longtext\x01s\0\x06binary\x01\x0c\
-\0\x09varbinary\x01\x0c\0\x08tinyblob\x01\x0c\0\x04blob\x01\x0c\0\x0amediumblob\x01\
-\x0c\0\x08longblob\x01\x0c\0\x0benumeration\x01s\0\x03set\x01s\0\x03bit\x01\x0d\0\
-\x04json\x01s\0\x04null\0\0\x04\0\x08db-value\x03\0\x0e\x01p\x0f\x01r\x01\x06val\
-ues\x10\x04\0\x06db-row\x03\0\x11\x01p\x0b\x01p\x12\x01r\x02\x07columns\x13\x04r\
-ows\x14\x04\0\x09db-result\x03\0\x15\x04\0\x0ddb-result-set\x03\x01\x04\0\x0ddb-\
-connection\x03\x01\x04\0\x0edb-transaction\x03\x01\x01h\x17\x01@\x01\x04self\x1a\
-\0\x13\x04\0![method]db-result-set.get-columns\x01\x1b\x01k\x14\x01@\x01\x04self\
-\x1a\0\x1c\x04\0\x1e[method]db-result-set.get-next\x01\x1d\x01i\x18\x01j\x01\x1e\
-\x01\x01\x01@\x01\x07addresss\0\x1f\x04\0\x1a[static]db-connection.open\x01\x20\x01\
-h\x18\x01i\x17\x01j\x01\"\x01\x01\x01@\x03\x04self!\x09statements\x06params\x10\0\
-#\x04\0\x1b[method]db-connection.query\x01$\x01j\x01w\x01\x01\x01@\x03\x04self!\x09\
-statements\x06params\x10\0%\x04\0\x1d[method]db-connection.execute\x01&\x01i\x19\
-\x01j\x01'\x01\x01\x01@\x01\x04self!\0(\x04\0'[method]db-connection.begin-transa\
-ction\x01)\x01h\x19\x01j\x01\x16\x01\x01\x01@\x03\x04self*\x09statements\x06para\
-ms\x10\0+\x04\0\x1c[method]db-transaction.query\x01,\x01@\x03\x04self*\x09statem\
-ents\x06params\x10\0%\x04\0\x1e[method]db-transaction.execute\x01-\x01j\0\x01\x01\
-\x01@\x01\x04self*\0.\x04\0\x1d[method]db-transaction.commit\x01/\x04\0\x1f[meth\
-od]db-transaction.rollback\x01/\x03\x01\x16wasi:rdbms/mysql@0.0.1\x05\x01\x02\x03\
-\0\0\x09db-result\x02\x03\0\x01\x09db-result\x01B\x20\x02\x03\x02\x01\x02\x04\0\x12\
-postgres-db-result\x03\0\0\x02\x03\x02\x01\x03\x04\0\x0fmysql-db-result\x03\0\x02\
-\x01m\x03\x06commit\x08rollback\x04none\x04\0\x0ftransaction-end\x03\0\x04\x01m\x02\
-\x07execute\x05query\x04\0\x10statement-action\x03\0\x06\x01ps\x01r\x03\x09state\
-ments\x06params\x08\x06action\x07\x04\0\x09statement\x03\0\x09\x01q\x02\x07execu\
-te\x01w\0\x05query\x01\x03\0\x04\0\x0cmysql-result\x03\0\x0b\x01q\x02\x07execute\
-\x01w\0\x05query\x01\x01\0\x04\0\x0fpostgres-result\x03\0\x0d\x01@\0\0s\x04\0\x05\
-check\x01\x0f\x01p\x0a\x01j\x01\x0c\x01s\x01p\x11\x01j\x01\x12\x01s\x01@\x02\x0a\
-statements\x10\x03end\x05\0\x13\x04\0\x11mysql-transaction\x01\x14\x01@\x01\x0as\
-tatements\x10\0\x13\x04\0\x10mysql-executions\x01\x15\x01j\x01\x0e\x01s\x01p\x16\
-\x01j\x01\x17\x01s\x01@\x02\x0astatements\x10\x03end\x05\0\x18\x04\0\x14postgres\
--transaction\x01\x19\x01@\x01\x0astatements\x10\0\x18\x04\0\x13postgres-executio\
-ns\x01\x1a\x04\x01\x0cgolem:it/api\x05\x04\x04\x01\x16golem:it/rdbms-service\x04\
-\0\x0b\x13\x01\0\x0drdbms-service\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\
-\x0dwit-component\x070.208.1\x10wit-bindgen-rust\x060.25.0";
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 5838] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xca,\x01A\x02\x01A\x08\
+\x01B\x80\x01\x01q\x05\x12connection-failure\x01s\0\x17query-parameter-failure\x01\
+s\0\x17query-execution-failure\x01s\0\x16query-response-failure\x01s\0\x05other\x01\
+s\0\x04\0\x05error\x03\0\0\x01r\x02\x09high-bitsw\x08low-bitsw\x04\0\x04uuid\x03\
+\0\x02\x01o\x04}}}}\x01o\x08{{{{{{{{\x01q\x02\x04ipv4\x01\x04\0\x04ipv6\x01\x05\0\
+\x04\0\x0aip-address\x03\0\x06\x01o\x06}}}}}}\x01r\x01\x06octets\x08\x04\0\x0bma\
+c-address\x03\0\x09\x01r\x03\x04yearz\x05month}\x03day}\x04\0\x04date\x03\0\x0b\x01\
+r\x04\x04hour}\x06minute}\x06second}\x0ananosecondy\x04\0\x04time\x03\0\x0d\x01r\
+\x02\x04date\x0c\x04time\x0e\x04\0\x09timestamp\x03\0\x0f\x01r\x02\x09timestamp\x10\
+\x06offsetz\x04\0\x0btimestamptz\x03\0\x11\x01r\x02\x04time\x0e\x06offsetz\x04\0\
+\x06timetz\x03\0\x13\x01r\x03\x06monthsz\x04daysz\x0cmicrosecondsx\x04\0\x08inte\
+rval\x03\0\x15\x01q\x03\x08included\x01z\0\x08excluded\x01z\0\x09unbounded\0\0\x04\
+\0\x09int4bound\x03\0\x17\x01q\x03\x08included\x01x\0\x08excluded\x01x\0\x09unbo\
+unded\0\0\x04\0\x09int8bound\x03\0\x19\x01q\x03\x08included\x01s\0\x08excluded\x01\
+s\0\x09unbounded\0\0\x04\0\x08numbound\x03\0\x1b\x01q\x03\x08included\x01\x10\0\x08\
+excluded\x01\x10\0\x09unbounded\0\0\x04\0\x07tsbound\x03\0\x1d\x01q\x03\x08inclu\
+ded\x01\x12\0\x08excluded\x01\x12\0\x09unbounded\0\0\x04\0\x09tstzbound\x03\0\x1f\
+\x01q\x03\x08included\x01\x0c\0\x08excluded\x01\x0c\0\x09unbounded\0\0\x04\0\x09\
+datebound\x03\0!\x01r\x02\x05start\x18\x03end\x18\x04\0\x09int4range\x03\0#\x01r\
+\x02\x05start\x1a\x03end\x1a\x04\0\x09int8range\x03\0%\x01r\x02\x05start\x1c\x03\
+end\x1c\x04\0\x08numrange\x03\0'\x01r\x02\x05start\x1e\x03end\x1e\x04\0\x07tsran\
+ge\x03\0)\x01r\x02\x05start\x20\x03end\x20\x04\0\x09tstzrange\x03\0+\x01r\x02\x05\
+start\"\x03end\"\x04\0\x09daterange\x03\0-\x01r\x01\x04names\x04\0\x10enumeratio\
+n-type\x03\0/\x01r\x02\x04names\x05values\x04\0\x0benumeration\x03\01\x04\0\x0dl\
+azy-db-value\x03\x01\x01i3\x01p4\x01r\x02\x04names\x06values5\x04\0\x09composite\
+\x03\06\x01r\x02\x04names\x05value4\x04\0\x06domain\x03\08\x01p}\x01p\x7f\x01q)\x09\
+character\x01~\0\x04int2\x01|\0\x04int4\x01z\0\x04int8\x01x\0\x06float4\x01v\0\x06\
+float8\x01u\0\x07numeric\x01s\0\x07boolean\x01\x7f\0\x04text\x01s\0\x07varchar\x01\
+s\0\x06bpchar\x01s\0\x09timestamp\x01\x10\0\x0btimestamptz\x01\x12\0\x04date\x01\
+\x0c\0\x04time\x01\x0e\0\x06timetz\x01\x14\0\x08interval\x01\x16\0\x05bytea\x01:\
+\0\x04json\x01s\0\x05jsonb\x01s\0\x08jsonpath\x01s\0\x03xml\x01s\0\x04uuid\x01\x03\
+\0\x04inet\x01\x07\0\x04cidr\x01\x07\0\x07macaddr\x01\x0a\0\x03bit\x01;\0\x06var\
+bit\x01;\0\x09int4range\x01$\0\x09int8range\x01&\0\x08numrange\x01(\0\x07tsrange\
+\x01*\0\x09tstzrange\x01,\0\x09daterange\x01.\0\x05money\x01x\0\x03oid\x01y\0\x0b\
+enumeration\x012\0\x09composite\x017\0\x06domain\x019\0\x05array\x015\0\x04null\0\
+\0\x04\0\x08db-value\x03\0<\x04\0\x13lazy-db-column-type\x03\x01\x01i>\x01o\x02s\
+?\x01p\xc0\0\x01r\x02\x04names\x0aattributes\xc1\0\x04\0\x0ecomposite-type\x03\0\
+B\x01r\x02\x04names\x09base-type?\x04\0\x0bdomain-type\x03\0D\x01q(\x09character\
+\0\0\x04int2\0\0\x04int4\0\0\x04int8\0\0\x06float4\0\0\x06float8\0\0\x07numeric\0\
+\0\x07boolean\0\0\x04text\0\0\x07varchar\0\0\x06bpchar\0\0\x09timestamp\0\0\x0bt\
+imestamptz\0\0\x04date\0\0\x04time\0\0\x06timetz\0\0\x08interval\0\0\x05bytea\0\0\
+\x04uuid\0\0\x03xml\0\0\x04json\0\0\x05jsonb\0\0\x08jsonpath\0\0\x04inet\0\0\x04\
+cidr\0\0\x07macaddr\0\0\x03bit\0\0\x06varbit\0\0\x09int4range\0\0\x09int8range\0\
+\0\x08numrange\0\0\x07tsrange\0\0\x09tstzrange\0\0\x09daterange\0\0\x05money\0\0\
+\x03oid\0\0\x0benumeration\x010\0\x09composite\x01\xc3\0\0\x06domain\x01\xc5\0\0\
+\x05array\x01?\0\x04\0\x0edb-column-type\x03\0F\x01r\x04\x07ordinalw\x04names\x07\
+db-type\xc7\0\x0cdb-type-names\x04\0\x09db-column\x03\0H\x01p=\x01r\x01\x06value\
+s\xca\0\x04\0\x06db-row\x03\0K\x01p\xc9\0\x01p\xcc\0\x01r\x02\x07columns\xcd\0\x04\
+rows\xce\0\x04\0\x09db-result\x03\0O\x04\0\x10db-result-stream\x03\x01\x04\0\x0d\
+db-connection\x03\x01\x04\0\x0edb-transaction\x03\x01\x01@\x01\x05value=\04\x04\0\
+\x1c[static]lazy-db-value.create\x01T\x01h3\x01@\x01\x04self\xd5\0\0=\x04\0\x19[\
+method]lazy-db-value.get\x01V\x01@\x01\x05value\xc7\0\0?\x04\0\"[static]lazy-db-\
+column-type.create\x01W\x01h>\x01@\x01\x04self\xd8\0\0\xc7\0\x04\0\x1f[method]la\
+zy-db-column-type.get\x01Y\x01hQ\x01@\x01\x04self\xda\0\0\xcd\0\x04\0$[method]db\
+-result-stream.get-columns\x01[\x01k\xce\0\x01@\x01\x04self\xda\0\0\xdc\0\x04\0!\
+[method]db-result-stream.get-next\x01]\x01iR\x01j\x01\xde\0\x01\x01\x01@\x01\x07\
+addresss\0\xdf\0\x04\0\x1a[static]db-connection.open\x01`\x01hR\x01iQ\x01j\x01\xe2\
+\0\x01\x01\x01@\x03\x04self\xe1\0\x09statements\x06params\xca\0\0\xe3\0\x04\0\"[\
+method]db-connection.query-stream\x01d\x01j\x01\xd0\0\x01\x01\x01@\x03\x04self\xe1\
+\0\x09statements\x06params\xca\0\0\xe5\0\x04\0\x1b[method]db-connection.query\x01\
+f\x01j\x01w\x01\x01\x01@\x03\x04self\xe1\0\x09statements\x06params\xca\0\0\xe7\0\
+\x04\0\x1d[method]db-connection.execute\x01h\x01iS\x01j\x01\xe9\0\x01\x01\x01@\x01\
+\x04self\xe1\0\0\xea\0\x04\0'[method]db-connection.begin-transaction\x01k\x01hS\x01\
+@\x03\x04self\xec\0\x09statements\x06params\xca\0\0\xe5\0\x04\0\x1c[method]db-tr\
+ansaction.query\x01m\x01@\x03\x04self\xec\0\x09statements\x06params\xca\0\0\xe7\0\
+\x04\0\x1e[method]db-transaction.execute\x01n\x01j\0\x01\x01\x01@\x01\x04self\xec\
+\0\0\xef\0\x04\0\x1d[method]db-transaction.commit\x01p\x04\0\x1f[method]db-trans\
+action.rollback\x01p\x03\x01\x19wasi:rdbms/postgres@0.0.1\x05\0\x01B<\x01q\x05\x12\
+connection-failure\x01s\0\x17query-parameter-failure\x01s\0\x17query-execution-f\
+ailure\x01s\0\x16query-response-failure\x01s\0\x05other\x01s\0\x04\0\x05error\x03\
+\0\0\x01r\x03\x04yearz\x05month}\x03day}\x04\0\x04date\x03\0\x02\x01r\x04\x04hou\
+r}\x06minute}\x06second}\x0ananosecondy\x04\0\x04time\x03\0\x04\x01r\x02\x04date\
+\x03\x04time\x05\x04\0\x09timestamp\x03\0\x06\x01q#\x07boolean\0\0\x07tinyint\0\0\
+\x08smallint\0\0\x09mediumint\0\0\x03int\0\0\x06bigint\0\0\x10tinyint-unsigned\0\
+\0\x11smallint-unsigned\0\0\x12mediumint-unsigned\0\0\x0cint-unsigned\0\0\x0fbig\
+int-unsigned\0\0\x05float\0\0\x06double\0\0\x07decimal\0\0\x04date\0\0\x08dateti\
+me\0\0\x09timestamp\0\0\x04time\0\0\x04year\0\0\x07fixchar\0\0\x07varchar\0\0\x08\
+tinytext\0\0\x04text\0\0\x0amediumtext\0\0\x08longtext\0\0\x06binary\0\0\x09varb\
+inary\0\0\x08tinyblob\0\0\x04blob\0\0\x0amediumblob\0\0\x08longblob\0\0\x0benume\
+ration\0\0\x03set\0\0\x03bit\0\0\x04json\0\0\x04\0\x0edb-column-type\x03\0\x08\x01\
+r\x04\x07ordinalw\x04names\x07db-type\x09\x0cdb-type-names\x04\0\x09db-column\x03\
+\0\x0a\x01p}\x01p\x7f\x01q$\x07boolean\x01\x7f\0\x07tinyint\x01~\0\x08smallint\x01\
+|\0\x09mediumint\x01z\0\x03int\x01z\0\x06bigint\x01x\0\x10tinyint-unsigned\x01}\0\
+\x11smallint-unsigned\x01{\0\x12mediumint-unsigned\x01y\0\x0cint-unsigned\x01y\0\
+\x0fbigint-unsigned\x01w\0\x05float\x01v\0\x06double\x01u\0\x07decimal\x01s\0\x04\
+date\x01\x03\0\x08datetime\x01\x07\0\x09timestamp\x01\x07\0\x04time\x01\x05\0\x04\
+year\x01{\0\x07fixchar\x01s\0\x07varchar\x01s\0\x08tinytext\x01s\0\x04text\x01s\0\
+\x0amediumtext\x01s\0\x08longtext\x01s\0\x06binary\x01\x0c\0\x09varbinary\x01\x0c\
+\0\x08tinyblob\x01\x0c\0\x04blob\x01\x0c\0\x0amediumblob\x01\x0c\0\x08longblob\x01\
+\x0c\0\x0benumeration\x01s\0\x03set\x01s\0\x03bit\x01\x0d\0\x04json\x01s\0\x04nu\
+ll\0\0\x04\0\x08db-value\x03\0\x0e\x01p\x0f\x01r\x01\x06values\x10\x04\0\x06db-r\
+ow\x03\0\x11\x01p\x0b\x01p\x12\x01r\x02\x07columns\x13\x04rows\x14\x04\0\x09db-r\
+esult\x03\0\x15\x04\0\x10db-result-stream\x03\x01\x04\0\x0ddb-connection\x03\x01\
+\x04\0\x0edb-transaction\x03\x01\x01h\x17\x01@\x01\x04self\x1a\0\x13\x04\0$[meth\
+od]db-result-stream.get-columns\x01\x1b\x01k\x14\x01@\x01\x04self\x1a\0\x1c\x04\0\
+![method]db-result-stream.get-next\x01\x1d\x01i\x18\x01j\x01\x1e\x01\x01\x01@\x01\
+\x07addresss\0\x1f\x04\0\x1a[static]db-connection.open\x01\x20\x01h\x18\x01i\x17\
+\x01j\x01\"\x01\x01\x01@\x03\x04self!\x09statements\x06params\x10\0#\x04\0\"[met\
+hod]db-connection.query-stream\x01$\x01j\x01\x16\x01\x01\x01@\x03\x04self!\x09st\
+atements\x06params\x10\0%\x04\0\x1b[method]db-connection.query\x01&\x01j\x01w\x01\
+\x01\x01@\x03\x04self!\x09statements\x06params\x10\0'\x04\0\x1d[method]db-connec\
+tion.execute\x01(\x01i\x19\x01j\x01)\x01\x01\x01@\x01\x04self!\0*\x04\0'[method]\
+db-connection.begin-transaction\x01+\x01h\x19\x01@\x03\x04self,\x09statements\x06\
+params\x10\0%\x04\0\x1c[method]db-transaction.query\x01-\x01@\x03\x04self,\x09st\
+atements\x06params\x10\0'\x04\0\x1e[method]db-transaction.execute\x01.\x01j\0\x01\
+\x01\x01@\x01\x04self,\0/\x04\0\x1d[method]db-transaction.commit\x010\x04\0\x1f[\
+method]db-transaction.rollback\x010\x03\x01\x16wasi:rdbms/mysql@0.0.1\x05\x01\x02\
+\x03\0\0\x09db-result\x02\x03\0\x01\x09db-result\x01B\x20\x02\x03\x02\x01\x02\x04\
+\0\x12postgres-db-result\x03\0\0\x02\x03\x02\x01\x03\x04\0\x0fmysql-db-result\x03\
+\0\x02\x01m\x03\x06commit\x08rollback\x04none\x04\0\x0ftransaction-end\x03\0\x04\
+\x01m\x03\x07execute\x05query\x0cquery-stream\x04\0\x10statement-action\x03\0\x06\
+\x01ps\x01r\x03\x09statements\x06params\x08\x06action\x07\x04\0\x09statement\x03\
+\0\x09\x01q\x02\x07execute\x01w\0\x05query\x01\x03\0\x04\0\x0cmysql-result\x03\0\
+\x0b\x01q\x02\x07execute\x01w\0\x05query\x01\x01\0\x04\0\x0fpostgres-result\x03\0\
+\x0d\x01@\0\0s\x04\0\x05check\x01\x0f\x01p\x0a\x01j\x01\x0c\x01s\x01p\x11\x01j\x01\
+\x12\x01s\x01@\x02\x0astatements\x10\x03end\x05\0\x13\x04\0\x11mysql-transaction\
+\x01\x14\x01@\x01\x0astatements\x10\0\x13\x04\0\x10mysql-executions\x01\x15\x01j\
+\x01\x0e\x01s\x01p\x16\x01j\x01\x17\x01s\x01@\x02\x0astatements\x10\x03end\x05\0\
+\x18\x04\0\x14postgres-transaction\x01\x19\x01@\x01\x0astatements\x10\0\x18\x04\0\
+\x13postgres-executions\x01\x1a\x04\x01\x0cgolem:it/api\x05\x04\x04\x01\x16golem\
+:it/rdbms-service\x04\0\x0b\x13\x01\0\x0drdbms-service\x03\0\0\0G\x09producers\x01\
+\x0cprocessed-by\x02\x0dwit-component\x070.208.1\x10wit-bindgen-rust\x060.25.0";
 
 #[inline(never)]
 #[doc(hidden)]

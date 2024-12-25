@@ -103,7 +103,16 @@ impl Guest for Component {
                 }
                 StatementAction::Query => {
                     let result: Result<PostgresDbResult, String> = {
-                        let result_set = connection.query(&statement.statement, params).map_err(|e| e.to_string())?;
+                        let result = connection.query(&statement.statement, params).map_err(|e| e.to_string())?;
+                        let columns = result.columns.into_iter().map(get_postgres_db_column).collect();
+                        let rows = result.rows.into_iter().map(get_postgres_db_row).collect();
+                        Ok(PostgresDbResult { columns, rows })
+                    };
+                    results.push(result.map(PostgresResult::Query));
+                }
+                StatementAction::QueryStream => {
+                    let result: Result<PostgresDbResult, String> = {
+                        let result_set = connection.query_stream(&statement.statement, params).map_err(|e| e.to_string())?;
                         let columns = result_set.get_columns().into_iter().map(get_postgres_db_column).collect();
                         let mut rows: Vec<PostgresDbRow> = vec![];
 
@@ -145,6 +154,9 @@ impl Guest for Component {
                     };
                     results.push(result.map(PostgresResult::Query));
                 }
+                StatementAction::QueryStream => {
+                    results.push(Err("Query Stream is not supported for transactions".to_string()));
+                }
             }
         }
 
@@ -173,8 +185,12 @@ impl Guest for Component {
                     results.push(result.map(MysqlResult::Execute));
                 }
                 StatementAction::Query => {
+                    let result = connection.query(&statement.statement, &params).map_err(|e| e.to_string());
+                    results.push(result.map(MysqlResult::Query));
+                }
+                StatementAction::QueryStream => {
                     let result: Result<MysqlDbResult, String> = {
-                        let result_set = connection.query(&statement.statement, &params).map_err(|e| e.to_string())?;
+                        let result_set = connection.query_stream(&statement.statement, &params).map_err(|e| e.to_string())?;
                         let columns = result_set.get_columns();
                         let mut rows: Vec<MysqlDbRow> = vec![];
 
@@ -211,6 +227,9 @@ impl Guest for Component {
                 StatementAction::Query => {
                     let result = transaction.query(&statement.statement, &params).map_err(|e| e.to_string());
                     results.push(result.map(MysqlResult::Query));
+                }
+                StatementAction::QueryStream => {
+                    results.push(Err("Query Stream is not supported for transactions".to_string()));
                 }
             }
         }
