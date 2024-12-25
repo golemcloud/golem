@@ -67,7 +67,7 @@ impl RibConverter {
     }
 
     #[allow(clippy::only_used_in_recursion)]
-    fn convert_type(&self, typ: &AnalysedType) -> Option<Schema> {
+    pub fn convert_type(&self, typ: &AnalysedType) -> Option<Schema> {
         match typ {
             AnalysedType::Bool(_) => {
                 let mut obj = Object::with_type(Type::Boolean);
