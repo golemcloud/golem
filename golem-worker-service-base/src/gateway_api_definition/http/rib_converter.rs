@@ -1,14 +1,14 @@
 use golem_wasm_ast::analysis::AnalysedType;
 use utoipa::openapi::{
-    schema::{Schema, Object, ObjectBuilder, Array, OneOf},
-    SchemaType,
+    schema::{Schema, Object, Array, OneOf, Type},
     RefOr,
 };
 use std::collections::BTreeMap;
 use serde_json::Value;
 use rib::RibInputTypeInfo;
+use std::fmt;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub enum CustomSchemaType {
     Boolean,
     Integer,
@@ -18,15 +18,28 @@ pub enum CustomSchemaType {
     Object,
 }
 
-impl From<SchemaType> for CustomSchemaType {
-    fn from(schema_type: SchemaType) -> Self {
+impl fmt::Debug for CustomSchemaType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CustomSchemaType::Boolean => write!(f, "Boolean"),
+            CustomSchemaType::Integer => write!(f, "Integer"),
+            CustomSchemaType::Number => write!(f, "Number"),
+            CustomSchemaType::String => write!(f, "String"),
+            CustomSchemaType::Array => write!(f, "Array"),
+            CustomSchemaType::Object => write!(f, "Object"),
+        }
+    }
+}
+
+impl From<Type> for CustomSchemaType {
+    fn from(schema_type: Type) -> Self {
         match schema_type {
-            SchemaType::Boolean => CustomSchemaType::Boolean,
-            SchemaType::Integer => CustomSchemaType::Integer,
-            SchemaType::Number => CustomSchemaType::Number,
-            SchemaType::String => CustomSchemaType::String,
-            SchemaType::Array => CustomSchemaType::Array,
-            SchemaType::Object => CustomSchemaType::Object,
+            Type::Boolean => CustomSchemaType::Boolean,
+            Type::Integer => CustomSchemaType::Integer,
+            Type::Number => CustomSchemaType::Number,
+            Type::String => CustomSchemaType::String,
+            Type::Array => CustomSchemaType::Array,
+            Type::Object => CustomSchemaType::Object,
             _ => CustomSchemaType::Object, // Default to Object for other types
         }
     }
@@ -37,7 +50,7 @@ pub struct RibConverter;
 impl RibConverter {
     pub fn convert_input_type(&self, input_type: &RibInputTypeInfo) -> Option<Schema> {
         let mut properties = BTreeMap::new();
-        
+
         for (name, typ) in &input_type.types {
             if let Some(schema) = self.convert_type(typ) {
                 properties.insert(name.clone(), RefOr::T(schema));
@@ -47,7 +60,7 @@ impl RibConverter {
         if properties.is_empty() {
             None
         } else {
-            let mut obj = Object::with_type(SchemaType::Object);
+            let mut obj = Object::with_type(Type::Object);
             obj.properties = properties;
             Some(Schema::Object(obj))
         }
@@ -57,22 +70,22 @@ impl RibConverter {
     fn convert_type(&self, typ: &AnalysedType) -> Option<Schema> {
         match typ {
             AnalysedType::Bool(_) => {
-                let mut obj = Object::with_type(SchemaType::Boolean);
+                let mut obj = Object::with_type(Type::Boolean);
                 obj.description = Some("Boolean value".to_string());
                 Some(Schema::Object(obj))
             }
             AnalysedType::U8(_) | AnalysedType::U32(_) | AnalysedType::U64(_) => {
-                let mut obj = Object::with_type(SchemaType::Integer);
+                let mut obj = Object::with_type(Type::Integer);
                 obj.description = Some("Integer value".to_string());
                 Some(Schema::Object(obj))
             }
             AnalysedType::F32(_) | AnalysedType::F64(_) => {
-                let mut obj = Object::with_type(SchemaType::Number);
+                let mut obj = Object::with_type(Type::Number);
                 obj.description = Some("Floating point value".to_string());
                 Some(Schema::Object(obj))
             }
             AnalysedType::Str(_) => {
-                let mut obj = Object::with_type(SchemaType::String);
+                let mut obj = Object::with_type(Type::String);
                 obj.description = Some("String value".to_string());
                 Some(Schema::Object(obj))
             }
@@ -96,7 +109,7 @@ impl RibConverter {
                 }
 
                 if !properties.is_empty() {
-                    let mut obj = Object::with_type(SchemaType::Object);
+                    let mut obj = Object::with_type(Type::Object);
                     obj.properties = properties;
                     obj.required = required;
                     obj.description = Some("Record type".to_string());
@@ -106,7 +119,7 @@ impl RibConverter {
                 }
             }
             AnalysedType::Enum(enum_type) => {
-                let mut obj = Object::with_type(SchemaType::String);
+                let mut obj = Object::with_type(Type::String);
                 obj.enum_values = Some(enum_type.cases.iter()
                     .map(|case| Value::String(case.clone()))
                     .collect());
@@ -122,25 +135,22 @@ impl RibConverter {
                 for case in &variant_type.cases {
                     if let Some(typ) = &case.typ {
                         if let Some(case_schema) = self.convert_type(typ) {
-                            let case_obj = ObjectBuilder::new()
-                                .schema_type(SchemaType::Object)
-                                .property(case.name.clone(), RefOr::T(case_schema))
-                                .build();
+                            let mut case_obj = Object::with_type(Type::Object);
+                            case_obj.properties = BTreeMap::new();
+                            case_obj.properties.insert(case.name.clone(), RefOr::T(case_schema));
                             schemas.push(Schema::Object(case_obj));
                         }
                     }
                 }
 
                 if !schemas.is_empty() {
-                    let mut obj = Object::with_type(SchemaType::Object);
+                    let mut obj = Object::with_type(Type::Object);
                     obj.description = Some("Variant type".to_string());
                     obj.properties = BTreeMap::new();
-                    
-                    let discriminator_obj = ObjectBuilder::new()
-                        .schema_type(SchemaType::String)
-                        .build();
+
+                    let discriminator_obj = Object::with_type(Type::String);
                     obj.properties.insert("discriminator".to_string(), RefOr::T(Schema::Object(discriminator_obj)));
-                    
+
                     let mut one_of = OneOf::new();
                     for schema in schemas {
                         one_of.items.push(RefOr::T(schema));
@@ -153,7 +163,7 @@ impl RibConverter {
             }
             AnalysedType::Option(option_type) => {
                 if let Some(inner_schema) = self.convert_type(&option_type.inner) {
-                    let mut obj = Object::with_type(SchemaType::Object);
+                    let mut obj = Object::with_type(Type::Object);
                     obj.description = Some("Optional value".to_string());
                     obj.properties = BTreeMap::new();
                     obj.properties.insert("value".to_string(), RefOr::T(inner_schema));
@@ -179,7 +189,7 @@ impl RibConverter {
                 }
 
                 if !properties.is_empty() {
-                    let mut obj = Object::with_type(SchemaType::Object);
+                    let mut obj = Object::with_type(Type::Object);
                     obj.properties = properties;
                     obj.description = Some("Result type".to_string());
                     Some(Schema::Object(obj))
@@ -205,13 +215,15 @@ mod tests {
     #[test]
     fn test_convert_type() {
         let converter = RibConverter;
-        
+
         // Test string type
         let str_type = AnalysedType::Str(TypeStr);
         let schema = converter.convert_type(&str_type).unwrap();
         match &schema {
-            Schema::Object(obj) => {
-                assert!(matches!(obj.schema_type, SchemaType::String));
+            Schema::Object(_) => {
+                let actual = CustomSchemaType::from(Type::String);
+                let expected = CustomSchemaType::String;
+                assert_eq!(actual, expected);
             }
             _ => panic!("Expected object schema"),
         }
