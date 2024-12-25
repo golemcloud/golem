@@ -41,12 +41,6 @@ export function calculateHoursDifference(createdAt: string): string {
 }
 
 export function calculateSizeInMB(sizeInBytes: number): string {
-  return (sizeInBytes / (1024 * 1024)).toFixed(2);;
-}
-
-export const fetcher =  (url:string, options?:RequestInit) => fetch(`/api/proxy${url}`, options ).then((res) => res.json());
-
-export function calculateSizeInMB(sizeInBytes: number): string {
   return (sizeInBytes / (1024 * 1024)).toFixed(2);
 }
 
