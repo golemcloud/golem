@@ -52,13 +52,14 @@ const ComponentInfoCard = ({
       sx={{
         width: 450,
         borderRadius: 2,
-        minWidth: "500px",
-        maxWidth: "500px",
+        minWidth: "400px",
+        // maxWidth: "500px",
         border: "1px solid #666",
         padding: 2,
-        "&:hover": { cursor: "pointer" },
+        "&:hover": { cursor: "pointer", boxShadow: "0px 5px 10px 0px #666"
+        },
       }}
-      className="flex-1 hover:shadow-xl shadow-white"
+      className="flex-1"
       onClick={onClick}
     >
       <CardContent>

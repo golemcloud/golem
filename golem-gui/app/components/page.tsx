@@ -58,7 +58,7 @@ const ComponentsPage = () => {
   }
 
   return (
-    <Container maxWidth="lg" sx={{ mt: 5, height: "100vh", overflow: "auto" }}>
+    <Container maxWidth="lg" sx={{ mt: 5}}>
       {/* Search Bar and Buttons */}
       <Box
         display="flex"
