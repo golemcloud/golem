@@ -30,13 +30,20 @@ export interface VersionedComponentId {
     name: string;
     typ: TypeDefinition;
   }
+
+  // export interface TupleItem {
+  //   fields: Parameter[],
+  //   type: string
+  // }
   
   export interface TypeDefinition {
-    type: 'Variant';
-    cases: Array<{
+    type: string
+    cases?: Array<{
       name: string;
       typ: Record<string, unknown>;
     }>;
+    fields?: Parameter[]
+    items?: Parameter[]
   }
   
   export interface Producer {
