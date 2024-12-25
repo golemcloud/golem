@@ -16,7 +16,7 @@ export const getErrorMessage = (error: GolemError | string): string => {
 
   if (error.golemError) {
     return `${error.golemError.type}: ${error.golemError.details}`;
-  }
+  } 
 
   if (error.errors?.length) {
     return error.errors.join(", ");
@@ -39,6 +39,12 @@ export function calculateHoursDifference(createdAt: string): string {
   }
   return `${differenceInHours} hours ago`;
 }
+
+export function calculateSizeInMB(sizeInBytes: number): string {
+  return (sizeInBytes / (1024 * 1024)).toFixed(2);;
+}
+
+export const fetcher =  (url:string, options?:RequestInit) => fetch(`/api/proxy${url}`, options ).then((res) => res.json());
 
 export function calculateSizeInMB(sizeInBytes: number): string {
   return (sizeInBytes / (1024 * 1024)).toFixed(2);
