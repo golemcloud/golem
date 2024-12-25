@@ -1,7 +1,14 @@
 import useSWR, { mutate } from "swr";
 import { fetcher, getErrorMessage } from "../utils";
-import { Component, Worker, WorkerFormData } from "@/types/api";
+import {
+  Component,
+  Parameter,
+  Worker,
+  WorkerFormData,
+  WorkerFunction,
+} from "@/types/api";
 import { useParams } from "next/navigation";
+import { useEffect, useState } from "react";
 // import { useRouter } from "next/navigation";
 const ROUTE_PATH = "?path=components";
 
@@ -29,6 +36,75 @@ export function getStateFromWorkersData(workers: Worker[]) {
     }
     return obj;
   }, {});
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function transform(inputs: Parameter[], data: Record<string, any>) {
+  return inputs?.map((input) => {
+    const { name } = input;
+
+    let value = null;
+
+    if (name in data) {
+      // Use provided data value
+      value = data[name];
+    }
+
+    return { ...input, value };
+  });
+}
+
+export function useWorkerInvocation(invoke: {
+  fun?: WorkerFunction;
+  instanceName?: string;
+}) {
+  const { compId, id: workerName } = useParams<{
+    compId: string;
+    id: string;
+  }>();
+
+  const instanceName = invoke.instanceName;
+  const functionName = invoke?.fun?.name;
+
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState(null);
+
+  useEffect(() => {
+    setError(null);
+    setResult(null);
+  }, [invoke]);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const invokeFunction = async (data: any) => {
+    try {
+      const payload = transform(invoke?.fun?.parameters || [], data);
+      const response = await fetcher(
+        `${ROUTE_PATH}/${compId}/workers/${workerName}/invoke-and-await?function=${instanceName}.{${functionName}}`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ params: payload }),
+        }
+      );
+
+      if (response.status !== 200) {
+        return setError(getErrorMessage(response.data));
+      }
+      setError(null);
+      setResult(response.data);
+      mutate(`${ROUTE_PATH}/${compId}/workers/${workerName}`);
+      mutate(`${ROUTE_PATH}/${compId}/workers`);
+    } catch (err) {
+      console.log("error", err);
+      setError("Something went wrong. try again");
+    }
+  };
+
+  return {
+    result,
+    error,
+    invokeFunction,
+  };
 }
 
 export async function addNewWorker(

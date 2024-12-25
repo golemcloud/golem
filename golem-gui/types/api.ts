@@ -24,6 +24,7 @@ export interface VersionedComponentId {
   export interface Parameter {
     name: string;
     typ: TypeDefinition;
+    value?: any;
   }
   
   export interface Result {
