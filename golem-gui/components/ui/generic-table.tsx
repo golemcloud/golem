@@ -57,17 +57,7 @@ const GenericTable = <T,>({
                   align={column.align || "left"}
                   className="text-gray-900 dark:text-gray-100"
                 >
-                  {/* Handle the case where accessor returns an array of objects */}
-                  {Array.isArray(column.accessor(item)) ? (
-                    column.accessor(item).map((subItem, index) => (
-                      <div key={index}>
-                        {JSON.stringify(subItem)}:
-                         `( ${subItem.name} )`
-                      </div>
-                    ))
-                  ) : (
-                    column.accessor(item) ?? "-" // Fallback if undefined
-                  )}
+                  {column.accessor(item)}
                 </TableCell>
               ))}
             </TableRow>
@@ -77,6 +67,5 @@ const GenericTable = <T,>({
     </TableContainer>
   );
 };
-
 
 export default GenericTable;
