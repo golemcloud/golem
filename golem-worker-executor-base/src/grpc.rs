@@ -70,14 +70,14 @@ use crate::services::events::Event;
 use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActivator};
 use crate::services::worker_event::WorkerEventReceiver;
 use crate::services::{
-    All, HasActiveWorkers, HasAll, HasComponentService, HasEvents, HasOplog, HasOplogService,
+    All, HasActiveWorkers, HasAll, HasComponentService, HasEvents, HasOplogService,
     HasPlugins, HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService,
     HasShardService, HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
 };
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use tokio;
-use golem_wasm_ast::analysis::analysed_type::u64;
+use crate::services::oplog::CommitLevel;
 
 pub enum GrpcError<E> {
     Transport(tonic::transport::Error),
@@ -421,12 +421,46 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Ok(())
     }
 
-    async fn fork_worker_internal(
+    async fn validate_worker_forking(
         &self,
-        request: ForkWorkerRequest,
-    ) -> Result<ForkWorkerResponse, GolemError> {
+        request: &ForkWorkerRequest
+    ) -> Result<(OwnedWorkerId, OwnedWorkerId, WorkerMetadata), GolemError> {
+        let second_index = u64::from(OplogIndex::INITIAL.next());
+
+        if request.oplog_index_cutoff < second_index {
+            return Err(GolemError::invalid_request(
+                "Invalid oplog index cutoff. It should be at least 1",
+            ));
+        }
+
+        let account_id_proto = request
+            .account_id.clone()
+            .ok_or(GolemError::invalid_request("account_id not found"))?;
+
+        let account_id = account_id_proto.into();
+
+        // Check if target worker id exists already and if so fail
+        let target_worker_id_proto = request
+            .target_worker_id.clone()
+            .ok_or(GolemError::invalid_request("worker_id not found"))?;
+
+        let target_worker_id: WorkerId = target_worker_id_proto
+            .try_into()
+            .map_err(GolemError::invalid_request)?;
+
+        // We assume the target worker is also owned by the same account
+        let owned_target_worker_id = OwnedWorkerId::new(&account_id, &target_worker_id);
+
+        let target_metadata =
+            self.worker_service().get(&owned_target_worker_id).await;
+
+        // We allow forking only if the target worker does not exist
+        if target_metadata.is_some() {
+            return Err(GolemError::worker_already_exists(target_worker_id));
+        }
+
         let source_worker_id_proto = request
-            .source_worker_id
+            .source_worker_id.clone()
             .ok_or(GolemError::invalid_request("worker_id not found"))?;
 
         let source_worker_id: WorkerId = source_worker_id_proto
@@ -435,127 +469,95 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         self.ensure_worker_belongs_to_this_executor(&source_worker_id)?;
 
-        let account_id_proto = request
-            .account_id
-            .ok_or(GolemError::invalid_request("account_id not found"))?;
-
-        let account_id = account_id_proto.into();
-
         let owned_source_worker_id = OwnedWorkerId::new(&account_id, &source_worker_id);
 
-        let source_worker_metadata =
-            self.worker_service().get(&owned_source_worker_id).await;
+        let metadata = self.worker_service().get(&owned_source_worker_id).await.ok_or(GolemError::worker_not_found(source_worker_id))?;
 
-        match source_worker_metadata {
-            Some(source_worker_metadata) => {
-                // Check if target worker id exists already and if so fail
-                let target_worker_id_proto = request
-                    .target_worker_id
-                    .ok_or(GolemError::invalid_request("worker_id not found"))?;
+        Ok((owned_source_worker_id, owned_target_worker_id, metadata))
+    }
 
-                let target_worker_id: WorkerId = target_worker_id_proto
-                    .try_into()
-                    .map_err(GolemError::invalid_request)?;
+    async fn fork_worker_internal(
+        &self,
+        request: ForkWorkerRequest,
+    ) -> Result<ForkWorkerResponse, GolemError> {
+        let (owned_source_worker_id, owned_target_worker_id, source_worker_metadata) =
+            self.validate_worker_forking(&request).await?;
 
-                // We assume the target worker is also owned by the same account
-                let owned_target_worker_id =
-                    OwnedWorkerId::new(&account_id, &target_worker_id);
+        let target_worker_id = owned_target_worker_id.worker_id.clone();
+        let account_id = owned_target_worker_id.account_id.clone();
 
-                let target_metadata =
-                    self.worker_service().get(&owned_target_worker_id).await;
+        // Not sure if we should copy the metadata or not, or stick on to just default
+        let target_worker_metadata = WorkerMetadata {
+            worker_id: target_worker_id.clone(),
+            account_id,
+            env: source_worker_metadata.env.clone(),
+            args: source_worker_metadata.args.clone(),
+            created_at: Timestamp::now_utc(),
+            parent: source_worker_metadata.parent.clone(),
+            last_known_status: WorkerStatusRecord::default(),
+        };
 
-                // We allow forking only if the target worker does not exist
-                if target_metadata.is_some() {
-                    Err(GolemError::worker_already_exists(target_worker_id))
-                } else {
-                    // It's not opening an existing oplog but `create` a new one
-                    let target_owned_worker_id = OwnedWorkerId::new(&account_id, &target_worker_id);
+        let range = self
+            .oplog_service()
+            .read_range(
+                &owned_source_worker_id,
+                OplogIndex::INITIAL,
+                OplogIndex::from_u64(request.oplog_index_cutoff),
+            )
+            .await;
 
-                    // Not sure if we should copy the metadata or not, or stick on to just default
-                    let target_worker_metadata = WorkerMetadata {
-                        worker_id: target_worker_id.clone(),
-                        account_id,
-                        env: source_worker_metadata.env.clone(),
-                        args: source_worker_metadata.args.clone(),
-                        created_at: Timestamp::now_utc(),
-                        parent: source_worker_metadata.parent.clone(),
-                        last_known_status: WorkerStatusRecord::default(),
-                    };
+        let initial_oplog_entry = range
+            .get(&OplogIndex::INITIAL)
+            .ok_or(GolemError::unknown("Failed to get initial oplog entry"))?;
 
-                    let range = self.oplog_service().read_range(
-                        &owned_source_worker_id,
-                        OplogIndex::INITIAL,
-                        OplogIndex::from_u64(request.oplog_index_cutoff),
-                    ).await;
+        // Update the oplog initial entry with the new worker
+        let target_initial_oplog_entry = initial_oplog_entry
+            .update_worker_id(&target_worker_id)
+            .ok_or(GolemError::unknown(
+                "Failed to update worker id in oplog entry",
+            ))?;
 
-                    let initial_oplog_entry = range.get(&OplogIndex::INITIAL)
-                        .ok_or(GolemError::unknown("Failed to get initial oplog entry"))?;
+        let new_oplog = self
+            .oplog_service()
+            .create(
+                &owned_target_worker_id,
+                target_initial_oplog_entry,
+                target_worker_metadata,
+                Arc::new(RwLock::new(ExecutionStatus::Suspended {
+                    last_known_status: WorkerStatusRecord::default(), // default is idle
+                    component_type: ComponentType::Durable, // Probably forking should fail if component type is ephemeral, or not?
+                    timestamp: Timestamp::now_utc(),
+                })),
+            )
+            .await;
 
-                    // Update the oplog initial entry with the new worker
-                    let target_initial_oplog_entry = initial_oplog_entry
-                        .update_worker_id(&target_worker_id)
-                        .ok_or(GolemError::unknown(
-                            "Failed to update worker id in oplog entry",
-                        ))?;
-
-                    let new_oplog = self
-                        .oplog_service()
-                        .create(
-                            &target_owned_worker_id,
-                            target_initial_oplog_entry,
-                            target_worker_metadata,
-                            Arc::new(RwLock::new(ExecutionStatus::Suspended {
-                                last_known_status: WorkerStatusRecord::default(), // default is idle
-                                component_type: ComponentType::Durable, // Probably forking should fail if component type is ephemeral, or not?
-                                timestamp: Timestamp::now_utc(),
-                            })),
-                        )
-                        .await;
-
-
-                    let second_index =
-                        u64::from(OplogIndex::INITIAL.next());
-                    
-                    if request.oplog_index_cutoff < second_index {
-                        return Err(GolemError::invalid_request("Invalid oplog_index_cutoff. It should be at least 1"));
-                    }
-
-                    // Copy the oplog as is until the range of the cut off index
-                    for index in second_index..=request.oplog_index_cutoff {
-                        let entry = range.get(&OplogIndex::from_u64(index))
-                            .ok_or(GolemError::unknown("Failed to get oplog entry"))?;
-                        new_oplog.add(entry.clone()).await;
-                    }
-
-                    // We go through worker proxy to resume the worker
-                    // as we need to make sure as it may live in another worker executor,
-                    // depending on sharding.
-                    self.services
-                        .worker_proxy()
-                        .resume(&target_worker_id)
-                        .await
-                        .map_err(|err| {
-                            GolemError::failed_to_resume_worker(
-                                target_worker_id.clone(),
-                                err.into(),
-                            )
-                        })?;
-
-                    Ok(ForkWorkerResponse {
-                        result: Some(
-                            golem::workerexecutor::v1::fork_worker_response::Result::Success(
-                                golem::common::Empty {},
-                            ),
-                        ),
-                    })
-                }
-            }
-
-            None => {
-                error!("Source worker {} not found", source_worker_id);
-                Err(GolemError::worker_not_found(source_worker_id))
-            }
+        for index in u64::from(OplogIndex::INITIAL.next())..=request.oplog_index_cutoff {
+            let entry = range
+                .get(&OplogIndex::from_u64(index))
+                .ok_or(GolemError::unknown("Failed to get oplog entry"))?;
+            new_oplog.add(entry.clone()).await;
         }
+
+        new_oplog.commit(CommitLevel::Immediate).await;
+
+        // We go through worker proxy to resume the worker
+        // as we need to make sure as it may live in another worker executor,
+        // depending on sharding.
+        self.services
+            .worker_proxy()
+            .resume(&target_worker_id)
+            .await
+            .map_err(|err| {
+                GolemError::failed_to_resume_worker(target_worker_id.clone(), err.into())
+            })?;
+
+        Ok(ForkWorkerResponse {
+            result: Some(
+                golem::workerexecutor::v1::fork_worker_response::Result::Success(
+                    golem::common::Empty {},
+                ),
+            ),
+        })
     }
 
     async fn interrupt_worker_internal(
