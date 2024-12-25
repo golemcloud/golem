@@ -19,7 +19,7 @@ import { useRouter } from "next/navigation";
 import { ApiDefinition } from "@/types/api";
 import CustomModal from "@/components/CustomModal";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
-
+import ApiInfoCard from "@/components/api-info-card";
 const ComponentsPage = () => {
   const [open, setOpen] = useState(false);
   //Ideally we are not sure about latest version. as we are getting the every version separately. there is no way of knowing what is the latest version.
@@ -33,7 +33,6 @@ const ComponentsPage = () => {
     },
     {}
   );
-
   const handleOpen = () => setOpen(true);
   const handleClose = () => setOpen(false);
 
@@ -115,24 +114,18 @@ const ComponentsPage = () => {
           {!isLoading &&
             Object.values(apiMap)?.map((api: ApiDefinition | null) =>
               api ? (
-                <Card
+                <ApiInfoCard
                   key={api.id}
-                  sx={{
-                    cursor: "pointer",
-                    width: "200px",
-                    "&:hover": { boxShadow: 4 },
-                    transition: "all 0.3s ease",
-                  }}
+                  name={api.id}
+                  version={api.version}
+                  routesCount={api.routes.length}
+                  locked={api.draft}
                   onClick={() => handleApiClick(api.id!)}
-                >
-                  <CardContent>
-                    <Typography variant="h6">{api.id}</Typography>
-                    <Typography>latest:{" "}{api.version}</Typography>
-                  </CardContent>
-                </Card>
+                />
               ) : null
             )}
         </Box>
+
       )}
       <CustomModal open={open} onClose={handleClose} heading="Create New API">
         <CreateAPI onCreation={handleClose} />

@@ -20,11 +20,35 @@ import { useRouter } from "next/navigation";
 import useComponents from "@/lib/hooks/use-component";
 import CustomModal from "@/components/CustomModal";
 import ComponentCard from "@/components/components-card";
+import { calculateHoursDifference, calculateSizeInMB } from "@/lib/utils";
+import clsx from "clsx";
+import ComponentTable from "@/components/ui/generic-table";
+
+
+type ComponentTableProps<T> = {
+  data: T[];
+  columns: Column<T>[];
+  onRowClick: (item: T) => void;
+};
+
+type Column<T> = {
+  key: keyof T;
+  label: string;
+  accessor: (item: T) => React.ReactNode;
+};
+
 
 const ComponentsPage = () => {
   const [open, setOpen] = useState(false);
+  const [activeButton, setActiveButton] = useState("grid");
   const handleOpen = () => setOpen(true);
   const handleClose = () => setOpen(false);
+  const [viewMode, setViewMode] = useState("card");
+
+  const handleActiveButton = (button: string) => {
+    setActiveButton(button);
+    setViewMode(button === "grid" ? "card" : "table");
+  };
   const router = useRouter();
   const { components, isLoading } = useComponents();
 
@@ -33,21 +57,8 @@ const ComponentsPage = () => {
     router.push(`/components/${id}/overview`);
   }
 
-  function calculateHoursDifference(createdAt: string): number {
-    const createdAtDate = new Date(createdAt);
-    const currentDate = new Date();
-    const differenceInMs = currentDate.getTime() - createdAtDate.getTime();
-    const differenceInHours = Math.round(differenceInMs / (1000 * 60 * 60));
-  
-    return differenceInHours;
-  }
-  
-  function calculateSizeInMB(sizeInBytes: number): string {
-    return (sizeInBytes / (1024 * 1024)).toFixed(2);;
-  }
-
   return (
-    <Container maxWidth="lg" sx={{ mt: 5, height: "100vh" ,overflow:"auto"}}>
+    <Container maxWidth="lg" sx={{ mt: 5}}>
       {/* Search Bar and Buttons */}
       <Box
         display="flex"
@@ -72,11 +83,27 @@ const ComponentsPage = () => {
         />
 
         {/* Buttons */}
-        <Box display="flex" gap={1}  sx={{borderRadius:'5px',bgColor:"#555"}}>
-          <IconButton>
+        <Box className="flex gap-0 rounded-md dark:bg-[#333] bg-gray-200 p-1">
+          <IconButton
+            onClick={() => handleActiveButton("grid")}
+            className={clsx(
+              "p-2 rounded-md transition-colors",
+              activeButton === "grid"
+                ? "dark:bg-black  bg-gray-500 text-white hover:bg-gray-500"
+                : "dark:text-gray-200 text-gray-700"
+            )}
+          >
             <GridViewIcon />
           </IconButton>
-          <IconButton>
+          <IconButton
+            onClick={() => handleActiveButton("list")}
+            className={clsx(
+              "p-2 rounded-md ",
+              activeButton === "list"
+                ? "dark:bg-black bg-gray-500 text-white  hover:bg-gray-500"
+                : "dark:text-gray-200 text-gray-700"
+            )}
+          >
             <ListIcon />
           </IconButton>
         </Box>
@@ -92,57 +119,75 @@ const ComponentsPage = () => {
           New
         </Button>
       </Box>
-  
 
       {components.length > 0 ? (
-        <Box sx={{ display: "flex", flexWrap: "wrap", gap: 2 }}>
-          {!isLoading && components?.map((item: Component) => (
-          <ComponentCard
-            key={item.versionedComponentId.componentId}
-            id={item.versionedComponentId.componentId}
-            title={item.componentName}
-            time={calculateHoursDifference(item.createdAt)}
-            version={item.versionedComponentId.version}
-            exports={item.metadata.exports.length}
-            size={calculateSizeInMB(item.componentSize)}
-            componentType={item.componentType}
-            onClick={() => handleComponentClick(item.versionedComponentId.componentId!)}
-          />
-            
-          ))}
-        </Box>)
-      :(<Box
-        sx={{
-          color: "#aaa",
-          textAlign: "center",
-          py: 8,
-          border: "2px dashed #333",
-          borderRadius: 2,
-        }}
-      >
-        <Box display="flex" justifyContent="center" mb={2}>
-          <Box
-            component="span"
-            sx={{
-              fontSize: 50,
-              color: "#666",
-            }}
-          >
-            <WidgetsIcon sx={{ fontSize: 40 }}/>
+        viewMode === "card" ? (
+          <Box sx={{ display: "flex", flexWrap: "wrap", gap: 2 }}>
+            {!isLoading &&
+              components.map((item) => (
+                <ComponentCard
+                  key={item.versionedComponentId.componentId}
+                  id={item.versionedComponentId.componentId}
+                  title={item.componentName}
+                  time={calculateHoursDifference(item.createdAt)}
+                  version={item.versionedComponentId.version}
+                  exports={item.metadata.exports.length}
+                  size={calculateSizeInMB(item.componentSize)}
+                  componentType={item.componentType}
+                  onClick={() =>
+                    handleComponentClick(item.versionedComponentId.componentId)
+                  }
+                />
+              ))}
           </Box>
-          <Typography
-            variant="h6"
-            fontWeight="bold"
-            gutterBottom
-            className="text-[#888] dark:text-gray-400"
-          >
+        ) : (
+          <ComponentTable<Component>
+              data={components}
+              columns={[
+                {
+                  key: "componentName",
+                  label: "Name",
+                  accessor: (item) => item.componentName,
+                },
+                {
+                  key: "componentType",
+                  label: "Type",
+                  accessor: (item) => item.componentType,
+                },
+                {
+                  key: "componentSize",
+                  label: "Size",
+                  accessor: (item) => calculateSizeInMB(item.componentSize),
+                },
+                {
+                  key: "metadata.exports",
+                  label: "Exports",
+                  accessor: (item) => item.metadata.exports.length,
+                },
+              ]}
+              onRowClick={(item) => handleComponentClick(item.versionedComponentId.componentId)} />
+        )
+      ) : (
+        <Box
+          sx={{
+            color: "#aaa",
+            textAlign: "center",
+            py: 8,
+            border: "2px dashed #333",
+            borderRadius: 2,
+          }}
+        >
+          <Box display="flex" justifyContent="center" mb={2}>
+            <WidgetsIcon sx={{ fontSize: 40, color: "#666" }} />
+          </Box>
+          <Typography variant="h6" fontWeight="bold" gutterBottom>
             No Project Components
           </Typography>
           <Typography variant="body2" color="grey.500">
             Create a new component to get started.
           </Typography>
         </Box>
-      </Box>)}
+      )}
       {/* Modal for Creating New API/Component */}
       <CustomModal
         open={open}
@@ -154,6 +199,7 @@ const ComponentsPage = () => {
           mode="create"
         />
       </CustomModal>
+      <br /><br /><br />
     </Container>
   );
 };

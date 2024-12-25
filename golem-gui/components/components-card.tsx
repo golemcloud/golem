@@ -14,7 +14,7 @@ import {
 
 interface ComponentInfoCardProps {
   title: string;
-  time: number;
+  time: string;
   version: number;
   exports: number;
   size: string;
@@ -52,9 +52,14 @@ const ComponentInfoCard = ({
       sx={{
         width: 450,
         borderRadius: 2,
-        boxShadow: "0 4px 10px rgba(0, 0, 0, 0.3)",
+        minWidth: "400px",
+        // maxWidth: "500px",
+        border: "1px solid #666",
         padding: 2,
+        "&:hover": { cursor: "pointer", boxShadow: "0px 5px 10px 0px #666"
+        },
       }}
+      className="flex-1"
       onClick={onClick}
     >
       <CardContent>
@@ -158,7 +163,7 @@ const ComponentInfoCard = ({
           </Typography>
 
           <Typography variant="body2" className="ml-5">
-            {time} hours ago
+            {time}
           </Typography>
         </Box>
       </CardContent>
