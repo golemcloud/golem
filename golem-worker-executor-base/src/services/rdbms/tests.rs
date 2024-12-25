@@ -135,6 +135,27 @@ impl<T: RdbmsType + Clone + Debug> StatementTest<T> {
             params,
         }
     }
+
+    fn with_execute_expected(&self, expected: Option<u64>) -> Self {
+        Self {
+            action: StatementAction::Execute(ExpectedExecuteResult::new(expected)),
+            ..self.clone()
+        }
+    }
+
+    fn with_query_expected(
+        &self,
+        expected_columns: Option<Vec<T::DbColumn>>,
+        expected_rows: Option<Vec<DbRow<T::DbValue>>>,
+    ) -> Self {
+        Self {
+            action: StatementAction::Query(ExpectedQueryResult::new(
+                expected_columns,
+                expected_rows,
+            )),
+            ..self.clone()
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -230,14 +251,14 @@ async fn postgres_transaction_tests(
         rows.push(DbRow { values: params });
     }
 
-    let select_statement = "SELECT user_id, name, tags FROM test_users ORDER BY user_id ASC";
-
-    statements.push(StatementTest::query_test(
-        select_statement,
+    let select_statement_test = StatementTest::query_test(
+        "SELECT user_id, name, tags FROM test_users ORDER BY user_id ASC",
         vec![],
         None,
         Some(rows.clone()),
-    ));
+    );
+
+    statements.push(select_statement_test.clone());
 
     rdbms_test(
         rdbms.clone(),
@@ -246,13 +267,13 @@ async fn postgres_transaction_tests(
     )
     .await;
 
-    let delete_statement = "DELETE FROM test_users";
+    let delete_statement_test = StatementTest::execute_test("DELETE FROM test_users", vec![], None);
 
     rdbms_test(
         rdbms.clone(),
         &db_address,
         RdbmsTest::new(
-            vec![StatementTest::execute_test(delete_statement, vec![], None)],
+            vec![delete_statement_test.clone()],
             Some(TransactionEnd::Rollback),
         ),
     )
@@ -262,13 +283,25 @@ async fn postgres_transaction_tests(
         rdbms.clone(),
         &db_address,
         RdbmsTest::new(
-            vec![StatementTest::query_test(
-                select_statement,
-                vec![],
-                None,
-                Some(rows.clone()),
-            )],
+            vec![select_statement_test.clone()],
             Some(TransactionEnd::None),
+        ),
+    )
+    .await;
+
+    rdbms_test(
+        rdbms.clone(),
+        &db_address,
+        RdbmsTest::new(vec![delete_statement_test], Some(TransactionEnd::Commit)),
+    )
+    .await;
+
+    rdbms_test(
+        rdbms.clone(),
+        &db_address,
+        RdbmsTest::new(
+            vec![select_statement_test.with_query_expected(Some(vec![]), Some(vec![]))],
+            None,
         ),
     )
     .await;
@@ -1696,14 +1729,14 @@ async fn mysql_transaction_tests(mysql: &DockerMysqlRdbs, rdbms_service: &RdbmsS
         rows.push(DbRow { values: params });
     }
 
-    let select_statement = "SELECT user_id, name FROM test_users ORDER BY user_id ASC";
-
-    statements.push(StatementTest::query_test(
-        select_statement,
+    let select_statement_test = StatementTest::query_test(
+        "SELECT user_id, name FROM test_users ORDER BY user_id ASC",
         vec![],
         None,
         Some(rows.clone()),
-    ));
+    );
+
+    statements.push(select_statement_test.clone());
 
     rdbms_test(
         rdbms.clone(),
@@ -1712,13 +1745,13 @@ async fn mysql_transaction_tests(mysql: &DockerMysqlRdbs, rdbms_service: &RdbmsS
     )
     .await;
 
-    let delete_statement = "DELETE FROM test_users";
+    let delete_statement_test = StatementTest::execute_test("DELETE FROM test_users", vec![], None);
 
     rdbms_test(
         rdbms.clone(),
         &db_address,
         RdbmsTest::new(
-            vec![StatementTest::execute_test(delete_statement, vec![], None)],
+            vec![delete_statement_test.clone()],
             Some(TransactionEnd::Rollback),
         ),
     )
@@ -1728,13 +1761,25 @@ async fn mysql_transaction_tests(mysql: &DockerMysqlRdbs, rdbms_service: &RdbmsS
         rdbms.clone(),
         &db_address,
         RdbmsTest::new(
-            vec![StatementTest::query_test(
-                select_statement,
-                vec![],
-                None,
-                Some(rows.clone()),
-            )],
+            vec![select_statement_test.clone()],
             Some(TransactionEnd::None),
+        ),
+    )
+    .await;
+
+    rdbms_test(
+        rdbms.clone(),
+        &db_address,
+        RdbmsTest::new(vec![delete_statement_test], Some(TransactionEnd::Commit)),
+    )
+    .await;
+
+    rdbms_test(
+        rdbms.clone(),
+        &db_address,
+        RdbmsTest::new(
+            vec![select_statement_test.with_query_expected(Some(vec![]), Some(vec![]))],
+            None,
         ),
     )
     .await;
