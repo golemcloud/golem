@@ -32,44 +32,40 @@ impl OpenApiConverter {
         base.paths.paths.extend(other.paths.paths);
 
         // Merge components
-        if let Some(base_components) = &mut base.components {
-            if let Some(other_components) = other.components {
+        match (&mut base.components, other.components.as_ref()) {
+            (Some(base_components), Some(other_components)) => {
                 // Merge schemas
-                base_components.schemas.extend(other_components.schemas);
+                base_components.schemas.extend(other_components.schemas.clone());
                 // Merge responses
-                base_components.responses.extend(other_components.responses);
+                base_components.responses.extend(other_components.responses.clone());
                 // Merge security schemes
-                base_components.security_schemes.extend(other_components.security_schemes);
+                base_components.security_schemes.extend(other_components.security_schemes.clone());
             }
-        } else {
-            base.components = other.components;
+            _ => base.components = other.components,
         }
 
         // Merge security requirements
-        if let Some(base_security) = &mut base.security {
-            if let Some(other_security) = other.security {
-                base_security.extend(other_security);
+        match (&mut base.security, other.security.as_ref()) {
+            (Some(base_security), Some(other_security)) => {
+                base_security.extend(other_security.clone());
             }
-        } else {
-            base.security = other.security;
+            _ => base.security = other.security,
         }
 
         // Merge tags
-        if let Some(base_tags) = &mut base.tags {
-            if let Some(other_tags) = other.tags {
-                base_tags.extend(other_tags);
+        match (&mut base.tags, other.tags.as_ref()) {
+            (Some(base_tags), Some(other_tags)) => {
+                base_tags.extend(other_tags.clone());
             }
-        } else {
-            base.tags = other.tags;
+            _ => base.tags = other.tags,
         }
 
         // Merge servers
-        if let Some(base_servers) = &mut base.servers {
-            if let Some(other_servers) = other.servers {
-                base_servers.extend(other_servers);
+        match (&mut base.servers, other.servers.as_ref()) {
+            (Some(base_servers), Some(other_servers)) => {
+                base_servers.extend(other_servers.clone());
             }
-        } else {
-            base.servers = other.servers;
+            _ => base.servers = other.servers,
         }
 
         base

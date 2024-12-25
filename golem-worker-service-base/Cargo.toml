@@ -18,6 +18,11 @@ harness = false
 name = "api_gateway_end_to_end_tests"
 harness = false
 
+
+[[test]]
+name = "openapi_swagger_tests"
+harness = false
+
 [dependencies]
 golem-common = { path = "../golem-common" }
 golem-api-grpc = { path = "../golem-api-grpc" }
@@ -83,8 +88,8 @@ tracing-subscriber = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 wasm-wave = { workspace = true }
-utoipa = { version = "4.2.0", features = ["axum_extras", "yaml", "chrono", "uuid", "openapi_extensions"] }
-utoipa-swagger-ui = { version = "6.0.0" }
+utoipa = { version = "5.3.0", features = ["axum_extras", "yaml", "chrono", "uuid", "openapi_extensions"] }
+utoipa-swagger-ui = { version = "8.1.0" }
 indexmap = "2.2.3"
 
 [dev-dependencies]
