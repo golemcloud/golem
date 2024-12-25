@@ -8,8 +8,6 @@ import {
   InputAdornment,
   TextField,
   Typography,
-  Card,
-  CardContent,
 } from "@mui/material";
 import SearchIcon from "@mui/icons-material/Search";
 import AddIcon from "@mui/icons-material/Add";
@@ -20,26 +18,24 @@ import { ApiDefinition } from "@/types/api";
 import CustomModal from "@/components/CustomModal";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 import ApiInfoCard from "@/components/api-info-card";
+
 const ComponentsPage = () => {
   const [open, setOpen] = useState(false);
-  //Ideally we are not sure about latest version. as we are getting the every version separately. there is no way of knowing what is the latest version.
-  //out of all the fetched api's considering the last one as latest. there is chance that if pagination applied on the api's latest version may show wrong.
+  const [searchQuery, setSearchQuery] = useState("");
   const { apiDefinitions, isLoading } = useApiDefinitions();
   const router = useRouter();
-  const apiMap = apiDefinitions?.reduce<Record<string, ApiDefinition | null>>(
-    (obj, api: ApiDefinition) => {
-        obj[api.id] = api;
-      return obj;
-    },
-    {}
-  );
+
   const handleOpen = () => setOpen(true);
   const handleClose = () => setOpen(false);
 
   const handleApiClick = (apiId: string) => {
-    // Navigate to the API details page within the project
     router.push(`/apis/${apiId}/overview`);
   };
+
+  // Filter APIs based on search query
+  const filteredApis = apiDefinitions?.filter((api: ApiDefinition) =>
+    api.id.toLowerCase().includes(searchQuery.toLowerCase())
+  );
 
   return (
     <Container maxWidth="lg" sx={{ mt: 5, height: "100vh" }}>
@@ -54,6 +50,8 @@ const ComponentsPage = () => {
           placeholder="Search APIs..."
           variant="outlined"
           size="small"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)} // Update search query
           InputProps={{
             startAdornment: (
               <InputAdornment position="start">
@@ -76,7 +74,7 @@ const ComponentsPage = () => {
         </Button>
       </Box>
 
-      {apiDefinitions.length === 0 ? (
+      {filteredApis.length === 0 ? (
         <Box
           sx={{
             color: "#aaa",
@@ -106,27 +104,25 @@ const ComponentsPage = () => {
             No APIs Components
           </Typography>
           <Typography variant="body2" color="grey.500">
-            Create a new API to get started.
+            No APIs found matching your search.
           </Typography>
         </Box>
       ) : (
         <Box sx={{ display: "flex", flexWrap: "wrap", gap: 2 }}>
           {!isLoading &&
-            Object.values(apiMap)?.map((api: ApiDefinition | null) =>
-              api ? (
-                <ApiInfoCard
-                  key={api.id}
-                  name={api.id}
-                  version={api.version}
-                  routesCount={api.routes.length}
-                  locked={api.draft}
-                  onClick={() => handleApiClick(api.id!)}
-                />
-              ) : null
-            )}
+            filteredApis.map((api: ApiDefinition) => (
+              <ApiInfoCard
+                key={api.id}
+                name={api.id}
+                version={api.version}
+                routesCount={api.routes.length}
+                locked={api.draft}
+                onClick={() => handleApiClick(api.id)}
+              />
+            ))}
         </Box>
-
       )}
+
       <CustomModal open={open} onClose={handleClose} heading="Create New API">
         <CreateAPI onCreation={handleClose} />
       </CustomModal>

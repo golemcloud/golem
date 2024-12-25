@@ -156,8 +156,6 @@ const ProjectDashboard = () => {
                 overflow: "hidden", // Prevents scrolling
               }}
             >
-              
-
               {!componentsLoading &&
                 components
                   .slice(0, 6)
