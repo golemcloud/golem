@@ -24,6 +24,7 @@ import {
   Paper,
 } from "@mui/material";
 import CreateNewApiVersion from "@/components/create-api-new-version";
+import CustomModal from "@/components/CustomModal";
 
 export default function APISLayout({
   children,
@@ -130,13 +131,9 @@ export default function APISLayout({
             </Stack>
           </>
         )}
-        <Modal open={open} onClose={() => setOpen(false)}>
-          <>
-            <Container maxWidth="sm" sx={{ mt: 4 }}>
-              {apiDefinition && <CreateNewApiVersion apiId={apiId} version={apiDefinition.version} onSuccees={()=>setOpen(false)}/>}
-            </Container>
-          </>
-        </Modal>
+        <CustomModal open={open} onClose={() => setOpen(false)} heading={"Create New version"}>
+              {apiDefinition && <CreateNewApiVersion apiId={apiId} version={apiDefinition.version} onSuccess={()=>setOpen(false)}/>}
+        </CustomModal>
         {children}
       </div>
     </div>
