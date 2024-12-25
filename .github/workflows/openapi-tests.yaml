@@ -1,0 +1,78 @@
+name: OpenAPI Tests
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    paths:
+      - 'golem-worker-service-base/tests/openapi_swagger_tests.rs'
+      - '**/openapi/**'
+      - '**/swagger/**'
+
+jobs:
+  openapi-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: recursive
+          
+      - name: Fetch tag
+        run: git fetch origin --deepen=1
+        
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          components: rustfmt, clippy
+          
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: openapi-tests
+          cache-all-crates: true
+          
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          
+      - uses: davidB/rust-cargo-make@v1
+
+      - name: Build all targets
+        run: cargo make --profile ci build
+      
+      - name: Build tests
+        run: cargo test --package golem-worker-service-base --test openapi_swagger_tests --no-run
+        
+      - name: Create output directory
+        run: mkdir -p openapi_exports
+        
+      - name: Run OpenAPI tests
+        run: |
+          RUST_LOG=info cargo test --package golem-worker-service-base --test openapi_swagger_tests -- --nocapture
+        env:
+          RUST_BACKTRACE: 1
+          CARGO_TERM_COLOR: always
+          
+      - name: Upload OpenAPI artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: openapi-exports
+          path: openapi_exports/
+          
+      - name: Publish Test Report
+        uses: mikepenz/action-junit-report@v4
+        if: success() || failure()
+        with:
+          report_paths: '**/target/report-*.xml'
+          detailed_summary: true
+          include_passed: true
+
+permissions:
+  contents: read
+  checks: write
+  pull-requests: write 

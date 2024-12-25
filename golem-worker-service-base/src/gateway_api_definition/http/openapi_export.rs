@@ -57,10 +57,10 @@ mod tests {
     #[test]
     fn test_openapi_export() {
         let exporter = super::OpenApiExporter;
-        let mut openapi = utoipa::openapi::OpenApi::new();
+        let mut openapi = utoipa::openapi::OpenApi::new(Default::default(), ());
 
         // Test JSON export
-        let json_format = OpenApiFormat { json: true };
+        let json_format = crate::gateway_api_definition::http::OpenApiFormat { json: true };
         let exported_json = exporter.export_openapi(
             "test-api",
             "1.0.0",
@@ -72,7 +72,7 @@ mod tests {
         assert!(exported_json.contains("1.0.0"));
 
         // Test YAML export
-        let yaml_format = OpenApiFormat { json: false };
+        let yaml_format = crate::gateway_api_definition::http::OpenApiFormat { json: false };
         let exported_yaml = exporter.export_openapi(
             "test-api",
             "1.0.0",
@@ -84,7 +84,7 @@ mod tests {
         assert!(exported_yaml.contains("1.0.0"));
 
         // Test invalid OpenAPI handling
-        let invalid_openapi = utoipa::openapi::OpenApi::new();
+        let invalid_openapi = utoipa::openapi::OpenApi::new(Default::default(), ());
         let result = exporter.export_openapi(
             "test-api",
             "1.0.0",
@@ -94,7 +94,7 @@ mod tests {
         assert!(!result.is_empty()); // Should return default value instead of failing
         
         // Test YAML export with invalid OpenAPI
-        let yaml_format = OpenApiFormat { json: false };
+        let yaml_format = crate::gateway_api_definition::http::OpenApiFormat { json: false };
         let result = exporter.export_openapi(
             "test-api",
             "1.0.0",
@@ -106,7 +106,7 @@ mod tests {
 
     #[test]
     fn test_openapi_format_default() {
-        let format = OpenApiFormat::default();
+        let format = crate::gateway_api_definition::http::OpenApiFormat::default();
         assert!(format.json);
     }
 }
