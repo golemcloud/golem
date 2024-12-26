@@ -80,15 +80,22 @@ impl Default for OpenApiConverter {
 
 #[cfg(test)]
 mod tests {
-    use super::OpenApiConverter;
-    use utoipa::openapi::{
-        OpenApi,
-        Server,
-        Tag,
-    };
-
     #[test]
     fn test_openapi_converter() {
+        use utoipa::openapi::{
+            Components,
+            HttpMethod,
+            Object,
+            OpenApi,
+            PathItem,
+            Schema,
+            SecurityRequirement,
+            Server,
+            Tag,
+            path::OperationBuilder,
+        };
+        use super::OpenApiConverter;
+
         let _converter = OpenApiConverter::new();
         
         // Create base OpenAPI
@@ -142,12 +149,26 @@ mod tests {
 
     #[test]
     fn test_openapi_converter_new() {
+        use super::OpenApiConverter;
+        use std::sync::Arc;
+        
         let converter = OpenApiConverter::new();
         assert_eq!(Arc::strong_count(&converter.exporter), 1);
     }
 
     #[test]
     fn test_merge_openapi_with_empty_fields() {
+        use utoipa::openapi::{
+            Components,
+            Object,
+            OpenApi,
+            Schema,
+            SecurityRequirement,
+            Server,
+            Tag,
+        };
+        use super::OpenApiConverter;
+
         // Test merging when base has empty optional fields
         let mut base = OpenApi::new(Default::default(), ());
         base.security = None;

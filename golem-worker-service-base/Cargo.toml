@@ -18,10 +18,38 @@ harness = false
 name = "api_gateway_end_to_end_tests"
 harness = false
 
+[[test]]
+name = "api_integration_tests.rs"
+harness = false
 
 [[test]]
-name = "openapi_swagger_tests"
+name = "complex_wit_type_validation_tests.rs"
 harness = false
+
+[[test]]
+name = "openapi_converter_tests.rs"
+harness = false
+
+[[test]]
+name = "openapi_export_integration_tests.rs"
+harness = false
+
+[[test]]
+name = "rib_json_schema_validation_tests.rs"
+harness = false
+
+[[test]]
+name = "rib_openapi_conversion_tests.rs"
+harness = false
+
+[[test]]
+name = "swagger_ui_tests.rs"
+harness = false
+
+[[test]]
+name = "utoipa_client_tests.rs"
+harness = false
+
 
 [dependencies]
 golem-common = { path = "../golem-common" }
@@ -95,9 +123,20 @@ indexmap = "2.2.3"
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 fastrand = "2.3.0"
+tempfile = "3.10.1"
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 test-r = { workspace = true }
+valico = "3.6.1"
+tokio-test = "0.4"
+axum = { version = "0.7", features = ["http1", "json"] }
+tower = "0.4"
+tower-http = { version = "0.6.2", features = ["trace"] }
+hyper = { version = "1.0", features = ["full"] }
+hyper-util = { version = "0.1", features = ["full"] }
+http-body-util = "0.1"
+reqwest = { version = "0.11", features = ["json"] }
+utoipa-gen = "5.3.0"
 
 [[bench]]
 name = "tree"
