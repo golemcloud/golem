@@ -79,13 +79,9 @@ const Overview = () => {
   }, [latestComponent]);
 
   const exports = useMemo(() => {
-    const metaExports = (latestComponent?.metadata?.exports ||
-      []) as ComponentExport[];
-    return metaExports.flatMap(
-      (expo: ComponentExport) =>
-        expo?.functions?.map(
-          (fun: WorkerFunction) => `${expo.name}.${fun.name}`
-        ) || []
+    const metaExports = (latestComponent?.metadata?.exports || []) as ComponentExport[];
+    return metaExports.flatMap((expo: ComponentExport) =>
+     "functions" in expo ?  expo.functions?.map((fun: WorkerFunction) => `${expo.name}.${fun.name}`) : expo.name
     );
   }, [latestComponent?.versionedComponentId?.version]);
   // const handleOpen = () => setIsOpen(true);
@@ -206,9 +202,10 @@ const Overview = () => {
         </Grid>
       </Grid>
       <CustomModal open={isOpen} onClose={handleClose} heading="Create Worker">
-        <CreateWorker
-          compId={compId}
-          version={latestComponent?.versionedComponentId?.version}
+        <CreateWorker 
+        compId={compId} 
+        version={latestComponent?.versionedComponentId?.version}
+        onSuccess={handleClose}
         />
       </CustomModal>
     </Box>

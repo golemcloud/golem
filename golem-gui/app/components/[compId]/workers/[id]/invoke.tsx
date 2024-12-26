@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import { WorkerFunction } from "@/types/api";
 import useComponents from "@/lib/hooks/use-component";
 import { useParams } from "next/navigation";
@@ -20,12 +20,14 @@ import { useWorkerInvocation } from "@/lib/hooks/use-worker";
 export function InvokeForm({
   invoke,
 }: {
-  invoke: { fun?: WorkerFunction; instanceName?: string };
+  invoke: { fun?: WorkerFunction; instanceName?: string|null };
 }) {
   const { result, error, invokeFunction } = useWorkerInvocation(invoke);
-  const paramsConfig = useMemo(() => invoke?.fun?.parameters || [], [invoke]);
+  const paramsConfig = useMemo(() => {
+    return  invoke?.fun?.parameters || [];
+  }, [invoke]);
 
-  const onSubmit = async (data: any) => {
+  const onSubmit = async (data: unknown) => {
     invokeFunction(data);
   };
 
@@ -82,19 +84,14 @@ export default function InvokePage() {
   const { compId } = useParams<{ compId: string }>();
   const { components, isLoading } = useComponents(compId, "latest");
   const [latestComponent] = components;
-  const [invoke, setInvoke] = useState<{
-    fun?: WorkerFunction;
-    instanceName?: string;
-  } | null>(null);
-
+  const [invoke, setInvoke] = useState<{fun:WorkerFunction, instanceName?:string|null } | null>(null);
   const exports = useMemo(() => {
-    const componentExports = latestComponent?.metadata?.exports || [];
-    setInvoke(
-      componentExports[0]
-        ? { fun: componentExports[0]?.functions?.[0], instanceName: componentExports[0]?.name }
-        : null
-    );
-    return componentExports;
+    const exports = latestComponent?.metadata?.exports || [];
+    const firstExport = exports[0] || null;
+    const isInstance =  firstExport?.type ==="Instance";
+    const firstFunction = firstExport ?  (isInstance ? firstExport?.functions?.[0]: firstExport) :  firstExport
+    setInvoke(firstFunction ? {fun: firstFunction, instanceName: isInstance ? firstExport.name: null} : null);
+    return exports;
   }, [latestComponent?.metadata?.exports]);
 
   if (isLoading) {
@@ -119,14 +116,12 @@ export default function InvokePage() {
           <Divider sx={{ marginY: 2,bgcolor:'#555' }} />
           <List>
             {exports.map((item, index) => (
-              <Stack key={index} spacing={1}>
-                <Typography variant="subtitle1" fontWeight="bold">
-                  {item.name}
-                </Typography>
+              <Stack key={index}>
+                <Typography>{item.type === "Instance" ? item.name : ""}</Typography>
                 <ListItem disableGutters>
-                  <List sx={{ paddingLeft: 2 }}>
-                    {item.functions.map((fun) => {
-                      const isActive = invoke?.fun?.name === fun.name;
+                  <List sx={{ marginLeft: 2}} className={`${index? "border-t-1": ""}`}>
+                    {item.type==="Instance" && item?.functions?.map((fun) => {
+                      const isActive = invoke?.fun?.name === fun.name && invoke.instanceName===invoke.instanceName;
                       return (
                         <ListItem
                           key={fun.name}
@@ -147,6 +142,29 @@ export default function InvokePage() {
                         </ListItem>
                       );
                     })}
+                    {item.type ==="Function" && <ListItem
+                          key={item.name}
+                          disableGutters
+                          onClick={() =>
+                            setInvoke({ fun: item, instanceName: "" })
+                          }
+                          sx={{
+                            marginBottom: "0.8rem",
+                            cursor: "pointer",
+                            borderRadius: "10px",
+                            backgroundColor: item.name === invoke?.fun?.name && !invoke.instanceName
+                              ? "#373737"
+                              : "transparent",
+                            "&:hover": { backgroundColor: "#373737" },
+                          }}
+                          className={`dark:hover:bg-[#373737] hover:bg-[#C0C0C0] ${
+                            item.name === invoke?.fun?.name && !invoke.instanceName
+                              ? "dark:bg-[#373737] bg-[#C0C0C0]"
+                              : "transparent"
+                          }`}
+                        >
+                          <ListItemText primary={item.name} />
+                        </ListItem>}
                   </List>
                 </ListItem>
               </Stack>

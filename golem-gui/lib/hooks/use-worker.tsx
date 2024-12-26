@@ -27,7 +27,6 @@ export function getStateFromWorkersData(workers: Worker[]) {
   if (!workers) {
     return {};
   }
-  console.log("workers---<", workers);
   return workers.reduce<Record<string, number>>((obj, worker) => {
     const key = worker?.status?.toLowerCase();
     if (key) {
@@ -56,14 +55,14 @@ export function transform(inputs: Parameter[], data: Record<string, any>) {
 
 export function useWorkerInvocation(invoke: {
   fun?: WorkerFunction;
-  instanceName?: string;
+  instanceName?: string|null;
 }) {
   const { compId, id: workerName } = useParams<{
     compId: string;
     id: string;
   }>();
 
-  const instanceName = invoke.instanceName;
+  const instanceName = invoke?.instanceName;
   const functionName = invoke?.fun?.name;
 
   const [error, setError] = useState<string | null>(null);
@@ -78,8 +77,10 @@ export function useWorkerInvocation(invoke: {
   const invokeFunction = async (data: any) => {
     try {
       const payload = transform(invoke?.fun?.parameters || [], data);
+      let endpoint = `${ROUTE_PATH}/${compId}/workers/${workerName}/invoke-and-await?function=`
+      endpoint = instanceName&& functionName? `${endpoint}${instanceName}.{${functionName}}` :`${endpoint}${functionName}`
       const response = await fetcher(
-        `${ROUTE_PATH}/${compId}/workers/${workerName}/invoke-and-await?function=${instanceName}.{${functionName}}`,
+        endpoint,
         {
           method: "POST",
           headers: { "content-type": "application/json" },

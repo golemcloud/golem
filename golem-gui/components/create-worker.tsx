@@ -21,6 +21,7 @@ import { Component, WorkerFormData } from "@/types/api";
 import { v4 as uuidv4 } from 'uuid';
 import { addNewWorker } from "@/lib/hooks/use-worker";
 import {getFormErrorMessage} from "@/lib/utils"
+import { toast } from "react-toastify";
 
 
 interface FormData {
@@ -30,12 +31,13 @@ interface FormData {
   envVars: { key: string; value: string }[];
 }
 
-const CreateWorker = ({compId, version}:{compId?:string, version?:string|number}) => {
+const CreateWorker = ({compId, version, onSuccess}:{compId?:string, version?:string|number, onSuccess?:()=>void}) => {
   const {
     control,
     handleSubmit,
     formState: { errors },
     reset,
+    setValue
   } = useForm<FormData>({
     defaultValues: {
       envVars: [{ key: "", value: "" }],
@@ -87,9 +89,13 @@ const removeArgumentVar = (index: number) => {
     } as WorkerFormData;
     const {error} = await addNewWorker(newWorker, (data.component|| compId!));
     
-    setError(error || ""); // Clear previous error
-      // TODO: Add mutation logic and toast
-      // onCreation?.();
+    setError(error || "");
+
+    if(error) {
+     return  toast.error(`Failed to create new worker. ${error}`);
+    }
+    toast.success("Sucessfully created new worker");
+    onSuccess?.()
 
   };
 
@@ -103,7 +109,7 @@ const removeArgumentVar = (index: number) => {
         p: 3,
       }}
     >
-      <Box sx={{ display: "flex", gap: 2, mb: 3 }}>
+      <Box sx={{ display: "flex", gap: 2}}>
         <FormControl fullWidth>
           <Typography variant="body2" sx={{ mb: 1 }}>
             Component
@@ -130,7 +136,7 @@ const removeArgumentVar = (index: number) => {
       <Typography variant="caption" color="error">{getFormErrorMessage("component", errors)}</Typography>{}
 
       {/* Worker Name */}
-      <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 3 }}>
+      <Box sx={{ display: "flex", alignItems: "center", gap: 2, mt: 3 }}>
         <Controller
           name="workerName"
           control={control}
@@ -147,8 +153,9 @@ const removeArgumentVar = (index: number) => {
         <Button
           variant="contained"
           sx={{ textTransform: "none" }}
-          onClick={() => {
-            reset({ workerName: uuidv4() });
+          onClick={(e) => {
+            e.preventDefault();
+            setValue("workerName", uuidv4());
           }}
         >
           Generate
