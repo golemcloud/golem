@@ -1,5 +1,5 @@
-import React, { useEffect, useId, useMemo, useState } from "react";
-import { ComponentExport, WorkerFunction } from "@/types/api";
+import React, { useMemo, useState } from "react";
+import { WorkerFunction } from "@/types/api";
 import useComponents from "@/lib/hooks/use-component";
 import { useParams } from "next/navigation";
 import { Loader } from "lucide-react";
@@ -27,7 +27,7 @@ export function InvokeForm({
     return  invoke?.fun?.parameters || [];
   }, [invoke]);
 
-  const onSubmit = async (data: any) => {
+  const onSubmit = async (data: unknown) => {
     invokeFunction(data);
   };
 

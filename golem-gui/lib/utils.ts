@@ -47,12 +47,34 @@ export function calculateSizeInMB(sizeInBytes: number): string {
 export const fetcher = (url: string, options?: RequestInit) =>
   fetch(`/api/proxy${url}`, options).then((res) => res.json());
 
-export function getFormErrorMessage(key: string, errors: FieldErrors<FormData>) {
-  const message = key
-    .split(".")
-    .reduce<Record<string, any>>(
-      (acc, curr) => acc?.[curr] || {},
-      errors
-    )?.message;
-  return message;
+
+//we can replace with lodash.
+export function getFormErrorMessage<T extends Record<string, unknown>>(
+  key: string,
+  errors: FieldErrors<T>
+): string | undefined {
+  const pathSegments = key.split(".");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let current: any = errors;
+
+  for (const segment of pathSegments) {
+    const match = segment.match(/^\[(\d+)]$/);
+    if (match) {
+      const index = Number(match[1]);
+      if (Array.isArray(current)) {
+        current = current[index];
+      } else {
+        return undefined;
+      }
+    } else {
+      if (typeof current === "object" && current !== null) {
+        current = current[segment as keyof typeof current];
+      } else {
+        return undefined;
+      }
+    }
+  }
+
+  return current?.message;
 }
+

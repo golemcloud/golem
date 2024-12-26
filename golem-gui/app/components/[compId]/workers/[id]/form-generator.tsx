@@ -11,12 +11,12 @@ import {
   Select,
   MenuItem,
 } from "@mui/material";
-import { Parameter, RecordTyp } from "@/types/api";
+import { Parameter } from "@/types/api";
+import { AnalysedType_TypeVariant } from "@/types/golem-data-types";
 import { getFormErrorMessage } from "@/lib/utils";
 
 type FormData = {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  [key: string]: any; // Using `any` here for dynamic keys
+  [key: string]: unknown;
 };
 
 const generateDefaultValues = (fields: Parameter[]): FormData => {
@@ -28,18 +28,13 @@ const generateDefaultValues = (fields: Parameter[]): FormData => {
     }
     switch (field?.typ?.type) {
       case "Record":
-        defaults[field.name] = generateDefaultValues(field.typ.fields || []);
+        defaults[field.name] = generateDefaultValues(field?.typ?.fields || []);
         break;
       // case "Tuple":
       //   defaults[field.name] = [generateDefaultValues(field.typ.items || [])];
       //   break;
 
       case "List":
-        //   defaults[field.name] = {options: (field.typ?.inner?.cases || []).map((_case)=>{
-        //      return generateDefaultValues([_case])
-        //   }),
-        //   value: []
-        // }
         defaults[field.name] = [];
         break;
       default:
@@ -52,7 +47,7 @@ const generateDefaultValues = (fields: Parameter[]): FormData => {
 };
 
 const generateField = (
-  field: Parameter,
+  parameter: Parameter & { ignoreDotConcat?: boolean },
   index: number,
   rootKey: string,
   control: Control<FormData>,
@@ -60,29 +55,42 @@ const generateField = (
   handleChange: (key: string, value: any) => void,
   errors: FieldErrors<FormData>
 ) => {
-  const finalRootKey = `${rootKey ? `${rootKey}.` : ""}${field.name}`;
+  const finalRootKey = `${
+    rootKey
+      ? `${rootKey}${!parameter?.ignoreDotConcat && parameter?.name ? "." : ""}`
+      : ""
+  }${parameter?.name || ""}`;
   // TODO need to add other types
 
-  switch (field?.typ?.type) {
-    case "Str":
+  const paramType = parameter?.typ?.type || "";
+  // TODO: Pending data types that needs work.
+  //   | AnalysedType_TypeResult
+  //   | AnalysedType_TypeOption
+  //   | AnalysedType_TypeEnum
+  //   | AnalysedType_TypeFlags
+  //   | AnalysedType_TypeTuple
+  //   | AnalysedType_TypeHandle;
+
+  switch (true) {
+    case ["Str", "S8", "S32", "Chr", "S64", "S16"].includes(paramType):
       return (
         <>
           <Controller
             key={index}
             name={finalRootKey}
             control={control}
-            rules={{ required: `${field.name} is Mandatory` }}
+            rules={{ required: `${parameter.name} is Mandatory` }}
             render={({ field: _field }) => (
               <TextField
                 {..._field}
-                label={field.name}
+                label={parameter.name}
                 variant="outlined"
                 fullWidth
-                placeholder={field.name}
+                placeholder={parameter.name}
                 className="mt-2"
-                onChange={(e) => {
-                  handleChange(finalRootKey, e.target.value);
-                }}
+                // onChange={(e) => {
+                //   handleChange(finalRootKey, e.target.value);
+                // }}
               />
             )}
           />
@@ -91,27 +99,24 @@ const generateField = (
           </Typography>
         </>
       );
-    case "Bool":
+    case paramType == "Bool":
       return (
         <>
           <Controller
             key={index}
             name={finalRootKey}
             control={control}
-            rules={{ required: `${field.name} is Mandatory` }}
             render={({ field: _field }) => (
               <FormControlLabel
                 control={
                   <Checkbox
                     {..._field}
-                    checked={_field.value || false} // Ensure a boolean value
-                    onChange={(e) => {
-                      _field.onChange(e.target.checked);
-                      handleChange(finalRootKey, e.target.checked);
-                    }}
+                    // onChange={(e) => {
+                    //   handleChange(finalRootKey, e.target.checked);
+                    // }}
                   />
                 }
-                label={field.name}
+                label={parameter.name}
               />
             )}
           />
@@ -120,30 +125,23 @@ const generateField = (
           </Typography>
         </>
       );
-    case "F32":
-    case "F64":
-    case "F16":
-    case "U32":
-    case "U64":
-    case "U16":
-    case "U8":
-    case "F8":
+    case ["F32", "F64", "U32", "U64", "U16", "U8"].includes(paramType):
       return (
         <>
           <Controller
             key={index}
             name={finalRootKey}
-            rules={{ required: `${field.name} is Mandatory` }}
+            rules={{ required: `${parameter.name} is Mandatory` }}
             control={control}
             render={({ field: _field }) => (
               <TextField
                 {..._field}
-                label={field.name}
+                label={parameter.name}
                 type="number"
                 variant="outlined"
                 className="mt-2"
                 fullWidth
-                placeholder={field.name}
+                placeholder={parameter.name}
                 onChange={(e) => {
                   handleChange(
                     finalRootKey,
@@ -159,69 +157,152 @@ const generateField = (
           </Typography>
         </>
       );
-    case "Record":
+    case paramType === "Record":
       return (
         <>
           <Controller
             key={index}
             name={finalRootKey}
-            rules={{ required: `${field.name} is Mandatory` }}
+            rules={{ required: `${parameter.name} is Mandatory` }}
             control={control}
             render={({}) => {
               const fields =
-                field.typ.type == "Record" ? field?.typ?.fields || [] : [];
+                parameter?.typ?.type == "Record"
+                  ? parameter?.typ?.fields || []
+                  : [];
               return (
                 <div key={`${finalRootKey}`}>
-                  <Typography variant="h6">{field.name}</Typography>
-                  {fields?.map((nestedField, nestedIndex) => (
-                    <Box key={`${finalRootKey}_${nestedField.name}`}>
-                      {generateField(
-                        nestedField,
-                        nestedIndex,
-                        finalRootKey,
-                        control,
-                        handleChange,
-                        errors
-                      )}
-                    </Box>
-                  ))}
+                  <Typography variant="h6">{parameter.name}</Typography>
+                  {fields?.map(
+                    (nestedField: Parameter, nestedIndex: number) => (
+                      <Box key={`${finalRootKey}_${nestedField.name}`}>
+                        {generateField(
+                          nestedField,
+                          nestedIndex,
+                          finalRootKey,
+                          control,
+                          handleChange,
+                          errors
+                        )}
+                      </Box>
+                    )
+                  )}
                 </div>
               );
             }}
           />
+
+          <Typography variant="caption" color="error">
+            {getFormErrorMessage(finalRootKey, errors)}
+          </Typography>
         </>
       );
-
-    case "List":
+    case paramType === "Variant":
+      const cases = (
+        parameter?.typ && "cases" in parameter?.typ ? parameter?.typ?.cases : []
+      ) as AnalysedType_TypeVariant["cases"];
       return (
         <>
           <Controller
-            key={index}
-            name={finalRootKey}
+            name={`${finalRootKey}`}
+            rules={{ required: `${parameter?.name || 0} is Mandatory` }}
             control={control}
-            render={({ field: { value, ..._field } }) => {
-              const cases =
-                field.typ.type === "List" ? field.typ.inner.cases || [] : [];
+            render={({ field: { value: innerValue, ...innerField } }) => {
+              const isEmpty =
+                !innerValue || Object.keys(innerValue).length === 0;
+
+              const selectValue = isEmpty
+                ? 0
+                : cases.findIndex(
+                    (c: Parameter) =>
+                      innerValue &&
+                      c.name in (innerValue as Record<string, unknown>)
+                  ) || 0;
               return (
                 <>
-                <Stack direction="row" justifyContent={"space-between"} alignItems={"center"}>
+                  <Select
+                    {...innerField}
+                    variant="outlined"
+                    className="max-w-max"
+                    value={selectValue}
+                    onChange={(e) => {
+                      const selectedIndex = Number(e.target.value);
+                      if (selectedIndex < 0 || isNaN(selectedIndex)) {
+                        return;
+                      }
+                      const selectedCase = cases[selectedIndex];
+                      if (!selectedCase.typ) {
+                        return alert("No fields found!");
+                      }
+                      const updatedValues = generateDefaultValues(
+                        selectedCase ? [selectedCase] : []
+                      );
 
-                  <Typography>{field.name}</Typography>
-                  <Button
-                    type="button"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      const newTuples = [
-                        ...value,
-                        generateDefaultValues(cases[0] ? [cases[0]] : []),
-                      ];
-                      handleChange(finalRootKey, newTuples);
+                      handleChange(finalRootKey, updatedValues);
                     }}
+                  >
+                    {cases.map((_case: Parameter, in_idx: number) => (
+                      <MenuItem
+                        key={`${finalRootKey}_${_case.name}`}
+                        value={in_idx}
+                      >
+                        {_case.name}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                  <Box>
+                    {generateField(
+                      cases[selectValue],
+                      selectValue,
+                      `${finalRootKey}`,
+                      control,
+                      handleChange,
+                      errors
+                    )}
+                  </Box>
+                </>
+              );
+            }}
+          />
+          <Typography variant="caption" color="error">
+            {getFormErrorMessage(finalRootKey, errors)}
+          </Typography>
+        </>
+      );
+    case paramType === "List":
+      return (
+        <>
+          <Controller
+            name={finalRootKey}
+            control={control}
+            rules={{ required: `${parameter.name} is Mandatory` }}
+            render={({ field: { value, ..._field } }) => {
+              // due to type issue we are again check here. ideally this should not happen. or we need to use if case instead of switch
+              const inner =
+                parameter.typ?.type === "List"
+                  ? parameter.typ.inner
+                  : undefined;
+              const listValues = (value || []) as Array<unknown>;
+              return inner ? (
+                <>
+                  <Stack
+                    direction="row"
+                    justifyContent={"space-between"}
+                    alignItems={"center"}
+                  >
+                    <Typography>{parameter?.name}</Typography>
+                    <Button
+                      type="button"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        const newTuples = [...listValues, ""];
+                        handleChange(finalRootKey, newTuples);
+                      }}
                     >
-                    Add Tuple
-                  </Button>
-                    </Stack>
-                  {value?.map((_value: Record<string, any>, idx: number) => (
+                      Add Tuple
+                    </Button>
+                  </Stack>
+                  {listValues?.map((_value: unknown, idx: number) => (
                     <fieldset key={`${finalRootKey}__${idx}`}>
                       <legend>
                         {_field.name} {idx}
@@ -233,94 +314,46 @@ const generateField = (
                         onClick={(e) => {
                           e.preventDefault();
                           const updatedTuples = [
-                            ...value.slice(0, idx), // Take all elements before the index
-                            ...value.slice(idx + 1), // Take all elements after the index
+                            ...listValues.slice(0, idx),
+                            ...listValues.slice(idx + 1),
                           ];
-                          console.log("updatedTuples=====>", updatedTuples);
-
                           handleChange(finalRootKey, updatedTuples);
                         }}
                       >
                         Remove Tuple
                       </Button>
-
-                      {/* Dropdown to Select Case */}
-                      <Controller
-                        name={`${finalRootKey}[${idx}]`}
-                        control={control}
-                        render={({
-                          field: { value: innerValue, ...innerField },
-                        }) => (
-                          <>
-                            <Select
-                              {...innerField}
-                              variant="outlined"
-                              className="max-w-max"
-                              value={
-                                cases.findIndex(
-                                  (c) => innerValue && c.name in innerValue
-                                ) || 0
-                              }
-                              onChange={(e) => {
-                                const selectedIndex = Number(e.target.value);
-                                const selectedCase = cases[selectedIndex];
-                                const updatedValues = generateDefaultValues(
-                                  selectedCase ? [selectedCase] : []
-                                );
-                                handleChange(
-                                  `${finalRootKey}[${idx}]`,
-                                  updatedValues
-                                );
-                              }}
-                            >
-                              {cases.map((_case, index) => (
-                                <MenuItem
-                                  key={`${finalRootKey}[${idx}_${_case.name}_${index}`}
-                                  value={index}
-                                >
-                                  {_case.name}
-                                </MenuItem>
-                              ))}
-                            </Select>
-
-                            {/* Render Fields for Selected Case */}
-                            {innerValue &&
-                              Object.entries(innerValue).map(
-                                ([key, fieldValue], _idx) =>
-                                  cases.map(
-                                    (_case, index) =>
-                                      _case.name === key && (
-                                        <Box
-                                          key={`${finalRootKey}[${idx}_${_case.name}_${_idx}`}
-                                        >
-                                          {generateField(
-                                            _case,
-                                            _idx,
-                                            `${finalRootKey}[${idx}]`,
-                                            control,
-                                            handleChange,
-                                            errors
-                                          )}
-                                        </Box>
-                                      )
-                                  )
-                              )}
-                          </>
+                      <>
+                        {generateField(
+                          {
+                            name: `[${idx}]`,
+                            typ: inner,
+                            // ignoreDotConcat: true,
+                          },
+                          idx,
+                          `${finalRootKey}`,
+                          control,
+                          handleChange,
+                          errors
                         )}
-                      />
+                      </>
                     </fieldset>
                   ))}
-
-                  {/* Button to Add Tuple */}
-                  
                 </>
+              ) : (
+                <></>
               );
             }}
           />
+          <Typography variant="caption" color="error">
+            {getFormErrorMessage(finalRootKey, errors)}
+          </Typography>
         </>
       );
-    case null: return null;
-    case undefined: return null;
+
+    case paramType === null:
+      return null;
+    case paramType === undefined:
+      return null;
     default:
       return <Typography>Some Data types were not configued.</Typography>;
   }
@@ -346,8 +379,7 @@ const DynamicForm: React.FC<{
 
   console.log("defaultValues", defaultValues);
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const handleChange = (key: string, value: any) => {
+  const handleChange = (key: string, value: unknown) => {
     setValue(key, value, { shouldDirty: true });
   };
 
@@ -366,7 +398,6 @@ const DynamicForm: React.FC<{
         color="primary"
         className="mt-2"
       >
-
         Submit
       </Button>
     </form>

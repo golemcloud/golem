@@ -17,7 +17,6 @@ import UploadFileIcon from "@mui/icons-material/UploadFile";
 import FolderIcon from "@mui/icons-material/Folder";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import CloudUploadIcon from "@mui/icons-material/CloudUpload";
-import { fetcher, getErrorMessage } from "@/lib/utils";
 import { toast } from "react-toastify";
 import { addNewcomponent } from "@/lib/hooks/use-component";
 import { getFormErrorMessage } from "../lib/utils";
@@ -34,7 +33,6 @@ type Props = {
   onSubmitSuccess?: () => void;
   componentId?: string;
   initialValues?: Partial<FormData>;
-  getVersions?: () => any;
 };
 
 export default function ComponentForm({
@@ -42,7 +40,6 @@ export default function ComponentForm({
   onSubmitSuccess,
   initialValues,
   componentId,
-  getVersions,
 }: Props) {
   const isCreateMode = mode === "create";
 

@@ -62,23 +62,22 @@ export default function ExportsTable<T>({
       .map(
         (param) =>
           `${param.name}: ${
-            param.typ.type 
+            param?.typ?.type 
           }`
       )
       .join(", "),
     returnType: func.results
       .map((result) => {
-        if (result.typ.type === "Variant") {
-          return result?.typ?.cases?
-            .map(
+        if (result?.typ?.type === "Variant") {
+          return result?.typ?.cases?.map(
               (variant) =>
-                `${variant.name}(${variant.typ.type || "Record"})`
+                `${variant.name}(${variant?.typ?.type || "Record"})`
             )
             .join(" | ");
-        } else if (result.typ.type === "List") {
+        } else if (result?.typ?.type === "List") {
           return `List<Record>`;
         } else {
-          return result.typ.type || "None";
+          return result?.typ?.type || "None";
         }
       })
       .join(", "),
