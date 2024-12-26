@@ -193,8 +193,11 @@ export default function ComponentForm({
         )}
         {/* WASM File Upload */}
         <Box mb={3}>
-          <Typography variant="body1" mb={1}>
+          <Typography variant="body1">
             Upload WASM File
+          </Typography>
+          <Typography variant="caption" mb={1} color="gray">
+          The compiled WASM binary of your component.
           </Typography>
           <Controller
             name="component"
@@ -239,6 +242,13 @@ export default function ComponentForm({
         </Box>
 
         {/* Initial Files Upload */}
+      
+        <Typography variant="body1">
+            Initial Files
+          </Typography>
+          <Typography variant="caption" mb={1} color="gray">
+          Files available to your workers at runtime.
+          </Typography>
         <Box
           mb={3}
           p={2}
@@ -246,6 +256,7 @@ export default function ComponentForm({
           borderRadius="8px"
           textAlign="center"
         >
+        
           <input
             type="file"
             multiple

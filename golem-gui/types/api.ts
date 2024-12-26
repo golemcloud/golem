@@ -2,7 +2,9 @@ export interface VersionedComponentId {
     componentId: string;
     version: number;
   }
-  
+   
+  export type ComponentExport  = WorkerInstanceFunctions | WorkerFunction
+
   export interface ComponentMetadata {
     exports: ComponentExport[];
     producers: Producer[];
@@ -13,14 +15,16 @@ export interface VersionedComponentId {
     name: string;
     parameters: Parameter[],
     results: Result[];
+    value?: any;
+    type: "Function";
   }
-  
-  export interface ComponentExport {
-    type: string;
+
+  export interface WorkerInstanceFunctions {
+    type: "Instance";
     name: string;
     functions: WorkerFunction[];
+    value?: any;
   }
-  
   export interface Parameter {
     name: string;
     typ: TypeDefinition;
@@ -32,20 +36,43 @@ export interface VersionedComponentId {
     typ: TypeDefinition;
   }
 
-  // export interface TupleItem {
-  //   fields: Parameter[],
-  //   type: string
-  // }
-  
-  export interface TypeDefinition {
+  export interface TupleItem {
+    fields: Parameter[],
     type: string
-    cases?: Array<{
-      name: string;
-      typ: Record<string, unknown>;
-    }>;
-    fields?: Parameter[]
-    items?: Parameter[]
   }
+  
+  export interface StrTyp {
+    type: "Str",
+  }
+
+  export interface BoolTyp {
+    type: "Bool",
+  }
+
+  export interface NumberTyp {
+    type: "U32" | "U64" |"U16" | "U8" |  "F32" | "F64" |"F16" | "F8"
+  }
+
+  export interface RecordTyp{
+    type: "Record",
+    fields: Parameter[]
+  }
+
+  export interface ListTyp {
+    type: "List",
+    inner: {
+      cases: Parameter[]
+      type: "Varaint"
+    }
+  }
+
+  export interface ResultTyp {
+    name: string|null;
+    type: "Result";
+    ok: TypeDefinition | null;
+    err: StrTyp | StrTyp[] | null;
+  }
+  export type TypeDefinition = ListTyp | RecordTyp |  StrTyp | NumberTyp | BoolTyp | ResultTyp
   
   export interface Producer {
     fields: Array<{

@@ -40,12 +40,17 @@ export default function ExportsTable<T>({
   const exports = useMemo(() => {
     const metaExports = (latestComponent?.metadata?.exports || []) as ComponentExport[];
     return metaExports.flatMap((exportItem) =>
-      exportItem.functions.map((func) => ({
+     exportItem.type==="Instance" ? exportItem.functions.map((func) => ({
         name: exportItem.name,
         functionName: func.name,
         parameters: func.parameters,
         results: func.results,
-      }))
+      })) : {
+        name: "",
+        functionName: exportItem.name,
+        parameters: exportItem.parameters,
+        results: exportItem.results,
+      }
     );
   }, [latestComponent?.versionedComponentId?.version]);
 
@@ -64,7 +69,7 @@ export default function ExportsTable<T>({
     returnType: func.results
       .map((result) => {
         if (result.typ.type === "Variant") {
-          return result.typ.cases
+          return result?.typ?.cases?
             .map(
               (variant) =>
                 `${variant.name}(${variant.typ.type || "Record"})`
