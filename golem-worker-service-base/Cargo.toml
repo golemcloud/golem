@@ -19,35 +19,35 @@ name = "api_gateway_end_to_end_tests"
 harness = false
 
 [[test]]
-name = "api_integration_tests.rs"
+name = "api_integration_tests"
 harness = false
 
 [[test]]
-name = "complex_wit_type_validation_tests.rs"
+name = "complex_wit_type_validation_tests"
 harness = false
 
 [[test]]
-name = "openapi_converter_tests.rs"
+name = "openapi_converter_tests"
 harness = false
 
 [[test]]
-name = "openapi_export_integration_tests.rs"
+name = "openapi_export_integration_tests"
 harness = false
 
 [[test]]
-name = "rib_json_schema_validation_tests.rs"
+name = "rib_json_schema_validation_tests"
 harness = false
 
 [[test]]
-name = "rib_openapi_conversion_tests.rs"
+name = "rib_openapi_conversion_tests"
 harness = false
 
 [[test]]
-name = "swagger_ui_tests.rs"
+name = "swagger_ui_tests"
 harness = false
 
 [[test]]
-name = "utoipa_client_tests.rs"
+name = "utoipa_client_tests"
 harness = false
 
 
