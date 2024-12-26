@@ -8,6 +8,7 @@ import {
   TextField,
   Typography,
   IconButton,
+  Alert,
 } from "@mui/material";
 import SearchIcon from "@mui/icons-material/Search";
 import AddIcon from "@mui/icons-material/Add";
@@ -39,7 +40,7 @@ const ComponentsPage = () => {
     setViewMode(button === "grid" ? "card" : "table");
   };
   const router = useRouter();
-  const { components, isLoading } = useComponents();
+  const { components, isLoading, error } = useComponents();
 
   function handleComponentClick(id: string) {
     console.log("Component Clicked");
@@ -53,6 +54,14 @@ const ComponentsPage = () => {
 
   return (
     <Container maxWidth="lg" sx={{ mt: 5}}>
+      <Box sx={{ display: 'flex', justifyContent: 'center'}}>
+        {error && (
+          <Alert severity="error" >
+            {error}
+          </Alert>
+        )}
+      </Box>
+      {!error && !isLoading && <>
       {/* Search Bar and Buttons */}
       <Box
         display="flex"
@@ -196,6 +205,7 @@ const ComponentsPage = () => {
         />
       </CustomModal>
       <br /><br /><br />
+      </>}
     </Container>
   );
 };

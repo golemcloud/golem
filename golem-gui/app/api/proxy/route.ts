@@ -39,6 +39,7 @@ export async function POST(request: NextRequest) {
 
     return  NextResponse.json(
       { status: backendResponse.status, data:  result},
+      {status: backendResponse.status}
     );
   } catch (error) {
     console.log("error====>", error);
@@ -88,6 +89,7 @@ export async function PUT(request: NextRequest) {
 
     return  NextResponse.json(
       { status: backendResponse.status, data:  result},
+      {status: backendResponse.status}
     );
   } catch (error) {
     console.log("error====>", error);
@@ -141,7 +143,8 @@ export async function DELETE(request: NextRequest) {
     const backendResponse = await fetch(backendUrl, init);
     const result = await backendResponse.json();
     return  NextResponse.json(
-      { status: backendResponse.status, data:  result}
+      { status: backendResponse.status, data:  result},
+      {status: backendResponse.status}
     );
   } catch (error) {
     return NextResponse.json(

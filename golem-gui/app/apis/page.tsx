@@ -2,6 +2,7 @@
 
 import React, { useState } from "react";
 import {
+  Alert,
   Box,
   Button,
   Container,
@@ -22,7 +23,7 @@ import ApiInfoCard from "@/components/api-info-card";
 const ComponentsPage = () => {
   const [open, setOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  const { apiDefinitions, isLoading } = useApiDefinitions();
+  const { apiDefinitions, isLoading, error } = useApiDefinitions();
   const router = useRouter();
 
   const handleOpen = () => setOpen(true);
@@ -39,6 +40,12 @@ const ComponentsPage = () => {
 
   return (
     <Container maxWidth="lg" sx={{ mt: 5, height: "100vh" }}>
+       {error && (
+        <Box sx={{ display: "flex", justifyContent: "center" }}>
+          {error && <Alert severity="error">{error}</Alert>}
+        </Box>
+      )}
+      {!error && !isLoading &&<>           
       <Box
         display="flex"
         justifyContent="space-between"
@@ -126,6 +133,7 @@ const ComponentsPage = () => {
       <CustomModal open={open} onClose={handleClose} heading="Create New API">
         <CreateAPI onCreation={handleClose} />
       </CustomModal>
+      </>}
     </Container>
   );
 };
