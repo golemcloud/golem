@@ -1,5 +1,12 @@
+use test_r::test_gen;
+use anyhow::Result;
+use test_r::core::DynamicTestRegistration;
+
+test_r::enable!();
+
 #[cfg(test)]
 mod api_integration_tests {
+    use super::*;
     use axum::{
         routing::{get, post},
         Router, Json, response::IntoResponse,
@@ -115,8 +122,10 @@ mod api_integration_tests {
         addr
     }
 
-    #[tokio::test]
-    async fn test_api_interaction() {
+    #[allow(unused_must_use)]
+    #[must_use]
+    #[test_gen(unwrap)]
+    async fn test_api_interaction(_test: &mut DynamicTestRegistration) -> Result<()> {
         // Start test server
         let addr = setup_test_server().await;
         let base_url = format!("http://{}", addr);
@@ -193,5 +202,7 @@ mod api_integration_tests {
             result.received.status,
             Status::Inactive { reason } if reason == "testing error"
         ));
+
+        Ok(())
     }
 } 

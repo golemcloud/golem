@@ -29,43 +29,76 @@ impl OpenApiConverter {
 
     pub fn merge_openapi(mut base: OpenApi, other: OpenApi) -> OpenApi {
         // Merge paths
-        base.paths.paths.extend(other.paths.paths);
-
-        // Merge components
-        match (&mut base.components, other.components.as_ref()) {
-            (Some(base_components), Some(other_components)) => {
-                // Merge schemas
-                base_components.schemas.extend(other_components.schemas.clone());
-                // Merge responses
-                base_components.responses.extend(other_components.responses.clone());
-                // Merge security schemes
-                base_components.security_schemes.extend(other_components.security_schemes.clone());
+        for (path, other_item) in other.paths.paths {
+            if let Some(base_item) = base.paths.paths.get_mut(&path) {
+                // Merge operations for existing paths
+                if other_item.get.is_some() {
+                    base_item.get = other_item.get;
+                }
+                if other_item.post.is_some() {
+                    base_item.post = other_item.post;
+                }
+                if other_item.put.is_some() {
+                    base_item.put = other_item.put;
+                }
+                if other_item.delete.is_some() {
+                    base_item.delete = other_item.delete;
+                }
+                if other_item.options.is_some() {
+                    base_item.options = other_item.options;
+                }
+                if other_item.head.is_some() {
+                    base_item.head = other_item.head;
+                }
+                if other_item.patch.is_some() {
+                    base_item.patch = other_item.patch;
+                }
+                if other_item.trace.is_some() {
+                    base_item.trace = other_item.trace;
+                }
+            } else {
+                // Add new paths
+                base.paths.paths.insert(path, other_item);
             }
-            _ => base.components = other.components,
         }
 
-        // Merge security requirements
-        match (&mut base.security, other.security.as_ref()) {
-            (Some(base_security), Some(other_security)) => {
-                base_security.extend(other_security.clone());
+        // Merge components if both exist
+        if let Some(other_components) = other.components {
+            match &mut base.components {
+                Some(base_components) => {
+                    // Move schemas
+                    base_components.schemas.extend(other_components.schemas);
+                    // Move responses
+                    base_components.responses.extend(other_components.responses);
+                    // Move security schemes
+                    base_components.security_schemes.extend(other_components.security_schemes);
+                }
+                None => base.components = Some(other_components),
             }
-            _ => base.security = other.security,
         }
 
-        // Merge tags
-        match (&mut base.tags, other.tags.as_ref()) {
-            (Some(base_tags), Some(other_tags)) => {
-                base_tags.extend(other_tags.clone());
+        // Merge security requirements if both exist
+        if let Some(other_security) = other.security {
+            match &mut base.security {
+                Some(base_security) => base_security.extend(other_security),
+                None => base.security = Some(other_security),
             }
-            _ => base.tags = other.tags,
         }
 
-        // Merge servers
-        match (&mut base.servers, other.servers.as_ref()) {
-            (Some(base_servers), Some(other_servers)) => {
-                base_servers.extend(other_servers.clone());
+        // Merge tags if both exist
+        if let Some(other_tags) = other.tags {
+            match &mut base.tags {
+                Some(base_tags) => base_tags.extend(other_tags),
+                None => base.tags = Some(other_tags),
             }
-            _ => base.servers = other.servers,
+        }
+
+        // Merge servers if both exist
+        if let Some(other_servers) = other.servers {
+            match &mut base.servers {
+                Some(base_servers) => base_servers.extend(other_servers),
+                None => base.servers = Some(other_servers),
+            }
         }
 
         base

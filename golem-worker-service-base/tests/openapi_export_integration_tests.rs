@@ -1,5 +1,12 @@
+use test_r::test_gen;
+use anyhow::Result;
+use test_r::core::DynamicTestRegistration;
+
+test_r::enable!();
+
 #[cfg(test)]
 mod openapi_export_integration_tests {
+    use super::*;
     use golem_wasm_ast::analysis::{
         AnalysedType, TypeBool, TypeStr, TypeU32, TypeVariant, TypeRecord, TypeList,
         NameOptionTypePair, NameTypePair,
@@ -96,8 +103,10 @@ mod openapi_export_integration_tests {
         openapi
     }
 
-    #[test]
-    fn test_complex_api_export() {
+    #[allow(unused_must_use)]
+    #[must_use]
+    #[test_gen(unwrap)]
+    async fn test_complex_api_export(_test: &mut DynamicTestRegistration) -> Result<()> {
         let exporter = OpenApiExporter;
         let openapi = create_complex_api();
 
@@ -111,7 +120,7 @@ mod openapi_export_integration_tests {
         );
 
         // Validate JSON structure
-        let json_value: Value = serde_json::from_str(&exported_json).unwrap();
+        let json_value: Value = serde_json::from_str(&exported_json)?;
         assert_eq!(json_value["info"]["title"], "complex-api API");
         assert_eq!(json_value["info"]["version"], "1.0.0");
         assert!(json_value["paths"]["/api/v1/complex"]["post"]["requestBody"].is_object());
@@ -131,13 +140,18 @@ mod openapi_export_integration_tests {
         assert!(exported_yaml.contains("version: '1.0.0'"));
         assert!(exported_yaml.contains("/api/v1/complex:"));
         assert!(exported_yaml.contains("ComplexRequest:"));
+
+        Ok(())
     }
 
-    #[test]
-    fn test_export_path_generation() {
+    #[allow(unused_must_use)]
+    #[must_use]
+    #[test_gen(unwrap)]
+    async fn test_export_path_generation(_test: &mut DynamicTestRegistration) -> Result<()> {
         let api_id = "test-api";
         let version = "2.0.0";
         let path = OpenApiExporter::get_export_path(api_id, version);
         assert_eq!(path, "/v1/api/definitions/test-api/version/2.0.0/export");
+        Ok(())
     }
 } 

@@ -24,31 +24,31 @@ harness = false
 
 [[test]]
 name = "complex_wit_type_validation_tests"
-harness = false
+harness = true
 
 [[test]]
 name = "openapi_converter_tests"
-harness = false
+harness = true
 
 [[test]]
 name = "openapi_export_integration_tests"
-harness = false
+harness = true
 
 [[test]]
 name = "rib_json_schema_validation_tests"
-harness = false
+harness = true
 
 [[test]]
 name = "rib_openapi_conversion_tests"
-harness = false
+harness = true
 
 [[test]]
 name = "swagger_ui_tests"
-harness = false
+harness = true
 
 [[test]]
 name = "utoipa_client_tests"
-harness = false
+harness = true
 
 
 [dependencies]

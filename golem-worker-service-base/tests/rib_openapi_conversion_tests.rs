@@ -1,5 +1,6 @@
 #[cfg(test)]
 mod rib_openapi_conversion_tests {
+    use test_r::test;
     use golem_wasm_ast::analysis::{
         AnalysedType,
         TypeBool,

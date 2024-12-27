@@ -1,20 +1,11 @@
 #[cfg(test)]
 mod openapi_converter_tests {
     use utoipa::openapi::{
-        Components,
-        HttpMethod,
-        Info,
-        Object,
-        OpenApi,
-        PathItem,
-        PathsBuilder,
-        Schema,
-        SecurityRequirement,
-        Server,
-        Tag,
+        Info, PathsBuilder, OpenApi, Components, Schema, Object, PathItem, Server, Tag,
         path::OperationBuilder,
+        security::{SecurityRequirement, SecurityScheme, ApiKey, ApiKeyValue},
         Response,
-        security::{SecurityScheme, ApiKeyValue, ApiKey},
+        HttpMethod,
     };
     use golem_worker_service_base::gateway_api_definition::http::openapi_converter::OpenApiConverter;
 
