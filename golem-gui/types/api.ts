@@ -166,6 +166,12 @@ export interface VersionedComponentId {
     createdAt?: string;
   }
 
+  export interface OplogQueryParams {
+    from?: number;
+    count: number;
+    cursor?: string;
+    query?: string;
+  }
 
   export type DeploymentApiDefinition = {
     id: string;

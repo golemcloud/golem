@@ -13,6 +13,7 @@ import InvokePage from "./invoke";
 import useComponents from "@/lib/hooks/use-component";
 import Overview from "./overview";
 import TerminalPage from "./live";
+import FileComponent from "./files";
 
 const WorkerListWithDropdowns = () => {
   const [activeTab, setActiveTab] = useState(0);
@@ -65,8 +66,11 @@ const WorkerListWithDropdowns = () => {
         <Tab label="Invoke" />
       </Tabs>
       {activeTab === 0 && <Overview worker={worker} isLoading={isLoading}/>}
-      {activeTab === 5 && <InvokePage/>}
       {activeTab === 1 && <TerminalPage workerName={workerName} />}
+      {activeTab === 3 && <FileComponent />}
+      {activeTab === 5 && <InvokePage/>}
+
+     
 
     </>
   );
