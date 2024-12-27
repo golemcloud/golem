@@ -2,14 +2,12 @@
 import React from "react";
 import { Box, Typography, Grid, Paper } from "@mui/material";
 import FolderIcon from "@mui/icons-material/Folder";
-import { WorkerFileContent } from "@/lib/hooks/use-worker"
+import { useWorkerFileContent } from "@/lib/hooks/use-worker"
 import { useParams } from "next/navigation";
 
 const FileComponent = () => {
-
-  const { id: workerName } = useParams<{ id: string }>();
   const { compId } = useParams<{ compId: string }>();
-  const { data, isLoading } = WorkerFileContent("test",compId, "file-service.wasm") as { data: any; isLoading: boolean; };
+  const { data, isLoading } = useWorkerFileContent("test",compId, "file-service.wasm") as { data: unknown; isLoading: boolean; error?:string|null  };
 
   console.log(data, isLoading);
 

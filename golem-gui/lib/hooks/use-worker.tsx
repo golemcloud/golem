@@ -236,10 +236,10 @@ export function useWorkerLogs(
   params: OplogQueryParams
 ) {
   const queryString = new URLSearchParams({
+    count: params.count.toString(),
     ...(params.from ? { from: params.from.toString() } : {}),
     ...(params.cursor ? { cursor: params.cursor } : {}),
     ...(params.query ? { query: params.query } : {}),
-    count: params.count.toString(),
   }).toString();
 
   const endpoint = `${ROUTE_PATH}/${componentId}/workers/${workerName}/oplog?${queryString}`;
@@ -314,16 +314,16 @@ export default function useWorkers(componentId?: string, version?: string | numb
   };
 }
 
-export function WorkerFileContent(workersName: string,componentsId:string, fileName: string){
+export function useWorkerFileContent(workersName: string,componentsId:string, fileName: string){
   const path = `${ROUTE_PATH}/${componentsId}/workers/${workersName}/files/${fileName}`
   console.log("path", path);
   const { data, error: requestError, isLoading } = useSWR(path, fetcher);
 
-  const error =
-    requestError || (data && data?.status != 200)
-      ? getErrorMessage(data?.data)
-      : "";
-  if(error) return error;
-  return {data, isLoading};
+  const error = useMemo(() => {
+    if (!isLoading && data?.status !== 200) {
+      return getErrorMessage(data);
+    }
+    return !isLoading ? getErrorMessage(requestError) : "";
+  }, [isLoading, requestError, data]);
+  return {data, isLoading, error};
 }
-

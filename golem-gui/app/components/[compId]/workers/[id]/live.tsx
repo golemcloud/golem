@@ -1,16 +1,37 @@
-import React from 'react';
-import { Box, AppBar, Toolbar, Tabs, Tab, Button, Divider, Typography } from '@mui/material';
-import Logs from './logs';
+import React, { useState } from "react";
+import {
+  Box,
+  AppBar,
+  Toolbar,
+  Tabs,
+  Tab,
+  Button,
+  Divider,
+} from "@mui/material";
+import Logs from "./logs";
+import InvocationLogs from "./invoke-logs";
+import TerminalLogs from "./terminal";
 const TerminalPage = ({ workerName }: { workerName: string }) => {
-  const [activeTab, setActiveTab] = React.useState(0);
+  const [activeTab, setActiveTab] = useState(0);
+  const [lastClearTimeStamp, setLastClearTimestamp] = useState<Date | null>(
+    null
+  );
 
   const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
     setActiveTab(newValue);
   };
 
+  console.log("lastClearTimeStamp", lastClearTimeStamp);
+
   return (
-    <Box className="text-black dark:text-white" sx={{ width: '100%', height: '100vh' }}>
-      <Divider className="border-gray-300 dark:border-gray-700" sx={{ marginTop: '4px' }} />
+    <Box
+      className="text-black dark:text-white"
+      sx={{ width: "100%", height: "100vh" }}
+    >
+      <Divider
+        className="border-gray-300 dark:border-gray-700"
+        sx={{ marginTop: "4px" }}
+      />
 
       <AppBar
         position="static"
@@ -24,8 +45,14 @@ const TerminalPage = ({ workerName }: { workerName: string }) => {
             sx={{ flexGrow: 1 }}
             className="text-gray-700 dark:text-gray-300"
           >
-            <Tab label="Terminal" className="text-gray-700 dark:text-gray-300" />
-            <Tab label="Invocations" className="text-gray-700 dark:text-gray-300" />
+            <Tab
+              label="Terminal"
+              className="text-gray-700 dark:text-gray-300"
+            />
+            <Tab
+              label="Invocations"
+              className="text-gray-700 dark:text-gray-300"
+            />
             <Tab label="Logs" className="text-gray-700 dark:text-gray-300" />
           </Tabs>
           <Button
@@ -33,19 +60,40 @@ const TerminalPage = ({ workerName }: { workerName: string }) => {
             color="error"
             sx={{ marginRight: 1 }}
             className="dark:border-red-600"
+            onClick={(e) => {
+              e.preventDefault();
+              setLastClearTimestamp(new Date());
+            }}
           >
             Clear
           </Button>
-          <Button variant="contained" color="primary">
+          <Button
+            variant="contained"
+            color="primary"
+            onClick={(e) => {
+              e.preventDefault();
+              setLastClearTimestamp(null);
+            }}
+          >
             Reload
           </Button>
         </Toolbar>
       </AppBar>
 
-      <Box sx={{ flex: 1, p: 2, overflowY: 'auto' }} className="text-gray-700 dark:text-gray-300">
-        {activeTab === 0 && <Box className="text-center">Terminal output...</Box>}
-        {activeTab === 1 && <Box className="text-center">Invocation data...</Box>}
-        {activeTab === 2 && <Logs/>}
+      <Box
+        sx={{ flex: 1, mt: 2, overflowY: "auto" }}
+        className="text-gray-700 dark:text-gray-300"
+      >
+        {activeTab === 0 && (
+          <TerminalLogs lastClearTimeStamp={lastClearTimeStamp} />
+        )}
+        {/* It is just logs for invocation only. but the console shows different. it merging the both inovked and 
+        invoked completed data and showing data. need to rework on this(little tricky)*/}
+        {activeTab === 1 && (
+          <InvocationLogs lastClearTimeStamp={lastClearTimeStamp} />
+        )}
+        {/* this i am not able to view in console.*/}
+        {activeTab === 2 && <Logs />}
       </Box>
     </Box>
   );

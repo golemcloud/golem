@@ -10,7 +10,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Missing "path" query parameter' }, { status: 400 });
     }
 
-    const backendUrl = `http://localhost:9881/v1/${path}`;
+    searchParams.delete("path");
+
+    const queryString = searchParams.toString();
+
+    const backendUrl = `http://localhost:9881/v1/${path}${queryString? `&${queryString}`: ''}`;
     const headers: HeadersInit = Object.fromEntries(request.headers.entries());
 
     // Ensure necessary headers are included
@@ -60,7 +64,11 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: 'Missing "path" query parameter' }, { status: 400 });
     }
 
-    const backendUrl = `http://localhost:9881/v1/${path}`;
+    searchParams.delete("path");
+
+    const queryString = searchParams.toString();
+
+    const backendUrl = `http://localhost:9881/v1/${path}${queryString? `&${queryString}`: ''}`;
     const headers: HeadersInit = Object.fromEntries(request.headers.entries());
 
     // Ensure necessary headers are included
@@ -107,8 +115,15 @@ export async function GET(request: NextRequest) {
   try {
     const { search } = new URL(request.url);
     const searchParams = new URLSearchParams(search);
+    const path = searchParams.get("path");
+    searchParams.delete("path");
 
-    const backendUrl = `http://localhost:9881/v1/${searchParams.get("path")}`;
+    const queryString = searchParams.toString();
+
+    const backendUrl = `http://localhost:9881/v1/${path}${queryString? `&${queryString}`: ''}`;
+
+    console.log("queryString========>", queryString);
+    console.log("backendUrl========>", backendUrl);
     const headers: HeadersInit = Object.fromEntries(request.headers.entries());
     delete headers['host'];
     const init: RequestInit = {
@@ -133,7 +148,12 @@ export async function DELETE(request: NextRequest) {
     const { search } = new URL(request.url);
     const searchParams = new URLSearchParams(search);
 
-    const backendUrl = `http://localhost:9881/v1/${searchParams.get("path")}`;
+    const path = searchParams.get("path");
+    searchParams.delete("path");
+
+    const queryString = searchParams.toString();
+
+    const backendUrl = `http://localhost:9881/v1/${path}${searchParams}${queryString? `&${queryString}`: ''}`;
     const headers: HeadersInit = Object.fromEntries(request.headers.entries());
     delete headers['host'];
     const init: RequestInit = {
