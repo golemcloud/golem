@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useMemo, useState } from "react";
-import { Box, Button, Typography, Tab, Tabs, Grid, Paper } from "@mui/material";
+import { AppBar, Box, Divider, Tab, Tabs, Toolbar, Typography } from "@mui/material";
 import { useWorker } from "@/lib/hooks/use-worker";
 import { useParams } from "next/navigation";
 import {
@@ -10,9 +10,9 @@ import {
   RocketLaunch,
 } from "@mui/icons-material";
 import InvokePage from "./invoke";
-import useComponents from "@/lib/hooks/use-component";
 import Overview from "./overview";
 import TerminalPage from "./live";
+import Manage from "./manage";
 
 const WorkerListWithDropdowns = () => {
   const [activeTab, setActiveTab] = useState(0);
@@ -50,7 +50,10 @@ const WorkerListWithDropdowns = () => {
   };
 
   return (
-    <>
+    <Box
+      className="text-black dark:text-white"
+      sx={{ width: "100%", height: "100vh" }}
+    >
       <Tabs
         value={activeTab}
         onChange={handleTabChange}
@@ -64,11 +67,28 @@ const WorkerListWithDropdowns = () => {
         <Tab label="Manage" />
         <Tab label="Invoke" />
       </Tabs>
-      {activeTab === 0 && <Overview worker={worker} isLoading={isLoading}/>}
-      {activeTab === 5 && <InvokePage/>}
+      <Divider
+        className="border-gray-300 dark:border-gray-700"
+        sx={{ marginTop: "4px" }}
+      />
+      <Divider className="border-gray-300 dark:border-gray-700" sx={{ marginTop: '4px' }} />
+      <Toolbar
+        sx={{ justifyContent: "center", borderBottom: "1px solid #333" }}
+        className="dark:border-gray-600"
+      >
+        <Typography
+          variant="h6"
+          sx={{ fontWeight: "bold" }}
+          className="text-gray-700 dark:text-gray-300"
+        >
+          {workerName}
+        </Typography>
+      </Toolbar>
+      {activeTab === 0 && <Overview worker={worker} isLoading={isLoading} />}
       {activeTab === 1 && <TerminalPage workerName={workerName} />}
-
-    </>
+      {activeTab === 4 && <Manage />}
+      {activeTab === 5 && <InvokePage />}
+    </Box>
   );
 };
 

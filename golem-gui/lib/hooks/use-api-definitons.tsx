@@ -244,7 +244,7 @@ function useApiDefinitions(defintionId?: string, version?: string | null) {
         );
         if (response.status !== 200) {
           const error = getErrorMessage(response.data);
-          toast.error(`Route deletion faile. ${error}`)
+          toast.error(`Route deletion failed. ${error}`)
 
           return { success: false, error };
         }
@@ -252,7 +252,7 @@ function useApiDefinitions(defintionId?: string, version?: string | null) {
         mutate(`${ROUTE_PATH}?api-definition-id=${data.id}`);
         mutate(`${ROUTE_PATH}/${data.id}/${data.version}`);
         mutate(`${ROUTE_PATH}`);
-        toast.success("Route delete Successfully")
+        toast.success("Route deleted Successfully")
         return { success: true, error: null };
       }
     } catch (error) {
@@ -288,15 +288,19 @@ export async function addNewApiDefinition(
 
     if (response.status > 300) {
       const error = getErrorMessage(response.data);
+      toast.error(`Api creation/updation failed. ${error}`)
       return { success: false, error: error };
     }
 
     mutate(ROUTE_PATH);
     mutate(`${ROUTE_PATH}/${newData.id}/${newData.version}`);
     mutate(`${ROUTE_PATH}/?api-definition-id=${newData.id}`);
+    toast.success(`Api successfully created/updated`)
+
     return { success: false, data: response.data };
   } catch (err) {
     console.log("Err", err);
+    toast.error(`Something went wrong!`)
     return { success: false, error: "Something went wrong!. please try again" };
   }
 }
