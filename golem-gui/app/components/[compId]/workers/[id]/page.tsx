@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useMemo, useState } from "react";
-import { AppBar, Box, Divider, Tab, Tabs, Toolbar, Typography } from "@mui/material";
+import { Box, Divider, Tab, Tabs, Toolbar, Typography } from "@mui/material";
 import { useWorker } from "@/lib/hooks/use-worker";
 import { useParams } from "next/navigation";
 import {

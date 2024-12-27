@@ -131,55 +131,14 @@ export interface Worker {
   activePlugins: string[];
 }
 
-  // API Definition Types
-  export interface ApiRoute {
-    method: string;
-    path: string;
-    security?: string | null;
-    binding: {
-      componentId: VersionedComponentId;
-      workerName: string;
-      idempotencyKey?: string|null;
-      response: string;
-      bindingType: string;
-      responseMappingInput?: Record<string, unknown>;
-      workerNameInput?: Record<string, unknown>;
-      idempotencyKeyInput?: Record<string, unknown> | null;
-      corsPreflight?: {
-        allowOrigin: string;
-        allowMethods: string;
-        allowHeaders: string;
-        exposeHeaders: string;
-        allowCredentials: boolean;
-        maxAge: number;
-      }| null;
-      responseMappingOutput?: Record<string, unknown>;
-    };
-  }
-  
-  export interface ApiDefinition {
-    id: string;
-    version: string;
-    routes: ApiRoute[];
-    draft: boolean;
-    createdAt?: string;
-  }
-
-  export interface OplogQueryParams {
-    from?: number;
-    count: number;
-    cursor?: string;
-    query?: string;
-  }
-
-  export type DeploymentApiDefinition = {
-    id: string;
-    version: string;
-  }
-  
-  type Site = {
-    host: string;
-    subdomain: string;
+// API Definition Types
+export interface ApiRoute {
+  method: string;
+  path: string;
+  security?: string | null;
+  binding: {
+    componentId: VersionedComponentId;
+    workerName: string;
     idempotencyKey?: string | null;
     response: string;
     bindingType: string;
@@ -248,4 +207,11 @@ export interface GolemError {
     type: string;
     details: string;
   };
+}
+
+export interface OplogQueryParams {
+  from?: number;
+  count: number;
+  cursor?: string;
+  query?: string;
 }

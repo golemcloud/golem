@@ -8,9 +8,9 @@ import {
   WorkerFunction,
   OplogQueryParams
 } from "@/types/api";
+import { toast } from "react-toastify";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { toast } from "react-toastify";
 const ROUTE_PATH = "?path=components";
 
 export function useDeleteWorker(componentId: string, workerName: string) {
