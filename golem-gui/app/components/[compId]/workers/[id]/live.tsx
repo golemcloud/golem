@@ -1,6 +1,6 @@
 import React from 'react';
 import { Box, AppBar, Toolbar, Tabs, Tab, Button, Divider, Typography } from '@mui/material';
-
+import Logs from './logs';
 const TerminalPage = ({ workerName }: { workerName: string }) => {
   const [activeTab, setActiveTab] = React.useState(0);
 
@@ -45,7 +45,7 @@ const TerminalPage = ({ workerName }: { workerName: string }) => {
       <Box sx={{ flex: 1, p: 2, overflowY: 'auto' }} className="text-gray-700 dark:text-gray-300">
         {activeTab === 0 && <Box className="text-center">Terminal output...</Box>}
         {activeTab === 1 && <Box className="text-center">Invocation data...</Box>}
-        {activeTab === 2 && <Box className="text-center">Logs output...</Box>}
+        {activeTab === 2 && <Logs/>}
       </Box>
     </Box>
   );

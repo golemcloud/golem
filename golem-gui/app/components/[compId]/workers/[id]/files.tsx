@@ -5,11 +5,11 @@ import FolderIcon from "@mui/icons-material/Folder";
 import { WorkerFileContent } from "@/lib/hooks/use-worker"
 import { useParams } from "next/navigation";
 
-const NoFilesComponent = () => {
+const FileComponent = () => {
 
   const { id: workerName } = useParams<{ id: string }>();
   const { compId } = useParams<{ compId: string }>();
-  const { data, isLoading } = WorkerFileContent("test",compId, "file-service.wasm");
+  const { data, isLoading } = WorkerFileContent("test",compId, "file-service.wasm") as { data: any; isLoading: boolean; };
 
   console.log(data, isLoading);
 
@@ -60,4 +60,4 @@ const NoFilesComponent = () => {
   );
 };
 
-export default NoFilesComponent;
+export default FileComponent;

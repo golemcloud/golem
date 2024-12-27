@@ -208,3 +208,10 @@ export interface GolemError {
     details: string;
   };
 }
+
+export interface OplogQueryParams {
+  from?: number;
+  count: number;
+  cursor?: string;
+  query?: string;
+}

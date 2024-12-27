@@ -6,11 +6,11 @@ import {
   Worker,
   WorkerFormData,
   WorkerFunction,
+  OplogQueryParams
 } from "@/types/api";
+import { toast } from "react-toastify";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { toast } from "react-toastify";
-// import { useRouter } from "next/navigation";
 const ROUTE_PATH = "?path=components";
 
 export function useDeleteWorker(componentId: string, workerName: string) {
@@ -230,7 +230,39 @@ export function useWorker(componentId: string, workerName: string) {
   };
 }
 
-function useWorkers(componentId?: string, version?: string | number) {
+export function useWorkerLogs(
+  componentId: string,
+  workerName: string,
+  params: OplogQueryParams
+) {
+  const queryString = new URLSearchParams({
+    ...(params.from ? { from: params.from.toString() } : {}),
+    ...(params.cursor ? { cursor: params.cursor } : {}),
+    ...(params.query ? { query: params.query } : {}),
+    count: params.count.toString(),
+  }).toString();
+
+  const endpoint = `${ROUTE_PATH}/${componentId}/workers/${workerName}/oplog?${queryString}`;
+  const {
+    data,
+    error: requestError,
+    isLoading,
+  } = useSWR(endpoint, fetcher);
+
+  const error =
+    requestError || (data && data?.status !== 200)
+      ? getErrorMessage(data?.data)
+      : "";
+  const logs = data?.data || [];
+  
+  return {
+    logs,
+    error,
+    isLoading,
+  };
+}
+
+export default function useWorkers(componentId?: string, version?: string | number) {
   const { compId } = useParams<{ compId: string }>();
   const path = `${ROUTE_PATH}/${componentId || compId}/workers${
     version ? `?filter=version = ${version}` : ""
@@ -282,4 +314,16 @@ function useWorkers(componentId?: string, version?: string | number) {
   };
 }
 
-export default useWorkers;
+export function WorkerFileContent(workersName: string,componentsId:string, fileName: string){
+  const path = `${ROUTE_PATH}/${componentsId}/workers/${workersName}/files/${fileName}`
+  console.log("path", path);
+  const { data, error: requestError, isLoading } = useSWR(path, fetcher);
+
+  const error =
+    requestError || (data && data?.status != 200)
+      ? getErrorMessage(data?.data)
+      : "";
+  if(error) return error;
+  return {data, isLoading};
+}
+

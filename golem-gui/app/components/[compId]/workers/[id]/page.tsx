@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useMemo, useState } from "react";
-import { AppBar, Box, Divider, Tab, Tabs, Toolbar, Typography } from "@mui/material";
+import { Box, Divider, Tab, Tabs, Toolbar, Typography } from "@mui/material";
 import { useWorker } from "@/lib/hooks/use-worker";
 import { useParams } from "next/navigation";
 import {
@@ -12,6 +12,7 @@ import {
 import InvokePage from "./invoke";
 import Overview from "./overview";
 import TerminalPage from "./live";
+import FileComponent from "./files";
 import Manage from "./manage";
 
 const WorkerListWithDropdowns = () => {
@@ -86,6 +87,7 @@ const WorkerListWithDropdowns = () => {
       </Toolbar>
       {activeTab === 0 && <Overview worker={worker} isLoading={isLoading} />}
       {activeTab === 1 && <TerminalPage workerName={workerName} />}
+      {activeTab === 3 && <FileComponent />}
       {activeTab === 4 && <Manage />}
       {activeTab === 5 && <InvokePage />}
     </Box>
