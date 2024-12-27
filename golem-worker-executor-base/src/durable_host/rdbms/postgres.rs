@@ -344,6 +344,35 @@ impl<Ctx: WorkerCtx> HostDbTransaction for DurableWorkerCtx<Ctx> {
         }
     }
 
+    async fn query_stream(
+        &mut self,
+        self_: Resource<DbTransactionEntry>,
+        statement: String,
+        params: Vec<DbValue>,
+    ) -> anyhow::Result<Result<Resource<DbResultStreamEntry>, Error>> {
+        record_host_function_call("rdbms::postgres::db-transaction", "query-stream");
+        match to_db_values(params, self.as_wasi_view().table()) {
+            Ok(params) => {
+                let internal = self
+                    .as_wasi_view()
+                    .table()
+                    .get::<DbTransactionEntry>(&self_)?
+                    .internal
+                    .clone();
+                let result = internal.query_stream(&statement, params).await;
+                match result {
+                    Ok(result) => {
+                        let entry = DbResultStreamEntry::new(result);
+                        let resource = self.as_wasi_view().table().push(entry)?;
+                        Ok(Ok(resource))
+                    }
+                    Err(e) => Ok(Err(e.into())),
+                }
+            }
+            Err(error) => Ok(Err(Error::QueryParameterFailure(error))),
+        }
+    }
+
     async fn execute(
         &mut self,
         self_: Resource<DbTransactionEntry>,
@@ -422,7 +451,7 @@ impl LazyDbColumnTypeEntry {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> HostLazyDbColumnType for DurableWorkerCtx<Ctx> {
-    async fn create(
+    async fn new(
         &mut self,
         value: DbColumnType,
     ) -> anyhow::Result<Resource<LazyDbColumnTypeEntry>> {
@@ -478,7 +507,7 @@ impl LazyDbValueEntry {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> HostLazyDbValue for DurableWorkerCtx<Ctx> {
-    async fn create(&mut self, value: DbValue) -> anyhow::Result<Resource<LazyDbValueEntry>> {
+    async fn new(&mut self, value: DbValue) -> anyhow::Result<Resource<LazyDbValueEntry>> {
         record_host_function_call("rdbms::postgres::lazy-db-value", "create");
         let value = to_db_value(value, self.as_wasi_view().table()).map_err(Error::Other)?;
         let result = self

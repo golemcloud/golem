@@ -313,7 +313,10 @@ async fn rdbms_postgres_crud(
         last_unique_id,
         deps,
         db_addresses.clone(),
-        RdbmsTest::new(vec![select_test1.clone(), select_test2], None),
+        RdbmsTest::new(
+            vec![select_test1.clone(), select_test2],
+            Some(TransactionEnd::Commit),
+        ),
         3,
     )
     .await;
@@ -550,7 +553,10 @@ async fn rdbms_mysql_crud(
         last_unique_id,
         deps,
         db_addresses.clone(),
-        RdbmsTest::new(vec![select_test1.clone(), select_test2], None),
+        RdbmsTest::new(
+            vec![select_test1.clone(), select_test2],
+            Some(TransactionEnd::Commit),
+        ),
         3,
     )
     .await;

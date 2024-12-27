@@ -65,7 +65,7 @@ fn get_postgres_db_param(value: String) -> PostgresDbValue {
         let mut elements: Vec<PostgresLazyDbValue> = vec![];
         let vs = value.trim_start_matches('[').trim_end_matches(']').split(',');
         for v in vs {
-            let element = PostgresLazyDbValue::create(PostgresDbValue::Text(v.trim().to_string()));
+            let element = PostgresLazyDbValue::new(PostgresDbValue::Text(v.trim().to_string()));
             elements.push(element)
         }
         PostgresDbValue::Array(elements)
@@ -155,7 +155,18 @@ impl Guest for Component {
                     results.push(result.map(PostgresResult::Query));
                 }
                 StatementAction::QueryStream => {
-                    results.push(Err("Query Stream is not supported for transactions".to_string()));
+                    let result: Result<PostgresDbResult, String> = {
+                        let result_set = transaction.query_stream(&statement.statement, params).map_err(|e| e.to_string())?;
+                        let columns = result_set.get_columns().into_iter().map(get_postgres_db_column).collect();
+                        let mut rows: Vec<PostgresDbRow> = vec![];
+
+                        while let Some(vs) = result_set.get_next() {
+                            let rs: Vec<PostgresDbRow> = vs.into_iter().map(get_postgres_db_row).collect();
+                            rows.extend(rs);
+                        }
+                        Ok(PostgresDbResult { columns, rows })
+                    };
+                    results.push(result.map(PostgresResult::Query));
                 }
             }
         }
@@ -229,7 +240,17 @@ impl Guest for Component {
                     results.push(result.map(MysqlResult::Query));
                 }
                 StatementAction::QueryStream => {
-                    results.push(Err("Query Stream is not supported for transactions".to_string()));
+                    let result: Result<MysqlDbResult, String> = {
+                        let result_set = transaction.query_stream(&statement.statement, &params).map_err(|e| e.to_string())?;
+                        let columns = result_set.get_columns();
+                        let mut rows: Vec<MysqlDbRow> = vec![];
+
+                        while let Some(rs) = result_set.get_next() {
+                            rows.extend(rs);
+                        }
+                        Ok(MysqlDbResult { columns, rows })
+                    };
+                    results.push(result.map(MysqlResult::Query));
                 }
             }
         }

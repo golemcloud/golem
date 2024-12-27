@@ -134,9 +134,9 @@ interface mysql {
   resource db-connection {
     open: static func(address: string) -> result<db-connection, error>;
 
-    query-stream: func(statement: string, params: list<db-value>) -> result<db-result-stream, error>;
-
     query: func(statement: string, params: list<db-value>) -> result<db-result, error>;
+
+    query-stream: func(statement: string, params: list<db-value>) -> result<db-result-stream, error>;
 
     execute: func(statement: string, params: list<db-value>) -> result<u64, error>;
 
@@ -145,6 +145,8 @@ interface mysql {
 
   resource db-transaction {
     query: func(statement: string, params: list<db-value>) -> result<db-result, error>;
+
+    query-stream: func(statement: string, params: list<db-value>) -> result<db-result-stream, error>;
 
     execute: func(statement: string, params: list<db-value>) -> result<u64, error>;
 
