@@ -1,12 +1,5 @@
-use test_r::test_gen;
-use anyhow::Result;
-use test_r::core::DynamicTestRegistration;
-
-test_r::enable!();
-
 #[cfg(test)]
 mod api_integration_tests {
-    use super::*;
     use axum::{
         routing::{get, post},
         Router, Json, response::IntoResponse,
@@ -16,15 +9,16 @@ mod api_integration_tests {
         swagger_ui::{SwaggerUiConfig, generate_swagger_ui},
     };
     use serde::{Deserialize, Serialize};
-    use std::{net::SocketAddr};
+    use std::net::SocketAddr;
     use tokio::net::TcpListener;
-    use hyper_util::client::legacy::Client;
-    use hyper_util::rt::TokioExecutor;
     use tower::ServiceBuilder;
     use tower_http::trace::TraceLayer;
-    use http_body_util::{BodyExt, Empty};
     use utoipa::{OpenApi, ToSchema};
+    use hyper_util::client::legacy::connect::HttpConnector;
+    use hyper_util::client::legacy::Client;
     use hyper::body::Bytes;
+    use http_body_util::{Empty, BodyExt};
+    use reqwest;
 
     // Types matching our OpenAPI spec
     #[derive(Debug, Serialize, Deserialize, ToSchema)]
@@ -122,24 +116,40 @@ mod api_integration_tests {
         addr
     }
 
-    #[allow(unused_must_use)]
-    #[must_use]
-    #[test_gen(unwrap)]
-    async fn test_api_interaction(_test: &mut DynamicTestRegistration) -> Result<()> {
+    #[tokio::test]
+    async fn test_api_interaction() -> Result<(), Box<dyn std::error::Error>> {
         // Start test server
         let addr = setup_test_server().await;
         let base_url = format!("http://{}", addr);
         
-        let client = Client::builder(TokioExecutor::new())
-            .build_http::<Empty<Bytes>>();
+        let client = Client::builder(hyper_util::rt::TokioExecutor::new())
+            .build::<_, Empty<Bytes>>(HttpConnector::new());
 
         // Test 1: Verify OpenAPI spec is served
         let spec_url = format!("{}/v1/api/definitions/test-api/version/1.0.0/export", base_url);
-        let resp = client.get(spec_url.parse().unwrap()).await.unwrap();
+        let resp = client.get(spec_url.parse().unwrap()).await?;
         assert_eq!(resp.status(), 200);
         
-        let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let spec_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let body = resp.into_body().collect().await?.to_bytes();
+        let spec_json: serde_json::Value = serde_json::from_slice(&body)?;
+        
+        // Write OpenAPI spec to files
+        let target_dir = std::path::Path::new("target");
+        if !target_dir.exists() {
+            std::fs::create_dir_all(target_dir)?;
+        }
+        
+        let json_path = target_dir.join("openapi-spec.json");
+        let yaml_path = target_dir.join("openapi-spec.yaml");
+        
+        std::fs::write(
+            &json_path,
+            serde_json::to_string_pretty(&spec_json)?
+        )?;
+        std::fs::write(
+            &yaml_path,
+            serde_yaml::to_string(&spec_json)?
+        )?;
         
         // Verify OpenAPI spec content
         assert!(spec_json["paths"]["/api/v1/complex"]["post"]["requestBody"]["content"]["application/json"]["schema"]["$ref"]
@@ -150,11 +160,11 @@ mod api_integration_tests {
 
         // Test 2: Verify Swagger UI is served
         let docs_url = format!("{}/docs", base_url);
-        let resp = client.get(docs_url.parse().unwrap()).await.unwrap();
+        let resp = client.get(docs_url.parse().unwrap()).await?;
         assert_eq!(resp.status(), 200);
         
-        let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let docs_html = String::from_utf8(body.to_vec()).unwrap();
+        let body = resp.into_body().collect().await?.to_bytes();
+        let docs_html = String::from_utf8(body.to_vec())?;
         assert!(docs_html.contains("swagger-ui"));
 
         // Test 3: Test actual API endpoint with reqwest (type-safe client)
@@ -171,11 +181,10 @@ mod api_integration_tests {
         let resp = client.post(format!("{}/api/v1/complex", base_url))
             .json(&request)
             .send()
-            .await
-            .unwrap();
+            .await?;
         assert_eq!(resp.status(), 200);
         
-        let result: ApiResponse = resp.json().await.unwrap();
+        let result: ApiResponse = resp.json().await?;
         assert!(result.success);
         assert_eq!(result.received.id, 42);
 
@@ -192,11 +201,10 @@ mod api_integration_tests {
         let resp = client.post(format!("{}/api/v1/complex", base_url))
             .json(&request)
             .send()
-            .await
-            .unwrap();
+            .await?;
         assert_eq!(resp.status(), 200);
         
-        let result: ApiResponse = resp.json().await.unwrap();
+        let result: ApiResponse = resp.json().await?;
         assert!(result.success);
         assert!(matches!(
             result.received.status,

@@ -1,3 +1,5 @@
+test_r::enable!();
+
 #[cfg(test)]
 mod rib_openapi_conversion_tests {
     use test_r::test;

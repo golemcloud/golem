@@ -1,8 +1,6 @@
-use test_r::test_gen;
 use anyhow::Result;
 use golem_worker_service_base::gateway_api_definition::http::swagger_ui::{generate_swagger_ui, SwaggerUiConfig};
 use reqwest::header::{HeaderMap as ReqHeaderMap, HeaderValue as ReqHeaderValue};
-use test_r::core::DynamicTestRegistration;
 
 test_r::enable!();
 
@@ -196,40 +194,41 @@ mod utoipa_client_tests {
         addr
     }
 
-    #[allow(unused_must_use)]
-    #[must_use]
-    #[test_gen(unwrap)]
-    async fn test_workflow_api_with_swagger_ui(_test: &mut DynamicTestRegistration) -> Result<()> {
-        let addr = setup_test_server().await;
-        let base_url = format!("http://{}", addr);
+    #[test]
+    fn test_workflow_api_with_swagger_ui() -> Result<()> {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let addr = setup_test_server().await;
+            let base_url = format!("http://{}", addr);
 
-        // Create headers with API key
-        let mut headers = ReqHeaderMap::new();
-        headers.insert("x-api-key", ReqHeaderValue::from_static("test-key"));
+            // Create headers with API key
+            let mut headers = ReqHeaderMap::new();
+            headers.insert("x-api-key", ReqHeaderValue::from_static("test-key"));
 
-        let client = reqwest::Client::builder()
-            .default_headers(headers)
-            .build()
-            .unwrap();
+            let client = reqwest::Client::builder()
+                .default_headers(headers)
+                .build()
+                .unwrap();
 
-        // Test Swagger UI endpoint
-        let swagger_ui_response = client
-            .get(format!("{}/docs", base_url))
-            .send()
-            .await?;
+            // Test Swagger UI endpoint
+            let swagger_ui_response = client
+                .get(format!("{}/docs", base_url))
+                .send()
+                .await?;
 
-        assert_eq!(swagger_ui_response.status(), 200);
-        let html = swagger_ui_response.text().await?;
-        assert!(html.contains("swagger-ui"));
-        assert!(html.contains("Workflow API"));
+            assert_eq!(swagger_ui_response.status(), 200);
+            let html = swagger_ui_response.text().await?;
+            assert!(html.contains("swagger-ui"));
+            assert!(html.contains("Workflow API"));
 
-        // Test OpenAPI spec endpoint
-        let docs_response = client
-            .get(format!("{}/api-docs/openapi.json", base_url))
-            .send()
-            .await?;
+            // Test OpenAPI spec endpoint
+            let docs_response = client
+                .get(format!("{}/api-docs/openapi.json", base_url))
+                .send()
+                .await?;
 
-        assert_eq!(docs_response.status(), 200);
-        Ok(())
+            assert_eq!(docs_response.status(), 200);
+            Ok(())
+        })
     }
 } 

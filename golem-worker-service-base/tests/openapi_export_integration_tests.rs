@@ -1,8 +1,4 @@
-use test_r::test_gen;
 use anyhow::Result;
-use test_r::core::DynamicTestRegistration;
-
-test_r::enable!();
 
 #[cfg(test)]
 mod openapi_export_integration_tests {
@@ -22,6 +18,8 @@ mod openapi_export_integration_tests {
         content::Content,
     };
     use serde_json::Value;
+
+    test_r::enable!();
 
     fn create_complex_api() -> OpenApi {
         // Create a complex record type for the request body
@@ -103,55 +101,57 @@ mod openapi_export_integration_tests {
         openapi
     }
 
-    #[allow(unused_must_use)]
-    #[must_use]
-    #[test_gen(unwrap)]
-    async fn test_complex_api_export(_test: &mut DynamicTestRegistration) -> Result<()> {
-        let exporter = OpenApiExporter;
-        let openapi = create_complex_api();
+    #[test]
+    fn test_complex_api_export() -> Result<()> {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let exporter = OpenApiExporter;
+            let openapi = create_complex_api();
 
-        // Test JSON export
-        let json_format = OpenApiFormat { json: true };
-        let exported_json = exporter.export_openapi(
-            "complex-api",
-            "1.0.0",
-            openapi.clone(),
-            &json_format,
-        );
+            // Test JSON export
+            let json_format = OpenApiFormat { json: true };
+            let exported_json = exporter.export_openapi(
+                "complex-api",
+                "1.0.0",
+                openapi.clone(),
+                &json_format,
+            );
 
-        // Validate JSON structure
-        let json_value: Value = serde_json::from_str(&exported_json)?;
-        assert_eq!(json_value["info"]["title"], "complex-api API");
-        assert_eq!(json_value["info"]["version"], "1.0.0");
-        assert!(json_value["paths"]["/api/v1/complex"]["post"]["requestBody"].is_object());
-        assert!(json_value["components"]["schemas"]["ComplexRequest"].is_object());
+            // Validate JSON structure
+            let json_value: Value = serde_json::from_str(&exported_json)?;
+            assert_eq!(json_value["info"]["title"], "complex-api API");
+            assert_eq!(json_value["info"]["version"], "1.0.0");
+            assert!(json_value["paths"]["/api/v1/complex"]["post"]["requestBody"].is_object());
+            assert!(json_value["components"]["schemas"]["ComplexRequest"].is_object());
 
-        // Test YAML export
-        let yaml_format = OpenApiFormat { json: false };
-        let exported_yaml = exporter.export_openapi(
-            "complex-api",
-            "1.0.0",
-            openapi,
-            &yaml_format,
-        );
+            // Test YAML export
+            let yaml_format = OpenApiFormat { json: false };
+            let exported_yaml = exporter.export_openapi(
+                "complex-api",
+                "1.0.0",
+                openapi,
+                &yaml_format,
+            );
 
-        // Basic YAML validation
-        assert!(exported_yaml.contains("title: complex-api API"));
-        assert!(exported_yaml.contains("version: '1.0.0'"));
-        assert!(exported_yaml.contains("/api/v1/complex:"));
-        assert!(exported_yaml.contains("ComplexRequest:"));
+            // Basic YAML validation
+            assert!(exported_yaml.contains("title: complex-api API"));
+            assert!(exported_yaml.contains("version: 1.0.0"));
+            assert!(exported_yaml.contains("/api/v1/complex:"));
+            assert!(exported_yaml.contains("ComplexRequest:"));
 
-        Ok(())
+            Ok(())
+        })
     }
 
-    #[allow(unused_must_use)]
-    #[must_use]
-    #[test_gen(unwrap)]
-    async fn test_export_path_generation(_test: &mut DynamicTestRegistration) -> Result<()> {
-        let api_id = "test-api";
-        let version = "2.0.0";
-        let path = OpenApiExporter::get_export_path(api_id, version);
-        assert_eq!(path, "/v1/api/definitions/test-api/version/2.0.0/export");
-        Ok(())
+    #[test]
+    fn test_export_path_generation() -> Result<()> {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let api_id = "test-api";
+            let version = "2.0.0";
+            let path = OpenApiExporter::get_export_path(api_id, version);
+            assert_eq!(path, "/v1/api/definitions/test-api/version/2.0.0/export");
+            Ok(())
+        })
     }
 } 

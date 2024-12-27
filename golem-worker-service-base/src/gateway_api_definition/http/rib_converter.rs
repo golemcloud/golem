@@ -1,7 +1,7 @@
 use golem_wasm_ast::analysis::AnalysedType;
 use utoipa::openapi::{
-    schema::{Schema, Object, Array, OneOf, Type},
-    RefOr,
+    schema::{Schema, Object, Array, Type, SchemaType},
+    RefOr, OneOf,
 };
 use std::collections::BTreeMap;
 use serde_json::Value;
@@ -45,6 +45,19 @@ impl From<Type> for CustomSchemaType {
     }
 }
 
+impl From<CustomSchemaType> for SchemaType {
+    fn from(custom_type: CustomSchemaType) -> Self {
+        match custom_type {
+            CustomSchemaType::Boolean => SchemaType::new(Type::Boolean),
+            CustomSchemaType::Integer => SchemaType::new(Type::Integer),
+            CustomSchemaType::Number => SchemaType::new(Type::Number),
+            CustomSchemaType::String => SchemaType::new(Type::String),
+            CustomSchemaType::Array => SchemaType::new(Type::Array),
+            CustomSchemaType::Object => SchemaType::new(Type::Object),
+        }
+    }
+}
+
 pub struct RibConverter;
 
 impl RibConverter {
@@ -74,7 +87,8 @@ impl RibConverter {
                 obj.description = Some("Boolean value".to_string());
                 Some(Schema::Object(obj))
             }
-            AnalysedType::U8(_) | AnalysedType::U32(_) | AnalysedType::U64(_) => {
+            AnalysedType::U8(_) | AnalysedType::U16(_) | AnalysedType::U32(_) | AnalysedType::U64(_) |
+            AnalysedType::S8(_) | AnalysedType::S16(_) | AnalysedType::S32(_) | AnalysedType::S64(_) => {
                 let mut obj = Object::with_type(Type::Integer);
                 obj.description = Some("Integer value".to_string());
                 Some(Schema::Object(obj))
@@ -84,7 +98,7 @@ impl RibConverter {
                 obj.description = Some("Floating point value".to_string());
                 Some(Schema::Object(obj))
             }
-            AnalysedType::Str(_) => {
+            AnalysedType::Str(_) | AnalysedType::Chr(_) => {
                 let mut obj = Object::with_type(Type::String);
                 obj.description = Some("String value".to_string());
                 Some(Schema::Object(obj))
@@ -131,35 +145,36 @@ impl RibConverter {
                     return None;
                 }
 
-                let mut schemas = Vec::new();
+                // Create a oneOf schema for the value field
+                let mut one_of = OneOf::new();
                 for case in &variant_type.cases {
                     if let Some(typ) = &case.typ {
                         if let Some(case_schema) = self.convert_type(typ) {
-                            let mut case_obj = Object::with_type(Type::Object);
-                            case_obj.properties = BTreeMap::new();
-                            case_obj.properties.insert(case.name.clone(), RefOr::T(case_schema));
-                            schemas.push(Schema::Object(case_obj));
+                            one_of.items.push(RefOr::T(case_schema));
                         }
+                    } else {
+                        one_of.items.push(RefOr::T(Schema::Object(Object::with_type(Type::Null))));
                     }
                 }
 
-                if !schemas.is_empty() {
-                    let mut obj = Object::with_type(Type::Object);
-                    obj.description = Some("Variant type".to_string());
-                    obj.properties = BTreeMap::new();
+                // Create the main object schema with discriminator and value fields
+                let mut properties = BTreeMap::new();
+                
+                // Add discriminator field (string enum of variant names)
+                let mut discriminator_obj = Object::with_type(Type::String);
+                discriminator_obj.enum_values = Some(variant_type.cases.iter()
+                    .map(|case| Value::String(case.name.clone()))
+                    .collect());
+                properties.insert("discriminator".to_string(), RefOr::T(Schema::Object(discriminator_obj)));
+                
+                // Add value field with oneOf schema
+                properties.insert("value".to_string(), RefOr::T(Schema::OneOf(one_of)));
 
-                    let discriminator_obj = Object::with_type(Type::String);
-                    obj.properties.insert("discriminator".to_string(), RefOr::T(Schema::Object(discriminator_obj)));
-
-                    let mut one_of = OneOf::new();
-                    for schema in schemas {
-                        one_of.items.push(RefOr::T(schema));
-                    }
-                    obj.properties.insert("value".to_string(), RefOr::T(Schema::OneOf(one_of)));
-                    Some(Schema::Object(obj))
-                } else {
-                    None
-                }
+                let mut obj = Object::with_type(Type::Object);
+                obj.properties = properties;
+                obj.required = vec!["discriminator".to_string(), "value".to_string()];
+                obj.description = Some("Variant type".to_string());
+                Some(Schema::Object(obj))
             }
             AnalysedType::Option(option_type) => {
                 if let Some(inner_schema) = self.convert_type(&option_type.inner) {
@@ -212,6 +227,11 @@ mod tests {
     };
     use test_r::test;
 
+    fn verify_schema_type(actual: &SchemaType, expected_type: Type) {
+        let expected = SchemaType::new(expected_type);
+        assert!(actual == &expected, "Schema type mismatch");
+    }
+
     #[test]
     fn test_convert_type() {
         let converter = RibConverter;
@@ -220,10 +240,8 @@ mod tests {
         let str_type = AnalysedType::Str(TypeStr);
         let schema = converter.convert_type(&str_type).unwrap();
         match &schema {
-            Schema::Object(_) => {
-                let actual = CustomSchemaType::from(Type::String);
-                let expected = CustomSchemaType::String;
-                assert_eq!(actual, expected);
+            Schema::Object(obj) => {
+                verify_schema_type(&obj.schema_type, Type::String);
             }
             _ => panic!("Expected object schema"),
         }
@@ -240,8 +258,32 @@ mod tests {
         let schema = converter.convert_type(&variant).unwrap();
         match &schema {
             Schema::Object(obj) => {
+                verify_schema_type(&obj.schema_type, Type::Object);
                 assert!(obj.properties.contains_key("discriminator"));
                 assert!(obj.properties.contains_key("value"));
+
+                // Verify discriminator field
+                if let Some(RefOr::T(Schema::Object(discriminator_obj))) = obj.properties.get("discriminator") {
+                    verify_schema_type(&discriminator_obj.schema_type, Type::String);
+                    assert!(discriminator_obj.enum_values.is_some());
+                    let enum_values = discriminator_obj.enum_values.as_ref().unwrap();
+                    assert_eq!(enum_values.len(), 1);
+                    assert_eq!(enum_values[0], Value::String("case1".to_string()));
+                } else {
+                    panic!("Expected discriminator to be a string schema with enum values");
+                }
+
+                // Verify value field
+                if let Some(RefOr::T(Schema::OneOf(one_of))) = obj.properties.get("value") {
+                    assert_eq!(one_of.items.len(), 1);
+                    if let RefOr::T(Schema::Object(value_obj)) = &one_of.items[0] {
+                        verify_schema_type(&value_obj.schema_type, Type::String);
+                    } else {
+                        panic!("Expected string schema in oneOf items");
+                    }
+                } else {
+                    panic!("Expected value to be a oneOf schema");
+                }
             }
             _ => panic!("Expected object schema"),
         }
