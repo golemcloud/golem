@@ -114,6 +114,7 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient
                         file,
                         files_permissions,
                         files_archive_file,
+                        None,
                     )
                     .await?
             }
@@ -131,6 +132,7 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient
                         bytes,
                         files_permissions,
                         files_archive_file,
+                        None,
                     )
                     .await?
             }
@@ -172,6 +174,7 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient
                         file,
                         files_permissions,
                         files_archive_file,
+                        None,
                     )
                     .await?
             }
@@ -189,6 +192,7 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient
                         bytes,
                         files_permissions,
                         files_archive_file,
+                        None,
                     )
                     .await?
             }

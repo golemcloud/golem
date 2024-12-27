@@ -15,12 +15,15 @@
 use chrono::Utc;
 use golem_common::model::component::ComponentOwner;
 use golem_common::model::component_constraint::{FunctionConstraint, FunctionConstraintCollection};
-use golem_common::model::component_metadata::{ComponentMetadata, ComponentProcessingError};
+use golem_common::model::component_metadata::{
+    ComponentMetadata, ComponentProcessingError, DynamicLinkedInstance,
+};
 use golem_common::model::plugin::PluginInstallation;
 use golem_common::model::InitialComponentFile;
 use golem_common::model::{ComponentFilePathWithPermissions, ComponentId, ComponentType};
 use golem_service_base::model::{ComponentName, VersionedComponentId};
 use rib::WorkerFunctionsInRib;
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::time::SystemTime;
 use tempfile::NamedTempFile;
@@ -48,9 +51,11 @@ impl<Owner: ComponentOwner> Component<Owner> {
         data: &[u8],
         files: Vec<InitialComponentFile>,
         installed_plugins: Vec<PluginInstallation>,
+        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         owner: Owner,
     ) -> Result<Component<Owner>, ComponentProcessingError> {
-        let metadata = ComponentMetadata::analyse_component(data)?;
+        let mut metadata = ComponentMetadata::analyse_component(data)?;
+        metadata.dynamic_linking = dynamic_linking;
 
         let versioned_component_id = VersionedComponentId {
             component_id: component_id.clone(),

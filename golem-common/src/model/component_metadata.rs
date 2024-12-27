@@ -327,7 +327,8 @@ fn drop_from_constructor(constructor: &AnalysedFunction) -> AnalysedFunction {
 #[cfg(feature = "protobuf")]
 mod protobuf {
     use crate::model::component_metadata::{
-        ComponentMetadata, LinearMemory, ProducerField, Producers, VersionedName,
+        ComponentMetadata, DynamicLinkedInstance, DynamicLinkedWasmRpc, LinearMemory,
+        ProducerField, Producers, VersionedName,
     };
     use std::collections::HashMap;
 
@@ -446,7 +447,64 @@ mod protobuf {
                     .into_iter()
                     .map(|memory| memory.into())
                     .collect(),
+                dynamic_linking: HashMap::from_iter(
+                    value
+                        .dynamic_linking
+                        .into_iter()
+                        .map(|(k, v)| (k, v.into())),
+                ),
             }
+        }
+    }
+
+    impl From<DynamicLinkedInstance>
+        for golem_api_grpc::proto::golem::component::DynamicLinkedInstance
+    {
+        fn from(value: DynamicLinkedInstance) -> Self {
+            match value {
+                DynamicLinkedInstance::WasmRpc(dynamic_linked_wasm_rpc) => Self {
+                    dynamic_linked_instance: Some(
+                        golem_api_grpc::proto::golem::component::dynamic_linked_instance::DynamicLinkedInstance::WasmRpc(
+                        dynamic_linked_wasm_rpc.into())),
+                },
+            }
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::component::DynamicLinkedInstance>
+        for DynamicLinkedInstance
+    {
+        type Error = String;
+
+        fn try_from(
+            value: golem_api_grpc::proto::golem::component::DynamicLinkedInstance,
+        ) -> Result<Self, Self::Error> {
+            match value.dynamic_linked_instance {
+                Some(golem_api_grpc::proto::golem::component::dynamic_linked_instance::DynamicLinkedInstance::WasmRpc(dynamic_linked_wasm_rpc)) => Ok(Self::WasmRpc(dynamic_linked_wasm_rpc.try_into()?)),
+                None => Err("Missing dynamic_linked_instance".to_string()),
+            }
+        }
+    }
+
+    impl From<DynamicLinkedWasmRpc> for golem_api_grpc::proto::golem::component::DynamicLinkedWasmRpc {
+        fn from(value: DynamicLinkedWasmRpc) -> Self {
+            Self {
+                target_interface_name: value.target_interface_name,
+            }
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::component::DynamicLinkedWasmRpc>
+        for DynamicLinkedWasmRpc
+    {
+        type Error = String;
+
+        fn try_from(
+            value: golem_api_grpc::proto::golem::component::DynamicLinkedWasmRpc,
+        ) -> Result<Self, Self::Error> {
+            Ok(Self {
+                target_interface_name: value.target_interface_name,
+            })
         }
     }
 }

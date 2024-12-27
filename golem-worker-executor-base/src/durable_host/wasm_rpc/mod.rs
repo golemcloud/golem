@@ -96,22 +96,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
         let remote_worker_id = payload.remote_worker_id().clone();
 
-        // TODO: remove redundancy
-        if let WasmRpcEntryPayload::Resource {
-            resource_uri,
-            resource_id,
-            ..
-        } = payload
-        {
-            function_params.insert(
-                0,
-                Value::Handle {
-                    uri: resource_uri.value.to_string(),
-                    resource_id: *resource_id,
-                }
-                .into(),
-            );
-        }
+        Self::add_self_parameter_if_needed(&mut function_params, payload);
 
         let current_idempotency_key = self
             .get_current_idempotency_key()
@@ -242,22 +227,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
         let remote_worker_id = payload.remote_worker_id().clone();
 
-        // TODO: remove redundancy
-        if let WasmRpcEntryPayload::Resource {
-            resource_uri,
-            resource_id,
-            ..
-        } = payload
-        {
-            function_params.insert(
-                0,
-                Value::Handle {
-                    uri: resource_uri.value.to_string(),
-                    resource_id: *resource_id,
-                }
-                .into(),
-            );
-        }
+        Self::add_self_parameter_if_needed(&mut function_params, payload);
 
         let current_idempotency_key = self
             .get_current_idempotency_key()
@@ -349,22 +319,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
         let remote_worker_id = payload.remote_worker_id().clone();
 
-        // TODO: remove redundancy
-        if let WasmRpcEntryPayload::Resource {
-            resource_uri,
-            resource_id,
-            ..
-        } = payload
-        {
-            function_params.insert(
-                0,
-                Value::Handle {
-                    uri: resource_uri.value.to_string(),
-                    resource_id: *resource_id,
-                }
-                .into(),
-            );
-        }
+        Self::add_self_parameter_if_needed(&mut function_params, payload);
 
         let current_idempotency_key = self
             .get_current_idempotency_key()
@@ -464,6 +419,29 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
         let _ = self.table().delete(rep)?;
         Ok(())
+    }
+}
+
+impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    fn add_self_parameter_if_needed(
+        function_params: &mut Vec<WitValue>,
+        payload: &WasmRpcEntryPayload,
+    ) {
+        if let WasmRpcEntryPayload::Resource {
+            resource_uri,
+            resource_id,
+            ..
+        } = payload
+        {
+            function_params.insert(
+                0,
+                Value::Handle {
+                    uri: resource_uri.value.to_string(),
+                    resource_id: *resource_id,
+                }
+                .into(),
+            );
+        }
     }
 }
 

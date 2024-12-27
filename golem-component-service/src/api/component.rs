@@ -23,7 +23,7 @@ use golem_common::model::ComponentFilePathWithPermissionsList;
 use golem_common::model::{ComponentId, ComponentType, Empty, PluginInstallationId};
 use golem_common::recorded_http_api_request;
 use golem_component_service_base::model::{
-    InitialComponentFilesArchiveAndPermissions, UpdatePayload,
+    DynamicLinking, InitialComponentFilesArchiveAndPermissions, UpdatePayload,
 };
 use golem_component_service_base::service::component::ComponentService;
 use golem_component_service_base::service::plugin::{PluginError, PluginService};
@@ -33,8 +33,9 @@ use golem_service_base::poem::TempFileUpload;
 use poem::Body;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::{Binary, Json};
-use poem_openapi::types::multipart::Upload;
+use poem_openapi::types::multipart::{JsonField, Upload};
 use poem_openapi::*;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::Instrument;
 
@@ -80,6 +81,11 @@ impl ComponentApi {
                     data,
                     files,
                     vec![],
+                    payload
+                        .dynamic_linking
+                        .unwrap_or_default()
+                        .0
+                        .dynamic_linking,
                     &DefaultComponentOwner,
                 )
                 .instrument(record.span.clone())
@@ -117,6 +123,7 @@ impl ComponentApi {
                     data,
                     component_type.0,
                     None,
+                    HashMap::new(),
                     &DefaultComponentOwner,
                 )
                 .instrument(record.span.clone())
@@ -161,6 +168,11 @@ impl ComponentApi {
                     data,
                     payload.component_type,
                     files,
+                    payload
+                        .dynamic_linking
+                        .unwrap_or_default()
+                        .0
+                        .dynamic_linking,
                     &DefaultComponentOwner,
                 )
                 .instrument(record.span.clone())
@@ -502,4 +514,5 @@ pub struct UploadPayload {
     component: Upload,
     files_permissions: Option<ComponentFilePathWithPermissionsList>,
     files: Option<TempFileUpload>,
+    dynamic_linking: Option<JsonField<DynamicLinking>>,
 }

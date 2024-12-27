@@ -2317,6 +2317,8 @@ paths:
                 files:
                   type: string
                   format: binary
+                dynamicLinking:
+                  $ref: '#/components/schemas/DynamicLinking'
               required:
               - name
               - component
@@ -2472,6 +2474,8 @@ paths:
                 files:
                   type: string
                   format: binary
+                dynamicLinking:
+                  $ref: '#/components/schemas/DynamicLinking'
               required:
               - component
         required: true
@@ -6404,6 +6408,15 @@ components:
           type: string
       required:
       - targetInterfaceName
+    DynamicLinking:
+      type: object
+      properties:
+        dynamicLinking:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/DynamicLinkedInstance'
+      required:
+      - dynamicLinking
     InitialComponentFile:
       type: object
       properties:

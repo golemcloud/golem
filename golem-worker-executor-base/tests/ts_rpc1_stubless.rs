@@ -16,6 +16,7 @@ use test_r::{inherit_test_dep, test};
 
 use crate::{common, LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
+use golem_common::model::component_metadata::{DynamicLinkedInstance, DynamicLinkedWasmRpc};
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::Value;
 use std::collections::HashMap;
@@ -38,7 +39,17 @@ async fn counter_resource_test_1(
     let executor = common::start(deps, &context).await.unwrap();
 
     let counters_component_id = executor.store_component(COUNTER_COMPONENT_NAME).await;
-    let caller_component_id = executor.store_component(CALLER_COMPONENT_NAME).await;
+    let caller_component_id = executor
+        .store_component_with_dynamic_linking(
+            CALLER_COMPONENT_NAME,
+            &[(
+                "rpc:counters-stub/stub-counters",
+                DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
+                    target_interface_name: "rpc:counters/api".to_string(),
+                }),
+            )],
+        )
+        .await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -73,7 +84,17 @@ async fn counter_resource_test_1_with_restart(
     let executor = common::start(deps, &context).await.unwrap();
 
     let counters_component_id = executor.store_component(COUNTER_COMPONENT_NAME).await;
-    let caller_component_id = executor.store_component(CALLER_COMPONENT_NAME).await;
+    let caller_component_id = executor
+        .store_component_with_dynamic_linking(
+            CALLER_COMPONENT_NAME,
+            &[(
+                "rpc:counters-stub/stub-counters",
+                DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
+                    target_interface_name: "rpc:counters/api".to_string(),
+                }),
+            )],
+        )
+        .await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -112,7 +133,17 @@ async fn context_inheritance(
     let executor = common::start(deps, &context).await.unwrap();
 
     let counters_component_id = executor.store_component(COUNTER_COMPONENT_NAME).await;
-    let caller_component_id = executor.store_component(CALLER_COMPONENT_NAME).await;
+    let caller_component_id = executor
+        .store_component_with_dynamic_linking(
+            CALLER_COMPONENT_NAME,
+            &[(
+                "rpc:counters-stub/stub-counters",
+                DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
+                    target_interface_name: "rpc:counters/api".to_string(),
+                }),
+            )],
+        )
+        .await;
 
     let mut env = HashMap::new();
     env.insert(

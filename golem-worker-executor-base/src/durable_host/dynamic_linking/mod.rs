@@ -13,7 +13,7 @@ use golem_wasm_rpc::{HostWasmRpc, Uri, Value, WasmRpcEntry, WitValue};
 use itertools::Itertools;
 use rib::{ParsedFunctionName, ParsedFunctionReference};
 use std::collections::HashMap;
-use tracing::debug;
+use tracing::Instrument;
 use wasmtime::component::types::{ComponentItem, Field};
 use wasmtime::component::{Component, Linker, Resource, ResourceType, Type, Val};
 use wasmtime::{AsContextMut, Engine, StoreContextMut};
@@ -33,49 +33,17 @@ impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DynamicLinking<Ctx>
     ) -> anyhow::Result<()> {
         let mut root = linker.root();
 
-        // TODO >
-        let mut component_metadata = component_metadata.clone();
-        component_metadata.dynamic_linking.insert(
-            "auction:auction-stub/stub-auction".to_string(),
-            DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                target_interface_name: "auction:auction/api".to_string(),
-            }),
-        );
-        component_metadata.dynamic_linking.insert(
-            "rpc:counters-stub/stub-counters".to_string(),
-            DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                target_interface_name: "rpc:counters/api".to_string(),
-            }),
-        );
-        component_metadata.dynamic_linking.insert(
-            "rpc:ephemeral-stub/stub-ephemeral".to_string(),
-            DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                target_interface_name: "rpc:ephemeral/api".to_string(),
-            }),
-        );
-        // TODO <
-
         let component_type = component.component_type();
         for (name, item) in component_type.imports(engine) {
             let name = name.to_string();
-            debug!("Import {name}: {item:?}");
             match item {
-                ComponentItem::ComponentFunc(_) => {
-                    debug!("MUST LINK COMPONENT FUNC {name}");
-                }
-                ComponentItem::CoreFunc(_) => {
-                    debug!("MUST LINK CORE FUNC {name}");
-                }
-                ComponentItem::Module(_) => {
-                    debug!("MUST LINK MODULE {name}");
-                }
-                ComponentItem::Component(_) => {
-                    debug!("MUST LINK COMPONENT {name}");
-                }
+                ComponentItem::ComponentFunc(_) => {}
+                ComponentItem::CoreFunc(_) => {}
+                ComponentItem::Module(_) => {}
+                ComponentItem::Component(_) => {}
                 ComponentItem::ComponentInstance(ref inst) => {
                     match component_metadata.dynamic_linking.get(&name.to_string()) {
                         Some(DynamicLinkedInstance::WasmRpc(rpc_metadata)) => {
-                            debug!("NAME == {name}");
                             let mut instance = root.instance(&name)?;
                             let mut resources: HashMap<(String, String), Vec<MethodInfo>> =
                                 HashMap::new();
@@ -84,7 +52,6 @@ impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DynamicLinking<Ctx>
                             for (inner_name, inner_item) in inst.exports(engine) {
                                 let name = name.to_owned();
                                 let inner_name = inner_name.to_owned();
-                                debug!("Instance {name} export {inner_name}: {inner_item:?}");
 
                                 match inner_item {
                                     ComponentItem::ComponentFunc(fun) => {
@@ -94,7 +61,7 @@ impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DynamicLinking<Ctx>
                                         let function_name = ParsedFunctionName::parse(format!(
                                             "{name}.{{{inner_name}}}"
                                         ))
-                                        .map_err(|err| anyhow!(err))?; // TODO: proper error
+                                        .map_err(|err| anyhow!(format!("Unexpected linking error: {name}.{{{inner_name}}} is not a valid function name: {err}")))?;
 
                                         if let Some(resource_name) =
                                             function_name.function.resource_name()
@@ -117,12 +84,8 @@ impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DynamicLinking<Ctx>
                                     }
                                     ComponentItem::CoreFunc(_) => {}
                                     ComponentItem::Module(_) => {}
-                                    ComponentItem::Component(component) => {
-                                        debug!("MUST LINK COMPONENT {inner_name} {component:?}");
-                                    }
-                                    ComponentItem::ComponentInstance(instance) => {
-                                        debug!("MUST LINK COMPONENT INSTANCE {inner_name} {instance:?}");
-                                    }
+                                    ComponentItem::Component(_) => {}
+                                    ComponentItem::ComponentInstance(_) => {}
                                     ComponentItem::Type(_) => {}
                                     ComponentItem::Resource(_resource) => {
                                         resources.entry((name, inner_name)).or_default();
@@ -148,7 +111,6 @@ impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DynamicLinking<Ctx>
 
                                 match resource_type {
                                     Some(DynamicRpcResource::InvokeResult) => {
-                                        debug!("LINKING FUTURE INVOKE RESULT {resource_name}");
                                         instance.resource(
                                             &resource_name,
                                             ResourceType::host::<FutureInvokeResult>(),
@@ -157,7 +119,6 @@ impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DynamicLinking<Ctx>
                                     }
                                     Some(DynamicRpcResource::Stub)
                                     | Some(DynamicRpcResource::ResourceStub) => {
-                                        debug!("LINKING RESOURCE {resource_name}");
                                         let interface_name_clone =
                                             rpc_metadata.target_interface_name.clone();
                                         let resource_name_clone = resource_name.clone();
@@ -169,20 +130,23 @@ impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DynamicLinking<Ctx>
                                                 let interface_name = interface_name_clone.clone();
                                                 let resource_name = resource_name_clone.clone();
 
-                                                Box::new(async move {
-                                                    Self::drop_linked_resource(
-                                                        store,
-                                                        rep,
-                                                        &interface_name,
-                                                        &resource_name,
-                                                    )
-                                                    .await
-                                                })
+                                                Box::new(
+                                                    async move {
+                                                        Self::drop_linked_resource(
+                                                            store,
+                                                            rep,
+                                                            &interface_name,
+                                                            &resource_name,
+                                                        )
+                                                        .await
+                                                    }
+                                                    .in_current_span(),
+                                                )
                                             },
                                         )?;
                                     }
                                     None => {
-                                        debug!("NOT LINKING RESOURCE {resource_name}");
+                                        // Unsupported resource
                                     }
                                 }
                             }
@@ -196,42 +160,36 @@ impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DynamicLinking<Ctx>
                                     &resource_types,
                                 )?;
                                 if let Some(call_type) = call_type {
-                                    let name2 = name.clone();
-                                    let inner_name2 = function.name.function.function_name();
                                     instance.func_new_async(
-                                        // TODO: instrument async closure
                                         &function.name.function.function_name(),
                                         move |store, params, results| {
-                                            let name = name2.clone();
-                                            let inner_name = inner_name2.clone();
                                             let param_types = function.params.clone();
                                             let result_types = function.results.clone();
                                             let call_type = call_type.clone();
-                                            Box::new(async move {
-                                                Self::dynamic_function_call(
-                                                    store,
-                                                    &name,
-                                                    &inner_name,
-                                                    params,
-                                                    &param_types,
-                                                    results,
-                                                    &result_types,
-                                                    &call_type,
-                                                )
-                                                .await?;
-                                                // TODO: failures here must be somehow handled
-                                                Ok(())
-                                            })
+                                            Box::new(
+                                                async move {
+                                                    Self::dynamic_function_call(
+                                                        store,
+                                                        params,
+                                                        &param_types,
+                                                        results,
+                                                        &result_types,
+                                                        &call_type,
+                                                    )
+                                                    .await?;
+                                                    Ok(())
+                                                }
+                                                .in_current_span(),
+                                            )
                                         },
                                     )?;
-                                    debug!("LINKED {name} export {}", function.name);
                                 } else {
-                                    debug!("NO CALL TYPE FOR {name} export {}", function.name);
+                                    // Unsupported function
                                 }
                             }
                         }
                         None => {
-                            debug!("NO DYNAMIC LINKING INFORMATION FOR {name}");
+                            // Instance not marked for dynamic linking
                         }
                     }
                 }
@@ -248,8 +206,6 @@ impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DynamicLinking<Ctx>
 impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DurableWorkerCtx<Ctx> {
     async fn dynamic_function_call(
         mut store: impl AsContextMut<Data = Ctx> + Send,
-        interface_name: &str,
-        function_name: &str,
         params: &[Val],
         param_types: &[Type],
         results: &mut [Val],
@@ -257,12 +213,6 @@ impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DurableWorkerCtx<Ctx
         call_type: &DynamicRpcCall,
     ) -> anyhow::Result<()> {
         let mut store = store.as_context_mut();
-        debug!(
-            "Instance {interface_name} export {function_name} called XXX {} params {} results",
-            params.len(),
-            results.len()
-        );
-
         match call_type {
             DynamicRpcCall::GlobalStubConstructor => {
                 // Simple stub interface constructor
@@ -284,8 +234,8 @@ impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DurableWorkerCtx<Ctx
                 results[0] = Val::Resource(handle.try_into_resource_any(store)?);
             }
             DynamicRpcCall::ResourceStubConstructor {
-                stub_constructor_name,
                 target_constructor_name,
+                ..
             } => {
                 // Resource stub constructor
 
@@ -310,7 +260,6 @@ impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DurableWorkerCtx<Ctx
                 let temp_handle = handle.rep();
 
                 let constructor_result = Self::remote_invoke_and_wait(
-                    stub_constructor_name,
                     target_constructor_name,
                     params,
                     param_types,
@@ -364,30 +313,17 @@ impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DurableWorkerCtx<Ctx
                 results[0] = Val::Resource(handle.try_into_resource_any(store)?);
             }
             DynamicRpcCall::BlockingFunctionCall {
-                stub_function_name,
                 target_function_name,
+                ..
             } => {
                 // Simple stub interface method
-                debug!(
-                    "{function_name} handle={:?}, rest={:?}",
-                    params[0],
-                    params.iter().skip(1).collect::<Vec<_>>()
-                );
-
                 let handle = match params[0] {
                     Val::Resource(handle) => handle,
                     _ => return Err(anyhow!("Invalid handle parameter")),
                 };
                 let handle: Resource<WasmRpcEntry> = handle.try_into_resource(&mut store)?;
-                {
-                    let mut wasi = store.data_mut().as_wasi_view();
-                    let entry = wasi.table().get(&handle)?;
-                    let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
-                    debug!("CALLING {function_name} ON {}", payload.remote_worker_id());
-                }
 
                 let result = Self::remote_invoke_and_wait(
-                    stub_function_name,
                     target_function_name,
                     params,
                     param_types,
@@ -399,30 +335,17 @@ impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DurableWorkerCtx<Ctx
                     .await?;
             }
             DynamicRpcCall::FireAndForgetFunctionCall {
-                stub_function_name,
                 target_function_name,
+                ..
             } => {
                 // Fire-and-forget stub interface method
-                debug!(
-                    "FNF {function_name} handle={:?}, rest={:?}",
-                    params[0],
-                    params.iter().skip(1).collect::<Vec<_>>()
-                );
-
                 let handle = match params[0] {
                     Val::Resource(handle) => handle,
                     _ => return Err(anyhow!("Invalid handle parameter")),
                 };
                 let handle: Resource<WasmRpcEntry> = handle.try_into_resource(&mut store)?;
-                {
-                    let mut wasi = store.data_mut().as_wasi_view();
-                    let entry = wasi.table().get(&handle)?;
-                    let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
-                    debug!("CALLING {function_name} ON {}", payload.remote_worker_id());
-                }
 
                 Self::remote_invoke(
-                    stub_function_name,
                     target_function_name,
                     params,
                     param_types,
@@ -432,30 +355,17 @@ impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DurableWorkerCtx<Ctx
                 .await?;
             }
             DynamicRpcCall::AsyncFunctionCall {
-                stub_function_name,
                 target_function_name,
+                ..
             } => {
                 // Async stub interface method
-                debug!(
-                    "ASYNC {function_name} handle={:?}, rest={:?}",
-                    params[0],
-                    params.iter().skip(1).collect::<Vec<_>>()
-                );
-
                 let handle = match params[0] {
                     Val::Resource(handle) => handle,
                     _ => return Err(anyhow!("Invalid handle parameter")),
                 };
                 let handle: Resource<WasmRpcEntry> = handle.try_into_resource(&mut store)?;
-                {
-                    let mut wasi = store.data_mut().as_wasi_view();
-                    let entry = wasi.table().get(&handle)?;
-                    let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
-                    debug!("CALLING {function_name} ON {}", payload.remote_worker_id());
-                }
 
                 let result = Self::remote_async_invoke_and_await(
-                    stub_function_name,
                     target_function_name,
                     params,
                     param_types,
@@ -537,8 +447,6 @@ impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DurableWorkerCtx<Ctx
             let entry: &WasmRpcEntry = table.get_any_mut(rep)?.downcast_ref().unwrap(); // TODO: error handling
             let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
 
-            debug!("DROPPING RESOURCE {payload:?}");
-
             matches!(payload, WasmRpcEntryPayload::Resource { .. })
         };
         if must_drop {
@@ -553,9 +461,7 @@ impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DurableWorkerCtx<Ctx
         Ok(())
     }
 
-    // TODO: stub_function_name can probably be removed
     async fn remote_invoke_and_wait(
-        stub_function_name: &ParsedFunctionName,
         target_function_name: &ParsedFunctionName,
         params: &[Val],
         param_types: &[Type],
@@ -570,28 +476,17 @@ impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DurableWorkerCtx<Ctx
             let wit_value: WitValue = value.into();
             wit_value_params.push(wit_value);
         }
-
-        debug!(
-                "CALLING {stub_function_name} as {target_function_name} with parameters {wit_value_params:?}",
-            );
 
         let wit_value_result = store
             .data_mut()
             .invoke_and_await(handle, target_function_name.to_string(), wit_value_params)
             .await??;
 
-        debug!(
-            "CALLING {stub_function_name} RESULTED IN {:?}",
-            wit_value_result
-        );
-
         let value_result: Value = wit_value_result.into();
         Ok(value_result)
     }
 
-    // TODO: stub_function_name can probably be removed
     async fn remote_async_invoke_and_await(
-        stub_function_name: &ParsedFunctionName,
         target_function_name: &ParsedFunctionName,
         params: &[Val],
         param_types: &[Type],
@@ -606,10 +501,6 @@ impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DurableWorkerCtx<Ctx
             let wit_value: WitValue = value.into();
             wit_value_params.push(wit_value);
         }
-
-        debug!(
-                "CALLING {stub_function_name} as {target_function_name} with parameters {wit_value_params:?}",
-            );
 
         let invoke_result_resource = store
             .data_mut()
@@ -627,9 +518,7 @@ impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DurableWorkerCtx<Ctx
         Ok(value_result)
     }
 
-    // TODO: stub_function_name can probably be removed
     async fn remote_invoke(
-        stub_function_name: &ParsedFunctionName,
         target_function_name: &ParsedFunctionName,
         params: &[Val],
         param_types: &[Type],
@@ -644,10 +533,6 @@ impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DurableWorkerCtx<Ctx
             let wit_value: WitValue = value.into();
             wit_value_params.push(wit_value);
         }
-
-        debug!(
-                "CALLING {stub_function_name} as {target_function_name} with parameters {wit_value_params:?}",
-            );
 
         store
             .data_mut()
@@ -740,19 +625,15 @@ impl<Ctx: WorkerCtx + HostWasmRpc> DurableWorkerCtx<Ctx> {
 enum DynamicRpcCall {
     GlobalStubConstructor,
     ResourceStubConstructor {
-        stub_constructor_name: ParsedFunctionName,
         target_constructor_name: ParsedFunctionName,
     },
     BlockingFunctionCall {
-        stub_function_name: ParsedFunctionName,
         target_function_name: ParsedFunctionName,
     },
     FireAndForgetFunctionCall {
-        stub_function_name: ParsedFunctionName,
         target_function_name: ParsedFunctionName,
     },
     AsyncFunctionCall {
-        stub_function_name: ParsedFunctionName,
         target_function_name: ParsedFunctionName,
     },
     FutureInvokeResultSubscribe,
@@ -782,7 +663,6 @@ impl DynamicRpcCall {
                     };
 
                     Ok(Some(DynamicRpcCall::ResourceStubConstructor {
-                        stub_constructor_name: stub_name.clone(),
                         target_constructor_name,
                     }))
                 }
@@ -829,22 +709,16 @@ impl DynamicRpcCall {
 
                     if blocking {
                         Ok(Some(DynamicRpcCall::BlockingFunctionCall {
-                            stub_function_name: stub_name.clone(),
+                            target_function_name,
+                        }))
+                    } else if !result_types.is_empty() {
+                        Ok(Some(DynamicRpcCall::AsyncFunctionCall {
                             target_function_name,
                         }))
                     } else {
-                        debug!("ASYNC FUNCTION RESULT TYPES: {result_types:?}");
-                        if !result_types.is_empty() {
-                            Ok(Some(DynamicRpcCall::AsyncFunctionCall {
-                                stub_function_name: stub_name.clone(),
-                                target_function_name,
-                            }))
-                        } else {
-                            Ok(Some(DynamicRpcCall::FireAndForgetFunctionCall {
-                                stub_function_name: stub_name.clone(),
-                                target_function_name,
-                            }))
-                        }
+                        Ok(Some(DynamicRpcCall::FireAndForgetFunctionCall {
+                            target_function_name,
+                        }))
                     }
                 }
                 None => Ok(None),

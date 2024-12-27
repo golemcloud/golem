@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use async_trait::async_trait;
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use tracing::Instrument;
@@ -47,6 +48,7 @@ use golem_api_grpc::proto::golem::component::{Component, PluginInstallation};
 use golem_common::grpc::{proto_component_id_string, proto_plugin_installation_id_string};
 use golem_common::model::component::DefaultComponentOwner;
 use golem_common::model::component_constraint::FunctionConstraintCollection;
+use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::plugin::{
     DefaultPluginOwner, DefaultPluginScope, PluginInstallationCreation, PluginInstallationUpdate,
 };
@@ -185,6 +187,16 @@ impl ComponentGrpcApi {
             .map(|f| f.clone().try_into())
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e: String| bad_request_error(&format!("Failed reading files: {e}")))?;
+        let dynamic_linking: HashMap<String, DynamicLinkedInstance> = HashMap::from_iter(
+            request
+                .dynamic_linking
+                .iter()
+                .map(|(k, v)| v.clone().try_into().map(|v| (k.clone(), v)))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e: String| {
+                    bad_request_error(&format!("Invalid dynamic linking information: {e}"))
+                })?,
+        );
         let result = self
             .component_service
             .create_internal(
@@ -194,6 +206,7 @@ impl ComponentGrpcApi {
                 data,
                 files,
                 vec![],
+                dynamic_linking,
                 &DefaultComponentOwner,
             )
             .await?;
@@ -227,9 +240,27 @@ impl ComponentGrpcApi {
             None
         };
 
+        let dynamic_linking: HashMap<String, DynamicLinkedInstance> = HashMap::from_iter(
+            request
+                .dynamic_linking
+                .into_iter()
+                .map(|(k, v)| v.try_into().map(|v| (k, v)))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e: String| {
+                    bad_request_error(&format!("Invalid dynamic linking information: {e}"))
+                })?,
+        );
+
         let result = self
             .component_service
-            .update_internal(&id, data, component_type, files, &DefaultComponentOwner)
+            .update_internal(
+                &id,
+                data,
+                component_type,
+                files,
+                dynamic_linking,
+                &DefaultComponentOwner,
+            )
             .await?;
         Ok(result.into())
     }
