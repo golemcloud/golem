@@ -9,7 +9,6 @@ import {
 import { useForm, Controller } from "react-hook-form";
 import { addNewApiDefinition } from "@/lib/hooks/use-api-definitons";
 import { ApiDefinition } from "@/types/api";
-import { toast } from "react-toastify";
 import { getFormErrorMessage } from '../lib/utils';
 
 const CreateAPI = ({
@@ -44,9 +43,8 @@ const CreateAPI = ({
     const { error } = await addNewApiDefinition(newApi);
 
     if (error) {
-      return toast.error(`Api Creation failed! ${error}`)
+      return;
     }
-    toast.success(`Successfully created Api!`)
     onCreation?.();
   };
 

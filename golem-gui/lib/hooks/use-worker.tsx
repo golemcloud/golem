@@ -6,24 +6,35 @@ import {
   Worker,
   WorkerFormData,
   WorkerFunction,
+  OplogQueryParams
 } from "@/types/api";
-import { useParams } from "next/navigation";
-import { OplogQueryParams } from "@/types/api";
+import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "react-toastify";
-// import { useRouter } from "next/navigation";
 const ROUTE_PATH = "?path=components";
 
-export async function deleteWorker(componentId: string, workerName: string) {
+export function useDeleteWorker(componentId: string, workerName: string) {
+  const router = useRouter();
   const endpoint = `${ROUTE_PATH}/${componentId}/workers/${workerName}`;
+
+  const deleteWorker = async()=>{
   const response = await fetcher(endpoint, { method: "DELETE" });
   if (response.status !== 200) {
     const error = getErrorMessage(response.data);
+    toast.success(`Fialed to  delete worker: ${error}`)
+
     return { success: false, error };
   }
+  toast.success("Successfully deleted the worker")
   mutate(endpoint);
   mutate(`${ROUTE_PATH}/${componentId}/workers`);
-}
+  router.push(`/components/${componentId}/workers`);
+  }
+
+  return {
+    deleteWorker
+  }
+} 
 
 export function getStateFromWorkersData(workers: Worker[]) {
   if (!workers) {
@@ -57,7 +68,7 @@ export function transform(inputs: Parameter[], data: Record<string, any>) {
 
 export function useWorkerInvocation(invoke: {
   fun?: WorkerFunction;
-  instanceName?: string|null;
+  instanceName?: string | null;
 }) {
   const { compId, id: workerName } = useParams<{
     compId: string;
@@ -79,24 +90,24 @@ export function useWorkerInvocation(invoke: {
   const invokeFunction = async (data: any) => {
     try {
       const payload = transform(invoke?.fun?.parameters || [], data);
-      let endpoint = `${ROUTE_PATH}/${compId}/workers/${workerName}/invoke-and-await?function=`
-      endpoint = instanceName&& functionName? `${endpoint}${instanceName}.{${functionName}}` :`${endpoint}${functionName}`
-      const response = await fetcher(
-        endpoint,
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ params: payload }),
-        }
-      );
+      let endpoint = `${ROUTE_PATH}/${compId}/workers/${workerName}/invoke-and-await?function=`;
+      endpoint =
+        instanceName && functionName
+          ? `${endpoint}${instanceName}.{${functionName}}`
+          : `${endpoint}${functionName}`;
+      const response = await fetcher(endpoint, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ params: payload }),
+      });
 
       if (response.status !== 200) {
-        toast.error("Failed to Invoked")
+        toast.error("Failed to Invoked");
         return setError(getErrorMessage(response.data));
       }
       setError(null);
       setResult(response.data);
-      toast.success("Successfully Invoked")
+      toast.success("Successfully Invoked");
       mutate(`${ROUTE_PATH}/${compId}/workers/${workerName}`);
       mutate(`${ROUTE_PATH}/${compId}/workers`);
     } catch (err) {
@@ -132,16 +143,69 @@ export async function addNewWorker(
 
   if (response.status !== 200) {
     const error = getErrorMessage(response.data);
-    toast.success("Worker failed to create")
+    toast.error("Worker failed to create");
     return { success: false, error };
   }
 
-  toast.success("Worker Sucessfully created")
+  toast.success("Worker Sucessfully created");
   mutate(endpoint);
   if (path && endpoint !== path) {
     mutate(path);
   }
   return { success: false, error: null };
+}
+
+export async function interruptWorker(
+  componentId: string,
+  workerName: string,
+  recover?: boolean
+) {
+  const response = await fetcher(
+    `${ROUTE_PATH}/${componentId}/workers/${workerName}/interrupt${
+      typeof recover === "boolean" ? `recovery-immediately=${recover}` : ""
+    }`,
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+    }
+  );
+
+  if (response.status !== 200) {
+    const error = getErrorMessage(response.data);
+    toast.error(`Worker Interruption Failed due to ${error}`);
+    return { success: false, error };
+  }
+
+  toast.success("Worker Interrupted Successfully");
+  mutate(`${ROUTE_PATH}/${componentId}/workers/${workerName}`)
+  return {success: true, error: null}
+}
+
+export async function resumeWorker(
+  componentId: string,
+  workerName: string,
+) {
+  const response = await fetcher(
+    `${ROUTE_PATH}/${componentId}/workers/${workerName}/resume`,
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+    }
+  );
+
+  if (response.status !== 200) {
+    const error = getErrorMessage(response.data);
+    toast.error(`Worker failed to resume due to: ${error}`);
+    return { success: false, error };
+  }
+
+  toast.success("Worker has successfully resumed");
+  mutate(`${ROUTE_PATH}/${componentId}/workers/${workerName}`)
+  return {success: true, error: null}
 }
 
 export function useWorker(componentId: string, workerName: string) {
@@ -152,11 +216,11 @@ export function useWorker(componentId: string, workerName: string) {
   } = useSWR(`${ROUTE_PATH}/${componentId}/workers/${workerName}`, fetcher);
 
   const error = useMemo(() => {
-    if(!isLoading && data?.status!==200){
+    if (!isLoading && data?.status !== 200) {
       return getErrorMessage(data);
     }
     return !isLoading ? getErrorMessage(requestError) : "";
-  }, [isLoading, requestError, data]); 
+  }, [isLoading, requestError, data]);
   const worker = data?.data as Worker;
 
   return {
@@ -206,11 +270,11 @@ export default function useWorkers(componentId?: string, version?: string | numb
   const { data, error: requestError, isLoading } = useSWR(path, fetcher);
 
   const error = useMemo(() => {
-    if(!isLoading && data?.status!==200){
+    if (!isLoading && data?.status !== 200) {
       return getErrorMessage(data);
     }
     return !isLoading ? getErrorMessage(requestError) : "";
-  }, [isLoading, requestError, data]); 
+  }, [isLoading, requestError, data]);
   const workers = (data?.data?.workers || []) as Worker[];
 
   const getWorkerById = (

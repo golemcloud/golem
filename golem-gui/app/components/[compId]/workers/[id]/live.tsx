@@ -16,19 +16,6 @@ const TerminalPage = ({ workerName }: { workerName: string }) => {
         position="static"
         className="bg-gray-200 dark:bg-[#333] border-b border-gray-300 dark:border-gray-700"
       >
-        <Toolbar
-          sx={{ justifyContent: 'center', borderBottom: '1px solid #333' }}
-          className="dark:border-gray-600"
-        >
-          <Typography
-            variant="h6"
-            sx={{ fontWeight: 'bold' }}
-            className="text-gray-700 dark:text-gray-300"
-          >
-            {workerName}
-          </Typography>
-        </Toolbar>
-
         <Toolbar>
           <Tabs
             value={activeTab}
