@@ -4614,6 +4614,7 @@ dependencies = [
  "serde 1.0.216",
  "serde_json",
  "sqlx",
+ "sqlx-core",
  "sysinfo",
  "tempfile",
  "test-r",

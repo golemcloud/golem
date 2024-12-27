@@ -250,7 +250,7 @@ async fn postgres_transaction_tests(
             ($1, $2, $3)
         "#;
 
-    let count = 40;
+    let count = 60;
 
     let mut rows: Vec<DbRow<postgres_types::DbValue>> = Vec::with_capacity(count);
 
@@ -308,7 +308,7 @@ async fn postgres_transaction_tests(
         &db_address,
         RdbmsTest::new(
             vec![select_statement_test.with_query_stream_expected(None, Some(rows.clone()))],
-            None,
+            Some(TransactionEnd::Commit),
         ),
     )
     .await;
@@ -1732,7 +1732,7 @@ async fn mysql_transaction_tests(mysql: &DockerMysqlRdbs, rdbms_service: &RdbmsS
             (?, ?)
         "#;
 
-    let count = 40;
+    let count = 60;
 
     let mut rows: Vec<DbRow<mysql_types::DbValue>> = Vec::with_capacity(count);
 
@@ -1786,7 +1786,7 @@ async fn mysql_transaction_tests(mysql: &DockerMysqlRdbs, rdbms_service: &RdbmsS
         &db_address,
         RdbmsTest::new(
             vec![select_statement_test.with_query_stream_expected(None, Some(rows.clone()))],
-            None,
+            Some(TransactionEnd::Commit),
         ),
     )
     .await;
@@ -2267,9 +2267,18 @@ async fn execute_rdbms_test<T: RdbmsType + Clone + Debug>(
                     results.push(result.map(StatementResult::Query));
                 }
                 StatementAction::QueryStream(_) => {
-                    results.push(Err(Error::Other(
-                        "Query Stream is not supported for transactions".to_string(),
-                    )));
+                    // results.push(Err(Error::Other(
+                    //     "Query Stream is not supported for transactions".to_string(),
+                    // )));
+                    match transaction.query_stream(st.statement, st.params).await {
+                        Ok(result_set) => {
+                            let result = DbResult::from(result_set).await;
+                            results.push(result.map(StatementResult::Query));
+                        }
+                        Err(e) => {
+                            results.push(Err(e));
+                        }
+                    }
                 }
             }
         }

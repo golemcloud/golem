@@ -31,7 +31,7 @@ use std::fmt::{Debug, Display};
 use std::sync::Arc;
 use url::Url;
 
-pub trait RdbmsType {
+pub trait RdbmsType: Debug + Display + Send {
     type DbColumn: Clone + Send + Sync + PartialEq + Debug;
     type DbValue: Clone + Send + Sync + PartialEq + Debug;
 }
@@ -58,6 +58,14 @@ pub trait DbTransaction<T: RdbmsType> {
         <T as RdbmsType>::DbValue: 'async_trait;
 
     async fn query(&self, statement: &str, params: Vec<T::DbValue>) -> Result<DbResult<T>, Error>
+    where
+        <T as RdbmsType>::DbValue: 'async_trait;
+
+    async fn query_stream(
+        &self,
+        statement: &str,
+        params: Vec<T::DbValue>,
+    ) -> Result<Arc<dyn DbResultStream<T> + Send + Sync>, Error>
     where
         <T as RdbmsType>::DbValue: 'async_trait;
 
