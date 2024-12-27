@@ -11,6 +11,14 @@ description = "Base functionalities of Golem Worker Service"
 harness = false
 
 [[test]]
+name = "services_tests"
+harness = false
+
+[[test]]
+name = "api_gateway_end_to_end_tests"
+harness = false
+
+[[test]]
 name = "api_integration_tests"
 harness = true
 
