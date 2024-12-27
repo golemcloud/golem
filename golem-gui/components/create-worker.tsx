@@ -21,8 +21,6 @@ import { Component, WorkerFormData } from "@/types/api";
 import { v4 as uuidv4 } from 'uuid';
 import { addNewWorker } from "@/lib/hooks/use-worker";
 import {getFormErrorMessage} from "@/lib/utils"
-import { toast } from "react-toastify";
-
 
 interface FormData {
   component: string;
@@ -36,7 +34,6 @@ const CreateWorker = ({compId, version, onSuccess}:{compId?:string, version?:str
     control,
     handleSubmit,
     formState: { errors },
-    reset,
     setValue
   } = useForm<FormData>({
     defaultValues: {
@@ -88,13 +85,10 @@ const removeArgumentVar = (index: number) => {
       }, {}),
     } as WorkerFormData;
     const {error} = await addNewWorker(newWorker, (data.component|| compId!));
-    
     setError(error || "");
-
     if(error) {
-     return  toast.error(`Failed to create new worker. ${error}`);
+     return
     }
-    toast.success("Sucessfully created new worker");
     onSuccess?.()
 
   };
