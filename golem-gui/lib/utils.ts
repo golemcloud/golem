@@ -10,19 +10,22 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 export const getErrorMessage = (error: GolemError | string): string => {
+  if(!error) {
+    return "";
+  }
   if (typeof error === "string") {
     return error;
   }
 
-  if (error.golemError) {
+  if (error?.golemError) {
     return `${error.golemError.type}: ${error.golemError.details}`;
-  } 
+  }
 
-  if (error.errors?.length) {
+  if (error?.errors?.length) {
     return error.errors.join(", ");
   }
 
-  if (error.error) {
+  if (error?.error) {
     return error.error;
   }
 

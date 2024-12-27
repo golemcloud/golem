@@ -1,14 +1,13 @@
 import useSWR, { mutate } from "swr";
 import { fetcher, getErrorMessage } from "../utils";
 import { ApiDefinition, ApiRoute } from "@/types/api";
-import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "react-toastify";
+import { useMemo } from "react";
 
 const ROUTE_PATH = "?path=api/definitions";
 
 function useApiDefinitions(defintionId?: string, version?: string | null) {
-  const [error, setError] = useState<string | null>(null);
   const router = useRouter();
   defintionId = defintionId;
   let path =
@@ -30,14 +29,12 @@ function useApiDefinitions(defintionId?: string, version?: string | null) {
       : apiData?.data || []
   ) as ApiDefinition[];
 
-  useEffect(() => {
-    if (apiData) {
-      const error =
-        requestError ||
-        (apiData?.status != 200 ? getErrorMessage(apiData?.data) : null);
-      setError(error);
+ const error = useMemo(() => {
+    if(!isLoading && apiData?.status!==200){
+      return getErrorMessage(apiData);
     }
-  }, [apiData]);
+    return !isLoading ? getErrorMessage(requestError) : "";
+  }, [isLoading, requestError, apiData]); 
 
   //if version is not given. we are providing the current working latest version routes
   const getApiDefintion = (
@@ -102,7 +99,7 @@ function useApiDefinitions(defintionId?: string, version?: string | null) {
       body: JSON.stringify(newData),
     });
 
-    if (response.status !== 200) {
+    if (response.status!== 200) {
       const error = getErrorMessage(response.data);
       return { success: false, error };
     }

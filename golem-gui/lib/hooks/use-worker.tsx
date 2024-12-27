@@ -8,7 +8,8 @@ import {
   WorkerFunction,
 } from "@/types/api";
 import { useParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { toast } from "react-toastify";
 // import { useRouter } from "next/navigation";
 const ROUTE_PATH = "?path=components";
 
@@ -89,10 +90,12 @@ export function useWorkerInvocation(invoke: {
       );
 
       if (response.status !== 200) {
+        toast.error("Failed to Invoked")
         return setError(getErrorMessage(response.data));
       }
       setError(null);
       setResult(response.data);
+      toast.success("Successfully Invoked")
       mutate(`${ROUTE_PATH}/${compId}/workers/${workerName}`);
       mutate(`${ROUTE_PATH}/${compId}/workers`);
     } catch (err) {
@@ -128,9 +131,11 @@ export async function addNewWorker(
 
   if (response.status !== 200) {
     const error = getErrorMessage(response.data);
+    toast.success("Worker failed to create")
     return { success: false, error };
   }
 
+  toast.success("Worker Sucessfully created")
   mutate(endpoint);
   if (path && endpoint !== path) {
     mutate(path);
@@ -145,10 +150,12 @@ export function useWorker(componentId: string, workerName: string) {
     isLoading,
   } = useSWR(`${ROUTE_PATH}/${componentId}/workers/${workerName}`, fetcher);
 
-  const error =
-    requestError || (data && data?.status != 200)
-      ? getErrorMessage(data?.data)
-      : "";
+  const error = useMemo(() => {
+    if(!isLoading && data?.status!==200){
+      return getErrorMessage(data);
+    }
+    return !isLoading ? getErrorMessage(requestError) : "";
+  }, [isLoading, requestError, data]); 
   const worker = data?.data as Worker;
 
   return {
@@ -165,10 +172,12 @@ function useWorkers(componentId?: string, version?: string | number) {
   }`;
   const { data, error: requestError, isLoading } = useSWR(path, fetcher);
 
-  const error =
-    requestError || (data && data?.status != 200)
-      ? getErrorMessage(data?.data)
-      : "";
+  const error = useMemo(() => {
+    if(!isLoading && data?.status!==200){
+      return getErrorMessage(data);
+    }
+    return !isLoading ? getErrorMessage(requestError) : "";
+  }, [isLoading, requestError, data]); 
   const workers = (data?.data?.workers || []) as Worker[];
 
   const getWorkerById = (
