@@ -8,14 +8,13 @@ import {
   Grid,
   Stack,
   Divider,
+  Alert,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import OverviewFooter from "@/components/ui/overview-footer";
 import CreateAPI from "@/components/create-api";
 import CreateComponentForm from "@/components/new-component";
-import { fetcher } from "@/lib/utils";
-import { ApiDefinition, Component } from "@/types/api";
-import useSWR from "swr";
+import { ApiDefinition } from "@/types/api";
 import { useRouter } from "next/navigation";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 import useComponents from "@/lib/hooks/use-component";
@@ -26,8 +25,8 @@ import { calculateHoursDifference, calculateSizeInMB } from "@/lib/utils";
 const ProjectDashboard = () => {
   const router = useRouter();
   const [open, setOpen] = useState<string | null>(null);
-  const { apiDefinitions, isLoading } = useApiDefinitions();
-  const { components, isLoading: componentsLoading } = useComponents();
+  const { apiDefinitions, isLoading, error } = useApiDefinitions();
+  const { components, isLoading: componentsLoading, error: componentError } = useComponents();
   //TODO we need limit the api we are showing in the Ui. for now we are showing all.
   const apiMap = apiDefinitions?.reduce<Record<string, ApiDefinition>>(
     (obj, api: ApiDefinition) => {
@@ -80,7 +79,12 @@ const ProjectDashboard = () => {
                 </Button>
               )}
             </Box>
-            <Stack marginTop={2} sx={{ flex: 1, overflow: "hidden" }}>
+            {error && (
+              <Box sx={{ display: "flex", justifyContent: "center" }}>
+                {error && <Alert severity="error">{error}</Alert>}
+              </Box>
+            )}
+            {!error && !isLoading && <Stack marginTop={2} sx={{ flex: 1, overflow: "hidden" }}>
               {!isLoading &&
                 uniquesApis.slice(0, 10).map((api) => (
                   <React.Fragment key={api.id}>
@@ -111,7 +115,7 @@ const ProjectDashboard = () => {
                     </Box>
                   </React.Fragment>
                 ))}
-            </Stack>
+            </Stack>}
           </Paper>
         </Grid>
 
@@ -145,7 +149,12 @@ const ProjectDashboard = () => {
                 </Button>
               )}
             </Box>
-            <Box
+            {componentError && (
+              <Box sx={{ display: "flex", justifyContent: "center" }}>
+                {error && <Alert severity="error">{componentError}</Alert>}
+              </Box>
+            )}
+            {!componentError && !componentsLoading &&<Box
               sx={{
                 mt: 2,
                 gap: 2,
@@ -156,8 +165,7 @@ const ProjectDashboard = () => {
                 overflow: "hidden", // Prevents scrolling
               }}
             >
-              {!componentsLoading &&
-                components
+              {components
                   .slice(0, 6)
                   .map((component) => (
                     <ComponentCard
@@ -171,7 +179,7 @@ const ProjectDashboard = () => {
                       onClick={() => handleComponentClick(component.versionedComponentId.componentId!)}
                     />
                   ))}
-              {!componentsLoading && components.length === 0 && (
+              {components.length === 0 && (
                 <Box
                   textAlign="center"
                   sx={{
@@ -200,7 +208,7 @@ const ProjectDashboard = () => {
                   </Button>
                 </Box>
               )}
-            </Box>
+            </Box>}
           </Paper>
         </Grid>
       </Grid>

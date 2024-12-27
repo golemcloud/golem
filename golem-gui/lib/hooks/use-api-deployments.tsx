@@ -1,7 +1,8 @@
 import useSWR, { mutate } from "swr";
 import { fetcher, getErrorMessage } from "../utils";
 import { ApiDeployment } from "@/types/api";
-import { useEffect, useState } from "react";
+import { useMemo } from "react";
+import { toast } from "react-toastify";
 // import { useRouter } from "next/navigation";
 
 const ROUTE_PATH = "?path=api/deployments";
@@ -24,18 +25,18 @@ export async function addNewApiDeployment(
 
   if (response.status !== 200) {
     const error = getErrorMessage(response.data);
+    toast.error("Failed to deploy:" + error)
     return { success: false, error };
   }
   mutate(`${ROUTE_PATH}`);
   if (path !== ROUTE_PATH) {
     mutate(path);
   }
+  toast.success("Successfully deployed")
   return { success: false, data: response.data };
 }
 
 function useApiDeployments(defintionId?: string, version?: string | null) {
-  const [error, setError] = useState<string | null>(null);
-  //   const router = useRouter();
   defintionId = defintionId;
   let path =
     defintionId && !version
@@ -48,14 +49,13 @@ function useApiDeployments(defintionId?: string, version?: string | null) {
     defintionId && version ? (data?.data ? [data?.data] : []) : data?.data || []
   ) as ApiDeployment[];
 
-  useEffect(() => {
-    if (data) {
-      const error =
-        requestError ||
-        (data?.status != 200 ? getErrorMessage(data?.data) : null);
-      setError(error);
+
+  const error = useMemo(() => {
+    if(!isLoading && data?.status!==200){
+      return getErrorMessage(data);
     }
-  }, [data]);
+    return !isLoading ? getErrorMessage(requestError) : "";
+  }, [isLoading, requestError, data]); 
 
   const addApiDeployment = async (
     newDeploy: ApiDeployment

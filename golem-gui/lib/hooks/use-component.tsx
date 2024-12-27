@@ -1,7 +1,8 @@
 import useSWR, { mutate } from "swr";
 import { fetcher, getErrorMessage } from "../utils";
 import { Component } from "@/types/api";
-import { useEffect, useState } from "react";
+import { toast } from "react-toastify";
+import { useMemo } from "react";
 // import { useRouter } from "next/navigation";
 
 const ROUTE_PATH = "?path=components";
@@ -37,12 +38,15 @@ export async function addNewcomponent(
 
   if (response.status !== 200) {
     const error = getErrorMessage(response.data);
+    toast.success(`Component Failed to ${mode ==="create" ? "create" :"update"}`)
+
     return { success: false, error };
   }
 
   mutate(ROUTE_PATH);
   mutate(`${ROUTE_PATH}/${componentId}`);
   mutate(`${ROUTE_PATH}/${componentId}/latest`);
+  toast.success(`Component Successfully ${mode ==="create" ? "Created" :"Updated"}`)
   if (path && endpoint !== path && ROUTE_PATH !== endpoint) {
     mutate(path);
   }
@@ -50,7 +54,6 @@ export async function addNewcomponent(
 }
 
 function useComponents(componentId?: string, version?: string | number | null) {
-  const [error, setError] = useState<string | null>(null);
   //   const router = useRouter();
   componentId = componentId;
   let path =
@@ -75,16 +78,12 @@ function useComponents(componentId?: string, version?: string | number | null) {
       : componentData?.data || []
   ) as Component[];
 
-  useEffect(() => {
-    if (componentData) {
-      const error =
-        requestError ||
-        (componentData?.status != 200
-          ? getErrorMessage(componentData?.data)
-          : null);
-      setError(error);
+  const error = useMemo(() => {
+    if(!isLoading && componentData?.status!==200){
+      return getErrorMessage(componentData);
     }
-  }, [componentData]);
+    return !isLoading ? getErrorMessage(requestError) : "";
+  }, [isLoading, requestError, componentData]); 
 
   const getComponent = (
     id?: string,

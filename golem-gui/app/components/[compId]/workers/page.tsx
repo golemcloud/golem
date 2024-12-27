@@ -24,6 +24,8 @@ import useWorkers from "@/lib/hooks/use-worker";
 import { useParams, useRouter } from "next/navigation";
 import { Loader } from "lucide-react";
 import { Worker } from "@/types/api";
+import CreateWorker from "@/components/create-worker";
+import CustomModal from "@/components/CustomModal";
 
 const WorkerListWithDropdowns = () => {
   const [workerStatus, setWorkerStatus] = useState<string[]>([]);
@@ -33,7 +35,10 @@ const WorkerListWithDropdowns = () => {
   const [version, setVersion] = useState("");
   const [createdAfter, setCreatedAfter] = useState<Date | null>(null);
   const [createdBefore, setCreatedBefore] = useState<Date | null>(null);
+  const [open, setOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState(""); // For searching statuses
+
+  const handleClose = ()=>setOpen(false)
 
   //need to integrate the filter logic here. and pagination or scroll on load needs to implemented or addd show more at the end on click we need to next set of data
   const { workers, isLoading } = useWorkers(compId);
@@ -53,6 +58,7 @@ const WorkerListWithDropdowns = () => {
 
 
   return (
+    <>
     <LocalizationProvider dateAdapter={AdapterDateFns}>
       <Box
         sx={{
@@ -84,6 +90,7 @@ const WorkerListWithDropdowns = () => {
               backgroundColor: "#2962FF",
               "&:hover": { backgroundColor: "#0039CB" },
             }}
+            onClick={(e)=>{e.preventDefault();setOpen(true)}}
           >
             New
           </Button>
@@ -318,6 +325,10 @@ const WorkerListWithDropdowns = () => {
         </Box>
       </Box>
     </LocalizationProvider>
+    <CustomModal open={open} onClose={handleClose} heading={"Create new Worker"}>
+          <CreateWorker compId={compId} onSuccess={handleClose}/>
+    </CustomModal>
+    </>
   );
 };
 
