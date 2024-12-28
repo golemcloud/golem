@@ -181,19 +181,26 @@ export type ApiDeployment = {
   site: Site;
 };
 
+export interface OplogProcessorSpecs {
+  type: 'OplogProcessor'; // Fixed type for identification
+  componentId: string;    // ID of the component being processed
+  componentVersion: string; // Version of the component
+};
+
+export interface ComponentTransformerSpecs {
+  type: 'ComponentTransformer'; // Fixed type for identification
+  jsonSchema: string;           // JSON schema definition as a string
+  validateUrl: string;          // URL for validation
+  transformUrl: string;         // URL for transformation
+};
+
 export interface Plugin {
   name: string;
   version: string;
-  description: string;
+  description?: string;
   icon: number[];
-  homepage: string;
-  specs: {
-    type: "ComponentTransformer";
-    providedWitPackage: string;
-    jsonSchema: string;
-    validateUrl: string;
-    transformUrl: string;
-  };
+  homepage?: string;
+  specs: OplogProcessorSpecs | ComponentTransformerSpecs
   scope: {
     type: "Global";
   };
@@ -294,4 +301,17 @@ export interface OplogQueryParams {
   count: number;
   cursor?: string;
   query?: string;
+}
+
+
+export interface InstallPluginPayload {
+  name: string;
+  version: string;
+  priority: number;
+  parameters: Record<string, string>;
+}
+
+export interface UpdatePluginInstallPayload {
+  priority: number;
+  parameters: Record<string, string>;
 }

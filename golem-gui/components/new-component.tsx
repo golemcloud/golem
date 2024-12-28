@@ -17,7 +17,6 @@ import UploadFileIcon from "@mui/icons-material/UploadFile";
 import FolderIcon from "@mui/icons-material/Folder";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import CloudUploadIcon from "@mui/icons-material/CloudUpload";
-import { toast } from "react-toastify";
 import { addNewcomponent } from "@/lib/hooks/use-component";
 import { getFormErrorMessage } from "../lib/utils";
 
@@ -99,12 +98,9 @@ export default function ComponentForm({
           formData.append(`file_${index}`, file);
         });
       }
-
       const { error } = await addNewcomponent(formData, componentId, mode);
       setError(error || null); // Clear previous error
       onSubmitSuccess?.();
-      if (isCreateMode) toast.success("Component created successfully");
-      else toast.success("Component updated successfully");
     } catch (err) {
       console.error("Error during submission:", err);
       setError("Something went wrong! Please try again.");

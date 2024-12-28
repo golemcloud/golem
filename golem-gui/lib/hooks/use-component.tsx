@@ -1,6 +1,10 @@
 import useSWR, { mutate } from "swr";
 import { fetcher, getErrorMessage } from "../utils";
-import { Component } from "@/types/api";
+import {
+  Component,
+  InstallPluginPayload,
+  UpdatePluginInstallPayload,
+} from "@/types/api";
 import { toast } from "react-toastify";
 import { useMemo } from "react";
 // import { useRouter } from "next/navigation";
@@ -38,7 +42,9 @@ export async function addNewcomponent(
 
   if (response.status !== 200) {
     const error = getErrorMessage(response.data);
-    toast.success(`Component Failed to ${mode ==="create" ? "create" :"update"}`)
+    toast.success(
+      `Component Failed to ${mode === "create" ? "create" : "update"}`
+    );
 
     return { success: false, error };
   }
@@ -46,11 +52,13 @@ export async function addNewcomponent(
   mutate(ROUTE_PATH);
   mutate(`${ROUTE_PATH}/${componentId}`);
   mutate(`${ROUTE_PATH}/${componentId}/latest`);
-  toast.success(`Component Successfully ${mode ==="create" ? "Created" :"Updated"}`)
+  toast.success(
+    `Component Successfully ${mode === "create" ? "Created" : "Updated"}`
+  );
   if (path && endpoint !== path && ROUTE_PATH !== endpoint) {
     mutate(path);
   }
-  return { success: false, error: null };
+  return { success: true, error: null };
 }
 
 function useComponents(componentId?: string, version?: string | number | null) {
@@ -79,11 +87,11 @@ function useComponents(componentId?: string, version?: string | number | null) {
   ) as Component[];
 
   const error = useMemo(() => {
-    if(!isLoading && componentData?.status!==200){
+    if (!isLoading && componentData?.status !== 200) {
       return getErrorMessage(componentData);
     }
     return !isLoading ? getErrorMessage(requestError) : "";
-  }, [isLoading, requestError, componentData]); 
+  }, [isLoading, requestError, componentData]);
 
   const getComponent = (
     id?: string,
@@ -145,6 +153,132 @@ function useComponents(componentId?: string, version?: string | number | null) {
     isLoading,
     upsertComponent,
     getComponent,
+  };
+}
+
+export async function installPlugin(
+  payload: InstallPluginPayload,
+  componentId: string,
+  version?: number | string
+) {
+  let endpoint = `${ROUTE_PATH}/${componentId}`;
+  endpoint =
+    typeof version == "number" || version
+      ? `${endpoint}/${version}`
+      : `${endpoint}/latest`;
+
+  const response = await fetcher(endpoint, {
+    method: "PUT",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (response.status !== 200) {
+    const error = getErrorMessage(response.data);
+    toast.success(`Plugin Failed to Install: ${error}`);
+    return { success: false, error };
+  }
+
+  mutate(ROUTE_PATH);
+  mutate(endpoint);
+  toast.success(`Plugin successfully installed`);
+  return { success: true, error: null };
+}
+
+export function useInstallPlugins(
+  componentId: string,
+  version?: number | string
+) {
+  let endpoint = `${ROUTE_PATH}/${componentId}`;
+  endpoint =
+    typeof version == "number" || version
+      ? `${endpoint}/${version}`
+      : `${endpoint}/latest`;
+
+  const { data, error: requestError, isLoading } = useSWR(endpoint, fetcher);
+
+  const installedPlugins = data?.data || [];
+
+  const error = useMemo(() => {
+    if (!isLoading && data?.status !== 200) {
+      return getErrorMessage(data);
+    }
+    return !isLoading ? getErrorMessage(requestError) : "";
+  }, [isLoading, requestError, data]);
+
+  return {
+    installedPlugins,
+    isLoading,
+    error,
+  };
+}
+
+export function useUninstallPlugin(
+  componentId: string,
+  version?: string | number
+) {
+  let endpoint = `${ROUTE_PATH}/${componentId}`;
+  endpoint =
+    typeof version == "number" || version
+      ? `${endpoint}/${version}`
+      : `${endpoint}/latest`;
+
+  const uninstallPlugin = async (installationId: string) => {
+    const response = await fetcher(`${endpoint}/${installationId}`, {
+      method: "DLETE",
+    });
+
+    if (response.status !== 200) {
+      const error = getErrorMessage(response.data);
+      toast.success(`Plugin Failed to Uninstall: ${error}`);
+      return { success: false, error };
+    }
+
+    mutate(ROUTE_PATH);
+    mutate(endpoint);
+    toast.success(`Plugin successfully uninstalled`);
+    return { success: true, error: null };
+  };
+
+  return {
+    uninstallPlugin,
+  };
+}
+
+export function useUpdateInstallPlugin(
+  componentId: string,
+  version?: number | string
+) {
+  let endpoint = `${ROUTE_PATH}/${componentId}`;
+  endpoint =
+    typeof version == "number" || version
+      ? `${endpoint}/${version}`
+      : `${endpoint}/latest`;
+
+  const updateInstalledPlugin = async (payload: UpdatePluginInstallPayload) => {
+    const response = await fetcher(endpoint, {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (response.status !== 200) {
+      const error = getErrorMessage(response.data);
+      toast.success(`Plugin Failed to update: ${error}`);
+      return { success: false, error };
+    }
+
+    mutate(ROUTE_PATH);
+    mutate(endpoint);
+    toast.success(`Plugin successfully updated`);
+    return { success: true, error: null };
+  };
+  return {
+    updateInstalledPlugin,
   };
 }
 
