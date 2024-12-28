@@ -47,19 +47,32 @@ rustls = { workspace = true }
 serde = { workspace = true }
 sqlx = { workspace = true }
 tempfile = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 xdg = { workspace = true }
 
 # Sozu builds with simd support by default, but it only works on x86_64
-
-[target.'cfg(target_arch = "x86_64")'.dependencies]
+[target.'cfg(not(target_arch = "x86_64"))'.dependencies]
 sozu-command-lib = { workspace = true }
 sozu-lib = { workspace = true }
 
-[target.'cfg(not(target_arch = "x86_64"))'.dependencies]
+[target.'cfg(all(target_arch = "x86_64", unix))'.dependencies]
+sozu-command-lib = { workspace = true }
+sozu-lib = { workspace = true }
+
+[target.'cfg(all(not(target_arch = "x86_64"), unix))'.dependencies]
 sozu-command-lib = { workspace = true, default-features = false }
 sozu-lib = { workspace = true, default-features = false }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_Networking_HttpServer",
+    "Win32_Security",
+    "Win32_System_IO",
+    "Win32_System_Threading",
+] }
 
 [dev-dependencies]
 test-r = { workspace = true }

@@ -45,10 +45,10 @@ cargo_metadata = "0.19.1"
 [features]
 default = ["host"]
 host-bindings = [
+    "dep:async-trait",
     "wasmtime"
 ]
 host = [
-    "dep:async-trait",
     "arbitrary",
     "bincode",
     "host-bindings",

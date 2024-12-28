@@ -354,8 +354,10 @@ mod test {
 
     impl Default for SqliteDb<'_> {
         fn default() -> Self {
+            let temp_dir = std::env::temp_dir();
+            let db_path = temp_dir.join(format!("golem-worker-{}.db", uuid::Uuid::new_v4()));
             Self {
-                db_path: format!("/tmp/golem-worker-{}.db", uuid::Uuid::new_v4()),
+                db_path: db_path.to_str().unwrap().to_string(),
                 lifetime: PhantomData,
             }
         }
@@ -363,7 +365,21 @@ mod test {
 
     impl Drop for SqliteDb<'_> {
         fn drop(&mut self) {
-            std::fs::remove_file(&self.db_path).unwrap();
+            // On Windows, we need to retry deletion due to potential file handle delays
+            let path = std::path::Path::new(&self.db_path);
+            if path.exists() {
+                for _ in 0..5 {
+                    match std::fs::remove_file(path) {
+                        Ok(_) => break,
+                        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                            // On Windows, wait a bit for file handles to be released
+                            std::thread::sleep(std::time::Duration::from_millis(100));
+                            continue;
+                        }
+                        Err(_) => break, // Other errors, just break
+                    }
+                }
+            }
         }
     }
 
@@ -404,15 +420,17 @@ mod test {
         let db = SqliteDb::default();
         let db_config = DbSqliteConfig {
             database: db.db_path.to_string(),
-            max_connections: 10,
+            max_connections: 1,
         };
 
-        db::sqlite_migrate(
-            &db_config,
-            MigrationsDir::new("./db/migration".into()).sqlite_migrations(),
-        )
-        .await
-        .unwrap();
+        {
+            db::sqlite_migrate(
+                &db_config,
+                MigrationsDir::new(std::path::Path::new("db").join("migration")).sqlite_migrations(),
+            )
+            .await
+            .unwrap();
+        }
 
         let db_pool = db::create_sqlite_pool(&db_config).await.unwrap();
 

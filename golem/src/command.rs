@@ -19,6 +19,22 @@ use golem_cli::{
     model::{GolemError, GolemResult},
 };
 use std::path::PathBuf;
+#[cfg(unix)]
+use xdg::BaseDirectories;
+
+#[cfg(windows)]
+fn get_app_data_dir(prefix: &str) -> Result<PathBuf, GolemError> {
+    std::env::var("LOCALAPPDATA")
+        .map(|local_app_data| PathBuf::from(local_app_data).join(prefix))
+        .map_err(|_| GolemError("Failed to get Windows AppData directory".to_string()))
+}
+
+#[cfg(unix)]
+fn get_app_data_dir(prefix: &str) -> Result<PathBuf, GolemError> {
+    BaseDirectories::with_prefix(prefix)
+        .map(|base_dirs| base_dirs.get_state_home())
+        .map_err(|_| GolemError("Failed to get XDG base directories".to_string()))
+}
 
 #[derive(Parser, Debug)]
 pub enum SingleExecutableCommand {
@@ -56,10 +72,7 @@ impl<Ctx> CliCommand<Ctx> for SingleExecutableCommand {
                 data_dir,
                 clean,
             } => {
-                let base_directories = xdg::BaseDirectories::with_prefix("golem")
-                    .map_err(|_| GolemError("Failed to get XDG base directories".to_string()))?;
-
-                let data_dir = data_dir.unwrap_or_else(|| base_directories.get_state_home());
+                let data_dir = data_dir.unwrap_or_else(|| get_app_data_dir("golem").unwrap());
 
                 if clean && tokio::fs::metadata(&data_dir).await.is_ok() {
                     tokio::fs::remove_dir_all(&data_dir)

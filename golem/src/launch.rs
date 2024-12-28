@@ -110,6 +110,7 @@ pub async fn launch_golem_services(args: &LaunchArgs) -> Result<(), anyhow::Erro
     .await?;
 
     // Don't drop the channel, it will cause the proxy to fail
+    #[cfg(unix)]
     let _proxy_command_channel = proxy::start_proxy(
         &args.router_host,
         args.router_port,
@@ -118,8 +119,20 @@ pub async fn launch_golem_services(args: &LaunchArgs) -> Result<(), anyhow::Erro
         &mut join_set,
     )?;
 
+    #[cfg(windows)]
+    let _ = proxy::start_proxy(
+        &args.router_host,
+        args.router_port,
+        healthcheck_port,
+        &all_run_details,
+        &mut join_set,
+    )?;
+
     while let Some(res) = join_set.join_next().await {
-        res??;
+        match res {
+            Ok(inner_res) => inner_res?,
+            Err(e) => return Err(anyhow::anyhow!("Join error: {:?}", e)),
+        }
     }
 
     Ok(())

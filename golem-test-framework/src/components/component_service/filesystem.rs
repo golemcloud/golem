@@ -24,7 +24,6 @@ use golem_common::model::{
 use golem_wasm_ast::analysis::AnalysedExport;
 use serde::Serialize;
 use std::{
-    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
 };
 use tonic::transport::Channel;
@@ -91,7 +90,7 @@ impl FileSystemComponentService {
         let size = tokio::fs::metadata(&target_path)
             .await
             .map_err(|e| AddComponentError::Other(format!("Failed to read component size: {}", e)))?
-            .size();
+            .len();
 
         let metadata = ComponentMetadata {
             version: component_version,

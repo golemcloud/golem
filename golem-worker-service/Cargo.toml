@@ -67,3 +67,4 @@ uuid = { workspace = true }
 
 [dev-dependencies]
 test-r = { workspace = true }
+rustls = { workspace = true }

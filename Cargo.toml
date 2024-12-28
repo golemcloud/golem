@@ -153,7 +153,9 @@ reqwest = { version = "0.12.9", features = [
     "multipart",
     "stream",
 ] }
-rustls = { version = "0.23.19" }
+rustls = { version = "0.23.20" }
+rustls-native-certs = "0.8.1"
+rustls-pemfile = "2.2.0"
 rand = "0.8.5"
 semver = "1.0.23"
 serde = { version = "1.0", features = ["derive"] }
@@ -212,7 +214,7 @@ tracing-test = "0.2.5"
 typed-path = "0.10.0"
 url = "2.5.4"
 uuid = { version = "1.11.0", features = ["serde", "v4", "v5"] }
-wasm-wave = "=0.6.0"
+wasm-wave = "0.222.0"
 wasmtime = { version = "=27.0.0", features = ["component-model"] }
 wasmtime-wasi = { version = "=27.0.0" }
 wasmtime-wasi-http = { version = "=27.0.0" }
@@ -224,3 +226,4 @@ redis-protocol = { git = "https://github.com/golemcloud/redis-protocol.rs.git", 
 wasmtime = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v27.0.0" }
 wasmtime-wasi = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v27.0.0" }
 wasmtime-wasi-http = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v27.0.0" }
+poule = { path = "crates/poule" }
