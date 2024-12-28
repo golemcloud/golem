@@ -64,20 +64,20 @@ export const DeployModal = ({
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-      <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full">
+      <div className="bg-card rounded-lg p-6 max-w-md w-full">
         <div className="flex justify-between items-start mb-6">
           <div>
             <h2 className="text-xl font-semibold flex items-center gap-2">
               <Upload className="h-5 w-5 text-green-400" />
               Deploy API
             </h2>
-            <p className="text-sm text-gray-400 mt-1">
+            <p className="text-sm text-muted-foreground mt-1">
               {apiDefinition.id} v{apiDefinition.version}
             </p>
           </div>
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-gray-300"
+            className="text-muted-foreground hover:text-gray-300"
             disabled={isSubmitting}
           >
             <X size={20} />
@@ -85,12 +85,12 @@ export const DeployModal = ({
         </div>
 
         <div className="space-y-6">
-          <div className="bg-gray-700/50 rounded-lg p-4">
+          <div className="bg-card/50 rounded-lg p-4">
             <h3 className="text-sm font-medium flex items-center gap-2 mb-2">
-              <Server className="h-4 w-4 text-blue-400" />
+              <Server className="h-4 w-4 text-primary" />
               Deployment Configuration
             </h3>
-            <p className="text-sm text-gray-400">
+            <p className="text-sm text-muted-foreground">
               Configure where your API will be deployed. The host should be a
               valid domain name where your API will be accessible.
             </p>
@@ -102,13 +102,13 @@ export const DeployModal = ({
                 Host <span className="text-red-400">*</span>
               </label>
               <div className="relative">
-                <Globe className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
+                <Globe className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
                 <input
                   type="text"
                   value={host}
                   onChange={(e) => setHost(e.target.value)}
                   placeholder="api.example.com"
-                  className="w-full pl-10 pr-3 py-2 bg-gray-700 rounded-md focus:ring-2 focus:ring-blue-500"
+                  className="w-full pl-10 pr-3 py-2 bg-card/80 rounded-md focus:ring-2 focus:ring-blue-500"
                   disabled={isSubmitting}
                 />
               </div>
@@ -116,20 +116,20 @@ export const DeployModal = ({
 
             <div>
               <label className="block text-sm font-medium mb-1">
-                Subdomain <span className="text-gray-400">(Optional)</span>
+                Subdomain <span className="text-muted-foreground">(Optional)</span>
               </label>
               <div className="relative">
-                <ExternalLink className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
+                <ExternalLink className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
                 <input
                   type="text"
                   value={subdomain}
                   onChange={(e) => setSubdomain(e.target.value)}
                   placeholder="v1"
-                  className="w-full pl-10 pr-3 py-2 bg-gray-700 rounded-md focus:ring-2 focus:ring-blue-500"
+                  className="w-full pl-10 pr-3 py-2 bg-card/80 rounded-md focus:ring-2 focus:ring-blue-500"
                   disabled={isSubmitting}
                 />
               </div>
-              <p className="mt-1 text-xs text-gray-400">
+              <p className="mt-1 text-xs text-muted-foreground">
                 Use subdomains to organize different versions or environments
               </p>
             </div>
@@ -138,7 +138,7 @@ export const DeployModal = ({
           {/* Preview */}
           {(host || subdomain) && (
             <div className="bg-gray-900 rounded-lg p-3 font-mono text-sm">
-              <div className="text-gray-400 mb-1">Preview URL:</div>
+              <div className="text-muted-foreground mb-1">Preview URL:</div>
               <div className="text-green-400">
                 https://{subdomain ? `${subdomain}.` : ""}
                 {host}
@@ -149,7 +149,7 @@ export const DeployModal = ({
           <div className="flex justify-end space-x-3 mt-6">
             <button
               onClick={onClose}
-              className="px-4 py-2 text-sm bg-gray-700 rounded-md hover:bg-gray-600"
+              className="px-4 py-2 text-sm bg-card/80 rounded-md hover:bg-gray-600"
               disabled={isSubmitting}
             >
               Cancel

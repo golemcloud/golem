@@ -48,14 +48,14 @@ const JsonDisplay = ({ data }: { data: string }) => {
   return (
     <div className="relative">
       <pre className="bg-gray-900 p-4 rounded-lg overflow-x-auto text-sm border border-gray-800">
-        <code className="text-gray-100 font-mono whitespace-pre">
+        <code className="text-foreground/90 font-mono whitespace-pre">
           {formattedJson}
         </code>
       </pre>
       <button
         onClick={handleCopy}
-        className="absolute top-3 right-3 p-2 text-gray-400 hover:text-gray-300 
-                         bg-gray-800/50 hover:bg-gray-800 rounded-md transition-all group"
+        className="absolute top-3 right-3 p-2 text-muted-foreground hover:text-gray-300 
+                         bg-card/50 hover:bg-card rounded-md transition-all group"
       >
         {copied ? (
           <CheckCircle2 size={16} className="text-green-400" />
@@ -78,9 +78,9 @@ const DetailsCard: React.FC<DetailsCardProps> = ({
   icon: Icon,
   children,
 }) => (
-  <div className="bg-gray-800/50 rounded-lg p-6 border border-gray-700/50">
+  <div className="bg-card/50 rounded-lg p-6 border border-gray-700/50">
     <div className="flex items-center gap-3 mb-4">
-      <div className="p-2 rounded-md bg-gray-700/50 text-blue-400">
+      <div className="p-2 rounded-md bg-card/50 text-primary">
         <Icon size={18} />
       </div>
       <h2 className="text-lg font-semibold">{title}</h2>
@@ -113,7 +113,7 @@ export const PluginDetailPage = () => {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="text-gray-400 flex items-center gap-2">
+        <div className="text-muted-foreground flex items-center gap-2">
           <Loader2 className="animate-spin" size={20} />
           <span>Loading plugin details...</span>
         </div>
@@ -123,7 +123,7 @@ export const PluginDetailPage = () => {
 
   if (!plugin) {
     return (
-      <div className="flex flex-col items-center justify-center h-64 text-gray-400">
+      <div className="flex flex-col items-center justify-center h-64 text-muted-foreground">
         <AlertCircle size={48} className="text-gray-500 mb-4" />
         <p>Plugin not found</p>
       </div>
@@ -133,25 +133,25 @@ export const PluginDetailPage = () => {
   return (
     <div className="space-y-8">
       {/* Header */}
-      <div className="bg-gray-800/50 p-6 rounded-lg border border-gray-700/50">
+      <div className="bg-card/50 p-6 rounded-lg border border-gray-700/50">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
             <Link
               to="/plugins"
-              className="p-2 text-gray-400 hover:text-gray-300 rounded-lg 
-                                     hover:bg-gray-700/50 transition-colors"
+              className="p-2 text-muted-foreground hover:text-gray-300 rounded-lg 
+                                     hover:bg-card/50 transition-colors"
             >
               <ArrowLeft size={20} />
             </Link>
             <div className="flex items-center gap-3">
-              <div className="p-2 rounded-md bg-blue-500/10 text-blue-400">
+              <div className="p-2 rounded-md bg-primary/10 text-primary">
                 <Puzzle size={24} />
               </div>
               <div>
                 <h1 className="text-2xl font-bold">{plugin.name}</h1>
                 <div className="flex items-center gap-2 mt-1">
-                  <Package size={14} className="text-gray-400" />
-                  <span className="text-gray-400">
+                  <Package size={14} className="text-muted-foreground" />
+                  <span className="text-muted-foreground">
                     Version {plugin.version}
                   </span>
                 </div>
@@ -161,11 +161,10 @@ export const PluginDetailPage = () => {
           <div className="flex items-center gap-3">
             <span
               className={`px-3 py-1 rounded-full text-sm
-                            ${
-                              plugin.scope.type === "Global"
-                                ? "bg-blue-500/10 text-blue-400"
-                                : "bg-purple-500/10 text-purple-400"
-                            }`}
+                            ${plugin.scope.type === "Global"
+                  ? "bg-primary/10 text-primary"
+                  : "bg-purple-500/10 text-purple-400"
+                }`}
             >
               {plugin.scope.type}
             </span>
@@ -188,8 +187,8 @@ export const PluginDetailPage = () => {
           <DetailsCard title="Plugin Details" icon={Settings}>
             <div className="space-y-4">
               <div>
-                <label className="text-sm text-gray-400 block mb-1">Type</label>
-                <div className="flex items-center gap-2 text-gray-200">
+                <label className="text-sm text-muted-foreground block mb-1">Type</label>
+                <div className="flex items-center gap-2 text-muted-foreground/80">
                   {plugin.specs.type === "ComponentTransformer" ? (
                     <Code size={16} className="text-green-400" />
                   ) : (
@@ -200,14 +199,14 @@ export const PluginDetailPage = () => {
               </div>
               {plugin.homepage && (
                 <div>
-                  <label className="text-sm text-gray-400 block mb-1">
+                  <label className="text-sm text-muted-foreground block mb-1">
                     Homepage
                   </label>
                   <a
                     href={plugin.homepage}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="flex items-center gap-2 text-blue-400 hover:text-blue-300 
+                    className="flex items-center gap-2 text-primary hover:text-primary-accent 
                                                  transition-colors group"
                   >
                     <Globe size={16} />
@@ -238,7 +237,7 @@ export const PluginDetailPage = () => {
               <DetailsCard title="Endpoints" icon={Globe}>
                 <div className="space-y-4">
                   <div>
-                    <label className="text-sm text-gray-400 block mb-1">
+                    <label className="text-sm text-muted-foreground block mb-1">
                       Validate URL
                     </label>
                     <div
@@ -249,7 +248,7 @@ export const PluginDetailPage = () => {
                     </div>
                   </div>
                   <div>
-                    <label className="text-sm text-gray-400 block mb-1">
+                    <label className="text-sm text-muted-foreground block mb-1">
                       Transform URL
                     </label>
                     <div
@@ -272,7 +271,7 @@ export const PluginDetailPage = () => {
             <DetailsCard title="Component Reference" icon={Package}>
               <div className="space-y-4">
                 <div>
-                  <label className="text-sm text-gray-400 block mb-1">
+                  <label className="text-sm text-muted-foreground block mb-1">
                     Component ID
                   </label>
                   <div
@@ -283,11 +282,11 @@ export const PluginDetailPage = () => {
                   </div>
                 </div>
                 <div>
-                  <label className="text-sm text-gray-400 block mb-1">
+                  <label className="text-sm text-muted-foreground block mb-1">
                     Version
                   </label>
                   <div className="flex items-center gap-2">
-                    <Package size={16} className="text-gray-400" />
+                    <Package size={16} className="text-muted-foreground" />
                     <span>{plugin.specs.componentVersion}</span>
                   </div>
                 </div>

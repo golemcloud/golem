@@ -35,7 +35,7 @@ const Input: React.FC<InputProps> = ({ label, error, ...props }) => (
     </label>
     <input
       {...props}
-      className="w-full px-4 py-2.5 bg-gray-700/50 rounded-lg border border-gray-600 
+      className="w-full px-4 py-2.5 bg-card/50 rounded-lg border border-gray-600 
                      focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none
                      transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
     />
@@ -87,7 +87,7 @@ const FileDropzone = ({
     onDrop={onFileDrop}
     className={`border-2 border-dashed rounded-lg p-6 text-center transition-all duration-200
             ${isSubmitting ? "cursor-not-allowed opacity-60" : "cursor-pointer hover:border-blue-400/50"} 
-            ${dragActive ? "border-blue-500 bg-blue-500/10" : "border-gray-600"}`}
+            ${dragActive ? "border-blue-500 bg-primary/10" : "border-gray-600"}`}
   >
     {file || (multiple && file?.length > 0) ? (
       <div className="space-y-2">
@@ -95,10 +95,10 @@ const FileDropzone = ({
           file.map((f: File, index: number) => (
             <div
               key={index}
-              className="flex items-center justify-between bg-gray-700/50 rounded-lg px-4 py-2"
+              className="flex items-center justify-between bg-card/50 rounded-lg px-4 py-2"
             >
               <div className="flex items-center gap-2">
-                <FileIcon size={16} className="text-blue-400" />
+                <FileIcon size={16} className="text-primary" />
                 <span className="text-sm truncate">{f.name}</span>
               </div>
               {!isSubmitting && (
@@ -107,7 +107,7 @@ const FileDropzone = ({
                     e.stopPropagation();
                     onRemove(index);
                   }}
-                  className="p-1 text-gray-400 hover:text-red-400 rounded-md
+                  className="p-1 text-muted-foreground hover:text-red-400 rounded-md
                                              hover:bg-gray-600/50 transition-colors"
                 >
                   <X size={14} />
@@ -116,9 +116,9 @@ const FileDropzone = ({
             </div>
           ))
         ) : (
-          <div className="flex items-center justify-between bg-gray-700/50 rounded-lg px-4 py-2">
+          <div className="flex items-center justify-between bg-card/50 rounded-lg px-4 py-2">
             <div className="flex items-center gap-2">
-              <FileIcon size={16} className="text-blue-400" />
+              <FileIcon size={16} className="text-primary" />
               <span className="text-sm">{file.name}</span>
             </div>
             {!isSubmitting && (
@@ -127,7 +127,7 @@ const FileDropzone = ({
                   e.stopPropagation();
                   onRemove();
                 }}
-                className="p-1 text-gray-400 hover:text-red-400 rounded-md
+                className="p-1 text-muted-foreground hover:text-red-400 rounded-md
                                          hover:bg-gray-600/50 transition-colors"
               >
                 <X size={14} />
@@ -138,10 +138,10 @@ const FileDropzone = ({
       </div>
     ) : (
       <div className="space-y-3">
-        <Upload className="h-8 w-8 mx-auto text-gray-400" />
+        <Upload className="h-8 w-8 mx-auto text-muted-foreground" />
         <div>
           <p className="text-sm text-gray-300">{placeholder}</p>
-          <p className="text-xs text-gray-400 mt-1">or click to browse</p>
+          <p className="text-xs text-muted-foreground mt-1">or click to browse</p>
         </div>
       </div>
     )}
@@ -259,24 +259,24 @@ const CreateComponentModal = ({
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50 backdrop-blur-sm">
-      <div className="bg-gray-800 rounded-xl p-6 max-w-md w-full shadow-xl">
+      <div className="bg-card rounded-xl p-6 max-w-md w-full shadow-xl">
         <div className="flex justify-between items-start mb-6">
           <div className="flex items-center gap-3">
-            <div className="p-2 rounded-md bg-blue-500/10 text-blue-400">
+            <div className="p-2 rounded-md bg-primary/10 text-primary">
               <Plus size={20} />
             </div>
             <div>
               <h2 className="text-xl font-semibold">
                 {isUpdateMode ? "Update Component" : "Create New Component"}
               </h2>
-              <p className="text-sm text-gray-400 mt-1">
+              <p className="text-sm text-muted-foreground mt-1">
                 Configure your component settings
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-gray-300 p-1 hover:bg-gray-700/50 
+            className="text-muted-foreground hover:text-gray-300 p-1 hover:bg-card/50 
                                  rounded-md transition-colors"
           >
             <X size={20} />
@@ -309,18 +309,17 @@ const CreateComponentModal = ({
                     setComponentType(option.value as ComponentType)
                   }
                   className={`flex items-center gap-3 p-4 rounded-lg border-2 transition-all
-                                             ${
-                                               componentType === option.value
-                                                 ? "border-blue-500 bg-blue-500/10"
-                                                 : "border-gray-600 hover:border-gray-500"
-                                             }`}
+                                             ${componentType === option.value
+                      ? "border-blue-500 bg-primary/10"
+                      : "border-gray-600 hover:border-gray-500"
+                    }`}
                   disabled={isSubmitting}
                 >
                   <option.icon
                     className={
                       componentType === option.value
-                        ? "text-blue-400"
-                        : "text-gray-400"
+                        ? "text-primary"
+                        : "text-muted-foreground"
                     }
                     size={20}
                   />
@@ -375,7 +374,7 @@ const CreateComponentModal = ({
           <div className="flex justify-end items-center gap-3 pt-2">
             <button
               onClick={onClose}
-              className="px-4 py-2 text-sm bg-gray-700 rounded-lg hover:bg-gray-600 
+              className="px-4 py-2 text-sm bg-card/80 rounded-lg hover:bg-gray-600 
                                      transition-colors disabled:opacity-50"
               disabled={isSubmitting}
             >
@@ -384,7 +383,7 @@ const CreateComponentModal = ({
             <button
               onClick={handleSubmit}
               disabled={!name || (!mainFile && !isUpdateMode) || isSubmitting}
-              className="px-4 py-2 text-sm bg-blue-500 rounded-lg hover:bg-blue-600 
+              className="px-4 py-2 text-sm bg-primary rounded-lg hover:bg-blue-600 
                                      disabled:opacity-50 transition-colors flex items-center gap-2"
             >
               {isSubmitting ? (

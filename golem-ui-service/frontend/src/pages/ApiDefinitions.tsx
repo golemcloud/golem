@@ -17,7 +17,7 @@ const ApiDefinitionCard = ({ apiDef }: { apiDef: ApiDefinition }) => {
   });
 
   return (
-    <div className="bg-gray-800 rounded-lg p-4 hover:bg-gray-750">
+    <div className="bg-card rounded-lg p-4 hover:bg-gray-750">
       <div className="flex justify-between">
         <Link
           to={`/api/definitions/${apiDef.id}/${apiDef.version}`}
@@ -27,7 +27,7 @@ const ApiDefinitionCard = ({ apiDef }: { apiDef: ApiDefinition }) => {
             <Globe className="h-4 w-4" />
             {apiDef.id}
           </h3>
-          <div className="mt-1 text-sm text-gray-400">
+          <div className="mt-1 text-sm text-muted-foreground">
             <span>Version {apiDef.version}</span>
             <span className="mx-2">•</span>
             <span>{apiDef.routes.length} routes</span>
@@ -51,7 +51,7 @@ const ApiDefinitionCard = ({ apiDef }: { apiDef: ApiDefinition }) => {
                 deleteDefinition({ id: apiDef.id, version: apiDef.version });
               }
             }}
-            className="p-1.5 text-red-400 hover:text-red-300 rounded-md hover:bg-gray-700"
+            className="p-1.5 text-red-400 hover:text-red-300 rounded-md hover:bg-card/50"
           >
             <Trash2 size={16} />
           </button>
@@ -66,7 +66,7 @@ export const ApiDefinitionsPage = () => {
   const { data: apiDefinitions, isLoading } = useApiDefinitions();
 
   if (isLoading) {
-    return <div className="text-gray-400">Loading...</div>;
+    return <div className="text-muted-foreground">Loading...</div>;
   }
 
   return (
@@ -75,7 +75,7 @@ export const ApiDefinitionsPage = () => {
         <h1 className="text-2xl font-bold">API Definitions</h1>
         <button
           onClick={() => setShowCreateModal(true)}
-          className="flex items-center gap-2 bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+          className="flex items-center gap-2 bg-primary text-white px-4 py-2 rounded hover:bg-blue-600"
         >
           <Plus size={18} />
           Create API Definition
@@ -91,8 +91,8 @@ export const ApiDefinitionsPage = () => {
         ))}
 
         {(!apiDefinitions || apiDefinitions.length === 0) && (
-          <div className="text-center py-8 bg-gray-800 rounded-lg">
-            <p className="text-gray-400">No API definitions found</p>
+          <div className="text-center py-8 bg-card rounded-lg">
+            <p className="text-muted-foreground">No API definitions found</p>
           </div>
         )}
       </div>

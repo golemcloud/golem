@@ -23,7 +23,7 @@ export const PluginsPage = () => {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="text-gray-400 flex items-center gap-2">
+        <div className="text-muted-foreground flex items-center gap-2">
           <Cog className="animate-spin" size={20} />
           <span>Loading plugins...</span>
         </div>
@@ -33,19 +33,19 @@ export const PluginsPage = () => {
 
   return (
     <div className="space-y-8">
-      <div className="flex justify-between items-center bg-gray-800/50 p-6 rounded-lg">
+      <div className="flex justify-between items-center bg-card/50 p-6 rounded-lg">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-3">
-            <Package size={24} className="text-blue-400" />
+            <Package size={24} className="text-primary" />
             Plugins
           </h1>
-          <p className="text-gray-400 mt-1">
+          <p className="text-muted-foreground mt-1">
             Manage your system plugins and extensions
           </p>
         </div>
         <button
           onClick={() => setShowCreateModal(true)}
-          className="flex items-center gap-2 bg-blue-500 text-white px-4 py-2 rounded-lg 
+          className="flex items-center gap-2 bg-primary text-white px-4 py-2 rounded-lg 
                              hover:bg-blue-600 transition-colors duration-200 shadow-lg hover:shadow-xl"
         >
           <Plus size={18} />
@@ -57,7 +57,7 @@ export const PluginsPage = () => {
         {plugins?.map((plugin) => (
           <div
             key={`${plugin.name}-${plugin.version}`}
-            className="bg-gray-800 rounded-lg p-6 hover:bg-gray-800/80 transition-colors duration-200"
+            className="bg-card rounded-lg p-6 hover:bg-card/80 transition-colors duration-200"
           >
             <div className="flex justify-between items-start">
               <div className="space-y-1">
@@ -69,12 +69,12 @@ export const PluginsPage = () => {
                   )}
                   <Link
                     to={`/plugins/${plugin.name}/${plugin.version}`}
-                    className="hover:text-blue-400 transition-colors"
+                    className="hover:text-primary transition-colors"
                   >
                     {plugin.name}
                   </Link>
                 </h3>
-                <div className="flex items-center gap-2 text-sm text-gray-400">
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
                   <Tag size={14} />
                   <span>Version {plugin.version}</span>
                 </div>
@@ -83,7 +83,7 @@ export const PluginsPage = () => {
                 onClick={() =>
                   deletePlugin({ name: plugin.name, version: plugin.version })
                 }
-                className="p-2 text-gray-400 hover:text-red-400 rounded-md hover:bg-gray-700/50
+                className="p-2 text-muted-foreground hover:text-red-400 rounded-md hover:bg-card/50
                                          transition-all duration-200"
                 title="Delete plugin"
               >
@@ -94,7 +94,7 @@ export const PluginsPage = () => {
             <div className="mt-6 space-y-4">
               <p className="text-gray-300">{plugin.description}</p>
 
-              <div className="flex gap-6 text-gray-400 text-sm">
+              <div className="flex gap-6 text-muted-foreground text-sm">
                 <div className="flex items-center gap-2">
                   <Target size={14} />
                   <span>Type: {plugin.specs.type}</span>
@@ -106,7 +106,7 @@ export const PluginsPage = () => {
               </div>
 
               {plugin.specs.type === "OplogProcessor" && (
-                <div className="bg-gray-700/50 p-4 rounded-lg space-y-2">
+                <div className="bg-muted/70 p-4 rounded-lg space-y-2">
                   <div className="flex items-center gap-2 text-sm">
                     <Database size={14} className="text-purple-400" />
                     <span>Component ID: {plugin.specs.componentId}</span>
@@ -120,11 +120,11 @@ export const PluginsPage = () => {
 
               {plugin.specs.type === "ComponentTransformer" && (
                 <div className="space-y-2 text-sm">
-                  <div className="flex items-center gap-2 text-gray-400 hover:text-blue-400 transition-colors">
+                  <div className="flex items-center gap-2 text-muted-foreground hover:text-primary transition-colors">
                     <ExternalLink size={14} />
                     <span>Validate URL: {plugin.specs.validateUrl}</span>
                   </div>
-                  <div className="flex items-center gap-2 text-gray-400 hover:text-blue-400 transition-colors">
+                  <div className="flex items-center gap-2 text-muted-foreground hover:text-primary transition-colors">
                     <ExternalLink size={14} />
                     <span>Transform URL: {plugin.specs.transformUrl}</span>
                   </div>
@@ -135,9 +135,9 @@ export const PluginsPage = () => {
         ))}
 
         {(!plugins || plugins.length === 0) && (
-          <div className="text-center py-12 bg-gray-800 rounded-lg">
+          <div className="text-center py-12 bg-card rounded-lg">
             <Package size={48} className="mx-auto text-gray-600 mb-4" />
-            <p className="text-gray-400">No plugins found</p>
+            <p className="text-muted-foreground">No plugins found</p>
             <p className="text-gray-500 text-sm mt-2">
               Create your first plugin to get started
             </p>

@@ -20,7 +20,7 @@ const Input: React.FC<InputProps> = ({ label, error, ...props }) => (
     </label>
     <input
       {...props}
-      className="w-full px-4 py-2.5 bg-gray-700/50 rounded-lg border border-gray-600 
+      className="w-full px-4 py-2.5 bg-card/50 rounded-lg border border-gray-600 
                      focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none
                      transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
     />
@@ -88,24 +88,24 @@ export const CreateWorkerModal = ({
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50 backdrop-blur-sm">
-      <div className="bg-gray-800 rounded-xl shadow-xl w-full max-w-2xl">
+      <div className="bg-card rounded-xl shadow-xl w-full max-w-2xl">
         {/* Header */}
         <div className="p-6 border-b border-gray-700">
           <div className="flex justify-between items-start">
             <div className="flex items-center gap-3">
-              <div className="p-2 rounded-md bg-blue-500/10 text-blue-400">
+              <div className="p-2 rounded-md bg-primary/10 text-primary">
                 <Terminal size={20} />
               </div>
               <div>
                 <h2 className="text-xl font-semibold">Create New Worker</h2>
-                <p className="text-sm text-gray-400 mt-1">
+                <p className="text-sm text-muted-foreground mt-1">
                   Configure worker settings
                 </p>
               </div>
             </div>
             <button
               onClick={onClose}
-              className="text-gray-400 hover:text-gray-300 p-1 hover:bg-gray-700/50 
+              className="text-muted-foreground hover:text-gray-300 p-1 hover:bg-card/50 
                                      rounded-md transition-colors"
             >
               <X size={20} />
@@ -132,8 +132,8 @@ export const CreateWorkerModal = ({
                 </label>
                 <button
                   onClick={() => setEnv([...env, { key: "", value: "" }])}
-                  className="text-sm text-blue-400 hover:text-blue-300 flex items-center gap-1
-                                             px-2 py-1 rounded hover:bg-blue-500/10 transition-colors"
+                  className="text-sm text-primary hover:text-primary-accent flex items-center gap-1
+                                             px-2 py-1 rounded hover:bg-primary/10 transition-colors"
                   disabled={createWorker.isLoading}
                 >
                   <Plus size={14} />
@@ -145,9 +145,9 @@ export const CreateWorkerModal = ({
                   <div
                     key={index}
                     className="flex gap-2 items-center p-2 rounded-lg bg-gray-700/30 
-                                                  group hover:bg-gray-700/50 transition-colors"
+                                                  group hover:bg-card/50 transition-colors"
                   >
-                    <Key size={16} className="text-gray-400 flex-shrink-0" />
+                    <Key size={16} className="text-muted-foreground flex-shrink-0" />
                     <input
                       placeholder="Key"
                       value={item.key}
@@ -156,7 +156,7 @@ export const CreateWorkerModal = ({
                         newEnv[index].key = e.target.value;
                         setEnv(newEnv);
                       }}
-                      className="flex-1 min-w-0 px-3 py-1.5 bg-gray-700/50 rounded-md border border-gray-600
+                      className="flex-1 min-w-0 px-3 py-1.5 bg-card/50 rounded-md border border-gray-600
                                                      focus:border-blue-500 outline-none transition-colors"
                       disabled={createWorker.isLoading}
                     />
@@ -168,13 +168,13 @@ export const CreateWorkerModal = ({
                         newEnv[index].value = e.target.value;
                         setEnv(newEnv);
                       }}
-                      className="flex-1 min-w-0 px-3 py-1.5 bg-gray-700/50 rounded-md border border-gray-600
+                      className="flex-1 min-w-0 px-3 py-1.5 bg-card/50 rounded-md border border-gray-600
                                                      focus:border-blue-500 outline-none transition-colors"
                       disabled={createWorker.isLoading}
                     />
                     <button
                       onClick={() => removeEnvVar(index)}
-                      className="p-1.5 text-gray-400 hover:text-red-400 rounded-md flex-shrink-0
+                      className="p-1.5 text-muted-foreground hover:text-red-400 rounded-md flex-shrink-0
                                                      opacity-0 group-hover:opacity-100 transition-all hover:bg-gray-600/50"
                       disabled={createWorker.isLoading}
                     >
@@ -193,8 +193,8 @@ export const CreateWorkerModal = ({
                 </label>
                 <button
                   onClick={() => setArguments([...args, ""])}
-                  className="text-sm text-blue-400 hover:text-blue-300 flex items-center gap-1
-                                             px-2 py-1 rounded hover:bg-blue-500/10 transition-colors"
+                  className="text-sm text-primary hover:text-primary-accent flex items-center gap-1
+                                             px-2 py-1 rounded hover:bg-primary/10 transition-colors"
                   disabled={createWorker.isLoading}
                 >
                   <Plus size={14} />
@@ -206,11 +206,11 @@ export const CreateWorkerModal = ({
                   <div
                     key={index}
                     className="flex items-center gap-2 p-2 rounded-lg bg-gray-700/30
-                                                  group hover:bg-gray-700/50 transition-colors"
+                                                  group hover:bg-card/50 transition-colors"
                   >
                     <Settings
                       size={16}
-                      className="text-gray-400 flex-shrink-0"
+                      className="text-muted-foreground flex-shrink-0"
                     />
                     <input
                       value={arg}
@@ -219,14 +219,14 @@ export const CreateWorkerModal = ({
                         newArgs[index] = e.target.value;
                         setArguments(newArgs);
                       }}
-                      className="flex-1 min-w-0 px-3 py-1.5 bg-gray-700/50 rounded-md border border-gray-600
+                      className="flex-1 min-w-0 px-3 py-1.5 bg-card/50 rounded-md border border-gray-600
                                                      focus:border-blue-500 outline-none transition-colors"
                       placeholder="Enter argument"
                       disabled={createWorker.isLoading}
                     />
                     <button
                       onClick={() => removeArg(index)}
-                      className="p-1.5 text-gray-400 hover:text-red-400 rounded-md flex-shrink-0
+                      className="p-1.5 text-muted-foreground hover:text-red-400 rounded-md flex-shrink-0
                                                      opacity-0 group-hover:opacity-100 transition-all hover:bg-gray-600/50"
                       disabled={createWorker.isLoading}
                     >
@@ -244,7 +244,7 @@ export const CreateWorkerModal = ({
           <div className="flex justify-end items-center gap-3">
             <button
               onClick={onClose}
-              className="px-4 py-2 text-sm bg-gray-700 rounded-lg hover:bg-gray-600 
+              className="px-4 py-2 text-sm bg-card/80 rounded-lg hover:bg-gray-600 
                                      transition-colors disabled:opacity-50"
               disabled={createWorker.isLoading}
             >
@@ -253,7 +253,7 @@ export const CreateWorkerModal = ({
             <button
               onClick={handleSubmit}
               disabled={!name || createWorker.isLoading}
-              className="px-4 py-2 text-sm bg-blue-500 rounded-lg hover:bg-blue-600 
+              className="px-4 py-2 text-sm bg-primary rounded-lg hover:bg-blue-600 
                                      disabled:opacity-50 transition-colors flex items-center gap-2"
             >
               {createWorker.isLoading ? (

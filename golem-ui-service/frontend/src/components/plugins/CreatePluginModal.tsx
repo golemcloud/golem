@@ -24,7 +24,7 @@ const Input: React.FC<InputProps> = ({ label, error, ...props }) => (
     </label>
     <input
       {...props}
-      className="w-full px-4 py-2.5 bg-gray-700/50 rounded-lg border border-gray-600 focus:border-blue-500 
+      className="w-full px-4 py-2.5 bg-card/50 rounded-lg border border-gray-600 focus:border-blue-500 
                      focus:ring-1 focus:ring-blue-500 outline-none transition duration-200
                      disabled:opacity-50 disabled:cursor-not-allowed"
     />
@@ -70,16 +70,16 @@ export const CreatePluginModal = ({
       specs:
         type === "OplogProcessor"
           ? {
-              type: "OplogProcessor",
-              componentId: selectedComponentId,
-              componentVersion: selectedVersion,
-            }
+            type: "OplogProcessor",
+            componentId: selectedComponentId,
+            componentVersion: selectedVersion,
+          }
           : {
-              type: "ComponentTransformer",
-              jsonSchema,
-              validateUrl,
-              transformUrl,
-            },
+            type: "ComponentTransformer",
+            jsonSchema,
+            validateUrl,
+            transformUrl,
+          },
       scope: {
         type: "Global",
       },
@@ -116,22 +116,22 @@ export const CreatePluginModal = ({
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50 backdrop-blur-sm">
-      <div className="bg-gray-800 rounded-xl p-6 max-w-2xl w-full shadow-xl">
+      <div className="bg-card rounded-xl p-6 max-w-2xl w-full shadow-xl">
         <div className="flex justify-between items-start mb-6">
           <div className="flex items-center gap-3">
-            <div className="p-2 rounded-md bg-blue-500/10 text-blue-400">
+            <div className="p-2 rounded-md bg-primary/10 text-primary">
               <Plus size={20} />
             </div>
             <div>
               <h2 className="text-xl font-semibold">Create New Plugin</h2>
-              <p className="text-sm text-gray-400 mt-1">
+              <p className="text-sm text-muted-foreground mt-1">
                 Configure your plugin settings
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-gray-300 p-1 hover:bg-gray-700/50 rounded-md transition-colors"
+            className="text-muted-foreground hover:text-gray-300 p-1 hover:bg-card/50 rounded-md transition-colors"
           >
             <X size={20} />
           </button>
@@ -200,16 +200,15 @@ export const CreatePluginModal = ({
                   key={option.value}
                   onClick={() => setType(option.value as PluginType)}
                   className={`flex items-center gap-3 p-4 rounded-lg border-2 transition-all
-                                             ${
-                                               type === option.value
-                                                 ? "border-blue-500 bg-blue-500/10"
-                                                 : "border-gray-600 hover:border-gray-500"
-                                             }`}
+                                             ${type === option.value
+                      ? "border-blue-500 bg-primary/10"
+                      : "border-gray-600 hover:border-gray-500"
+                    }`}
                   disabled={isSubmitting}
                 >
                   <option.icon
                     className={
-                      type === option.value ? "text-blue-400" : "text-gray-400"
+                      type === option.value ? "text-primary" : "text-muted-foreground"
                     }
                     size={20}
                   />
@@ -228,7 +227,7 @@ export const CreatePluginModal = ({
                 <select
                   value={selectedComponentId}
                   onChange={(e) => setSelectedComponentId(e.target.value)}
-                  className="w-full px-4 py-2.5 bg-gray-700/50 rounded-lg border border-gray-600 
+                  className="w-full px-4 py-2.5 bg-card/50 rounded-lg border border-gray-600 
                                              focus:border-blue-500 outline-none"
                   disabled={isSubmitting}
                 >
@@ -266,7 +265,7 @@ export const CreatePluginModal = ({
                 <textarea
                   value={jsonSchema}
                   onChange={(e) => setJsonSchema(e.target.value)}
-                  className="w-full px-4 py-2.5 bg-gray-700/50 rounded-lg border border-gray-600 
+                  className="w-full px-4 py-2.5 bg-card/50 rounded-lg border border-gray-600 
                                              focus:border-blue-500 outline-none font-mono text-sm h-32 resize-none"
                   placeholder="{}"
                   disabled={isSubmitting}
@@ -294,7 +293,7 @@ export const CreatePluginModal = ({
           <div className="flex justify-end items-center gap-3 pt-2">
             <button
               onClick={onClose}
-              className="px-4 py-2 text-sm bg-gray-700 rounded-lg hover:bg-gray-600 transition-colors
+              className="px-4 py-2 text-sm bg-card/80 rounded-lg hover:bg-gray-600 transition-colors
                                      disabled:opacity-50"
               disabled={isSubmitting}
             >
@@ -303,7 +302,7 @@ export const CreatePluginModal = ({
             <button
               onClick={handleSubmit}
               disabled={!name || !version || isSubmitting}
-              className="px-4 py-2 text-sm bg-blue-500 rounded-lg hover:bg-blue-600 disabled:opacity-50
+              className="px-4 py-2 text-sm bg-primary rounded-lg hover:bg-blue-600 disabled:opacity-50
                                      transition-colors flex items-center gap-2"
             >
               {isSubmitting ? (

@@ -19,7 +19,7 @@ const DeleteConfirmDialog = ({
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50 backdrop-blur-sm">
-      <div className="bg-gray-800 rounded-xl p-6 max-w-md w-full shadow-xl border border-red-500/10">
+      <div className="bg-card rounded-xl p-6 max-w-md w-full shadow-xl border border-red-500/10">
         <div className="flex items-start gap-4">
           <div className="p-3 rounded-full bg-red-500/10">
             <AlertTriangle className="text-red-400" size={24} />
@@ -38,7 +38,7 @@ const DeleteConfirmDialog = ({
               <button
                 onClick={onClose}
                 disabled={isDeleting}
-                className="px-4 py-2 text-sm bg-gray-700 rounded-lg hover:bg-gray-600 
+                className="px-4 py-2 text-sm bg-card/80 rounded-lg hover:bg-gray-600 
                                          transition-colors disabled:opacity-50"
               >
                 Cancel

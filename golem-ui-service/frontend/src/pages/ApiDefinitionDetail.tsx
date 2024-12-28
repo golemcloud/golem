@@ -127,7 +127,7 @@ export const ApiDefinitionView = () => {
   if (isLoadingDefinition || isLoadingDeployments) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="text-gray-400">Loading...</div>
+        <div className="text-muted-foreground">Loading...</div>
       </div>
     );
   }
@@ -135,7 +135,7 @@ export const ApiDefinitionView = () => {
   if (!apiDefinition) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="text-gray-400">API definition not found</div>
+        <div className="text-muted-foreground">API definition not found</div>
       </div>
     );
   }
@@ -147,13 +147,13 @@ export const ApiDefinitionView = () => {
         <div className="flex items-center gap-4">
           <Link
             to="/api"
-            className="p-2 text-gray-400 hover:text-gray-300 rounded-md hover:bg-gray-800"
+            className="p-2 text-muted-foreground hover:text-gray-300 rounded-md hover:bg-card"
           >
             <ArrowLeft size={20} />
           </Link>
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2">
-              <Globe className="h-6 w-6 text-blue-400" />
+              <Globe className="h-6 w-6 text-primary" />
               {apiDefinition.id}
               {apiDefinition.draft && (
                 <span className="text-sm bg-yellow-500/10 text-yellow-500 px-2 py-0.5 rounded">
@@ -161,7 +161,7 @@ export const ApiDefinitionView = () => {
                 </span>
               )}
             </h1>
-            <p className="text-gray-400">Version {apiDefinition.version}</p>
+            <p className="text-muted-foreground">Version {apiDefinition.version}</p>
           </div>
         </div>
 
@@ -175,7 +175,7 @@ export const ApiDefinitionView = () => {
           </button>
           <button
             onClick={() => setShowRouteModal(true)}
-            className="flex items-center gap-2 bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+            className="flex items-center gap-2 bg-primary text-white px-4 py-2 rounded hover:bg-blue-600"
           >
             <Plus size={18} />
             Add Route
@@ -185,12 +185,12 @@ export const ApiDefinitionView = () => {
 
       <div className="grid grid-cols-3 gap-6">
         {/* Routes List */}
-        <div className="col-span-2 bg-gray-800 rounded-lg p-6">
+        <div className="col-span-2 bg-card rounded-lg p-6">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-semibold flex items-center gap-2">
-              <RouteIcon className="h-5 w-5 text-blue-400" />
+              <RouteIcon className="h-5 w-5 text-primary" />
               Routes
-              <span className="text-sm text-gray-400">
+              <span className="text-sm text-muted-foreground">
                 ({apiDefinition.routes.length})
               </span>
             </h2>
@@ -203,7 +203,7 @@ export const ApiDefinitionView = () => {
                   navigator.clipboard.writeText(text);
                   toast.success("Routes copied to clipboard");
                 }}
-                className="text-sm text-gray-400 hover:text-gray-300 flex items-center gap-1"
+                className="text-sm text-muted-foreground hover:text-gray-300 flex items-center gap-1"
               >
                 <Share2 size={14} />
                 Copy All
@@ -215,7 +215,7 @@ export const ApiDefinitionView = () => {
             {apiDefinition.routes.map((route, index) => (
               <div
                 key={index}
-                className="bg-gray-700 rounded-lg p-4 hover:bg-gray-650 transition-colors"
+                className="bg-card/80 hover:bg-card/60 border border-border/10 hover:border-border/20 rounded-lg p-4 transition-colors"
               >
                 <div className="flex items-start justify-between">
                   <div className="space-y-2">
@@ -223,11 +223,10 @@ export const ApiDefinitionView = () => {
                       <span
                         className={`
                         px-2 py-0.5 rounded text-sm font-medium
-                        ${
-                          route.method === "GET"
+                        ${route.method === "GET"
                             ? "bg-green-500/10 text-green-500"
                             : route.method === "POST"
-                              ? "bg-blue-500/10 text-blue-500"
+                              ? "bg-primary/10 text-blue-500"
                               : route.method === "PUT"
                                 ? "bg-yellow-500/10 text-yellow-500"
                                 : route.method === "DELETE"
@@ -235,7 +234,7 @@ export const ApiDefinitionView = () => {
                                   : route.method === "PATCH"
                                     ? "bg-purple-500/10 text-purple-500"
                                     : "bg-gray-500/10 text-gray-500"
-                        }
+                          }
                       `}
                       >
                         {route.method}
@@ -243,7 +242,7 @@ export const ApiDefinitionView = () => {
                       <span className="font-mono">{route.path}</span>
                     </div>
 
-                    <div className="text-sm text-gray-400 space-y-1">
+                    <div className="text-sm text-muted-foreground space-y-1">
                       <div className="flex items-center gap-2">
                         <Code2 className="h-4 w-4" />
                         Component: {route.binding.componentId.componentId} (v
@@ -264,7 +263,7 @@ export const ApiDefinitionView = () => {
                   <div className="flex gap-2">
                     <button
                       onClick={() => handleEditRoute(route, index)}
-                      className="p-1.5 text-blue-400 hover:text-blue-300 rounded-md hover:bg-gray-600"
+                      className="p-1.5 text-primary hover:text-primary-accent rounded-md hover:bg-gray-600"
                     >
                       <Code2 size={16} />
                     </button>
@@ -288,12 +287,12 @@ export const ApiDefinitionView = () => {
             ))}
 
             {apiDefinition.routes.length === 0 && (
-              <div className="text-center py-8 text-gray-400">
+              <div className="text-center py-8 text-muted-foreground">
                 <RouteIcon className="h-8 w-8 mx-auto mb-2 opacity-50" />
                 <p>No routes defined yet</p>
                 <button
                   onClick={() => setShowRouteModal(true)}
-                  className="text-blue-400 hover:text-blue-300 mt-2"
+                  className="text-primary hover:text-primary-accent mt-2"
                 >
                   Add your first route
                 </button>
@@ -303,7 +302,7 @@ export const ApiDefinitionView = () => {
         </div>
 
         {/* Deployments Panel */}
-        <div className="col-span-1 bg-gray-800 rounded-lg p-6">
+        <div className="col-span-1 bg-card rounded-lg p-6">
           <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
             <Upload className="h-5 w-5 text-green-400" />
             Deployments
@@ -313,16 +312,16 @@ export const ApiDefinitionView = () => {
             {deployments?.map((deployment) => (
               <div
                 key={`${deployment.site.host}-${deployment.site.subdomain}`}
-                className="bg-gray-700 rounded-lg p-3"
+                className="bg-card/80 rounded-lg p-3"
               >
                 <div className="flex items-center justify-between">
                   <div>
                     <div className="flex items-center gap-2">
-                      <Globe size={16} className="text-gray-400" />
+                      <Globe size={16} className="text-muted-foreground" />
                       <span>{deployment.site.host}</span>
                     </div>
                     {deployment.site.subdomain && (
-                      <p className="text-sm text-gray-400 mt-1">
+                      <p className="text-sm text-muted-foreground mt-1">
                         Subdomain: {deployment.site.subdomain}
                       </p>
                     )}
@@ -348,7 +347,7 @@ export const ApiDefinitionView = () => {
             ))}
 
             {(!deployments || deployments.length === 0) && (
-              <div className="text-center py-4 text-gray-400">
+              <div className="text-center py-4 text-muted-foreground">
                 <p>No active deployments</p>
                 <button
                   onClick={() => setShowDeployModal(true)}

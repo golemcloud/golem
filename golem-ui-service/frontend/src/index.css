@@ -1,3 +1,207 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+
+  [data-theme="dark"] {
+    --golem-background: 0 0% 3.9%;
+    --golem-background-base: 0 0% 7.8%;
+    --golem-foreground: 0 0% 93.3%;
+    --golem-border: 0 0% 24.7%;
+    --golem-input: 0 0% 29%;
+    --golem-ring: 0 0% 37.6%;
+    --golem-card: 0 0% 13.3%;
+    --golem-card-foreground: 0 0% 93.3%;
+    --golem-popover: 0 0% 3.9%;
+    --golem-popover-foreground: 0 0% 93.3%;
+    --golem-muted: 0 0% 18.8%;
+    --golem-muted-foreground: 0 0% 69.4%;
+    --golem-accent: 0 0% 21.6%;
+    --golem-accent-foreground: 0 0% 93.3%;
+    --golem-primary: 226 70% 55.5%;
+    --golem-primary-background: 228 43.5% 18%;
+    --golem-primary-foreground: 0 0% 100%;
+    --golem-primary-soft: 236 94.3% 93.1%;
+    --golem-primary-accent: 230 74.3% 63.3%;
+    --golem-primary-border: 225 50.7% 28.6%;
+    --golem-secondary: 236 94.3% 93.1%;
+    --golem-secondary-foreground: 226 25.5% 10%;
+    --golem-destructive: 358 75.1% 59%;
+    --golem-destructive-background: 353 40.5% 16.5%;
+    --golem-destructive-foreground: 0 0% 100%;
+    --golem-destructive-soft: 350 100% 91%;
+    --golem-destructive-accent: 359 84.3% 67.5%;
+    --golem-destructive-border: 354 56.7% 26.3%;
+    --golem-success: 131 40.9% 46.5%;
+    --golem-success-background: 139 25% 12.5%;
+    --golem-success-foreground: 0 0% 100%;
+    --golem-success-soft: 120 60.5% 85.1%;
+    --golem-success-accent: 131 41.7% 54.9%;
+    --golem-success-border: 136 31.4% 20.6%;
+    --golem-sidebar-background: 0 0% 3.9%;
+    --golem-sidebar-foreground: 0 0% 93.3%;
+    --golem-sidebar-primary: 226 70% 55.5%;
+    --golem-sidebar-primary-foreground: 0 0% 100%;
+    --golem-sidebar-accent: 0 0% 21.6%;
+    --golem-sidebar-accent-foreground: 0 0% 93.3%;
+    --golem-sidebar-border: 0 0% 24.7%;
+    --golem-sidebar-ring: 0 0% 37.6%;
+    --golem-radius: 0.4rem;
+    --chart-1: 12 76% 61%;
+    --chart-2: 173 58% 39%;
+    --chart-3: 197 37% 24%;
+    --chart-4: 43 74% 66%;
+    --chart-5: 27 87% 67%;
+  }
+
+  [data-theme="black"] {
+    --golem-background: 240 10% 3.9%;
+    --golem-background-base: 240 10% 3.9%;
+    --golem-foreground: 0 0% 98%;
+    --golem-border: 240 3.7% 15.9%;
+    --golem-input: 240 3.7% 15.9%;
+    --golem-ring: 240 4.9% 83.9%;
+    --golem-card: 240 10% 3.9%;
+    --golem-card-foreground: 0 0% 98%;
+    --golem-popover: 240 10% 3.9%;
+    --golem-popover-foreground: 0 0% 98%;
+    --golem-muted: 240 3.7% 15.9%;
+    --golem-muted-foreground: 240 5% 64.9%;
+    --golem-accent: 240 3.7% 15.9%;
+    --golem-accent-foreground: 0 0% 98%;
+    --golem-primary: 226 70% 55.5%;
+    --golem-primary-background: 228 43.5% 18%;
+    --golem-primary-foreground: 0 0% 100%;
+    --golem-primary-soft: 236 94.3% 93.1%;
+    --golem-primary-accent: 230 74.3% 63.3%;
+    --golem-primary-border: 225 50.7% 28.6%;
+    --golem-secondary: 236 94.3% 93.1%;
+    --golem-secondary-foreground: 226 25.5% 10%;
+    --golem-destructive: 358 75.1% 59%;
+    --golem-destructive-background: 353 40.5% 16.5%;
+    --golem-destructive-foreground: 0 0% 100%;
+    --golem-destructive-soft: 350 100% 91%;
+    --golem-destructive-accent: 359 84.3% 67.5%;
+    --golem-destructive-border: 354 56.7% 26.3%;
+    --golem-success: 131 40.9% 46.5%;
+    --golem-success-background: 139 25% 12.5%;
+    --golem-success-foreground: 0 0% 100%;
+    --golem-success-soft: 120 60.5% 85.1%;
+    --golem-success-accent: 131 41.7% 54.9%;
+    --golem-success-border: 136 31.4% 20.6%;
+    --golem-sidebar-background: 0 0% 3.9%;
+    --golem-sidebar-foreground: 0 0% 93.3%;
+    --golem-sidebar-primary: 226 70% 55.5%;
+    --golem-sidebar-primary-foreground: 0 0% 100%;
+    --golem-sidebar-accent: 0 0% 21.6%;
+    --golem-sidebar-accent-foreground: 0 0% 93.3%;
+    --golem-sidebar-border: 0 0% 24.7%;
+    --golem-sidebar-ring: 0 0% 37.6%;
+    --golem-radius: 0.4rem;
+    --chart-1: 220 70% 50%;
+    --chart-2: 160 60% 45%;
+    --chart-3: 30 80% 55%;
+    --chart-4: 280 65% 60%;
+    --chart-5: 340 75% 55%;
+
+     /* Add subtle border to all card elements */
+     & .bg-card,
+     & div[class*="bg-gray-800"] {
+       @apply border-2 border-border/40;
+     }
+ 
+     /* Add slightly stronger border to hoverable cards */
+     & .bg-card:hover,
+     & div[class*="bg-gray-800"]:hover {
+       @apply border-border/60;
+     }
+  }
+
+  [data-theme="light"] {
+    --golem-background: 0 0% 98.8%;
+    --golem-background-base: 0 0% 96.5%;
+    --golem-foreground: 0 0% 12.5%;
+    --golem-border: 0 0% 86.7%;
+    --golem-input: 0 0% 83.1%;
+    --golem-ring: 0 0% 73.3%;
+    --golem-card: 0 0% 98.8%;
+    --golem-card-foreground: 0 0% 12.5%;
+    --golem-popover: 0 0% 98.8%;
+    --golem-popover-foreground: 0 0% 12.5%;
+    --golem-muted: 0 0% 92.2%;
+    --golem-muted-foreground: 0 0% 39.2%;
+    --golem-accent: 0 0% 89.4%;
+    --golem-accent-foreground: 0 0% 12.5%;
+    --golem-primary: 226 70% 55.5%;
+    --golem-primary-background: 224 100% 97.1%;
+    --golem-primary-foreground: 0 0% 100%;
+    --golem-primary-soft: 226 49.6% 24.1%;
+    --golem-primary-accent: 226 58.9% 51.4%;
+    --golem-primary-border: 224 81% 87.6%;
+    --golem-secondary: 226 49.6% 24.1%;
+    --golem-secondary-foreground: 240 33.3% 99.4%;
+    --golem-destructive: 358 75.1% 59%;
+    --golem-destructive-background: 0 100% 96.9%;
+    --golem-destructive-foreground: 0 0% 100%;
+    --golem-destructive-soft: 351 62.6% 24.1%;
+    --golem-destructive-accent: 358 67.2% 54.5%;
+    --golem-destructive-border: 0 81% 87.6%;
+    --golem-success: 131 40.9% 46.5%;
+    --golem-success-background: 120 53.8% 94.9%;
+    --golem-success-foreground: 0 0% 100%;
+    --golem-success-soft: 131 30.4% 18%;
+    --golem-success-accent: 132 43.3% 42.2%;
+    --golem-success-border: 124 38.5% 79.6%;
+    --golem-sidebar-background: 0 0% 98.8%;
+    --golem-sidebar-foreground: 0 0% 12.5%;
+    --golem-sidebar-primary: 226 70% 55.5%;
+    --golem-sidebar-primary-foreground: 0 0% 100%;
+    --golem-sidebar-accent: 0 0% 89.4%;
+    --golem-sidebar-accent-foreground: 0 0% 12.5%;
+    --golem-sidebar-border: 0 0% 86.7%;
+    --golem-sidebar-ring: 0 0% 73.3%;
+    --golem-radius: 0.4rem;
+    --chart-1: 220 70% 50%;
+    --chart-2: 160 60% 45%;
+    --chart-3: 30 80% 55%;
+    --chart-4: 280 65% 60%;
+    --chart-5: 340 75% 55%;
+
+         /* Add subtle border to all card elements */
+         & .bg-card,
+         & div[class*="bg-gray-800"] {
+           @apply border-2 border-border/40;
+         }
+     
+         /* Add slightly stronger border to hoverable cards */
+         & .bg-card:hover,
+         & div[class*="bg-gray-800"]:hover {
+           @apply border-border/60;
+         }
+  }
+
+  [data-theme="light"] .logo-light {
+    display: block;
+  }
+
+  [data-theme]:not([data-theme="light"]) .logo-light {
+    display: none;
+  }
+
+  [data-theme="black"].logo-dark,
+  [data-theme="dark"] {
+    display: block;
+  }
+
+  [data-theme]:not([data-theme="dark"], [data-theme="black"]) .logo-dark {
+    display: none;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+  }
+}

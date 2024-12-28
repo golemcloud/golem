@@ -24,11 +24,10 @@ const TabButton = ({
   <button
     onClick={onClick}
     className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors 
-                   ${
-                     active
-                       ? "bg-blue-500/10 text-blue-400"
-                       : "text-gray-400 hover:text-gray-300 hover:bg-gray-700/50"
-                   }`}
+                   ${active
+        ? "bg-primary/10 text-primary"
+        : "text-muted-foreground hover:text-gray-300 hover:bg-card/50"
+      }`}
   >
     {children}
   </button>
@@ -125,22 +124,22 @@ export const ApiDefinitionModal = ({
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50 backdrop-blur-sm">
-      <div className="bg-gray-800 rounded-xl p-6 max-w-md w-full shadow-xl">
+      <div className="bg-card rounded-xl p-6 max-w-md w-full shadow-xl">
         <div className="flex justify-between items-start mb-6">
           <div className="flex items-center gap-3">
-            <div className="p-2 rounded-md bg-blue-500/10 text-blue-400">
+            <div className="p-2 rounded-md bg-primary/10 text-primary">
               <Globe size={24} />
             </div>
             <div>
               <h2 className="text-xl font-semibold">Create API Definition</h2>
-              <p className="text-sm text-gray-400 mt-1">
+              <p className="text-sm text-muted-foreground mt-1">
                 Define your API endpoints
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-gray-300 p-1 hover:bg-gray-700/50 
+            className="text-muted-foreground hover:text-gray-300 p-1 hover:bg-card/50 
                                  rounded-md transition-colors"
           >
             <X size={20} />
@@ -175,7 +174,7 @@ export const ApiDefinitionModal = ({
                   type="text"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  className="w-full px-4 py-2.5 bg-gray-700/50 rounded-lg border border-gray-600 
+                  className="w-full px-4 py-2.5 bg-card/50 rounded-lg border border-gray-600 
                                              focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
                   placeholder="Enter API name"
                   disabled={isSubmitting}
@@ -189,7 +188,7 @@ export const ApiDefinitionModal = ({
                   type="text"
                   value={version}
                   onChange={(e) => setVersion(e.target.value)}
-                  className="w-full px-4 py-2.5 bg-gray-700/50 rounded-lg border border-gray-600 
+                  className="w-full px-4 py-2.5 bg-card/50 rounded-lg border border-gray-600 
                                              focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
                   placeholder="e.g., 1.0.0"
                   disabled={isSubmitting}
@@ -208,16 +207,16 @@ export const ApiDefinitionModal = ({
               onDrop={handleFileDrop}
               className={`border-2 border-dashed rounded-lg p-8 text-center transition-all
                                 ${isSubmitting ? "cursor-not-allowed opacity-60" : "cursor-pointer"} 
-                                ${dragActive ? "border-blue-500 bg-blue-500/10" : "border-gray-600"}`}
+                                ${dragActive ? "border-blue-500 bg-primary/10" : "border-gray-600"}`}
             >
               {file ? (
                 <div className="flex items-center justify-center gap-3">
-                  <FileJson className="h-6 w-6 text-blue-400" />
+                  <FileJson className="h-6 w-6 text-primary" />
                   <span>{file.name}</span>
                   {!isSubmitting && (
                     <button
                       onClick={() => setFile(null)}
-                      className="p-1 text-gray-400 hover:text-red-400 rounded-md
+                      className="p-1 text-muted-foreground hover:text-red-400 rounded-md
                                                      hover:bg-red-500/10 transition-colors"
                     >
                       <X size={16} />
@@ -226,12 +225,12 @@ export const ApiDefinitionModal = ({
                 </div>
               ) : (
                 <div className="space-y-2">
-                  <Upload className="h-8 w-8 mx-auto text-gray-400" />
+                  <Upload className="h-8 w-8 mx-auto text-muted-foreground" />
                   <div>
                     <p className="text-sm text-gray-300">
                       Upload your OpenAPI specification
                     </p>
-                    <p className="text-xs text-gray-400 mt-1">
+                    <p className="text-xs text-muted-foreground mt-1">
                       Drag and drop or click to browse
                     </p>
                   </div>
@@ -250,7 +249,7 @@ export const ApiDefinitionModal = ({
           <div className="flex justify-end items-center gap-3 pt-2">
             <button
               onClick={onClose}
-              className="px-4 py-2 text-sm bg-gray-700 rounded-lg hover:bg-gray-600 
+              className="px-4 py-2 text-sm bg-card/80 rounded-lg hover:bg-gray-600 
                                      transition-colors disabled:opacity-50"
               disabled={isSubmitting}
             >
@@ -263,7 +262,7 @@ export const ApiDefinitionModal = ({
                 (creationMethod === "upload" && !file) ||
                 isSubmitting
               }
-              className="px-4 py-2 text-sm bg-blue-500 rounded-lg hover:bg-blue-600 
+              className="px-4 py-2 text-sm bg-primary rounded-lg hover:bg-blue-600 
                                      disabled:opacity-50 transition-colors flex items-center gap-2"
             >
               {isSubmitting ? (

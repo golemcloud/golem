@@ -59,7 +59,7 @@ export const WorkerActionModal = ({
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4">
-      <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full">
+      <div className="bg-card rounded-lg p-6 max-w-md w-full">
         <div className="flex justify-between items-start mb-4">
           <div className="flex items-center gap-2">
             {action === "interrupt" ? (
@@ -73,7 +73,7 @@ export const WorkerActionModal = ({
           </div>
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-gray-300"
+            className="text-muted-foreground hover:text-gray-300"
           >
             <XCircle className="h-6 w-6" />
           </button>
@@ -84,7 +84,7 @@ export const WorkerActionModal = ({
             <p className="text-gray-300">
               Worker: <span className="font-medium">{workerName}</span>
             </p>
-            <p className="text-gray-400 text-sm">
+            <p className="text-muted-foreground text-sm">
               Current Status:{" "}
               <span className="font-medium">{currentStatus}</span>
             </p>
@@ -97,7 +97,7 @@ export const WorkerActionModal = ({
                 id="recover-immediately"
                 checked={recoverImmediately}
                 onChange={(e) => setRecoverImmediately(e.target.checked)}
-                className="rounded bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500"
+                className="rounded bg-card/80 border-gray-600 text-blue-500 focus:ring-blue-500"
               />
               <label
                 htmlFor="recover-immediately"
@@ -108,7 +108,7 @@ export const WorkerActionModal = ({
             </div>
           )}
 
-          <div className="bg-gray-700 rounded p-3 flex items-start gap-2">
+          <div className="bg-card/80 rounded p-3 flex items-start gap-2">
             <AlertCircle className="h-5 w-5 text-yellow-500 flex-shrink-0 mt-0.5" />
             <p className="text-sm text-gray-300">
               {action === "interrupt"
@@ -120,17 +120,16 @@ export const WorkerActionModal = ({
           <div className="flex justify-end space-x-3 mt-6">
             <button
               onClick={onClose}
-              className="px-4 py-2 text-sm bg-gray-700 rounded-md hover:bg-gray-600"
+              className="px-4 py-2 text-sm bg-card/80 rounded-md hover:bg-gray-600"
             >
               Cancel
             </button>
             <button
               onClick={handleAction}
-              className={`px-4 py-2 text-sm rounded-md ${
-                action === "interrupt"
-                  ? "bg-yellow-500 hover:bg-yellow-600"
-                  : "bg-green-500 hover:bg-green-600"
-              }`}
+              className={`px-4 py-2 text-sm rounded-md ${action === "interrupt"
+                ? "bg-yellow-500 hover:bg-yellow-600"
+                : "bg-green-500 hover:bg-green-600"
+                }`}
             >
               {action === "interrupt" ? "Interrupt Worker" : "Resume Worker"}
             </button>
