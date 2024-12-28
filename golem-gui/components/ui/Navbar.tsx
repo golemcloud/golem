@@ -29,7 +29,7 @@ const links = [
   { name: "Components", to: "/components" },
   { name: "Workers", to: "/workers" },
   { name: "APIs", to: "/apis" },
-  { name: "Plugins", to: "/plugins", comingSoon: true },
+  { name: "Plugins", to: "/plugins", comingSoon: false },
 ] as NAV_LINK[];
 
 export default function Navbar() {
