@@ -77,11 +77,11 @@ impl WasmValue for ValueAndType {
         val.into_value_and_type()
     }
 
-    fn make_float32(val: f32) -> Self {
+    fn make_f32(val: f32) -> Self {
         val.into_value_and_type()
     }
 
-    fn make_float64(val: f64) -> Self {
+    fn make_f64(val: f64) -> Self {
         val.into_value_and_type()
     }
 
@@ -275,14 +275,14 @@ impl WasmValue for ValueAndType {
         }
     }
 
-    fn unwrap_float32(&self) -> f32 {
+    fn unwrap_f32(&self) -> f32 {
         match self.value {
             Value::F32(val) => val,
             _ => panic!("Expected f32, found {:?}", self),
         }
     }
 
-    fn unwrap_float64(&self) -> f64 {
+    fn unwrap_f64(&self) -> f64 {
         match self.value {
             Value::F64(val) => val,
             _ => panic!("Expected f64, found {:?}", self),
@@ -705,11 +705,11 @@ mod type_annotated_value {
             TypeAnnotatedValuePrintable(TypeAnnotatedValue::U64(val))
         }
 
-        fn make_float32(val: f32) -> Self {
+        fn make_f32(val: f32) -> Self {
             TypeAnnotatedValuePrintable(TypeAnnotatedValue::F32(val))
         }
 
-        fn make_float64(val: f64) -> Self {
+        fn make_f64(val: f64) -> Self {
             TypeAnnotatedValuePrintable(TypeAnnotatedValue::F64(val))
         }
 
@@ -1015,14 +1015,14 @@ mod type_annotated_value {
             }
         }
 
-        fn unwrap_float32(&self) -> f32 {
+        fn unwrap_f32(&self) -> f32 {
             match self.0 {
                 TypeAnnotatedValue::F32(value) => value,
                 _ => panic!("Expected f32, found {:?}", self),
             }
         }
 
-        fn unwrap_float64(&self) -> f64 {
+        fn unwrap_f64(&self) -> f64 {
             match self.0 {
                 TypeAnnotatedValue::F64(value) => value,
                 _ => panic!("Expected f64, found {:?}", self),
