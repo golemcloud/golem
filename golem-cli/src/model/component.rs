@@ -178,8 +178,8 @@ fn render_type(typ: &AnalysedType) -> String {
         AnalysedType::List(boxed) => format!("list<{}>", render_type(&boxed.inner)),
         AnalysedType::Str { .. } => "string".to_string(),
         AnalysedType::Chr { .. } => "char".to_string(),
-        AnalysedType::F64 { .. } => "float64".to_string(),
-        AnalysedType::F32 { .. } => "float32".to_string(),
+        AnalysedType::F64 { .. } => "f64".to_string(),
+        AnalysedType::F32 { .. } => "f32".to_string(),
         AnalysedType::U64 { .. } => "u64".to_string(),
         AnalysedType::S64 { .. } => "s64".to_string(),
         AnalysedType::U32 { .. } => "u32".to_string(),
@@ -559,12 +559,12 @@ mod tests {
 
     #[test]
     fn same_export_for_f64() {
-        ensure_same_export(f64(), "float64")
+        ensure_same_export(f64(), "f64")
     }
 
     #[test]
     fn same_export_for_f32() {
-        ensure_same_export(f32(), "float32")
+        ensure_same_export(f32(), "f32")
     }
 
     #[test]
