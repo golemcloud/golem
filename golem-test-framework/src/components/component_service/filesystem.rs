@@ -24,6 +24,7 @@ use golem_common::model::{
 use golem_wasm_ast::analysis::AnalysedExport;
 use serde::Serialize;
 use std::{
+    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
 };
 use tonic::transport::Channel;
