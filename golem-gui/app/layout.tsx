@@ -31,8 +31,10 @@ export default function RootLayout({
               theme='dark'
             />
           <Navbar />
-          <div style={{ display: 'flex' }}>
-            <main style={{ flexGrow: 1, }}>{children}</main>
+          <div style={{ display: 'flex',minWidth:'100vh' }}>
+            <div style={{ flexGrow: 1, minHeight:'100vh' }}>
+              <main style={{ flexGrow: 1}}>{children}</main>
+            </div>
           </div>
           <Footer/>
         </ThemeProvider>
