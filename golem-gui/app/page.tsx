@@ -14,7 +14,7 @@ import {
 import DescriptionIcon from "@mui/icons-material/Description";
 import WorkIcon from "@mui/icons-material/Work";
 import SettingsIcon from "@mui/icons-material/Settings";
-import { NotepadText, Code ,BookOpenText,Github} from "lucide-react";
+import { NotepadText, Code, BookOpenText, Github } from "lucide-react";
 
 import { useRouter } from "next/navigation";
 import useComponents from "@/lib/hooks/use-component";
@@ -77,8 +77,7 @@ const Dashboard = () => {
   ];
 
   return (
-    <Box className="container mx-auto flex flex-col gap-8 px-4 py-8 md:px-6 lg:px-8">
-      {/* Hero Section */}
+    <main className="container mx-auto flex flex-col gap-8 px-4 py-8 md:px-6 lg:px-8">
       <Paper
         elevation={2}
         sx={{
@@ -98,7 +97,7 @@ const Dashboard = () => {
             Here is a quick overview of your account
           </Typography>
         </Box>
-        <Box className="flex gap-3 pr-3"  >
+        <Box className="flex gap-3 pr-3">
           <Box textAlign="center">
             <Typography
               variant="h2"
@@ -175,7 +174,7 @@ const Dashboard = () => {
       </Paper>
       {/* Resources Section */}
       <FooterLinks variant="main" resources={resources} />
-    </Box>
+    </main>
   );
 };
 

@@ -74,182 +74,180 @@ const ProjectDashboard = () => {
   const handleClose = () => setOpen(null);
 
   return (
-    <Box sx={{ minHeight: "100vh", marginTop: 4, px: { xs: 2, md: 10 } }}
-     className="container mx-auto flex flex-col gap-8 px-4 py-8 md:px-6 lg:px-8"
-    >
-      <Grid container spacing={3} sx={{ flexWrap: "wrap" }}>
-        {/* APIs Section */}
-        <Grid  size={{xs:12 ,md:4}} >
-          <Paper
-            elevation={3}
-            sx={{
-              p: 2,
-              minHeight: { xs: "auto", md: "calc(100vh - 120px)" },
-              height: { md: "calc(100vh - 120px)" },
-              borderRadius: 2,
-              display: "flex",
-              flexDirection: "column",
-            }}
-          >
-            <Box className="flex justify-between">
-              <Typography variant="h5">APIs</Typography>
-              {uniquesApis?.length > 0 && (
-                <Button
-                  variant="text"
-                  sx={{
-                    fontSize: "0.8rem",
-                    border: "0.1px solid #555",
-                    textTransform: "none",
-                  }}
-                  className="text-[#888] dark:text-gray-400"
-                  onClick={() => router.push("/apis")}
-                >
-                  View All
-                </Button>
-              )}
-            </Box>
-            {error && (
-              <Box sx={{ display: "flex", justifyContent: "center" }}>
-                {error && <Alert severity="error">{error}</Alert>}
-              </Box>
-            )}
-            {!error && !isLoading && <Stack marginTop={2} sx={{ flex: 1, overflow: "hidden" }}>
-              {!isLoading &&
-                uniquesApis.slice(0, 10).map((api) => (
-                  <React.Fragment key={api.id}>
-                    <Divider sx={{ bgcolor: "#555" }} />
-                    <Box
-                      key={api.id}
-                      padding={3}
-                      className="hover:bg-[#444] cursor-pointer"
-                      onClick={() =>
-                        router.push(
-                          `/apis/${api.id}/overview?version=${api.version}`
-                        )
-                      }
-                    >
-                      <Box display="flex" justifyContent="space-between">
-                        <Typography variant="body1">{api.id}</Typography>
-                        <Typography
-                          variant="body2"
-                          sx={{
-                            px: 1,
-                            border: "1px solid #555",
-                            borderRadius: 1,
-                          }}
-                        >
-                          {api.version}
-                        </Typography>
-                      </Box>
-                    </Box>
-                  </React.Fragment>
-                ))}
-            </Stack>}
-          </Paper>
-        </Grid>
-
-        {/* Components Section */}
-        <Grid size={{ xs:12, md:8}}>
-          <Paper
-            elevation={3}
-            sx={{
-              p: 2,
-              minHeight: { xs: "auto", md: "calc(100vh - 120px)" },
-              height: { md: "calc(100vh - 120px)" },
-              borderRadius: 2,
-              display: "flex",
-              flexDirection: "column",
-            }}
-          >
-            <Box className="flex justify-between">
-              <Typography variant="h5">Components</Typography>
-              {components.length > 0 && (
-                <Button
-                  variant="text"
-                  sx={{
-                    fontSize: "0.8rem",
-                    border: "0.1px solid #555",
-                    textTransform: "none",
-                  }}
-                  className="text-[#888] dark:text-gray-400"
-                  onClick={() => router.push("/components")}
-                >
-                  View All
-                </Button>
-              )}
-            </Box>
-            {componentError && (
-              <Box sx={{ display: "flex", justifyContent: "center" }}>
-                {error && <Alert severity="error">{componentError}</Alert>}
-              </Box>
-            )}
-            {!componentError && !componentsLoading &&<Box
+    <main className="mx-auto max-w-7xl px-6 lg:px-8 min-h-[calc(100svh-84px)] py-4 flex h-full w-full flex-1 flex-col">
+      <Box className="mx-auto max-w-2xl lg:max-w-none gap-6 flex h-full w-full flex-1 flex-col">
+        <Grid container spacing={3} sx={{ flexWrap: "wrap" }}>
+          {/* APIs Section */}
+          <Grid  size={{xs:12 ,md:4}} >
+            <Paper
+              elevation={3}
               sx={{
-                mt: 2,
-                gap: 2,
+                p: 2,
+                minHeight: { xs: "auto", md: "calc(100vh - 120px)" },
+                height: { md: "calc(100vh - 120px)" },
+                borderRadius: 2,
                 display: "flex",
-                flexWrap: "wrap",
-                // justifyContent: "center",
-                flex: 1, // Ensures it stretches within its parent
-                overflow: "hidden", // Prevents scrolling
+                flexDirection: "column",
               }}
             >
-              {components
-                  .slice(0, 6)
-                  .map((component) => (
-                    <ComponentCard
-                      key={component.versionedComponentId.componentId}
-                      name={component.componentName}
-                      time={calculateHoursDifference(component.createdAt)}
-                      version={component.versionedComponentId.version}
-                      exports={component.metadata.exports.length}
-                      size={calculateSizeInMB(component.componentSize)}
-                      type={component.componentType}
-                      onClick={() => handleComponentClick(component.versionedComponentId.componentId!)}
-                    />
-                  ))}
-              {components.length === 0 && (
-                <Box
-                  textAlign="center"
-                  sx={{
-                    borderRadius: 2,
-                    border: "2px dashed #444",
-                    py: 6,
-                    px: 2,
-                  }}
-                >
-                  <Typography variant="h6" color="text.secondary">
-                    No Project Components
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    Create your first component to get started
-                  </Typography>
+              <Box className="flex justify-between">
+                <Typography variant="h5">APIs</Typography>
+                {uniquesApis?.length > 0 && (
                   <Button
-                    variant="contained"
-                    startIcon={<AddIcon />}
+                    variant="text"
                     sx={{
-                      mt: 2,
-                      bgcolor: "#444",
-                      "&:hover": { bgcolor: "#555" },
+                      fontSize: "0.8rem",
+                      border: "0.1px solid #555",
+                      textTransform: "none",
                     }}
+                    className="text-[#888] dark:text-gray-400"
+                    onClick={() => router.push("/apis")}
                   >
-                    Create New
+                    View All
                   </Button>
+                )}
+              </Box>
+              {error && (
+                <Box sx={{ display: "flex", justifyContent: "center" }}>
+                  {error && <Alert severity="error">{error}</Alert>}
                 </Box>
               )}
-            </Box>}
-          </Paper>
-        </Grid>
-      </Grid>
+              {!error && !isLoading && <Stack marginTop={2} sx={{ flex: 1, overflow: "hidden" }}>
+                {!isLoading &&
+                  uniquesApis.slice(0, 10).map((api) => (
+                    <React.Fragment key={api.id}>
+                      <Divider sx={{ bgcolor: "#555" }} />
+                      <Box
+                        key={api.id}
+                        padding={3}
+                        className="hover:bg-[#444] cursor-pointer"
+                        onClick={() =>
+                          router.push(
+                            `/apis/${api.id}/overview?version=${api.version}`
+                          )
+                        }
+                      >
+                        <Box display="flex" justifyContent="space-between">
+                          <Typography variant="body1">{api.id}</Typography>
+                          <Typography
+                            variant="body2"
+                            sx={{
+                              px: 1,
+                              border: "1px solid #555",
+                              borderRadius: 1,
+                            }}
+                          >
+                            {api.version}
+                          </Typography>
+                        </Box>
+                      </Box>
+                    </React.Fragment>
+                  ))}
+              </Stack>}
+            </Paper>
+          </Grid>
 
-      <CustomModal open={!!open} onClose={handleClose}>
-        {open === "api" && <CreateAPI onCreation={handleClose} />}
-        {open === "component" && (
-          <CreateComponentForm mode="create" onSubmitSuccess={handleClose} />
-        )}
-      </CustomModal>
-      <FooterLinks variant="others" resources={resources}/>
-    </Box>
+          {/* Components Section */}
+          <Grid size={{ xs:12, md:8}}>
+            <Paper
+              elevation={3}
+              sx={{
+                p: 2,
+                minHeight: { xs: "auto", md: "calc(100vh - 120px)" },
+                height: { md: "calc(100vh - 120px)" },
+                borderRadius: 2,
+                display: "flex",
+                flexDirection: "column",
+              }}
+            >
+              <Box className="flex justify-between">
+                <Typography variant="h5">Components</Typography>
+                {components.length > 0 && (
+                  <Button
+                    variant="text"
+                    sx={{
+                      fontSize: "0.8rem",
+                      border: "0.1px solid #555",
+                      textTransform: "none",
+                    }}
+                    className="text-[#888] dark:text-gray-400"
+                    onClick={() => router.push("/components")}
+                  >
+                    View All
+                  </Button>
+                )}
+              </Box>
+              {componentError && (
+                <Box sx={{ display: "flex", justifyContent: "center" }}>
+                  {error && <Alert severity="error">{componentError}</Alert>}
+                </Box>
+              )}
+              {!componentError && !componentsLoading &&<Box
+                sx={{
+                  mt: 2,
+                  gap: 2,
+                  display: "flex",
+                  flexWrap: "wrap",
+                  overflow: "hidden",
+                }}
+              >
+                {components
+                    .slice(0, 6)
+                    .map((component) => (
+                      <ComponentCard
+                        key={component.versionedComponentId.componentId}
+                        name={component.componentName}
+                        time={calculateHoursDifference(component.createdAt)}
+                        version={component.versionedComponentId.version}
+                        exports={component.metadata.exports.length}
+                        size={calculateSizeInMB(component.componentSize)}
+                        type={component.componentType}
+                        onClick={() => handleComponentClick(component.versionedComponentId.componentId!)}
+                      />
+                    ))}
+                {components.length === 0 && (
+                  <Box
+                    textAlign="center"
+                    sx={{
+                      borderRadius: 2,
+                      border: "2px dashed #444",
+                      py: 6,
+                      px: 2,
+                    }}
+                  >
+                    <Typography variant="h6" color="text.secondary">
+                      No Project Components
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      Create your first component to get started
+                    </Typography>
+                    <Button
+                      variant="contained"
+                      startIcon={<AddIcon />}
+                      sx={{
+                        mt: 2,
+                        bgcolor: "#444",
+                        "&:hover": { bgcolor: "#555" },
+                      }}
+                    >
+                      Create New
+                    </Button>
+                  </Box>
+                )}
+              </Box>}
+            </Paper>
+          </Grid>
+        </Grid>
+
+        <CustomModal open={!!open} onClose={handleClose}>
+          {open === "api" && <CreateAPI onCreation={handleClose} />}
+          {open === "component" && (
+            <CreateComponentForm mode="create" onSubmitSuccess={handleClose} />
+          )}
+        </CustomModal>
+        <FooterLinks variant="others" resources={resources}/>
+      </Box>
+    </main>
   );
 };
 

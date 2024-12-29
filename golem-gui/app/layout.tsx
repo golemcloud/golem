@@ -32,7 +32,7 @@ export default function RootLayout({
             />
           <Navbar />
           <div style={{ display: 'flex',minHeight:'100vh' }}>
-            <main style={{flexGrow:1}}>{children}</main>
+            {children}
           </div>
           <Footer/>
         </ThemeProvider>
