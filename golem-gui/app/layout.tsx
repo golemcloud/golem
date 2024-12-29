@@ -31,7 +31,9 @@ export default function RootLayout({
               theme='dark'
             />
           <Navbar />
-          <div style={{ display: 'flex', minHeight:'100vh' }}>
+          <div style={{ display: 'flex', minHeight:'100vh' ,maxWidth:"75%" , margin:"auto", flexDirection: 'column', }}
+            className='container mx-auto flex flex-col gap-8 px-4 py-8 md:px-6 lg:px-8'
+          >
             <main style={{ flexGrow: 1, }}>{children}</main>
           </div>
           <Footer/>

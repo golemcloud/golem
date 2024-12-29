@@ -127,7 +127,8 @@ const ComponentsPage = () => {
 
       {filteredComponents.length > 0 ? (
         viewMode === "card" ? (
-          <Box sx={{ display: "flex", flexWrap: "wrap", gap: 2 }}>
+          <Box sx={{ }}
+           className="grid md:grid-cols-2 grid-cols-1 gap-4 mx-auto">
             {!isLoading &&
               filteredComponents.map((item) => (
                 <ComponentCard

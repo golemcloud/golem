@@ -41,22 +41,22 @@ const Footer = () => {
           </Typography>
           <Stack direction="row" spacing={1} marginBottom={1}>
             <IconButton
-              sx={{ color: "#FFFFFF", border: "1px solid #333", borderRadius: "8px" }}
+              sx={{  border: "1px solid #333", borderRadius: "8px" }}
             >
               <GitHubIcon />
             </IconButton>
             <IconButton
-              sx={{ color: "#FFFFFF", border: "1px solid #333", borderRadius: "8px" }}
+              sx={{  border: "1px solid #333", borderRadius: "8px" }}
             >
               <TwitterIcon />
             </IconButton>
             <IconButton
-              sx={{ color: "#FFFFFF", border: "1px solid #333", borderRadius: "8px" }}
+              sx={{  border: "1px solid #333", borderRadius: "8px" }}
             >
               <MailOutlineIcon />
             </IconButton>
             <IconButton
-              sx={{ color: "#FFFFFF", border: "1px solid #333", borderRadius: "8px" }}
+              sx={{ border: "1px solid #333", borderRadius: "8px" }}
             >
               <SportsEsportsIcon />
             </IconButton>
@@ -69,7 +69,7 @@ const Footer = () => {
         {/* Middle Section */}
         <Box
           sx={{
-            flexBasis: { xs: "100%", sm: "25%", md: "20%" }, // Responsive width
+            flexBasis: { xs: "100%", sm: "25%", md: "20%" }, 
           }}
         >
           <Typography

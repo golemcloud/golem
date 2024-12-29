@@ -53,13 +53,15 @@ const ComponentInfoCard = ({
         width: 450,
         borderRadius: 2,
         minWidth: "400px",
-        // maxWidth: "500px",
+       
         border: "1px solid #666",
+        display: "grid",
+        mx: "auto",
         padding: 2,
         "&:hover": { cursor: "pointer", boxShadow: "0px 5px 10px 0px #666"
         },
       }}
-      className="flex-1"
+      // className="flex-1"
       onClick={onClick}
     >
       <CardContent>
