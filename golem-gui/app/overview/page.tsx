@@ -77,13 +77,13 @@ const ProjectDashboard = () => {
     <main className="mx-auto max-w-7xl px-6 lg:px-8 min-h-[calc(100svh-84px)] py-4 flex h-full w-full flex-1 flex-col">
       <Box className="mx-auto max-w-2xl lg:max-w-none gap-6 flex h-full w-full flex-1 flex-col">
         <Grid container spacing={3} sx={{ flexWrap: "wrap" }}>
-          {/* APIs Section */}
-          <Grid  size={{xs:12 ,md:4}} >
+
+          <Grid  size={{xs:12 ,md:12, lg:4}} >
             <Paper
               elevation={3}
               sx={{
                 p: 2,
-                minHeight: { xs: "auto", md: "520px" },
+                minHeight: { md: "auto",lg: "calc(100vh - 200px)" },
                 borderRadius: 2,
                 display: "flex",
                 flexDirection: "column",
@@ -147,12 +147,12 @@ const ProjectDashboard = () => {
           </Grid>
 
           {/* Components Section */}
-          <Grid size={{ xs:12, md:8}}>
+          <Grid size={{ xs:12, md:12,lg:8}}>
             <Paper
               elevation={3}
               sx={{
                 p: 2,
-                minHeight: { xs: "auto", md: "520px" },
+                minHeight: { md: "auto",lg: "calc(100vh - 200px)" },
                 borderRadius: 2,
                 display: "flex",
                 flexDirection: "column",

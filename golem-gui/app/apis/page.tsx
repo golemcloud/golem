@@ -39,102 +39,110 @@ const ComponentsPage = () => {
   );
 
   return (
-    <Container maxWidth="lg" sx={{ mt: 5, height: "100vh" }}>
-       {error && (
-        <Box sx={{ display: "flex", justifyContent: "center" }}>
-          {error && <Alert severity="error">{error}</Alert>}
-        </Box>
-      )}
-      {!error && !isLoading &&<>           
-      <Box
-        display="flex"
-        justifyContent="space-between"
-        alignItems="center"
-        mb={3}
-        gap={2}
-      >
-        <TextField
-          placeholder="Search APIs..."
-          variant="outlined"
-          size="small"
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)} // Update search query
-          InputProps={{
-            startAdornment: (
-              <InputAdornment position="start">
-                <SearchIcon sx={{ color: "grey.500" }} />
-              </InputAdornment>
-            ),
-          }}
-          className="flex-1"
-        />
-        <Button
-          variant="contained"
-          startIcon={<AddIcon />}
-          sx={{
-            textTransform: "none",
-            marginLeft: "2px",
-          }}
-          onClick={handleOpen}
-        >
-          New
-        </Button>
-      </Box>
-
-      {filteredApis.length === 0 ? (
-        <Box
-          sx={{
-            color: "#aaa",
-            textAlign: "center",
-            py: 8,
-            border: "2px dashed #333",
-            borderRadius: 2,
-          }}
-        >
-          <Box display="flex" justifyContent="center" mb={2}>
-            <Box
-              component="span"
-              sx={{
-                fontSize: 50,
-                color: "#666",
-              }}
-            >
-              <ApiIcon sx={{ fontSize: 40 }} />
-            </Box>
+    <main className="mx-auto max-w-7xl px-6 lg:px-8 min-h-[calc(100svh-84px)] py-4 flex h-full w-full flex-1 flex-col">
+      <Box className="mx-auto max-w-2xl lg:max-w-none gap-6 flex h-full w-full flex-1 flex-col">
+        {error && (
+          <Box sx={{ display: "flex", justifyContent: "center" }}>
+            {error && <Alert severity="error">{error}</Alert>}
           </Box>
-          <Typography
-            variant="h6"
-            fontWeight="bold"
-            gutterBottom
-            className="text-[#888] dark:text-gray-400"
-          >
-            No APIs Components
-          </Typography>
-          <Typography variant="body2" color="grey.500">
-            No APIs found matching your search.
-          </Typography>
-        </Box>
-      ) : (
-        <Box sx={{ display: "flex", flexWrap: "wrap", gap: 2 }}>
-          {!isLoading &&
-            filteredApis.map((api: ApiDefinition) => (
-              <ApiInfoCard
-                key={api.id}
-                name={api.id}
-                version={api.version}
-                routesCount={api.routes.length}
-                locked={api.draft}
-                onClick={() => handleApiClick(api.id)}
+        )}
+        {!error && !isLoading && (
+          <>
+            <Box
+              display="flex"
+              justifyContent="space-between"
+              alignItems="center"
+              mb={1}
+              gap={2}
+            >
+              <TextField
+                placeholder="Search APIs..."
+                variant="outlined"
+                size="small"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)} // Update search query
+                InputProps={{
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <SearchIcon sx={{ color: "grey.500" }} />
+                    </InputAdornment>
+                  ),
+                }}
+                className="flex-1"
               />
-            ))}
-        </Box>
-      )}
+              <Button
+                variant="contained"
+                startIcon={<AddIcon />}
+                sx={{
+                  textTransform: "none",
+                  marginLeft: "2px",
+                }}
+                onClick={handleOpen}
+              >
+                New
+              </Button>
+            </Box>
 
-      <CustomModal open={open} onClose={handleClose} heading="Create New API">
-        <CreateAPI onCreation={handleClose} />
-      </CustomModal>
-      </>}
-    </Container>
+            {filteredApis.length === 0 ? (
+              <Box
+                sx={{
+                  color: "#aaa",
+                  textAlign: "center",
+                  py: 8,
+                  border: "2px dashed #333",
+                  borderRadius: 2,
+                }}
+              >
+                <Box display="flex" justifyContent="center" mb={2}>
+                  <Box
+                    component="span"
+                    sx={{
+                      fontSize: 50,
+                      color: "#666",
+                    }}
+                  >
+                    <ApiIcon sx={{ fontSize: 40 }} />
+                  </Box>
+                </Box>
+                <Typography
+                  variant="h6"
+                  fontWeight="bold"
+                  gutterBottom
+                  className="text-[#888] dark:text-gray-400"
+                >
+                  No APIs Components
+                </Typography>
+                <Typography variant="body2" color="grey.500">
+                  No APIs found matching your search.
+                </Typography>
+              </Box>
+            ) : (
+              <Box className="grid w-full grid-cols-1 gap-3 lg:grid-cols-2 xl:grid-cols-3  mt-2">
+                {!isLoading &&
+                  filteredApis.map((api: ApiDefinition) => (
+                    <ApiInfoCard
+                      key={api.id}
+                      name={api.id}
+                      version={api.version}
+                      routesCount={api.routes.length}
+                      locked={api.draft}
+                      onClick={() => handleApiClick(api.id)}
+                    />
+                  ))}
+              </Box>
+            )}
+
+            <CustomModal
+              open={open}
+              onClose={handleClose}
+              heading="Create New API"
+            >
+              <CreateAPI onCreation={handleClose} />
+            </CustomModal>
+          </>
+        )}
+      </Box>
+    </main>
   );
 };
 

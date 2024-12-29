@@ -23,7 +23,7 @@ export default function Overview() {
       <>
         <Paper
           elevation={3}
-          className="bg-[#333]"
+       
           sx={{
             p: 3,
             mb: 3,
