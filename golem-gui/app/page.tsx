@@ -14,15 +14,17 @@ import {
 import DescriptionIcon from "@mui/icons-material/Description";
 import WorkIcon from "@mui/icons-material/Work";
 import SettingsIcon from "@mui/icons-material/Settings";
-import CodeIcon from "@mui/icons-material/Code";
-import BuildIcon from "@mui/icons-material/Build";
-import CloudIcon from "@mui/icons-material/Cloud";
-import GitHubIcon from "@mui/icons-material/GitHub";
+import { NotepadText, Code ,BookOpenText,Github} from "lucide-react";
+
 import { useRouter } from "next/navigation";
+import useComponents from "@/lib/hooks/use-component";
+import useApiDefinitions from "@/lib/hooks/use-api-definitons";
+import FooterLinks from "@/components/ui/footer-links";
 
 const Dashboard = () => {
   const router = useRouter();
-
+  const { components } = useComponents();
+  const { apiDefinitions } = useApiDefinitions();
   const apis = [
     { id: 1, name: "My Project A", components: 2, apis: 3 },
     { id: 2, name: "My Project B", components: 4, apis: 0 },
@@ -50,25 +52,25 @@ const Dashboard = () => {
   const resources = [
     {
       label: "Getting Started",
-      icon: <CodeIcon />,
+      icon: <BookOpenText />,
       description:
         "Learn how to setup your development environment and build your first component",
     },
     {
       label: "API Docs",
-      icon: <BuildIcon />,
+      icon: <Code />,
       description:
         "Explore the API Documentation and learn how to integrate with our platform",
     },
     {
       label: "Language Guides",
-      icon: <CloudIcon />,
+      icon: <NotepadText />,
       description:
         "Check out our language specific tutorials and examples to get started",
     },
     {
       label: "Github",
-      icon: <GitHubIcon />,
+      icon: <Github />,
       description:
         "Check out our Github repository to contribute and report issues",
     },
@@ -85,29 +87,44 @@ const Dashboard = () => {
           alignItems: "center",
           p: 3,
           borderRadius: "5px",
-          border: "0.1px solid #555",
         }}
+        className="border"
       >
         <Box>
           <Typography variant="h4" sx={{ fontWeight: 700 }}>
             Welcome, Mubashir Shariq
           </Typography>
-          <Typography variant="h6" sx={{ mt: 1 }}>
+          <Typography variant="h6" className="text-muted-foreground mt-1">
             Here is a quick overview of your account
           </Typography>
         </Box>
-        <Box textAlign="center">
-          <Typography
-            variant="h2"
-            sx={{
-              fontWeight: 900,
-            }}
-          >
-            {apis.length}
-          </Typography>
-          <Typography variant="subtitle2" sx={{ fontWeight: 500 }}>
-            APIs Created
-          </Typography>
+        <Box className="flex gap-3 pr-3"  >
+          <Box textAlign="center">
+            <Typography
+              variant="h2"
+              sx={{
+                fontWeight: 900,
+              }}
+            >
+              {components.length}
+            </Typography>
+            <Typography variant="subtitle2" sx={{ fontWeight: 500 }}>
+              Components
+            </Typography>
+          </Box>
+          <Box textAlign="center">
+            <Typography
+              variant="h2"
+              sx={{
+                fontWeight: 900,
+              }}
+            >
+              {apiDefinitions.length}
+            </Typography>
+            <Typography variant="subtitle2" sx={{ fontWeight: 500 }}>
+              Api's
+            </Typography>
+          </Box>
         </Box>
       </Paper>
       {/* Quick Access Section */}
@@ -119,8 +136,8 @@ const Dashboard = () => {
           py: 4,
           px: 3,
           borderRadius: "5px",
-          border: "0.1px solid #555",
         }}
+        className="border"
       >
         <Typography variant="h5" sx={{ mb: 2, fontWeight: 600 }}>
           Quick Access
@@ -128,10 +145,14 @@ const Dashboard = () => {
         <Box>
           <MuiGrid container spacing={4}>
             {buttonData.map((item) => (
-              <MuiGrid key={item.label}>
+              <MuiGrid
+                className=" border dark:hover:bg-[#555] rounded-md"
+                key={item.label}
+              >
                 <IconButton
                   onClick={item.onClick}
-                  className="dark:text-white hover:bg-accent border-[var(--border)]"
+                  color="inherit"
+                  className="dark:text-white"
                   sx={{
                     display: "flex",
                     flexDirection: "column",
@@ -140,13 +161,6 @@ const Dashboard = () => {
                     height: "100px",
                     width: "100px",
                     padding: "1.5rem",
-                    borderRadius: "5px",
-                    transition: "transform 0.3s ease, 0.3s ease",
-                    "&:hover": {
-                      transform: "translateY(-5px)",
-                      // border:'0px solid #555',
-                      backgroundColor: "#555",
-                    },
                   }}
                 >
                   {item.icon}
@@ -160,54 +174,7 @@ const Dashboard = () => {
         </Box>
       </Paper>
       {/* Resources Section */}
-      <Box>
-        <Typography variant="h5" sx={{ mb: 3, fontWeight: 600 }}>
-          Resources
-        </Typography>
-        <MuiGrid container spacing={4}>
-          {resources.map((resource) => (
-            <MuiGrid
-              size={{ xs: 12, sm: 6, md: 6, lg: 3 }}
-              key={resource.label}
-            >
-              <Card
-                sx={{
-                  display: "flex",
-                  flexDirection: "column",
-                  justifyContent: "space-between",
-                  padding: "1rem",
-                  width: "100%",
-                  height: "200px",
-                  borderRadius: "5px",
-                  textAlign: "center",
-                  transition: "transform 0.3s ease",
-                  border: "0.1px solid #555",
-                  "&:hover": {
-                    transform: "translateY(-5px)",
-                  },
-                }}
-              >
-                <Box
-                  sx={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    gap: "1rem",
-                  }}
-                >
-                  <Typography variant="h6" sx={{ fontWeight: 600 }}>
-                    {resource.label}
-                  </Typography>
-                  <Typography sx={{ fontSize: "2.5rem", color: "#ff9800" }}>
-                    {resource.icon}
-                  </Typography>
-                </Box>
-                <Typography variant="body2">{resource.description}</Typography>
-              </Card>
-            </MuiGrid>
-          ))}
-        </MuiGrid>
-      </Box>
+      <FooterLinks variant="main" resources={resources} />
     </Box>
   );
 };

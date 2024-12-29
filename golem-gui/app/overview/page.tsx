@@ -5,13 +5,13 @@ import {
   Typography,
   Button,
   Paper,
-  Grid,
+  Grid2 as Grid,
   Stack,
   Divider,
   Alert,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
-import OverviewFooter from "@/components/ui/overview-footer";
+import FooterLinks from "@/components/ui/footer-links";
 import CreateAPI from "@/components/create-api";
 import CreateComponentForm from "@/components/new-component";
 import { ApiDefinition } from "@/types/api";
@@ -21,9 +21,36 @@ import useComponents from "@/lib/hooks/use-component";
 import CustomModal from "@/components/CustomModal";
 import ComponentCard from "../../components/component-card";
 import { calculateHoursDifference, calculateSizeInMB } from "@/lib/utils";
+import { NotepadText,Component,Globe ,Bot} from 'lucide-react';
 
 const ProjectDashboard = () => {
   const router = useRouter();
+  const resources = [
+    {
+      label: "Language Guides",
+      icon: <NotepadText />,
+      description:
+        "Check our language and start building",
+    },
+    {
+      label: "Components",
+      icon: <Component />,
+      description:
+        "Create Wasm components that run on Golem", 
+    },
+    {
+      label: "APIs",
+      icon: <Globe />,
+      description:
+        "Craft custom APIs to expose your components to the world",
+    },
+    {
+      label: "Workers",
+      icon: <Bot />,
+      description:
+        "Launch and manage efficient workers from your components",
+    },
+  ];
   const [open, setOpen] = useState<string | null>(null);
   const { apiDefinitions, isLoading, error } = useApiDefinitions();
   const { components, isLoading: componentsLoading, error: componentError } = useComponents();
@@ -47,10 +74,12 @@ const ProjectDashboard = () => {
   const handleClose = () => setOpen(null);
 
   return (
-    <Box sx={{ minHeight: "100vh", marginTop: 4, px: { xs: 2, md: 10 } }}>
+    <Box sx={{ minHeight: "100vh", marginTop: 4, px: { xs: 2, md: 10 } }}
+     className="container mx-auto flex flex-col gap-8 px-4 py-8 md:px-6 lg:px-8"
+    >
       <Grid container spacing={3} sx={{ flexWrap: "wrap" }}>
         {/* APIs Section */}
-        <Grid item xs={12} md={4}>
+        <Grid  size={{xs:12 ,md:4}} >
           <Paper
             elevation={3}
             sx={{
@@ -120,7 +149,7 @@ const ProjectDashboard = () => {
         </Grid>
 
         {/* Components Section */}
-        <Grid item xs={12} md={8}>
+        <Grid size={{ xs:12, md:8}}>
           <Paper
             elevation={3}
             sx={{
@@ -219,7 +248,7 @@ const ProjectDashboard = () => {
           <CreateComponentForm mode="create" onSubmitSuccess={handleClose} />
         )}
       </CustomModal>
-      <OverviewFooter />
+      <FooterLinks variant="others" resources={resources}/>
     </Box>
   );
 };
