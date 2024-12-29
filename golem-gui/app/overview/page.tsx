@@ -6,7 +6,6 @@ import {
   Button,
   Paper,
   Grid2 as Grid,
-  Grid2 as Grid,
   Stack,
   Divider,
   Alert,
