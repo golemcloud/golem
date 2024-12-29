@@ -71,30 +71,19 @@ const Dashboard = () => {
   ];
 
   return (
-    <Box
-      sx={{
-        flexGrow: 1,
-        padding: "2rem",
-        minHeight: "100vh",
-        fontFamily: "'Inter', sans-serif",
-      }}
-    >
+    <Box className="container mx-auto flex flex-col gap-8 px-4 py-8 md:px-6 lg:px-8">
       {/* Hero Section */}
-      <Paper elevation={2}>
-      <Box
+      <Paper
+        elevation={2}
         sx={{
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
-          mb: 6,
-          py: 4,
-          px: 3,
-          borderRadius: "20px",
-          boxShadow: "0 8px 30px rgba(0, 0, 0, 0.1)",
-          backdropFilter: "blur(20px)",
+          p: 3,
+          borderRadius: "5px",
+          border: "0.1px solid #555",
         }}
       >
-        
         <Box>
           <Typography variant="h4" sx={{ fontWeight: 700 }}>
             Welcome, Mubashir Shariq
@@ -116,21 +105,17 @@ const Dashboard = () => {
             APIs Created
           </Typography>
         </Box>
-      </Box>
-</Paper>
+      </Paper>
       {/* Quick Access Section */}
-
-<Paper>
-      <Box
+      <Paper
         sx={{
           display: "flex",
           flexDirection: "column",
-          mb: 6,
+          mb: 2,
           py: 4,
           px: 3,
-          borderRadius: "20px",
-          boxShadow: "0 8px 30px rgba(0, 0, 0, 0.1)",
-          backdropFilter: "blur(20px)",
+          borderRadius: "5px",
+          border: "0.1px solid #555",
         }}
       >
         <Typography variant="h5" sx={{ mb: 2, fontWeight: 600 }}>
@@ -142,7 +127,7 @@ const Dashboard = () => {
               <MuiGrid item key={item.label}>
                 <IconButton
                   onClick={item.onClick}
-                  className="dark:bg-[#555] bg-[rgba(0, 0, 0, 0.05)] dark:text-white"
+                  className="dark:text-white hover:bg-accent border-[var(--border)]"
                   sx={{
                     display: "flex",
                     flexDirection: "column",
@@ -151,12 +136,12 @@ const Dashboard = () => {
                     height: "100px",
                     width: "100px",
                     padding: "1.5rem",
-                    borderRadius: "20px",
-                 
-                    transition: "transform 0.3s ease, box-shadow 0.3s ease",
+                    borderRadius: "5px",
+                    transition: "transform 0.3s ease, 0.3s ease",
                     "&:hover": {
-                      transform: "translateY(-10px)",
-                      boxShadow: "0 10px 30px rgba(0, 0, 0, 0.2)",
+                      // transform: "translateY(-5px)",
+                      // border:'0px solid #555',
+                      backgroundColor:'#555'
                     },
                   }}
                 >
@@ -169,7 +154,6 @@ const Dashboard = () => {
             ))}
           </MuiGrid>
         </Box>
-      </Box>
       </Paper>
       {/* Resources Section */}
       <Box>
@@ -193,9 +177,11 @@ const Dashboard = () => {
                   boxShadow: "0 6px 20px rgba(0, 0, 0, 0.1)",
                   backdropFilter: "blur(15px)",
                   transition: "transform 0.3s ease, box-shadow 0.3s ease",
+                  border:'0.1px solid #555',
                   "&:hover": {
-                    transform: "translateY(-10px)",
+                    transform: "translateY(-5px)",
                     boxShadow: "0 12px 35px rgba(0, 0, 0, 0.2)",
+                    border:'0px solid #555',
                   },
                 }}
               >
