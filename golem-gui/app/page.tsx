@@ -6,7 +6,7 @@ import {
   Typography,
   Card,
   IconButton,
-  Grid as MuiGrid,
+  Grid2 as MuiGrid,
   Tooltip,
   useTheme,
   Paper,
@@ -17,7 +17,7 @@ import SettingsIcon from "@mui/icons-material/Settings";
 import CodeIcon from "@mui/icons-material/Code";
 import BuildIcon from "@mui/icons-material/Build";
 import CloudIcon from "@mui/icons-material/Cloud";
-import PeopleAltIcon from "@mui/icons-material/PeopleAlt";
+import GitHubIcon from "@mui/icons-material/GitHub";
 import { useRouter } from "next/navigation";
 
 const Dashboard = () => {
@@ -49,24 +49,28 @@ const Dashboard = () => {
 
   const resources = [
     {
-      label: "Language Guides",
+      label: "Getting Started",
       icon: <CodeIcon />,
-      description: "Choose your language and start building",
+      description:
+        "Learn how to setup your development environment and build your first component",
     },
     {
-      label: "Components",
+      label: "API Docs",
       icon: <BuildIcon />,
-      description: "Create WASM components that run on Golem",
+      description:
+        "Explore the API Documentation and learn how to integrate with our platform",
     },
     {
-      label: "APIs",
+      label: "Language Guides",
       icon: <CloudIcon />,
-      description: "Craft custom APIs to expose your components to the world",
+      description:
+        "Check out our language specific tutorials and examples to get started",
     },
     {
-      label: "Workers",
-      icon: <PeopleAltIcon />,
-      description: "Launch and manage efficient workers from your components",
+      label: "Github",
+      icon: <GitHubIcon />,
+      description:
+        "Check out our Github repository to contribute and report issues",
     },
   ];
 
@@ -124,7 +128,7 @@ const Dashboard = () => {
         <Box>
           <MuiGrid container spacing={4}>
             {buttonData.map((item) => (
-              <MuiGrid item key={item.label}>
+              <MuiGrid key={item.label}>
                 <IconButton
                   onClick={item.onClick}
                   className="dark:text-white hover:bg-accent border-[var(--border)]"
@@ -139,9 +143,9 @@ const Dashboard = () => {
                     borderRadius: "5px",
                     transition: "transform 0.3s ease, 0.3s ease",
                     "&:hover": {
-                      // transform: "translateY(-5px)",
+                      transform: "translateY(-5px)",
                       // border:'0px solid #555',
-                      backgroundColor:'#555'
+                      backgroundColor: "#555",
                     },
                   }}
                 >
@@ -162,26 +166,24 @@ const Dashboard = () => {
         </Typography>
         <MuiGrid container spacing={4}>
           {resources.map((resource) => (
-            <MuiGrid item xs={12} sm={6} md={3} key={resource.label}>
+            <MuiGrid
+              size={{ xs: 12, sm: 6, md: 6, lg: 3 }}
+              key={resource.label}
+            >
               <Card
                 sx={{
                   display: "flex",
                   flexDirection: "column",
                   justifyContent: "space-between",
-                  padding: "1.5rem",
+                  padding: "1rem",
                   width: "100%",
                   height: "200px",
-                  background: "rgba(0, 0, 0, 0.05)",
-                  borderRadius: "20px",
+                  borderRadius: "5px",
                   textAlign: "center",
-                  boxShadow: "0 6px 20px rgba(0, 0, 0, 0.1)",
-                  backdropFilter: "blur(15px)",
-                  transition: "transform 0.3s ease, box-shadow 0.3s ease",
-                  border:'0.1px solid #555',
+                  transition: "transform 0.3s ease",
+                  border: "0.1px solid #555",
                   "&:hover": {
                     transform: "translateY(-5px)",
-                    boxShadow: "0 12px 35px rgba(0, 0, 0, 0.2)",
-                    border:'0px solid #555',
                   },
                 }}
               >
@@ -190,24 +192,17 @@ const Dashboard = () => {
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "space-between",
-                    gap: "5rem",
+                    gap: "1rem",
                   }}
                 >
                   <Typography variant="h6" sx={{ fontWeight: 600 }}>
                     {resource.label}
                   </Typography>
-                  <Box sx={{ fontSize: "2.5rem", color: "#ff9800" }}>
+                  <Typography sx={{ fontSize: "2.5rem", color: "#ff9800" }}>
                     {resource.icon}
-                  </Box>
+                  </Typography>
                 </Box>
-                <Typography
-                  variant="body2"
-                  sx={{
-                    color: "rgba(0,0,0,0.6)",
-                  }}
-                >
-                  {resource.description}
-                </Typography>
+                <Typography variant="body2">{resource.description}</Typography>
               </Card>
             </MuiGrid>
           ))}

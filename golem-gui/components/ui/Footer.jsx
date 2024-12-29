@@ -41,27 +41,31 @@ const Footer = () => {
           </Typography>
           <Stack direction="row" spacing={1} marginBottom={1}>
             <IconButton
+             color="inherit"
               sx={{  border: "1px solid #333", borderRadius: "8px" }}
             >
               <GitHubIcon />
             </IconButton>
             <IconButton
+              color="inherit"
               sx={{  border: "1px solid #333", borderRadius: "8px" }}
             >
               <TwitterIcon />
             </IconButton>
             <IconButton
+              color="inherit"
               sx={{  border: "1px solid #333", borderRadius: "8px" }}
             >
               <MailOutlineIcon />
             </IconButton>
             <IconButton
+              color="inherit"
               sx={{ border: "1px solid #333", borderRadius: "8px" }}
             >
               <SportsEsportsIcon />
             </IconButton>
           </Stack>
-          <Typography variant="caption" sx={{ color: "#AAAAAA" }}>
+          <Typography variant="caption" color="inherit">
             © 2024 Zverge Inc.
           </Typography>
         </Box>
