@@ -50,8 +50,7 @@ const ComponentInfoCard = ({
     <Card
       sx={{
         borderRadius: 2,
-        minWidth: "400px",
-        padding: 2,
+        minWidth: "200px",
         "&:hover": { cursor: "pointer", boxShadow: "0px 5px 10px 0px #666"
         },
       }}

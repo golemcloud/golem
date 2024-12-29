@@ -83,8 +83,7 @@ const ProjectDashboard = () => {
               elevation={3}
               sx={{
                 p: 2,
-                minHeight: { xs: "auto", md: "calc(100vh - 120px)" },
-                height: { md: "calc(100vh - 120px)" },
+                minHeight: { xs: "auto", md: "520px" },
                 borderRadius: 2,
                 display: "flex",
                 flexDirection: "column",
@@ -153,8 +152,7 @@ const ProjectDashboard = () => {
               elevation={3}
               sx={{
                 p: 2,
-                minHeight: { xs: "auto", md: "calc(100vh - 120px)" },
-                height: { md: "calc(100vh - 120px)" },
+                minHeight: { xs: "auto", md: "520px" },
                 borderRadius: 2,
                 display: "flex",
                 flexDirection: "column",
@@ -182,15 +180,8 @@ const ProjectDashboard = () => {
                   {error && <Alert severity="error">{componentError}</Alert>}
                 </Box>
               )}
-              {!componentError && !componentsLoading &&<Box
-                sx={{
-                  mt: 2,
-                  gap: 2,
-                  display: "flex",
-                  flexWrap: "wrap",
-                  overflow: "hidden",
-                }}
-              >
+              {!componentError && !componentsLoading &&
+              <Box className="grid w-full grid-cols-1 gap-3 lg:grid-cols-2 mt-2">
                 {components
                     .slice(0, 6)
                     .map((component) => (
