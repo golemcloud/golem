@@ -6,6 +6,7 @@ import {
   Button,
   Paper,
   Grid2 as Grid,
+  Grid2 as Grid,
   Stack,
   Divider,
   Alert,
@@ -85,10 +86,10 @@ const ProjectDashboard = () => {
             sx={{
               p: 2,
               minHeight: { xs: "auto", md: "calc(100vh - 120px)" },
-              height: { md: "calc(100vh - 120px)" }, // Ensures height consistency
+              height: { md: "calc(100vh - 120px)" },
               borderRadius: 2,
               display: "flex",
-              flexDirection: "column", // For stacking items within
+              flexDirection: "column",
             }}
           >
             <Box className="flex justify-between">
