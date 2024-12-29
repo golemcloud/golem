@@ -258,41 +258,34 @@ async fn rdbms_postgres_crud(
     fn get_expected(expected_values: Vec<(Uuid, String, String)>) -> serde_json::Value {
         let expected_rows: Vec<serde_json::Value> =
             expected_values.into_iter().map(get_row).collect();
-        json!(
-               {
-                  "ok":{
-                   "query":{
-                     "columns":[
-                        {
-                           "db-type":{
-                              "uuid":null
-                           },
-                           "db-type-name":"UUID",
-                           "name":"user_id",
-                           "ordinal":0
-                        },
-                        {
-                           "db-type":{
-                              "text":null
-                           },
-                           "db-type-name":"TEXT",
-                           "name":"name",
-                           "ordinal":1
-                        },
-                        {
-                           "db-type":{
-                                 "text":null
-                           },
-                           "db-type-name":"TEXT[]",
-                           "name":"tags",
-                           "ordinal":2
-                        }
-                     ],
-                     "rows": expected_rows
-                    }
-                  }
-               }
-        )
+
+        let expected_columns: Vec<serde_json::Value> = vec![
+            json!({
+               "db-type":{
+                  "uuid":null
+               },
+               "db-type-name":"UUID",
+               "name":"user_id",
+               "ordinal":0
+            }),
+            json!({
+               "db-type":{
+                  "text":null
+               },
+               "db-type-name":"TEXT",
+               "name":"name",
+               "ordinal":1
+            }),
+            json!({
+               "db-type":{
+                     "text":null
+               },
+               "db-type-name":"TEXT[]",
+               "name":"tags",
+               "ordinal":2
+            }),
+        ];
+        query_ok_response(expected_columns, expected_rows)
     }
 
     let expected = get_expected(expected_values.clone());
@@ -383,33 +376,22 @@ async fn rdbms_postgres_select1(
 ) {
     let test1 = StatementTest::execute_test("SELECT 1", vec![], Some(1));
 
-    let expected = json!(
-               {
-                  "ok":{
-                     "query":{
-                         "columns":[
-                            {
-                               "db-type":{
-                                     "int4":null
-                               },
-                               "db-type-name":"INT4",
-                               "name":"?column?",
-                               "ordinal":0
-                            }
-                         ],
-                         "rows":[
-                            {
-                               "values":[
-                                  {
-                                      "int4":1
-                                  }
-                               ]
-                            }
-                         ]
-                      }
-                   }
-               }
-    );
+    let expected_rows: Vec<serde_json::Value> = vec![json!({
+       "values":[
+          {
+             "int4":1
+          }
+       ]
+    })];
+    let expected_columns: Vec<serde_json::Value> = vec![json!({
+        "db-type":{
+              "int4":null
+        },
+        "db-type-name":"INT4",
+        "name":"?column?",
+        "ordinal":0
+    })];
+    let expected = query_ok_response(expected_columns, expected_rows);
 
     let test2 = StatementTest::query_test("SELECT 1", vec![], Some(expected));
 
@@ -506,33 +488,28 @@ async fn rdbms_mysql_crud(
     fn get_expected(expected_values: Vec<(String, String)>) -> serde_json::Value {
         let expected_rows: Vec<serde_json::Value> =
             expected_values.into_iter().map(get_row).collect();
-        json!(
-           {
-              "ok":{
-                "query":{
-                 "columns":[
-                    {
-                       "db-type":{
-                          "varchar":null
-                       },
-                       "db-type-name":"VARCHAR",
-                       "name":"user_id",
-                       "ordinal":0
-                    },
-                    {
-                       "db-type":{
-                          "varchar":null
-                       },
-                       "db-type-name":"VARCHAR",
-                       "name":"name",
-                       "ordinal":1
-                    }
-                 ],
-                 "rows": expected_rows
-                }
-              }
-           }
-        )
+
+        let expected_columns: Vec<serde_json::Value> = vec![
+            json!(
+            {
+               "db-type":{
+                  "varchar":null
+               },
+               "db-type-name":"VARCHAR",
+               "name":"user_id",
+               "ordinal":0
+            }),
+            json!(
+            {
+               "db-type":{
+                  "varchar":null
+               },
+               "db-type-name":"VARCHAR",
+               "name":"name",
+               "ordinal":1
+            }),
+        ];
+        query_ok_response(expected_columns, expected_rows)
     }
 
     let expected = get_expected(expected_values.clone());
@@ -622,33 +599,23 @@ async fn rdbms_mysql_select1(
     _tracing: &Tracing,
 ) {
     let test1 = StatementTest::execute_test("SELECT 1", vec![], Some(0));
-    let expected = json!(
-       {
-          "ok":{
-             "query":{
-                 "columns":[
-                    {
-                       "db-type":{
-                          "bigint":null
-                       },
-                       "db-type-name":"BIGINT",
-                       "name":"1",
-                       "ordinal":0
-                    }
-                 ],
-                 "rows":[
-                    {
-                       "values":[
-                          {
-                             "bigint":1
-                          }
-                       ]
-                    }
-                 ]
-             }
-           }
-       }
-    );
+
+    let expected_rows: Vec<serde_json::Value> = vec![json!({
+       "values":[
+          {
+             "bigint":1
+          }
+       ]
+    })];
+    let expected_columns: Vec<serde_json::Value> = vec![json!({
+        "db-type":{
+           "bigint":null
+        },
+        "db-type-name":"BIGINT",
+        "name":"1",
+        "ordinal":0
+    })];
+    let expected = query_ok_response(expected_columns, expected_rows);
 
     let test2 = StatementTest::query_test("SELECT 1", vec![], Some(expected));
 
@@ -662,7 +629,7 @@ async fn rdbms_mysql_select1(
     .await;
 }
 
-async fn rdbms_component_test<T: RdbmsType + Default + Display>(
+async fn rdbms_component_test<T: RdbmsType>(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     db_addresses: Vec<String>,
@@ -680,7 +647,7 @@ async fn rdbms_component_test<T: RdbmsType + Default + Display>(
     drop(executor);
 }
 
-async fn rdbms_workers_test<T: RdbmsType + Default + Display>(
+async fn rdbms_workers_test<T: RdbmsType>(
     executor: &TestWorkerExecutor,
     worker_ids: Vec<WorkerId>,
     test: RdbmsTest,
@@ -778,7 +745,7 @@ async fn rdbms_workers_test<T: RdbmsType + Default + Display>(
     }
 }
 
-async fn start_workers<T: RdbmsType + Default + Display>(
+async fn start_workers<T: RdbmsType>(
     executor: &TestWorkerExecutor,
     component_id: &ComponentId,
     db_addresses: Vec<String>,
@@ -816,15 +783,22 @@ fn execute_ok_response(value: u64) -> serde_json::Value {
     )
 }
 
-fn query_empty_ok_response() -> serde_json::Value {
+fn query_ok_response(
+    columns: Vec<serde_json::Value>,
+    rows: Vec<serde_json::Value>,
+) -> serde_json::Value {
     json!(
         {
           "ok":{
              "query":{
-                 "columns":[],
-                 "rows":[]
+                 "columns": columns,
+                 "rows":rows
              }
            }
        }
     )
+}
+
+fn query_empty_ok_response() -> serde_json::Value {
+    query_ok_response(vec![], vec![])
 }

@@ -1947,7 +1947,6 @@ pub mod tests {
             check!(new_resource_reps2 == DbValueResourceRep::None);
         }
 
-        // println!("wit {:?}", wit);
         let expected_value = to_db_value(wit, resource_table).unwrap();
         let expected_value2 = to_db_value(wit2, resource_table).unwrap();
 
@@ -2219,7 +2218,6 @@ pub mod tests {
             check!(new_resource_reps2 == DbColumnTypeResourceRep::None);
         }
 
-        // println!("wit {:?}", wit);
         let expected_value = to_db_column_type(wit, resource_table).unwrap();
         let expected_value2 = to_db_column_type(wit2, resource_table).unwrap();
 

@@ -52,19 +52,19 @@ fn rdbms_service() -> RdbmsServiceDefault {
 }
 
 #[derive(Clone, Debug)]
-enum StatementAction<T: RdbmsType + Clone + Debug> {
+enum StatementAction<T: RdbmsType + Clone> {
     Execute(ExpectedExecuteResult),
     Query(ExpectedQueryResult<T>),
     QueryStream(ExpectedQueryResult<T>),
 }
 
 #[derive(Clone, Debug)]
-struct ExpectedQueryResult<T: RdbmsType + Clone + Debug> {
+struct ExpectedQueryResult<T: RdbmsType + Clone> {
     expected_columns: Option<Vec<T::DbColumn>>,
     expected_rows: Option<Vec<DbRow<T::DbValue>>>,
 }
 
-impl<T: RdbmsType + Clone + Debug> ExpectedQueryResult<T> {
+impl<T: RdbmsType + Clone> ExpectedQueryResult<T> {
     fn new(
         expected_columns: Option<Vec<T::DbColumn>>,
         expected_rows: Option<Vec<DbRow<T::DbValue>>>,
@@ -88,7 +88,7 @@ impl ExpectedExecuteResult {
 }
 
 #[derive(Clone, Debug)]
-enum StatementResult<T: RdbmsType + Clone + Debug> {
+enum StatementResult<T: RdbmsType + Clone> {
     Execute(u64),
     Query(DbResult<T>),
 }
@@ -102,13 +102,13 @@ enum TransactionEnd {
 }
 
 #[derive(Debug, Clone)]
-struct StatementTest<T: RdbmsType + Clone + Debug> {
+struct StatementTest<T: RdbmsType + Clone> {
     pub action: StatementAction<T>,
     pub statement: &'static str,
     pub params: Vec<T::DbValue>,
 }
 
-impl<T: RdbmsType + Clone + Debug> StatementTest<T> {
+impl<T: RdbmsType + Clone> StatementTest<T> {
     fn execute_test(
         statement: &'static str,
         params: Vec<T::DbValue>,
@@ -183,12 +183,12 @@ impl<T: RdbmsType + Clone + Debug> StatementTest<T> {
 }
 
 #[derive(Debug, Clone)]
-struct RdbmsTest<T: RdbmsType + Clone + Debug> {
+struct RdbmsTest<T: RdbmsType + Clone> {
     statements: Vec<StatementTest<T>>,
     transaction_end: Option<TransactionEnd>,
 }
 
-impl<T: RdbmsType + Clone + Debug> RdbmsTest<T> {
+impl<T: RdbmsType + Clone> RdbmsTest<T> {
     fn new(statements: Vec<StatementTest<T>>, transaction_end: Option<TransactionEnd>) -> Self {
         Self {
             statements,
@@ -2242,7 +2242,7 @@ async fn mysql_create_insert_select_test(
     .await;
 }
 
-async fn execute_rdbms_test<T: RdbmsType + Clone + Debug>(
+async fn execute_rdbms_test<T: RdbmsType + Clone>(
     rdbms: Arc<dyn Rdbms<T> + Send + Sync>,
     pool_key: &RdbmsPoolKey,
     worker_id: &WorkerId,
@@ -2323,7 +2323,7 @@ async fn execute_rdbms_test<T: RdbmsType + Clone + Debug>(
     results
 }
 
-async fn rdbms_test<T: RdbmsType + Clone + Debug>(
+async fn rdbms_test<T: RdbmsType + Clone>(
     rdbms: Arc<dyn Rdbms<T> + Send + Sync>,
     db_address: &str,
     test: RdbmsTest<T>,
@@ -2341,7 +2341,7 @@ async fn rdbms_test<T: RdbmsType + Clone + Debug>(
     check!(!exists);
 }
 
-fn check_test_results<T: RdbmsType + Clone + Debug>(
+fn check_test_results<T: RdbmsType + Clone>(
     worker_id: &WorkerId,
     test: RdbmsTest<T>,
     results: Vec<Result<StatementResult<T>, Error>>,
@@ -2402,7 +2402,7 @@ fn check_test_results<T: RdbmsType + Clone + Debug>(
     }
 }
 
-async fn rdbms_par_test<T: RdbmsType + Clone + Debug + 'static>(
+async fn rdbms_par_test<T: RdbmsType + Clone + 'static>(
     rdbms: Arc<dyn Rdbms<T> + Send + Sync>,
     db_addresses: Vec<String>,
     count: u8,
@@ -2628,7 +2628,6 @@ async fn rdbms_connection_err_test<T: RdbmsType>(
     check!(result.is_err(), "connection to {db_address} is not error");
 
     let error = result.err().unwrap();
-    // println!("error: {}", error);
     check!(
         error == expected,
         "connection error for {db_address} do not match"
@@ -2659,7 +2658,6 @@ async fn rdbms_query_err_test<T: RdbmsType>(
     );
 
     let error = result.err().unwrap();
-    // println!("error: {}", error);
     check!(
         error == expected,
         "query {} (executed on {}) - response error do not match",
@@ -2692,7 +2690,6 @@ async fn rdbms_execute_err_test<T: RdbmsType>(
     );
 
     let error = result.err().unwrap();
-    // println!("error: {}", error);
     check!(
         error == expected,
         "query {} (executed on {}) - response error do not match",

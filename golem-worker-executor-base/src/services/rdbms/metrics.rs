@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt::Display;
 use std::time::{Duration, Instant};
 
 use crate::services::rdbms::RdbmsType;
@@ -36,33 +35,32 @@ lazy_static! {
     .unwrap();
 }
 
-pub fn record_rdbms_success(rdbms_type: &str, api_name: &str, duration: Duration) {
+pub fn record_rdbms_success<T: RdbmsType>(rdbms_type: &T, api_name: &str, duration: Duration) {
     RDBMS_SUCCESS_SECONDS
-        .with_label_values(&[rdbms_type, api_name])
+        .with_label_values(&[rdbms_type.to_string().as_str(), api_name])
         .observe(duration.as_secs_f64());
 }
 
-pub fn record_rdbms_failure(rdbms_type: &str, api_name: &str) {
+pub fn record_rdbms_failure<T: RdbmsType>(rdbms_type: &T, api_name: &str) {
     RDBMS_FAILURE_TOTAL
-        .with_label_values(&[rdbms_type, api_name])
+        .with_label_values(&[rdbms_type.to_string().as_str(), api_name])
         .inc();
 }
 
-pub fn record_rdbms_metrics<T: RdbmsType + Display + Send + Sync, R>(
+pub fn record_rdbms_metrics<T: RdbmsType, R>(
     rdbms_type: &T,
     name: &'static str,
     start: Instant,
     result: std::result::Result<R, crate::services::rdbms::Error>,
 ) -> std::result::Result<R, crate::services::rdbms::Error> {
     let end = Instant::now();
-    let rdbms_type = rdbms_type.to_string();
     match result {
         Ok(result) => {
-            record_rdbms_success(&rdbms_type, name, end.duration_since(start));
+            record_rdbms_success(rdbms_type, name, end.duration_since(start));
             Ok(result)
         }
         Err(err) => {
-            record_rdbms_failure(&rdbms_type, name);
+            record_rdbms_failure(rdbms_type, name);
             Err(err)
         }
     }

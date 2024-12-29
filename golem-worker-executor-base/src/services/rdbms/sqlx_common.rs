@@ -31,7 +31,7 @@ use sqlx::pool::PoolConnection;
 use sqlx::{Database, Describe, Execute, Pool, Row, TransactionManager};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
-use std::fmt::{Display, Formatter};
+use std::fmt::Formatter;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::time::Instant;
@@ -40,7 +40,7 @@ use tracing::{debug, error, info};
 #[derive(Clone)]
 pub(crate) struct SqlxRdbms<T, DB>
 where
-    T: RdbmsType + Display,
+    T: RdbmsType,
     DB: Database,
 {
     rdbms_type: T,
@@ -51,7 +51,7 @@ where
 
 impl<T, DB> SqlxRdbms<T, DB>
 where
-    T: RdbmsType + Default + Send + Sync + QueryExecutor<T, DB>,
+    T: RdbmsType + Sync + QueryExecutor<T, DB>,
     DB: Database,
     RdbmsPoolKey: PoolCreator<DB>,
 {
@@ -143,7 +143,7 @@ where
 #[async_trait]
 impl<T, DB> Rdbms<T> for SqlxRdbms<T, DB>
 where
-    T: RdbmsType + Default + Send + Sync + QueryExecutor<T, DB> + 'static,
+    T: RdbmsType + Sync + QueryExecutor<T, DB> + 'static,
     DB: Database,
     for<'c> &'c mut <DB as Database>::Connection: sqlx::Executor<'c, Database = DB>,
     RdbmsPoolKey: PoolCreator<DB>,
@@ -163,7 +163,7 @@ where
 
             Ok(key)
         };
-        self.record_metrics("create", start, result)
+        self.record_metrics("create-connection", start, result)
     }
 
     fn remove(&self, key: &RdbmsPoolKey, worker_id: &WorkerId) -> bool {
@@ -306,7 +306,7 @@ where
         debug!(
             rdbms_type = self.rdbms_type.to_string(),
             pool_key = key.to_string(),
-            "begin",
+            "begin transaction",
         );
 
         let result = {
@@ -332,12 +332,12 @@ where
             error!(
                 rdbms_type = self.rdbms_type.to_string(),
                 pool_key = key.to_string(),
-                "begin - error: {}",
+                "begin transaction - error: {}",
                 e
             );
             e
         });
-        self.record_metrics("begin", start, result)
+        self.record_metrics("begin-transaction", start, result)
     }
 
     fn status(&self) -> RdbmsStatus {
@@ -419,7 +419,6 @@ impl<DB: Database> Debug for SqlxDbTransactionConnection<DB> {
 }
 
 #[derive(Clone)]
-#[allow(clippy::type_complexity)]
 pub struct SqlxDbTransaction<T: RdbmsType, DB: Database> {
     rdbms_type: T,
     pool_key: RdbmsPoolKey,
@@ -427,7 +426,7 @@ pub struct SqlxDbTransaction<T: RdbmsType, DB: Database> {
     query_config: RdbmsQueryConfig,
 }
 
-impl<T: RdbmsType + Debug, DB: Database> Debug for SqlxDbTransaction<T, DB> {
+impl<T: RdbmsType, DB: Database> Debug for SqlxDbTransaction<T, DB> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SqlxDbTransaction")
             .field("rdbms_type", &self.rdbms_type)
@@ -439,7 +438,7 @@ impl<T: RdbmsType + Debug, DB: Database> Debug for SqlxDbTransaction<T, DB> {
 
 impl<T, DB> SqlxDbTransaction<T, DB>
 where
-    T: RdbmsType + Default + Send + Sync + QueryExecutor<T, DB>,
+    T: RdbmsType + Sync + QueryExecutor<T, DB>,
     DB: Database,
 {
     fn new(
@@ -546,9 +545,9 @@ where
 #[async_trait]
 impl<T, DB> DbTransaction<T> for SqlxDbTransaction<T, DB>
 where
-    T: RdbmsType + Default + Send + Sync + QueryExecutor<T, DB>,
+    T: RdbmsType + Sync + QueryExecutor<T, DB>,
     DB: Database,
-    for<'c> &'c mut <DB as sqlx::Database>::Connection: sqlx::Executor<'c, Database = DB>,
+    for<'c> &'c mut <DB as Database>::Connection: sqlx::Executor<'c, Database = DB>,
 {
     async fn execute(&self, statement: &str, params: Vec<T::DbValue>) -> Result<u64, Error>
     where
@@ -651,7 +650,7 @@ where
         debug!(
             rdbms_type = self.rdbms_type.to_string(),
             pool_key = self.pool_key.to_string(),
-            "commit"
+            "commit transaction"
         );
 
         let mut tx_conn = self.tx_connection.0.lock().await;
@@ -666,12 +665,12 @@ where
             error!(
                 rdbms_type = self.rdbms_type.to_string(),
                 pool_key = self.pool_key.to_string(),
-                "commit - error: {}",
+                "commit transaction - error: {}",
                 e
             );
             e
         });
-        self.record_metrics("commit", start, result)
+        self.record_metrics("commit-transaction", start, result)
     }
 
     async fn rollback(&self) -> Result<(), Error> {
@@ -679,7 +678,7 @@ where
         debug!(
             rdbms_type = self.rdbms_type.to_string(),
             pool_key = self.pool_key.to_string(),
-            "rollback"
+            "rollback transaction"
         );
 
         let mut tx_conn = self.tx_connection.0.lock().await;
@@ -694,12 +693,12 @@ where
             error!(
                 rdbms_type = self.rdbms_type.to_string(),
                 pool_key = self.pool_key.to_string(),
-                "rollback - error: {}",
+                "rollback transaction - error: {}",
                 e
             );
             e
         });
-        self.record_metrics("rollback", start, result)
+        self.record_metrics("rollback-transaction", start, result)
     }
 
     async fn rollback_if_open(&self) -> Result<(), Error> {
@@ -707,7 +706,7 @@ where
         debug!(
             rdbms_type = self.rdbms_type.to_string(),
             pool_key = self.pool_key.to_string(),
-            "rollback if open"
+            "rollback transaction if open"
         );
 
         let mut tx_conn = self.tx_connection.0.lock().await;
@@ -716,17 +715,16 @@ where
             DB::TransactionManager::start_rollback(&mut tx_conn.connection);
         }
 
-        self.record_metrics("rollback-if-open", start, Ok(()))
+        self.record_metrics("rollback-transaction-if-open", start, Ok(()))
     }
 }
 
 #[async_trait]
 impl<T, DB> AsyncDrop for SqlxDbTransaction<T, DB>
 where
-    T: RdbmsType + Default + Send + Sync + QueryExecutor<T, DB>,
+    T: RdbmsType + Sync + QueryExecutor<T, DB>,
     DB: Database,
     for<'c> &'c mut <DB as Database>::Connection: sqlx::Executor<'c, Database = DB>,
-    RdbmsPoolKey: PoolCreator<DB>,
 {
     async fn async_drop(&mut self) {
         let _ = SqlxDbTransaction::rollback_if_open(self).await;
@@ -744,9 +742,8 @@ pub struct SqlxDbResultStream<'q, T: RdbmsType, DB: Database> {
 
 impl<'q, T, DB> SqlxDbResultStream<'q, T, DB>
 where
-    T: RdbmsType + Default + Send + Sync,
+    T: RdbmsType + Sync,
     DB: Database,
-    DB::Row: Row,
     DbRow<T::DbValue>: for<'a> TryFrom<&'a DB::Row, Error = String>,
     T::DbColumn: for<'a> TryFrom<&'a DB::Column, Error = String>,
 {
@@ -796,9 +793,8 @@ where
 #[async_trait]
 impl<T, DB> DbResultStream<T> for SqlxDbResultStream<'_, T, DB>
 where
-    T: RdbmsType + Default + Send + Sync,
+    T: RdbmsType + Sync,
     DB: Database,
-    DB::Row: Row,
     DbRow<T::DbValue>: for<'a> TryFrom<&'a DB::Row, Error = String>,
 {
     async fn get_columns(&self) -> Result<Vec<T::DbColumn>, Error> {
@@ -845,9 +841,8 @@ pub(crate) trait QueryParamsBinder<'q, T: RdbmsType, DB: Database> {
 
 pub(crate) fn create_db_result<T, DB>(rows: Vec<DB::Row>) -> Result<DbResult<T>, Error>
 where
-    T: RdbmsType + Send + Sync,
+    T: RdbmsType + Sync,
     DB: Database,
-    DB::Row: Row,
     DbRow<T::DbValue>: for<'a> TryFrom<&'a DB::Row, Error = String>,
     T::DbColumn: for<'a> TryFrom<&'a DB::Column, Error = String>,
 {

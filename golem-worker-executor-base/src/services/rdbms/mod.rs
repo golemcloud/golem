@@ -31,7 +31,7 @@ use std::fmt::{Debug, Display};
 use std::sync::Arc;
 use url::Url;
 
-pub trait RdbmsType: Debug + Display + Send {
+pub trait RdbmsType: Debug + Display + Default + Send {
     type DbColumn: Clone + Send + Sync + PartialEq + Debug;
     type DbValue: Clone + Send + Sync + PartialEq + Debug;
 }
@@ -170,9 +170,8 @@ impl RdbmsPoolKey {
     }
 
     pub fn from(address: &str) -> Result<Self, String> {
-        Ok(RdbmsPoolKey {
-            address: Url::parse(address).map_err(|e| e.to_string())?,
-        })
+        let url = Url::parse(address).map_err(|e| e.to_string())?;
+        Ok(Self::new(url))
     }
 
     pub fn masked_address(&self) -> String {
@@ -256,10 +255,7 @@ impl<T: RdbmsType> DbResult<T> {
     }
 
     pub fn empty() -> Self {
-        Self {
-            columns: vec![],
-            rows: vec![],
-        }
+        Self::new(vec![], vec![])
     }
 
     #[allow(dead_code)]
