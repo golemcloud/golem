@@ -20,18 +20,20 @@ const ApiInfoCard: React.FC<ApiInfoProps> = ({
 }) => {
   return (
     <Card
-      sx={{
-        p: 2,
-        border: "1px solid #666",
-        borderRadius: 2,
-        width: "320px",
-        display: "flex",
-        flexDirection: "column",
-        cursor: "pointer",
-        gap: 1,
-        "&:hover": { boxShadow: 2 },
-      }}
-      onClick={onClick}
+    sx={{
+      p: 2,
+      border: "1px solid #555",
+      borderRadius: 2,
+      maxHeight: "fit-content",
+      display: "flex",
+      flexDirection: "column",
+      cursor: "pointer",
+      gap: 1,
+      minWidth: "300px",
+      "&:hover": { boxShadow: 4 },
+    }}
+    onClick={onClick}
+    className="flex-1"
     >   <Box
         sx={{
           display: "flex",
