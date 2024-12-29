@@ -24,7 +24,6 @@ const ComponentCard: React.FC<ComponentCardProps> = ({
     <Box
       sx={{
         p: 2,
-        mb: 2,
         border: "1px solid #555",
         borderRadius: 2,
         maxHeight: "fit-content",

@@ -7,7 +7,6 @@ import {
   Card,
   CardContent,
   Typography,
-  Chip,
   Select,
   MenuItem,
 } from "@mui/material";
@@ -50,20 +49,15 @@ const ComponentInfoCard = ({
   return (
     <Card
       sx={{
-        width: 450,
         borderRadius: 2,
-        minWidth: "400px",
-        // maxWidth: "500px",
-        border: "1px solid #666",
-        padding: 2,
+        minWidth: "200px",
         "&:hover": { cursor: "pointer", boxShadow: "0px 5px 10px 0px #666"
         },
       }}
-      className="flex-1"
+      className="flex-1 border"
       onClick={onClick}
     >
       <CardContent>
-        {/* Header Section */}
         <Box
           sx={{
             display: "flex",

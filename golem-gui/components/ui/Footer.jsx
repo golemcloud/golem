@@ -41,27 +41,31 @@ const Footer = () => {
           </Typography>
           <Stack direction="row" spacing={1} marginBottom={1}>
             <IconButton
-              sx={{ color: "#FFFFFF", border: "1px solid #333", borderRadius: "8px" }}
+             color="inherit"
+              sx={{  border: "1px solid #333", borderRadius: "8px" }}
             >
               <GitHubIcon />
             </IconButton>
             <IconButton
-              sx={{ color: "#FFFFFF", border: "1px solid #333", borderRadius: "8px" }}
+              color="inherit"
+              sx={{  border: "1px solid #333", borderRadius: "8px" }}
             >
               <TwitterIcon />
             </IconButton>
             <IconButton
-              sx={{ color: "#FFFFFF", border: "1px solid #333", borderRadius: "8px" }}
+              color="inherit"
+              sx={{  border: "1px solid #333", borderRadius: "8px" }}
             >
               <MailOutlineIcon />
             </IconButton>
             <IconButton
-              sx={{ color: "#FFFFFF", border: "1px solid #333", borderRadius: "8px" }}
+              color="inherit"
+              sx={{ border: "1px solid #333", borderRadius: "8px" }}
             >
               <SportsEsportsIcon />
             </IconButton>
           </Stack>
-          <Typography variant="caption" sx={{ color: "#AAAAAA" }}>
+          <Typography variant="caption" color="inherit">
             © 2024 Zverge Inc.
           </Typography>
         </Box>
@@ -69,7 +73,7 @@ const Footer = () => {
         {/* Middle Section */}
         <Box
           sx={{
-            flexBasis: { xs: "100%", sm: "25%", md: "20%" }, // Responsive width
+            flexBasis: { xs: "100%", sm: "25%", md: "20%" }, 
           }}
         >
           <Typography
