@@ -16,11 +16,19 @@ int32_t c_api1_run(void) {
 
 void c_api1_print(c_api1_string_t *s) {
     char* buf = malloc(s->len + 1);
+    if (buf == NULL) {
+        return;
+    }
     memset(buf, 0, s->len + 1);
-    strncpy(buf, s->ptr, s->len);
+    if (s->len > 0) {
+        strncpy(buf, s->ptr, s->len);
+        buf[s->len] = '\0';
+    }
 
     time_t t = time(NULL);
-    struct tm tm = *localtime(&t);
+    struct tm tm;
+    localtime_r(&t, &tm); // #include <time.h>
 
     printf("%s %d\n", buf, tm.tm_year + 1900);
+    free(buf);
 }

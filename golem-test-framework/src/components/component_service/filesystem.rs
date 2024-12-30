@@ -23,6 +23,10 @@ use golem_common::model::{
 };
 use golem_wasm_ast::analysis::AnalysedExport;
 use serde::Serialize;
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
+#[cfg(windows)]
+use std::os::windows::fs::MetadataExt as WindowsMetadataExt;
 use std::{
     path::{Path, PathBuf},
 };
@@ -87,10 +91,14 @@ impl FileSystemComponentService {
                 ))?
         };
 
-        let size = tokio::fs::metadata(&target_path)
+        let metadata = tokio::fs::metadata(&target_path)
             .await
-            .map_err(|e| AddComponentError::Other(format!("Failed to read component size: {}", e)))?
-            .len();
+            .map_err(|e| AddComponentError::Other(format!("Failed to read component size: {}", e)))?;
+
+        #[cfg(unix)]
+        let size = metadata.size();
+        #[cfg(windows)]
+        let size = metadata.file_size();
 
         let metadata = ComponentMetadata {
             version: component_version,
