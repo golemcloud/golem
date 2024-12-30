@@ -15,12 +15,13 @@
 use crate::durable_host::DurableWorkerCtx;
 use crate::metrics::wasm::record_host_function_call;
 use crate::preview2::wasi::rdbms::postgres::{
-    Composite, CompositeType, Date, Datebound, Daterange, DbColumn, DbColumnType, DbResult, DbRow,
+    Composite, CompositeType, Datebound, Daterange, DbColumn, DbColumnType, DbResult, DbRow,
     DbValue, Domain, DomainType, Enumeration, EnumerationType, Error, Host, HostDbConnection,
     HostDbResultStream, HostDbTransaction, HostLazyDbColumnType, HostLazyDbValue, Int4bound,
-    Int4range, Int8bound, Int8range, Interval, IpAddress, MacAddress, Numbound, Numrange, Time,
-    Timestamp, Timestamptz, Timetz, Tsbound, Tsrange, Tstzbound, Tstzrange, Uuid,
+    Int4range, Int8bound, Int8range, Interval, Numbound, Numrange, Tsbound, Tsrange, Tstzbound,
+    Tstzrange,
 };
+use crate::preview2::wasi::rdbms::types::Timetz;
 use crate::services::rdbms::postgres::types as postgres_types;
 use crate::services::rdbms::postgres::PostgresType;
 use crate::services::rdbms::RdbmsPoolKey;
@@ -28,8 +29,6 @@ use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
-use chrono::{Datelike, Offset, Timelike};
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::ops::{Bound, Deref};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -563,42 +562,13 @@ impl From<crate::services::rdbms::Error> for Error {
     }
 }
 
-impl From<IpAddr> for IpAddress {
-    fn from(value: IpAddr) -> Self {
-        match value {
-            IpAddr::V4(v) => Self::Ipv4(v.octets().into()),
-            IpAddr::V6(v) => Self::Ipv6(v.segments().into()),
+impl From<Interval> for postgres_types::Interval {
+    fn from(v: Interval) -> Self {
+        Self {
+            months: v.months,
+            days: v.days,
+            microseconds: v.microseconds,
         }
-    }
-}
-
-impl From<IpAddress> for IpAddr {
-    fn from(value: IpAddress) -> Self {
-        match value {
-            IpAddress::Ipv4((a, b, c, d)) => {
-                let v = Ipv4Addr::new(a, b, c, d);
-                IpAddr::V4(v)
-            }
-            IpAddress::Ipv6((a, b, c, d, e, f, g, h)) => {
-                let v = Ipv6Addr::new(a, b, c, d, e, f, g, h);
-                IpAddr::V6(v)
-            }
-        }
-    }
-}
-
-impl TryFrom<Time> for chrono::NaiveTime {
-    type Error = String;
-
-    fn try_from(value: Time) -> Result<Self, Self::Error> {
-        let time = chrono::NaiveTime::from_hms_nano_opt(
-            value.hour as u32,
-            value.minute as u32,
-            value.second as u32,
-            value.nanosecond,
-        )
-        .ok_or("Time value is not valid")?;
-        Ok(time)
     }
 }
 
@@ -613,13 +583,11 @@ impl TryFrom<Timetz> for postgres_types::TimeTz {
     }
 }
 
-impl From<Interval> for postgres_types::Interval {
-    fn from(v: Interval) -> Self {
-        Self {
-            months: v.months,
-            days: v.days,
-            microseconds: v.microseconds,
-        }
+impl From<postgres_types::TimeTz> for Timetz {
+    fn from(v: postgres_types::TimeTz) -> Self {
+        let time = v.time.into();
+        let offset = v.offset.local_minus_utc();
+        Timetz { time, offset }
     }
 }
 
@@ -635,67 +603,6 @@ impl From<Enumeration> for postgres_types::Enum {
 impl From<EnumerationType> for postgres_types::EnumType {
     fn from(v: EnumerationType) -> Self {
         Self { name: v.name }
-    }
-}
-
-impl TryFrom<Date> for chrono::NaiveDate {
-    type Error = String;
-
-    fn try_from(value: Date) -> Result<Self, Self::Error> {
-        let date = chrono::naive::NaiveDate::from_ymd_opt(
-            value.year,
-            value.month as u32,
-            value.day as u32,
-        )
-        .ok_or("Date value is not valid")?;
-        Ok(date)
-    }
-}
-
-impl TryFrom<Timestamp> for chrono::NaiveDateTime {
-    type Error = String;
-
-    fn try_from(value: Timestamp) -> Result<Self, Self::Error> {
-        let date = value.date.try_into()?;
-        let time = value.time.try_into()?;
-        Ok(chrono::naive::NaiveDateTime::new(date, time))
-    }
-}
-
-impl TryFrom<Timestamptz> for chrono::DateTime<chrono::Utc> {
-    type Error = String;
-
-    fn try_from(value: Timestamptz) -> Result<Self, Self::Error> {
-        let datetime: chrono::NaiveDateTime = value.timestamp.try_into()?;
-        let offset = chrono::offset::FixedOffset::west_opt(value.offset)
-            .ok_or("Offset value is not valid")?;
-        let datetime = datetime
-            .checked_add_offset(offset)
-            .ok_or("Offset value is not valid")?;
-        Ok(datetime.and_utc())
-    }
-}
-
-impl From<chrono::NaiveTime> for Time {
-    fn from(v: chrono::NaiveTime) -> Self {
-        let hour = v.hour() as u8;
-        let minute = v.minute() as u8;
-        let second = v.second() as u8;
-        let nanosecond = v.nanosecond();
-        Time {
-            hour,
-            minute,
-            second,
-            nanosecond,
-        }
-    }
-}
-
-impl From<postgres_types::TimeTz> for Timetz {
-    fn from(v: postgres_types::TimeTz) -> Self {
-        let time = v.time.into();
-        let offset = v.offset.local_minus_utc();
-        Timetz { time, offset }
     }
 }
 
@@ -721,31 +628,6 @@ impl From<postgres_types::Enum> for Enumeration {
 impl From<postgres_types::EnumType> for EnumerationType {
     fn from(v: postgres_types::EnumType) -> Self {
         Self { name: v.name }
-    }
-}
-
-impl From<chrono::NaiveDate> for Date {
-    fn from(v: chrono::NaiveDate) -> Self {
-        let year = v.year();
-        let month = v.month() as u8;
-        let day = v.day() as u8;
-        Date { year, month, day }
-    }
-}
-
-impl From<chrono::NaiveDateTime> for Timestamp {
-    fn from(v: chrono::NaiveDateTime) -> Self {
-        let date = v.date().into();
-        let time = v.time().into();
-        Timestamp { date, time }
-    }
-}
-
-impl From<chrono::DateTime<chrono::Utc>> for Timestamptz {
-    fn from(v: chrono::DateTime<chrono::Utc>) -> Self {
-        let timestamp = v.naive_utc().into();
-        let offset = v.offset().fix().local_minus_utc();
-        Timestamptz { timestamp, offset }
     }
 }
 
@@ -1239,7 +1121,7 @@ fn to_db_value(
             postgres_types::DbValue::Xml(s),
         )),
         DbValue::Uuid(v) => Ok(DbValueWithResourceRep::new_resource_none(
-            postgres_types::DbValue::Uuid(uuid::Uuid::from_u64_pair(v.high_bits, v.low_bits)),
+            postgres_types::DbValue::Uuid(v.into()),
         )),
         DbValue::Bit(v) => Ok(DbValueWithResourceRep::new_resource_none(
             postgres_types::DbValue::Bit(BitVec::from_iter(v)),
@@ -1257,7 +1139,7 @@ fn to_db_value(
             postgres_types::DbValue::Cidr(v.into()),
         )),
         DbValue::Macaddr(v) => Ok(DbValueWithResourceRep::new_resource_none(
-            postgres_types::DbValue::Macaddr(mac_address::MacAddress::new(v.octets.into())),
+            postgres_types::DbValue::Macaddr(v.into()),
         )),
         DbValue::Int4range(v) => Ok(DbValueWithResourceRep::new_resource_none(
             postgres_types::DbValue::Int4range(v.into()),
@@ -1419,14 +1301,7 @@ fn from_db_value(
         }
         postgres_types::DbValue::Xml(s) => Ok((DbValue::Xml(s), DbValueResourceRep::None)),
         postgres_types::DbValue::Uuid(uuid) => {
-            let (high_bits, low_bits) = uuid.as_u64_pair();
-            Ok((
-                DbValue::Uuid(Uuid {
-                    high_bits,
-                    low_bits,
-                }),
-                DbValueResourceRep::None,
-            ))
+            Ok((DbValue::Uuid(uuid.into()), DbValueResourceRep::None))
         }
         postgres_types::DbValue::Bit(v) => {
             Ok((DbValue::Bit(v.iter().collect()), DbValueResourceRep::None))
@@ -1438,11 +1313,7 @@ fn from_db_value(
         postgres_types::DbValue::Inet(v) => Ok((DbValue::Inet(v.into()), DbValueResourceRep::None)),
         postgres_types::DbValue::Cidr(v) => Ok((DbValue::Cidr(v.into()), DbValueResourceRep::None)),
         postgres_types::DbValue::Macaddr(v) => {
-            let v = v.bytes();
-            Ok((
-                DbValue::Macaddr(MacAddress { octets: v.into() }),
-                DbValueResourceRep::None,
-            ))
+            Ok((DbValue::Macaddr(v.into()), DbValueResourceRep::None))
         }
         postgres_types::DbValue::Tsrange(v) => {
             Ok((DbValue::Tsrange(v.into()), DbValueResourceRep::None))

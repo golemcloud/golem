@@ -15,8 +15,8 @@
 use crate::durable_host::DurableWorkerCtx;
 use crate::metrics::wasm::record_host_function_call;
 use crate::preview2::wasi::rdbms::mysql::{
-    Date, DbColumn, DbColumnType, DbResult, DbRow, DbValue, Error, Host, HostDbConnection,
-    HostDbResultStream, HostDbTransaction, Time, Timestamp,
+    DbColumn, DbColumnType, DbResult, DbRow, DbValue, Error, Host, HostDbConnection,
+    HostDbResultStream, HostDbTransaction,
 };
 use crate::services::rdbms::mysql::types as mysql_types;
 use crate::services::rdbms::mysql::MysqlType;
@@ -24,7 +24,6 @@ use crate::services::rdbms::RdbmsPoolKey;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use bit_vec::BitVec;
-use chrono::{Datelike, Timelike};
 use std::ops::Deref;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -672,78 +671,6 @@ impl From<crate::services::rdbms::Error> for Error {
             crate::services::rdbms::Error::QueryResponseFailure(v) => Self::QueryResponseFailure(v),
             crate::services::rdbms::Error::Other(v) => Self::Other(v),
         }
-    }
-}
-
-impl TryFrom<Time> for chrono::NaiveTime {
-    type Error = String;
-
-    fn try_from(value: Time) -> Result<Self, Self::Error> {
-        let time = chrono::NaiveTime::from_hms_nano_opt(
-            value.hour as u32,
-            value.minute as u32,
-            value.second as u32,
-            value.nanosecond,
-        )
-        .ok_or("Time value is not valid")?;
-        Ok(time)
-    }
-}
-
-impl TryFrom<Date> for chrono::NaiveDate {
-    type Error = String;
-
-    fn try_from(value: Date) -> Result<Self, Self::Error> {
-        let date = chrono::naive::NaiveDate::from_ymd_opt(
-            value.year,
-            value.month as u32,
-            value.day as u32,
-        )
-        .ok_or("Date value is not valid")?;
-        Ok(date)
-    }
-}
-
-impl TryFrom<Timestamp> for chrono::DateTime<chrono::Utc> {
-    type Error = String;
-
-    fn try_from(value: Timestamp) -> Result<Self, Self::Error> {
-        let date = value.date.try_into()?;
-        let time = value.time.try_into()?;
-        Ok(chrono::naive::NaiveDateTime::new(date, time).and_utc())
-    }
-}
-
-impl From<chrono::NaiveTime> for Time {
-    fn from(v: chrono::NaiveTime) -> Self {
-        let hour = v.hour() as u8;
-        let minute = v.minute() as u8;
-        let second = v.second() as u8;
-        let nanosecond = v.nanosecond();
-        Time {
-            hour,
-            minute,
-            second,
-            nanosecond,
-        }
-    }
-}
-
-impl From<chrono::NaiveDate> for Date {
-    fn from(v: chrono::NaiveDate) -> Self {
-        let year = v.year();
-        let month = v.month() as u8;
-        let day = v.day() as u8;
-        Date { year, month, day }
-    }
-}
-
-impl From<chrono::DateTime<chrono::Utc>> for Timestamp {
-    fn from(v: chrono::DateTime<chrono::Utc>) -> Self {
-        let v = v.naive_utc();
-        let date = v.date().into();
-        let time = v.time().into();
-        Timestamp { date, time }
     }
 }
 

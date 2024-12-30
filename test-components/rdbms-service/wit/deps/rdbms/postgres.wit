@@ -1,6 +1,7 @@
 package wasi:rdbms@0.0.1;
 
 interface postgres {
+  use types.{date, time, timetz, timestamp, timestamptz, uuid, ip-address, mac-address};
 
   variant error {
     connection-failure(string),
@@ -8,48 +9,6 @@ interface postgres {
     query-execution-failure(string),
     query-response-failure(string),
     other(string)
-  }
-
-  record uuid {
-    high-bits: u64,
-    low-bits: u64
-  }
-
-  variant ip-address {
-    ipv4(tuple<u8, u8, u8, u8>),
-    ipv6(tuple<u16, u16, u16, u16, u16, u16, u16, u16>),
-  }
-
-  record mac-address {
-    octets: tuple<u8, u8, u8, u8, u8, u8>
-  }
-
-  record date {
-    year: s32,
-    month: u8,
-    day: u8
-  }
-
-  record time {
-    hour: u8,
-    minute: u8,
-    second: u8,
-    nanosecond: u32
-  }
-
-  record timestamp {
-    date: date,
-    time: time
-  }
-
-  record timestamptz {
-    timestamp: timestamp,
-    offset: s32
-  }
-
-  record timetz {
-    time: time,
-    offset: s32
   }
 
   record interval {
@@ -94,33 +53,33 @@ interface postgres {
   }
 
   record int4range {
-   start: int4bound,
-   end: int4bound
+    start: int4bound,
+    end: int4bound
   }
 
   record int8range {
-   start: int8bound,
-   end: int8bound
+    start: int8bound,
+    end: int8bound
   }
 
   record numrange {
-   start: numbound,
-   end: numbound
+    start: numbound,
+    end: numbound
   }
 
   record tsrange {
-   start: tsbound,
-   end: tsbound
+    start: tsbound,
+    end: tsbound
   }
 
   record tstzrange {
-   start: tstzbound,
-   end: tstzbound
+    start: tstzbound,
+    end: tstzbound
   }
 
   record daterange {
-   start: datebound,
-   end: datebound
+    start: datebound,
+    end: datebound
   }
 
   record enumeration-type {
@@ -240,12 +199,12 @@ interface postgres {
   }
 
   resource lazy-db-value {
-    constructor(value: db-value);
+constructor(value: db-value);
     get: func() -> db-value;
   }
 
   resource lazy-db-column-type {
-    constructor(value: db-column-type);
+constructor(value: db-column-type);
     get: func() -> db-column-type;
   }
 
