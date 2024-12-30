@@ -16,7 +16,6 @@ pub mod http;
 
 use std::fmt::Debug;
 use std::fmt::Display;
-use std::str::FromStr;
 
 use bincode::{Decode, Encode};
 use poem_openapi::NewType;
@@ -40,14 +39,6 @@ impl Display for ApiDefinitionId {
     }
 }
 
-impl FromStr for ApiDefinitionId {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(ApiDefinitionId(s.to_string()))
-    }
-}
-
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, Encode, Decode, NewType)]
 pub struct ApiVersion(pub String);
 
@@ -66,14 +57,6 @@ impl From<String> for ApiVersion {
 impl Display for ApiVersion {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
-    }
-}
-
-impl FromStr for ApiVersion {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(ApiVersion::new(s))
     }
 }
 
