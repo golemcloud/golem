@@ -1,6 +1,4 @@
 import React, { useCallback, useMemo } from "react";
-import { useWorkerLogs } from "@/lib/hooks/use-worker";
-import { useParams } from "next/navigation";
 import {
   Typography,
   List,
@@ -10,69 +8,87 @@ import {
   Alert,
   Paper,
 } from "@mui/material";
-import { ExportedFunctionInvokedEntry } from "@/types/api";
 
 export default function InvocationLogs({
   lastClearTimeStamp,
+  messages,
 }: {
   lastClearTimeStamp: Date | null;
+  messages: Array<any>;
 }) {
-  const { compId } = useParams<{ compId: string }>();
-  const { id: workerName } = useParams<{ id: string }>();
-  const { logs, error, isLoading } = useWorkerLogs(compId, workerName, {
-    count: 100,
-    query: "exported-function-invoked",
-  });
-
-  console.log(logs, error, isLoading);
-
   const checkLogIsAfterLastClearTime = useCallback(
-    ({ entry }: { entry: ExportedFunctionInvokedEntry }) => {
+    (entryTime: string) => {
       console.log("entering this");
       if (!lastClearTimeStamp) {
         return true;
       }
 
-      const entryTimestamp = new Date(entry.timestamp);
+      if (!entryTime) {
+        return false;
+      }
+
+      const entryTimestamp = new Date(entryTime);
 
       return entryTimestamp > lastClearTimeStamp;
     },
     [lastClearTimeStamp]
   );
 
-  const entries = useMemo(() => {
-    if (!logs) {
-      return [];
-    }
-    const _entries = Array.isArray(logs?.entries) ? logs.entries : [];
-    return _entries.filter(checkLogIsAfterLastClearTime) || [];
-  }, [checkLogIsAfterLastClearTime, logs, lastClearTimeStamp]);
+  console.log("messages in invokvelogs", messages);
+  const invokeMessages = useMemo(() => {
+    return Object.values(
+      messages?.reduce<Record<string, any>>((obj, message: any) => {
+        let idempotency_key = message?.["InvocationStart"]?.idempotency_key;
+        const isEligible =
+          idempotency_key &&
+          checkLogIsAfterLastClearTime(message?.["InvocationStart"].timeStamp);
+        if ("InvocationStart" in message && idempotency_key && isEligible) {
+          obj[idempotency_key] = {
+            ...message["InvocationStart"],
+            startTime: message["InvocationStart"].timestamp,
+            status: "Pending",
+          };
+        }
 
-  if (isLoading)
-    return (
-      <Box
-        display="flex"
-        justifyContent="center"
-        alignItems="center"
-        height="100vh"
-      >
-        <CircularProgress />
-      </Box>
+        idempotency_key = message?.["InvocationFinished"]?.idempotency_key;
+        if ("InvocationFinished" in message && idempotency_key in obj) {
+          obj[idempotency_key] = {
+            ...obj[idempotency_key],
+            endTime: message["InvocationFinished"].timestamp,
+            status: "Finished",
+          };
+        }
+        return obj;
+      }, {}) || {}
     );
+  }, [messages, checkLogIsAfterLastClearTime, lastClearTimeStamp]);
+  console.log(invokeMessages);
 
-  if (error)
-    return (
-      <Box
-        display="flex"
-        justifyContent="center"
-        alignItems="center"
-        height="100vh"
-      >
-        <Alert severity="error">Error: {error}</Alert>
-      </Box>
-    );
+  // if (isLoading)
+  //   return (
+  //     <Box
+  //       display="flex"
+  //       justifyContent="center"
+  //       alignItems="center"
+  //       height="100vh"
+  //     >
+  //       <CircularProgress />
+  //     </Box>
+  //   );
 
-  if (!entries || entries.length === 0)
+  // if (error)
+  //   return (
+  //     <Box
+  //       display="flex"
+  //       justifyContent="center"
+  //       alignItems="center"
+  //       height="100vh"
+  //     >
+  //       <Alert severity="error">Error: {error}</Alert>
+  //     </Box>
+  //   );
+
+  if (!invokeMessages || invokeMessages.length === 0)
     return (
       <Box
         display="flex"
@@ -88,20 +104,22 @@ export default function InvocationLogs({
     <Box>
       <Paper elevation={3} sx={{ px: 2 }}>
         <List>
-          {entries.map(
-            (
-              { entry }: { entry: ExportedFunctionInvokedEntry },
-              index: number
-            ) => (
-              <>
-                {index > 0 && <Divider sx={{ my: 1 }} color="" />}
-                <Typography variant="h6" gutterBottom>
-                  {new Date(entry?.timestamp).toLocaleString()}{" "}
-                  {entry?.function_name}
-                </Typography>
-              </>
-            )
-          )}
+          {invokeMessages.map((entry, index: number) => (
+            <>
+              {index > 0 && <Divider sx={{ my: 1 }} color="" />}
+              <Typography variant="h6" gutterBottom>
+                {new Date(entry?.startTime).toLocaleString()} {entry?.function}{" "}
+                <span className="px-4 py-1 border">{entry.status}</span>
+                {"  "}
+                {entry.status === "Finished"
+                  ? `${
+                      new Date(entry.endTime).getTime() -
+                      new Date(entry.startTime).getTime()
+                    } ms`
+                  : ""}{" "}
+              </Typography>
+            </>
+          ))}
         </List>
       </Paper>
     </Box>

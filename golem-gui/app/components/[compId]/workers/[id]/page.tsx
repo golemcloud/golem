@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, {useMemo, useState } from "react";
 import { Box, Divider, Tab, Tabs, Toolbar, Typography } from "@mui/material";
 import { useWorker } from "@/lib/hooks/use-worker";
 import { useParams } from "next/navigation";
@@ -14,7 +14,12 @@ import Overview from "./overview";
 import TerminalPage from "./live";
 import FileComponent from "./files";
 import Manage from "./manage";
+import { useWebSocketWithPath, WebSocketMessage } from "@/lib/hooks/use-websocket";
 
+interface CustomMessage extends WebSocketMessage {
+  type: 'custom';
+  payload: { user: string; message: string };
+}
 const WorkerListWithDropdowns = () => {
   const [activeTab, setActiveTab] = useState(0);
 
@@ -23,6 +28,16 @@ const WorkerListWithDropdowns = () => {
   const { id: workerName } = useParams<{ id: string }>();
   //need to integrate the filter logic here. and pagination or scroll on load needs to implemented or addd show more at the end on click we need to next set of data
   const { worker, isLoading } = useWorker(compId, workerName);
+
+
+  const { messages, isConnected } = useWebSocketWithPath<CustomMessage>(`v1/components/${compId}/workers/${workerName}/connect`);
+
+  console.log("messages", messages);
+  console.log("isConnected", isConnected);
+
+  
+
+  // console.log("invokeMessages====>", invokeMessages);
   const workerStats = useMemo(() => {
     return [
       {
@@ -86,7 +101,7 @@ const WorkerListWithDropdowns = () => {
         </Typography>
       </Toolbar>
       {activeTab === 0 && <Overview worker={worker} isLoading={isLoading} />}
-      {activeTab === 1 && <TerminalPage workerName={workerName} />}
+      {activeTab === 1 && <TerminalPage messages={messages}/>}
       {activeTab === 3 && <FileComponent />}
       {activeTab === 4 && <Manage />}
       {activeTab === 5 && <InvokePage />}

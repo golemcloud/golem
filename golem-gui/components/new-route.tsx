@@ -59,7 +59,7 @@ const NewRouteForm = ({
 
   const component = watch("component");
   const [error, setError] = useState<string | null>(null);
-  const { data, isLoading } = useSWR("?path=components", fetcher);
+  const { data, isLoading } = useSWR("v1/components", fetcher);
   const { getApiDefintion, isLoading: apiDefinitonLoading, upsertRoute, deleteRoute } = useApiDefinitions(apiId, version);
   const { error: apiDefintionError } = getApiDefintion(apiId, version);
   const components = (data?.data || null) as Component[];

@@ -14,27 +14,20 @@ import { PublicOplogEntry_LogParameters } from "@/types/api";
 
 export default function TerminalLogs({
   lastClearTimeStamp,
+  messages,
 }: {
   lastClearTimeStamp: Date | null;
+  messages: Array<any>;
 }) {
-  const { compId } = useParams<{ compId: string }>();
-  const { id: workerName } = useParams<{ id: string }>();
-  const { logs, error, isLoading } = useWorkerLogs(compId, workerName, {
-    count: 1000,
-    query: "log",
-  });
-
-  console.log(logs, error, isLoading, lastClearTimeStamp);
-
   //TODO: we can make useCllaback and useMemo a custom hook. so that we can see this across all tabs.
   const checkLogIsAfterLastClearTime = useCallback(
-    ({ entry }: { entry: PublicOplogEntry_LogParameters }) => {
+    (timestamp: string) => {
       console.log("entering this");
       if (!lastClearTimeStamp) {
         return true;
       }
 
-      const entryTimestamp = new Date(entry.timestamp);
+      const entryTimestamp = new Date(timestamp);
 
       return entryTimestamp > lastClearTimeStamp;
     },
@@ -42,36 +35,43 @@ export default function TerminalLogs({
   );
 
   const entries = useMemo(() => {
-    if (!logs) {
+    if (!messages) {
       return [];
     }
-    const _entries = Array.isArray(logs?.entries) ? logs.entries : [];
-    return _entries.filter(checkLogIsAfterLastClearTime) || [];
-  }, [checkLogIsAfterLastClearTime, logs, lastClearTimeStamp]);
+    const _entries = Array.isArray(messages) ? messages : [];
 
-  if (isLoading)
     return (
-      <Box
-        display="flex"
-        justifyContent="center"
-        alignItems="center"
-        height="100vh"
-      >
-        <CircularProgress />
-      </Box>
+      _entries.filter(
+        (entry) =>
+          "StdOut" in entry &&
+          checkLogIsAfterLastClearTime(entry?.StdOut?.timestamp)
+      ) || []
     );
+  }, [checkLogIsAfterLastClearTime, messages]);
 
-  if (error)
-    return (
-      <Box
-        display="flex"
-        justifyContent="center"
-        alignItems="center"
-        height="100vh"
-      >
-        <Alert severity="error">Error: {error}</Alert>
-      </Box>
-    );
+  // if (isLoading)
+  //   return (
+  //     <Box
+  //       display="flex"
+  //       justifyContent="center"
+  //       alignItems="center"
+  //       height="100vh"
+  //     >
+  //       <CircularProgress />
+  //     </Box>
+  //   );
+
+  // if (error)
+  //   return (
+  //     <Box
+  //       display="flex"
+  //       justifyContent="center"
+  //       alignItems="center"
+  //       height="100vh"
+  //     >
+  //       <Alert severity="error">Error: {error}</Alert>
+  //     </Box>
+  //   );
 
   if (!entries || entries.length === 0)
     return (
@@ -89,19 +89,16 @@ export default function TerminalLogs({
     <Box>
       <Paper elevation={3} sx={{ px: 2 }}>
         <List>
-          {entries.map(
-            (
-              { entry }: { entry: PublicOplogEntry_LogParameters },
-              index: number
-            ) => (
-              <>
-                {index > 0 && <Divider sx={{ my: 1 }} color="" />}
-                <Typography variant="h6" gutterBottom>
-                  {new Date(entry?.timestamp).toLocaleString()} {entry?.message}
-                </Typography>
-              </>
-            )
-          )}
+          {entries.map((entry, index: number) => (
+            <>
+              {index > 0 && <Divider sx={{ my: 1 }} color="" />}
+              <Typography variant="h6" gutterBottom>
+                {new Date(entry?.StdOut?.timestamp).toLocaleString()}{" "}
+                {entry?.StdOut?.bytes &&
+                  String.fromCharCode(...entry?.StdOut?.bytes)}
+              </Typography>
+            </>
+          ))}
         </List>
       </Paper>
     </Box>

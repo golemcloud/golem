@@ -11,7 +11,7 @@ import {
 import Logs from "./logs";
 import InvocationLogs from "./invoke-logs";
 import TerminalLogs from "./terminal";
-const TerminalPage = ({ workerName }: { workerName: string }) => {
+const TerminalPage = ({ messages }: { messages: Array<any> }) => {
   const [activeTab, setActiveTab] = useState(0);
   const [lastClearTimeStamp, setLastClearTimestamp] = useState<Date | null>(
     null
@@ -85,12 +85,12 @@ const TerminalPage = ({ workerName }: { workerName: string }) => {
         className="text-gray-700 dark:text-gray-300"
       >
         {activeTab === 0 && (
-          <TerminalLogs lastClearTimeStamp={lastClearTimeStamp} />
+          <TerminalLogs lastClearTimeStamp={lastClearTimeStamp} messages={messages}/>
         )}
         {/* It is just logs for invocation only. but the console shows different. it merging the both inovked and 
         invoked completed data and showing data. need to rework on this(little tricky)*/}
         {activeTab === 1 && (
-          <InvocationLogs lastClearTimeStamp={lastClearTimeStamp} />
+          <InvocationLogs lastClearTimeStamp={lastClearTimeStamp} messages={messages}/>
         )}
         {/* this i am not able to view in console.*/}
         {activeTab === 2 && <Logs />}

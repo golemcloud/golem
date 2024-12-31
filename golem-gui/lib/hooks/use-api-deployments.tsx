@@ -1,11 +1,10 @@
 import useSWR, { mutate } from "swr";
-import { fetcher, getErrorMessage } from "../utils";
+import { fetcher } from "../utils";
 import { ApiDeployment } from "@/types/api";
-import { useMemo } from "react";
 import { toast } from "react-toastify";
 // import { useRouter } from "next/navigation";
 
-const ROUTE_PATH = "?path=api/deployments";
+const ROUTE_PATH = "v1/api/deployments";
 
 export async function addNewApiDeployment(
   newDploy: ApiDeployment,
@@ -15,7 +14,7 @@ export async function addNewApiDeployment(
   error?: string | null;
   data?: ApiDeployment | null;
 }> {
-  const response = await fetcher(`${ROUTE_PATH}/deploy`, {
+  const { error, data } = await fetcher(`${ROUTE_PATH}/deploy`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -23,17 +22,16 @@ export async function addNewApiDeployment(
     body: JSON.stringify(newDploy),
   });
 
-  if (response.status !== 200) {
-    const error = getErrorMessage(response.data);
-    toast.error("Failed to deploy:" + error)
+  if (error) {
+    toast.error("Failed to deploy:" + error);
     return { success: false, error };
   }
   mutate(`${ROUTE_PATH}`);
   if (path !== ROUTE_PATH) {
     mutate(path);
   }
-  toast.success("Successfully deployed")
-  return { success: false, data: response.data };
+  toast.success("Successfully deployed");
+  return { success: false, data: data };
 }
 
 function useApiDeployments(defintionId?: string, version?: string | null) {
@@ -43,19 +41,11 @@ function useApiDeployments(defintionId?: string, version?: string | null) {
       ? `${ROUTE_PATH}?api-definition-id=${defintionId}`
       : ROUTE_PATH;
   path = defintionId && version ? `${path}/${defintionId}/${version}` : path;
-  const { data, isLoading, error: requestError } = useSWR(path, fetcher);
+  const { data, isLoading, error } = useSWR(path, fetcher);
 
   const apiDeployments = (
     defintionId && version ? (data?.data ? [data?.data] : []) : data?.data || []
   ) as ApiDeployment[];
-
-
-  const error = useMemo(() => {
-    if(!isLoading && data?.status!==200){
-      return getErrorMessage(data);
-    }
-    return !isLoading ? getErrorMessage(requestError) : "";
-  }, [isLoading, requestError, data]); 
 
   const addApiDeployment = async (
     newDeploy: ApiDeployment
@@ -69,14 +59,13 @@ function useApiDeployments(defintionId?: string, version?: string | null) {
 
   //   TODO Currently we are not able to delete deployment in local.
   const deleteDeployment = async (id: string, site: string) => {
-    const response = await fetcher(`${ROUTE_PATH}/${id}/${site}`, {
+    const { error } = await fetcher(`${ROUTE_PATH}/${id}/${site}`, {
       method: "DELETE",
       headers: {
         "Content-Type": "application/json",
       },
     });
-    if (response.status !== 200) {
-      const error = getErrorMessage(response.data);
+    if (error) {
       return { success: false, error };
     }
 
@@ -88,7 +77,7 @@ function useApiDeployments(defintionId?: string, version?: string | null) {
 
   return {
     apiDeployments,
-    error,
+    error: error || data?.error,
     isLoading,
     addApiDeployment,
     deleteDeployment,
