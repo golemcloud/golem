@@ -1,15 +1,7 @@
 "use client";
-import React, { useState } from "react";
-import {useRouter} from "next/navigation";
-import { SelectChangeEvent } from "@mui/material";
-import {
-  Box,
-  Card,
-  CardContent,
-  Typography,
-  Select,
-  MenuItem,
-} from "@mui/material";
+import React from "react";
+import { Dropdown } from "./ui/dropdown-button";
+import { Box, Card, CardContent, Typography } from "@mui/material";
 
 interface ComponentInfoCardProps {
   title: string;
@@ -32,27 +24,17 @@ const ComponentInfoCard = ({
   id,
   onClick,
 }: ComponentInfoCardProps) => {
-  const [value, setValue] = useState<string>();
-  const router = useRouter();
-  const cardInfo=[`${exports} Exports`, `${size} MB`, componentType];
-  
-  const handleSelectChange = (event: SelectChangeEvent<string>) => {
-    const value = event.target.value as string;
-    setValue(value);
-
-    if (value === "newworker") {
-      router.push(`/components/${id}/overview`);
-    } else if (value === "settings") {
-      router.push(`/components/${id}/settings`);
-    }
-  };
+  const cardInfo = [`${exports} Exports`, `${size} MB`, componentType];
+  const workloads = [
+    { route: `/components/${id}/overview`, value: "New Worker" },
+    { route: `/components/${id}/settings`, value: "Settings" },
+  ];
   return (
     <Card
       sx={{
         borderRadius: 2,
         minWidth: "200px",
-        "&:hover": { cursor: "pointer", boxShadow: "0px 5px 10px 0px #666"
-        },
+        "&:hover": { cursor: "pointer", boxShadow: "0px 5px 10px 0px #666" },
       }}
       className="flex-1 border"
       onClick={onClick}
@@ -68,19 +50,8 @@ const ComponentInfoCard = ({
           <Typography variant="h6" component="div">
             {title}
           </Typography>
-
-          <Select  value={value} variant="standard" 
-             sx={{
-              color: 'white',
-            }}
-           onChange={handleSelectChange}
-           onClick={(e) => e.stopPropagation()}
-           >
-            <MenuItem value="newworker">New Worker</MenuItem>
-            <MenuItem value="settings">Settings</MenuItem>
-          </Select>
+          {Dropdown(workloads)}
         </Box>
-
         <Box
           sx={{
             display: "flex",
@@ -98,9 +69,7 @@ const ComponentInfoCard = ({
             >
               Running
             </Typography>
-            <Typography variant="body2">
-              0 ▶
-            </Typography>
+            <Typography variant="body2">0 ▶</Typography>
           </Box>
           <Box>
             <Typography
@@ -110,9 +79,7 @@ const ComponentInfoCard = ({
             >
               Idle
             </Typography>
-            <Typography variant="body2">
-              0 ⏸
-            </Typography>
+            <Typography variant="body2">0 ⏸</Typography>
           </Box>
           <Box>
             <Typography
@@ -122,9 +89,7 @@ const ComponentInfoCard = ({
             >
               Suspended
             </Typography>
-            <Typography variant="body2" >
-              0 ⏹
-            </Typography>
+            <Typography variant="body2">0 ⏹</Typography>
           </Box>
           <Box>
             <Typography
@@ -134,9 +99,7 @@ const ComponentInfoCard = ({
             >
               Failed
             </Typography>
-            <Typography variant="body2">
-              0 ⚠
-            </Typography>
+            <Typography variant="body2">0 ⚠</Typography>
           </Box>
         </Box>
 
@@ -144,18 +107,16 @@ const ComponentInfoCard = ({
           <Typography className=" bg-button_bg border border-button_border px-2  rounded-sm text-sm">
             v{version}
           </Typography>
-          {
-            cardInfo.map((info, index) => (
-              <Typography
-                key={index}
-                variant="body2"
-                className="border text-muted-foreground px-2 rounded-md"
-              >
-                {info}
-              </Typography>
-            ))
-          }
-      
+          {cardInfo.map((info, index) => (
+            <Typography
+              key={index}
+              variant="body2"
+              className="border text-muted-foreground px-2 rounded-md"
+            >
+              {info}
+            </Typography>
+          ))}
+
           <Typography variant="body2" className="ml-5 text-muted-foreground">
             {time}
           </Typography>
