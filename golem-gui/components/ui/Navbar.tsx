@@ -27,7 +27,6 @@ const links = [
   { name: "Home", to: "/" },
   { name: "Overview", to: "/overview" },
   { name: "Components", to: "/components" },
-  { name: "Workers", to: "/workers" },
   { name: "APIs", to: "/apis" },
   { name: "Plugins", to: "/plugins", comingSoon: false },
 ] as NAV_LINK[];

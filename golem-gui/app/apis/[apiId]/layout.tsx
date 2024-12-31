@@ -8,7 +8,7 @@ import {
 } from "next/navigation";
 import { Home, Settings, RocketLaunch } from "@mui/icons-material";
 import PlayForWorkIcon from "@mui/icons-material/PlayForWork";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 import { Loader } from "lucide-react";
 import {
@@ -17,11 +17,6 @@ import {
   Select,
   MenuItem,
   Button,
-  Modal,
-  Box,
-  TextField,
-  Container,
-  Paper,
 } from "@mui/material";
 import CreateNewApiVersion from "@/components/create-api-new-version";
 import CustomModal from "@/components/CustomModal";

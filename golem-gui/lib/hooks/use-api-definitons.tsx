@@ -3,9 +3,8 @@ import { fetcher, getErrorMessage } from "../utils";
 import { ApiDefinition, ApiRoute } from "@/types/api";
 import { useRouter } from "next/navigation";
 import { toast } from "react-toastify";
-import { useMemo } from "react";
 
-const ROUTE_PATH = "?path=api/definitions";
+const ROUTE_PATH = "v1/api/definitions";
 
 function useApiDefinitions(defintionId?: string, version?: string | null) {
   const router = useRouter();
@@ -15,11 +14,7 @@ function useApiDefinitions(defintionId?: string, version?: string | null) {
       ? `${ROUTE_PATH}?api-definition-id=${defintionId}`
       : ROUTE_PATH;
   path = defintionId && version ? `${path}/${defintionId}/${version}` : path;
-  const {
-    data: apiData,
-    isLoading,
-    error: requestError,
-  } = useSWR(path, fetcher);
+  const { data: apiData, isLoading, error } = useSWR(path, fetcher);
 
   const apiDefinitions = (
     defintionId && version
@@ -28,13 +23,6 @@ function useApiDefinitions(defintionId?: string, version?: string | null) {
         : []
       : apiData?.data || []
   ) as ApiDefinition[];
-
- const error = useMemo(() => {
-    if(!isLoading && apiData?.status!==200){
-      return getErrorMessage(apiData);
-    }
-    return !isLoading ? getErrorMessage(requestError) : "";
-  }, [isLoading, requestError, apiData]); 
 
   //if version is not given. we are providing the current working latest version routes
   const getApiDefintion = (
@@ -79,19 +67,19 @@ function useApiDefinitions(defintionId?: string, version?: string | null) {
     update: { version: string },
     id: string,
     version?: string | null,
-    noRedirect?:boolean
+    noRedirect?: boolean
   ) => {
     const { data, error, success } = getApiDefintion(id, version);
 
     if (!success || !data) {
       return {
         success,
-        error,
+        error: error || apiData?.error,
       };
     }
     //make sure new version is draft.
     const newData = { ...data, draft: true, ...update };
-    const response = await fetcher(ROUTE_PATH, {
+    const { error: requestError } = await fetcher(ROUTE_PATH, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -99,9 +87,8 @@ function useApiDefinitions(defintionId?: string, version?: string | null) {
       body: JSON.stringify(newData),
     });
 
-    if (response.status!== 200) {
-      const error = getErrorMessage(response.data);
-      return { success: false, error };
+    if (requestError) {
+      return { success: false, error: requestError };
     }
     mutate(`${ROUTE_PATH}?api-definition-id=${newData.id}`);
     mutate(`${ROUTE_PATH}/${data.id}/${update.version}`);
@@ -122,29 +109,31 @@ function useApiDefinitions(defintionId?: string, version?: string | null) {
         };
       }
 
-      const response = await fetcher(`${ROUTE_PATH}/${id}/${data.version}`, {
-        method: "DELETE",
-        headers: {
-          "Content-Type": "application/json",
-        },
-      });
-      if (response.status !== 200) {
-        const error = getErrorMessage(response.data);
-        toast.error(`Version Deletion failed. ${error}`)
+      const { error: requestError } = await fetcher(
+        `${ROUTE_PATH}/${id}/${data.version}`,
+        {
+          method: "DELETE",
+          headers: {
+            "Content-Type": "application/json",
+          },
+        }
+      );
+      if (requestError) {
+        toast.error(`Version Deletion failed. ${requestError}`);
 
-        return { success: false, error };
+        return { success: false, error: requestError };
       }
 
       mutate(`${ROUTE_PATH}?api-definition-id=${data.id}`);
       mutate(`${ROUTE_PATH}/${data.id}/${data.version}`);
       mutate(`${ROUTE_PATH}`);
-      toast.success("Api version deleted")
+      toast.success("Api version deleted");
 
       //If version we are deleting is the last version. then  redirect to api's page.
       router.push(noOfVersions > 1 ? `/apis/${id}/overview` : `/apis`);
     } catch (error) {
       console.error("Error deleting version:", error);
-      toast.error(`Version Deletion failed. Something went wrong`)
+      toast.error(`Version Deletion failed. Something went wrong`);
       return { success: false, error: "Something went wrong" };
     }
   };
@@ -190,22 +179,23 @@ function useApiDefinitions(defintionId?: string, version?: string | null) {
         }
       );
 
-      if (response.status !== 200) {
-        const error = getErrorMessage(response.data);
-        toast.error(`Api definition addition/updation failed. ${error}`)
-
-        return { success: false, error };
+      if (response.error) {
+        toast.error(
+          `Api definition addition/updation failed. ${response.error}`
+        );
+        return response;
       }
 
       mutate(`${ROUTE_PATH}?api-definition-id=${data.id}`);
       mutate(`${ROUTE_PATH}/${data.id}/${data.version}`);
       mutate(`${ROUTE_PATH}`);
-      toast.success("Api definition added/updated")
-
-      return { success: true, error: null };
+      toast.success("Api definition added/updated");
+      return response;
     } catch (error) {
       console.error("Error upserting the apidefintion:", error);
-      toast.error(`Api definition addition/updation failed. Something went wrong`)
+      toast.error(
+        `Api definition addition/updation failed. Something went wrong`
+      );
 
       return { success: false, error: "Something went wrong" };
     }
@@ -242,29 +232,28 @@ function useApiDefinitions(defintionId?: string, version?: string | null) {
             }),
           }
         );
-        if (response.status !== 200) {
+        if (response.error) {
           const error = getErrorMessage(response.data);
-          toast.error(`Route deletion failed. ${error}`)
-
-          return { success: false, error };
+          toast.error(`Route deletion failed. ${error}`);
+          return response;
         }
 
         mutate(`${ROUTE_PATH}?api-definition-id=${data.id}`);
         mutate(`${ROUTE_PATH}/${data.id}/${data.version}`);
         mutate(`${ROUTE_PATH}`);
-        toast.success("Route deleted Successfully")
-        return { success: true, error: null };
+        toast.success("Route deleted Successfully");
+        return response;
       }
     } catch (error) {
       console.error("Error deleting route:", error);
-      toast.error(`Route deletion failed. Something went wrong`)
+      toast.error(`Route deletion failed. Something went wrong`);
       return { success: false, error: "Something went wrong" };
     }
   };
 
   return {
     apiDefinitions,
-    error,
+    error: error || apiData?.error,
     isLoading,
     addNewApiVersionDefinition,
     getApiDefintion,
@@ -286,21 +275,20 @@ export async function addNewApiDefinition(
       body: JSON.stringify(newData),
     });
 
-    if (response.status > 300) {
+    if (response.error) {
       const error = getErrorMessage(response.data);
-      toast.error(`Api creation/updation failed. ${error}`)
-      return { success: false, error: error };
+      toast.error(`Api creation/updation failed. ${error}`);
+      return response;
     }
 
     mutate(ROUTE_PATH);
     mutate(`${ROUTE_PATH}/${newData.id}/${newData.version}`);
     mutate(`${ROUTE_PATH}/?api-definition-id=${newData.id}`);
-    toast.success(`Api successfully created/updated`)
-
-    return { success: false, data: response.data };
+    toast.success(`Api successfully created/updated`);
+    return response;
   } catch (err) {
     console.log("Err", err);
-    toast.error(`Something went wrong!`)
+    toast.error(`Something went wrong!`);
     return { success: false, error: "Something went wrong!. please try again" };
   }
 }
