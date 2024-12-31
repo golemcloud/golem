@@ -43,6 +43,9 @@ pub mod worker_activator;
 pub mod worker_enumeration;
 pub mod worker_event;
 pub mod worker_proxy;
+
+pub mod worker_fork;
+
 // HasXXX traits for fine-grained control of which dependencies a function needs
 
 pub trait HasActiveWorkers<Ctx: WorkerCtx> {

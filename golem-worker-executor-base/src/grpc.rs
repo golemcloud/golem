@@ -64,10 +64,9 @@ use crate::model::public_oplog::{
     find_component_version_at, get_public_oplog_chunk, search_public_oplog,
 };
 use crate::model::{
-    ExecutionStatus, InterruptKind, LastError, ListDirectoryResult, ReadFileResult,
+    InterruptKind, LastError, ListDirectoryResult, ReadFileResult,
 };
 use crate::services::events::Event;
-use crate::services::oplog::CommitLevel;
 use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActivator};
 use crate::services::worker_event::WorkerEventReceiver;
 use crate::services::{
@@ -78,6 +77,7 @@ use crate::services::{
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use tokio;
+use crate::services::worker_fork::{DefaultWorkerFork, WorkerFork};
 
 pub enum GrpcError<E> {
     Transport(tonic::transport::Error),
@@ -144,6 +144,7 @@ pub struct WorkerExecutorImpl<
 > {
     /// Reference to all the initialized services
     services: Svcs,
+    worker_fork: Arc<dyn WorkerFork + Sync + Send>,
     ctx: PhantomData<Ctx>,
 }
 
@@ -153,6 +154,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     fn clone(&self) -> Self {
         Self {
             services: self.services.clone(),
+            worker_fork: self.worker_fork.clone(),
             ctx: PhantomData,
         }
     }
@@ -169,11 +171,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         lazy_worker_activator: Arc<LazyWorkerActivator<Ctx>>,
         port: u16,
     ) -> Result<Self, Error> {
+        let worker_fork: Arc<dyn WorkerFork + Sync + Send> =
+            Arc::new(DefaultWorkerFork::new(services.clone()));
+
         let worker_executor = WorkerExecutorImpl {
             services: services.clone(),
+            worker_fork,
             ctx: PhantomData,
         };
-        let worker_activator = Arc::new(DefaultWorkerActivator::new(services));
+        let worker_activator = Arc::new(DefaultWorkerActivator::new(services.clone()));
+
         lazy_worker_activator.set(worker_activator);
 
         let host = gethostname().to_string_lossy().to_string();
@@ -473,7 +480,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let (owned_source_worker_id, owned_target_worker_id) =
             self.get_worker_ids(&request).await?;
 
-        self.worker_service()
+        self.worker_fork
             .fork(
                 &owned_source_worker_id,
                 &owned_target_worker_id.worker_id,
