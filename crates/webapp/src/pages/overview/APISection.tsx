@@ -35,10 +35,11 @@ const APISection = () => {
   }, []);
 
   return (
-    <div className="bg-white rounded-lg border border-gray-200 p-6">
+    <div className="bg-white rounded-lg border border-gray-200 p-6 overflow-scroll max-h-[50vh]">
       <div className="flex justify-between items-center mb-6">
         <h2 className="text-xl font-semibold">APIs</h2>
         <button
+          className="text-blue-600 hover:text-blue-700"
           onClick={() => {
             navigate("/apis");
           }}
