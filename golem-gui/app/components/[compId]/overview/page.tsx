@@ -99,7 +99,7 @@ const Overview = () => {
             <Paper sx={{ padding: 2, textAlign: "center", bgcolor: "#1E1E1E" }}>
               <Box sx={{display:"flex", justifyContent:"space-between"}}>
                 <Typography variant="body2">{stat.label}</Typography>
-                 <Typography sx={{fontSize:"4px"}}>
+                 <Typography sx={{fontSize:"px"}}>
                   {stat.icon}
                  </Typography>
                 
