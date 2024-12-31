@@ -17,19 +17,17 @@ use std::sync::{Arc, RwLock};
 use crate::error::GolemError;
 use crate::metrics::workers::record_worker_call;
 use crate::model::ExecutionStatus;
-use crate::services::oplog::{CommitLevel, OplogService};
+use crate::services::oplog::OplogService;
 use crate::services::shard::ShardService;
 use crate::services::worker_proxy::WorkerProxy;
-use crate::services::{HasOplog, HasShardService};
+use crate::services::HasShardService;
 use crate::storage::keyvalue::{
     KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
 };
-use crate::worker::Worker;
 use async_trait::async_trait;
-use golem_api_grpc::proto::golem::workerexecutor::v1::ForkWorkerRequest;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{
-    AccountId, ComponentType, OwnedWorkerId, ShardId, Timestamp, WorkerId, WorkerMetadata,
+    ComponentType, OwnedWorkerId, ShardId, Timestamp, WorkerId, WorkerMetadata,
     WorkerStatus, WorkerStatusRecord, WorkerStatusRecordExtensions,
 };
 use tracing::{debug, warn};

@@ -38,7 +38,7 @@ use golem_common::metrics::api::record_new_grpc_api_active_stream;
 use golem_common::model::oplog::{OplogIndex, UpdateDescription};
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentId, ComponentType, IdempotencyKey, OwnedWorkerId,
-    PluginInstallationId, ScanCursor, ShardId, TargetWorkerId, Timestamp,
+    PluginInstallationId, ScanCursor, ShardId, TargetWorkerId,
     TimestampedWorkerInvocation, WorkerEvent, WorkerFilter, WorkerId, WorkerInvocation,
     WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
@@ -50,7 +50,7 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::marker::PhantomData;
 use std::pin::Pin;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::sync::broadcast::error::RecvError;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
