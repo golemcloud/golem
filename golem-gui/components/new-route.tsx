@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
 
 import React, { useState } from "react";
@@ -8,8 +7,6 @@ import {
   Button,
   TextField,
   Typography,
-  Select,
-  MenuItem,
   InputLabel,
   FormControl,
   Divider,
@@ -20,6 +17,7 @@ import { ApiRoute, Component } from "@/types/api";
 import { Loader } from "lucide-react";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 import { DeleteForever } from "@mui/icons-material";
+import { ComponentSelect } from "./new-route-select";
 
 type FormData = {
   path: string;
@@ -36,17 +34,22 @@ const NewRouteForm = ({
   isModal,
   isExperimental,
   defaultRoute,
-  onSuccess
+  onSuccess,
 }: {
   apiId: string;
   version?: string;
   onSuccess?: () => void;
   isModal?: boolean;
   isExperimental?: boolean;
-  defaultRoute?: ApiRoute | null
+  defaultRoute?: ApiRoute | null;
 }) => {
-
-  const { control, handleSubmit, reset, watch,  formState: { errors }, } = useForm<FormData>({
+  const {
+    control,
+    handleSubmit,
+    reset,
+    watch,
+    formState: { errors },
+  } = useForm<FormData>({
     defaultValues: {
       path: defaultRoute?.path || "",
       workerName: defaultRoute?.binding?.workerName || "",
@@ -68,7 +71,7 @@ const NewRouteForm = ({
     return <Loader />;
   }
 
-  const versionNotFound = !apiDefinitonLoading && apiDefintionError
+  const versionNotFound = !apiDefinitonLoading && apiDefintionError;
   const onSubmit = async (formData: any) => {
     if (isExperimental) {
       return;
@@ -98,7 +101,7 @@ const NewRouteForm = ({
           },
         },
       };
-      const { success, error } = await upsertRoute(apiId, newRoute, version)
+      const { success, error } = await upsertRoute(apiId, newRoute, version);
 
       if (!success) {
         return setError(error!);
@@ -110,7 +113,7 @@ const NewRouteForm = ({
   };
 
   const handleDelete = async () => {
-     await deleteRoute(defaultRoute!);
+    await deleteRoute(defaultRoute!);
     onSuccess?.();
   };
 
@@ -138,11 +141,11 @@ const NewRouteForm = ({
         <Typography variant="h5" gutterBottom>
           {defaultRoute ? "Update" : "New"} Route
         </Typography>
-        {defaultRoute && <Button
-          onClick={handleDelete}
-        >
-          <DeleteForever />
-        </Button>}
+        {defaultRoute && (
+          <Button onClick={handleDelete}>
+            <DeleteForever />
+          </Button>
+        )}
       </Box>
 
       <Divider sx={{ borderColor: "#555" }} />
@@ -199,7 +202,11 @@ const NewRouteForm = ({
             />
           ))}
         </Box>
-        {errors && errors.method && <Typography variant="inherit" color="error">{errors.method.message?.toString()}</Typography>}
+        {errors && errors.method && (
+          <Typography variant="inherit" color="error">
+            {errors.method.message?.toString()}
+          </Typography>
+        )}
         <Controller
           name="path"
           control={control}
@@ -215,7 +222,11 @@ const NewRouteForm = ({
             />
           )}
         />
-        {errors && errors.path && <Typography variant="inherit" color="error">{errors.path.message?.toString()}</Typography>}
+        {errors && errors.path && (
+          <Typography variant="inherit" color="error">
+            {errors.path.message?.toString()}
+          </Typography>
+        )}
       </Box>
 
       {/* Worker Binding */}
@@ -226,60 +237,35 @@ const NewRouteForm = ({
         <Box sx={{ display: "flex", gap: 2, marginTop: 2 }}>
           <FormControl fullWidth>
             <InputLabel sx={{ color: "#AAA" }}>Component</InputLabel>
-            <Controller
-              name="component"
+            <ComponentSelect
+              name={"component"}
+              label={"Select component"}
               control={control}
-              rules={{ required: "Component is mandatory!" }}
-              render={({ field }) => (
-                <Select
-                  {...field}
-                  variant="outlined"
-                  label="Component"
-                  disabled={isLoading || components?.length == 0}
-                >
-                  {components?.map((component: Component) => (
-                    <MenuItem
-                      key={component?.versionedComponentId?.componentId}
-                      value={component?.versionedComponentId?.componentId}
-                    >
-                      {component.componentName}
-                    </MenuItem>
-                  ))}
-                </Select>
-              )}
+              options={components}
+              isLoading={isLoading}
             />
-            {errors && errors.component && <Typography variant="inherit" color="error">{errors.component.message?.toString()}</Typography>}
+            {errors && errors.component && (
+              <Typography variant="inherit" color="error">
+                {errors.component.message?.toString()}
+              </Typography>
+            )}
           </FormControl>
 
           <FormControl fullWidth>
             <InputLabel sx={{ color: "#AAA" }}>Version</InputLabel>
-            <Controller
-              name="version"
+            <ComponentSelect
+              name={"version"}
+              label={"Select version"}
+              component={component}
               control={control}
-              rules={{ required: "Component is mandatory!" }}
-              render={({ field }) => (
-                <Select
-                  {...field}
-                  variant="outlined"
-                  label="Version"
-                  disabled={isLoading || components?.length == 0}
-                >
-                  {!isLoading &&
-                    components?.map((comp: Component) => {
-                      return comp?.versionedComponentId?.componentId ==
-                        component ? (
-                        <MenuItem
-                          key={`${comp?.versionedComponentId?.componentId}__${comp.versionedComponentId.version}`}
-                          value={comp.versionedComponentId.version}
-                        >
-                          {comp.versionedComponentId.version}
-                        </MenuItem>
-                      ) : null;
-                    })}
-                </Select>
-              )}
+              options={components}
+              isLoading={isLoading}
             />
-            {errors && errors.version && <Typography variant="inherit" color="error">{errors.version.message?.toString()}</Typography>}
+            {errors && errors.version && (
+              <Typography variant="inherit" color="error">
+                {errors.version.message?.toString()}
+              </Typography>
+            )}
           </FormControl>
         </Box>
         <Box sx={{ marginTop: 4 }}>
@@ -302,7 +288,11 @@ const NewRouteForm = ({
               />
             )}
           />
-          {errors && errors.workerName && <Typography variant="inherit" color="error">{errors.workerName.message?.toString()}</Typography>}
+          {errors && errors.workerName && (
+            <Typography variant="inherit" color="error">
+              {errors.workerName.message?.toString()}
+            </Typography>
+          )}
         </Box>
       </Box>
 
@@ -331,13 +321,15 @@ const NewRouteForm = ({
             />
           )}
         />
-        {errors && errors.response && <Typography variant="inherit" color="error">{errors.response.message?.toString()}</Typography>}
+        {errors && errors.response && (
+          <Typography variant="inherit" color="error">
+            {errors.response.message?.toString()}
+          </Typography>
+        )}
       </Box>
       {(versionNotFound || error) && (
         // TODO we need error type veraint as we are using it many places
-        <Typography color="error">
-          {versionNotFound || error}
-        </Typography>
+        <Typography color="error">{versionNotFound || error}</Typography>
       )}
       {/* Buttons */}
       <Box
@@ -357,7 +349,7 @@ const NewRouteForm = ({
           onClick={handleSubmit(onSubmit)}
           disabled={!!versionNotFound}
         >
-          {defaultRoute ? 'Update' : 'Create'} Route
+          {defaultRoute ? "Update" : "Create"} Route
         </Button>
       </Box>
     </Box>
