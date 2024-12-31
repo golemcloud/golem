@@ -42,18 +42,23 @@ export default function InvocationLogs({
         const isEligible =
           idempotency_key &&
           checkLogIsAfterLastClearTime(message?.["InvocationStart"].timeStamp);
-        if ("InvocationStart" in message && idempotency_key && isEligible) {
+        if ("InvocationStart" in message) {
+          if(isEligible) {
           obj[idempotency_key] = {
-            ...message["InvocationStart"],
+            ...obj[idempotency_key],
             startTime: message["InvocationStart"].timestamp,
-            status: "Pending",
+            status:  obj[idempotency_key]?.status || "Pending",
           };
+          }else {
+            delete obj[idempotency_key]
+          }
         }
 
         idempotency_key = message?.["InvocationFinished"]?.idempotency_key;
-        if ("InvocationFinished" in message && idempotency_key in obj) {
+        if ("InvocationFinished" in message) {
           obj[idempotency_key] = {
             ...obj[idempotency_key],
+            ...message["InvocationFinished"],
             endTime: message["InvocationFinished"].timestamp,
             status: "Finished",
           };

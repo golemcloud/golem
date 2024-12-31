@@ -34,7 +34,7 @@ export const useWebSocket = <T extends WebSocketMessage>(url: string) => {
     };
 
     const handleMessage = (event: MessageEvent) => {
-      setMessages((prev)=>[...prev, JSON.parse(event.data)])
+      setMessages((prev)=>[JSON.parse(event.data),...prev])
     };
 
     const handleClose = () => {
