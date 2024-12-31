@@ -29,6 +29,8 @@ golem-worker-executor-base = { path = "../golem-worker-executor-base", version =
 golem-worker-service = { path = "../golem-worker-service", version = "0.0.0" }
 golem-worker-service-base = { path = "../golem-worker-service-base", version = "0.0.0" }
 
+actix-web = "4.5.1"
+actix-rt = "2.9.0"
 anyhow = { workspace = true }
 bytes = { workspace = true }
 clap = { workspace = true }
@@ -51,28 +53,6 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 xdg = { workspace = true }
-
-# Sozu builds with simd support by default, but it only works on x86_64
-[target.'cfg(not(target_arch = "x86_64"))'.dependencies]
-sozu-command-lib = { workspace = true }
-sozu-lib = { workspace = true }
-
-[target.'cfg(all(target_arch = "x86_64", unix))'.dependencies]
-sozu-command-lib = { workspace = true }
-sozu-lib = { workspace = true }
-
-[target.'cfg(all(not(target_arch = "x86_64"), unix))'.dependencies]
-sozu-command-lib = { workspace = true, default-features = false }
-sozu-lib = { workspace = true, default-features = false }
-
-[target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.52", features = [
-    "Win32_Foundation",
-    "Win32_Networking_HttpServer",
-    "Win32_Security",
-    "Win32_System_IO",
-    "Win32_System_Threading",
-] }
 
 [dev-dependencies]
 test-r = { workspace = true }

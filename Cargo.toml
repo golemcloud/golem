@@ -226,4 +226,3 @@ redis-protocol = { git = "https://github.com/golemcloud/redis-protocol.rs.git", 
 wasmtime = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v27.0.0" }
 wasmtime-wasi = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v27.0.0" }
 wasmtime-wasi-http = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v27.0.0" }
-poule = { path = "crates/poule" }
