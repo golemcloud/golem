@@ -6,8 +6,10 @@ import CreateComponent from './pages/components/create';
 import {APIs} from './pages/api';
 import CreateAPI from './pages/api/create';
 import APIDetails from './pages/api/details';
+import APISettings from './pages/api/details/settings';
 import CreateRoute from './pages/api/details/CreateRoute';
 import Deployments from './pages/Deployments';
+import Plugin from "./pages/plugin";
 
 function App() {
     return (
@@ -21,8 +23,10 @@ function App() {
                     <Route path="/apis" element={<APIs />} />
                     <Route path="/apis/create" element={<CreateAPI />} />
                     <Route path="/apis/:apiName" element={<APIDetails />} />
+                    <Route path="/apis/:apiName/settings" element={<APISettings />} />
                     <Route path="/apis/:apiName/routes/new" element={<CreateRoute />} />
                     <Route path="/deployments" element={<Deployments />} />
+                    <Route path="/plugins" element={<Plugin />} />
                 </Routes>
             </div>
         </Router>
