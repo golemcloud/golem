@@ -18,7 +18,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
 } from "@radix-ui/react-dropdown-menu";
-import { Button as CustomButton } from "@/components/ui/button";
+import { Button2 as CustomButton } from "@/components/ui/button";
 import { ApiDeployment as Deployment} from "@/types/api";
 import { Card } from "@/components/ui/card";
 import DeploymentCreationPage from "@/components/deployment-creation";

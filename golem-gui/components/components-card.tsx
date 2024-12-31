@@ -34,7 +34,7 @@ const ComponentInfoCard = ({
 }: ComponentInfoCardProps) => {
   const [value, setValue] = useState<string>();
   const router = useRouter();
- 
+  const cardInfo=[`${exports} Exports`, `${size} MB`, componentType];
   
   const handleSelectChange = (event: SelectChangeEvent<string>) => {
     const value = event.target.value as string;
@@ -69,7 +69,10 @@ const ComponentInfoCard = ({
             {title}
           </Typography>
 
-          <Select value={value} variant="standard" 
+          <Select  value={value} variant="standard" 
+             sx={{
+              color: 'white',
+            }}
            onChange={handleSelectChange}
            onClick={(e) => e.stopPropagation()}
            >
@@ -89,74 +92,71 @@ const ComponentInfoCard = ({
         >
           <Box>
             <Typography
+              className="text-muted-foreground"
               variant="subtitle2"
               sx={{ fontWeight: 600, marginBottom: 0.5 }}
             >
               Running
             </Typography>
-            <Typography variant="body2" sx={{ color: "#AAAAAA" }}>
+            <Typography variant="body2">
               0 ▶
             </Typography>
           </Box>
           <Box>
             <Typography
+              className="text-muted-foreground"
               variant="subtitle2"
               sx={{ fontWeight: 600, marginBottom: 0.5 }}
             >
               Idle
             </Typography>
-            <Typography variant="body2" sx={{ color: "#AAAAAA" }}>
+            <Typography variant="body2">
               0 ⏸
             </Typography>
           </Box>
           <Box>
             <Typography
+              className="text-muted-foreground"
               variant="subtitle2"
               sx={{ fontWeight: 600, marginBottom: 0.5 }}
             >
               Suspended
             </Typography>
-            <Typography variant="body2" sx={{ color: "#AAAAAA" }}>
+            <Typography variant="body2" >
               0 ⏹
             </Typography>
           </Box>
           <Box>
             <Typography
+              className="text-muted-foreground"
               variant="subtitle2"
               sx={{ fontWeight: 600, marginBottom: 0.5 }}
             >
               Failed
             </Typography>
-            <Typography variant="body2" sx={{ color: "#AAAAAA" }}>
+            <Typography variant="body2">
               0 ⚠
             </Typography>
           </Box>
         </Box>
 
         <Box sx={{ display: "flex", gap: 1, alignItems: "center" }}>
-          <Typography className=" bg-[#787676] text-white px-2 py-1 rounded-md text-sm">
+          <Typography className=" bg-button_bg border border-button_border px-2  rounded-sm text-sm">
             v{version}
           </Typography>
-          <Typography
-            variant="body2"
-            className="border border-[#555] px-2 rounded-md"
-          >
-            {`${exports} Exports`}
-          </Typography>
-          <Typography
-            variant="body2"
-            className="border border-[#555] px-2 rounded-md"
-          >
-            {`${size} MB`}
-          </Typography>
-          <Typography
-            variant="body2"
-            className="border border-[#555] px-2 rounded-md"
-          >
-            {componentType}
-          </Typography>
-
-          <Typography variant="body2" className="ml-5">
+          {
+            cardInfo.map((info, index) => (
+              <Typography
+                key={index}
+                variant="body2"
+                className="border text-muted-foreground px-2 rounded-md"
+              >
+                {info}
+              </Typography>
+            ))
+          }
+      
+          <Typography variant="body2" className="ml-5 text-muted-foreground">
             {time}
           </Typography>
         </Box>

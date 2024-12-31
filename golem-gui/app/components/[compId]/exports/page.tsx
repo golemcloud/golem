@@ -4,6 +4,8 @@ import GenericTable from "@/components/ui/generic-table";
 import useComponents from "@/lib/hooks/use-component";
 import { ComponentExport } from "@/types/api";
 import { useParams } from "next/navigation";
+import SecondaryHeader from "@/components/ui/secondary-header";
+import { Box } from "@mui/material";
 
 type Column<T> = {
   key: string;
@@ -84,6 +86,13 @@ export default function ExportsTable<T>({
   }));
 
   return (
+    <>
+    <Box sx={{ display: { xs: "block", md: "none" } }}>
+        <SecondaryHeader onClick={() => {}} variant="components" />
+      </Box>
+    <div className="mx-auto max-w-7xl px-6 lg:px-8">
+      <div className="mx-auto max-w-2xl lg:max-w-none py-4">
+    
     <GenericTable
       data={tableData}
       columns={[
@@ -120,5 +129,8 @@ export default function ExportsTable<T>({
       ]}
     //   onRowClick={onRowClick}
     />
+    </div>
+    </div>
+    </>
   );
 }

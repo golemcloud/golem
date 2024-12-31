@@ -26,6 +26,7 @@ import { Loader } from "lucide-react";
 import { Worker } from "@/types/api";
 import CreateWorker from "@/components/create-worker";
 import CustomModal from "@/components/CustomModal";
+import SecondaryHeader from "@/components/ui/secondary-header";
 
 const WorkerListWithDropdowns = () => {
   const [workerStatus, setWorkerStatus] = useState<string[]>([]);
@@ -59,6 +60,12 @@ const WorkerListWithDropdowns = () => {
 
   return (
     <>
+    <Box sx={{ display: { xs: "block", md: "none" } }}>
+    <SecondaryHeader onClick={() => {}} variant="components" />
+  </Box>
+    <div className="mx-auto max-w-7xl px-6 lg:px-8">
+      <div className="mx-auto max-w-2xl lg:max-w-none py-4">
+     
     <LocalizationProvider dateAdapter={AdapterDateFns}>
       <Box
         sx={{
@@ -328,6 +335,8 @@ const WorkerListWithDropdowns = () => {
     <CustomModal open={open} onClose={handleClose} heading={"Create new Worker"}>
           <CreateWorker compId={compId} onSuccess={handleClose}/>
     </CustomModal>
+    </div>
+    </div>
     </>
   );
 };

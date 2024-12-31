@@ -11,7 +11,7 @@ import {
   Typography,
 } from "@mui/material";
 // import AddIcon from "@mui/icons-material/Add";
-import { Button } from "@/components/ui/button";
+import { Button2 as Button } from "@/components/ui/button";
 // import { Loader } from "lucide-react";
 import React from "react";
 import AddCircleOutlineIcon from "@mui/icons-material/AddCircleOutline";
