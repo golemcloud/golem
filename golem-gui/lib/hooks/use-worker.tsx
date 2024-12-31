@@ -1,40 +1,39 @@
 import useSWR, { mutate } from "swr";
-import { fetcher, getErrorMessage } from "../utils";
+import { fetcher } from "../utils";
 import {
   Component,
   Parameter,
   Worker,
   WorkerFormData,
   WorkerFunction,
-  OplogQueryParams
+  OplogQueryParams,
 } from "@/types/api";
 import { toast } from "react-toastify";
 import { useParams, useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
-const ROUTE_PATH = "?path=components";
+import { useEffect, useState } from "react";
+const ROUTE_PATH = "v1/components";
 
 export function useDeleteWorker(componentId: string, workerName: string) {
   const router = useRouter();
   const endpoint = `${ROUTE_PATH}/${componentId}/workers/${workerName}`;
 
-  const deleteWorker = async()=>{
-  const response = await fetcher(endpoint, { method: "DELETE" });
-  if (response.status !== 200) {
-    const error = getErrorMessage(response.data);
-    toast.success(`Fialed to  delete worker: ${error}`)
+  const deleteWorker = async () => {
+    const response = await fetcher(endpoint, { method: "DELETE" });
+    if (response.error) {
+      toast.success(`Fialed to  delete worker: ${response.error}`);
 
-    return { success: false, error };
-  }
-  toast.success("Successfully deleted the worker")
-  mutate(endpoint);
-  mutate(`${ROUTE_PATH}/${componentId}/workers`);
-  router.push(`/components/${componentId}/workers`);
-  }
+      return response;
+    }
+    toast.success("Successfully deleted the worker");
+    mutate(endpoint);
+    mutate(`${ROUTE_PATH}/${componentId}/workers`);
+    router.push(`/components/${componentId}/workers`);
+  };
 
   return {
-    deleteWorker
-  }
-} 
+    deleteWorker,
+  };
+}
 
 export function getStateFromWorkersData(workers: Worker[]) {
   if (!workers) {
@@ -101,9 +100,9 @@ export function useWorkerInvocation(invoke: {
         body: JSON.stringify({ params: payload }),
       });
 
-      if (response.status !== 200) {
+      if (response.error) {
         toast.error("Failed to Invoked");
-        return setError(getErrorMessage(response.data));
+        return setError(response.error);
       }
       setError(null);
       setResult(response.data);
@@ -141,10 +140,9 @@ export async function addNewWorker(
     body: JSON.stringify(newWorker),
   });
 
-  if (response.status !== 200) {
-    const error = getErrorMessage(response.data);
+  if (response.error) {
     toast.error("Worker failed to create");
-    return { success: false, error };
+    return { success: false, error: response.error };
   }
 
   toast.success("Worker Sucessfully created");
@@ -172,21 +170,17 @@ export async function interruptWorker(
     }
   );
 
-  if (response.status !== 200) {
-    const error = getErrorMessage(response.data);
-    toast.error(`Worker Interruption Failed due to ${error}`);
-    return { success: false, error };
+  if (response.error) {
+    toast.error(`Worker Interruption Failed due to ${response.error}`);
+    return { success: false, error: response.error };
   }
 
   toast.success("Worker Interrupted Successfully");
-  mutate(`${ROUTE_PATH}/${componentId}/workers/${workerName}`)
-  return {success: true, error: null}
+  mutate(`${ROUTE_PATH}/${componentId}/workers/${workerName}`);
+  return { success: true, error: null };
 }
 
-export async function resumeWorker(
-  componentId: string,
-  workerName: string,
-) {
+export async function resumeWorker(componentId: string, workerName: string) {
   const response = await fetcher(
     `${ROUTE_PATH}/${componentId}/workers/${workerName}/resume`,
     {
@@ -197,34 +191,25 @@ export async function resumeWorker(
     }
   );
 
-  if (response.status !== 200) {
-    const error = getErrorMessage(response.data);
-    toast.error(`Worker failed to resume due to: ${error}`);
-    return { success: false, error };
+  if (response.error) {
+    toast.error(`Worker failed to resume due to: ${response.error}`);
+    return { success: false, error: response.error };
   }
 
   toast.success("Worker has successfully resumed");
-  mutate(`${ROUTE_PATH}/${componentId}/workers/${workerName}`)
-  return {success: true, error: null}
+  mutate(`${ROUTE_PATH}/${componentId}/workers/${workerName}`);
+  return { success: true, error: null };
 }
 
 export function useWorker(componentId: string, workerName: string) {
-  const {
-    data,
-    error: requestError,
-    isLoading,
-  } = useSWR(`${ROUTE_PATH}/${componentId}/workers/${workerName}`, fetcher);
-
-  const error = useMemo(() => {
-    if (!isLoading && data?.status !== 200) {
-      return getErrorMessage(data);
-    }
-    return !isLoading ? getErrorMessage(requestError) : "";
-  }, [isLoading, requestError, data]);
+  const { data, error, isLoading } = useSWR(
+    `${ROUTE_PATH}/${componentId}/workers/${workerName}`,
+    fetcher
+  );
   const worker = data?.data as Worker;
 
   return {
-    error,
+    error: error || data?.error,
     worker,
     isLoading,
   };
@@ -243,38 +228,27 @@ export function useWorkerLogs(
   }).toString();
 
   const endpoint = `${ROUTE_PATH}/${componentId}/workers/${workerName}/oplog?${queryString}`;
-  const {
-    data,
-    error: requestError,
-    isLoading,
-  } = useSWR(endpoint, fetcher);
+  const { data, error, isLoading } = useSWR(endpoint, fetcher);
 
-  const error =
-    requestError || (data && data?.status !== 200)
-      ? getErrorMessage(data?.data)
-      : "";
   const logs = data?.data || [];
-  
+
   return {
     logs,
-    error,
+    error: error || data?.error,
     isLoading,
   };
 }
 
-export default function useWorkers(componentId?: string, version?: string | number) {
+export default function useWorkers(
+  componentId?: string,
+  version?: string | number
+) {
   const { compId } = useParams<{ compId: string }>();
   const path = `${ROUTE_PATH}/${componentId || compId}/workers${
     version ? `?filter=version = ${version}` : ""
   }`;
-  const { data, error: requestError, isLoading } = useSWR(path, fetcher);
+  const { data, error, isLoading } = useSWR(path, fetcher);
 
-  const error = useMemo(() => {
-    if (!isLoading && data?.status !== 200) {
-      return getErrorMessage(data);
-    }
-    return !isLoading ? getErrorMessage(requestError) : "";
-  }, [isLoading, requestError, data]);
   const workers = (data?.data?.workers || []) as Worker[];
 
   const getWorkerById = (
@@ -307,23 +281,21 @@ export default function useWorkers(componentId?: string, version?: string | numb
 
   return {
     workers,
-    error,
+    error: error || data?.error,
     getWorkerById,
     addWorker,
     isLoading,
   };
 }
 
-export function useWorkerFileContent(workersName: string,componentsId:string, fileName: string){
-  const path = `${ROUTE_PATH}/${componentsId}/workers/${workersName}/files/${fileName}`
+export function useWorkerFileContent(
+  workersName: string,
+  componentsId: string,
+  fileName: string
+) {
+  const path = `${ROUTE_PATH}/${componentsId}/workers/${workersName}/files/${fileName}`;
   console.log("path", path);
-  const { data, error: requestError, isLoading } = useSWR(path, fetcher);
+  const { data, error, isLoading } = useSWR(path, fetcher);
 
-  const error = useMemo(() => {
-    if (!isLoading && data?.status !== 200) {
-      return getErrorMessage(data);
-    }
-    return !isLoading ? getErrorMessage(requestError) : "";
-  }, [isLoading, requestError, data]);
-  return {data, isLoading, error};
+  return { data, isLoading, error: error || data?.error };
 }

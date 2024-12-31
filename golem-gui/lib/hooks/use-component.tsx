@@ -6,21 +6,19 @@ import {
   UpdatePluginInstallPayload,
 } from "@/types/api";
 import { toast } from "react-toastify";
-import { useMemo } from "react";
 // import { useRouter } from "next/navigation";
 
-const ROUTE_PATH = "?path=components";
+const ROUTE_PATH = "v1/components";
 
 export async function getLatestComponent(componentId: string) {
   const response = await fetcher(`${ROUTE_PATH}/${componentId}/latest`, {
     method: "GET",
   });
 
-  if (response.status !== 200) {
-    const error = getErrorMessage(response.data);
-    return { success: false, error };
+  if (response.error) {
+    return response;
   }
-  return { success: false, error: null };
+  return response;
 }
 
 export async function addNewcomponent(
@@ -40,13 +38,11 @@ export async function addNewcomponent(
     body: update,
   });
 
-  if (response.status !== 200) {
-    const error = getErrorMessage(response.data);
+  if (response.error) {
     toast.success(
       `Component Failed to ${mode === "create" ? "create" : "update"}`
     );
-
-    return { success: false, error };
+    return response;
   }
 
   mutate(ROUTE_PATH);
@@ -72,11 +68,7 @@ function useComponents(componentId?: string, version?: string | number | null) {
           version === "latest" ? version : `versions/${version}`
         }`
       : path;
-  const {
-    data: componentData,
-    isLoading,
-    error: requestError,
-  } = useSWR(path, fetcher);
+  const { data: componentData, isLoading, error } = useSWR(path, fetcher);
 
   const components = (
     componentId && version
@@ -85,13 +77,6 @@ function useComponents(componentId?: string, version?: string | number | null) {
         : []
       : componentData?.data || []
   ) as Component[];
-
-  const error = useMemo(() => {
-    if (!isLoading && componentData?.status !== 200) {
-      return getErrorMessage(componentData);
-    }
-    return !isLoading ? getErrorMessage(requestError) : "";
-  }, [isLoading, requestError, componentData]);
 
   const getComponent = (
     id?: string,
@@ -149,7 +134,7 @@ function useComponents(componentId?: string, version?: string | number | null) {
 
   return {
     components,
-    error,
+    error: error || componentData?.error,
     isLoading,
     upsertComponent,
     getComponent,
@@ -175,16 +160,15 @@ export async function installPlugin(
     body: JSON.stringify(payload),
   });
 
-  if (response.status !== 200) {
-    const error = getErrorMessage(response.data);
-    toast.success(`Plugin Failed to Install: ${error}`);
-    return { success: false, error };
+  if (response.error) {
+    toast.success(`Plugin Failed to Install: ${response.error}`);
+    return response;
   }
 
   mutate(ROUTE_PATH);
   mutate(endpoint);
   toast.success(`Plugin successfully installed`);
-  return { success: true, error: null };
+  return response;
 }
 
 export function useInstallPlugins(
@@ -197,16 +181,9 @@ export function useInstallPlugins(
       ? `${endpoint}/${version}`
       : `${endpoint}/latest`;
 
-  const { data, error: requestError, isLoading } = useSWR(endpoint, fetcher);
+  const { data, error, isLoading } = useSWR(endpoint, fetcher);
 
   const installedPlugins = data?.data || [];
-
-  const error = useMemo(() => {
-    if (!isLoading && data?.status !== 200) {
-      return getErrorMessage(data);
-    }
-    return !isLoading ? getErrorMessage(requestError) : "";
-  }, [isLoading, requestError, data]);
 
   return {
     installedPlugins,
@@ -230,16 +207,15 @@ export function useUninstallPlugin(
       method: "DLETE",
     });
 
-    if (response.status !== 200) {
-      const error = getErrorMessage(response.data);
-      toast.success(`Plugin Failed to Uninstall: ${error}`);
-      return { success: false, error };
+    if (response.error) {
+      toast.success(`Plugin Failed to Uninstall: ${response.error}`);
+      return response;
     }
 
     mutate(ROUTE_PATH);
     mutate(endpoint);
     toast.success(`Plugin successfully uninstalled`);
-    return { success: true, error: null };
+    return response;
   };
 
   return {
@@ -266,16 +242,16 @@ export function useUpdateInstallPlugin(
       body: JSON.stringify(payload),
     });
 
-    if (response.status !== 200) {
+    if (response.error) {
       const error = getErrorMessage(response.data);
       toast.success(`Plugin Failed to update: ${error}`);
-      return { success: false, error };
+      return response;
     }
 
     mutate(ROUTE_PATH);
     mutate(endpoint);
     toast.success(`Plugin successfully updated`);
-    return { success: true, error: null };
+    return response;
   };
   return {
     updateInstalledPlugin,

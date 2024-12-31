@@ -10,7 +10,7 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 export const getErrorMessage = (error: GolemError | string): string => {
-  if(!error) {
+  if (!error) {
     return "";
   }
   if (typeof error === "string") {
@@ -47,9 +47,38 @@ export function calculateSizeInMB(sizeInBytes: number): string {
   return (sizeInBytes / (1024 * 1024)).toFixed(2);
 }
 
-export const fetcher = (url: string, options?: RequestInit) =>
-  fetch(`/api/proxy${url}`, options).then((res) => res.json());
+export const fetcher = async (url: string, options?: RequestInit) => {
+  try {
+    const res = await fetch(`/api-backend/${url}`, options);
+    const isJson = res.headers
+      .get("content-type")
+      ?.includes("application/json");
 
+    if (res.status === 500) {
+      throw new Error("Error connecting to backend!");
+    }
+
+    const result = isJson ? await res.json() : await res.text();
+
+    if (!res.ok) {
+      return {
+        success: false,
+        error: getErrorMessage(result),
+      };
+    }
+
+    return {
+      success: true,
+      data: result,
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err?.message || "Error connecting to backend!",
+    };
+  }
+};
 
 //we can replace with lodash.
 export function getFormErrorMessage<T extends Record<string, unknown>>(
@@ -80,4 +109,3 @@ export function getFormErrorMessage<T extends Record<string, unknown>>(
 
   return current?.message;
 }
-

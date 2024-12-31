@@ -1,10 +1,9 @@
 import useSWR, { mutate } from "swr";
-import { fetcher, getErrorMessage } from "../utils";
+import { fetcher } from "../utils";
 import { Plugin } from "@/types/api";
 import { toast } from "react-toastify";
 import { useParams } from "next/navigation";
-import { useMemo } from "react";
-const PULGIN_PATH = "?path=plugins";
+const PULGIN_PATH = "v1/plugins";
 
 export function useDeletePlugin() {
   const deletePlugin = async (name: string, version: string) => {
@@ -12,14 +11,13 @@ export function useDeletePlugin() {
       const response = await fetcher(`${PULGIN_PATH}/${name}/${version}`, {
         method: "DELETE",
       });
-      if (response.status !== 200) {
-        const error = getErrorMessage(response);
-        toast.error(`Plugin failed to delete due to: ${error}`);
-        return { success: false, error };
+      if (response.error) {
+        toast.error(`Plugin failed to delete due to: ${response.error}`);
+        return response;
       }
       mutate(PULGIN_PATH);
       toast.success("Plugin Deleted Successfully");
-      return { success: true, data: response.data };
+      return response;
     } catch (err) {
       console.error("Fialed to delete plugin due to", err);
       toast.error("Something went wrong!");
@@ -40,14 +38,13 @@ export function useAddPlugin() {
         },
         body: JSON.stringify(pulginData),
       });
-      if (response.status !== 200) {
-        const error = getErrorMessage(response);
-        toast.error(`Plugin failed to create due to: ${error}`);
-        return { success: false, error };
+      if (response.error) {
+        toast.error(`Plugin failed to create due to: ${response.error}`);
+        return response;
       }
       mutate(PULGIN_PATH);
-      toast.success("Plugin has successfully resumed");
-      return { success: true, data: response.data };
+      toast.success("Plugin Created successfully");
+      return response;
     } catch (err) {
       console.error("Fialed to create plugin due to", err);
       toast.error("Something went wrong!");
@@ -64,14 +61,8 @@ export default function usePlugins() {
   let path = `${PULGIN_PATH}`;
   path = name ? `${path}/${name}` : path;
   path = name && version ? `${path}/${version}` : path;
-  const { data, error: requestError, isLoading } = useSWR(path, fetcher);
+  const { data, error, isLoading } = useSWR(path, fetcher);
 
-  const error = useMemo(() => {
-    if (!isLoading && data?.status !== 200) {
-      return getErrorMessage(data);
-    }
-    return !isLoading ? getErrorMessage(requestError) : "";
-  }, [isLoading, requestError, data]);
   const plugins = (data?.data || []) as Plugin[];
 
   const getPluginByName = (
@@ -91,7 +82,7 @@ export default function usePlugins() {
 
   return {
     plugins,
-    error,
+    error: error || data?.error,
     getPluginByName,
     isLoading,
   };
