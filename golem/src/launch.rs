@@ -49,6 +49,7 @@ use tracing::Instrument;
 use crate::proxy;
 
 pub struct LaunchArgs {
+    pub router_host: String,
     pub router_port: u16,
     pub custom_request_port: u16,
     pub data_dir: PathBuf,
@@ -110,6 +111,7 @@ pub async fn launch_golem_services(args: &LaunchArgs) -> Result<(), anyhow::Erro
 
     // Don't drop the channel, it will cause the proxy to fail
     let _proxy_command_channel = proxy::start_proxy(
+        &args.router_host,
         args.router_port,
         healthcheck_port,
         &all_run_details,
@@ -188,14 +190,14 @@ fn worker_executor_config(
         blob_storage: blob_storage_config(args),
         component_service: golem_worker_executor_base::services::golem_config::ComponentServiceConfig::Grpc(
             ComponentServiceGrpcConfig {
-                host: "127.0.0.1".to_string(),
+                host: args.router_host.clone(),
                 port: component_service_run_details.grpc_port,
                 ..ComponentServiceGrpcConfig::default()
             }
         ),
         compiled_component_service: CompiledComponentServiceConfig::Disabled(golem_worker_executor_base::services::golem_config::CompiledComponentServiceDisabledConfig {  }),
         shard_manager_service: ShardManagerServiceConfig::Grpc(ShardManagerServiceGrpcConfig {
-            host: "127.0.0.1".to_string(),
+            host: args.router_host.clone(),
             port: shard_manager_run_details.grpc_port,
             ..ShardManagerServiceGrpcConfig::default()
         }),
@@ -236,12 +238,12 @@ fn worker_service_config(
             ),
         blob_storage: blob_storage_config(args),
         component_service: golem_worker_service_base::app_config::ComponentServiceConfig {
-            host: "127.0.0.1".to_string(),
+            host: args.router_host.clone(),
             port: component_service_run_details.grpc_port,
             ..golem_worker_service_base::app_config::ComponentServiceConfig::default()
         },
         routing_table: RoutingTableConfig {
-            host: "127.0.0.1".to_string(),
+            host: args.router_host.clone(),
             port: shard_manager_run_details.grpc_port,
             ..RoutingTableConfig::default()
         },
