@@ -89,7 +89,6 @@ body {
 
 
 .dark {
-
   .MuiSelect-root {
     background-color: #555;
     color: white;
@@ -100,23 +99,25 @@ body {
     color:white
   }
 
+  /* outline for input border initially */
   .MuiOutlinedInput-root .MuiOutlinedInput-notchedOutline {
-    border-color: #555;
+    border: 1px solid #333;
   }
-
+  /* outline color on focus */
+  .MuiOutlinedInput-root.Mui-focused .MuiOutlinedInput-notchedOutline {
+    border-color: #888;
+  }
+  /* placeholder color for input */
   .MuiInputBase-input::placeholder {
     color: #555;
     opacity: 1;
   }
-
+  /* label color for input */
   .MuiInputLabel-root {
-    color: #555;
+    color: #888;
   }
 
-  .MuiOutlinedInput-root.Mui-focused .MuiOutlinedInput-notchedOutline {
-    border-color: #888;
-  }
-
+  /* input text for input box */
   .MuiInputBase-input {
     color: white;
   }
@@ -130,14 +131,11 @@ body {
 
 
 .light{
-  .MuiOutlinedInput-root .Mui-focused {
-    @apply border-[#000000] text-white focus:border-white;
-  }
   .MuiInputLabel-root {
-    @apply text-gray-400;
+    @apply text-muted-foreground;
   }
   .Mui-focused .MuiOutlinedInput-notchedOutline {
-    @apply border-[#888];
+    border:1px solid #888;
   }
   .MuiPaper-root {
     background-color: white;

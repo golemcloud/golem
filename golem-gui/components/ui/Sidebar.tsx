@@ -35,7 +35,6 @@ const Sidebar = ({ id, navigationLinks, variant }: SidebarProps) => {
     <Box
       sx={{
         width: 250,
-        height: "100vh",
         flexDirection: "column",
         padding: 2,
         display: { xs: "none", md: "flex" },

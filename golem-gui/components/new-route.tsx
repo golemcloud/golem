@@ -214,11 +214,13 @@ const NewRouteForm = ({
           rules={{ required: "path is mandatory!" }}
           render={({ field }) => (
             <TextField
+              size="small"
               {...field}
               fullWidth
               variant="outlined"
               label="Path"
               placeholder="/api/endpoint/{VARIABLE_NAME}"
+              className="border border-input"
             />
           )}
         />
@@ -236,7 +238,6 @@ const NewRouteForm = ({
         </Typography>
         <Box sx={{ display: "flex", gap: 2, marginTop: 2 }}>
           <FormControl fullWidth>
-            <InputLabel sx={{ color: "#AAA" }}>Component</InputLabel>
             <ComponentSelect
               name={"component"}
               label={"Select component"}
@@ -252,7 +253,6 @@ const NewRouteForm = ({
           </FormControl>
 
           <FormControl fullWidth>
-            <InputLabel sx={{ color: "#AAA" }}>Version</InputLabel>
             <ComponentSelect
               name={"version"}
               label={"Select version"}
@@ -281,6 +281,7 @@ const NewRouteForm = ({
               <TextField
                 {...field}
                 fullWidth
+                size="small"
                 variant="outlined"
                 label="Worker Name"
                 placeholder="Worker name in Rib expression"

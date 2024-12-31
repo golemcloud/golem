@@ -81,14 +81,14 @@ export default function APISLayout({
   }
 
   return (
-    <div style={{ display: "flex", height: "100vh", overflow: "hidden" }}>
+    <div style={{ display: "flex"}}>
       <Sidebar id={apiId!} navigationLinks={navigationLinks} variant="apis" />
       <div
         className="flex-1 p-[20px]"
-        style={{
-          overflowY: "auto",
-          height: "100vh",
-        }}
+        // style={{
+        //   overflowY: "auto",
+        //   height: "100vh",
+        // }}
       >
         {tab !== "playground" && (
           <>
