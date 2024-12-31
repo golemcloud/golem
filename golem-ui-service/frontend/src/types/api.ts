@@ -11,7 +11,14 @@ export interface ComponentMetadata {
 }
 
 export interface ComponentExport {
-  type: "Function";
+  type: string;
+  name: string;
+  // parameters: Parameter[];
+  functions: ExportFunction[];
+  // results: Result[];
+}
+
+export interface ExportFunction {
   name: string;
   parameters: Parameter[];
   results: Result[];
@@ -174,3 +181,4 @@ export interface Plugin {
   };
   owner?: Record<string, unknown>;
 }
+

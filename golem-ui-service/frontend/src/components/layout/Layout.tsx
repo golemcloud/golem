@@ -16,7 +16,7 @@ const navItems = [
   { label: "Overview", path: "/", icon: TableOfContents },
   { label: "Components", path: "/components", icon: Package },
   { label: "Plugins", path: "/plugins", icon: Puzzle },
-  { label: "API", path: "/api", icon: Webhook },
+  { label: "API", path: "/apis", icon: Webhook },
 ];
 
 const NavLink = ({

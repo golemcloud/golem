@@ -21,6 +21,7 @@ import { useNavigate, useParams } from "react-router-dom";
 
 import CreateComponentModal from "../components/components/CreateComponentModal";
 import { CreateWorkerModal } from "../components/workers/CreateWorkerModal";
+import { Link } from "react-router-dom";
 import { WorkerActionModal } from "../components/workers/UpdateWorkerModal";
 import { useState } from "react";
 
@@ -263,8 +264,11 @@ export const ComponentDetail = () => {
                     <CircleDot size={16} />
                   </div>
                   <div>
+                    
                     <h3 className="font-medium flex items-center gap-2">
-                      {worker.workerId.workerName}
+                      <Link to={`/components/${id}/workers/${worker.workerId.workerName}`}>
+                        {worker.workerId.workerName}
+                      </Link>
                     </h3>
                     <div className="flex gap-4 mt-1">
                       <span className="text-sm text-muted-foreground">

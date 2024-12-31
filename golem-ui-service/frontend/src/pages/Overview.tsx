@@ -132,7 +132,7 @@ export const Overview = () => {
       <div className="grid md:grid-cols-8 gap-6">
         {/* APIs - 3/8 width */}
         <div className="col-span-3">
-          <SectionCard title="APIs" viewMoreLink="/api" icon={Terminal}>
+          <SectionCard title="APIs" viewMoreLink="/apis" icon={Terminal}>
             {apisLoading ? (
               <LoadingState />
             ) : (
@@ -146,7 +146,7 @@ export const Overview = () => {
                       subtitle={`Version ${api.version}`}
                       status={api.draft ? "inactive" : "active"}
                       icon={Globe}
-                      url={"/api/definitions/" + api.id + "/" + api.version}
+                      url={"/apis/definitions/" + api.id + "/" + api.version}
                     />
                   ))}
                 {!apis?.length && <EmptyState message="No APIs defined" />}

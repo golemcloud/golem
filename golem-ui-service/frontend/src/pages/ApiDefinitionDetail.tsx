@@ -146,11 +146,11 @@ export const ApiDefinitionView = () => {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
           <Link
-            to="/api"
+            to="/apis"
             className="p-2 text-muted-foreground hover:text-gray-300 rounded-md hover:bg-card"
           >
             <ArrowLeft size={20} />
-          </Link>
+          </Link> 
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2">
               <Globe className="h-6 w-6 text-primary" />

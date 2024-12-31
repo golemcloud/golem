@@ -20,7 +20,7 @@ const ApiDefinitionCard = ({ apiDef }: { apiDef: ApiDefinition }) => {
     <div className="bg-card rounded-lg p-4 hover:bg-gray-750">
       <div className="flex justify-between">
         <Link
-          to={`/api/definitions/${apiDef.id}/${apiDef.version}`}
+          to={`/apis/definitions/${apiDef.id}/${apiDef.version}`}
           className="flex-1"
         >
           <h3 className="font-medium flex items-center gap-2">

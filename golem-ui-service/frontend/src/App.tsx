@@ -4,11 +4,13 @@ import { ApiDefinitionView } from "./pages/ApiDefinitionDetail";
 import { ApiDefinitionsPage } from "./pages/ApiDefinitions";
 import { ComponentDetail } from "./pages/ComponentDetail";
 import { Components } from "./pages/Components";
+import FunctionInvoker from "./pages/FunctionInvoker";
 import { Layout } from "./components/layout/Layout";
 import { Overview } from "./pages/Overview";
 import PluginDetailPage from "./pages/PluginDetail";
 import { PluginsPage } from "./pages/Plugins";
 import { Toaster } from "react-hot-toast";
+import WorkerDetail from "./pages/WorkerDetail";
 
 function App() {
   return (
@@ -20,15 +22,17 @@ function App() {
           <Route path="/components" element={<Components />} />
           <Route path="/components/:id" element={<ComponentDetail />} />
           <Route path="/plugins" element={<PluginsPage />} />
-          <Route path="/api" element={<ApiDefinitionsPage />} />
+          <Route path="/apis" element={<ApiDefinitionsPage />} />
           <Route
-            path="/api/definitions/:id/:version"
+            path="/apis/definitions/:id/:version"
             element={<ApiDefinitionView />}
           />
           <Route
             path="/plugins/:name/:version"
             element={<PluginDetailPage />}
           />
+          <Route path="/components/:componentId/workers/:workerName" element={<WorkerDetail />} />
+          <Route path="/components/:componentId/workers/:workerName/invoke" element={<FunctionInvoker />} />
 
           {/* <Route path="/api" */}
         </Routes>
