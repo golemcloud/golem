@@ -1,6 +1,6 @@
 import React from 'react';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
-import { Home, Settings, Share2, Plus } from 'lucide-react';
+import { Home, Settings, Plus } from 'lucide-react';
 
 const APILeftNav = () => {
   const navigate = useNavigate();
@@ -37,19 +37,6 @@ const APILeftNav = () => {
               <div className="flex items-center">
                 <Settings className="h-4 w-4 mr-2" />
                 <span>Settings</span>
-              </div>
-            </button>
-          </li>
-          <li>
-            <button
-              onClick={() => navigate(`/apis/${apiName}/deployments`)}
-              className={`w-full text-left px-3 py-2 rounded-md ${
-                isActive('deployments') ? 'bg-gray-200' : 'hover:bg-gray-100'
-              }`}
-            >
-              <div className="flex items-center">
-                <Share2 className="h-4 w-4 mr-2" />
-                <span>Deployments</span>
               </div>
             </button>
           </li>

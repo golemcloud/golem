@@ -10,14 +10,14 @@ const APIDetails = () => {
     <div className="flex">
       <APILeftNav />
       <div className="flex-1 p-8">
-        <div className="flex items-center justify-between mb-8">
-          <div>
-            <h1 className="text-2xl font-semibold mb-2">{apiName}</h1>
-            <div className="flex items-center gap-2">
-              <span className="px-2 py-1 bg-gray-100 rounded text-sm">0.1.0</span>
-            </div>
+      <div className="flex items-center justify-between mb-8">
+        <div className="grid grid-cols-2 gap-4">
+          <h1 className="text-2xl font-semibold mb-2">{apiName}</h1>
+          <div className="flex items-center gap-2">
+            <span className="inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 bg-primary-background text-primary-soft hover:bg-primary/50 active:bg-primary/50 border border-primary-border w-fit font-mono">0.1.0</span>
           </div>
         </div>
+      </div>
 
         <div className="space-y-8">
           <section>

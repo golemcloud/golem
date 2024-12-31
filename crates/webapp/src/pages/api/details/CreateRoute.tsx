@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
+import APILeftNav from './APILeftNav';
+
 
 const HTTP_METHODS = ['Get', 'Post', 'Put', 'Patch', 'Delete', 'Head', 'Options', 'Trace', 'Connect'];
 
@@ -21,18 +23,20 @@ const CreateRoute = () => {
   };
 
   return (
-    <div className="p-6">
+    <div className="flex">
+       <APILeftNav />
+       <div className="flex-1 p-8">
       <div className="flex items-center mb-6">
         <button
           onClick={() => navigate(`/apis/${apiName}`)}
-          className="flex items-center text-gray-600 hover:text-gray-900"
+          className="text-xl  flex items-center text-gray-800 hover:text-gray-900"
         >
           <ArrowLeft className="h-4 w-4 mr-2" />
           <span>New Route</span>
         </button>
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-8">
+      <form onSubmit={handleSubmit} className="space-y-8  p-6">
         <section>
           <h3 className="text-lg font-medium mb-4">HTTP Endpoint</h3>
           <p className="text-sm text-gray-600 mb-4">
@@ -48,10 +52,10 @@ const CreateRoute = () => {
                     key={m}
                     type="button"
                     onClick={() => setMethod(m)}
-                    className={`px-3 py-1 rounded ${
+                    className={`px-3 py-1 rounded border hover:border-gray-400 ${
                       method === m
-                        ? 'bg-gray-100 text-gray-900'
-                        : 'text-gray-600 hover:bg-gray-50'
+                        ? 'bg-gray-200 text-gray-900 border-gray-400'
+                        : 'text-gray-600 hover:bg-gray-50 border-gray-200'
                     }`}
                   >
                     {m}
@@ -140,6 +144,7 @@ const CreateRoute = () => {
           </button>
         </div>
       </form>
+    </div>
     </div>
   );
 };
