@@ -347,18 +347,13 @@ mod tests {
     };
     use crate::services::shard::{ShardService, ShardServiceDefault};
     use crate::services::worker::{DefaultWorkerService, WorkerService};
-    use crate::services::worker_proxy::{WorkerProxy, WorkerProxyError};
     use crate::storage::indexed::memory::InMemoryIndexedStorage;
     use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
-    use golem_api_grpc::proto::golem::worker::UpdateMode;
     use golem_common::model::oplog::OplogIndex;
     use golem_common::model::{
-        AccountId, ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId, PromiseId,
-        ScheduledAction, ShardId, WorkerId,
+        AccountId, ComponentId, OwnedWorkerId, PromiseId, ScheduledAction, ShardId, WorkerId,
     };
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
-    use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-    use golem_wasm_rpc::WitValue;
     use uuid::Uuid;
 
     struct SchedulerWorkerAccessMock;
@@ -411,11 +406,7 @@ mod tests {
         shard_service: Arc<dyn ShardService + Send + Sync>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
     ) -> Arc<dyn WorkerService + Send + Sync> {
-        Arc::new(DefaultWorkerService::new(
-            kvs,
-            shard_service,
-            oplog_service,
-        ))
+        Arc::new(DefaultWorkerService::new(kvs, shard_service, oplog_service))
     }
 
     #[test]
@@ -454,11 +445,8 @@ mod tests {
         let promise_service = create_promise_service_mock();
         let worker_access = create_worker_access_mock();
         let oplog_service = create_oplog_service_mock().await;
-        let worker_service = create_worker_service_mock(
-            kvs.clone(),
-            shard_service.clone(),
-            oplog_service.clone(),
-        );
+        let worker_service =
+            create_worker_service_mock(kvs.clone(), shard_service.clone(), oplog_service.clone());
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
@@ -574,11 +562,8 @@ mod tests {
         let promise_service = create_promise_service_mock();
         let worker_access = create_worker_access_mock();
         let oplog_service = create_oplog_service_mock().await;
-        let worker_service = create_worker_service_mock(
-            kvs.clone(),
-            shard_service.clone(),
-            oplog_service.clone(),
-        );
+        let worker_service =
+            create_worker_service_mock(kvs.clone(), shard_service.clone(), oplog_service.clone());
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
@@ -679,11 +664,8 @@ mod tests {
         let promise_service = create_promise_service_mock();
         let worker_access = create_worker_access_mock();
         let oplog_service = create_oplog_service_mock().await;
-        let worker_service = create_worker_service_mock(
-            kvs.clone(),
-            shard_service.clone(),
-            oplog_service.clone(),
-        );
+        let worker_service =
+            create_worker_service_mock(kvs.clone(), shard_service.clone(), oplog_service.clone());
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
@@ -789,11 +771,8 @@ mod tests {
         let promise_service = create_promise_service_mock();
         let worker_access = create_worker_access_mock();
         let oplog_service = create_oplog_service_mock().await;
-        let worker_service = create_worker_service_mock(
-            kvs.clone(),
-            shard_service.clone(),
-            oplog_service.clone(),
-        );
+        let worker_service =
+            create_worker_service_mock(kvs.clone(), shard_service.clone(), oplog_service.clone());
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
@@ -897,11 +876,8 @@ mod tests {
         let promise_service = create_promise_service_mock();
         let worker_access = create_worker_access_mock();
         let oplog_service = create_oplog_service_mock().await;
-        let worker_service = create_worker_service_mock(
-            kvs.clone(),
-            shard_service.clone(),
-            oplog_service.clone(),
-        );
+        let worker_service =
+            create_worker_service_mock(kvs.clone(), shard_service.clone(), oplog_service.clone());
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
@@ -1011,11 +987,8 @@ mod tests {
         let promise_service = create_promise_service_mock();
         let worker_access = create_worker_access_mock();
         let oplog_service = create_oplog_service_mock().await;
-        let worker_service = create_worker_service_mock(
-            kvs.clone(),
-            shard_service.clone(),
-            oplog_service.clone(),
-        );
+        let worker_service =
+            create_worker_service_mock(kvs.clone(), shard_service.clone(), oplog_service.clone());
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),

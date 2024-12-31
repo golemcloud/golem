@@ -25,8 +25,8 @@ use crate::storage::keyvalue::{
 use async_trait::async_trait;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{
-    ComponentType, OwnedWorkerId, ShardId, Timestamp, WorkerId, WorkerMetadata,
-    WorkerStatus, WorkerStatusRecord, WorkerStatusRecordExtensions,
+    ComponentType, OwnedWorkerId, ShardId, Timestamp, WorkerId, WorkerMetadata, WorkerStatus,
+    WorkerStatusRecord, WorkerStatusRecordExtensions,
 };
 use tracing::{debug, warn};
 

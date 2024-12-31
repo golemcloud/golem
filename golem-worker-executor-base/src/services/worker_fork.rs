@@ -4,7 +4,7 @@ use std::sync::{Arc, RwLock};
 use crate::error::GolemError;
 use crate::metrics::workers::record_worker_call;
 use crate::model::ExecutionStatus;
-use crate::services::oplog::{CommitLevel};
+use crate::services::oplog::CommitLevel;
 use crate::services::{HasAll, HasOplog};
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
@@ -55,7 +55,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx>> DefaultWorkerFork<Ctx, Svcs> {
         }
 
         // We assume the target worker is also owned by the same account
-        let owned_target_worker_id = OwnedWorkerId::new(&account_id, &target_worker_id);
+        let owned_target_worker_id = OwnedWorkerId::new(account_id, target_worker_id);
 
         let target_metadata = self.all.worker_service().get(&owned_target_worker_id).await;
 
@@ -67,7 +67,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx>> DefaultWorkerFork<Ctx, Svcs> {
         // We assume the source worker belongs to this executor
         self.all.shard_service().check_worker(source_worker_id)?;
 
-        let owned_source_worker_id = OwnedWorkerId::new(&account_id, source_worker_id);
+        let owned_source_worker_id = OwnedWorkerId::new(account_id, source_worker_id);
 
         let metadata = self
             .all

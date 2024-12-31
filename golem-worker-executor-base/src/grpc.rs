@@ -38,9 +38,9 @@ use golem_common::metrics::api::record_new_grpc_api_active_stream;
 use golem_common::model::oplog::{OplogIndex, UpdateDescription};
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentId, ComponentType, IdempotencyKey, OwnedWorkerId,
-    PluginInstallationId, ScanCursor, ShardId, TargetWorkerId,
-    TimestampedWorkerInvocation, WorkerEvent, WorkerFilter, WorkerId, WorkerInvocation,
-    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+    PluginInstallationId, ScanCursor, ShardId, TargetWorkerId, TimestampedWorkerInvocation,
+    WorkerEvent, WorkerFilter, WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatus,
+    WorkerStatusRecord,
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
