@@ -2,6 +2,8 @@ import React from "react";
 import { Box, Typography, Chip, Stack, Card } from "@mui/material";
 import LockIcon from "@mui/icons-material/Lock";
 import LockOpenIcon from "@mui/icons-material/LockOpen";
+import { Button2 } from "./ui/button";
+import { GitCommitHorizontal } from "lucide-react";
 
 interface ApiInfoProps {
   name: string;
@@ -20,21 +22,23 @@ const ApiInfoCard: React.FC<ApiInfoProps> = ({
 }) => {
   return (
     <Card
-    sx={{
-      p: 2,
-      border: "1px solid #555",
-      borderRadius: 2,
-      maxHeight: "fit-content",
-      display: "flex",
-      flexDirection: "column",
-      cursor: "pointer",
-      gap: 1,
-      minWidth: "300px",
-      "&:hover": { boxShadow: 4 },
-    }}
-    onClick={onClick}
-    className="flex-1"
-    >   <Box
+      sx={{
+        p: 2,
+        borderRadius: 2,
+        maxHeight: "fit-content",
+        display: "flex",
+        flexDirection: "column",
+        cursor: "pointer",
+        gap: 1,
+        minWidth: "300px",
+        "&:hover": { cursor: "pointer", boxShadow: "0px 3px 10px 1px #666"
+        },
+      }}
+      onClick={onClick}
+      className="flex-1 border"
+    >
+      {" "}
+      <Box
         sx={{
           display: "flex",
           justifyContent: "space-between",
@@ -44,64 +48,67 @@ const ApiInfoCard: React.FC<ApiInfoProps> = ({
         <Typography variant="subtitle1" fontWeight="bold">
           {name}
         </Typography>
-        <Chip
-          label=  {routesCount}
-          sx={{
-            fontSize: "0.8rem",
-            fontWeight: 500,
-            borderRadius: 1,
-            bgcolor: "primary.main",
-            color: "primary.contrastText",
-          }}
-        />
+        <Button2
+          variant="default"
+          endIcon={<GitCommitHorizontal />}
+          size="xs"
+          className="px-2"
+        >
+          {routesCount}
+        </Button2>
       </Box>
-
       <Stack
         direction="row"
         justifyContent="space-between"
         alignItems="center"
         sx={{ mt: 1 }}
       >
-        <Stack direction="column" >
-            <Typography variant="body2" sx={{fontSize:"12px"}}>
-                Latest Version
-            </Typography>
-            <Typography
+        <Stack direction="column">
+          <Typography variant="body2" sx={{ fontSize: "12px" }}
+          className="text-muted-foreground"
+          >
+
+            Latest Version
+          </Typography>
+          <Typography
             variant="body2"
             sx={{
-                border: "1px solid #555",
-                width: "fit-content",
-                padding: "8px 2px",
-                borderRadius: "4px",
+              border: "1px solid #555",
+              width: "fit-content",
+              marginTop:"1px",
+              padding: "1px 5px",
+              borderRadius: "4px",
             }}
-            >
+            className="texr-muted-foreground"
+          >
             {version}
-            </Typography>
+          </Typography>
         </Stack>
-        <Stack direction="column" >
-            <Typography variant="body2" sx={{fontSize:"12px"}}>
-                Routes
-            </Typography>
-            <Stack direction="row">
+        <Stack direction="column">
+          <Typography variant="body2" sx={{ fontSize: "12px" }}
+          className="text-muted-foreground"
+          >
+            Routes
+          </Typography>
+          <Stack direction="row">
             <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-          {locked ? (
-            <LockIcon sx={{ fontSize: "1.2rem", color: "#888" }} />
-          ) : (
-            <LockOpenIcon sx={{ fontSize: "1.2rem", color: "#888" }} />
-          )}
-        </Box>
+              {locked ? (
+                <LockIcon sx={{ fontSize: "1.2rem", color: "#888" }} />
+              ) : (
+                <LockOpenIcon sx={{ fontSize: "1.2rem", color: "#888" }} />
+              )}
+            </Box>
             <Typography
-            variant="body2"
-            sx={{
+              variant="body2"
+              sx={{
                 padding: "4px 2px",
-            }}
+              }}
+              className="text-muted-foreground"
             >
-            {routesCount}
+              {routesCount}
             </Typography>
-         
+          </Stack>
         </Stack>
-        </Stack>
-       
       </Stack>
     </Card>
   );

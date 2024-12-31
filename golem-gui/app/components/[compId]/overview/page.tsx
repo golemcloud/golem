@@ -2,7 +2,7 @@
 
 import React, { useMemo, useState } from "react";
 import {
-  Grid,
+  Grid2 as Grid,
   Paper,
   Typography,
   Box,
@@ -10,7 +10,6 @@ import {
   List,
   ListItem,
   ListItemText,
-  Button,
   CircularProgress,
 } from "@mui/material";
 import {
@@ -26,6 +25,7 @@ import useComponents from "@/lib/hooks/use-component";
 import { useParams } from "next/navigation";
 import { ComponentExport, WorkerFunction } from "@/types/api";
 import useWorkers, { getStateFromWorkersData } from "@/lib/hooks/use-worker";
+import SecondaryHeader from "@/components/ui/secondary-header";
 
 const Overview = () => {
   const [isOpen, setIsOpen] = useState(false);
@@ -88,30 +88,14 @@ const Overview = () => {
   const handleClose = () => setIsOpen(false);
 
   return (
-    <Box sx={{ padding: 4, minHeight: "100vh" }}
-     className="container mx-auto flex flex-col gap-8 px-4 py-8 md:px-6 lg:px-8"
-    >
-      <Box sx={{ display: "flex", justifyContent: "flex-end" }}>
-        <Button
-          variant="contained"
-          startIcon={<AddIcon />}
-          sx={{
-            textTransform: "none",
-            marginLeft: "2px",
-            marginBottom: "8px",
-          }}
-          onClick={() => {
-            setIsOpen(true);
-          }}
-        >
-          New
-        </Button>
-      </Box>
-
+    <>
+     <SecondaryHeader   onClick={() =>  setIsOpen(true)} variant="components"/>
+    <div className="mx-auto max-w-7xl px-6 lg:px-8">
+      <div className="mx-auto max-w-2xl lg:max-w-none py-4">
       <Grid container spacing={4}>
         {/* Stats Section */}
         {[...stats, ...workerStats].map((stat, index) => (
-          <Grid item xs={12} sm={6} md={3} key={index}>
+          <Grid size={{ xs:12,sm:6}} key={index}>
             <Paper sx={{ padding: 2, textAlign: "center", bgcolor: "#1E1E1E" }}>
               <Box sx={{display:"flex", justifyContent:"space-between"}}>
                 <Typography variant="body2">{stat.label}</Typography>
@@ -129,7 +113,7 @@ const Overview = () => {
         ))}
 
         {/* Exports Section */}
-        <Grid item xs={12} md={6}>
+        <Grid  size={{xs:12, md:6}}>
           <Paper sx={{ padding: 3, bgcolor: "#1E1E1E" }}>
             <Typography variant="h6">Exports</Typography>
             <Divider sx={{ bgcolor: "#424242", marginY: 1 }} />
@@ -144,7 +128,7 @@ const Overview = () => {
         </Grid>
 
         {/* Worker Status */}
-        <Grid item xs={12} md={6}>
+        <Grid size={{xs:12,md:6}}>
           <Paper
             sx={{
               padding: 4,
@@ -210,7 +194,9 @@ const Overview = () => {
         onSuccess={handleClose}
         />
       </CustomModal>
-    </Box>
+      </div>
+    </div>
+    </>
   );
 };
 

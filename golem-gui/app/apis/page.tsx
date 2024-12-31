@@ -4,8 +4,6 @@ import React, { useState } from "react";
 import {
   Alert,
   Box,
-  Button,
-  Container,
   InputAdornment,
   TextField,
   Typography,
@@ -19,6 +17,7 @@ import { ApiDefinition } from "@/types/api";
 import CustomModal from "@/components/CustomModal";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 import ApiInfoCard from "@/components/api-info-card";
+import { Button2 } from "@/components/ui/button";
 
 const ComponentsPage = () => {
   const [open, setOpen] = useState(false);
@@ -70,17 +69,14 @@ const ComponentsPage = () => {
                 }}
                 className="flex-1"
               />
-              <Button
-                variant="contained"
-                startIcon={<AddIcon />}
-                sx={{
-                  textTransform: "none",
-                  marginLeft: "2px",
-                }}
+              <Button2
+                variant="default"
+                endIcon={<AddIcon />}
+                size="md"
                 onClick={handleOpen}
               >
                 New
-              </Button>
+              </Button2>
             </Box>
 
             {filteredApis.length === 0 ? (

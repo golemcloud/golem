@@ -2,7 +2,7 @@
 import React, { useState } from "react";
 import {
   Box,
-  Button,
+  
   Container,
   InputAdornment,
   TextField,
@@ -22,6 +22,7 @@ import useComponents from "@/lib/hooks/use-component";
 import CustomModal from "@/components/CustomModal";
 import ComponentCard from "@/components/components-card";
 import { calculateHoursDifference, calculateSizeInMB } from "@/lib/utils";
+import {Button2} from "@/components/ui/button";
 import clsx from "clsx";
 import ComponentTable from "@/components/ui/generic-table";
 
@@ -82,11 +83,11 @@ const ComponentsPage = () => {
                 className="flex-1"
               />
 
-              <Box className="flex gap-0 rounded-md dark:bg-[#333] bg-gray-200 p-1">
+              <Box className="flex  rounded-md dark:bg-[#333] bg-gray-200 p-1">
                 <IconButton
                   onClick={() => handleActiveButton("grid")}
                   className={clsx(
-                    "p-2 rounded-md transition-colors",
+                    "p-1 rounded-md transition-colors",
                     activeButton === "grid"
                       ? "dark:bg-black  bg-gray-500 text-white hover:bg-gray-500"
                       : "dark:text-gray-200 text-gray-700"
@@ -97,7 +98,7 @@ const ComponentsPage = () => {
                 <IconButton
                   onClick={() => handleActiveButton("list")}
                   className={clsx(
-                    "p-2 rounded-md ",
+                    "p-1 rounded-md ",
                     activeButton === "list"
                       ? "dark:bg-black bg-gray-500 text-white  hover:bg-gray-500"
                       : "dark:text-gray-200 text-gray-700"
@@ -106,17 +107,14 @@ const ComponentsPage = () => {
                   <ListIcon />
                 </IconButton>
               </Box>
-              <Button
-                variant="contained"
-                startIcon={<AddIcon />}
-                sx={{
-                  textTransform: "none",
-                  marginLeft: "2px",
-                }}
+              <Button2
+                variant="default"
+                size="md"
+                endIcon={<AddIcon />}
                 onClick={handleOpen}
               >
                 New
-              </Button>
+              </Button2>
             </Box>
 
             {filteredComponents.length > 0 ? (
