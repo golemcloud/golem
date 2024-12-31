@@ -1,9 +1,9 @@
 use crate::durable_host::wasm_rpc::{UrnExtensions, WasmRpcEntryPayload};
 use crate::durable_host::DurableWorkerCtx;
 use crate::services::component::ComponentMetadata;
-use crate::services::rpc::RpcDemand;
+use crate::services::rpc::{RpcDemand, RpcError};
 use crate::workerctx::{DynamicLinking, WorkerCtx};
-use anyhow::anyhow;
+use anyhow::{anyhow, Context};
 use async_trait::async_trait;
 use golem_common::model::component_metadata::{DynamicLinkedInstance, DynamicLinkedWasmRpc};
 use golem_common::model::OwnedWorkerId;
@@ -61,7 +61,7 @@ impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DynamicLinking<Ctx>
                                         let function_name = ParsedFunctionName::parse(format!(
                                             "{name}.{{{inner_name}}}"
                                         ))
-                                        .map_err(|err| anyhow!(format!("Unexpected linking error: {name}.{{{inner_name}}} is not a valid function name: {err}")))?;
+                                            .map_err(|err| anyhow!(format!("Unexpected linking error: {name}.{{{inner_name}}} is not a valid function name: {err}")))?;
 
                                         if let Some(resource_name) =
                                             function_name.function.resource_name()
@@ -96,7 +96,6 @@ impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DynamicLinking<Ctx>
                             let mut resource_types = HashMap::new();
                             for ((interface_name, resource_name), methods) in resources {
                                 let resource_type = DynamicRpcResource::analyse(
-                                    &interface_name,
                                     &resource_name,
                                     &methods,
                                     rpc_metadata,
@@ -166,10 +165,12 @@ impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DynamicLinking<Ctx>
                                             let param_types = function.params.clone();
                                             let result_types = function.results.clone();
                                             let call_type = call_type.clone();
+                                            let function_name = function.name.clone();
                                             Box::new(
                                                 async move {
                                                     Self::dynamic_function_call(
                                                         store,
+                                                        &function_name,
                                                         params,
                                                         &param_types,
                                                         results,
@@ -204,8 +205,24 @@ impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DynamicLinking<Ctx>
 
 // TODO: these helpers probably should not be directly living in DurableWorkerCtx
 impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DurableWorkerCtx<Ctx> {
+    fn register_wasm_rpc_entry(
+        store: &mut StoreContextMut<'_, Ctx>,
+        remote_worker_id: OwnedWorkerId,
+        demand: Box<dyn RpcDemand>,
+    ) -> anyhow::Result<Resource<WasmRpcEntry>> {
+        let mut wasi = store.data_mut().as_wasi_view();
+        let table = wasi.table();
+        Ok(table.push(WasmRpcEntry {
+            payload: Box::new(WasmRpcEntryPayload::Interface {
+                demand,
+                remote_worker_id,
+            }),
+        })?)
+    }
+
     async fn dynamic_function_call(
         mut store: impl AsContextMut<Data = Ctx> + Send,
+        function_name: &ParsedFunctionName,
         params: &[Val],
         param_types: &[Type],
         results: &mut [Val],
@@ -221,16 +238,7 @@ impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DurableWorkerCtx<Ctx
                 let (remote_worker_id, demand) =
                     Self::create_rpc_target(&mut store, target_worker_urn).await?;
 
-                let handle = {
-                    let mut wasi = store.data_mut().as_wasi_view();
-                    let table = wasi.table();
-                    table.push(WasmRpcEntry {
-                        payload: Box::new(WasmRpcEntryPayload::Interface {
-                            demand,
-                            remote_worker_id,
-                        }),
-                    })?
-                };
+                let handle = Self::register_wasm_rpc_entry(&mut store, remote_worker_id, demand)?;
                 results[0] = Val::Resource(handle.try_into_resource_any(store)?);
             }
             DynamicRpcCall::ResourceStubConstructor {
@@ -247,16 +255,7 @@ impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DurableWorkerCtx<Ctx
                     Self::create_rpc_target(&mut store, target_worker_urn.clone()).await?;
 
                 // First creating a resource for invoking the constructor (to avoid having to make a special case)
-                let handle = {
-                    let mut wasi = store.data_mut().as_wasi_view();
-                    let table = wasi.table();
-                    table.push(WasmRpcEntry {
-                        payload: Box::new(WasmRpcEntryPayload::Interface {
-                            demand,
-                            remote_worker_id,
-                        }),
-                    })?
-                };
+                let handle = Self::register_wasm_rpc_entry(&mut store, remote_worker_id, demand)?;
                 let temp_handle = handle.rep();
 
                 let constructor_result = Self::remote_invoke_and_wait(
@@ -268,28 +267,9 @@ impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DurableWorkerCtx<Ctx
                 )
                 .await?;
 
-                // TODO: extract and clean up
-                let (resource_uri, resource_id) = if let Value::Tuple(values) = constructor_result {
-                    if values.len() == 1 {
-                        if let Value::Handle { uri, resource_id } =
-                            values.into_iter().next().unwrap()
-                        {
-                            (Uri { value: uri }, resource_id)
-                        } else {
-                            return Err(anyhow!(
-                                "Invalid constructor result: single handle expected"
-                            ));
-                        }
-                    } else {
-                        return Err(anyhow!(
-                            "Invalid constructor result: single handle expected"
-                        ));
-                    }
-                } else {
-                    return Err(anyhow!(
-                        "Invalid constructor result: single handle expected"
-                    ));
-                };
+                let (resource_uri, resource_id) =
+                    Self::unwrap_constructor_result(constructor_result)
+                        .context(format!("Unwrapping constructor result of {function_name}"))?;
 
                 let (remote_worker_id, demand) =
                     Self::create_rpc_target(&mut store, target_worker_urn).await?;
@@ -319,7 +299,7 @@ impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DurableWorkerCtx<Ctx
                 // Simple stub interface method
                 let handle = match params[0] {
                     Val::Resource(handle) => handle,
-                    _ => return Err(anyhow!("Invalid handle parameter")),
+                    _ => return Err(anyhow!("Invalid parameter for {function_name} - it must be a resource handle but it is {:?}", params[0])),
                 };
                 let handle: Resource<WasmRpcEntry> = handle.try_into_resource(&mut store)?;
 
@@ -332,7 +312,8 @@ impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DurableWorkerCtx<Ctx
                 )
                 .await?;
                 Self::value_result_to_wasmtime_vals(result, results, result_types, &mut store)
-                    .await?;
+                    .await
+                    .context(format!("In {function_name}, decoding result value of remote {target_function_name} call"))?;
             }
             DynamicRpcCall::FireAndForgetFunctionCall {
                 target_function_name,
@@ -341,7 +322,7 @@ impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DurableWorkerCtx<Ctx
                 // Fire-and-forget stub interface method
                 let handle = match params[0] {
                     Val::Resource(handle) => handle,
-                    _ => return Err(anyhow!("Invalid handle parameter")),
+                    _ => return Err(anyhow!("Invalid parameter for {function_name} - it must be a resource handle but it is {:?}", params[0])),
                 };
                 let handle: Resource<WasmRpcEntry> = handle.try_into_resource(&mut store)?;
 
@@ -361,7 +342,7 @@ impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DurableWorkerCtx<Ctx
                 // Async stub interface method
                 let handle = match params[0] {
                     Val::Resource(handle) => handle,
-                    _ => return Err(anyhow!("Invalid handle parameter")),
+                    _ => return Err(anyhow!("Invalid parameter for {function_name} - it must be a resource handle but it is {:?}", params[0])),
                 };
                 let handle: Resource<WasmRpcEntry> = handle.try_into_resource(&mut store)?;
 
@@ -375,12 +356,13 @@ impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DurableWorkerCtx<Ctx
                 .await?;
 
                 Self::value_result_to_wasmtime_vals(result, results, result_types, &mut store)
-                    .await?;
+                    .await
+                    .context(format!("In {function_name}, decoding result value of remote {target_function_name} call"))?;
             }
             DynamicRpcCall::FutureInvokeResultSubscribe => {
                 let handle = match params[0] {
                     Val::Resource(handle) => handle,
-                    _ => return Err(anyhow!("Invalid handle parameter")),
+                    _ => return Err(anyhow!("Invalid parameter for {function_name} - it must be a resource handle but it is {:?}", params[0])),
                 };
                 let handle: Resource<FutureInvokeResult> = handle.try_into_resource(&mut store)?;
                 let pollable = store.data_mut().subscribe(handle).await?;
@@ -397,12 +379,13 @@ impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DurableWorkerCtx<Ctx
                     result_types,
                     &mut store,
                 )
-                .await?;
+                .await
+                .context(format!("In {function_name}, decoding the result value"))?;
             }
             DynamicRpcCall::FutureInvokeResultGet => {
                 let handle = match params[0] {
                     Val::Resource(handle) => handle,
-                    _ => return Err(anyhow!("Invalid handle parameter")),
+                    _ => return Err(anyhow!("Invalid parameter for {function_name} - it must be a resource handle but it is {:?}", params[0])),
                 };
                 let handle: Resource<FutureInvokeResult> = handle.try_into_resource(&mut store)?;
                 let result = HostFutureInvokeResult::get(store.data_mut(), handle).await?;
@@ -416,10 +399,15 @@ impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DurableWorkerCtx<Ctx
                             Value::Tuple(items) if items.len() == 1 => {
                                 Value::Option(Some(Box::new(items.into_iter().next().unwrap())))
                             }
-                            _ => Err(anyhow!("Invalid future invoke result value"))?, // TODO: better error
+                            _ => Err(anyhow!("Invalid future invoke result value in {function_name} - expected a tuple with a single item, got {value:?}"))?,
                         }
                     }
-                    Some(Err(err)) => Err(anyhow!("RPC invocation failed with {err:?}"))?, // TODO: more information into the error
+                    Some(Err(err)) => {
+                        let rpc_error: RpcError = err.into();
+                        Err(anyhow!(
+                            "RPC invocation of {function_name} failed with: {rpc_error}"
+                        ))?
+                    }
                 }]);
 
                 Self::value_result_to_wasmtime_vals(
@@ -428,11 +416,35 @@ impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DurableWorkerCtx<Ctx
                     result_types,
                     &mut store,
                 )
-                .await?;
+                .await
+                .context(format!("In {function_name}, decoding the result value"))?;
             }
         }
 
         Ok(())
+    }
+
+    fn unwrap_constructor_result(constructor_result: Value) -> anyhow::Result<(Uri, u64)> {
+        if let Value::Tuple(values) = constructor_result {
+            if values.len() == 1 {
+                if let Value::Handle { uri, resource_id } = values.into_iter().next().unwrap() {
+                    Ok((Uri { value: uri }, resource_id))
+                } else {
+                    Err(anyhow!(
+                        "Invalid constructor result: single handle expected"
+                    ))
+                }
+            } else {
+                Err(anyhow!(
+                    "Invalid constructor result: single result value expected, but got {}",
+                    values.len()
+                ))
+            }
+        } else {
+            Err(anyhow!(
+                "Invalid constructor result: a tuple with a single field expected, but got {constructor_result:?}"
+            ))
+        }
     }
 
     async fn drop_linked_resource(
@@ -444,10 +456,13 @@ impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DurableWorkerCtx<Ctx
         let must_drop = {
             let mut wasi = store.data_mut().as_wasi_view();
             let table = wasi.table();
-            let entry: &WasmRpcEntry = table.get_any_mut(rep)?.downcast_ref().unwrap(); // TODO: error handling
-            let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
+            if let Some(entry) = table.get_any_mut(rep)?.downcast_ref::<WasmRpcEntry>() {
+                let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
 
-            matches!(payload, WasmRpcEntryPayload::Resource { .. })
+                matches!(payload, WasmRpcEntryPayload::Resource { .. })
+            } else {
+                false
+            }
         };
         if must_drop {
             let resource: Resource<WasmRpcEntry> = Resource::new_own(rep);
@@ -461,6 +476,22 @@ impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DurableWorkerCtx<Ctx
         Ok(())
     }
 
+    async fn encode_parameters(
+        params: &[Val],
+        param_types: &[Type],
+        store: &mut StoreContextMut<'_, Ctx>,
+    ) -> anyhow::Result<Vec<WitValue>> {
+        let mut wit_value_params = Vec::new();
+        for (idx, (param, typ)) in params.iter().zip(param_types).enumerate().skip(1) {
+            let value: Value = encode_output(param, typ, store.data_mut())
+                .await
+                .map_err(|err| anyhow!(format!("Failed to encode parameter {idx}: {err}")))?;
+            let wit_value: WitValue = value.into();
+            wit_value_params.push(wit_value);
+        }
+        Ok(wit_value_params)
+    }
+
     async fn remote_invoke_and_wait(
         target_function_name: &ParsedFunctionName,
         params: &[Val],
@@ -468,14 +499,9 @@ impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DurableWorkerCtx<Ctx
         store: &mut StoreContextMut<'_, Ctx>,
         handle: Resource<WasmRpcEntry>,
     ) -> anyhow::Result<Value> {
-        let mut wit_value_params = Vec::new();
-        for (param, typ) in params.iter().zip(param_types).skip(1) {
-            let value: Value = encode_output(param, typ, store.data_mut())
-                .await
-                .map_err(|err| anyhow!(format!("{err:?}")))?; // TODO: proper error
-            let wit_value: WitValue = value.into();
-            wit_value_params.push(wit_value);
-        }
+        let wit_value_params = Self::encode_parameters(params, param_types, store)
+            .await
+            .context(format!("Encoding parameters of {target_function_name}"))?;
 
         let wit_value_result = store
             .data_mut()
@@ -493,14 +519,9 @@ impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DurableWorkerCtx<Ctx
         store: &mut StoreContextMut<'_, Ctx>,
         handle: Resource<WasmRpcEntry>,
     ) -> anyhow::Result<Value> {
-        let mut wit_value_params = Vec::new();
-        for (param, typ) in params.iter().zip(param_types).skip(1) {
-            let value: Value = encode_output(param, typ, store.data_mut())
-                .await
-                .map_err(|err| anyhow!(format!("{err:?}")))?; // TODO: proper error
-            let wit_value: WitValue = value.into();
-            wit_value_params.push(wit_value);
-        }
+        let wit_value_params = Self::encode_parameters(params, param_types, store)
+            .await
+            .context(format!("Encoding parameters of {target_function_name}"))?;
 
         let invoke_result_resource = store
             .data_mut()
@@ -525,14 +546,9 @@ impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DurableWorkerCtx<Ctx
         store: &mut StoreContextMut<'_, Ctx>,
         handle: Resource<WasmRpcEntry>,
     ) -> anyhow::Result<()> {
-        let mut wit_value_params = Vec::new();
-        for (param, typ) in params.iter().zip(param_types).skip(1) {
-            let value: Value = encode_output(param, typ, store.data_mut())
-                .await
-                .map_err(|err| anyhow!(format!("{err:?}")))?; // TODO: proper error
-            let wit_value: WitValue = value.into();
-            wit_value_params.push(wit_value);
-        }
+        let wit_value_params = Self::encode_parameters(params, param_types, store)
+            .await
+            .context(format!("Encoding parameters of {target_function_name}"))?;
 
         store
             .data_mut()
@@ -551,9 +567,12 @@ impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DurableWorkerCtx<Ctx
         match value_result {
             Value::Tuple(values) | Value::Record(values) => {
                 for (idx, (value, typ)) in values.iter().zip(result_types).enumerate() {
-                    let result = decode_param(value, typ, store.data_mut())
-                        .await
-                        .map_err(|err| anyhow!(format!("{err:?}")))?; // TODO: proper error
+                    let result =
+                        decode_param(value, typ, store.data_mut())
+                            .await
+                            .map_err(|err| {
+                                anyhow!(format!("Failed to decode result value {idx}: {err}"))
+                            })?;
                     results[idx] = result.val;
                 }
             }
@@ -615,7 +634,7 @@ impl<Ctx: WorkerCtx + HostWasmRpc> DurableWorkerCtx<Ctx> {
                 }
             }
         } else {
-            return Err(anyhow!("Missing or invalid worker URN parameter")); // TODO: more details;
+            return Err(anyhow!("Missing or invalid worker URN parameter. Expected to use golem:rpc/types@0.1.0.{{uri}} as constructor parameter, got {target_worker_urn:?}"));
         };
         Ok((remote_worker_id, demand))
     }
@@ -656,7 +675,10 @@ impl DynamicRpcCall {
                 Some(DynamicRpcResource::Stub) => Ok(Some(DynamicRpcCall::GlobalStubConstructor)),
                 Some(DynamicRpcResource::ResourceStub) => {
                     let target_constructor_name = ParsedFunctionName {
-                        site: rpc_metadata.target_site().map_err(|err| anyhow!(err))?, // TODO: proper error
+                        site: rpc_metadata.target_site().map_err(|err| anyhow!("Failed to parse mapped target site ({}) from dynamic linking metadata: {}",
+                            rpc_metadata.target_interface_name,
+                            err
+                        ))?,
                         function: ParsedFunctionReference::RawResourceConstructor {
                             resource: resource_name.to_string(),
                         },
@@ -703,7 +725,10 @@ impl DynamicRpcCall {
                     };
 
                     let target_function_name = ParsedFunctionName {
-                        site: rpc_metadata.target_site().map_err(|err| anyhow!(err))?, // TODO: proper error
+                        site: rpc_metadata.target_site().map_err(|err| anyhow!("Failed to parse mapped target site ({}) from dynamic linking metadata: {}",
+                            rpc_metadata.target_interface_name,
+                            err
+                        ))?,
                         function: target_function,
                     };
 
@@ -739,7 +764,6 @@ enum DynamicRpcResource {
 
 impl DynamicRpcResource {
     pub fn analyse(
-        _interface_name: &str, // TODO: remove
         resource_name: &str,
         methods: &[MethodInfo],
         rpc_metadata: &DynamicLinkedWasmRpc,
@@ -764,7 +788,7 @@ impl DynamicRpcResource {
                     Ok(Some(DynamicRpcResource::ResourceStub))
                 }
             } else {
-                // First constructor parameter is not an Uri => not a stub
+                // First constructor parameter is not a Uri => not a stub
                 Ok(None)
             }
         } else {

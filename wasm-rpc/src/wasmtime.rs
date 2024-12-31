@@ -20,6 +20,8 @@ use golem_wasm_ast::analysis::analysed_type::{
     tuple, u16, u32, u64, u8, unit_case, variant,
 };
 use golem_wasm_ast::analysis::{AnalysedType, TypeResult};
+use std::fmt;
+use std::fmt::{Display, Formatter};
 use wasmtime::component::{types, ResourceAny, Type, Val};
 
 #[derive(Debug)]
@@ -27,6 +29,18 @@ pub enum EncodingError {
     ParamTypeMismatch { details: String },
     ValueMismatch { details: String },
     Unknown { details: String },
+}
+
+impl Display for EncodingError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            EncodingError::ParamTypeMismatch { details } => {
+                write!(f, "Parameter type mismatch: {}", details)
+            }
+            EncodingError::ValueMismatch { details } => write!(f, "Value mismatch: {}", details),
+            EncodingError::Unknown { details } => write!(f, "Unknown error: {}", details),
+        }
+    }
 }
 
 #[async_trait]
