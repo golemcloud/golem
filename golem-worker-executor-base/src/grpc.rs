@@ -421,18 +421,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Ok(())
     }
 
-    async fn validate_worker_forking(
+    async fn get_worker_ids(
         &self,
         request: &ForkWorkerRequest,
-    ) -> Result<(OwnedWorkerId, OwnedWorkerId, WorkerMetadata), GolemError> {
-        let second_index = u64::from(OplogIndex::INITIAL.next());
-
-        if request.oplog_index_cutoff < second_index {
-            return Err(GolemError::invalid_request(
-                "Invalid oplog index cutoff. It should be at least 1",
-            ));
-        }
-
+    ) -> Result<(OwnedWorkerId, OwnedWorkerId), GolemError> {
         let account_id_proto = request
             .account_id
             .clone()
@@ -469,93 +461,25 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .try_into()
             .map_err(GolemError::invalid_request)?;
 
-        self.ensure_worker_belongs_to_this_executor(&source_worker_id)?;
-
         let owned_source_worker_id = OwnedWorkerId::new(&account_id, &source_worker_id);
 
-        let metadata = self
-            .worker_service()
-            .get(&owned_source_worker_id)
-            .await
-            .ok_or(GolemError::worker_not_found(source_worker_id))?;
-
-        Ok((owned_source_worker_id, owned_target_worker_id, metadata))
+        Ok((owned_source_worker_id, owned_target_worker_id))
     }
 
     async fn fork_worker_internal(
         &self,
         request: ForkWorkerRequest,
     ) -> Result<ForkWorkerResponse, GolemError> {
-        let (owned_source_worker_id, owned_target_worker_id, source_worker_metadata) =
-            self.validate_worker_forking(&request).await?;
+        let (owned_source_worker_id, owned_target_worker_id) =
+            self.get_worker_ids(&request).await?;
 
-        let target_worker_id = owned_target_worker_id.worker_id.clone();
-        let account_id = owned_target_worker_id.account_id.clone();
-
-        // Not sure if we should copy the metadata or not, or stick on to just default
-        let target_worker_metadata = WorkerMetadata {
-            worker_id: target_worker_id.clone(),
-            account_id,
-            env: source_worker_metadata.env.clone(),
-            args: source_worker_metadata.args.clone(),
-            created_at: Timestamp::now_utc(),
-            parent: source_worker_metadata.parent.clone(),
-            last_known_status: WorkerStatusRecord::default(),
-        };
-
-        let range = self
-            .oplog_service()
-            .read_range(
+        self.worker_service()
+            .fork(
                 &owned_source_worker_id,
-                OplogIndex::INITIAL,
+                &owned_target_worker_id.worker_id,
                 OplogIndex::from_u64(request.oplog_index_cutoff),
             )
-            .await;
-
-        let initial_oplog_entry = range
-            .get(&OplogIndex::INITIAL)
-            .ok_or(GolemError::unknown("Failed to get initial oplog entry"))?;
-
-        // Update the oplog initial entry with the new worker
-        let target_initial_oplog_entry = initial_oplog_entry
-            .update_worker_id(&target_worker_id)
-            .ok_or(GolemError::unknown(
-                "Failed to update worker id in oplog entry",
-            ))?;
-
-        let new_oplog = self
-            .oplog_service()
-            .create(
-                &owned_target_worker_id,
-                target_initial_oplog_entry,
-                target_worker_metadata,
-                Arc::new(RwLock::new(ExecutionStatus::Suspended {
-                    last_known_status: WorkerStatusRecord::default(), // default is idle
-                    component_type: ComponentType::Durable, // Probably forking should fail if component type is ephemeral, or not?
-                    timestamp: Timestamp::now_utc(),
-                })),
-            )
-            .await;
-
-        for index in u64::from(OplogIndex::INITIAL.next())..=request.oplog_index_cutoff {
-            let entry = range
-                .get(&OplogIndex::from_u64(index))
-                .ok_or(GolemError::unknown("Failed to get oplog entry"))?;
-            new_oplog.add(entry.clone()).await;
-        }
-
-        new_oplog.commit(CommitLevel::Immediate).await;
-
-        // We go through worker proxy to resume the worker
-        // as we need to make sure as it may live in another worker executor,
-        // depending on sharding.
-        self.services
-            .worker_proxy()
-            .resume(&target_worker_id)
-            .await
-            .map_err(|err| {
-                GolemError::failed_to_resume_worker(target_worker_id.clone(), err.into())
-            })?;
+            .await?;
 
         Ok(ForkWorkerResponse {
             result: Some(
