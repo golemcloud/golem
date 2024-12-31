@@ -23,7 +23,9 @@ use crate::service::component::ComponentService;
 use crate::service::deploy::DeployService;
 use crate::service::project::ProjectResolver;
 use clap::Subcommand;
-use golem_client::model::ComponentType;
+use golem_client::model::{
+    ComponentType, DynamicLinkedInstance, DynamicLinkedWasmRpc, DynamicLinking,
+};
 use golem_common::model::PluginInstallationId;
 use golem_wasm_rpc_stubgen::commands::app::{ApplicationContext, ApplicationSourceMode, Config};
 use golem_wasm_rpc_stubgen::log::Output;
@@ -307,6 +309,7 @@ impl<
                         non_interactive,
                         format,
                         vec![],
+                        None,
                     )
                     .await?;
                 Ok(GolemResult::Ok(Box::new(ComponentAddView(
@@ -330,6 +333,7 @@ impl<
                     &component_name.0,
                 )?;
 
+                let dynamic_linking = ctx.dynamic_linking();
                 let component = service
                     .add(
                         component_name,
@@ -339,6 +343,7 @@ impl<
                         non_interactive,
                         format,
                         ctx.extensions.files,
+                        dynamic_linking,
                     )
                     .await?;
                 Ok(GolemResult::Ok(Box::new(ComponentAddView(
@@ -366,6 +371,7 @@ impl<
                         non_interactive,
                         format,
                         vec![],
+                        None,
                     )
                     .await?;
 
@@ -401,6 +407,7 @@ impl<
                     &component_name,
                 )?;
 
+                let dynamic_linking = ctx.dynamic_linking();
                 let mut result = service
                     .update(
                         component_name_or_uri.clone(),
@@ -410,6 +417,7 @@ impl<
                         non_interactive,
                         format,
                         ctx.extensions.files,
+                        dynamic_linking,
                     )
                     .await?;
 
@@ -566,5 +574,38 @@ impl ApplicationComponentContext {
             linked_wasm,
             extensions,
         })
+    }
+
+    fn dynamic_linking(&self) -> Option<DynamicLinking> {
+        let mapping = Vec::new();
+
+        let wasm_rpc_deps = self
+            .app_ctx
+            .application
+            .component_wasm_rpc_dependencies(&self.name);
+
+        for _wasm_rpc_dep in wasm_rpc_deps {
+            // let target_props = self
+            //     .app_ctx
+            //     .application
+            //     .component_properties(&self.name, self.build_profile.as_ref());
+
+            // TODO: figure out source->target names and add to `mapping`
+        }
+
+        if mapping.is_empty() {
+            None
+        } else {
+            Some(DynamicLinking {
+                dynamic_linking: HashMap::from_iter(mapping.into_iter().map(|(from, to)| {
+                    (
+                        from,
+                        DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
+                            target_interface_name: to,
+                        }),
+                    )
+                })),
+            })
+        }
     }
 }
