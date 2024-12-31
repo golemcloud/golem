@@ -20,7 +20,6 @@ use crate::model::ExecutionStatus;
 use crate::services::oplog::OplogService;
 use crate::services::shard::ShardService;
 use crate::services::worker_proxy::WorkerProxy;
-use crate::services::HasShardService;
 use crate::storage::keyvalue::{
     KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
 };
@@ -62,7 +61,6 @@ pub struct DefaultWorkerService {
     key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
     shard_service: Arc<dyn ShardService + Send + Sync>,
     oplog_service: Arc<dyn OplogService + Send + Sync>,
-    worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
 }
 
 impl DefaultWorkerService {
@@ -70,13 +68,11 @@ impl DefaultWorkerService {
         key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
         shard_service: Arc<dyn ShardService + Send + Sync>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
-        worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
     ) -> Self {
         Self {
             key_value_storage,
             shard_service,
             oplog_service,
-            worker_proxy,
         }
     }
 
