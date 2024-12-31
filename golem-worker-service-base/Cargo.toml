@@ -87,9 +87,19 @@ wasm-wave = { workspace = true }
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 fastrand = "2.3.0"
+tempfile = "3.10.1"
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 test-r = { workspace = true }
+valico = "3.6.1"
+tokio-test = "0.4"
+axum = { version = "0.7", features = ["http1", "json"] }
+tower = "0.4"
+tower-http = { version = "0.6.2", features = ["trace"] }
+hyper = { version = "1.0", features = ["full"] }
+hyper-util = { version = "0.1", features = ["full"] }
+http-body-util = "0.1"
+reqwest = { version = "0.11", features = ["json"] }
 
 [[bench]]
 name = "tree"

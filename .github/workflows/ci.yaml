@@ -207,7 +207,16 @@ jobs:
           labels: ${{ steps.meta-golem-router.outputs.labels }}
 
   build-and-test:
-    runs-on: ubuntu-latest-xlarge
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest-xlarge, windows-latest]
+        include:
+          - os: ubuntu-latest-xlarge
+            target: x86_64-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -217,10 +226,10 @@ jobs:
       - name: Fetch tag
         run: git fetch origin --deepen=1
       - name: Setup Rust
-        run: rustup update stable --no-self-update && rustup default stable
+        run: rustup update stable --no-self-update && rustup default stable && rustup target add ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: debug
+          shared-key: debug-${{ matrix.os }}
           cache-all-crates: true
           save-if: true
       - uses: davidB/rust-cargo-make@v1
@@ -229,14 +238,19 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Build all targets
+        shell: bash
         run: cargo make --profile ci build
       - name: Check that OpenAPI specs are up-to-date
+        if: matrix.os == 'ubuntu-latest-xlarge'  # Only run on Linux
         run: cargo make --profile ci check-openapi
       - name: Check that configs are up-to-date
+        if: matrix.os == 'ubuntu-latest-xlarge'  # Only run on Linux
         run: cargo make --profile ci check-configs
       - name: Unit tests
+        shell: bash
         run: cargo make --profile ci unit-tests
       - name: Check formatting and clippy rules
+        if: matrix.os == 'ubuntu-latest-xlarge'  # Only run on Linux
         run: cargo make --profile ci check
       - name: Publish Test Report
         uses: mikepenz/action-junit-report@v4
@@ -275,8 +289,17 @@ jobs:
         run: cargo component build -p golem-wasm-rpc --no-default-features --features stub
 
   worker-tests-group1:
-    runs-on: ubuntu-latest-xlarge
-    name: worker-tests-group1
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest-xlarge, windows-latest]
+        include:
+          - os: ubuntu-latest-xlarge
+            target: x86_64-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    name: worker-tests-group1-${{ matrix.os }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -286,22 +309,29 @@ jobs:
       - name: Fetch tag
         run: git fetch origin --deepen=1
       - name: Setup Rust
-        run: rustup update stable --no-self-update && rustup default stable
+        run: rustup update stable --no-self-update && rustup default stable && rustup target add ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: debug-workertests
+          shared-key: debug-workertests-${{ matrix.os }}
           cache-all-crates: true
       - uses: davidB/rust-cargo-make@v1
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Setup Redis
+      - name: Setup Redis (Linux)
+        if: matrix.os == 'ubuntu-latest-xlarge'
         uses: shogo82148/actions-setup-redis@v1.35.1
         with:
           redis-version: latest
           auto-start: false
+      - name: Setup Redis (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: zhulik/redis-action@1.1.0
+        with:
+          redis version: latest
       - name: Worker Executor integration tests
+        shell: bash
         run: cargo make --profile ci worker-executor-tests-group1
         timeout-minutes: 20
       - name: Publish Test Report
@@ -311,12 +341,13 @@ jobs:
           report_paths: '**/target/report-*.xml'
           detailed_summary: true
           include_passed: true
+
   worker-tests:
     needs: [ worker-tests-group1 ]
-    runs-on: ubuntu-latest-xlarge
     strategy:
       fail-fast: true
       matrix:
+        os: [ubuntu-latest-xlarge, windows-latest]
         group:
           - name: group2
           - name: group3
@@ -325,7 +356,13 @@ jobs:
           - name: group6
           - name: group7
           - name: group8
-    name: worker-tests-${{ matrix.group.name }}
+        include:
+          - os: ubuntu-latest-xlarge
+            target: x86_64-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    name: worker-tests-${{ matrix.group.name }}-${{ matrix.os }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -335,10 +372,10 @@ jobs:
       - name: Fetch tag
         run: git fetch origin --deepen=1
       - name: Setup Rust
-        run: rustup update stable --no-self-update && rustup default stable
+        run: rustup update stable --no-self-update && rustup default stable && rustup target add ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: debug-workertests
+          shared-key: debug-workertests-${{ matrix.os }}
           cache-all-crates: true
           save-if: false
       - uses: davidB/rust-cargo-make@v1
@@ -346,12 +383,19 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Setup Redis
+      - name: Setup Redis (Linux)
+        if: matrix.os == 'ubuntu-latest-xlarge'
         uses: shogo82148/actions-setup-redis@v1.35.1
         with:
           redis-version: latest
           auto-start: false
+      - name: Setup Redis (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: zhulik/redis-action@1.1.0
+        with:
+          redis version: latest
       - name: Worker Executor integration tests
+        shell: bash
         run: cargo make --profile ci worker-executor-tests-${{ matrix.group.name }}
         timeout-minutes: 40
       - name: Publish Test Report
@@ -361,8 +405,18 @@ jobs:
           report_paths: '**/target/report-*.xml'
           detailed_summary: true
           include_passed: true
+
   integration-tests:
-    runs-on: ubuntu-latest-xlarge
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest-xlarge, windows-latest]
+        include:
+          - os: ubuntu-latest-xlarge
+            target: x86_64-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -372,13 +426,13 @@ jobs:
       - name: Fetch tag
         run: git fetch origin --deepen=1
       - name: Setup Rust
-        run: rustup update stable --no-self-update && rustup default stable
+        run: rustup update stable --no-self-update && rustup default stable && rustup target add ${{ matrix.target }}
       - uses: cargo-bins/cargo-binstall@main
       - name: Install cargo-component
         run: cargo binstall --no-confirm cargo-component@0.13.2
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: debug
+          shared-key: debug-${{ matrix.os }}
           cache-all-crates: true
           save-if: false
       - uses: davidB/rust-cargo-make@v1
@@ -386,12 +440,19 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Setup Redis
+      - name: Setup Redis (Linux)
+        if: matrix.os == 'ubuntu-latest-xlarge'
         uses: shogo82148/actions-setup-redis@v1.35.1
         with:
           redis-version: latest
           auto-start: false
+      - name: Setup Redis (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: zhulik/redis-action@1.1.0
+        with:
+          redis version: latest
       - name: Integration tests
+        shell: bash
         env:
           QUIET: true
         run: cargo make --profile ci integration-tests
@@ -403,8 +464,18 @@ jobs:
           report_paths: '**/target/report-*.xml'
           detailed_summary: true
           include_passed: true
+
   cli-tests:
-    runs-on: ubuntu-latest-xlarge
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest-xlarge, windows-latest]
+        include:
+          - os: ubuntu-latest-xlarge
+            target: x86_64-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -414,10 +485,10 @@ jobs:
       - name: Fetch tag
         run: git fetch origin --deepen=1
       - name: Setup Rust
-        run: rustup update stable --no-self-update && rustup default stable
+        run: rustup update stable --no-self-update && rustup default stable && rustup target add ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: debug
+          shared-key: debug-${{ matrix.os }}
           cache-all-crates: true
           save-if: false
       - uses: davidB/rust-cargo-make@v1
@@ -425,12 +496,19 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Setup Redis
+      - name: Setup Redis (Linux)
+        if: matrix.os == 'ubuntu-latest-xlarge'
         uses: shogo82148/actions-setup-redis@v1.35.1
         with:
           redis-version: latest
           auto-start: false
+      - name: Setup Redis (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: zhulik/redis-action@1.1.0
+        with:
+          redis version: latest
       - name: CLI tests
+        shell: bash
         env:
           QUIET: true
         run: cargo make --profile ci cli-tests
@@ -442,6 +520,7 @@ jobs:
           report_paths: '**/target/report-*.xml'
           detailed_summary: true
           include_passed: true
+
   sharding-tests:
     runs-on: ubuntu-latest-xlarge
     steps:
@@ -481,6 +560,7 @@ jobs:
           report_paths: '**/target/report-*.xml'
           detailed_summary: true
           include_passed: true
+
   publish:
     needs:
       [
@@ -491,7 +571,7 @@ jobs:
         cli-tests,
         sharding-tests,
       ]
-    if: "startsWith(github.ref, 'refs/tags/v')"
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout

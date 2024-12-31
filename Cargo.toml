@@ -153,7 +153,9 @@ reqwest = { version = "0.12.9", features = [
     "multipart",
     "stream",
 ] }
-rustls = { version = "0.23.19" }
+rustls = { version = "0.23.20" }
+rustls-native-certs = "0.8.1"
+rustls-pemfile = "2.2.0"
 rand = "0.8.5"
 semver = "1.0.23"
 serde = { version = "1.0", features = ["derive"] }
