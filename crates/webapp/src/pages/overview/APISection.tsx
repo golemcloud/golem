@@ -1,4 +1,3 @@
-import React from 'react';
 import { useNavigate } from 'react-router-dom';
 
 
@@ -8,7 +7,7 @@ const APISection = () => {
     <div className="bg-white rounded-lg border border-gray-200 p-6">
       <div className="flex justify-between items-center mb-6">
         <h2 className="text-xl font-semibold">APIs</h2>
-        <button className="text-blue-600 hover:text-blue-700" onClick={() =>{
+        <button onClick={() =>{
           navigate("/apis");
         }}>View All</button>
       </div>

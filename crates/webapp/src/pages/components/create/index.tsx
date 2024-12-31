@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
-import { Database, Zap } from 'lucide-react';
+import {Database, PlusCircle, Zap} from 'lucide-react';
 import WASMUpload from './WASMUpload';
 import FileManager from './FileManager';
+import {Button} from "@/components/ui/button.tsx";
+import {useState} from "react";
 
 const CreateComponent = () => {
   const [componentName, setComponentName] = useState('');
@@ -85,6 +86,10 @@ const CreateComponent = () => {
           <button className="flex items-center space-x-2 bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
             <span>Create Component</span>
           </button>
+          <Button >
+            <PlusCircle className="mr-2 size-4" />
+            Create Component
+          </Button>
         </div>
       </div>
     </div>

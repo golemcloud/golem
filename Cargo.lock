@@ -13560,6 +13560,8 @@ dependencies = [
 name = "webapp"
 version = "0.1.0"
 dependencies = [
+ "golem-cli",
+ "lazy_static 1.5.0",
  "serde 1.0.216",
  "serde_json",
  "tauri",

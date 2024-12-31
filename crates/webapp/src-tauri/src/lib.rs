@@ -1,14 +1,68 @@
+use std::path::PathBuf;
+use serde_json::Value;
+use golem_cli::config::{get_config_dir, Config, NamedProfile, OssProfile, Profile, ProfileName};
+use golem_cli::factory::ServiceFactory;
+use golem_cli::init::CliKind;
+use golem_cli::model::{ComponentName, Format, PathBufOrStdin};
+use golem_cli::model::app_ext::InitialComponentFile;
+use golem_cli::model::app_ext_raw::ComponentType;
+use golem_cli::oss::factory::OssServiceFactory;
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
+
+
+lazy_static::lazy_static! {
+    static ref PROFILE: (ProfileName, OssProfile) = get_profile();
+    static ref FACTORY: OssServiceFactory = OssServiceFactory::from_profile(&PROFILE.1).unwrap();
+
 }
+
+fn get_profile() -> (ProfileName, OssProfile) {
+    let config_dir = get_config_dir();
+    let oss_profile = match Config::get_active_profile(CliKind::Oss, &config_dir) {
+        Some(NamedProfile {
+                 name,
+                 profile: Profile::Golem(p),
+             }) => Some((name, p)),
+        Some(NamedProfile {
+                 name: _,
+                 profile: Profile::GolemCloud(_),
+             }) => {
+            /// TODO: Add a error log for the user
+            None
+        }
+        None => None,
+    }.unwrap();
+    oss_profile
+}
+#[tauri::command]
+async fn get_component() -> Value {
+    let service = FACTORY.component_service();
+    let components = service.list(None, None).await.unwrap().as_json_value();
+    components
+}
+
+
+// #[tauri::command]
+// async fn create_component(name: String, path_buf: String, com_type: String, format: String) -> Value {
+//     let service = FACTORY.component_service();
+//     let components = service.add(
+//         ComponentName(name),
+//         PathBufOrStdin::Path(PathBuf::from(path_buf)),
+//         // ComponentType::from(com_type),
+//         None,
+//         false,
+//         Format::from(format),
+//         vec![],
+//     ).await;
+//     components
+// }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![greet])
+        .invoke_handler(tauri::generate_handler![get_component])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

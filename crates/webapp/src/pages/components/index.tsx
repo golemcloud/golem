@@ -1,6 +1,6 @@
-import React from 'react';
-import { Search, LayoutGrid, Plus } from 'lucide-react';
+import {Search, LayoutGrid, Plus, PlusCircle} from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import {Button} from "@/components/ui/button.tsx";
 const Components = () => {
   const navigate = useNavigate();
 
@@ -23,6 +23,11 @@ const Components = () => {
               <span>New</span>
               <Plus className="h-5 w-5" />
             </button>
+
+              <Button >
+                  <PlusCircle className="mr-2 size-4" />
+                  Create Component
+              </Button>
           </div>
         </div>
 
@@ -30,7 +35,7 @@ const Components = () => {
           <div className="h-16 w-16 bg-gray-100 rounded-lg flex items-center justify-center mb-4">
             <LayoutGrid className="h-8 w-8 text-gray-400" />
           </div>
-          <h2 className="text-xl font-semibold mb-2">No Project Components</h2>
+          <h2 className="text-xl font-semibold mb-2">No Components</h2>
           <p className="text-gray-500 mb-6">Create a new component to get started.</p>
         </div>
       </div>
