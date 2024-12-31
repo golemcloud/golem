@@ -4,7 +4,7 @@ import { Search, LayoutGrid, Plus } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 const Components = () => {
   const navigate = useNavigate();
-  const [componentList, setComponentList] = useState([{ name: "component1", version: "0.1.0", id: 1 }]);
+  const [componentList, setComponentList] = useState([{ name: "component1", version: "0.1.0", id: "component1" }]);
 
   return (
     <div className="container mx-auto px-4 py-8">

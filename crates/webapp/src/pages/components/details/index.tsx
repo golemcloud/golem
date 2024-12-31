@@ -1,51 +1,57 @@
 import React from 'react';
 import { useParams } from 'react-router-dom';
-import { Plus } from 'lucide-react';
+import { MetricCard } from "./widgets/metrixCard";
+import { ExportsList } from "./widgets/exportsList";
+import { WorkerStatus } from "./widgets/workerStatus";
 import ComponentLeftNav from './componentsLeftNav';
 
+
+
 const ComponentDetails = () => {
-  const { apiName } = useParams();
+  const { componentId } = useParams();
 
   return (
     <div className="flex">
       <ComponentLeftNav />
-      <div className="flex-1 p-8">
-      <div className="flex items-center justify-between mb-8">
-        <div className="grid grid-cols-2 gap-4">
-          <h1 className="text-2xl font-semibold mb-2">{apiName}</h1>
-          <div className="flex items-center gap-2">
-            <span className="inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 bg-primary-background text-primary-soft hover:bg-primary/50 active:bg-primary/50 border border-primary-border w-fit font-mono">0.1.0</span>
-          </div>
-        </div>
+      <div className="p-6 max-w-7xl mx-auto space-y-6">
+      <div className="flex justify-between items-center">
+        <h1 className="text-2xl font-bold">{componentId}</h1>
       </div>
 
-        <div className="space-y-8">
-          <section>
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-xl font-semibold">Routes</h2>
-              <button className="flex items-center gap-2 text-blue-600 hover:text-blue-700">
-                <Plus className="h-5 w-5" />
-                <span>Add</span>
-              </button>
-            </div>
-            <div className="bg-white rounded-lg border border-gray-200 p-8 text-center text-gray-500">
-              No routes defined for this API version.
-            </div>
-          </section>
-
-          <section>
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-xl font-semibold">Active Deployments</h2>
-              <button className="text-blue-600 hover:text-blue-700">View All</button>
-            </div>
-            <div className="bg-white rounded-lg border border-gray-200 p-8 text-center text-gray-500">
-              No active deployments for this API version.
-            </div>
-          </section>
-        </div>
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+        <MetricCard
+          title="Latest Component Version"
+          value="v0"
+          type="version"
+        />
+        <MetricCard
+          title="Active Workers"
+          value="1"
+          type="active"
+        />
+        <MetricCard
+          title="Running Workers"
+          value="0"
+          type="running"
+        />
+        <MetricCard
+          title="Failed Workers"
+          value="0"
+          type="failed"
+        />
       </div>
+
+      <div className="grid gap-4 md:grid-cols-2">
+        <ExportsList />
+        <WorkerStatus totalWorkers={1} />
+      </div>
+    </div>
     </div>
   );
 };
 
 export default ComponentDetails;
+
+
+
+

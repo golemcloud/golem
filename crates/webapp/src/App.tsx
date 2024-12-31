@@ -11,6 +11,10 @@ import CreateRoute from './pages/api/details/CreateRoute';
 import Deployments from './pages/Deployments';
 import Plugin from "./pages/plugin";
 import ComponentDetails from "./pages/components/details";
+import ComponentSettings from "./pages/components/details/settings";
+import Exports from "./pages/components/details/export";
+import ComponentUpdate from "./pages/components/details/update";
+import Workers from "./pages/workers";
 
 function App() {
     return (
@@ -22,11 +26,15 @@ function App() {
                     <Route path="/components" element={<Components />} />
                     <Route path="/components/create" element={<CreateComponent />} />
                     <Route path="/components/:componentId" element={<ComponentDetails />} />
+                    <Route path="/components/:componentId/settings" element={<ComponentSettings />} />
+                    <Route path="/components/:componentId/update" element={<ComponentUpdate />} />
+                    <Route path="/components/:componentId/exports" element={<Exports />} />
                     <Route path="/apis" element={<APIs />} />
                     <Route path="/apis/create" element={<CreateAPI />} />
                     <Route path="/apis/:apiName" element={<APIDetails />} />
                     <Route path="/apis/:apiName/settings" element={<APISettings />} />
                     <Route path="/apis/:apiName/routes/new" element={<CreateRoute />} />
+                    <Route path="/workers" element={<Workers />} />
                     <Route path="/deployments" element={<Deployments />} />
                     <Route path="/plugins" element={<Plugin />} />
                 </Routes>
