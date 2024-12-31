@@ -10,6 +10,7 @@ import APISettings from './pages/api/details/settings';
 import CreateRoute from './pages/api/details/CreateRoute';
 import Deployments from './pages/Deployments';
 import Plugin from "./pages/plugin";
+import ComponentDetails from "./pages/components/details";
 
 function App() {
     return (
@@ -20,6 +21,7 @@ function App() {
                     <Route path="/" element={<Overview />} />
                     <Route path="/components" element={<Components />} />
                     <Route path="/components/create" element={<CreateComponent />} />
+                    <Route path="/components/:componentId" element={<ComponentDetails />} />
                     <Route path="/apis" element={<APIs />} />
                     <Route path="/apis/create" element={<CreateAPI />} />
                     <Route path="/apis/:apiName" element={<APIDetails />} />
