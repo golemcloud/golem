@@ -63,12 +63,11 @@ use wasmtime::Error;
 use crate::model::public_oplog::{
     find_component_version_at, get_public_oplog_chunk, search_public_oplog,
 };
-use crate::model::{
-    InterruptKind, LastError, ListDirectoryResult, ReadFileResult,
-};
+use crate::model::{InterruptKind, LastError, ListDirectoryResult, ReadFileResult};
 use crate::services::events::Event;
 use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActivator};
 use crate::services::worker_event::WorkerEventReceiver;
+use crate::services::worker_fork::{DefaultWorkerFork, WorkerFork};
 use crate::services::{
     All, HasActiveWorkers, HasAll, HasComponentService, HasEvents, HasOplogService, HasPlugins,
     HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
@@ -77,7 +76,6 @@ use crate::services::{
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use tokio;
-use crate::services::worker_fork::{DefaultWorkerFork, WorkerFork};
 
 pub enum GrpcError<E> {
     Transport(tonic::transport::Error),

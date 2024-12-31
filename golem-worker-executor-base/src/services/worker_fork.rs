@@ -9,13 +9,13 @@ use crate::services::shard::ShardService;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{HasAll, HasOplog, HasShardService};
 use crate::worker::Worker;
+use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
-use golem_common::model::oplog::{OplogIndex};
+use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{
     AccountId, ComponentType, OwnedWorkerId, Timestamp, WorkerId, WorkerMetadata,
     WorkerStatusRecord,
 };
-use crate::workerctx::WorkerCtx;
 
 #[async_trait]
 pub trait WorkerFork {
@@ -82,9 +82,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx>> DefaultWorkerFork<Ctx, Svcs> {
     }
 }
 
-
 #[async_trait]
-impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerFork for DefaultWorkerFork<Ctx, Svcs> {
+impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerFork
+    for DefaultWorkerFork<Ctx, Svcs>
+{
     async fn fork(
         &self,
         source_worker_id: &OwnedWorkerId,
@@ -124,13 +125,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerFork for D
             None,
             None,
         )
-            .await?;
+        .await?;
 
         let source_oplog = source_worker_instance.oplog();
 
-        let initial_oplog_entry = source_oplog
-            .read(OplogIndex::INITIAL)
-            .await;
+        let initial_oplog_entry = source_oplog.read(OplogIndex::INITIAL).await;
 
         // Update the oplog initial entry with the new worker
         let target_initial_oplog_entry = initial_oplog_entry
@@ -155,9 +154,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerFork for D
             .await;
 
         for index in u64::from(OplogIndex::INITIAL.next())..=u64::from(oplog_index_cut_off) {
-            let entry = source_oplog
-                .read(OplogIndex::from_u64(index))
-                .await;
+            let entry = source_oplog.read(OplogIndex::from_u64(index)).await;
             new_oplog.add(entry.clone()).await;
         }
 
@@ -166,7 +163,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerFork for D
         // We go through worker proxy to resume the worker
         // as we need to make sure as it may live in another worker executor,
         // depending on sharding.
-        self.all.worker_proxy()
+        self.all
+            .worker_proxy()
             .resume(&target_worker_id)
             .await
             .map_err(|err| {
