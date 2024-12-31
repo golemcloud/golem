@@ -67,7 +67,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx>> DefaultWorkerFork<Ctx, Svcs> {
         // We assume the source worker belongs to this executor
         self.all.shard_service().check_worker(source_worker_id)?;
 
-        let owned_source_worker_id = OwnedWorkerId::new(&account_id, &source_worker_id);
+        let owned_source_worker_id = OwnedWorkerId::new(&account_id, source_worker_id);
 
         let metadata = self
             .all

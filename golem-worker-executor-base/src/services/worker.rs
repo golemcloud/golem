@@ -19,7 +19,6 @@ use crate::metrics::workers::record_worker_call;
 use crate::model::ExecutionStatus;
 use crate::services::oplog::OplogService;
 use crate::services::shard::ShardService;
-use crate::services::worker_proxy::WorkerProxy;
 use crate::storage::keyvalue::{
     KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
 };
