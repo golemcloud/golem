@@ -10,7 +10,7 @@ const buttonVariants = cva(
     variants: {
       variant: {
         default: "bg-button_bg border border-button_border",
-        primary:"bg-button_bg border border-button_border dark:hover:bg-[#78272c] hover:bg-[#A0AAE9]",
+        primary:"bg-button_bg border border-button_border dark:hover:bg-[#2C3B78] hover:bg-[#A0AAE9]",
         dropdown: "border text-secondary-foreground hover:bg-secondary/80", 
         error: "bg-[#FFEFEF] dark:bg-[#3b191d] text-[#8e4e5a] dark:text-[#ffd1d9] border border-[#f9c6c6] dark:border-[#691D25] dark:hover:bg-[#782A2B] hover:bg-[#F29EA6] ",
         destructive:

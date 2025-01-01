@@ -137,12 +137,16 @@ useEffect(() => {
 
             {/* Exports Section */}
             <Grid size={{ xs: 12, md: 4 }}>
-              <Paper sx={{ padding: 3, bgcolor: "#1E1E1E", height: 550 }} className="border">
+              <Paper sx={{ padding: 3, bgcolor: "#1E1E1E", minHeight: 550 }} className="border">
                 <Typography variant="h6">Exports</Typography>
                 <Divider sx={{ bgcolor: "#555", marginY: 1 }} />
                 <List>
-                  {exports.map((item, index) => (
-                    <ListItem key={index} disableGutters>
+                  {exports.slice(0,13).map((item, index) => (
+                    <ListItem key={index} sx={{
+
+                    }}
+                    divider
+                    >
                       <ListItemText primary={item} />
                     </ListItem>
                   ))}
@@ -152,7 +156,7 @@ useEffect(() => {
 
             {/* Worker Status */}
             <Grid size={{ xs: 12, md: 8 }}>
-              <Paper sx={{ padding: 4, bgcolor: "#1E1E1E", height: 550 }} className="border">
+              <Paper sx={{ padding: 4, bgcolor: "#1E1E1E", minHeight:550 }} className="border">
                 <Typography variant="h6">Worker Status</Typography>
                 <Divider sx={{ bgcolor: "#555", marginY: 1 }} />
                 {totalWorkers > 0 ? (

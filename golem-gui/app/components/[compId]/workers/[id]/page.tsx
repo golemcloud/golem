@@ -77,11 +77,12 @@ const WorkerListWithDropdowns = () => {
         value={activeTab}
         variant="scrollable"
         onChange={handleTabChange}
+        className="dark:bg-[#0a0a0a8e]"
         aria-label="Worker Settings Tabs"
         textColor="inherit"
         sx={{
-          marginBottom: "5px",
-          marginLeft: "12px",
+          paddingBottom: "5px",
+          paddingLeft: "12px",
           "& .MuiTab-root": {
             minWidth: "80px",
             padding: "2px 2px",
@@ -95,7 +96,7 @@ const WorkerListWithDropdowns = () => {
               minWidth: "40px",
             },
             "& .MuiTabs-flexContainer": {
-              gap: "4px", // Decrease the gap between tabs
+              gap: "4px"
             },
           },
         }}

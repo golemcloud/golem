@@ -18,6 +18,7 @@ import Link from "next/link";
 import { usePathname, useParams } from "next/navigation";
 import { useState } from "react";
 import { Button2 } from "@/components/ui/button";
+import {Dropdown} from "@/components/ui/dropdown-button";
 
 
 type secondaryHeaderProps = {
@@ -63,7 +64,10 @@ export default function SecondaryHeader({
       icon: <Settings fontSize="small" />,
     },
   ];
-
+  const workloads = [
+    { route: `/components/${compId}/settings?activeTab=1`, value: "info"},
+    { route: `/components/${compId}/settings?activeTab=2`, value: "update" },
+  ];
   const toggleDrawer = (open: boolean) => () => {
     setDrawerOpen(open);
   };
@@ -80,7 +84,7 @@ export default function SecondaryHeader({
         </Box>
 
         {pathname === `/components/${compId}/overview` && (
-          <Box sx={{ marginLeft: "auto" }}>
+          <Box sx={{ marginLeft: "auto" ,display:"flex" }}>
             <Button2
               variant="primary"
               startIcon={<AddIcon />}
@@ -89,6 +93,10 @@ export default function SecondaryHeader({
             >
               New
             </Button2>
+            
+            <Box className="ml-2 p-1 border rounded-md">
+              {Dropdown(workloads)}
+            </Box>
           </Box>
         )}
 
