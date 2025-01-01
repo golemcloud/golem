@@ -1446,9 +1446,11 @@ async fn fork_worker_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         )
         .await;
 
-    let result = deps.search_oplog(&target_worker_id, "G1002").await;
+    let result1 = deps.search_oplog(&target_worker_id, "G1002").await;
+    let result2 = deps.search_oplog(&target_worker_id, "G1001").await;
 
-    assert_eq!(result.len(), 4); //  two invocations for G1002 and two log messages
+    dbg!(result2.clone());
+    assert_eq!(result1.len(), 4); //  two invocations for G1002 and two log messages
 }
 
 #[test]
