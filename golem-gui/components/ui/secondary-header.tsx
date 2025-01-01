@@ -19,11 +19,6 @@ import { usePathname, useParams } from "next/navigation";
 import { useState } from "react";
 import { Button2 } from "@/components/ui/button";
 
-type NavigationLinks = {
-  name: string;
-  href: string;
-  icon: React.ReactNode;
-};
 
 type secondaryHeaderProps = {
   onClick: () => void;
@@ -39,6 +34,7 @@ export default function SecondaryHeader({
   const [drawerOpen, setDrawerOpen] = useState(false);
   const pathname = usePathname();
   const { compId } = useParams<{ compId: string }>();
+  const { id: workerName } = useParams<{ id: string }>();
 
   const navigationLinks = [
     {
@@ -73,7 +69,7 @@ export default function SecondaryHeader({
   };
 
   return (
-    <Box className="dark:bg-[#0a0a0a] border p-2 pr-20 ">
+    <Box className="dark:bg-[#0a0a0a] border-b p-2 pr-20 ">
       <Box className="flex items-center justify-between w-full">
         <Box sx={{ display: { xs: "block", md: "none" } }}>
           <Button
@@ -82,10 +78,11 @@ export default function SecondaryHeader({
             className="dark:text-white text-9xl ml-2"
           ></Button>
         </Box>
+
         {pathname === `/components/${compId}/overview` && (
           <Box sx={{ marginLeft: "auto" }}>
             <Button2
-              variant="default"
+              variant="primary"
               startIcon={<AddIcon />}
               size="md"
               onClick={onClick}
@@ -94,6 +91,16 @@ export default function SecondaryHeader({
             </Button2>
           </Box>
         )}
+
+     {pathname === `/components/${compId}/workers/${workerName}` && (
+         <Typography
+            variant="h6"
+            sx={{ fontWeight: "bold" }}
+            className="mx-auto text-gray-700 dark:text-gray-300"
+          >
+            {workerName}
+          </Typography>
+        )}   
       </Box>
 
       <Drawer
