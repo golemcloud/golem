@@ -4,17 +4,23 @@ import {
   List,
   Box,
   Divider,
-  CircularProgress,
-  Alert,
   Paper,
 } from "@mui/material";
+import { EventMessage, InvocationStart } from "@/types/api";
+
+type InovkeMeta = {
+  status: "Pending" | "Finished",
+  startTime: string
+  endTime: string
+}
+
 
 export default function InvocationLogs({
   lastClearTimeStamp,
   messages,
 }: {
   lastClearTimeStamp: Date | null;
-  messages: Array<any>;
+  messages: Array<EventMessage>;
 }) {
   const checkLogIsAfterLastClearTime = useCallback(
     (entryTime: string) => {
@@ -37,12 +43,13 @@ export default function InvocationLogs({
   console.log("messages in invokvelogs", messages);
   const invokeMessages = useMemo(() => {
     return Object.values(
-      messages?.reduce<Record<string, any>>((obj, message: any) => {
-        let idempotency_key = message?.["InvocationStart"]?.idempotency_key;
-        const isEligible =
-          idempotency_key &&
-          checkLogIsAfterLastClearTime(message?.["InvocationStart"].timeStamp);
+      messages?.reduce<Record<string, InvocationStart["InvocationStart"]&InovkeMeta>>((obj, message: EventMessage) => {
+       
         if ("InvocationStart" in message) {
+          const idempotency_key = message?.["InvocationStart"]?.idempotency_key;
+          const isEligible =
+            idempotency_key &&
+            checkLogIsAfterLastClearTime(message?.["InvocationStart"].timestamp);
           if(isEligible) {
           obj[idempotency_key] = {
             ...obj[idempotency_key],
@@ -54,8 +61,8 @@ export default function InvocationLogs({
           }
         }
 
-        idempotency_key = message?.["InvocationFinished"]?.idempotency_key;
         if ("InvocationFinished" in message) {
+          const idempotency_key = message?.["InvocationFinished"]?.idempotency_key;
           obj[idempotency_key] = {
             ...obj[idempotency_key],
             ...message["InvocationFinished"],
@@ -66,7 +73,7 @@ export default function InvocationLogs({
         return obj;
       }, {}) || {}
     );
-  }, [messages, checkLogIsAfterLastClearTime, lastClearTimeStamp]);
+  }, [messages, checkLogIsAfterLastClearTime]);
   console.log(invokeMessages);
 
   // if (isLoading)
@@ -109,8 +116,8 @@ export default function InvocationLogs({
     <Box>
       <Paper elevation={3} sx={{ px: 2 }}>
         <List>
-          {invokeMessages.map((entry, index: number) => (
-            <>
+          {invokeMessages.map((entry:InvocationStart["InvocationStart"]&InovkeMeta , index: number) => (
+            entry?.startTime ? <>
               {index > 0 && <Divider sx={{ my: 1 }} color="" />}
               <Typography variant="h6" gutterBottom>
                 {new Date(entry?.startTime).toLocaleString()} {entry?.function}{" "}
@@ -123,7 +130,7 @@ export default function InvocationLogs({
                     } ms`
                   : ""}{" "}
               </Typography>
-            </>
+            </>: null
           ))}
         </List>
       </Paper>

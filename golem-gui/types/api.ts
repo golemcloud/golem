@@ -315,3 +315,34 @@ export interface UpdatePluginInstallPayload {
   priority: number;
   parameters: Record<string, string>;
 }
+
+export type InvocationStart = {
+  InvocationStart: {
+    timestamp: string; // ISO 8601 format date string
+    function: string;  // Function name with namespace or path
+    idempotency_key: string; // Unique key for idempotency
+  };
+};
+
+export type StdOutMessage = {
+  StdOut: {
+    timestamp: string; // ISO 8601 format date string
+    bytes: number[];   // Array of bytes representing the message
+  };
+}; 
+
+export type InvocationFinishedMessage = {
+  InvocationFinished: {
+    timestamp: string; // ISO 8601 format date string
+    function: string;  // Identifier of the function invoked
+    idempotency_key: string; // Unique key for ensuring idempotency
+  };
+};
+
+
+export type EventMessage = InvocationStart | StdOutMessage | InvocationFinishedMessage
+
+export type WebSocketMessage = {
+  type: string;
+  data: EventMessage; // You can replace `any` with a more specific type if known
+};
