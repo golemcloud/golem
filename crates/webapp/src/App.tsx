@@ -1,5 +1,4 @@
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
-import Navbar from './components/Navbar';
+import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
 import Overview from '@/pages/overview';
 import Components from '@/pages/components';
 import CreateComponent from '@/pages/components/create';
@@ -16,29 +15,44 @@ import Exports from "@/pages/components/details/export";
 import ComponentUpdate from "@/pages/components/details/update";
 import Workers from "@/pages/workers";
 import {ThemeProvider} from "@/components/theme-provider.tsx";
+import Navbar from "@/components/Navbar";
+import APINewVersion from "./pages/api/details/newVersion";
 
 function App() {
     return (
         <ThemeProvider defaultTheme="system" storageKey="golem-theme">
             <Router>
                 <div className="min-h-screen">
-                    <Navbar />
+                    <Navbar/>
                     <Routes>
-                        <Route path="/" element={<Overview />} />
-                        <Route path="/components" element={<Components />} />
-                        <Route path="/components/create" element={<CreateComponent />} />
-                        <Route path="/components/:componentId" element={<ComponentDetails />} />
-                        <Route path="/components/:componentId/settings" element={<ComponentSettings />} />
-                        <Route path="/components/:componentId/update" element={<ComponentUpdate />} />
-                        <Route path="/components/:componentId/exports" element={<Exports />} />
-                        <Route path="/apis" element={<APIs />} />
-                        <Route path="/apis/create" element={<CreateAPI />} />
-                        <Route path="/apis/:apiName" element={<APIDetails />} />
-                        <Route path="/apis/:apiName/settings" element={<APISettings />} />
-                        <Route path="/apis/:apiName/routes/new" element={<CreateRoute />} />
-                        <Route path="/workers" element={<Workers />} />
-                        <Route path="/deployments" element={<Deployments />} />
-                        <Route path="/plugins" element={<Plugin />} />
+                        <Route path="/" element={<Overview/>}/>
+                        <Route path="/components" element={<Components/>}/>
+                        <Route path="/components/create" element={<CreateComponent/>}/>
+                        <Route
+                            path="/components/:componentId"
+                            element={<ComponentDetails/>}
+                        />
+                        <Route
+                            path="/components/:componentId/settings"
+                            element={<ComponentSettings/>}
+                        />
+                        <Route
+                            path="/components/:componentId/update"
+                            element={<ComponentUpdate/>}
+                        />
+                        <Route
+                            path="/components/:componentId/exports"
+                            element={<Exports/>}
+                        />
+                        <Route path="/apis" element={<APIs/>}/>
+                        <Route path="/apis/create" element={<CreateAPI/>}/>
+                        <Route path="/apis/:apiName" element={<APIDetails/>}/>
+                        <Route path="/apis/:apiName/settings" element={<APISettings/>}/>
+                        <Route path="/apis/:apiName/newversion" element={<APINewVersion/>}/>
+                        <Route path="/apis/:apiName/routes/new" element={<CreateRoute/>}/>
+                        <Route path="/workers" element={<Workers/>}/>
+                        <Route path="/deployments" element={<Deployments/>}/>
+                        <Route path="/plugins" element={<Plugin/>}/>
                     </Routes>
                 </div>
             </Router>

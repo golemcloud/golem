@@ -1,5 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { PlusCircle, ArrowLeft } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
 const CreateAPI = () => {
   const navigate = useNavigate();
@@ -26,7 +28,15 @@ const CreateAPI = () => {
 
   return (
     <div className="container mx-auto px-4 py-8 max-w-2xl">
-      <h1 className="text-2xl font-semibold mb-2">Create a new API</h1>
+      <div className="flex items-center gap-2 mb-2">
+        <button
+          onClick={() => navigate(-1)}
+          className="text-xl  flex items-center text-gray-800 hover:text-gray-900"
+        >
+          <ArrowLeft className="h-7 w-7 mr-2" />
+        </button>
+        <h1 className="text-2xl font-semibold mb-2">Create a new API</h1>
+      </div>
       <p className="text-gray-600 mb-8">
         Export worker functions as a REST API
       </p>
@@ -66,13 +76,15 @@ const CreateAPI = () => {
         </div>
 
         <div className="flex justify-end">
-          <button
+          <Button
             type="submit"
-            className="flex items-center space-x-2 bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+            className="flex items-center space-x-2"
             onClick={onCreateApi}
+            disabled={!apiName || !version}
           >
+            <PlusCircle className="mr-2 size-4" />
             Create API
-          </button>
+          </Button>
         </div>
       </form>
     </div>

@@ -1,6 +1,6 @@
 import { FileText, Box, Globe, Cpu } from "lucide-react";
-import APISection from "./APISection";
-import ComponentsSection from "./ComponentsSection";
+import APISection from "./apiSection";
+import ComponentsSection from "./componentsSection";
 import FeatureCard from "../../components/FeatureCard";
 
 const Overview = () => {

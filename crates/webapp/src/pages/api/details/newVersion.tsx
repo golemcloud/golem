@@ -1,6 +1,9 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
+import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { useEffect, useState } from "react";
-import { Plus } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
+import { Button } from "@/components/ui/button";
+import { PlusCircle } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -28,9 +31,11 @@ const ApiMockData = [
   },
 ];
 
-const APIDetails = () => {
-  const { apiName } = useParams();
+export default function APINewVersion() {
+  const { toast } = useToast();
   const navigate = useNavigate();
+  const [version, setVersion] = useState("");
+  const { apiName } = useParams();
   const [apiDetails, setApiDetails] = useState(ApiMockData);
   const [activeApiDetails, setActiveApiDetails] = useState(
     apiDetails[apiDetails.length - 1]
@@ -39,6 +44,7 @@ const APIDetails = () => {
   useEffect(() => {
     const fetchData = async () => {
       //check the api https://release.api.golem.cloud/v1/api/definitions/305e832c-f7c1-4da6-babc-cb2422e0f5aa?api-definition-id=${appId}
+      //Get method
       // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars
       const response: any = await invoke("get_api");
       setApiDetails(response);
@@ -46,6 +52,25 @@ const APIDetails = () => {
     };
     fetchData().then((r) => r);
   }, []);
+
+  const onCreateApi = async () => {
+    try {
+      // Simulate API call
+      // https://release.api.golem.cloud/v1/api/definitions/305e832c-f7c1-4da6-babc-cb2422e0f5aa
+      //Post method
+      const payload = {
+        ...activeApiDetails,
+        version: version,
+      };
+      navigate(`/apis/${apiName}`);
+    } catch (error) {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: "Failed to create new version. Please try again.",
+      });
+    }
+  };
 
   return (
     <div className="flex">
@@ -93,27 +118,33 @@ const APIDetails = () => {
             </div>
           </header>
         </div>
-
-        <div className="overflow-scroll h-[85vh] space-y-8 p-8">
-          <section>
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-xl font-semibold">Routes</h2>
-              <button
-                className="flex items-center gap-2 text-blue-600 hover:text-blue-700"
-                onClick={() => navigate(`/apis/${apiName}/routes/new`)}
-              >
-                <Plus className="h-5 w-5" />
-                <span>Add</span>
-              </button>
-            </div>
-            <div className="bg-white rounded-lg border border-gray-200 p-8 text-center text-gray-500">
-              No routes defined for this API version.
-            </div>
-          </section>
+        <div className="max-w-4xl mx-auto p-8">
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            New Version
+          </label>
+          <input
+            type="text"
+            value={version}
+            onChange={(e) => setVersion(e.target.value)}
+            className="w-full border border-gray-200 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            placeholder="New Version prefix (0.0.0)"
+          />
+          <p className="mt-1 text-sm text-gray-500">
+            Creating copy of version {activeApiDetails.version}
+          </p>
+          <div className="flex justify-end">
+            <Button
+              type="submit"
+              className="flex items-center space-x-2"
+              onClick={onCreateApi}
+              disabled={!version}
+            >
+              <PlusCircle className="mr-2 size-4" />
+              Create New Version
+            </Button>
+          </div>
         </div>
       </div>
     </div>
   );
-};
-
-export default APIDetails;
+}
