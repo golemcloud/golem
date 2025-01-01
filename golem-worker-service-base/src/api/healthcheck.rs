@@ -23,26 +23,45 @@ pub struct HealthcheckApi;
 #[derive(
     Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, serde::Serialize, serde::Deserialize, Object,
 )]
-pub struct HealthcheckResponse {}
+pub struct HealthcheckResponse {
+    status: String,
+    data: VersionData,
+}
+
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, serde::Serialize, serde::Deserialize, Object,
+)]
+pub struct VersionData {
+    version: String,
+}
 
 #[derive(
     Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, serde::Serialize, serde::Deserialize, Object,
 )]
 pub struct VersionInfo {
-    pub version: String,
+    status: String,
+    data: VersionData,
 }
 
 #[OpenApi(prefix_path = "/", tag = ApiTags::HealthCheck)]
 impl HealthcheckApi {
     #[oai(path = "/healthcheck", method = "get", operation_id = "healthcheck")]
     async fn healthcheck(&self) -> Json<HealthcheckResponse> {
-        Json(HealthcheckResponse {})
+        Json(HealthcheckResponse {
+            status: "success".to_string(),
+            data: VersionData {
+                version: VERSION.to_string(),
+            },
+        })
     }
 
     #[oai(path = "/version", method = "get", operation_id = "version")]
     async fn version(&self) -> Json<VersionInfo> {
         Json(VersionInfo {
-            version: VERSION.to_string(),
+            status: "success".to_string(),
+            data: VersionData {
+                version: VERSION.to_string(),
+            },
         })
     }
 }

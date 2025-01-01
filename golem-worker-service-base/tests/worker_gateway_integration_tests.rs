@@ -47,8 +47,8 @@ mod worker_gateway_integration_tests {
         core::{
             CoreAuthDisplay, CoreClientAuthMethod, CoreClaimName, CoreClaimType,
             CoreGrantType, CoreJweContentEncryptionAlgorithm, CoreJweKeyManagementAlgorithm,
-            CoreJwsSigningAlgorithm, CoreResponseMode, CoreResponseType, CoreSubjectIdentifierType,
-            CoreGenderClaim, CoreJsonWebKeyType, CoreJsonWebKeyUse, CoreJsonWebKey,
+            CoreJwsSigningAlgorithm, CoreGenderClaim, CoreJsonWebKeyType, CoreJsonWebKeyUse, CoreJsonWebKey,
+            CoreResponseMode, CoreResponseType, CoreSubjectIdentifierType,
         },
         EmptyAdditionalClaims, EmptyAdditionalProviderMetadata,
         IdTokenFields, IdTokenClaims, ProviderMetadata,
@@ -64,9 +64,17 @@ mod worker_gateway_integration_tests {
         RefOr,
     };
     use golem_wasm_ast::analysis::{
-        AnalysedType, TypeStr, AnalysedExport, AnalysedFunction,
-        AnalysedFunctionParameter, AnalysedFunctionResult, AnalysedInstance,
-        TypeRecord, NameTypePair, TypeList,
+        AnalysedType,
+        TypeStr,
+        TypeU32,
+        TypeRecord,
+        TypeList,
+        NameTypePair,
+        AnalysedExport,
+        AnalysedFunction,
+        AnalysedFunctionParameter,
+        AnalysedFunctionResult,
+        AnalysedInstance,
     };
     use rib::RibOutputTypeInfo;
 
@@ -153,7 +161,7 @@ mod worker_gateway_integration_tests {
                 // User management
                 RouteRequest {
                     method: MethodPattern::Get,
-                    path: AllPathPatterns::parse("/users/:id/profile").unwrap(),
+                    path: AllPathPatterns::parse("/users/{user-id}/profile").unwrap(),
                     binding: GatewayBinding::Default(WorkerBinding {
                         component_id: TestComponent::test_component_id(),
                         worker_name: None,
@@ -165,7 +173,7 @@ mod worker_gateway_integration_tests {
                 },
                 RouteRequest {
                     method: MethodPattern::Post,
-                    path: AllPathPatterns::parse("/users/:id/settings").unwrap(),
+                    path: AllPathPatterns::parse("/users/{user-id}/settings").unwrap(),
                     binding: GatewayBinding::Default(WorkerBinding {
                         component_id: TestComponent::test_component_id(),
                         worker_name: None,
@@ -177,7 +185,7 @@ mod worker_gateway_integration_tests {
                 },
                 RouteRequest {
                     method: MethodPattern::Get,
-                    path: AllPathPatterns::parse("/users/:id/permissions").unwrap(),
+                    path: AllPathPatterns::parse("/users/{user-id}/permissions").unwrap(),
                     binding: GatewayBinding::Default(WorkerBinding {
                         component_id: TestComponent::test_component_id(),
                         worker_name: None,
@@ -203,7 +211,7 @@ mod worker_gateway_integration_tests {
                 },
                 RouteRequest {
                     method: MethodPattern::Get,
-                    path: AllPathPatterns::parse("/content/:id").unwrap(),
+                    path: AllPathPatterns::parse("/content/{id}").unwrap(),
                     binding: GatewayBinding::Default(WorkerBinding {
                         component_id: TestComponent::test_component_id(),
                         worker_name: None,
@@ -267,7 +275,7 @@ mod worker_gateway_integration_tests {
                 },
                 RouteRequest {
                     method: MethodPattern::Get,
-                    path: AllPathPatterns::parse("/batch/:id/status").unwrap(),
+                    path: AllPathPatterns::parse("/batch/{id}/status").unwrap(),
                     binding: GatewayBinding::Default(WorkerBinding {
                         component_id: TestComponent::test_component_id(),
                         worker_name: None,
@@ -319,7 +327,7 @@ mod worker_gateway_integration_tests {
                 },
                 RouteRequest {
                     method: MethodPattern::Get,
-                    path: AllPathPatterns::parse("/tree/:id").unwrap(),
+                    path: AllPathPatterns::parse("/tree/{id}").unwrap(),
                     binding: GatewayBinding::Default(WorkerBinding {
                         component_id: TestComponent::test_component_id(),
                         worker_name: None,
@@ -369,23 +377,166 @@ mod worker_gateway_integration_tests {
         .unwrap()
     }
 
+    // Helper function to create RIB mapping for each endpoint
+    fn create_test_rib_mapping(function_name: &str) -> ResponseMapping {
+        let rib_expr = match function_name {
+            // No parameters
+            "healthcheck" | "version" | "get-primitive-types" => format!(r#"
+                let response = golem:it/api.{{{0}}}();
+                response
+            "#, function_name),
+            
+            // User profile endpoints - use user-id
+            "get-user-profile" | "get-user-permissions" => format!(r#"
+                let id: u32 = request.path.user-id;
+                let response = golem:it/api.{{{0}}}(id);
+                response
+            "#, function_name),
+            
+            // Content and other endpoints - use id
+            "get-content" | "get-batch-status" | "query-tree" => format!(r#"
+                let id: u32 = request.path.id;
+                let response = golem:it/api.{{{0}}}(id);
+                response
+            "#, function_name),
+            
+            // Only body parameter
+            "create-primitive-types" | "create-content" | "perform-search" | "validate-search" | 
+            "batch-process" | "batch-validate" | "create-tree" | "modify-tree" |
+            "apply-transformation" | "chain-transformations" => format!(r#"
+                let body = request.body;
+                let response = golem:it/api.{{{0}}}(body);
+                response
+            "#, function_name),
+            
+            // Both path id and body
+            "update-user-settings" => format!(r#"
+                let id: u32 = request.path.user-id;
+                let body = request.body;
+                let response = golem:it/api.{{{0}}}(id, body);
+                response
+            "#, function_name),
+            
+            // Default case - no parameters
+            _ => format!(r#"
+                let response = golem:it/api.{{{0}}}();
+                response
+            "#, function_name),
+        };
+        println!("\nAttempting to parse RIB expression for {function_name}:\n{}", rib_expr);
+        match rib::from_string(&rib_expr) {
+            Ok(parsed) => {
+                println!("Successfully parsed RIB expression for {function_name}");
+                ResponseMapping(parsed)
+            },
+            Err(e) => {
+                println!("Failed to parse RIB expression for {function_name}: {:?}", e);
+                panic!("RIB parsing failed: {:?}", e);
+            }
+        }
+    }
+
     // Helper function to create a test function with consistent structure
     fn create_test_function(name: &str) -> AnalysedFunction {
-        // Convert hyphens to underscores for function names in metadata
-        let metadata_name = name.replace('-', "_");
-        
-        AnalysedFunction {
-            name: metadata_name,
-            parameters: vec![
+        let parameters = match name {
+            // Basic endpoints - no parameters
+            "healthcheck" | "version" => vec![],
+            
+            // Primitive types demo - body parameter for POST
+            "get-primitive-types" => vec![],
+            "create-primitive-types" => vec![
                 AnalysedFunctionParameter {
-                    name: "a".to_string(),
-                    typ: AnalysedType::Str(TypeStr),
-                },
-                AnalysedFunctionParameter {
-                    name: "b".to_string(),
-                    typ: AnalysedType::Str(TypeStr),
+                    name: "body".to_string(),
+                    typ: AnalysedType::Record(TypeRecord { fields: vec![] }),
                 },
             ],
+            
+            // User management - path id parameter and optional body
+            "get-user-profile" | "get-user-permissions" => vec![
+                AnalysedFunctionParameter {
+                    name: "id".to_string(),
+                    typ: AnalysedType::U32(TypeU32),
+                },
+            ],
+            "update-user-settings" => vec![
+                AnalysedFunctionParameter {
+                    name: "id".to_string(),
+                    typ: AnalysedType::U32(TypeU32),
+                },
+                AnalysedFunctionParameter {
+                    name: "settings".to_string(),
+                    typ: AnalysedType::Record(TypeRecord { fields: vec![] }),
+                },
+            ],
+            
+            // Content handling - path id parameter and body
+            "create-content" => vec![
+                AnalysedFunctionParameter {
+                    name: "body".to_string(),
+                    typ: AnalysedType::Record(TypeRecord { fields: vec![] }),
+                },
+            ],
+            "get-content" => vec![
+                AnalysedFunctionParameter {
+                    name: "id".to_string(),
+                    typ: AnalysedType::U32(TypeU32),
+                },
+            ],
+            
+            // Search functionality - body parameters
+            "perform-search" | "validate-search" => vec![
+                AnalysedFunctionParameter {
+                    name: "body".to_string(),
+                    typ: AnalysedType::Record(TypeRecord { fields: vec![] }),
+                },
+            ],
+            
+            // Batch operations - path id parameter and body
+            "batch-process" | "batch-validate" => vec![
+                AnalysedFunctionParameter {
+                    name: "body".to_string(),
+                    typ: AnalysedType::Record(TypeRecord { fields: vec![] }),
+                },
+            ],
+            "get-batch-status" => vec![
+                AnalysedFunctionParameter {
+                    name: "id".to_string(),
+                    typ: AnalysedType::U32(TypeU32),
+                },
+            ],
+            
+            // Data transformations - body parameters
+            "apply-transformation" | "chain-transformations" => vec![
+                AnalysedFunctionParameter {
+                    name: "body".to_string(),
+                    typ: AnalysedType::Record(TypeRecord { fields: vec![] }),
+                },
+            ],
+            
+            // Tree operations - path id parameter and body
+            "create-tree" | "modify-tree" => vec![
+                AnalysedFunctionParameter {
+                    name: "body".to_string(),
+                    typ: AnalysedType::Record(TypeRecord { fields: vec![] }),
+                },
+            ],
+            "query-tree" => vec![
+                AnalysedFunctionParameter {
+                    name: "id".to_string(),
+                    typ: AnalysedType::U32(TypeU32),
+                },
+            ],
+            
+            // Export API definition - no parameters
+            "export-api-definition" => vec![],
+            
+            // Default case
+            _ => vec![],
+        };
+        
+        AnalysedFunction {
+            name: name.to_string(),
+            parameters,
             results: vec![AnalysedFunctionResult {
                 name: None,
                 typ: AnalysedType::Record(TypeRecord {
@@ -411,31 +562,6 @@ mod worker_gateway_integration_tests {
                     ],
                 }),
             }],
-        }
-    }
-
-    // Helper function to create RIB mapping for each endpoint
-    fn create_test_rib_mapping(function_name: &str) -> ResponseMapping {
-        // Convert underscores to hyphens for RIB syntax
-        let rib_function_name = function_name.replace('_', "-");
-        
-        let rib_expr = format!(r#"
-            let response = {{golem/it/api.{0} "a" "b"}};
-            {{
-                status: 200u32,
-                data: response
-            }}
-        "#, rib_function_name);
-        println!("\nAttempting to parse RIB expression for {function_name}:\n{}", rib_expr);
-        match rib::from_string(&rib_expr) {
-            Ok(parsed) => {
-                println!("Successfully parsed RIB expression for {function_name}");
-                ResponseMapping(parsed)
-            },
-            Err(e) => {
-                println!("Failed to parse RIB expression for {function_name}: {:?}", e);
-                panic!("RIB parsing failed: {:?}", e);
-            }
         }
     }
 
@@ -860,7 +986,23 @@ mod worker_gateway_integration_tests {
 
         #[async_trait]
         impl IdentityProvider for TestIdentityProvider {
-            async fn get_provider_metadata(&self, _provider: &Provider) -> Result<ProviderMetadata<EmptyAdditionalProviderMetadata, CoreAuthDisplay, CoreClientAuthMethod, CoreClaimName, CoreClaimType, CoreGrantType, CoreJweContentEncryptionAlgorithm, CoreJweKeyManagementAlgorithm, CoreJwsSigningAlgorithm, CoreJsonWebKeyType, CoreJsonWebKeyUse, CoreJsonWebKey, CoreResponseMode, CoreResponseType, CoreSubjectIdentifierType>, IdentityProviderError> {
+            async fn get_provider_metadata(&self, _provider: &Provider) -> Result<ProviderMetadata<
+                EmptyAdditionalProviderMetadata,
+                CoreAuthDisplay,
+                CoreClientAuthMethod,
+                CoreClaimName,
+                CoreClaimType,
+                CoreGrantType,
+                CoreJweContentEncryptionAlgorithm,
+                CoreJweKeyManagementAlgorithm,
+                CoreJwsSigningAlgorithm,
+                CoreJsonWebKeyType,
+                CoreJsonWebKeyUse,
+                CoreJsonWebKey,
+                CoreResponseMode,
+                CoreResponseType,
+                CoreSubjectIdentifierType
+            >, IdentityProviderError> {
                 unimplemented!()
             }
 
