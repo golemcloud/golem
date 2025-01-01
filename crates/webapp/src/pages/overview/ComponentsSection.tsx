@@ -3,7 +3,6 @@ import { Layers, PlusCircle } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button.tsx";
 import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { formatRelativeTime } from "@/lib/utils";
 
 const MockData = [
@@ -301,13 +300,30 @@ const MockData = [
 
 const ComponentsSection = () => {
   const navigate = useNavigate();
-  const [components, setComponents] = useState(MockData);
+  const [components, setComponents] = useState({} as any);
 
   useEffect(() => {
     const fetchData = async () => {
       //https://release.api.golem.cloud/v1/components?project-id=305e832c-f7c1-4da6-babc-cb2422e0f5aa
-      const response: any = await invoke("get_component");
-      setComponents(response);
+      // const response: any = await invoke("get_component");
+      const componentData = {} as any;
+      const response: any = MockData;
+      response.forEach((data: any) => {
+        componentData[data.versionedComponentId.componentId] = {
+          componentName: data.componentName,
+          componentId: data.versionedComponentId.componentId,
+          createdAt: data.createdAt,
+          exports: data.metadata.exports,
+          componentSize: data.componentSize,
+          componentType: data.componentType,
+          versionId: [
+            ...(componentData[data.versionedComponentId.componentId]
+              ?.versionId || []),
+            data.versionedComponentId.version,
+          ],
+        };
+      });
+      setComponents(componentData);
     };
     fetchData().then((r) => r);
   }, []);
@@ -325,42 +341,36 @@ const ComponentsSection = () => {
           View All
         </button>
       </div>
-      {components.length > 0 ? (
+      {Object.keys(components).length > 0 ? (
         <div className="p-4 pt-0 md:p-6 md:pt-0 flex-1 w-full">
           <div className="grid w-full grid-cols-1 gap-4 md:gap-6 md:grid-cols-2">
-            {components.map((component) => (
+            {Object.values(components).map((data: any) => (
               <div
-                key={component.versionedComponentId.componentId}
+                key={data.componentId}
                 className="rounded-lg border bg-card text-card-foreground shadow transition-all hover:shadow-lg hover:shadow-border/75 duration-150 h-full flex-col gap-2 p-4"
-                onClick={() =>
-                  navigate(
-                    `/components/${component.versionedComponentId.componentId}`
-                  )
-                }
+                onClick={() => navigate(`/components/${data.componentId}`)}
               >
                 <div className="flex h-12 flex-row items-start justify-between pb-2 text-base">
                   <div className="flex flex-col items-start">
-                    <h3 className="font-medium">{component.componentName}</h3>
+                    <h3 className="font-medium">{data.componentName}</h3>
                     <span className="text-xs font-light text-muted-foreground">
-                      {formatRelativeTime(component.createdAt)}
+                      {formatRelativeTime(data.createdAt)}
                     </span>
                   </div>
                   <div className="inline-flex items-center rounded-md px-2.5 py-0.5 text-xs transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 bg-primary-background text-primary-soft hover:bg-primary/50 active:bg-primary/50 border border-primary-border font-mono font-normal">
-                    v{component.versionedComponentId.version}
+                    v{data.versionId?.[0]}
                   </div>
                 </div>
                 <div className="mt-2 flex w-full items-center gap-2">
                   <div className="rounded-md border px-2.5 py-0.5 transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 hover:bg-accent hover:text-accent-foreground active:bg-accent/50 active:text-accent-foreground flex h-5 items-center gap-2 text-xs font-normal text-muted-foreground">
-                    <span>
-                      {component.metadata.exports[0].functions.length}
-                    </span>
+                    <span>{data.exports[0].functions.length}</span>
                     <span>Exports</span>
                   </div>
                   <div className="rounded-md border px-2.5 py-0.5 transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 hover:bg-accent hover:text-accent-foreground active:bg-accent/50 active:text-accent-foreground flex h-5 items-center gap-2 text-xs font-normal text-muted-foreground">
-                    <span>{Math.round(component.componentSize / 1024)} KB</span>
+                    <span>{Math.round(data.componentSize / 1024)} KB</span>
                   </div>
                   <div className="rounded-md border px-2.5 py-0.5 transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 hover:bg-accent hover:text-accent-foreground active:bg-accent/50 active:text-accent-foreground flex h-5 items-center gap-2 text-xs font-normal text-muted-foreground">
-                    <span>{component.componentType}</span>
+                    <span>{data.componentType}</span>
                   </div>
                 </div>
               </div>

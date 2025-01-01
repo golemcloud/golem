@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from "react";
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { useState, useEffect } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Slash } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -10,6 +11,8 @@ import {
 } from "@/components/ui/select";
 import { invoke } from "@tauri-apps/api/core";
 import APILeftNav from "./apiLeftNav";
+import { Button } from "@/components/ui/button";
+import { toast } from "@/hooks/use-toast";
 
 const ApiMockData = [
   {
@@ -28,6 +31,14 @@ const ApiMockData = [
   },
 ];
 
+const ComponentMockData = {
+  ["17c50abc-d410-4603-a0d7-97d1a05cbad2"]: {
+    componentName: "Component",
+    componentId: "17c50abc-d410-4603-a0d7-97d1a05cbad2",
+    versionId: [0, 1, 2],
+  },
+};
+
 const HTTP_METHODS = [
   "Get",
   "Post",
@@ -45,10 +56,11 @@ const CreateRoute = () => {
   const { apiName } = useParams();
   const [method, setMethod] = useState("Get");
   const [path, setPath] = useState("");
-  const [component, setComponent] = useState("");
+  const [componentId, setComponentId] = useState("");
   const [version, setVersion] = useState("");
   const [workerName, setWorkerName] = useState("");
   const [response, setResponse] = useState("");
+  const [componentList, setComponentList] = useState(ComponentMockData as any);
 
   const [apiDetails, setApiDetails] = useState(ApiMockData);
   const [activeApiDetails, setActiveApiDetails] = useState(
@@ -64,12 +76,64 @@ const CreateRoute = () => {
       setActiveApiDetails(response[response.length - 1]);
     };
     fetchData().then((r) => r);
+
+    const fetchData2 = async () => {
+      // https://release.api.golem.cloud/v1/components?project-id=305e832c-f7c1-4da6-babc-cb2422e0f5aa
+      //Get method
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars
+      const response: any = await invoke("get_api");
+      const componentData = {} as any;
+      response.forEach((data: any) => {
+        componentData[data.versionedComponentId.componentId] = {
+          componentName: data.componentName,
+          componentId: data.versionedComponentId.componentId,
+          versionId: [
+            ...(componentData[data.versionedComponentId.componentId]
+              .versionId || []),
+            data.versionedComponentId.version,
+          ],
+        };
+      });
+      setComponentList(componentData);
+    };
+    fetchData2().then((r) => r);
   }, []);
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    // Handle route creation
-    navigate(`/apis/${apiName}`);
+  const onCreateRoute = () => {
+    try {
+      // Simulate API call
+      //https://release.api.golem.cloud/v1/api/definitions/305e832c-f7c1-4da6-babc-cb2422e0f5aa/vvvvv/{activeApiDetails.version}
+      //put method
+      const payload = {
+        id: activeApiDetails.id,
+        version: activeApiDetails.version,
+        draft: activeApiDetails.draft,
+        routes: [
+          ...activeApiDetails.routes,
+          {
+            method: method,
+            path: path,
+            binding: {
+              componentId: {
+                componentId: componentId,
+                version: version,
+              },
+              workerName: workerName,
+              response: response,
+            },
+          },
+        ],
+      };
+      console.log(payload);
+      navigate(`/apis/${apiName}`);
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    } catch (error) {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: "API failed .",
+      });
+    }
   };
 
   return (
@@ -118,7 +182,7 @@ const CreateRoute = () => {
             </div>
           </header>
         </div>
-        <div className="overflow-scroll h-[95vh] p-8">
+        <div className="overflow-scroll h-[95vh] p-8 max-w-4xl mx-auto">
           <div className="flex items-center mb-6 border-b border-gray-300 pb-4">
             <button
               onClick={() => navigate(`/apis/${apiName}`)}
@@ -129,7 +193,7 @@ const CreateRoute = () => {
             <span>New Route</span>
           </div>
 
-          <form onSubmit={handleSubmit} className="space-y-8  p-6">
+          <form className="space-y-8  p-6">
             <section>
               <h3 className="text-lg font-medium mb-4">HTTP Endpoint</h3>
               <p className="text-sm text-gray-600 mb-4">
@@ -180,28 +244,56 @@ const CreateRoute = () => {
                 Bind this endpoint to a specific worker function
               </p>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
                     Component
                   </label>
-                  <input
-                    type="text"
-                    value={component}
-                    onChange={(e) => setComponent(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-md"
-                  />
+                  <Select
+                    onValueChange={(componentId) => {
+                      setComponentId(componentId);
+                    }}
+                  >
+                    <SelectTrigger className="w-full h-10">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {Object.values(componentList).map((data: any) => (
+                        <SelectItem
+                          value={data.componentId}
+                          key={data.componentName}
+                        >
+                          {data.componentName}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <label className="block text-sm ml-14 font-medium text-gray-700 mb-2">
                     Version
                   </label>
-                  <input
-                    type="text"
-                    value={version}
-                    onChange={(e) => setVersion(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-md"
-                  />
+                  <div className="flex items-center gap-8">
+                    <Slash className="h-10 w-7" />
+                    <Select
+                      onValueChange={(version) => {
+                        setVersion(version);
+                      }}
+                    >
+                      <SelectTrigger className="w-full h-10">
+                        <SelectValue>V{version} </SelectValue>
+                      </SelectTrigger>
+                      <SelectContent>
+                        {componentList[componentId]?.versionId.map(
+                          (data: any) => (
+                            <SelectItem value={data} key={data}>
+                              V{data}
+                            </SelectItem>
+                          )
+                        )}
+                      </SelectContent>
+                    </Select>
+                  </div>
                 </div>
               </div>
 
@@ -232,19 +324,31 @@ const CreateRoute = () => {
             </section>
 
             <div className="flex justify-end space-x-3">
-              <button
+              <Button
                 type="button"
-                onClick={() => navigate(`/apis/${apiName}`)}
-                className="px-4 py-2 text-gray-600 hover:text-gray-900"
+                onClick={() => {
+                  setMethod("Get");
+                  setPath("");
+                  setComponentId("");
+                  setVersion("");
+                  setWorkerName("");
+                  setResponse("");
+                }}
+                className="px-4 py-2"
+                variant={"secondary"}
               >
                 Clear
-              </button>
-              <button
+              </Button>
+              <Button
                 type="submit"
+                onClick={onCreateRoute}
+                disabled={
+                  !path || !method || !componentId || !version || !workerName
+                }
                 className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
               >
                 Create Route
-              </button>
+              </Button>
             </div>
           </form>
         </div>
