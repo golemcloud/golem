@@ -29,10 +29,16 @@ export const APIService: GolemService = {
   getApi: async (id: string): Promise<Api[]> => {
     return api.get(ENDPOINT.getApi(id)).then((r) => JSON.parse(r.data) as Api[]);   
   },
+  postApi: async (payload: Api) => {
+    return api.post(ENDPOINT.postApi(), payload).then((r) => JSON.parse(r.data)); 
+  },
   deleteApi: async (id: string, version: string) => { 
     return api.delete(ENDPOINT.deleteApi(id, version));     
   },
   putApi: async (id: string, version: string, payload: Api) => {
     return api.put(ENDPOINT.putApi(id, version), payload);
+  },
+  getWorkers: async (): Promise<{ cursor: string; workers: Worker[] }> => {
+    return api.get(ENDPOINT.getWorkers()).then((r) => JSON.parse(r.data) as { cursor: string; workers: Worker[] });
   },
 }

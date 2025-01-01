@@ -19,6 +19,9 @@ export const ENDPOINT = {
   createApi: () => {
     return "/v1/api/definitions";
   },
+  postApi: () => {
+    return `/v1/api/definitions`;
+  },
   getApi: (id: string) => {
     return `/v1/api/definitions?api-definition-id=${id}`;
   },
@@ -27,5 +30,8 @@ export const ENDPOINT = {
   },
   putApi: (id: string, version: string) => {
     return `/v1/api/definitions/${id}/${version}`;
+  },
+  getWorkers: () => {
+    return "/v1/components/workers/find";
   }
 };

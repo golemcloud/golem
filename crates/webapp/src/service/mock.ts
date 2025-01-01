@@ -32,4 +32,11 @@ export const MockService: GolemService = {
     console.log(id, version, payload);
     return Promise.resolve(undefined);
   },
+  postApi: async (payload: Api) => {
+    console.log(payload);
+    return Promise.resolve(payload);
+  },
+  getWorkers: async (): Promise<{ cursor: string | null; workers: Worker[] }> => {
+    return import("@/mocks/get_worker.json").then((res) => res.default as { cursor: string | null; workers: Worker[] });
+  },
 };

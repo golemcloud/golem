@@ -61,11 +61,6 @@ export default function APISettings() {
       .catch((error) => {
         console.log(error);
         setIsDeleting(false);
-        toast({
-          variant: "destructive",
-          title: "Error",
-          description: "Failed to delete the API version. Please try again.",
-        });
       });
   };
 
@@ -85,11 +80,6 @@ export default function APISettings() {
       })
       .catch((error) => {
         console.log(error);
-        toast({
-          variant: "destructive",
-          title: "Error",
-          description: "Failed to delete all API versions. Please try again.",
-        });
         setIsDeleting(false);
       });
   };
@@ -110,12 +100,6 @@ export default function APISettings() {
       })
       .catch((error) => {
         console.log(error);
-        toast({
-          variant: "destructive",
-          title: "Error",
-          description:
-            "Failed to delete all routes versions. Please try again.",
-        });
       });
   };
 
