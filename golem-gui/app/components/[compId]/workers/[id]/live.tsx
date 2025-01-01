@@ -11,7 +11,8 @@ import {
 import Logs from "./logs";
 import InvocationLogs from "./invoke-logs";
 import TerminalLogs from "./terminal";
-const TerminalPage = ({ messages }: { messages: Array<any> }) => {
+import { EventMessage } from "@/types/api";
+const TerminalPage = ({ messages }: { messages: Array<EventMessage> }) => {
   const [activeTab, setActiveTab] = useState(0);
   const [lastClearTimeStamp, setLastClearTimestamp] = useState<Date | null>(
     null

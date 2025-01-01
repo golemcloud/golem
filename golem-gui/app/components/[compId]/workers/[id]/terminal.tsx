@@ -1,23 +1,20 @@
 import React, { useCallback, useMemo } from "react";
-import { useWorkerLogs } from "@/lib/hooks/use-worker";
-import { useParams } from "next/navigation";
 import {
   Typography,
   List,
   Box,
   Divider,
-  CircularProgress,
-  Alert,
   Paper,
+  Stack,
 } from "@mui/material";
-import { PublicOplogEntry_LogParameters } from "@/types/api";
+import { EventMessage, StdOutMessage } from "@/types/api";
 
 export default function TerminalLogs({
   lastClearTimeStamp,
   messages,
 }: {
   lastClearTimeStamp: Date | null;
-  messages: Array<any>;
+  messages: Array<EventMessage>;
 }) {
   //TODO: we can make useCllaback and useMemo a custom hook. so that we can see this across all tabs.
   const checkLogIsAfterLastClearTime = useCallback(
@@ -46,32 +43,8 @@ export default function TerminalLogs({
           "StdOut" in entry &&
           checkLogIsAfterLastClearTime(entry?.StdOut?.timestamp)
       ) || []
-    );
+    ) as StdOutMessage[];
   }, [checkLogIsAfterLastClearTime, messages]);
-
-  // if (isLoading)
-  //   return (
-  //     <Box
-  //       display="flex"
-  //       justifyContent="center"
-  //       alignItems="center"
-  //       height="100vh"
-  //     >
-  //       <CircularProgress />
-  //     </Box>
-  //   );
-
-  // if (error)
-  //   return (
-  //     <Box
-  //       display="flex"
-  //       justifyContent="center"
-  //       alignItems="center"
-  //       height="100vh"
-  //     >
-  //       <Alert severity="error">Error: {error}</Alert>
-  //     </Box>
-  //   );
 
   if (!entries || entries.length === 0)
     return (
@@ -89,15 +62,15 @@ export default function TerminalLogs({
     <Box>
       <Paper elevation={3} sx={{ px: 2 }}>
         <List>
-          {entries.map((entry, index: number) => (
-            <>
+          {entries.map((entry:StdOutMessage , index: number) => (
+            <Stack key={index}>
               {index > 0 && <Divider sx={{ my: 1 }} color="" />}
               <Typography variant="h6" gutterBottom>
                 {new Date(entry?.StdOut?.timestamp).toLocaleString()}{" "}
                 {entry?.StdOut?.bytes &&
                   String.fromCharCode(...entry?.StdOut?.bytes)}
               </Typography>
-            </>
+            </Stack>
           ))}
         </List>
       </Paper>
