@@ -1,11 +1,8 @@
-import React from 'react';
 import { useParams } from 'react-router-dom';
 import { MetricCard } from "./widgets/metrixCard";
 import { ExportsList } from "./widgets/exportsList";
 import { WorkerStatus } from "./widgets/workerStatus";
 import ComponentLeftNav from './componentsLeftNav';
-
-
 
 const ComponentDetails = () => {
   const { componentId } = useParams();

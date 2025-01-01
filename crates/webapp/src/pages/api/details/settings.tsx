@@ -16,7 +16,7 @@ import APILeftNav from './APILeftNav';
 
 export default function APISettings() {
   const { toast } = useToast()
-  const [version, setVersion] = React.useState("0.1.0")
+  const [version, _setVersion] = React.useState("0.1.0")
   const [showConfirmDialog, setShowConfirmDialog] = React.useState(false)
   const [showConfirmAllDialog, setShowConfirmAllDialog] = React.useState(false)
   const [isDeleting, setIsDeleting] = React.useState(false);

@@ -1,4 +1,3 @@
-import React from 'react';
 import { FileText, Box, Globe, Cpu } from 'lucide-react';
 import APISection from './APISection';
 import ComponentsSection from './ComponentsSection';

@@ -1,11 +1,11 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
-import React, {useState} from "react";
-import {Search, LayoutGrid, Plus, PlusCircle} from "lucide-react";
+import {useState} from "react";
+import {Search, LayoutGrid, PlusCircle} from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import {Button} from "@/components/ui/button.tsx";
 const Components = () => {
   const navigate = useNavigate();
-  const [componentList, setComponentList] = useState([{ name: "component1", version: "0.1.0", id: "component1" }]);
+  const [componentList, _setComponentList] = useState([{ name: "component1", version: "0.1.0", id: "component1" }]);
 
   return (
     <div className="container mx-auto px-4 py-8">

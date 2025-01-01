@@ -1,4 +1,3 @@
-import React from 'react';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { Home, Settings, Plus } from 'lucide-react';
 

@@ -1,13 +1,12 @@
-use std::path::PathBuf;
-use serde_json::Value;
 use golem_cli::config::{get_config_dir, Config, NamedProfile, OssProfile, Profile, ProfileName};
 use golem_cli::factory::ServiceFactory;
 use golem_cli::init::CliKind;
-use golem_cli::model::{ComponentName, Format, PathBufOrStdin};
-use golem_cli::model::app_ext::InitialComponentFile;
-use golem_cli::model::app_ext_raw::ComponentType;
 use golem_cli::oss::factory::OssServiceFactory;
+use crate::handler::components::get_component;
+// use crate::handler::handlers;
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
+
+mod handler;
 
 
 lazy_static::lazy_static! {
@@ -34,28 +33,6 @@ fn get_profile() -> (ProfileName, OssProfile) {
     }.unwrap();
     oss_profile
 }
-#[tauri::command]
-async fn get_component() -> Value {
-    let service = FACTORY.component_service();
-    let components = service.list(None, None).await.unwrap().as_json_value();
-    components
-}
-
-
-// #[tauri::command]
-// async fn create_component(name: String, path_buf: String, com_type: String, format: String) -> Value {
-//     let service = FACTORY.component_service();
-//     let components = service.add(
-//         ComponentName(name),
-//         PathBufOrStdin::Path(PathBuf::from(path_buf)),
-//         // ComponentType::from(com_type),
-//         None,
-//         false,
-//         Format::from(format),
-//         vec![],
-//     ).await;
-//     components
-// }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {

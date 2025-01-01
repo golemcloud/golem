@@ -12,9 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "webapp",
-        "width": 800,
-        "height": 600
+        "title": "webapp"
       }
     ],
     "security": {
