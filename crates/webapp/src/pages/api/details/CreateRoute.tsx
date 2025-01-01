@@ -1,17 +1,17 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
-import APILeftNav from "./APILeftNav";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { invoke } from "@tauri-apps/api/core";
+import APILeftNav from "./apiLeftNav";
 
 const ApiMockData = [
-  {
-    createdAt: "2024-12-31T15:55:12.838362+00:00",
-    draft: true,
-    id: "great",
-    routes: [],
-    version: "0.2.0",
-  },
   {
     createdAt: "2024-12-31T05:34:20.197542+00:00",
     draft: false,
@@ -19,9 +19,14 @@ const ApiMockData = [
     routes: [],
     version: "0.1.0",
   },
+  {
+    createdAt: "2025-01-01T08:50:03.144928+00:00",
+    draft: true,
+    id: "vvvvv",
+    routes: [],
+    version: "0.2.0",
+  },
 ];
-
-const ApiDetailsMock = ApiMockData[0];
 
 const HTTP_METHODS = [
   "Get",
@@ -45,19 +50,18 @@ const CreateRoute = () => {
   const [workerName, setWorkerName] = useState("");
   const [response, setResponse] = useState("");
 
-  const [apiDetails, setApiDetails] = useState(ApiDetailsMock);
+  const [apiDetails, setApiDetails] = useState(ApiMockData);
+  const [activeApiDetails, setActiveApiDetails] = useState(
+    apiDetails[apiDetails.length - 1]
+  );
 
   useEffect(() => {
     const fetchData = async () => {
-      //check the api https://release.api.golem.cloud/v1/api/definitions/305e832c-f7c1-4da6-babc-cb2422e0f5aa
+      //check the api https://release.api.golem.cloud/v1/api/definitions/305e832c-f7c1-4da6-babc-cb2422e0f5aa?api-definition-id=${appId}
       // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars
       const response: any = await invoke("get_api");
-      const apiData = ApiMockData.find((api) => api.id === apiName);
-      if (apiData) {
-        setApiDetails(apiData);
-      } else {
-        setApiDetails(ApiDetailsMock); // or handle the undefined case as needed
-      }
+      setApiDetails(response);
+      setActiveApiDetails(response[response.length - 1]);
     };
     fetchData().then((r) => r);
   }, []);
@@ -74,7 +78,7 @@ const CreateRoute = () => {
       <div className="flex-1">
         <div className="flex items-center justify-between">
           <header className="w-full border-b bg-background py-2">
-            <div className="mx-auto max-w-7xl px-6 lg:px-8">
+            <div className="max-w-7xl px-6 lg:px-8">
               <div className="mx-auto max-w-2xl lg:max-w-none">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
@@ -82,9 +86,31 @@ const CreateRoute = () => {
                       {apiName}
                     </h1>
                     <div className="flex items-center gap-1">
-                      <div className="inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-semibold focus:outline-none bg-primary-background text-primary-soft  border border-primary-border w-fit font-mono">
-                        {apiDetails?.version}
-                      </div>
+                      <Select
+                        defaultValue={activeApiDetails.version}
+                        onValueChange={(version) => {
+                          const selectedApi = apiDetails.find(
+                            (api) => api.version === version
+                          );
+                          if (selectedApi) {
+                            setActiveApiDetails(selectedApi);
+                          }
+                        }}
+                      >
+                        <SelectTrigger className="w-20 h-6">
+                          <SelectValue placeholder="Version">
+                            {activeApiDetails.version}
+                          </SelectValue>
+                        </SelectTrigger>
+                        <SelectContent>
+                          {apiDetails.map((api) => (
+                            <SelectItem value={api.version} key={api.version}>
+                              {api.version}{" "}
+                              {api.draft ? "(Draft)" : "(Published)"}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </div>
                   </div>
                 </div>
@@ -92,15 +118,15 @@ const CreateRoute = () => {
             </div>
           </header>
         </div>
-        <div className="space-y-8 p-8">
-          <div className="flex items-center mb-6">
+        <div className="overflow-scroll h-[95vh] p-8">
+          <div className="flex items-center mb-6 border-b border-gray-300 pb-4">
             <button
               onClick={() => navigate(`/apis/${apiName}`)}
               className="text-xl  flex items-center text-gray-800 hover:text-gray-900"
             >
               <ArrowLeft className="h-4 w-4 mr-2" />
-              <span>New Route</span>
             </button>
+            <span>New Route</span>
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-8  p-6">

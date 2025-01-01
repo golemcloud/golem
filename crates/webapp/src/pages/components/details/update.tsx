@@ -1,8 +1,8 @@
 import { useParams } from "react-router-dom";
 
 import ComponentLeftNav from "./componentsLeftNav";
-import WASMUpload from "../create/WASMUpload";
-import FileManager from "../create/FileManager";
+import WASMUpload from "../create/wasmUpload";
+import FileManager from "../create/fileManager";
 
 export default function ComponentUpdate() {
   const { componentId } = useParams();
