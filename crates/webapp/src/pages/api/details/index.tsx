@@ -8,44 +8,24 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { invoke } from "@tauri-apps/api/core";
 import APILeftNav from "./apiLeftNav";
-
-const ApiMockData = [
-  {
-    createdAt: "2024-12-31T05:34:20.197542+00:00",
-    draft: false,
-    id: "vvvvv",
-    routes: [],
-    version: "0.1.0",
-  },
-  {
-    createdAt: "2025-01-01T08:50:03.144928+00:00",
-    draft: true,
-    id: "vvvvv",
-    routes: [],
-    version: "0.2.0",
-  },
-];
+import { SERVICE } from "@/service";
+import { Api } from "@/types/api";
 
 const APIDetails = () => {
   const { apiName } = useParams();
   const navigate = useNavigate();
-  const [apiDetails, setApiDetails] = useState(ApiMockData);
-  const [activeApiDetails, setActiveApiDetails] = useState(
-    apiDetails[apiDetails.length - 1]
-  );
+  const [apiDetails, setApiDetails] = useState([] as Api[]);
+  const [activeApiDetails, setActiveApiDetails] = useState({} as Api);
 
   useEffect(() => {
-    const fetchData = async () => {
-      //check the api https://release.api.golem.cloud/v1/api/definitions/305e832c-f7c1-4da6-babc-cb2422e0f5aa?api-definition-id=${appId}
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars
-      const response: any = await invoke("get_api");
-      setApiDetails(response);
-      setActiveApiDetails(response[response.length - 1]);
-    };
-    fetchData().then((r) => r);
-  }, []);
+    if (apiName) {
+      SERVICE.getApi(apiName).then((response) => {
+        setApiDetails(response);
+        setActiveApiDetails(response[response.length - 1]);
+      });
+    }
+  }, [apiName]);
 
   return (
     <div className="flex">
@@ -61,31 +41,33 @@ const APIDetails = () => {
                       {apiName}
                     </h1>
                     <div className="flex items-center gap-1">
-                      <Select
-                        defaultValue={activeApiDetails.version}
-                        onValueChange={(version) => {
-                          const selectedApi = apiDetails.find(
-                            (api) => api.version === version
-                          );
-                          if (selectedApi) {
-                            setActiveApiDetails(selectedApi);
-                          }
-                        }}
-                      >
-                        <SelectTrigger className="w-20 h-6">
-                          <SelectValue placeholder="Version">
-                            {activeApiDetails.version}
-                          </SelectValue>
-                        </SelectTrigger>
-                        <SelectContent>
-                          {apiDetails.map((api) => (
-                            <SelectItem value={api.version} key={api.version}>
-                              {api.version}{" "}
-                              {api.draft ? "(Draft)" : "(Published)"}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      {activeApiDetails.version && (
+                        <Select
+                          defaultValue={activeApiDetails.version}
+                          onValueChange={(version) => {
+                            const selectedApi = apiDetails.find(
+                              (api) => api.version === version
+                            );
+                            if (selectedApi) {
+                              setActiveApiDetails(selectedApi);
+                            }
+                          }}
+                        >
+                          <SelectTrigger className="w-20 h-6">
+                            <SelectValue>
+                              {activeApiDetails.version}
+                            </SelectValue>
+                          </SelectTrigger>
+                          <SelectContent>
+                            {apiDetails.map((api) => (
+                              <SelectItem value={api.version} key={api.version}>
+                                {api.version}{" "}
+                                {api.draft ? "(Draft)" : "(Published)"}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      )}
                     </div>
                   </div>
                 </div>

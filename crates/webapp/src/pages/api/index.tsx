@@ -1,68 +1,20 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useState } from "react";
 import { Plus, Search, Layers } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { invoke } from "@tauri-apps/api/core";
-
-const ApiMockData = [
-  {
-    createdAt: "2024-12-31T15:55:12.838362+00:00",
-    draft: true,
-    id: "great",
-    routes: [],
-    version: "0.2.0",
-  },
-  {
-    createdAt: "2024-12-31T05:34:20.197542+00:00",
-    draft: false,
-    id: "vvvvv",
-    routes: [],
-    version: "0.1.0",
-  },
-];
-
-interface APICardProps {
-  name: string;
-  version: string;
-  routes: number;
-}
-
-const APICard = ({ name, version, routes }: APICardProps) => {
-  const navigate = useNavigate();
-
-  return (
-    <div
-      className="bg-white rounded-lg border border-gray-200 p-6 hover:shadow-md transition-shadow cursor-pointer"
-      onClick={() => navigate(`/apis/${name}`)}
-    >
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="text-lg font-medium">{name}</h3>
-        <div className="flex items-center gap-2">
-          <span className="px-2 py-1 bg-gray-100 rounded text-sm">
-            {version}
-          </span>
-        </div>
-      </div>
-      <div className="flex items-center text-sm text-gray-600">
-        <span>Routes</span>
-        <span className="ml-2">{routes}</span>
-      </div>
-    </div>
-  );
-};
+import { Api } from "@/types/api";
+import { SERVICE } from "@/service";
 
 export const APIs = () => {
   const navigate = useNavigate();
-  const [apis, setApis] = useState(ApiMockData);
-  const [searchedApi, setSearchedApi] = useState(ApiMockData);
+  const [apis, setApis] = useState([] as Api[]);
+  const [searchedApi, setSearchedApi] = useState([] as Api[]);
 
   useEffect(() => {
-    const fetchData = async () => {
-      //check the api https://release.api.golem.cloud/v1/api/definitions/305e832c-f7c1-4da6-babc-cb2422e0f5aa
-      const response: any = await invoke("get_api");
-      setApis(response);
-    };
-    fetchData().then((r) => r);
+    SERVICE.getApiList().then((response) => {
+      const newData = response.filter((api) => api.draft);
+      setApis(newData);
+      setSearchedApi(newData);
+    });
   }, []);
 
   return (
@@ -94,6 +46,7 @@ export const APIs = () => {
         <div className="grid grid-cols-3 gap-6 overflow-scroll max-h-[75vh]">
           {searchedApi.map((api) => (
             <APICard
+              key={api.id}
               name={api.id}
               version={api.version}
               routes={api.routes.length}
@@ -109,6 +62,36 @@ export const APIs = () => {
           </p>
         </div>
       )}
+    </div>
+  );
+};
+
+interface APICardProps {
+  name: string;
+  version: string;
+  routes: number;
+}
+
+const APICard = ({ name, version, routes }: APICardProps) => {
+  const navigate = useNavigate();
+
+  return (
+    <div
+      className="bg-white rounded-lg border border-gray-200 p-6 hover:shadow-md transition-shadow cursor-pointer"
+      onClick={() => navigate(`/apis/${name}`)}
+    >
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-lg font-medium">{name}</h3>
+        <div className="flex items-center gap-2">
+          <span className="px-2 py-1 bg-gray-100 rounded text-sm">
+            {version}
+          </span>
+        </div>
+      </div>
+      <div className="flex items-center text-sm text-gray-600">
+        <span>Routes</span>
+        <span className="ml-2">{routes}</span>
+      </div>
     </div>
   );
 };

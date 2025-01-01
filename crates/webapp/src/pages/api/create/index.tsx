@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { PlusCircle, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { SERVICE } from "@/service";
 
 const CreateAPI = () => {
   const navigate = useNavigate();
@@ -9,21 +10,12 @@ const CreateAPI = () => {
   const [version, setVersion] = useState("0.1.0");
 
   const onCreateApi = () => {
-    // Handle API creation
-    navigate(`/apis/${apiName}`);
-
-    const fetchData = async () => {
-      // https://release.api.golem.cloud/v1/api/definitions/305e832c-f7c1-4da6-babc-cb2422e0f5aa
-      //Post call
-      const payload = {
-        id: apiName,
-        version: version,
-        routes: [],
-        draft: true,
-      };
-      console.log(payload);
-    };
-    fetchData().then(() => navigate(`/apis/${apiName}`));
+    SERVICE.createApi({
+      id: apiName,
+      version: version,
+      routes: [],
+      draft: true,
+    }).then(() => navigate(`/apis/${apiName}`));
   };
 
   return (
