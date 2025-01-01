@@ -5,12 +5,13 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 -nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
+  "inline-flex items-center justify-center gap-2 -nowrap text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
   {
     variants: {
       variant: {
         default: "bg-button_bg border border-button_border",
         primary:"bg-button_bg border border-button_border dark:hover:bg-[#78272c] hover:bg-[#A0AAE9]",
+        dropdown: "border text-secondary-foreground hover:bg-secondary/80", 
         error: "bg-[#FFEFEF] dark:bg-[#3b191d] text-[#8e4e5a] dark:text-[#ffd1d9] border border-[#f9c6c6] dark:border-[#691D25] dark:hover:bg-[#782A2B] hover:bg-[#F29EA6] ",
         destructive:
           "bg-destructive text-destructive-foreground hover:bg-destructive/90",
