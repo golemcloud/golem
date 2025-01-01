@@ -1,26 +1,23 @@
 "use client";
 
-import React, {useMemo, useState } from "react";
+import React, { useState } from "react";
 import { Box, Divider, Tab, Tabs, Toolbar, Typography } from "@mui/material";
 import { useWorker } from "@/lib/hooks/use-worker";
 import { useParams } from "next/navigation";
-import {
-  CheckCircleOutline,
-  ErrorOutline,
-  RocketLaunch,
-} from "@mui/icons-material";
 import InvokePage from "./invoke";
 import Overview from "./overview";
 import TerminalPage from "./live";
 import FileComponent from "./files";
 import Manage from "./manage";
+
 import { useWebSocketWithPath, WebSocketMessage } from "@/lib/hooks/use-websocket";
 import SecondaryHeader from "@/components/ui/secondary-header";
 
-interface CustomMessage extends WebSocketMessage {
-  type: 'custom';
-  payload: { user: string; message: string };
-}
+
+// interface CustomMessage extends WebSocketMessage {
+//   type: 'custom';
+//   payload: { user: string; message: string };
+// }
 const WorkerListWithDropdowns = () => {
   const [activeTab, setActiveTab] = useState(0);
 
@@ -31,36 +28,10 @@ const WorkerListWithDropdowns = () => {
   const { worker, isLoading } = useWorker(compId, workerName);
 
 
-  const { messages, isConnected } = useWebSocketWithPath<CustomMessage>(`v1/components/${compId}/workers/${workerName}/connect`);
+  const { messages, isConnected } = useWebSocketWithPath(`v1/components/${compId}/workers/${workerName}/connect`);
 
   console.log("messages", messages);
-  console.log("isConnected", isConnected);
-
-  
-
-  // console.log("invokeMessages====>", invokeMessages);
-  const workerStats = useMemo(() => {
-    return [
-      {
-        label: "Status",
-        value: worker?.status,
-        icon: <CheckCircleOutline fontSize="large" />,
-        isLoading: isLoading,
-      },
-      {
-        label: "Memory Usage",
-        value: `${worker?.totalLinearMemorySize}`,
-        icon: <RocketLaunch fontSize="large" />,
-        isLoading: isLoading,
-      },
-      {
-        label: "Resource Count",
-        value: `${worker?.ownedResources?.length ?? 0}`,
-        icon: <ErrorOutline fontSize="large" />,
-        isLoading: isLoading,
-      },
-    ];
-  }, [worker]);
+  console.log("isConnected", isConnected);  
 
   const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
     setActiveTab(newValue);
@@ -112,7 +83,7 @@ const WorkerListWithDropdowns = () => {
       {activeTab === 1 && <TerminalPage messages={messages}/>}
       {activeTab === 3 && <FileComponent />}
       {activeTab === 4 && <Manage />}
-      {activeTab === 5 && <InvokePage />}
+      {activeTab === 5 && <InvokePage worker={worker}/>}
     </Box>
   );
 };

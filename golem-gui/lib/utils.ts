@@ -53,12 +53,12 @@ export const fetcher = async (url: string, options?: RequestInit) => {
     const isJson = res.headers
       .get("content-type")
       ?.includes("application/json");
+      const result = isJson ? await res.json() : await res.text();
 
     if (res.status === 500) {
-      throw new Error("Error connecting to backend!");
+      throw getErrorMessage(result);
     }
 
-    const result = isJson ? await res.json() : await res.text();
 
     if (!res.ok) {
       return {

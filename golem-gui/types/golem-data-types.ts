@@ -44,6 +44,19 @@ export interface TypeList {
   inner: AnalysedType;
 }
 
+export type AnalysedResourceMode = "Owned" | "Borrowed";
+
+// TypeHandle Interface
+export interface TypeHandle {
+  resource_id: number; // uint64
+  mode: AnalysedResourceMode;
+}
+
+// AnalysedType_TypeHandle Interface
+export interface AnalysedType_TypeHandle extends TypeHandle {
+  type: "Handle";
+}
+
 export interface TypeResult {
   ok: AnalysedType; // Represents the 'ok' analyzed type
   err: AnalysedType; // Represents the 'err' analyzed type
@@ -125,10 +138,6 @@ export interface AnalysedType_TypeStr extends AnalysedType_Base {
   type: "Str";
 }
 
-export interface AnalysedType_TypeTuple extends AnalysedType_Base {
-  type: "Tuple";
-}
-
 export interface AnalysedType_TypeU16 extends AnalysedType_Base {
   type: "U16";
 }
@@ -150,6 +159,12 @@ export interface AnalysedType_TypeVariant extends AnalysedType_Base {
   cases: NameOptionTypePair[];
 }
 
+export interface AnalysedType_TypeTuple extends AnalysedType_Base {
+  type: 'Tuple';
+  items: AnalysedType[];
+}
+
+
 export interface TimestampParameter {
   timestamp: string; // ISO date-time format
 }
@@ -166,10 +181,4 @@ export interface TypeEnum {
 export interface TypeFlags {
   names: string[];
 }
-
-export interface TypeHandle {
-  resource_id: number; // uint64
-  mode: AnalysedResourceMode;
-}
 // Define AnalysedResourceMode if it is required elsewhere in the schema
-export type AnalysedResourceMode = string; // Replace with exact type if known

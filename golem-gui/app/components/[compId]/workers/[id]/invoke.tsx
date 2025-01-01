@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { WorkerFunction } from "@/types/api";
+import { Parameter, Worker, WorkerFunction } from "@/types/api";
 import useComponents from "@/lib/hooks/use-component";
 import { useParams } from "next/navigation";
 import { Loader } from "lucide-react";
@@ -80,9 +80,9 @@ export function InvokeForm({
   );
 }
 
-export default function InvokePage() {
+export default function InvokePage({worker}:{worker: Worker}) {
   const { compId } = useParams<{ compId: string }>();
-  const { components, isLoading } = useComponents(compId, "latest");
+  const { components, isLoading } = useComponents(compId, worker?.componentVersion ?? "latest");
   const [latestComponent] = components;
   const [invoke, setInvoke] = useState<{fun:WorkerFunction, instanceName?:string|null } | null>(null);
   const exports = useMemo(() => {
