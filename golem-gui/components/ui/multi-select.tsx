@@ -1,11 +1,8 @@
-// src/components/multi-select.tsx
-
 import * as React from "react";
 import { cva, type VariantProps } from "class-variance-authority";
 import {
   CheckIcon,
   XIcon,
-  WandSparkles,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -111,6 +108,9 @@ interface MultiSelectProps
    * Optional, can be used to add custom styles.
    */
   className?: string;
+
+  /** Mode of selection: "single" or "multi". Defaults to "multi". */
+  selectMode?: "single" | "multi";
 }
 
 export const MultiSelect = React.forwardRef<
@@ -129,6 +129,7 @@ export const MultiSelect = React.forwardRef<
       modalPopover = false,
       asChild = false,
       className,
+      selectMode = "multi",
       ...props
     },
     ref
@@ -136,7 +137,6 @@ export const MultiSelect = React.forwardRef<
     const [selectedValues, setSelectedValues] =
       React.useState<string[]>(defaultValue);
     const [isPopoverOpen, setIsPopoverOpen] = React.useState(false);
-    const [isAnimating, setIsAnimating] = React.useState(false);
 
     const handleInputKeyDown = (
       event: React.KeyboardEvent<HTMLInputElement>
@@ -152,11 +152,16 @@ export const MultiSelect = React.forwardRef<
     };
 
     const toggleOption = (option: string) => {
-      const newSelectedValues = selectedValues.includes(option)
-        ? selectedValues.filter((value) => value !== option)
-        : [...selectedValues, option];
+      let newSelectedValues;
+      if (selectMode === "single") {
+        newSelectedValues = [option];
+      } else {
+        newSelectedValues = selectedValues.includes(option)
+          ? selectedValues.filter((value) => value !== option)
+          : [...selectedValues, option];
+      }
       setSelectedValues(newSelectedValues);
-      onValueChange(newSelectedValues);
+      onValueChange(selectMode === "single" ? [newSelectedValues[0]] : newSelectedValues);
     };
 
     const handleClear = () => {
@@ -166,12 +171,6 @@ export const MultiSelect = React.forwardRef<
 
     const handleTogglePopover = () => {
       setIsPopoverOpen((prev) => !prev);
-    };
-
-    const clearExtraOptions = () => {
-      const newSelectedValues = selectedValues.slice(0, maxCount);
-      setSelectedValues(newSelectedValues);
-      onValueChange(newSelectedValues);
     };
 
     const toggleAll = () => {
@@ -235,8 +234,8 @@ export const MultiSelect = React.forwardRef<
           <div
             className={`${
               selectedValues.length >= 1
-                ? "hover:bg-[#333] cursor-pointer"
-                : "border border-[#444] text-[#444]"
+                ? "dark:hover:bg-[#333] hover:bg-[#e9e7e7] cursor-pointer"
+                : "border dark:border-[#444] dark:text-[#444]"
             } text-muted-foreground border border-l-0  py-2 px-3 flex justify-center items-center rounded-r-full`}
             onClick={(event) => {
               event.stopPropagation();
@@ -282,41 +281,32 @@ export const MultiSelect = React.forwardRef<
                 })}
               </CommandGroup>
               <CommandSeparator />
-              <CommandGroup>
-                <div className="flex items-center justify-between">
-                  <>
-                    <CommandItem
-                      onSelect={handleClear}
-                      className="flex-1 justify-center cursor-pointer"
-                    >
-                      Clear
-                    </CommandItem>
-                    <Separator
-                      orientation="vertical"
-                      className="flex min-h-6 h-full"
-                    />
-                  </>
+            {selectMode==="multi" && <CommandGroup>
+              <div className="flex items-center justify-between">
+                <>
                   <CommandItem
-                    key="all"
-                    onSelect={toggleAll}
+                    onSelect={handleClear}
                     className="flex-1 justify-center cursor-pointer"
                   >
-                    Select All
+                    Clear
                   </CommandItem>
-                </div>
-              </CommandGroup>
+                  <Separator
+                    orientation="vertical"
+                    className="flex min-h-6 h-full"
+                  />
+                </>
+                <CommandItem
+                  key="all"
+                  onSelect={toggleAll}
+                  className="flex-1 justify-center cursor-pointer"
+                >
+                  Select All
+                </CommandItem>
+              </div>
+            </CommandGroup>}
             </CommandList>
           </Command>
         </PopoverContent>
-        {animation > 0 && selectedValues.length > 0 && (
-          <WandSparkles
-            className={cn(
-              "cursor-pointer my-2 text-foreground bg-background w-3 h-3",
-              isAnimating ? "" : "text-muted-foreground"
-            )}
-            onClick={() => setIsAnimating(!isAnimating)}
-          />
-        )}
       </Popover>
     );
   }

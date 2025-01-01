@@ -13,8 +13,7 @@ const statuses = [
   { value: "exited", label: "Exited" }
 ]
 
-
-function DropDown() {
+export function StatusFilter() {
 
   const [selectedStatus, setSelectedStatus] = useState(['running']);
 
@@ -24,7 +23,7 @@ function DropDown() {
         options={statuses}
         onValueChange={setSelectedStatus}
         value={selectedStatus}
-        placeholder="Select"
+        placeholder="Status"
         variant="inverted"
         animation={2}
         maxCount={2}
@@ -33,4 +32,28 @@ function DropDown() {
   );
 }
 
-export default DropDown;
+export function VersionFilter() {
+
+  const version = [
+    { value: "Any", label: "Any" },
+    { value: "v1", label: "v1" },
+    { value: "v2", label: "v2" },
+  ]
+
+  const [selectedVersion, setSelectedVersion] = useState(['Any']);
+
+  return (
+    <div className="max-w-40 ">
+      <MultiSelect
+        options={version}
+        onValueChange={setSelectedVersion}
+        value={selectedVersion}
+        placeholder="Version"
+        variant="inverted"
+        selectMode="single"
+        animation={2}
+        maxCount={2}
+      />
+    </div>
+  );
+}

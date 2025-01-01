@@ -21,7 +21,9 @@ import SecondaryHeader from "@/components/ui/secondary-header";
 import SearchIcon from "@mui/icons-material/Search";
 import { Button2 } from "@/components/ui/button";
 import WorkerInfoCard from "@/components/worker-info-card";
-import DropDown from "./drop-down";
+import {StatusFilter, VersionFilter} from "./workers-filter";
+import { DatePicker } from '@/components/ui/date-picker';
+
 
 const WorkerListWithDropdowns = () => {
   const [workerStatus, setWorkerStatus] = useState<string[]>([]);
@@ -51,6 +53,8 @@ const WorkerListWithDropdowns = () => {
   const filteredStatuses = statuses.filter((status) =>
     status.toLowerCase().includes(searchQuery.toLowerCase())
   );
+  const [date, setDate] = useState<Date | undefined>(undefined);
+
 
   return (
     <>
@@ -101,11 +105,13 @@ const WorkerListWithDropdowns = () => {
           </Box>
 
           {/* Filters */}
-          <Stack direction="row" gap={2} mb={3}>
-            <DropDown />
-            {/* <DropDown />
-            <DropDown />
-            <DropDown /> */}
+          <Stack direction="row" gap={7} mb={3}>
+            <StatusFilter />
+            <VersionFilter />
+            <Stack direction="row" gap={4}>
+              <DatePicker />
+              <DatePicker />
+            </Stack>
           </Stack>
 
           {/* No Workers Found */}
