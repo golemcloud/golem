@@ -12,6 +12,7 @@ export const ComponentsSection = () => {
 
   useEffect(() => {
     SERVICE.getComponents().then((response) => {
+      console.log(response);
       const componentData = {} as any;
       response.forEach((data: any) => {
         componentData[data.versionedComponentId.componentId] = {

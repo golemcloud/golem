@@ -1,15 +1,33 @@
 // import { ENDPOINT } from "./endpoints";
 import {GolemService} from "@/service/base.ts";
 import {Component} from "@/types/component.ts";
-import axios from "axios";
-import {invoke} from "@tauri-apps/api/core";
-import {Response} from "@/types";
+// import axios from "axios";
 import {ENDPOINT} from "@/service/endpoints.ts";
+import {invoke} from "@tauri-apps/api/core";
 
-const api = axios.create({
-  baseURL: "http://localhost:9881"
-})
+// const api = axios.create({
+//   baseURL: "http://localhost:9881"
+// })
 
+enum ApiRequestStatus {
+  Success = "success",
+  Error = "error"
+}
+interface ApiResponse {
+  status: ApiRequestStatus;
+  data?: any;
+  error?: any;
+}
+
+async function callApi(url: string, method: string = "GET", data: any = null): Promise<ApiResponse | undefined> {
+  const r = await invoke("invoke_api", {url, method, data});
+  let result = r as ApiResponse;
+  if (result.status === "error") {
+    console.log(result.error);
+    return;
+  }
+  return result;
+}
 
 export const APIService: GolemService = {
   createComponent(): Promise<any> {
@@ -25,14 +43,7 @@ export const APIService: GolemService = {
    * @returns {Promise<Component[]>}
    */
   getComponents: async (): Promise<Component[]> => {
-    return api.get(ENDPOINT.getComponents()).then((r) => JSON.parse(r.data) as Component[]);
-    // return invoke("get_components").then((result) => {
-    //   let res: Response<Component[]> = <Response<Component[]>> result;
-    //   if(res.data == undefined){
-    //     return [];
-    //   }
-    //   return res.data;
-    // });
+    return callApi(ENDPOINT.getComponents()).then((r) => r?.data as Component[]);
   }
 }
 
