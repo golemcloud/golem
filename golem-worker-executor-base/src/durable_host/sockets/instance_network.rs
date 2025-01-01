@@ -27,10 +27,3 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         Host::instance_network(&mut self.as_wasi_view())
     }
 }
-
-#[async_trait]
-impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {
-    fn instance_network(&mut self) -> anyhow::Result<Resource<Network>> {
-        (*self).instance_network()
-    }
-}

@@ -738,9 +738,9 @@ impl ResourceLimiterAsync for TestWorkerCtx {
 
     async fn table_growing(
         &mut self,
-        current: u32,
-        desired: u32,
-        _maximum: Option<u32>,
+        current: usize,
+        desired: usize,
+        _maximum: Option<usize>,
     ) -> anyhow::Result<bool> {
         debug!(
             "Table growing for {}: current: {}, desired: {}",
