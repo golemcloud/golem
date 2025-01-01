@@ -23,6 +23,8 @@ import ComponentCard from "../../components/component-card";
 import { calculateHoursDifference, calculateSizeInMB } from "@/lib/utils";
 import { NotepadText,Component,Globe ,Bot} from 'lucide-react';
 
+// working on overview page
+
 const ProjectDashboard = () => {
   const router = useRouter();
   const resources = [

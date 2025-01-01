@@ -2,60 +2,74 @@
 import React from "react";
 import { Box, Typography, Grid, Paper } from "@mui/material";
 import FolderIcon from "@mui/icons-material/Folder";
-import { useWorkerFileContent } from "@/lib/hooks/use-worker"
+import { useWorkerFileContent } from "@/lib/hooks/use-worker";
 import { useParams } from "next/navigation";
+import SecondaryHeader from "@/components/ui/secondary-header";
 
 const NoFilesComponent = () => {
-
   const { compId } = useParams<{ compId: string }>();
-  const { data, isLoading } = useWorkerFileContent("test",compId, "file-service.wasm");
+  const { data, isLoading } = useWorkerFileContent(
+    "test",
+    compId,
+    "file-service.wasm"
+  );
 
   console.log(data, isLoading);
 
   return (
-    <Paper
-      elevation={3}
-      sx={{
-        backgroundColor: "#1c1c1c",
-        borderRadius: "8px",
-        overflow: "hidden",
-        height: "80%",
-      }}
-    >
-      <Grid
-        container
+    <> <Box sx={{ display: { xs: "block", md: "none" } }}>
+    <SecondaryHeader onClick={() => {}} variant="components" />
+  </Box>
+    <div className="mx-auto max-w-7xl px-6 lg:px-8">
+      <div className="mx-auto max-w-2xl lg:max-w-none py-4">
+      <Paper
+        elevation={3}
         sx={{
-          padding: "10px 16px",
-          backgroundColor: "#2c2c2c",
-          color: "#ffffff",
+          backgroundColor: "#1c1c1c",
+          borderRadius: "8px",
+          overflow: "hidden",
+          height: "80%",
         }}
       >
-        <Grid item xs={6}>
-          <Typography variant="body1" fontWeight="bold">
-            NAME
-          </Typography>
+        <Grid
+          container
+          sx={{
+            padding: "10px 16px",
+            backgroundColor: "#2c2c2c",
+            color: "#ffffff",
+          }}
+        >
+          <Grid item xs={6}>
+            <Typography variant="body1" fontWeight="bold">
+              NAME
+            </Typography>
+          </Grid>
+          <Grid item xs={6} textAlign="right">
+            <Typography variant="body1" fontWeight="bold">
+              PERMISSIONS
+            </Typography>
+          </Grid>
         </Grid>
-        <Grid item xs={6} textAlign="right">
-          <Typography variant="body1" fontWeight="bold">
-            PERMISSIONS
-          </Typography>
-        </Grid>
-      </Grid>
 
-      <Box
-        sx={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          flexDirection: "column",
-          height: "calc(100% - 50px)",
-          color: "#ffffff",
-        }}
-      >
-        <FolderIcon sx={{ fontSize: 60, color: "#757575", marginBottom: 1 }} />
-        <Typography variant="body2">No files found</Typography>
-      </Box>
-    </Paper>
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            flexDirection: "column",
+            height: "calc(100% - 50px)",
+            color: "#ffffff",
+          }}
+        >
+          <FolderIcon
+            sx={{ fontSize: 60, color: "#757575", marginBottom: 1 }}
+          />
+          <Typography variant="body2">No files found</Typography>
+        </Box>
+      </Paper>
+    </div>
+    </div>
+    </>
   );
 };
 

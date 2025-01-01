@@ -29,17 +29,17 @@ type NavigationLinks = {
 
 const Sidebar = ({ id, navigationLinks, variant }: SidebarProps) => {
   const pathname = usePathname();
+  const [isOpen, setIsOpen] = React.useState(false);
 
   return (
     <Box
       sx={{
         width: 250,
-        height: "100vh",
-        display: "flex",
         flexDirection: "column",
         padding: 2,
+        display: { xs: "none", md: "flex" },
       }}
-      className="dark:bg-[#0a0a0a] bg-white border-r border-gray-300 dark:border-[#3f3f3f]"
+      className="dark:bg-[#0a0a0a] bg-white border-r border-gray-300 dark:border-[#3f3f3f] "
     >
       {variant == "apis" && (
         <Typography
