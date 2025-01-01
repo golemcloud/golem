@@ -30,6 +30,7 @@ import CustomModal from "@/components/CustomModal";
 import SecondaryHeader from "@/components/ui/secondary-header";
 import SearchIcon from "@mui/icons-material/Search";
 import { Button2 } from "@/components/ui/button";
+import WorkerInfoCard from "@/components/worker-info-card";
 
 const WorkerListWithDropdowns = () => {
   const [workerStatus, setWorkerStatus] = useState<string[]>([]);
@@ -317,60 +318,13 @@ const WorkerListWithDropdowns = () => {
                   <Stack gap={4}>
                     {workers?.map((worker: Worker) => {
                       return (
-                        <Card
-                          key={worker?.workerId.workerName}
-                          className="p-4"
-                          onClick={() =>
-                            router.push(
-                              `/components/${compId}/workers/${worker.workerId.workerName}`
-                            )
-                          }
-                        >
-                          <Stack gap={2}>
-                            <Typography>
-                              {worker?.workerId.workerName}
-                            </Typography>
-                            <Stack
-                              direction="row"
-                              justifyContent={"space-between"}
-                              alignItems={"center"}
-                            >
-                              <Stack>
-                                <Typography>Status</Typography>
-                                <Typography>{worker.status}</Typography>
-                              </Stack>
-                              <Stack>
-                                <Typography>Memory</Typography>
-                                <Typography>
-                                  {worker.totalLinearMemorySize}
-                                </Typography>
-                              </Stack>
-                              <Stack>
-                                <Typography>Pending Invocation</Typography>
-                                <Typography>
-                                  {worker.pendingInvocationCount}
-                                </Typography>
-                              </Stack>
-                              <Stack>
-                                <Typography>Resources</Typography>
-                                <Typography>
-                                  {Object.values(worker.ownedResources).length}
-                                </Typography>
-                              </Stack>
-                            </Stack>
-                          </Stack>
-                          <Stack direction="row" gap={4} marginTop={2}>
-                            <Typography className="border p-1 px-4">
-                              V{worker.componentVersion}
-                            </Typography>
-                            <Typography className="border p-1 px-4">
-                              Env {Object.values(worker.env).length}
-                            </Typography>
-                            <Typography className="border p-1 px-4">
-                              Agrs {worker.args.length}
-                            </Typography>
-                          </Stack>
-                        </Card>
+                      <WorkerInfoCard
+                        key={worker.workerId.workerName}
+                        worker={worker}
+                        onClick={() =>
+                          router.push(`/components/${compId}/workers/${worker.workerId.workerName}`)
+                        }
+                      />
                       );
                     })}
                   </Stack>
