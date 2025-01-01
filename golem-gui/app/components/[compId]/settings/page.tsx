@@ -13,7 +13,7 @@ import {
   MenuItem,
   Select,
 } from "@mui/material";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import CreateComponentForm from "@/components/new-component";
 
 import { toast } from "react-toastify";
@@ -22,11 +22,14 @@ import { Component } from "@/types/api";
 import SecondaryHeader from "@/components/ui/secondary-header";
 
 const WorkerSettings = () => {
-  const [activeTab, setActiveTab] = useState(0);
 
   const { compId } = useParams<{ compId: string }>();
   const { components } = useComponents(compId);
   const [version, setVersion] = useState<number | null>(null);
+  const searchParams = useSearchParams();
+  const activeTabFromQuery = Number(searchParams.get("activeTab")) || 0;
+
+  const [activeTab, setActiveTab] = useState(activeTabFromQuery);
 
   const component = components?.[version ?? components?.length - 1];
   const versionedComponentId = component?.versionedComponentId || {};
@@ -47,6 +50,10 @@ const WorkerSettings = () => {
       onClick: () => toast.success("All workers deleted successfully"),
     },
   ];
+
+  useEffect(() => {
+    setActiveTab(activeTabFromQuery);
+  }, [activeTabFromQuery]);
 
   return (
     <>

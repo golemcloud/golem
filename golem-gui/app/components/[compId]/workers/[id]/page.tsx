@@ -9,7 +9,10 @@ import Overview from "./overview";
 import TerminalPage from "./live";
 import FileComponent from "./files";
 import Manage from "./manage";
-import { useWebSocketWithPath } from "@/lib/hooks/use-websocket";
+
+import { useWebSocketWithPath, WebSocketMessage } from "@/lib/hooks/use-websocket";
+import SecondaryHeader from "@/components/ui/secondary-header";
+
 
 // interface CustomMessage extends WebSocketMessage {
 //   type: 'custom';
@@ -37,13 +40,37 @@ const WorkerListWithDropdowns = () => {
   return (
     <Box
       className="text-black dark:text-white"
-      sx={{ width: "100%", height: "100vh" }}
+      // sx={{ width: "100%"}}
     >
+      <SecondaryHeader variant="component" onClick={()=>{}}/>
+
       <Tabs
         value={activeTab}
+        variant="scrollable"
         onChange={handleTabChange}
+        className="dark:bg-[#0a0a0a8e]"
         aria-label="Worker Settings Tabs"
         textColor="inherit"
+        sx={{
+          paddingBottom: "5px",
+          paddingLeft: "12px",
+          "& .MuiTab-root": {
+            minWidth: "80px",
+            padding: "2px 2px",
+          },
+          "& .MuiTabs-scroller": {
+            overflowX: "auto",
+          },
+          "@media (max-width: 600px)": {
+            "& .MuiTab-root": {
+              fontSize: "11px", 
+              minWidth: "40px",
+            },
+            "& .MuiTabs-flexContainer": {
+              gap: "4px"
+            },
+          },
+        }}
       >
         <Tab label="Overview" />
         <Tab label="Live" />
@@ -52,23 +79,6 @@ const WorkerListWithDropdowns = () => {
         <Tab label="Manage" />
         <Tab label="Invoke" />
       </Tabs>
-      <Divider
-        className="border-gray-300 dark:border-gray-700"
-        sx={{ marginTop: "4px" }}
-      />
-      <Divider className="border-gray-300 dark:border-gray-700" sx={{ marginTop: '4px' }} />
-      <Toolbar
-        sx={{ justifyContent: "center", borderBottom: "1px solid #333" }}
-        className="dark:border-gray-600"
-      >
-        <Typography
-          variant="h6"
-          sx={{ fontWeight: "bold" }}
-          className="text-gray-700 dark:text-gray-300"
-        >
-          {workerName}
-        </Typography>
-      </Toolbar>
       {activeTab === 0 && <Overview worker={worker} isLoading={isLoading} />}
       {activeTab === 1 && <TerminalPage messages={messages}/>}
       {activeTab === 3 && <FileComponent />}

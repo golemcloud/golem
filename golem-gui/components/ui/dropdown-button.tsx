@@ -6,9 +6,11 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import ArrowDropDownIcon from "@mui/icons-material/ArrowDropDown";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 export function Dropdown(list: { route: string; value: string }[]) {
+  const router = useRouter();
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -16,9 +18,13 @@ export function Dropdown(list: { route: string; value: string }[]) {
       </DropdownMenuTrigger>
       <DropdownMenuContent className="w-16">
         <DropdownMenuGroup>
-          {list.map((item) => (
-            <DropdownMenuItem>
-              <Link href={item.route}>{item.value}</Link>
+          {list.map((item, ind) => (
+            <DropdownMenuItem
+              key={ind}
+              onClick={() => router.push(item.route)}
+              className="cursor-pointer"
+            >
+              {item.value}
             </DropdownMenuItem>
           ))}
         </DropdownMenuGroup>
