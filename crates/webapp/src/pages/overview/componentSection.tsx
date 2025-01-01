@@ -1,41 +1,42 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { Layers, PlusCircle } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button.tsx";
-import {useEffect, useState} from "react";
+import { useEffect, useState } from "react";
 import { formatRelativeTime } from "@/lib/utils";
-import {SERVICE} from "@/service";
+import { SERVICE } from "@/service";
 
-
-const ComponentsSection = () => {
+export const ComponentsSection = () => {
   const navigate = useNavigate();
   const [components, setComponents] = useState({} as any);
 
   useEffect(() => {
     SERVICE.getComponents().then((response) => {
-        const componentData = {} as any;
-        response.forEach((data: any) => {
-            componentData[data.versionedComponentId.componentId] = {
-                componentName: data.componentName,
-                componentId: data.versionedComponentId.componentId,
-                createdAt: data.createdAt,
-                exports: data.metadata.exports,
-                componentSize: data.componentSize,
-                componentType: data.componentType,
-                versionId: [
-                    ...(componentData[data.versionedComponentId.componentId]
-                        ?.versionId || []),
-                    data.versionedComponentId.version,
-                ],
-            };
-        });
-        setComponents(componentData)
+      const componentData = {} as any;
+      response.forEach((data: any) => {
+        componentData[data.versionedComponentId.componentId] = {
+          componentName: data.componentName,
+          componentId: data.versionedComponentId.componentId,
+          createdAt: data.createdAt,
+          exports: data.metadata.exports,
+          componentSize: data.componentSize,
+          componentType: data.componentType,
+          versionId: [
+            ...(componentData[data.versionedComponentId.componentId]
+              ?.versionId || []),
+            data.versionedComponentId.version,
+          ],
+        };
+      });
+      setComponents(componentData);
     });
   }, [SERVICE]);
   return (
     <div className="rounded-lg border p-6 overflow-scroll max-h-[50vh] min-h-[50vh]">
       <div className="flex justify-between items-center mb-6">
         <h2 className="text-xl font-semibold">Components</h2>
-        <Button variant="link"
+        <Button
+          variant="link"
           onClick={() => {
             navigate("/components");
           }}
@@ -99,5 +100,3 @@ const ComponentsSection = () => {
     </div>
   );
 };
-
-export default ComponentsSection;
