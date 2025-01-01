@@ -1,3 +1,4 @@
+import { create } from "domain";
 
 export const ENDPOINT = {
   getComponents: () => {
@@ -11,5 +12,26 @@ export const ENDPOINT = {
   },
   getComponentById: (id: string) => {
     return `/v1/components/${id}/latest`;
+  },
+  getApiList: () => {
+    return "/v1/api/definitions";
+  },
+  createApi: () => {
+    return "/v1/api/definitions";
+  },
+  postApi: () => {
+    return `/v1/api/definitions`;
+  },
+  getApi: (id: string) => {
+    return `/v1/api/definitions?api-definition-id=${id}`;
+  },
+  deleteApi: (id: string, version: string) => {
+    return `/v1/api/definitions/${id}/${version}`;  
+  },
+  putApi: (id: string, version: string) => {
+    return `/v1/api/definitions/${id}/${version}`;
+  },
+  getWorkers: () => {
+    return "/v1/components/workers/find";
   }
 };

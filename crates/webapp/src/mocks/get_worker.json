@@ -1,0 +1,47 @@
+{
+  "cursor": null,
+  "workers": [
+    {
+      "accountId": "5f60f26f-da99-40e7-90fe-33cc93f55a1f",
+      "activePlugins": [],
+      "args": [],
+      "componentSize": 129179,
+      "componentVersion": 0,
+      "createdAt": "2025-01-01T13:18:05.024Z",
+      "env": {},
+      "lastError": null,
+      "ownedResources": {},
+      "pendingInvocationCount": 0,
+      "retryCount": 0,
+      "status": "Idle",
+      "totalLinearMemorySize": 1114112,
+      "updates": [],
+      "workerId": {
+        "componentId": "1b5260e8-a8ae-4ca7-bced-179586082da5",
+        "workerName": "51384dde-4d3e-4088-9e9c-c66b7d5e02d5"
+      }
+    },
+    {
+      "accountId": "5f60f26f-da99-40e7-90fe-33cc93f55a1f",
+      "activePlugins": [],
+      "args": [],
+      "componentSize": 129179,
+      "componentVersion": 0,
+      "createdAt": "2025-01-01T13:12:09.317Z",
+      "env": {
+        "EMAILID": "EMAIL"
+      },
+      "lastError": null,
+      "ownedResources": {},
+      "pendingInvocationCount": 0,
+      "retryCount": 0,
+      "status": "Idle",
+      "totalLinearMemorySize": 1114112,
+      "updates": [],
+      "workerId": {
+        "componentId": "1b5260e8-a8ae-4ca7-bced-179586082da5",
+        "workerName": "list-1"
+      }
+    }
+  ]
+}

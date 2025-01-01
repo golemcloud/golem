@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { useState, useEffect } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft, Slash } from "lucide-react";
@@ -9,35 +8,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { invoke } from "@tauri-apps/api/core";
 import APILeftNav from "./apiLeftNav";
 import { Button } from "@/components/ui/button";
-import { toast } from "@/hooks/use-toast";
-
-const ApiMockData = [
-  {
-    createdAt: "2024-12-31T05:34:20.197542+00:00",
-    draft: false,
-    id: "vvvvv",
-    routes: [],
-    version: "0.1.0",
-  },
-  {
-    createdAt: "2025-01-01T08:50:03.144928+00:00",
-    draft: true,
-    id: "vvvvv",
-    routes: [],
-    version: "0.2.0",
-  },
-];
-
-const ComponentMockData = {
-  ["17c50abc-d410-4603-a0d7-97d1a05cbad2"]: {
-    componentName: "Component",
-    componentId: "17c50abc-d410-4603-a0d7-97d1a05cbad2",
-    versionId: [0, 1, 2],
-  },
-};
+import { SERVICE } from "@/service";
+import { Api } from "@/types/api";
+import { Component } from "@/types/component";
 
 const HTTP_METHODS = [
   "Get",
@@ -60,80 +35,71 @@ const CreateRoute = () => {
   const [version, setVersion] = useState("");
   const [workerName, setWorkerName] = useState("");
   const [response, setResponse] = useState("");
-  const [componentList, setComponentList] = useState(ComponentMockData as any);
-
-  const [apiDetails, setApiDetails] = useState(ApiMockData);
-  const [activeApiDetails, setActiveApiDetails] = useState(
-    apiDetails[apiDetails.length - 1]
-  );
+  const [componentList, setComponentList] = useState<{
+    [key: string]: Component;
+  }>({});
+  const [apiDetails, setApiDetails] = useState([] as Api[]);
+  const [activeApiDetails, setActiveApiDetails] = useState({} as Api);
 
   useEffect(() => {
-    const fetchData = async () => {
-      //check the api https://release.api.golem.cloud/v1/api/definitions/305e832c-f7c1-4da6-babc-cb2422e0f5aa?api-definition-id=${appId}
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars
-      const response: any = await invoke("get_api");
-      setApiDetails(response);
-      setActiveApiDetails(response[response.length - 1]);
-    };
-    fetchData().then((r) => r);
+    if (apiName) {
+      SERVICE.getApi(apiName).then((response) => {
+        setApiDetails(response);
+        setActiveApiDetails(response[response.length - 1]);
+      });
+    }
+  }, [apiName]);
 
-    const fetchData2 = async () => {
-      // https://release.api.golem.cloud/v1/components?project-id=305e832c-f7c1-4da6-babc-cb2422e0f5aa
-      //Get method
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars
-      const response: any = await invoke("get_api");
-      const componentData = {} as any;
-      response.forEach((data: any) => {
-        componentData[data.versionedComponentId.componentId] = {
-          componentName: data.componentName,
-          componentId: data.versionedComponentId.componentId,
-          versionId: [
-            ...(componentData[data.versionedComponentId.componentId]
-              .versionId || []),
-            data.versionedComponentId.version,
-          ],
-        };
+  useEffect(() => {
+    SERVICE.getComponents().then((response) => {
+      const componentData = {} as { [key: string]: Component };
+      response.forEach((data: Component) => {
+        if (data?.versionedComponentId?.componentId) {
+          componentData[data.versionedComponentId.componentId] = {
+            componentName: data.componentName,
+            componentId: data.versionedComponentId.componentId,
+            createdAt: data.createdAt,
+            exports: data?.metadata?.exports,
+            componentSize: data.componentSize,
+            componentType: data.componentType,
+            versionId: [
+              ...(componentData[data.versionedComponentId.componentId]
+                ?.versionId || []),
+              data.versionedComponentId.version,
+            ],
+          };
+        }
       });
       setComponentList(componentData);
-    };
-    fetchData2().then((r) => r);
+    });
   }, []);
 
   const onCreateRoute = () => {
-    try {
-      // Simulate API call
-      //https://release.api.golem.cloud/v1/api/definitions/305e832c-f7c1-4da6-babc-cb2422e0f5aa/vvvvv/{activeApiDetails.version}
-      //put method
-      const payload = {
-        id: activeApiDetails.id,
-        version: activeApiDetails.version,
-        draft: activeApiDetails.draft,
-        routes: [
-          ...activeApiDetails.routes,
-          {
-            method: method,
-            path: path,
-            binding: {
-              componentId: {
-                componentId: componentId,
-                version: version,
-              },
-              workerName: workerName,
-              response: response,
+    const payload = {
+      id: activeApiDetails.id,
+      version: activeApiDetails.version,
+      draft: activeApiDetails.draft,
+      routes: [
+        ...activeApiDetails.routes,
+        {
+          method: method,
+          path: path,
+          binding: {
+            componentId: {
+              componentId: componentId,
+              version: version,
             },
+            workerName: workerName,
+            response: response,
           },
-        ],
-      };
-      console.log(payload);
-      navigate(`/apis/${apiName}`);
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    } catch (error) {
-      toast({
-        variant: "destructive",
-        title: "Error",
-        description: "API failed .",
-      });
-    }
+        },
+      ],
+    };
+    SERVICE.putApi(activeApiDetails.id, activeApiDetails.version, payload).then(
+      () => {
+        navigate(`/apis/${apiName}`);
+      }
+    );
   };
 
   return (
@@ -150,31 +116,33 @@ const CreateRoute = () => {
                       {apiName}
                     </h1>
                     <div className="flex items-center gap-1">
-                      <Select
-                        defaultValue={activeApiDetails.version}
-                        onValueChange={(version) => {
-                          const selectedApi = apiDetails.find(
-                            (api) => api.version === version
-                          );
-                          if (selectedApi) {
-                            setActiveApiDetails(selectedApi);
-                          }
-                        }}
-                      >
-                        <SelectTrigger className="w-20 h-6">
-                          <SelectValue placeholder="Version">
-                            {activeApiDetails.version}
-                          </SelectValue>
-                        </SelectTrigger>
-                        <SelectContent>
-                          {apiDetails.map((api) => (
-                            <SelectItem value={api.version} key={api.version}>
-                              {api.version}{" "}
-                              {api.draft ? "(Draft)" : "(Published)"}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      {activeApiDetails.version && (
+                        <Select
+                          defaultValue={activeApiDetails.version}
+                          onValueChange={(version) => {
+                            const selectedApi = apiDetails.find(
+                              (api) => api.version === version
+                            );
+                            if (selectedApi) {
+                              setActiveApiDetails(selectedApi);
+                            }
+                          }}
+                        >
+                          <SelectTrigger className="w-20 h-6">
+                            <SelectValue placeholder="Version">
+                              {activeApiDetails.version}
+                            </SelectValue>
+                          </SelectTrigger>
+                          <SelectContent>
+                            {apiDetails.map((api) => (
+                              <SelectItem value={api.version} key={api.version}>
+                                {api.version}{" "}
+                                {api.draft ? "(Draft)" : "(Published)"}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -258,9 +226,9 @@ const CreateRoute = () => {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {Object.values(componentList).map((data: any) => (
+                      {Object.values(componentList).map((data: Component) => (
                         <SelectItem
-                          value={data.componentId}
+                          value={data.componentId || ""}
                           key={data.componentName}
                         >
                           {data.componentName}
@@ -284,13 +252,14 @@ const CreateRoute = () => {
                         <SelectValue>V{version} </SelectValue>
                       </SelectTrigger>
                       <SelectContent>
-                        {componentList[componentId]?.versionId.map(
-                          (data: any) => (
-                            <SelectItem value={data} key={data}>
-                              V{data}
-                            </SelectItem>
-                          )
-                        )}
+                        {componentId &&
+                          componentList[componentId]?.versionId?.map(
+                            (data: string) => (
+                              <SelectItem value={data} key={data}>
+                                V{data}
+                              </SelectItem>
+                            )
+                          )}
                       </SelectContent>
                     </Select>
                   </div>

@@ -63,8 +63,8 @@ export interface Metadata {
 }
 
 export interface VersionedComponentId {
-  componentId: string;
-  version: number;
+  componentId?: string;
+  version?: number;
 }
 
 export enum ComponentType {
@@ -73,14 +73,17 @@ export enum ComponentType {
 }
 
 export interface Component {
-  componentName: string;
-  componentSize: number;
-  componentType: ComponentType;
-  createdAt: string;
-  files: any[];
-  installedPlugins: any[];
-  metadata: Metadata;
+  componentName?: string;
+  componentSize?: number;
+  componentType?: ComponentType;
+  createdAt?: string;
+  files?: any[];
+  installedPlugins?: any[];
+  metadata?: Metadata;
   projectId?: string;
-  versionedComponentId: VersionedComponentId;
+  versionId?: any[];
+  componentId?: string;
+  exports?: any[];
+  versionedComponentId?: VersionedComponentId;
 }
 

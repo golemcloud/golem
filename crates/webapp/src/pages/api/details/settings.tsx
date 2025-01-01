@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
 import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
@@ -19,24 +18,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import APILeftNav from "./apiLeftNav";
-import { invoke } from "@tauri-apps/api/core";
-
-const ApiMockData = [
-  {
-    createdAt: "2024-12-31T05:34:20.197542+00:00",
-    draft: false,
-    id: "vvvvv",
-    routes: [],
-    version: "0.1.0",
-  },
-  {
-    createdAt: "2025-01-01T08:50:03.144928+00:00",
-    draft: true,
-    id: "vvvvv",
-    routes: [],
-    version: "0.2.0",
-  },
-];
+import { SERVICE } from "@/service";
+import { Api } from "@/types/api";
 
 export default function APISettings() {
   const { toast } = useToast();
@@ -45,102 +28,79 @@ export default function APISettings() {
   const [showConfirmAllDialog, setShowConfirmAllDialog] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const { apiName } = useParams();
-  const [apiDetails, setApiDetails] = useState(ApiMockData);
-  const [activeApiDetails, setActiveApiDetails] = useState(
-    apiDetails[apiDetails.length - 1]
-  );
+  const [apiDetails, setApiDetails] = useState([] as Api[]);
+  const [activeApiDetails, setActiveApiDetails] = useState({} as Api);
 
   useEffect(() => {
-    const fetchData = async () => {
-      //check the api https://release.api.golem.cloud/v1/api/definitions/305e832c-f7c1-4da6-babc-cb2422e0f5aa?api-definition-id=${appId}
-      //Get method
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars
-      const response: any = await invoke("get_api");
-      setApiDetails(response);
-      setActiveApiDetails(response[response.length - 1]);
-    };
-    fetchData().then((r) => r);
-  }, []);
+    if (apiName) {
+      SERVICE.getApi(apiName).then((response) => {
+        setApiDetails(response);
+        setActiveApiDetails(response[response.length - 1]);
+      });
+    }
+  }, [apiName]);
 
   const handleDeleteVersion = async () => {
     setIsDeleting(true);
-    try {
-      // Simulate API call
-      //https://release.api.golem.cloud/v1/api/definitions/305e832c-f7c1-4da6-babc-cb2422e0f5aa/vvvvv/${activeApiDetails.version}
-      //Delete method      await new Promise((resolve) => setTimeout(resolve, 1000));
-      toast({
-        title: "Version deleted",
-        description: `API version ${activeApiDetails.version} has been deleted successfully.`,
+    SERVICE.deleteApi(activeApiDetails.id, activeApiDetails.version)
+      .then(() => {
+        toast({
+          title: "Version deleted",
+          description: `API version ${activeApiDetails.version} has been deleted successfully.`,
+        });
+        if (apiDetails.length === 1) {
+          navigate(`/apis`);
+        } else {
+          setApiDetails(
+            apiDetails.filter((api) => api.version !== activeApiDetails.version)
+          );
+        }
+        setShowConfirmDialog(false);
+        setIsDeleting(false);
+      })
+      .catch((error) => {
+        console.log(error);
+        setIsDeleting(false);
       });
-      if (apiDetails.length === 1) {
-        navigate(`/apis`);
-      } else {
-        setApiDetails(
-          apiDetails.filter((api) => api.version !== activeApiDetails.version)
-        );
-      }
-      setShowConfirmDialog(false);
-    } catch (error) {
-      toast({
-        variant: "destructive",
-        title: "Error",
-        description: "Failed to delete the API version. Please try again.",
-      });
-    } finally {
-      setIsDeleting(false);
-    }
   };
 
   const handleDeleteAll = async () => {
     setIsDeleting(true);
-    try {
-      await apiDetails.forEach(async (api) => {
-        // Simulate API call
-        //https://release.api.golem.cloud/v1/api/definitions/305e832c-f7c1-4da6-babc-cb2422e0f5aa/vvvvv/${api.version}
-        //Delete method      await new Promise((resolve) => setTimeout(resolve, 1000));
+    const promises = apiDetails.map((api) =>
+      SERVICE.deleteApi(api.id, api.version)
+    );
+    Promise.all(promises)
+      .then(() => {
+        toast({
+          title: "All versions deleted",
+          description: "All API versions have been deleted successfully.",
+        });
+        setShowConfirmAllDialog(false);
+        navigate(`/apis`);
+      })
+      .catch((error) => {
+        console.log(error);
+        setIsDeleting(false);
       });
-
-      toast({
-        title: "All versions deleted",
-        description: "All API versions have been deleted successfully.",
-      });
-      setShowConfirmAllDialog(false);
-      navigate(`/apis`);
-    } catch (error) {
-      toast({
-        variant: "destructive",
-        title: "Error",
-        description: "Failed to delete all API versions. Please try again.",
-      });
-    } finally {
-      setIsDeleting(false);
-    }
   };
 
   const handleDeleteAllRoutes = async () => {
-    try {
-      await apiDetails.forEach(async (api) => {
-        // Simulate API call
-        // https://release.api.golem.cloud/v1/api/definitions/305e832c-f7c1-4da6-babc-cb2422e0f5aa/vvvvv/${activeApiDetails.version}
-        //Put method      await new Promise((resolve) => setTimeout(resolve, 1000));
+    const payload = {
+      ...activeApiDetails,
+      routes: [],
+    };
+    SERVICE.putApi(activeApiDetails.id, activeApiDetails.version, payload)
+      .then(() => {
+        toast({
+          title: "All routes deleted",
+          description: "All routes have been deleted successfully.",
+        });
+        setShowConfirmAllDialog(false);
+        navigate(`/apis/${apiName}`);
+      })
+      .catch((error) => {
+        console.log(error);
       });
-      const payload = {
-        ...activeApiDetails,
-        routes: [],
-      };
-
-      toast({
-        title: "All versions deleted",
-        description: "All API versions have been deleted successfully.",
-      });
-      setShowConfirmAllDialog(false);
-    } catch (error) {
-      toast({
-        variant: "destructive",
-        title: "Error",
-        description: "Failed to delete all API versions. Please try again.",
-      });
-    }
   };
 
   return (
@@ -157,31 +117,33 @@ export default function APISettings() {
                       {apiName}
                     </h1>
                     <div className="flex items-center gap-1">
-                      <Select
-                        defaultValue={activeApiDetails.version}
-                        onValueChange={(version) => {
-                          const selectedApi = apiDetails.find(
-                            (api) => api.version === version
-                          );
-                          if (selectedApi) {
-                            setActiveApiDetails(selectedApi);
-                          }
-                        }}
-                      >
-                        <SelectTrigger className="w-20 h-6">
-                          <SelectValue placeholder="Version">
-                            {activeApiDetails.version}
-                          </SelectValue>
-                        </SelectTrigger>
-                        <SelectContent>
-                          {apiDetails.map((api) => (
-                            <SelectItem value={api.version} key={api.version}>
-                              {api.version}{" "}
-                              {api.draft ? "(Draft)" : "(Published)"}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      {activeApiDetails.version && (
+                        <Select
+                          defaultValue={activeApiDetails.version}
+                          onValueChange={(version) => {
+                            const selectedApi = apiDetails.find(
+                              (api) => api.version === version
+                            );
+                            if (selectedApi) {
+                              setActiveApiDetails(selectedApi);
+                            }
+                          }}
+                        >
+                          <SelectTrigger className="w-20 h-6">
+                            <SelectValue>
+                              {activeApiDetails.version}
+                            </SelectValue>
+                          </SelectTrigger>
+                          <SelectContent>
+                            {apiDetails.map((api) => (
+                              <SelectItem value={api.version} key={api.version}>
+                                {api.version}{" "}
+                                {api.draft ? "(Draft)" : "(Published)"}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      )}
                     </div>
                   </div>
                 </div>
