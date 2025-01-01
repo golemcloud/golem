@@ -25,6 +25,8 @@ import { calculateHoursDifference, calculateSizeInMB } from "@/lib/utils";
 import {Button2} from "@/components/ui/button";
 import clsx from "clsx";
 import ComponentTable from "@/components/ui/generic-table";
+import { Crosshair } from 'lucide-react';
+
 
 const ComponentsPage = () => {
   const [open, setOpen] = useState(false);
@@ -68,7 +70,7 @@ const ComponentsPage = () => {
               gap={2}
             >
               <TextField
-                placeholder="Search Components..."
+                placeholder="Worker Name..."
                 variant="outlined"
                 value={searchQuery}
                 size="small"
@@ -108,7 +110,7 @@ const ComponentsPage = () => {
                 </IconButton>
               </Box>
               <Button2
-                variant="default"
+                variant="primary"
                 size="md"
                 endIcon={<AddIcon />}
                 onClick={handleOpen}
