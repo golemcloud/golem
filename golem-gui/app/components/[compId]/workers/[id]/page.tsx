@@ -73,7 +73,7 @@ const WorkerListWithDropdowns = () => {
       {activeTab === 1 && <TerminalPage messages={messages}/>}
       {activeTab === 3 && <FileComponent />}
       {activeTab === 4 && <Manage />}
-      {activeTab === 5 && <InvokePage />}
+      {activeTab === 5 && <InvokePage worker={worker}/>}
     </Box>
   );
 };

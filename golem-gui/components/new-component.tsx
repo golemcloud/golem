@@ -22,7 +22,7 @@ import { getFormErrorMessage } from "../lib/utils";
 
 type FormData = {
   name: string;
-  component_type?: "0" | "1";
+  componentType?: "Durable" | "Ephemeral";
   component?: File | null;
   files: File[];
 };
@@ -52,7 +52,7 @@ export default function ComponentForm({
   } = useForm<FormData>({
     defaultValues: {
       name: "",
-      component_type: "0",
+      componentType: "Durable",
       component: null,
       files: [],
       ...initialValues,
@@ -87,7 +87,7 @@ export default function ComponentForm({
         formData.append("name", data.name);
       }
       if (isCreateMode) {
-        formData.append("component_type", data.component_type || "0");
+        formData.append("componentType", data.componentType || "Durable");
       }
       if (data.component) {
         formData.append("component", data.component);
@@ -146,12 +146,12 @@ export default function ComponentForm({
               Type
             </Typography>
             <Controller
-              name="component_type"
+              name="componentType"
               control={control}
               render={({ field }) => (
                 <RadioGroup row {...field}>
                   <FormControlLabel
-                    value="0"
+                    value="Durable"
                     control={<Radio />}
                     label={
                       <Box>
@@ -166,7 +166,7 @@ export default function ComponentForm({
                     }
                   />
                   <FormControlLabel
-                    value="1"
+                    value="Ephemeral"
                     control={<Radio />}
                     label={
                       <Box>

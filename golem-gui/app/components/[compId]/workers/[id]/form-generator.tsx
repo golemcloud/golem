@@ -12,7 +12,10 @@ import {
   MenuItem,
 } from "@mui/material";
 import { Parameter } from "@/types/api";
-import { AnalysedType_TypeVariant } from "@/types/golem-data-types";
+import {
+  AnalysedType,
+  AnalysedType_TypeVariant,
+} from "@/types/golem-data-types";
 import { getFormErrorMessage } from "@/lib/utils";
 
 type FormData = {
@@ -30,12 +33,20 @@ const generateDefaultValues = (fields: Parameter[]): FormData => {
       case "Record":
         defaults[field.name] = generateDefaultValues(field?.typ?.fields || []);
         break;
-      // case "Tuple":
-      //   defaults[field.name] = [generateDefaultValues(field.typ.items || [])];
-      //   break;
-
+      case "Tuple":
       case "List":
         defaults[field.name] = [];
+        break;
+      case "Option":
+        if (["List", "Tuple"].includes(field.typ?.inner?.type)) {
+          defaults[field.name] = [];
+        } else if (field.typ?.inner?.type == "Record") {
+          defaults[field.name] = generateDefaultValues(
+            field?.typ?.inner?.fields || []
+          );
+        } else {
+          defaults[field.name] = "";
+        }
         break;
       default:
         defaults[field.name] = "";
@@ -53,22 +64,19 @@ const generateField = (
   control: Control<FormData>,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   handleChange: (key: string, value: any) => void,
-  errors: FieldErrors<FormData>
+  errors: FieldErrors<FormData>,
+  optional?: boolean
 ) => {
   const finalRootKey = `${
     rootKey
       ? `${rootKey}${!parameter?.ignoreDotConcat && parameter?.name ? "." : ""}`
       : ""
   }${parameter?.name || ""}`;
-  // TODO need to add other types
-
   const paramType = parameter?.typ?.type || "";
   // TODO: Pending data types that needs work.
   //   | AnalysedType_TypeResult
-  //   | AnalysedType_TypeOption
-  //   | AnalysedType_TypeEnum
-  //   | AnalysedType_TypeFlags
-  //   | AnalysedType_TypeTuple
+  //   | AnalysedType_TypeEnum // done but not tested
+  //   | AnalysedType_TypeFlags // done but not tested
   //   | AnalysedType_TypeHandle;
 
   switch (true) {
@@ -79,7 +87,9 @@ const generateField = (
             key={index}
             name={finalRootKey}
             control={control}
-            rules={{ required: `${parameter.name} is Mandatory` }}
+            rules={
+              optional ? {} : { required: `${parameter.name} is Mandatory` }
+            }
             render={({ field: _field }) => (
               <TextField
                 {..._field}
@@ -131,7 +141,9 @@ const generateField = (
           <Controller
             key={index}
             name={finalRootKey}
-            rules={{ required: `${parameter.name} is Mandatory` }}
+            rules={
+              optional ? {} : { required: `${parameter.name} is Mandatory` }
+            }
             control={control}
             render={({ field: _field }) => (
               <TextField
@@ -163,7 +175,9 @@ const generateField = (
           <Controller
             key={index}
             name={finalRootKey}
-            rules={{ required: `${parameter.name} is Mandatory` }}
+            rules={
+              optional ? {} : { required: `${parameter.name} is Mandatory` }
+            }
             control={control}
             render={({}) => {
               const fields =
@@ -182,7 +196,8 @@ const generateField = (
                           finalRootKey,
                           control,
                           handleChange,
-                          errors
+                          errors,
+                          optional
                         )}
                       </Box>
                     )
@@ -257,7 +272,8 @@ const generateField = (
                       `${finalRootKey}`,
                       control,
                       handleChange,
-                      errors
+                      errors,
+                      optional
                     )}
                   </Box>
                 </>
@@ -333,7 +349,8 @@ const generateField = (
                           `${finalRootKey}`,
                           control,
                           handleChange,
-                          errors
+                          errors,
+                          optional
                         )}
                       </>
                     </fieldset>
@@ -347,6 +364,138 @@ const generateField = (
           <Typography variant="caption" color="error">
             {getFormErrorMessage(finalRootKey, errors)}
           </Typography>
+        </>
+      );
+
+    case paramType === "Option":
+      return (
+        <>
+          <Controller
+            name={finalRootKey}
+            control={control}
+            render={({}) => {
+              const inner =
+                parameter.typ?.type === "Option"
+                  ? parameter.typ.inner
+                  : undefined;
+              return inner ? (
+                <>
+                  <Stack>
+                    <Typography>{parameter?.name} (optional)</Typography>
+                    {generateField(
+                      {
+                        name: "",
+                        typ: inner,
+                        // ignoreDotConcat: true,
+                      },
+                      index,
+                      `${finalRootKey}`,
+                      control,
+                      handleChange,
+                      errors,
+                      true
+                    )}
+                  </Stack>
+                </>
+              ) : (
+                <></>
+              );
+            }}
+          />
+        </>
+      );
+
+    case paramType === "Tuple":
+      return (
+        <>
+          <Controller
+            key={index}
+            name={finalRootKey}
+            rules={
+              optional ? {} : { required: `${parameter.name} is Mandatory` }
+            }
+            control={control}
+            render={({}) => {
+              const items = (
+                parameter?.typ?.type == "Tuple"
+                  ? parameter?.typ?.items || []
+                  : []
+              ) as AnalysedType[];
+              return (
+                <div key={`${finalRootKey}`}>
+                  <Typography variant="h6">{parameter.name}</Typography>
+                  {items?.map((item: AnalysedType, nestedIndex: number) => {
+                    return (
+                      <Box key={`${finalRootKey}__${index}__${nestedIndex}`}>
+                        {generateField(
+                          {
+                            name: `[${nestedIndex}]`,
+                            typ: item,
+                            // ignoreDotConcat: true,
+                          },
+                          index,
+                          `${finalRootKey}`,
+                          control,
+                          handleChange,
+                          errors,
+                          optional
+                        )}
+                      </Box>
+                    );
+                  })}
+                </div>
+              );
+            }}
+          />
+
+          <Typography variant="caption" color="error">
+            {getFormErrorMessage(finalRootKey, errors)}
+          </Typography>
+        </>
+      );
+      break;
+
+    case ["Flags", "Emun"].includes(paramType):
+      return (
+        <>
+          <Controller
+            key={index}
+            name={finalRootKey}
+            rules={
+              optional ? {} : { required: `${parameter.name} is Mandatory` }
+            }
+            control={control}
+            render={({ field }) => {
+              let options =
+                parameter?.typ?.type === "Enum" ? parameter?.typ?.cases : [];
+              options =
+                parameter?.typ?.type === "Flags"
+                  ? parameter?.typ?.names
+                  : options;
+              return (
+                <>
+                  <Typography>{finalRootKey}</Typography>
+                  <Select
+                    {...field}
+                    variant="outlined"
+                    className="max-w-max"
+                    onChange={(e) => {
+                      handleChange(finalRootKey, e.target.value);
+                    }}
+                  >
+                    {options?.map((option: string, idx: number) => (
+                      <MenuItem
+                        key={`${finalRootKey}_${option}__${index}_${idx}`}
+                        value={option}
+                      >
+                        {option}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </>
+              );
+            }}
+          />
         </>
       );
 
