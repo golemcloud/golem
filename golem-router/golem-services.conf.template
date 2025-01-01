@@ -11,6 +11,7 @@ http {
     server {
         listen 80;
         server_name localhost;
+        add_header Access-Control-Allow-Origin *;
 
         location ~ /v1/components/[^/]+/workers/[^/]+/connect$ {
             proxy_pass http://$GOLEM_WORKER_SERVICE_HOST:$GOLEM_WORKER_SERVICE_PORT;

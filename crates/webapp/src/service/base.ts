@@ -1,7 +1,8 @@
+import {Component} from "@/types/component.ts";
 
 
 export interface GolemService {
-    getComponent(): Promise<any>;
+    getComponents(): Promise<Component[]>;
     createComponent(): Promise<any>;
     getComponentById(): Promise<any>;
 }

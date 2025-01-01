@@ -6,7 +6,7 @@ import FeatureCard from "../../components/FeatureCard";
 const Overview = () => {
   return (
     <div className="container mx-auto px-4 py-8">
-      <div className="grid grid-cols-[40%_60%] gap-6 mb-8 min-h-[50vh]">
+      <div className="grid grid-cols-[40%_60%] gap-6 mb-8 min-h-[50vh] max-h-[50vh]">
         <APISection />
         <ComponentsSection />
       </div>

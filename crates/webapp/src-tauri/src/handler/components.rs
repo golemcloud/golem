@@ -1,19 +1,68 @@
-use std::path::PathBuf;
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Deserializer};
-use serde_json::Value;
-use golem_cli::factory::ServiceFactory;
-use golem_cli::model::component::Component;
-use golem_cli::model::{ComponentName, Format, GolemError, GolemResult, PathBufOrStdin};
-use golem_cli::model::app_ext_raw::ComponentType;
 use crate::FACTORY;
+use golem_cli::factory::ServiceFactory;
+use golem_cli::model::{GolemError};
+use serde::{Deserializer, Serialize};
+use serde_json::Value;
+
+#[derive(Serialize)]
+pub enum Status {
+    Success,
+    Error,
+}
+
+#[derive(Serialize)]
+pub struct Response<T> {
+    status: Status,
+    data: Option<T>,
+    error: Option<String>,
+}
+
+
+// create the error type that represents all errors possible in our program
+#[derive(Debug, thiserror::Error)]
+enum GError {
+    #[error(transparent)]
+    Error(#[from] std::io::Error),
+    #[error(transparent)]
+    GolemError(#[from] GolemError)
+}
+
+// we must manually implement serde::Serialize
+impl serde::Serialize for GError {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::ser::Serializer,
+    {
+        serializer.serialize_str(self.to_string().as_ref())
+    }
+}
+
+fn handle_response<T>(result: Result<T, GError>) -> Response<T> {
+    match result {
+        Ok(data) => {
+            Response {
+                status: Status::Success,
+                data: Some(data),
+                error: None,
+            }
+        },
+        Err(error) => Response {
+            status: Status::Error,
+            data: None,
+            error: Some(error.to_string()),
+        },
+    }
+}
+
 
 #[tauri::command]
-pub async fn get_component() -> GolemResult<Value, GolemError> {
+pub async fn get_components() -> Response<Value> {
     let service = FACTORY.component_service();
-    Ok(service.list(None, None).await?.as_json_value())
-    // let components =
-    // components
+    let result = service.list(None, None).await.map_err(|e| GError::GolemError(e));
+    match result.map(|r| r.as_json_value()){
+        Ok(data) => handle_response(Ok(data)),
+        Err(error) => handle_response(Err(error))
+    }
 }
 
 // #[tauri::command]

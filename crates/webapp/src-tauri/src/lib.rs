@@ -2,7 +2,7 @@ use golem_cli::config::{get_config_dir, Config, NamedProfile, OssProfile, Profil
 use golem_cli::factory::ServiceFactory;
 use golem_cli::init::CliKind;
 use golem_cli::oss::factory::OssServiceFactory;
-use crate::handler::components::get_component;
+use crate::handler::components::get_components;
 // use crate::handler::handlers;
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 
@@ -39,7 +39,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![get_component])
+        .invoke_handler(tauri::generate_handler![get_components])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

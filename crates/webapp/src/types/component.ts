@@ -83,3 +83,4 @@ export interface Component {
   projectId?: string;
   versionedComponentId: VersionedComponentId;
 }
+

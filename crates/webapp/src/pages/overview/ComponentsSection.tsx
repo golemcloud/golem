@@ -1,331 +1,33 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { Layers, PlusCircle } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button.tsx";
-import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import {useEffect, useState} from "react";
 import { formatRelativeTime } from "@/lib/utils";
+import {SERVICE} from "@/service";
+import {Component} from "@/types/component";
 
-const MockData = [
-  {
-    componentName: "Component",
-    componentSize: 129179,
-    componentType: "Durable",
-    createdAt: "2024-12-31T09:43:54.427307+00:00",
-    files: [],
-    installedPlugins: [],
-    metadata: {
-      exports: [
-        {
-          functions: [
-            {
-              name: "initialize-cart",
-              parameters: [
-                {
-                  name: "user-id",
-                  typ: {
-                    type: "Str",
-                  },
-                },
-              ],
-              results: [],
-            },
-            {
-              name: "add-item",
-              parameters: [
-                {
-                  name: "item",
-                  typ: {
-                    fields: [
-                      {
-                        name: "product-id",
-                        typ: {
-                          type: "Str",
-                        },
-                      },
-                      {
-                        name: "name",
-                        typ: {
-                          type: "Str",
-                        },
-                      },
-                      {
-                        name: "price",
-                        typ: {
-                          type: "F32",
-                        },
-                      },
-                      {
-                        name: "quantity",
-                        typ: {
-                          type: "U32",
-                        },
-                      },
-                    ],
-                    type: "Record",
-                  },
-                },
-              ],
-              results: [],
-            },
-            {
-              name: "remove-item",
-              parameters: [
-                {
-                  name: "product-id",
-                  typ: {
-                    type: "Str",
-                  },
-                },
-              ],
-              results: [],
-            },
-            {
-              name: "update-item-quantity",
-              parameters: [
-                {
-                  name: "product-id",
-                  typ: {
-                    type: "Str",
-                  },
-                },
-                {
-                  name: "quantity",
-                  typ: {
-                    type: "U32",
-                  },
-                },
-              ],
-              results: [],
-            },
-            {
-              name: "checkout",
-              parameters: [],
-              results: [
-                {
-                  name: null,
-                  typ: {
-                    cases: [
-                      {
-                        name: "error",
-                        typ: {
-                          type: "Str",
-                        },
-                      },
-                      {
-                        name: "success",
-                        typ: {
-                          fields: [
-                            {
-                              name: "order-id",
-                              typ: {
-                                type: "Str",
-                              },
-                            },
-                          ],
-                          type: "Record",
-                        },
-                      },
-                    ],
-                    type: "Variant",
-                  },
-                },
-              ],
-            },
-            {
-              name: "get-cart-contents",
-              parameters: [],
-              results: [
-                {
-                  name: null,
-                  typ: {
-                    inner: {
-                      fields: [
-                        {
-                          name: "product-id",
-                          typ: {
-                            type: "Str",
-                          },
-                        },
-                        {
-                          name: "name",
-                          typ: {
-                            type: "Str",
-                          },
-                        },
-                        {
-                          name: "price",
-                          typ: {
-                            type: "F32",
-                          },
-                        },
-                        {
-                          name: "quantity",
-                          typ: {
-                            type: "U32",
-                          },
-                        },
-                      ],
-                      type: "Record",
-                    },
-                    type: "List",
-                  },
-                },
-              ],
-            },
-          ],
-          name: "golem:component/api",
-          type: "Instance",
-        },
-      ],
-      memories: [
-        {
-          initial: 1114112,
-          maximum: null,
-        },
-      ],
-      producers: [
-        {
-          fields: [
-            {
-              name: "processed-by",
-              values: [
-                {
-                  name: "wit-component",
-                  version: "0.208.1",
-                },
-                {
-                  name: "cargo-component",
-                  version: "0.13.2 (wasi:040ec92)",
-                },
-              ],
-            },
-          ],
-        },
-        {
-          fields: [
-            {
-              name: "language",
-              values: [
-                {
-                  name: "Rust",
-                  version: "",
-                },
-                {
-                  name: "C11",
-                  version: "",
-                },
-              ],
-            },
-            {
-              name: "processed-by",
-              values: [
-                {
-                  name: "rustc",
-                  version: "1.83.0 (90b35a623 2024-11-26)",
-                },
-                {
-                  name: "clang",
-                  version:
-                    "18.1.2-wasi-sdk (https://github.com/llvm/llvm-project 26a1d6601d727a96f4301d0d8647b5a42760ae0c)",
-                },
-                {
-                  name: "wit-component",
-                  version: "0.208.1",
-                },
-                {
-                  name: "wit-bindgen-rust",
-                  version: "0.25.0",
-                },
-              ],
-            },
-          ],
-        },
-        {
-          fields: [
-            {
-              name: "language",
-              values: [
-                {
-                  name: "Rust",
-                  version: "",
-                },
-              ],
-            },
-            {
-              name: "processed-by",
-              values: [
-                {
-                  name: "rustc",
-                  version: "1.75.0 (82e1608df 2023-12-21)",
-                },
-              ],
-            },
-          ],
-        },
-        {
-          fields: [
-            {
-              name: "processed-by",
-              values: [
-                {
-                  name: "wit-component",
-                  version: "0.208.1",
-                },
-              ],
-            },
-          ],
-        },
-        {
-          fields: [
-            {
-              name: "processed-by",
-              values: [
-                {
-                  name: "wit-component",
-                  version: "0.208.1",
-                },
-              ],
-            },
-          ],
-        },
-      ],
-    },
-    projectId: "305e832c-f7c1-4da6-babc-cb2422e0f5aa",
-    versionedComponentId: {
-      componentId: "17c50abc-d410-4603-a0d7-97d1a05cbad2",
-      version: 0,
-    },
-  },
-];
 
 const ComponentsSection = () => {
   const navigate = useNavigate();
-  const [components, setComponents] = useState(MockData);
+  const [components, setComponents] = useState([] as Component[]);
 
   useEffect(() => {
-    const fetchData = async () => {
-      //https://release.api.golem.cloud/v1/components?project-id=305e832c-f7c1-4da6-babc-cb2422e0f5aa
-      const response: any = await invoke("get_component");
-      setComponents(response);
-    };
-    fetchData().then((r) => r);
-  }, []);
-
+    SERVICE.getComponents().then((r) => setComponents(r));
+  }, [SERVICE]);
+  console.log(components);
   return (
-    <div className="bg-white rounded-lg border border-gray-200 p-6 overflow-scroll max-h-[50vh]">
+    <div className=" rounded-lg border p-6 overflow-scroll max-h-[50vh] min-h-[50vh]">
       <div className="flex justify-between items-center mb-6">
         <h2 className="text-xl font-semibold">Components</h2>
-        <button
-          className="text-blue-600 hover:text-blue-700"
+        <Button variant="link"
           onClick={() => {
             navigate("/components");
           }}
         >
           View All
-        </button>
+        </Button>
       </div>
-      {components.length > 0 ? (
+      {components && components.length > 0 ? (
         <div className="p-4 pt-0 md:p-6 md:pt-0 flex-1 w-full">
           <div className="grid w-full grid-cols-1 gap-4 md:gap-6 md:grid-cols-2">
             {components.map((component) => (
@@ -368,8 +70,8 @@ const ComponentsSection = () => {
           </div>
         </div>
       ) : (
-        <div className="flex flex-col items-center justify-center py-12 border-2 border-dashed border-gray-200 rounded-lg">
-          <Layers className="h-12 w-12 text-gray-400 mb-4" />
+        <div className="flex flex-col items-center justify-center py-8 border-2 border-dashed rounded-lg">
+          <Layers className="h-12 w-12 mb-4" />
           <h3 className="text-lg font-medium mb-2">No Components</h3>
           <p className="text-gray-500 mb-4">
             Create your first component to get started

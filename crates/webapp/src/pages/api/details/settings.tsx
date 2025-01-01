@@ -12,7 +12,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import APILeftNav from "./APILeftNav";
-import { invoke } from "@tauri-apps/api/core";
 
 const ApiMockData = [
   {
@@ -44,8 +43,6 @@ export default function APISettings() {
   useEffect(() => {
     const fetchData = async () => {
       //check the api https://release.api.golem.cloud/v1/api/definitions/305e832c-f7c1-4da6-babc-cb2422e0f5aa
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars
-      const response: any = await invoke("get_api");
       const apiData = ApiMockData.find((api) => api.id === apiName);
       if (apiData) {
         setApiDetails(apiData);
