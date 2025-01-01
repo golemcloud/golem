@@ -1,0 +1,1019 @@
+openapi: 3.1.0
+info:
+  title: Golem Worker Service Base API
+  version: 1.0.0
+  description: API for the Golem Worker Service Base
+
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+
+paths:
+  /healthcheck:
+    get:
+      summary: Health check endpoint
+      description: Returns the health status of the service
+      operationId: getHealthCheck
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: ["success"]
+                  data:
+                    type: object
+                required:
+                  - status
+                  - data
+
+  /version:
+    get:
+      summary: Get service version
+      description: Returns the version information of the service
+      operationId: getVersion
+      responses:
+        '200':
+          description: Version information
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: ["success"]
+                  data:
+                    type: object
+                    properties:
+                      version:
+                        type: string
+                        example: "1.0.0"
+                    required:
+                      - version
+                required:
+                  - status
+                  - data
+
+  /v1/api/definitions/{api_id}/version/{version}/export:
+    get:
+      summary: Export API definition
+      description: Exports the OpenAPI specification for a specific API version
+      operationId: exportApiDefinition
+      parameters:
+        - name: api_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: version
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OpenAPI specification
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: ["success"]
+                  data:
+                    type: object
+                    properties:
+                      openapi:
+                        type: string
+                        example: "3.1.0"
+                      info:
+                        type: object
+                        properties:
+                          title:
+                            type: string
+                            example: "Test API"
+                          version:
+                            type: string
+                            example: "1.0.0"
+                    required:
+                      - openapi
+                      - info
+                required:
+                  - status
+                  - data
+
+  /api/v1/rib/healthcheck:
+    get:
+      summary: Get RIB health status
+      description: Returns the health status of the RIB service
+      operationId: getRibHealthCheck
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: ["success"]
+                  data:
+                    type: object
+                required:
+                  - status
+                  - data
+
+  /api/v1/rib/version:
+    get:
+      summary: Get RIB version information
+      description: Returns the version information of the RIB service
+      operationId: getRibVersion
+      responses:
+        '200':
+          description: Version information
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: ["success"]
+                  data:
+                    type: object
+                    properties:
+                      version:
+                        type: string
+                        example: "1.0.0"
+                    required:
+                      - version
+                required:
+                  - status
+                  - data
+
+  /primitives:
+    get:
+      summary: Get primitive types
+      description: Returns example primitive types and their schema
+      operationId: getPrimitiveTypes
+      responses:
+        '200':
+          description: Primitive types schema and example
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: ["success"]
+                  data:
+                    type: object
+                    properties:
+                      schema:
+                        type: object
+                      example:
+                        type: object
+                        properties:
+                          bool_val:
+                            type: boolean
+                          u32_val:
+                            type: integer
+                            format: int32
+                          f64_val:
+                            type: number
+                            format: double
+                          string_val:
+                            type: string
+                    required:
+                      - schema
+                      - example
+                required:
+                  - status
+                  - data
+
+    post:
+      summary: Create primitive types
+      description: Creates primitive types from provided data
+      operationId: createPrimitiveTypes
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Created primitive types
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: ["success"]
+                  data:
+                    type: object
+                required:
+                  - status
+                  - data
+
+  /users/{id}/profile:
+    get:
+      summary: Get user profile
+      description: Returns the profile information for a specific user
+      operationId: getUserProfile
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int32
+      responses:
+        '200':
+          description: User profile information
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: ["success"]
+                  data:
+                    type: object
+                    properties:
+                      schema:
+                        type: object
+                      profile:
+                        type: object
+                        properties:
+                          id:
+                            type: integer
+                            format: int32
+                          username:
+                            type: string
+                          settings:
+                            type: object
+                            properties:
+                              value:
+                                type: object
+                                properties:
+                                  theme:
+                                    type: string
+                                  notifications_enabled:
+                                    type: boolean
+                          permissions:
+                            type: object
+                            properties:
+                              can_read:
+                                type: boolean
+                              can_write:
+                                type: boolean
+                              is_admin:
+                                type: boolean
+                required:
+                  - status
+                  - data
+
+  /users/{id}/settings:
+    post:
+      summary: Update user settings
+      description: Updates settings for a specific user
+      operationId: updateUserSettings
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int32
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Updated user settings
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: ["success"]
+                  data:
+                    type: object
+                    properties:
+                      id:
+                        type: integer
+                        format: int32
+                      settings:
+                        type: object
+                required:
+                  - status
+                  - data
+
+  /users/{id}/permissions:
+    get:
+      summary: Get user permissions
+      description: Returns the permissions for a specific user
+      operationId: getUserPermissions
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int32
+      responses:
+        '200':
+          description: User permissions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: ["success"]
+                  data:
+                    type: object
+                    properties:
+                      permissions:
+                        type: object
+                        properties:
+                          can_read:
+                            type: boolean
+                          can_write:
+                            type: boolean
+                          can_delete:
+                            type: boolean
+                          is_admin:
+                            type: boolean
+                required:
+                  - status
+                  - data
+
+  /content:
+    post:
+      summary: Create content
+      description: Creates new content
+      operationId: createContent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Created content
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: ["success"]
+                  data:
+                    type: object
+                required:
+                  - status
+                  - data
+
+  /content/{id}:
+    get:
+      summary: Get content
+      description: Returns content by ID
+      operationId: getContent
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int32
+      responses:
+        '200':
+          description: Content information
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: ["success"]
+                  data:
+                    type: object
+                    properties:
+                      content:
+                        type: object
+                        properties:
+                          id:
+                            type: integer
+                            format: int32
+                          title:
+                            type: string
+                          body:
+                            type: string
+                required:
+                  - status
+                  - data
+
+  /search:
+    post:
+      summary: Perform search
+      description: Performs a search with given query and filters
+      operationId: performSearch
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SearchQuery'
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: ["success"]
+                  data:
+                    type: object
+                    properties:
+                      matches:
+                        type: array
+                        items:
+                          type: object
+                      total_count:
+                        type: integer
+                        format: int32
+                      execution_time_ms:
+                        type: integer
+                        format: int32
+                    required:
+                      - matches
+                      - total_count
+                      - execution_time_ms
+                required:
+                  - status
+                  - data
+
+  /search/validate:
+    post:
+      summary: Validate search query
+      description: Validates a search query
+      operationId: validateSearch
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SearchQuery'
+      responses:
+        '200':
+          description: Validation result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: ["success"]
+                  data:
+                    type: object
+                    properties:
+                      valid:
+                        type: boolean
+                required:
+                  - status
+                  - data
+
+  /batch/process:
+    post:
+      summary: Process batch operation
+      description: Processes a batch of operations
+      operationId: processBatch
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                type: string
+      responses:
+        '200':
+          description: Batch processing result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: ["success"]
+                  data:
+                    type: object
+                    properties:
+                      successful:
+                        type: array
+                        items:
+                          type: string
+                      failed:
+                        type: array
+                        items:
+                          type: string
+                    required:
+                      - successful
+                      - failed
+                required:
+                  - status
+                  - data
+
+  /batch/validate:
+    post:
+      summary: Validate batch operation
+      description: Validates a batch of operations
+      operationId: validateBatch
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                type: string
+      responses:
+        '200':
+          description: Batch validation result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: ["success"]
+                  data:
+                    type: object
+                    properties:
+                      valid:
+                        type: boolean
+                required:
+                  - status
+                  - data
+
+  /batch/{id}/status:
+    get:
+      summary: Get batch status
+      description: Returns the status of a batch operation
+      operationId: getBatchStatus
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int32
+      responses:
+        '200':
+          description: Batch status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: ["success"]
+                  data:
+                    type: object
+                    properties:
+                      status:
+                        type: string
+                      progress:
+                        type: integer
+                        format: int32
+                      successful:
+                        type: integer
+                        format: int32
+                      failed:
+                        type: integer
+                        format: int32
+                required:
+                  - status
+                  - data
+
+  /transform:
+    post:
+      summary: Apply transformation
+      description: Applies a transformation to data
+      operationId: applyTransformation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                data:
+                  type: array
+                  items:
+                    type: string
+                transformation:
+                  $ref: '#/components/schemas/DataTransformation'
+      responses:
+        '200':
+          description: Transformation result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: ["success"]
+                  data:
+                    type: object
+                    properties:
+                      success:
+                        type: boolean
+                      output:
+                        type: array
+                        items:
+                          type: string
+                      metrics:
+                        type: object
+                        properties:
+                          input_size:
+                            type: integer
+                            format: int32
+                          output_size:
+                            type: integer
+                            format: int32
+                          duration_ms:
+                            type: integer
+                            format: int32
+                    required:
+                      - success
+                      - output
+                      - metrics
+                required:
+                  - status
+                  - data
+
+  /transform/chain:
+    post:
+      summary: Chain transformations
+      description: Applies a chain of transformations to data
+      operationId: chainTransformations
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                data:
+                  type: array
+                  items:
+                    type: string
+                transformations:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/DataTransformation'
+      responses:
+        '200':
+          description: Chained transformation result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: ["success"]
+                  data:
+                    type: object
+                    properties:
+                      success:
+                        type: boolean
+                      output:
+                        type: array
+                        items:
+                          type: string
+                      metrics:
+                        type: object
+                        properties:
+                          input_size:
+                            type: integer
+                            format: int32
+                          output_size:
+                            type: integer
+                            format: int32
+                          duration_ms:
+                            type: integer
+                            format: int32
+                    required:
+                      - success
+                      - output
+                      - metrics
+                required:
+                  - status
+                  - data
+
+  /tree:
+    post:
+      summary: Create tree
+      description: Creates a new tree structure
+      operationId: createTree
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TreeNode'
+      responses:
+        '200':
+          description: Created tree
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: ["success"]
+                  data:
+                    $ref: '#/components/schemas/TreeNode'
+                required:
+                  - status
+                  - data
+
+  /tree/{id}:
+    get:
+      summary: Query tree
+      description: Queries a tree structure
+      operationId: queryTree
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int32
+        - name: depth
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int32
+            default: 1
+      responses:
+        '200':
+          description: Tree query result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: ["success"]
+                  data:
+                    type: object
+                    properties:
+                      id:
+                        type: integer
+                        format: int32
+                      depth:
+                        type: integer
+                        format: int32
+                      node:
+                        $ref: '#/components/schemas/TreeNode'
+                    required:
+                      - id
+                      - depth
+                      - node
+                required:
+                  - status
+                  - data
+
+  /tree/modify:
+    post:
+      summary: Modify tree
+      description: Modifies a tree structure
+      operationId: modifyTree
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TreeOperation'
+      responses:
+        '200':
+          description: Tree modification result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: ["success"]
+                  data:
+                    type: object
+                    properties:
+                      success:
+                        type: boolean
+                      operation_type:
+                        type: string
+                      nodes_affected:
+                        type: integer
+                        format: int32
+                    required:
+                      - success
+                      - operation_type
+                      - nodes_affected
+                required:
+                  - status
+                  - data
+
+components:
+  schemas:
+    SearchQuery:
+      type: object
+      properties:
+        query:
+          type: string
+        filters:
+          $ref: '#/components/schemas/SearchFilters'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+
+    SearchFilters:
+      type: object
+      properties:
+        categories:
+          type: array
+          items:
+            type: string
+        date_range:
+          $ref: '#/components/schemas/DateRange'
+        flags:
+          $ref: '#/components/schemas/SearchFlags'
+
+    SearchFlags:
+      type: object
+      properties:
+        case_sensitive:
+          type: boolean
+        whole_word:
+          type: boolean
+        regex_enabled:
+          type: boolean
+
+    DateRange:
+      type: object
+      properties:
+        start:
+          type: integer
+          format: int64
+        end:
+          type: integer
+          format: int64
+
+    Pagination:
+      type: object
+      properties:
+        page:
+          type: integer
+          format: int32
+        items_per_page:
+          type: integer
+          format: int32
+
+    DataTransformation:
+      oneOf:
+        - type: object
+          properties:
+            Sort:
+              type: object
+              properties:
+                field:
+                  type: string
+                ascending:
+                  type: boolean
+        - type: object
+          properties:
+            Filter:
+              type: object
+              properties:
+                predicate:
+                  type: string
+        - type: object
+          properties:
+            Map:
+              type: object
+              properties:
+                expression:
+                  type: string
+        - type: object
+          properties:
+            GroupBy:
+              type: object
+              properties:
+                key:
+                  type: string
+
+    TreeNode:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int32
+        value:
+          type: string
+        children:
+          type: array
+          items:
+            $ref: '#/components/schemas/TreeNode'
+        metadata:
+          $ref: '#/components/schemas/NodeMetadata'
+
+    NodeMetadata:
+      type: object
+      properties:
+        created_at:
+          type: integer
+          format: int64
+        modified_at:
+          type: integer
+          format: int64
+        tags:
+          type: array
+          items:
+            type: string
+
+    TreeOperation:
+      oneOf:
+        - type: object
+          properties:
+            Insert:
+              type: object
+              properties:
+                parent_id:
+                  type: integer
+                  format: int32
+                node:
+                  $ref: '#/components/schemas/TreeNode'
+        - type: object
+          properties:
+            Delete:
+              type: object
+              properties:
+                node_id:
+                  type: integer
+                  format: int32
+        - type: object
+          properties:
+            Move:
+              type: object
+              properties:
+                node_id:
+                  type: integer
+                  format: int32
+                new_parent_id:
+                  type: integer
+                  format: int32
+        - type: object
+          properties:
+            Update:
+              type: object
+              properties:
+                node_id:
+                  type: integer
+                  format: int32
+                new_value:
+                  type: string 

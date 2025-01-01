@@ -11,12 +11,12 @@ description = "Base functionalities of Golem Worker Service"
 harness = false
 
 [[test]]
-name = "services_tests"
-harness = false
+name = "comprehensive_wit_converter_tests"
+harness = true
 
 [[test]]
-name = "api_gateway_end_to_end_tests"
-harness = false
+name = "api_definition_tests"
+harness = true
 
 [[test]]
 name = "api_integration_tests"
@@ -47,9 +47,20 @@ name = "swagger_ui_tests"
 harness = true
 
 [[test]]
+name = "worker_gateway_integration_tests"
+harness = true
+
+[[test]]
 name = "utoipa_client_tests"
 harness = true
 
+[[test]]
+name = "client_generation_integration_tests"
+harness = true
+
+[[test]]
+name = "rib_endpoints_tests"
+harness = true
 
 [dependencies]
 golem-common = { path = "../golem-common" }
@@ -58,6 +69,10 @@ golem-service-base = { path = "../golem-service-base" }
 golem-rib = { path = "../golem-rib" }
 golem-wasm-ast = { path = "../wasm-ast", version = "0.0.0" }
 golem-wasm-rpc = { path = "../wasm-rpc", version = "0.0.0", default-features = false, features = ["host"] }
+
+axum = { version = "0.7", features = ["json"] }
+tower = { version = "0.4" }
+tower-http = { version = "0.6.2", features = ["trace"] }
 
 anyhow = { workspace = true }
 async-trait = { workspace = true }
@@ -137,6 +152,12 @@ hyper-util = { version = "0.1", features = ["full"] }
 http-body-util = "0.1"
 reqwest = { version = "0.11", features = ["json"] }
 utoipa-gen = "5.3.0"
+tokio = { version = "1.0", features = ["full"] }
+serde_yaml = "0.9"
+serde_json = "1.0"
+async-trait = "0.1"
+chrono = "0.4"
+oauth2 = { version = "4.4", default-features = false }
 
 [[bench]]
 name = "tree"

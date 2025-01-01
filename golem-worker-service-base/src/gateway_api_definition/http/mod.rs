@@ -32,3 +32,4 @@ pub mod rib_converter;
 pub mod swagger_ui;
 pub(crate) mod path_pattern_parser;
 pub(crate) mod place_holder_parser;
+pub mod client_generator;

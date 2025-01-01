@@ -1,0 +1,221 @@
+// Primitive types wrapper
+record primitive-types {
+    bool-val: bool,
+    u8-val: u8,
+    u16-val: u16,
+    u32-val: u32,
+    u64-val: u64,
+    s8-val: s8,
+    s16-val: s16,
+    s32-val: s32,
+    s64-val: s64,
+    f32-val: float32,
+    f64-val: float64,
+    char-val: char,
+    string-val: string,
+}
+
+// User settings record
+record user-settings {
+    theme: string,
+    notifications-enabled: bool,
+    email-frequency: string,
+}
+
+// User permissions flags
+record user-permissions {
+    can-read: bool,
+    can-write: bool,
+    can-delete: bool,
+    is-admin: bool,
+}
+
+// Complex record with optional fields
+record user-profile {
+    id: u32,
+    username: string,
+    settings: option<user-settings>,
+    permissions: user-permissions,
+}
+
+// Variant type with different cases
+variant content-type {
+    text(string),
+    number(float64),
+    boolean(bool),
+    complex(complex-data),
+}
+
+// Complex data for variant
+record complex-data {
+    id: u32,
+    data: list<string>,
+}
+
+// Success response
+record success-response {
+    code: u16,
+    message: string,
+    data: option<string>,
+}
+
+// Error details
+record error-details {
+    code: u16,
+    message: string,
+    details: option<list<string>>,
+}
+
+// Result type
+type operation-result = result<success-response, error-details>
+
+// Search types
+record search-flags {
+    case-sensitive: bool,
+    whole-word: bool,
+    regex-enabled: bool,
+}
+
+record date-range {
+    start: u64,
+    end: u64,
+}
+
+record pagination {
+    page: u32,
+    items-per-page: u32,
+}
+
+record search-filters {
+    categories: list<string>,
+    date-range: option<date-range>,
+    flags: search-flags,
+}
+
+record search-query {
+    query: string,
+    filters: search-filters,
+    pagination: option<pagination>,
+}
+
+record search-match {
+    id: u32,
+    score: float64,
+    context: string,
+}
+
+record search-result {
+    matches: list<search-match>,
+    total-count: u32,
+    execution-time-ms: u32,
+}
+
+// Batch operation types
+record batch-options {
+    parallel: bool,
+    retry-count: u32,
+    timeout-ms: u32,
+}
+
+record batch-result {
+    successful: u32,
+    failed: u32,
+    errors: list<string>,
+}
+
+// Data transformation types
+variant data-transformation {
+    sort(record {
+        field: string,
+        ascending: bool,
+    }),
+    filter(record {
+        predicate: string,
+    }),
+    map(record {
+        expression: string,
+    }),
+    group-by(record {
+        key: string,
+    }),
+}
+
+record transformation-metrics {
+    input-size: u32,
+    output-size: u32,
+    duration-ms: u32,
+}
+
+record transformation-result {
+    success: bool,
+    output: list<string>,
+    metrics: transformation-metrics,
+}
+
+// Tree operation types
+record node-metadata {
+    created-at: u64,
+    modified-at: u64,
+    tags: list<string>,
+}
+
+record tree-node {
+    id: u32,
+    value: string,
+    children: list<tree-node>,
+    metadata: node-metadata,
+}
+
+variant tree-operation {
+    insert(record {
+        parent-id: u32,
+        node: tree-node,
+    }),
+    delete(record {
+        node-id: u32,
+    }),
+    move(record {
+        node-id: u32,
+        new-parent-id: u32,
+    }),
+    update(record {
+        node-id: u32,
+        new-value: string,
+    }),
+}
+
+record operation-stats {
+    operation-type: string,
+    nodes-affected: u32,
+    depth-changed: s32,
+}
+
+// Interface definition
+interface test-component {
+    test-primitives: func() -> primitive-types
+    test-user-profile: func() -> user-profile
+    test-content-types: func() -> list<content-type>
+    test-operation-result: func(succeed: bool) -> operation-result
+
+    perform-search: func(query: search-query) -> search-result
+    validate-search-query: func(query: search-query) -> result<bool, string>
+    
+    batch-process: func(items: list<string>, options: batch-options) -> batch-result
+    batch-validate: func(items: list<string>) -> list<result<bool, string>>
+    
+    apply-transformation: func(data: list<string>, transform: data-transformation) -> transformation-result
+    chain-transformations: func(data: list<string>, transforms: list<data-transformation>) -> result<transformation-result, string>
+    
+    create-tree: func(root: tree-node) -> result<tree-node, string>
+    modify-tree: func(operation: tree-operation) -> result<operation-stats, string>
+    query-tree: func(node-id: u32, depth: option<u32>) -> option<tree-node>
+    
+    process-batch-async: func(items: list<string>, options: batch-options) -> result<u32, string>
+    get-batch-status: func(batch-id: u32) -> option<batch-result>
+    
+    validate-complex-input: func(
+        profile: user-profile,
+        query: search-query,
+        options: batch-options
+    ) -> result<bool, list<string>>
+} 
