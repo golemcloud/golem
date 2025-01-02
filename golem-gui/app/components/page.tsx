@@ -1,5 +1,5 @@
 "use client";
-import React, { useState } from "react";
+import React, { useCallback, useState } from "react";
 import {
   Box,
   InputAdornment,
@@ -20,7 +20,7 @@ import useComponents from "@/lib/hooks/use-component";
 import CustomModal from "@/components/CustomModal";
 import ComponentCard from "@/components/components-card";
 import { calculateHoursDifference, calculateSizeInMB } from "@/lib/utils";
-import {Button2} from "@/components/ui/button";
+import { Button2 } from "@/components/ui/button";
 import clsx from "clsx";
 import ComponentTable from "@/components/ui/generic-table";
 
@@ -31,7 +31,6 @@ const ComponentsPage = () => {
   const handleClose = () => setOpen(false);
   const [viewMode, setViewMode] = useState("card");
   const [searchQuery, setSearchQuery] = useState("");
-
   const handleActiveButton = (button: string) => {
     setActiveButton(button);
     setViewMode(button === "grid" ? "card" : "table");
@@ -44,9 +43,25 @@ const ComponentsPage = () => {
     router.push(`/components/${id}/overview`);
   }
 
-  // Filter APIs based on search query
-  const filteredComponents = components?.filter((component: Component) =>
-    component.componentName.toLowerCase().includes(searchQuery.toLowerCase())
+  const finalComponents = Object.values(
+    components?.reduce<Record<string, Component>>((obj, component) => {
+      obj[component.versionedComponentId.componentId] = component;
+      return obj;
+    }, {}) || {}
+  ).sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  );
+
+  const checkForMatch = useCallback(
+    (component: Component) => {
+      if (!searchQuery || searchQuery?.length <= 2) {
+        return true;
+      }
+      return component.componentName
+        .toLowerCase()
+        .includes(searchQuery.toLowerCase());
+    },
+    [searchQuery]
   );
 
   return (
@@ -115,31 +130,33 @@ const ComponentsPage = () => {
               </Button2>
             </Box>
 
-            {filteredComponents.length > 0 ? (
+            {finalComponents.length > 0 ? (
               viewMode === "card" ? (
                 <Box className="grid w-full grid-cols-1 lg:grid-cols-2 gap-6 xl:grid-cols-2">
                   {!isLoading &&
-                    filteredComponents.map((item) => (
-                      <ComponentCard
-                        key={item.versionedComponentId.componentId}
-                        id={item.versionedComponentId.componentId}
-                        title={item.componentName}
-                        time={calculateHoursDifference(item.createdAt)}
-                        version={item.versionedComponentId.version}
-                        exports={item.metadata.exports.length}
-                        size={calculateSizeInMB(item.componentSize)}
-                        componentType={item.componentType}
-                        onClick={() =>
-                          handleComponentClick(
-                            item.versionedComponentId.componentId
-                          )
-                        }
-                      />
-                    ))}
+                    finalComponents.map((item) =>
+                      checkForMatch(item) ? (
+                        <ComponentCard
+                          key={item.versionedComponentId.componentId}
+                          id={item.versionedComponentId.componentId}
+                          title={item.componentName}
+                          time={calculateHoursDifference(item.createdAt)}
+                          version={item.versionedComponentId.version}
+                          exports={item.metadata.exports.length}
+                          size={calculateSizeInMB(item.componentSize)}
+                          componentType={item.componentType}
+                          onClick={() =>
+                            handleComponentClick(
+                              item.versionedComponentId.componentId
+                            )
+                          }
+                        />
+                      ) : null
+                    )}
                 </Box>
               ) : (
                 <ComponentTable<Component>
-                  data={filteredComponents}
+                  data={finalComponents}
                   columns={[
                     {
                       key: "componentName",

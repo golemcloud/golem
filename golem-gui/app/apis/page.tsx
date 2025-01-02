@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import {
   Alert,
   Box,
@@ -32,9 +32,29 @@ const ComponentsPage = () => {
     router.push(`/apis/${apiId}/overview`);
   };
 
-  // Filter APIs based on search query
-  const filteredApis = apiDefinitions?.filter((api: ApiDefinition) =>
-    api.id.toLowerCase().includes(searchQuery.toLowerCase())
+  const finalApis = useMemo(() => {
+    return Object.values(
+      apiDefinitions?.reduce<Record<string, ApiDefinition>>(
+        (obj, api: ApiDefinition) => {
+          obj[api.id] = api;
+          return obj;
+        },
+        {}
+      ) || {}
+    ).sort(
+      (a, b) =>
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+  }, [apiDefinitions]);
+  const checkForMatch = useCallback(
+    (api: ApiDefinition) => {
+      if (!searchQuery || searchQuery?.length <= 2) {
+        return true;
+      }
+
+      return api.id.toLowerCase().includes(searchQuery.toLowerCase());
+    },
+    [searchQuery]
   );
 
   return (
@@ -79,7 +99,7 @@ const ComponentsPage = () => {
               </Button2>
             </Box>
 
-            {filteredApis.length === 0 ? (
+            {finalApis.length === 0 ? (
               <Box
                 sx={{
                   color: "#aaa",
@@ -115,16 +135,18 @@ const ComponentsPage = () => {
             ) : (
               <Box className="grid w-full grid-cols-1 gap-3 lg:grid-cols-2 xl:grid-cols-3  mt-2">
                 {!isLoading &&
-                  filteredApis.map((api: ApiDefinition) => (
-                    <ApiInfoCard
-                      key={api.id}
-                      name={api.id}
-                      version={api.version}
-                      routesCount={api.routes.length}
-                      locked={api.draft}
-                      onClick={() => handleApiClick(api.id)}
-                    />
-                  ))}
+                  finalApis.map((api: ApiDefinition) =>
+                    checkForMatch(api) ? (
+                      <ApiInfoCard
+                        key={api.id}
+                        name={api.id}
+                        version={api.version}
+                        routesCount={api.routes.length}
+                        locked={api.draft}
+                        onClick={() => handleApiClick(api.id)}
+                      />
+                    ) : null
+                  )}
               </Box>
             )}
 
