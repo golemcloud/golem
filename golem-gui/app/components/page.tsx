@@ -2,8 +2,6 @@
 import React, { useState } from "react";
 import {
   Box,
-  
-  Container,
   InputAdornment,
   TextField,
   Typography,
@@ -25,8 +23,6 @@ import { calculateHoursDifference, calculateSizeInMB } from "@/lib/utils";
 import {Button2} from "@/components/ui/button";
 import clsx from "clsx";
 import ComponentTable from "@/components/ui/generic-table";
-import { Crosshair } from 'lucide-react';
-
 
 const ComponentsPage = () => {
   const [open, setOpen] = useState(false);

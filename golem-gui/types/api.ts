@@ -182,17 +182,17 @@ export type ApiDeployment = {
 };
 
 export interface OplogProcessorSpecs {
-  type: 'OplogProcessor'; // Fixed type for identification
-  componentId: string;    // ID of the component being processed
+  type: "OplogProcessor"; // Fixed type for identification
+  componentId: string; // ID of the component being processed
   componentVersion: string; // Version of the component
-};
+}
 
 export interface ComponentTransformerSpecs {
-  type: 'ComponentTransformer'; // Fixed type for identification
-  jsonSchema: string;           // JSON schema definition as a string
-  validateUrl: string;          // URL for validation
-  transformUrl: string;         // URL for transformation
-};
+  type: "ComponentTransformer"; // Fixed type for identification
+  jsonSchema: string; // JSON schema definition as a string
+  validateUrl: string; // URL for validation
+  transformUrl: string; // URL for transformation
+}
 
 export interface Plugin {
   name: string;
@@ -200,7 +200,7 @@ export interface Plugin {
   description?: string;
   icon: number[];
   homepage?: string;
-  specs: OplogProcessorSpecs | ComponentTransformerSpecs
+  specs: OplogProcessorSpecs | ComponentTransformerSpecs;
   scope: {
     type: "Global";
   };
@@ -242,15 +242,15 @@ interface ValueAndType {
   value: unknown; // The actual value (generic to accommodate various types)
 }
 
-
 interface ExportedFunctionParameters {
-  function_name:string;
+  function_name: string;
   idempotency_key: string; // Unique identifier
   full_function_name?: string; // Name of the function, including its scope or namespace
   function_input?: ValueAndType[]; // Array of function inputs, with value and type metadata
 }
 
-export interface ExportedFunctionInvokedEntry extends ExportedFunctionParameters {
+export interface ExportedFunctionInvokedEntry
+  extends ExportedFunctionParameters {
   request: ValueAndType[]; // Array of requests, can hold any type
   timestamp: string; // ISO 8601 timestamp string
   type: "ExportedFunctionInvoked"; // Literal type for identification
@@ -284,17 +284,18 @@ export interface PublicOplogEntry_LogParameters extends LogParameters {
   type: "Log"; // Fixed value
 }
 
-
-
 export interface EntryWrapper {
-  entry: CreateLogEntry | ExportedFunctionInvokedEntry | ExportedFunctionCompletedEntry | PublicOplogEntry_LogParameters;
+  entry:
+    | CreateLogEntry
+    | ExportedFunctionInvokedEntry
+    | ExportedFunctionCompletedEntry
+    | PublicOplogEntry_LogParameters;
   oplogIndex: number;
 }
 
-export interface OpLog{
-  entry: EntryWrapper
+export interface OpLog {
+  entry: EntryWrapper;
 }
-
 
 export interface OplogQueryParams {
   from?: number;
@@ -302,7 +303,6 @@ export interface OplogQueryParams {
   cursor?: string;
   query?: string;
 }
-
 
 export interface InstallPluginPayload {
   name: string;
@@ -319,7 +319,7 @@ export interface UpdatePluginInstallPayload {
 export type InvocationStart = {
   InvocationStart: {
     timestamp: string; // ISO 8601 format date string
-    function: string;  // Function name with namespace or path
+    function: string; // Function name with namespace or path
     idempotency_key: string; // Unique key for idempotency
   };
 };
@@ -327,22 +327,70 @@ export type InvocationStart = {
 export type StdOutMessage = {
   StdOut: {
     timestamp: string; // ISO 8601 format date string
-    bytes: number[];   // Array of bytes representing the message
+    bytes: number[]; // Array of bytes representing the message
   };
-}; 
+};
 
 export type InvocationFinishedMessage = {
   InvocationFinished: {
     timestamp: string; // ISO 8601 format date string
-    function: string;  // Identifier of the function invoked
+    function: string; // Identifier of the function invoked
     idempotency_key: string; // Unique key for ensuring idempotency
   };
 };
 
-
-export type EventMessage = InvocationStart | StdOutMessage | InvocationFinishedMessage
+export type EventMessage =
+  | InvocationStart
+  | StdOutMessage
+  | InvocationFinishedMessage;
 
 export type WebSocketMessage = {
   type: string;
   data: EventMessage; // You can replace `any` with a more specific type if known
 };
+export type FilterComparator =
+  | "Equal"
+  | "Greater"
+  | "GreaterEqual"
+  | "LessEqual"
+  | "Less"
+  | "NotEqual";
+
+export type StringFilterComparator = "Equal" | "NotEqual" | "Like" | "NotLike";
+
+export type WorkerNormalFilter = {
+  type: string;
+  comparator: string;
+  value: string | number | WorkerStatus;
+  name?: string; // For Env filter
+};
+
+export interface WorkerHybridFilter {
+  // type: "OR" | "AND" | "NOT";
+  type: string;
+  filters: WorkerNormalFilter[];
+}
+
+export type Cursor = {
+  cursor: number;
+  layer: number;
+} | null;
+
+export type WorkerFilter = {
+  count?: number;
+  cursor?: Cursor;
+  filter?: {
+    // type: "OR" | "AND" | "NOT";
+    type: string;
+    filters: (WorkerNormalFilter | WorkerHybridFilter)[];
+  } | null;
+  precise?: boolean;
+};
+
+export interface WorkerListResponse {
+  workers: Worker[];
+  cursor?: {
+    cursor: number;
+    layer: number;
+  };
+}

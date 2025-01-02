@@ -8,7 +8,7 @@ import {
   RouteStep,
   V2Step,
 } from "@/types/react-flow";
-import { ApiDefinition, ApiRoute } from "@/types/api";
+import { ApiDefinition } from "@/types/api";
 import ApiIcon from "@mui/icons-material/Api";
 import RouteIcon from "@mui/icons-material/Route";
 
@@ -141,7 +141,7 @@ export const processApiFlow = (
       ...newEdges, 
       ...createCustomEdgeMeta(firstApiDefintion.id, nodeId)]
     newNodes.push(createDefaultNodeV2(apiDefiniton, nodeId));
-    routes.forEach((route, index)=>{
+    routes.forEach((route)=>{
       const id = `${nodeId}__${route?.path}__${route?.method}__route`;
       const routeData = {
         apiInfo: { ...nodeData } as Omit<ApiDefinition, "routes">,

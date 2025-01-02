@@ -5,11 +5,11 @@ import React, { useMemo } from "react";
 import { calculateHoursDifference, calculateSizeInMB } from "@/lib/utils";
 import GenericCard from "@/components/ui/generic-card";
 
-const cardStyle = {
-  padding: 3,
-  textAlign: "center",
-  bgcolor: "#1E1E1E",
-};
+// const cardStyle = {
+//   padding: 3,
+//   textAlign: "center",
+//   bgcolor: "#1E1E1E",
+// };
 
 const Overview = ({
   worker,

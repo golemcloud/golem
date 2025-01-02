@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/ban-ts-comment */
+'use client'
 import React, { useState } from "react";
 import {
   Box,
@@ -21,6 +22,7 @@ import { Component, WorkerFormData } from "@/types/api";
 import { v4 as uuidv4 } from 'uuid';
 import { addNewWorker } from "@/lib/hooks/use-worker";
 import {getFormErrorMessage} from "@/lib/utils"
+import { useRouter } from "next/navigation";
 
 interface FormData {
   component: string;
@@ -44,6 +46,7 @@ const CreateWorker = ({compId, version, onSuccess}:{compId?:string, version?:str
     },
   });
 
+  const router = useRouter();
   const { fields, append, remove } = useFieldArray({
     control,
     name: "envVars",
@@ -84,12 +87,13 @@ const removeArgumentVar = (index: number) => {
         return acc;
       }, {}),
     } as WorkerFormData;
-    const {error} = await addNewWorker(newWorker, (data.component|| compId!));
+    const {error, data: worker} = await addNewWorker(newWorker, (data.component|| compId!));
     setError(error || "");
     if(error) {
      return
     }
     onSuccess?.()
+    router.push(`/components/${compId}/workers/${worker?.workerId?.workerName}`)
 
   };
 

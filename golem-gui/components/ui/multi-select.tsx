@@ -135,8 +135,12 @@ export const MultiSelect = React.forwardRef<
     ref
   ) => {
     const [selectedValues, setSelectedValues] =
-      React.useState<string[]>(defaultValue);
+      React.useState<string[]>([]);
     const [isPopoverOpen, setIsPopoverOpen] = React.useState(false);
+
+    React.useEffect(()=>{
+      setSelectedValues(defaultValue)
+    }, [defaultValue?.toString()])
 
     const handleInputKeyDown = (
       event: React.KeyboardEvent<HTMLInputElement>

@@ -1,16 +1,18 @@
 import useSWR, { mutate } from "swr";
 import { fetcher } from "../utils";
 import {
-  Component,
   Parameter,
   Worker,
   WorkerFormData,
   WorkerFunction,
   OplogQueryParams,
+  Cursor,
+  WorkerNormalFilter,
 } from "@/types/api";
 import { toast } from "react-toastify";
-import { useParams, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useCallback, useEffect, useState } from "react";
+import { WorkerFilter } from "../../types/api";
 const ROUTE_PATH = "v1/components";
 
 export function useDeleteWorker(componentId: string, workerName: string) {
@@ -129,7 +131,7 @@ export async function addNewWorker(
 ): Promise<{
   success: boolean;
   error?: string | null;
-  data?: Component;
+  data?: Worker;
 }> {
   const endpoint = `${ROUTE_PATH}/${componentId}/workers`;
   const response = await fetcher(endpoint, {
@@ -147,10 +149,11 @@ export async function addNewWorker(
 
   toast.success("Worker Sucessfully created");
   mutate(endpoint);
+  mutate(`${endpoint}/find`);
   if (path && endpoint !== path) {
     mutate(path);
   }
-  return { success: false, error: null };
+  return { success: true, error: null, data: response.data };
 }
 
 export async function interruptWorker(
@@ -239,6 +242,184 @@ export function useWorkerLogs(
   };
 }
 
+export function useWorkerFind(compId: string, limit?: number) {
+  const [error, setError] = useState<string | null>(null);
+  const [workers, setWorkers] = useState<Worker[]>([]);
+  const [cursor, setCursor] = useState<Cursor>(null);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const searchParams = useSearchParams();
+
+  const transformSearchParams = useCallback(
+    (cursor?: Cursor) => {
+      // Parse the query string into an object
+      const params = new URLSearchParams(searchParams);
+
+      // Extract and parse workerStatus and workerVersion
+      let workerStatus: string[] = [];
+      let workerVersion: { version: number; comparator: string } | null = null;
+      let workerName: { search: string; comparator: string } | null = null;
+      let workerAfter: { type: string; value: string } | null = null;
+      let workerBefore: { type: string; value: string } | null = null;
+      try {
+        workerStatus = JSON.parse(params.get("workerStatus") || "[]");
+        workerVersion = JSON.parse(params.get("workerVersion") || "{}");
+        workerName = JSON.parse(params.get("workerName") || "{}");
+        workerAfter = JSON.parse(params.get("workerAfter") || "{}");
+        workerBefore = JSON.parse(params.get("workerBefore") || "{}");
+      } catch (e) {
+        console.log("error occured while parsing", e);
+      }
+      // Construct filters based on workerStatus
+      const statusFilters = workerStatus.map((status: string) => ({
+        type: "Status",
+        comparator: "Equal",
+        value: status,
+      }));
+
+      // Combine the filters into the desired structure
+      let defaultFilter: WorkerFilter = {
+        count: limit || 10,
+        precise: true,
+      };
+      if (cursor) {
+        defaultFilter = {
+          ...defaultFilter,
+          cursor: cursor,
+        };
+      }
+
+      const finalFilters = statusFilters.length
+        ? {
+            ...defaultFilter,
+            filter: {
+              type: "And",
+              filters: [
+                {
+                  type: "Or",
+                  filters: statusFilters,
+                },
+              ],
+            },
+          }
+        : defaultFilter;
+
+      // Add workerVersion if it exists
+      if (
+        workerVersion &&
+        "version" in workerVersion &&
+        workerVersion.comparator
+      ) {
+        finalFilters.filter = finalFilters.filter || {
+          type: "And",
+          filters: [],
+        };
+        const versionFilter: WorkerNormalFilter = {
+          type: "Version",
+          comparator: workerVersion.comparator,
+          value: workerVersion.version,
+        };
+        finalFilters.filter.filters = [
+          ...finalFilters.filter.filters,
+          versionFilter,
+        ];
+      }
+
+      if (workerName && "search" in workerName && workerName.comparator) {
+        finalFilters.filter = finalFilters.filter || {
+          type: "And",
+          filters: [],
+        };
+        finalFilters.filter.filters = [
+          ...finalFilters.filter.filters,
+          {
+            type: "Name",
+            comparator: workerName.comparator,
+            value: workerName.search,
+          },
+        ];
+      }
+
+      if (workerAfter && "value" in workerAfter) {
+        finalFilters.filter = finalFilters.filter || {
+          type: "And",
+          filters: [],
+        };
+        finalFilters.filter.filters = [
+          ...finalFilters.filter.filters,
+          {
+            type: "CreatedAt",
+            comparator: "GreaterEqual",
+            value: workerAfter.value,
+          },
+        ];
+      }
+
+      if (workerBefore && "value" in workerBefore) {
+        finalFilters.filter = finalFilters.filter || {
+          type: "And",
+          filters: [],
+        };
+        finalFilters.filter.filters = [
+          ...finalFilters.filter.filters,
+          {
+            type: "CreatedAt",
+            comparator: "LessEqual",
+            value: workerBefore.value,
+          },
+        ];
+      }
+
+      return finalFilters;
+    },
+    [searchParams, limit]
+  );
+
+  const triggerQuery = useCallback(
+    async (cursor: Cursor, triggerNext?: boolean) => {
+      const payload = transformSearchParams(cursor);
+      try {
+        setIsLoading(true);
+        const response = await fetcher(`${ROUTE_PATH}/${compId}/workers/find`, {
+          method: "POST",
+          body: JSON.stringify(payload),
+          headers: {
+            "content-type": "application/json",
+          },
+        });
+
+        if (response.error) {
+          setError(response.error);
+          return toast.error(response.error);
+        }
+        setWorkers((prev) => [
+          ...(triggerNext ? prev : []),
+          ...response.data.workers,
+        ]);
+        setCursor(response.data.cursor);
+      } catch (err) {
+        //do nothing
+        console.log("error occured while fetching the data", err);
+        setError("Something went wrong");
+        return toast.error("Something went wrong");
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [compId, transformSearchParams]
+  );
+
+  useEffect(() => {
+    triggerQuery(null);
+  }, [triggerQuery]);
+
+  return {
+    error,
+    data: workers,
+    isLoading,
+    triggerNext: cursor ? () => triggerQuery(cursor, true) : null,
+  };
+}
+
 export default function useWorkers(
   componentId?: string,
   version?: string | number
@@ -274,7 +455,7 @@ export default function useWorkers(
   ): Promise<{
     success: boolean;
     error?: string | null;
-    data?: Component;
+    data?: Worker;
   }> => {
     return addNewWorker(newWorker, componentId, path);
   };
@@ -294,7 +475,6 @@ export function useWorkerFileContent(
   fileName: string
 ) {
   const path = `${ROUTE_PATH}/${componentsId}/workers/${workersName}/files/${fileName}`;
-  console.log("path", path);
   const { data, error, isLoading } = useSWR(path, fetcher);
 
   return { data, isLoading, error: error || data?.error };

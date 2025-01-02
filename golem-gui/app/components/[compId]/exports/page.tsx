@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
 import React, { useMemo } from "react";
 import GenericTable from "@/components/ui/generic-table";
@@ -28,12 +29,12 @@ type DataItem = {
 };
 
 export default function ExportsTable<T>({
-  data,
-  columns,
-  onRowClick,
+  // data,
+  // columns,
+  // onRowClick,
 }: ExportsTableProps<T>) {
   const { compId } = useParams<{ compId: string }>();
-  const { components, isLoading: componentDataLoading } = useComponents(
+  const { components } = useComponents(
     compId,
     "latest"
   );

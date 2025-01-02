@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from "react";
 import DangerZone from "@/components/settings";
-import ComponentInfo from "@/components/componentInfoCard";
+import ComponentInfo from "@/components/component-info-card";
 import {
   Tabs,
   Tab,

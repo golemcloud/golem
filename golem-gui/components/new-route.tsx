@@ -1,13 +1,12 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useForm, Controller } from "react-hook-form";
 import {
   Box,
   Button,
   TextField,
   Typography,
-  InputLabel,
   FormControl,
   Divider,
 } from "@mui/material";
@@ -66,6 +65,13 @@ const NewRouteForm = ({
   const { getApiDefintion, isLoading: apiDefinitonLoading, upsertRoute, deleteRoute } = useApiDefinitions(apiId, version);
   const { error: apiDefintionError } = getApiDefintion(apiId, version);
   const components = (data?.data || null) as Component[];
+
+
+  useEffect(()=>{
+
+
+  }, [mode, routePath, apiId])
+
 
   if (apiDefinitonLoading || isLoading) {
     return <Loader />;

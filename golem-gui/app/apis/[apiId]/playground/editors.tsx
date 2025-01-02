@@ -1,5 +1,5 @@
 "use client";
-import { Container, Modal, Paper, TextField, Typography } from "@mui/material";
+import { Paper, TextField } from "@mui/material";
 import React, { useEffect, useState } from "react";
 import useStore from "@/lib/hooks/use-react-flow-store";
 import CreateAPI from "@/components/create-api";
@@ -13,7 +13,6 @@ export default function Editors() {
   const [open, setOpen] = useState<string | null>(null);
   const { apiId } = useParams<{ apiId: string }>();
   const { trigger, setTrigger, setSelectedNode, setSelectedEdge } = useStore();
-  const handleOpen = (type: string) => setOpen(type);
   const handleClose = () => {
     setTrigger(null);
     setSelectedNode(null);

@@ -3,58 +3,34 @@
 import React, { useState } from "react";
 import {
   Box,
-  TextField,
   Button,
   Typography,
   Stack,
-  Card,
-  InputAdornment,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
-import useWorkers from "@/lib/hooks/use-worker";
+import { useWorkerFind } from "@/lib/hooks/use-worker";
 import { useParams, useRouter } from "next/navigation";
 import { Crosshair, Loader } from "lucide-react";
 import { Worker } from "@/types/api";
 import CreateWorker from "@/components/create-worker";
 import CustomModal from "@/components/CustomModal";
 import SecondaryHeader from "@/components/ui/secondary-header";
-import SearchIcon from "@mui/icons-material/Search";
 import { Button2 } from "@/components/ui/button";
 import WorkerInfoCard from "@/components/worker-info-card";
-import {StatusFilter, VersionFilter} from "./workers-filter";
-import { DatePicker } from '@/components/ui/date-picker';
+import {StatusFilter, VersionFilter, Search, CustomDatePickFilter} from "./workers-filter";
 
 
 const WorkerListWithDropdowns = () => {
-  const [workerStatus, setWorkerStatus] = useState<string[]>([]);
   const router = useRouter();
   //TO DO: let show filters in url so that user can share the url to others.
   const { compId } = useParams<{ compId: string }>();
-  const [version, setVersion] = useState("");
-  const [createdAfter, setCreatedAfter] = useState<Date | null>(null);
-  const [createdBefore, setCreatedBefore] = useState<Date | null>(null);
   const [open, setOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState(""); // For searching statuses
 
   const handleClose = () => setOpen(false);
 
-  //need to integrate the filter logic here. and pagination or scroll on load needs to implemented or addd show more at the end on click we need to next set of data
-  const { workers, isLoading } = useWorkers(compId);
-  const statuses = [
-    "Running",
-    "Idle",
-    "Suspended",
-    "Interrupted",
-    "Retrying",
-    "Failed",
-    "Exited",
-  ];
-
-  const filteredStatuses = statuses.filter((status) =>
-    status.toLowerCase().includes(searchQuery.toLowerCase())
-  );
-  const [date, setDate] = useState<Date | undefined>(undefined);
-
+  //need to integrate pagination or scroll on lcomponentIdoad needs to implemented or addd show more at the end on click we need to next set of data
+  const { data, isLoading, error, triggerNext } = useWorkerFind(compId, 10);
+  const workers = !isLoading && !error ? data : []
 
   return (
     <>
@@ -71,22 +47,7 @@ const WorkerListWithDropdowns = () => {
             mb={3}
             gap={2}
           >
-            <TextField
-              placeholder="Worker Name..."
-              variant="outlined"
-              className="flex-1"
-              value={searchQuery}
-              size="small"
-              onChange={(e) => setSearchQuery(e.target.value)}
-              InputProps={{
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <SearchIcon sx={{ color: "grey.500" }} />
-                  </InputAdornment>
-                ),
-              }}
-            />
-
+            <Search />
             <Box className="border p-2 text-lg rounded-md cursor-pointer">
               <Crosshair size="22px" />
             </Box>
@@ -109,13 +70,15 @@ const WorkerListWithDropdowns = () => {
             <StatusFilter />
             <VersionFilter />
             <Stack direction="row" gap={4}>
-              <DatePicker />
-              <DatePicker />
+              <CustomDatePickFilter label="Created After" searchKey={"workerAfter"}/>
+              <CustomDatePickFilter label="Created Before" searchKey={"workerBefore"}/>
+              {/* <DatePicker handleChange={handleChange}/> */}
+              {/* <DatePicker handleChange={handleChange}/> */}
             </Stack>
           </Stack>
 
           {/* No Workers Found */}
-          {!isLoading && workers.length == 0 && (
+          {!isLoading && workers?.length == 0 && (
             <Box
               className="dark:bg-gray-800 bg-[#E3F2FD] dark:text-white text-black"
               sx={{
@@ -164,6 +127,10 @@ const WorkerListWithDropdowns = () => {
                   </Stack>
                 )}
               </Box>
+              {/*TODO: for now cursor is handled like this. but this can be improved on scroll load and some other things */}
+              {triggerNext && <Stack alignItems={"center"} sx={{pt:2}}>
+                <Button2 onClick={triggerNext}>more..</Button2>
+                </Stack>}
           <CustomModal
             open={open}
             onClose={handleClose}

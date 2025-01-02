@@ -18,11 +18,10 @@ import {
   ErrorOutline,
   RocketLaunch,
 } from "@mui/icons-material";
-import AddIcon from "@mui/icons-material/Add";
 import CreateWorker from "@/components/create-worker";
 import CustomModal from "@/components/CustomModal";
 import useComponents from "@/lib/hooks/use-component";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { ComponentExport, WorkerFunction } from "@/types/api";
 import useWorkers, { getStateFromWorkersData } from "@/lib/hooks/use-worker";
 import SecondaryHeader from "@/components/ui/secondary-header";
@@ -30,6 +29,7 @@ import SecondaryHeader from "@/components/ui/secondary-header";
 const Overview = () => {
   const [isOpen, setIsOpen] = useState(false);
   const { compId } = useParams<{ compId: string }>();
+  const router = useRouter();
 
   const { components, isLoading: componentDataLoading } = useComponents(
     compId,
@@ -38,6 +38,14 @@ const Overview = () => {
   const [latestComponent] = components;
 
   const { workers, isLoading } = useWorkers(compId);
+
+  const getNewSearchParams = (key:string, value:string[]|string|number)=>{
+  const searchParams = new URLSearchParams();
+  if (value && Array.isArray(value)) {
+    searchParams.set(key, JSON.stringify(value));
+  }
+  return searchParams.toString();
+  }
 
   const workerStats = useMemo(() => {
     const stats = getStateFromWorkersData(workers);
@@ -51,18 +59,23 @@ const Overview = () => {
           ) || 0,
         icon: <CheckCircleOutline fontSize="small" />,
         isLoading: isLoading,
+        handleClick:(()=>router.push(`/components/${compId}/workers?${getNewSearchParams('workerStatus', ["Running", "Idle", "Suspended"])}`))
       },
       {
         label: "Running Workers",
         value: stats["running"] || 0,
         icon: <RocketLaunch fontSize="small" />,
         isLoading: isLoading,
+        handleClick:(()=>router.push(`/components/${compId}/workers?${getNewSearchParams('workerStatus', ["Running"])}`))
+
       },
       {
         label: "Failed Workers",
         value: stats["failed"] || 0,
         icon: <ErrorOutline fontSize="small" />,
         isLoading: isLoading,
+        handleClick:(()=>{router.push(`/components/${compId}/workers?${getNewSearchParams('workerStatus', ["Failed"])}`)})
+
       },
     ];
   }, [workers]);
@@ -74,6 +87,7 @@ const Overview = () => {
         value: `v${latestComponent?.versionedComponentId?.version}`,
         icon: <InsertChart fontSize="small" />,
         isLoading: componentDataLoading,
+        handleClick:()=>{}
       },
     ];
   }, [latestComponent]);
@@ -122,7 +136,7 @@ useEffect(() => {
         <div className="mx-auto max-w-2xl lg:max-w-none py-4">
           <Grid container spacing={4}>
             {[...stats, ...workerStats].map((stat, index) => (
-              <Grid size={{ xs: 12, sm: 6, lg: 3 }} key={index}>
+              <Grid size={{ xs: 12, sm: 6, lg: 3 }} key={index} onClick={stat?.handleClick}>
                 <Paper sx={{ padding: 4, textAlign: "center", bgcolor: "#1E1E1E" }} className="border">
                   <Box sx={{ display: "flex", justifyContent: "space-between" }}>
                     <Typography variant="body2">{stat.label}</Typography>

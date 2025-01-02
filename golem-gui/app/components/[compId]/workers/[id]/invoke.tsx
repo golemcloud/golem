@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { Parameter, Worker, WorkerFunction } from "@/types/api";
+import { Worker, WorkerFunction } from "@/types/api";
 import useComponents from "@/lib/hooks/use-component";
 import { useParams } from "next/navigation";
 import { Loader } from "lucide-react";
