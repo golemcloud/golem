@@ -1,5 +1,5 @@
 "use client";
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import {
   Box,
   InputAdornment,
@@ -43,14 +43,17 @@ const ComponentsPage = () => {
     router.push(`/components/${id}/overview`);
   }
 
-  const finalComponents = Object.values(
-    components?.reduce<Record<string, Component>>((obj, component) => {
-      obj[component.versionedComponentId.componentId] = component;
-      return obj;
-    }, {}) || {}
-  ).sort(
-    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-  );
+  const finalComponents = useMemo(() => {
+    return Object.values(
+      components?.reduce<Record<string, Component>>((obj, component) => {
+        obj[component.versionedComponentId.componentId] = component;
+        return obj;
+      }, {}) || {}
+    ).sort(
+      (a, b) =>
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+  }, [components]);
 
   const checkForMatch = useCallback(
     (component: Component) => {
