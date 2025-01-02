@@ -19,7 +19,7 @@ const ApiLeftNav = () => {
 
   return (
     <ErrorBoundary>
-      <nav className="w-64 border-r p-4 border-gray-200 dark:border-gray-700">
+      <nav className="w-64 border-r p-4 border-gray-200 dark:border-gray-700 min-h-[95vh]">
         <div className="mb-6">
           <div className="flex items-center mb-6">
             <div onClick={() => navigate(`/apis`)}>
