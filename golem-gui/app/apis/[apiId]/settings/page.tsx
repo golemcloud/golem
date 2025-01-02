@@ -9,21 +9,23 @@ const ApiSettings = () => {
   const { apiId} = useParams<{apiId:string}>();
   const params = useSearchParams();
   const version = params.get("version");
-  const { deleteVersion } = useApiDefinitions(apiId)
+  const { deleteVersion, error, isLoading } = useApiDefinitions(apiId)
 
   const actions = [
     {
       title: `Delete API Version ${version || ""}`,
       description: "Once you delete an API, there is no going back. Please be certain.",
       buttonText: `Delete Version ${version || ""}`,
-      onClick: (e:any) => {e?.preventDefault(); deleteVersion(apiId, version)},
+      disabled: !!error || isLoading,
+      onClick: (e:React.MouseEvent<HTMLButtonElement>) => {e?.preventDefault(); if(error){return}deleteVersion(apiId, version)},
     },
     {
       title: "Delete All API Versions",
       description: "Once you delete all API versions, there is no going back. Please be certain.",
       buttonText: "Delete All Versions",
+      disabled: !!error || isLoading,
       // I don't see any api for this at one go. if it really needed we need to perform this batch wise one by one. for now skipping it
-      onClick: () => alert("All versions deleted!"),
+      onClick: (e:React.MouseEvent<HTMLButtonElement>) =>{e?.preventDefault(); if(error){return} alert("All versions deleted!")},
     },
   ];
 

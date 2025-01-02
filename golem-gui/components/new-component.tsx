@@ -59,15 +59,15 @@ export default function ComponentForm({
     },
   });
 
-  const wasmFile = watch("component");
+  // const wasmFile = watch("component");
   const files = watch("files");
   const [error, setError] = React.useState<string | null>(null);
 
-  const handleWasmUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) {
-      setValue("component", e.target.files[0]);
-    }
-  };
+  // const handleWasmUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  //   if (e.target.files) {
+  //     setValue("component", e.target.files[0]);
+  //   }
+  // };
 
   const handleFilesUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const uploadedFiles = Array.from(e.target.files || []);
@@ -75,7 +75,7 @@ export default function ComponentForm({
   };
 
   const handleFileDelete = (index: number) => {
-    const updatedFiles = files.filter((_, i) => i !== index);
+    const updatedFiles = files?.filter((_, i) => i !== index);
     setValue("files", updatedFiles);
   };
 
@@ -134,7 +134,7 @@ export default function ComponentForm({
             />
           </Box>
             <Typography variant="caption" color="error">
-            {getFormErrorMessage("component", errors)}
+            {getFormErrorMessage("name", errors)}
           </Typography>
           </>
         )}
