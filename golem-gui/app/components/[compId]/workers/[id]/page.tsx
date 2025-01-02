@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { Box, Divider, Tab, Tabs, Toolbar, Typography } from "@mui/material";
+import { Box, Tab, Tabs } from "@mui/material";
 import { useWorker } from "@/lib/hooks/use-worker";
 import { useParams } from "next/navigation";
 import InvokePage from "./invoke";

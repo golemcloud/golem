@@ -7,7 +7,7 @@ import { MdNotStarted } from "react-icons/md";
 import { GoSquareFill } from "react-icons/go";
 import { BiSolidError } from "react-icons/bi";
 import { toast } from "react-toastify";
-import { FlowNode, Trigger } from "@/types/react-flow";
+import { FlowNode } from "@/types/react-flow";
 import {
   getIconBasedOnType,
   getStatus,

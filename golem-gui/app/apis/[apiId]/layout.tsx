@@ -30,7 +30,6 @@ export default function APISLayout({
   const params = useSearchParams();
   const version = params.get("version");
   const pathname = usePathname();
-  const [newVersion, setNewVersion] = useState("");
   const [open, setOpen] = useState(false);
   const router = useRouter();
   const { apiDefinitions, getApiDefintion, isLoading } =

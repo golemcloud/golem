@@ -1,20 +1,15 @@
 import React, { useState } from "react";
 import {
   Box,
-  AppBar,
-  Toolbar,
   Tabs,
   Tab,
-  Button,
-  Divider,
 } from "@mui/material";
 import Logs from "./logs";
 import InvocationLogs from "./invoke-logs";
 import { Button2 } from "@/components/ui/button";
 import TerminalLogs from "./terminal";
 import { RotateCw, Ban } from "lucide-react";
-import { EventMessage } from "@/types/api"; 
-
+import { EventMessage } from "@/types/api";
 
 const TerminalPage = ({ messages }: { messages: Array<EventMessage> }) => {
   const [activeTab, setActiveTab] = useState(0);

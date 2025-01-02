@@ -1,6 +1,6 @@
 "use client";
 import React from "react";
-import { Box, Card, CardContent, Typography, Stack } from "@mui/material";
+import { Box, Card, CardContent, Typography } from "@mui/material";
 import { Dropdown } from "./ui/dropdown-button";
 import { Worker } from "@/types/api";
 import { calculateHoursDifference, calculateSizeInMB } from "@/lib/utils";

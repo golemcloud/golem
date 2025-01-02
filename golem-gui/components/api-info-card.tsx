@@ -1,5 +1,5 @@
 import React from "react";
-import { Box, Typography, Chip, Stack, Card } from "@mui/material";
+import { Box, Typography, Stack, Card } from "@mui/material";
 import LockIcon from "@mui/icons-material/Lock";
 import LockOpenIcon from "@mui/icons-material/LockOpen";
 import { Button2 } from "./ui/button";

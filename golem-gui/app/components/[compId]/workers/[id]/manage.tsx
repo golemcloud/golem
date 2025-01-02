@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import DangerZone from "@/components/settings";
 import {
   useDeleteWorker,

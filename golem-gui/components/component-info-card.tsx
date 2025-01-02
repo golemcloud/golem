@@ -1,5 +1,5 @@
 import React from 'react';
-import { Card, CardContent, Typography, Divider, Box,Paper } from '@mui/material';
+import { CardContent, Typography, Divider,Paper } from '@mui/material';
 
 interface ComponentInfoProps {
   componentId: string;
