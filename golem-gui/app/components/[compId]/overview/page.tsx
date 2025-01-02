@@ -151,16 +151,12 @@ useEffect(() => {
 
             {/* Exports Section */}
             <Grid size={{ xs: 12, md: 4 }}>
-              <Paper sx={{ padding: 3, bgcolor: "#1E1E1E", minHeight: 550 }} className="border">
-                <Typography variant="h6">Exports</Typography>
-                <Divider sx={{ bgcolor: "#555", marginY: 1 }} />
-                <List>
+              <Paper sx={{ bgcolor: "#1E1E1E", minHeight: 550 }} className="border">
+                <Typography variant="h6" className="m-5">Exports</Typography>
+                <Divider className="my-1 bg-border" />
+                <List className="px-7">
                   {exports.slice(0,13).map((item, index) => (
-                    <ListItem key={index} sx={{
-
-                    }}
-                    divider
-                    >
+                    <ListItem key={index} divider className="border-border">
                       <ListItemText primary={item} />
                     </ListItem>
                   ))}
@@ -170,9 +166,9 @@ useEffect(() => {
 
             {/* Worker Status */}
             <Grid size={{ xs: 12, md: 8 }}>
-              <Paper sx={{ padding: 4, bgcolor: "#1E1E1E", minHeight:550 }} className="border">
-                <Typography variant="h6">Worker Status</Typography>
-                <Divider sx={{ bgcolor: "#555", marginY: 1 }} />
+              <Paper sx={{ bgcolor: "#1E1E1E", minHeight:550 }} className="border">
+                <Typography variant="h6" className="m-5">Worker Status</Typography>
+                <Divider className="my-1 bg-border" />
                 {totalWorkers > 0 ? (
                   <Box
                     sx={{
@@ -199,7 +195,7 @@ useEffect(() => {
                     </Box>
                   </Box>
                 ) : (
-                  <Typography>No workers found</Typography>
+                  <Typography className="mt-5 ml-5">No workers found</Typography>
                 )}
               </Paper>
             </Grid>

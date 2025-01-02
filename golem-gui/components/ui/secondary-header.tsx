@@ -84,7 +84,7 @@ export default function SecondaryHeader({
         </Box>
 
         {pathname === `/components/${compId}/overview` && (
-          <Box sx={{ marginLeft: "auto" ,display:"flex" }}>
+          <Box sx={{ marginLeft: "auto" ,display:"flex",gap:2 }}>
             <Button2
               variant="primary"
               startIcon={<AddIcon />}
@@ -94,7 +94,7 @@ export default function SecondaryHeader({
               New
             </Button2>
             
-            <Box className="ml-2 p-1 border rounded-md">
+            <Box className="py-1 px-2 border rounded-md hover:bg-[#222] cursor-pointer">
               {Dropdown(workloads)}
             </Box>
           </Box>

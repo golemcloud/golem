@@ -28,7 +28,7 @@ const GenericTable = <T,>({
   return (
     <TableContainer
       component={Paper}
-      className="bg-white dark:bg-[#333] rounded-sm shadow-md border border-gray-400"
+      className="dark:bg-[#222] rounded-sm shadow-md border"
     >
       <Table className="min-w-full" aria-label="generic table">
         <TableHead className="dark:bg-[#1a2241] bg-[#f0f4ff]">
@@ -36,7 +36,7 @@ const GenericTable = <T,>({
             {columns.map((column, index) => (
               <TableCell
                 key={index}
-                className="text-gray-900 dark:text-gray-100"
+                className="border-b border-border text-gray-900 dark:text-gray-100"
                 align={column.align || "left"}
               >
                 {column.label}
@@ -49,13 +49,13 @@ const GenericTable = <T,>({
             <TableRow
               key={rowIndex}
               onClick={() => onRowClick && onRowClick(item)}
-              className="border-b dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer"
+              className="hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer"
             >
               {columns.map((column, colIndex) => (
                 <TableCell
                   key={colIndex}
                   align={column.align || "left"}
-                  className="text-gray-900 dark:text-gray-100"
+                  className="border-b border-border text-gray-900 dark:text-gray-100"
                 >
                   {column.accessor(item)}
                 </TableCell>

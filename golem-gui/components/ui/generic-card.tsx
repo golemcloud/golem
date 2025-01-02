@@ -11,10 +11,7 @@ const GenericCard: React.FC<GenericCardProps> = ({ title, content, emptyMessage 
   return (
     <Paper
       elevation={2}
-      sx={{
-        padding: 3,
-        borderRadius: 2,
-      }}
+      className="border rounded-sm p-5"
     >
       <Typography
         variant="h6"

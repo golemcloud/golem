@@ -29,7 +29,7 @@ export function DatePicker({handleChange, defaultValue, label}:{handleChange?:(d
         <Button
           variant={"outline"}
           className={cn(
-            "w-[220px] justify-start text-left font-normal border rounded-full",
+            "w-[220px] justify-start text-left font-normal border border-border rounded-full",
             !date && "text-muted-foreground rounded-full"
           )}
         >
