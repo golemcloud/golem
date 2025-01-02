@@ -88,10 +88,10 @@ export default function APINewVersion() {
             </div>
           </header>
         </div>
-        <div className="max-w-4xl mx-auto p-8">
-          <label className="block text-sm font-medium text-gray-700 mb-1">
+        <div className="max-w-4xl mx-auto p-16">
+          <h1 className="block text-sm font-medium text-gray-700 mb-4 text-xl	">
             New Version
-          </label>
+          </h1>
           <input
             type="text"
             value={version}
@@ -99,10 +99,10 @@ export default function APINewVersion() {
             className="w-full border border-gray-200 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
             placeholder="New Version prefix (0.0.0)"
           />
-          <p className="mt-1 text-sm text-gray-500">
+          <p className="mt-4 text-sm text-gray-500">
             Creating copy of version {activeApiDetails.version}
           </p>
-          <div className="flex justify-end">
+          <div className="flex justify-end mt-4">
             <Button
               type="submit"
               className="flex items-center space-x-2"
