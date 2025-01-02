@@ -18,8 +18,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import ApiLeftNav from "./apiLeftNav.tsx";
-import { SERVICE } from "@/service";
+import { API } from "@/service";
 import { Api } from "@/types/api";
+import ErrorBoundary from "@/components/errorBoundary";
 
 export default function APISettings() {
   const { toast } = useToast();
@@ -33,7 +34,7 @@ export default function APISettings() {
 
   useEffect(() => {
     if (apiName) {
-      SERVICE.getApi(apiName).then((response) => {
+      API.getApi(apiName).then((response) => {
         setApiDetails(response);
         setActiveApiDetails(response[response.length - 1]);
       });
@@ -42,7 +43,7 @@ export default function APISettings() {
 
   const handleDeleteVersion = async () => {
     setIsDeleting(true);
-    SERVICE.deleteApi(activeApiDetails.id, activeApiDetails.version)
+    API.deleteApi(activeApiDetails.id, activeApiDetails.version)
       .then(() => {
         toast({
           title: "Version deleted",
@@ -54,12 +55,13 @@ export default function APISettings() {
           setApiDetails(
             apiDetails.filter((api) => api.version !== activeApiDetails.version)
           );
+          navigate(`/apis/${apiName}`);
         }
         setShowConfirmDialog(false);
         setIsDeleting(false);
       })
       .catch((error) => {
-        console.log(error);
+        console.error(error);
         setIsDeleting(false);
       });
   };
@@ -67,7 +69,7 @@ export default function APISettings() {
   const handleDeleteAll = async () => {
     setIsDeleting(true);
     const promises = apiDetails.map((api) =>
-      SERVICE.deleteApi(api.id, api.version)
+      API.deleteApi(api.id, api.version)
     );
     Promise.all(promises)
       .then(() => {
@@ -79,7 +81,7 @@ export default function APISettings() {
         navigate(`/apis`);
       })
       .catch((error) => {
-        console.log(error);
+        console.error(error);
         setIsDeleting(false);
       });
   };
@@ -89,13 +91,13 @@ export default function APISettings() {
       ...activeApiDetails,
       routes: [],
     };
-    SERVICE.putApi(activeApiDetails.id, activeApiDetails.version, payload)
-      .then(() => {
+    API.putApi(activeApiDetails.id, activeApiDetails.version, payload)
+      .then((r) => {
+        console.log(r, "r");
         toast({
           title: "All routes deleted",
           description: "All routes have been deleted successfully.",
         });
-        setShowConfirmAllDialog(false);
         navigate(`/apis/${apiName}`);
       })
       .catch((error) => {
@@ -104,184 +106,188 @@ export default function APISettings() {
   };
 
   return (
-    <div className="flex">
-      <ApiLeftNav />
-      <div className="flex-1">
-        <div className="flex items-center justify-between">
-          <header className="w-full border-b bg-background py-2">
-            <div className="max-w-7xl px-6 lg:px-8">
-              <div className="mx-auto max-w-2xl lg:max-w-none">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <h1 className="line-clamp-1 font-medium leading-tight sm:leading-normal">
-                      {apiName}
-                    </h1>
-                    <div className="flex items-center gap-1">
-                      {activeApiDetails.version && (
-                        <Select
-                          defaultValue={activeApiDetails.version}
-                          onValueChange={(version) => {
-                            const selectedApi = apiDetails.find(
-                              (api) => api.version === version
-                            );
-                            if (selectedApi) {
-                              setActiveApiDetails(selectedApi);
-                            }
-                          }}
-                        >
-                          <SelectTrigger className="w-20 h-6">
-                            <SelectValue>
-                              {activeApiDetails.version}
-                            </SelectValue>
-                          </SelectTrigger>
-                          <SelectContent>
-                            {apiDetails.map((api) => (
-                              <SelectItem value={api.version} key={api.version}>
-                                {api.version}{" "}
-                                {api.draft ? "(Draft)" : "(Published)"}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      )}
-                    </div>
-                  </div>
+    <ErrorBoundary>
+      <div className="flex bg-background text-foreground">
+        <ApiLeftNav />
+        <div className="flex-1">
+          <header className="w-full border-b bg-background py-4">
+            <div className="mx-auto px-6 lg:px-8">
+              <div className="flex items-center gap-4">
+                <h1 className="text-xl font-semibold text-foreground truncate">
+                  {apiName}
+                </h1>
+                <div className="flex items-center gap-2">
+                  {activeApiDetails.version && (
+                    <Select
+                      defaultValue={activeApiDetails.version}
+                      onValueChange={(version) => {
+                        const selectedApi = apiDetails.find(
+                          (api) => api.version === version
+                        );
+                        if (selectedApi) {
+                          setActiveApiDetails(selectedApi);
+                        }
+                      }}
+                    >
+                      <SelectTrigger className="w-28">
+                        <SelectValue>{activeApiDetails.version}</SelectValue>
+                      </SelectTrigger>
+                      <SelectContent>
+                        {apiDetails.map((api) => (
+                          <SelectItem value={api.version} key={api.version}>
+                            {api.version}{" "}
+                            {api.draft ? "(Draft)" : "(Published)"}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
                 </div>
               </div>
             </div>
           </header>
-        </div>
-        <div className=" overflow-scroll h-[85vh] max-w-4xl mx-auto p-8">
-          <h1 className="text-3xl font-semibold mb-2">API Settings</h1>
-          <p className="text-gray-500 text-lg mb-8">Manage your API settings</p>
 
-          <div className="border border-red-100 rounded-lg bg-red-50/50 p-6">
-            <h2 className="text-2xl font-semibold mb-4">Danger Zone</h2>
-            <p className="text-gray-600 mb-8">Proceed with caution.</p>
+          <div className="overflow-y-auto h-[85vh] max-w-4xl mx-auto p-8">
+            <h1 className="text-3xl font-semibold mb-2">API Settings</h1>
+            <p className="text-muted-foreground text-lg mb-8">
+              Manage your API settings
+            </p>
 
-            <div className="space-y-8">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-xl font-semibold mb-2">
-                    Delete API Version {activeApiDetails.version}
-                  </h3>
-                  <p className="text-gray-600">
-                    Once you delete an API, there is no going back. Please be
-                    certain.
-                  </p>
+            <div className="border border-destructive/20 rounded-lg bg-destructive/10 p-6">
+              <h2 className="text-2xl font-semibold mb-4 text-destructive">
+                Danger Zone
+              </h2>
+              <p className="text-muted-foreground mb-8">
+                Proceed with caution.
+              </p>
+
+              <div className="space-y-8">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-xl font-semibold mb-2">
+                      Delete API Version {activeApiDetails.version}
+                    </h3>
+                    <p className="text-muted-foreground">
+                      Once you delete an API, there is no going back. Please be
+                      certain.
+                    </p>
+                  </div>
+                  <Button
+                    variant="outline"
+                    className="border-destructive/20 text-destructive hover:bg-destructive/10"
+                    onClick={() => setShowConfirmDialog(true)}
+                  >
+                    Delete Version {activeApiDetails.version}
+                  </Button>
                 </div>
-                <Button
-                  variant="outline"
-                  className="border-red-200 text-red-700 hover:bg-red-50 hover:text-red-800"
-                  onClick={() => setShowConfirmDialog(true)}
-                >
-                  Delete Version {activeApiDetails.version}
-                </Button>
-              </div>
 
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-xl font-semibold mb-2">
-                    Delete all API Versions
-                  </h3>
-                  <p className="text-gray-600">
-                    Once you delete all API versions, there is no going back.
-                    Please be certain.
-                  </p>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-xl font-semibold mb-2">
+                      Delete all API Versions
+                    </h3>
+                    <p className="text-muted-foreground">
+                      Once you delete all API versions, there is no going back.
+                      Please be certain.
+                    </p>
+                  </div>
+                  <Button
+                    variant="outline"
+                    className="border-destructive/20 text-destructive hover:bg-destructive/10"
+                    onClick={() => setShowConfirmAllDialog(true)}
+                  >
+                    Delete All Versions
+                  </Button>
                 </div>
-                <Button
-                  variant="outline"
-                  className="border-red-200 text-red-700 hover:bg-red-50 hover:text-red-800"
-                  onClick={() => setShowConfirmAllDialog(true)}
-                >
-                  Delete All Versions
-                </Button>
-              </div>
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-xl font-semibold mb-2">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-xl font-semibold mb-2">
+                      Delete All Routes
+                    </h3>
+                    <p className="text-muted-foreground">
+                      Once you delete all routes, there is no going back. Please
+                      be certain.
+                    </p>
+                  </div>
+                  <Button
+                    variant="outline"
+                    className="border-destructive/20 text-destructive hover:bg-destructive/10"
+                    onClick={handleDeleteAllRoutes}
+                  >
                     Delete All Routes
-                  </h3>
-                  <p className="text-gray-600">
-                    Once you delete all routes, there is no going back. Please
-                    be certain.
-                  </p>
+                  </Button>
                 </div>
-                <Button
-                  variant="outline"
-                  className="border-red-200 text-red-700 hover:bg-red-50 hover:text-red-800"
-                  onClick={handleDeleteAllRoutes}
-                >
-                  Delete All Routes
-                </Button>
               </div>
             </div>
+
+            {/* Confirmation Dialog for Single Version Delete */}
+            <Dialog
+              open={showConfirmDialog}
+              onOpenChange={setShowConfirmDialog}
+            >
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Are you sure you want to delete?</DialogTitle>
+                  <DialogDescription>
+                    This action cannot be undone. This will permanently delete
+                    API version {activeApiDetails.version}.
+                  </DialogDescription>
+                </DialogHeader>
+                <DialogFooter>
+                  <Button
+                    variant="outline"
+                    onClick={() => setShowConfirmDialog(false)}
+                    disabled={isDeleting}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    onClick={handleDeleteVersion}
+                    disabled={isDeleting}
+                  >
+                    {isDeleting ? "Deleting..." : "Yes, delete"}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
+            {/* Confirmation Dialog for Delete All */}
+            <Dialog
+              open={showConfirmAllDialog}
+              onOpenChange={setShowConfirmAllDialog}
+            >
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>
+                    Are you sure you want to delete all versions?
+                  </DialogTitle>
+                  <DialogDescription>
+                    This action cannot be undone. This will permanently delete
+                    all API versions and remove all associated data.
+                  </DialogDescription>
+                </DialogHeader>
+                <DialogFooter>
+                  <Button
+                    variant="outline"
+                    onClick={() => setShowConfirmAllDialog(false)}
+                    disabled={isDeleting}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    onClick={handleDeleteAll}
+                    disabled={isDeleting}
+                  >
+                    {isDeleting ? "Deleting..." : "Yes, delete all"}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
           </div>
-
-          {/* Confirmation Dialog for Single Version Delete */}
-          <Dialog open={showConfirmDialog} onOpenChange={setShowConfirmDialog}>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Are you sure you want to delete?</DialogTitle>
-                <DialogDescription>
-                  This action cannot be undone. This will permanently delete API
-                  version {activeApiDetails.version}.
-                </DialogDescription>
-              </DialogHeader>
-              <DialogFooter>
-                <Button
-                  variant="outline"
-                  onClick={() => setShowConfirmDialog(false)}
-                  disabled={isDeleting}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  variant="destructive"
-                  onClick={handleDeleteVersion}
-                  disabled={isDeleting}
-                >
-                  {isDeleting ? "Deleting..." : "Yes, delete"}
-                </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
-
-          {/* Confirmation Dialog for Delete All */}
-          <Dialog
-            open={showConfirmAllDialog}
-            onOpenChange={setShowConfirmAllDialog}
-          >
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>
-                  Are you sure you want to delete all versions?
-                </DialogTitle>
-                <DialogDescription>
-                  This action cannot be undone. This will permanently delete all
-                  API versions and remove all associated data.
-                </DialogDescription>
-              </DialogHeader>
-              <DialogFooter>
-                <Button
-                  variant="outline"
-                  onClick={() => setShowConfirmAllDialog(false)}
-                  disabled={isDeleting}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  variant="destructive"
-                  onClick={handleDeleteAll}
-                  disabled={isDeleting}
-                >
-                  {isDeleting ? "Deleting..." : "Yes, delete all"}
-                </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
         </div>
       </div>
-    </div>
+    </ErrorBoundary>
   );
 }

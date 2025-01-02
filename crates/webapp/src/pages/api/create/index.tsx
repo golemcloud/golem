@@ -2,84 +2,114 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { PlusCircle, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { SERVICE } from "@/service";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { API } from "@/service";
+import ErrorBoundary from "@/components/errorBoundary";
 
 const CreateAPI = () => {
   const navigate = useNavigate();
   const [apiName, setApiName] = useState("");
   const [version, setVersion] = useState("0.1.0");
+  const [errors, setErrors] = useState({ apiName: "", version: "" });
 
-  const onCreateApi = () => {
-    SERVICE.createApi({
-      id: apiName,
-      version: version,
-      routes: [],
-      draft: true,
-    }).then(() => navigate(`/apis/${apiName}`));
+  const validateForm = () => {
+    const newErrors = { apiName: "", version: "" };
+    if (!apiName.trim()) newErrors.apiName = "API Name is required.";
+    if (!version.trim()) newErrors.version = "Version is required.";
+    setErrors(newErrors);
+    return !newErrors.apiName && !newErrors.version;
+  };
+
+  const onCreateApi = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (validateForm()) {
+      API.createApi({
+        id: apiName,
+        version: version,
+        routes: [],
+        draft: true,
+      }).then(() => navigate(`/apis/${apiName}`));
+    }
   };
 
   return (
-    <div className="container mx-auto px-4 py-8 max-w-2xl">
-      <div className="flex items-center gap-2 mb-2">
-        <button
-          onClick={() => navigate(-1)}
-          className="text-xl  flex items-center text-gray-800 hover:text-gray-900"
-        >
-          <ArrowLeft className="h-7 w-7 mr-2" />
-        </button>
+    <ErrorBoundary>
+      <div className="container mx-auto px-4 py-16 max-w-2xl">
         <h1 className="text-2xl font-semibold mb-2">Create a new API</h1>
-      </div>
-      <p className="text-gray-600 mb-8">
-        Export worker functions as a REST API
-      </p>
+        <p className="text-muted-foreground mb-8">
+          Export worker functions as a REST API
+        </p>
 
-      <form className="space-y-6">
-        <div className="grid  gap-4">
-          <div className="col-span-2">
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              API Name
-            </label>
-            <div className="flex items-center">
-              <input
+        <form className="space-y-6" onSubmit={onCreateApi}>
+          <div className="grid gap-4">
+            <div>
+              <Label htmlFor="apiName" className="mb-1">
+                API Name
+              </Label>
+              <Input
+                id="apiName"
                 type="text"
                 value={apiName}
-                onChange={(e) => setApiName(e.target.value)}
-                className="flex-1 border border-gray-200 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                onChange={(e) => {
+                  setErrors({ ...errors, apiName: "" });
+                  setApiName(e.target.value);
+                }}
                 placeholder="Must be unique per project"
+                className={`${errors.apiName ? "border-destructive" : ""}`}
               />
+              {errors.apiName && (
+                <p className="text-sm text-destructive mt-1">
+                  {errors.apiName}
+                </p>
+              )}
             </div>
           </div>
-        </div>
 
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
-            Version
-          </label>
-          <input
-            type="text"
-            value={version}
-            onChange={(e) => setVersion(e.target.value)}
-            className="w-full border border-gray-200 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            placeholder="Version prefix for your API"
-          />
-          <p className="mt-1 text-sm text-gray-500">
-            Version prefix for your API
-          </p>
-        </div>
+          <div>
+            <Label htmlFor="version" className="mb-1">
+              Version
+            </Label>
+            <Input
+              id="version"
+              type="text"
+              value={version}
+              onChange={(e) => {
+                setErrors({ ...errors, version: "" });
+                setVersion(e.target.value);
+              }}
+              placeholder="Version prefix for your API"
+              className={`${errors.version ? "border-destructive" : ""}`}
+            />
+            {errors.version && (
+              <p className="text-sm text-destructive mt-1">{errors.version}</p>
+            )}
+            <p className="mt-1 text-sm text-muted-foreground">
+              Version prefix for your API
+            </p>
+          </div>
 
-        <div className="flex justify-end">
-          <Button
-            type="submit"
-            className="flex items-center space-x-2"
-            onClick={onCreateApi}
-            disabled={!apiName || !version}
-          >
-            <PlusCircle className="mr-2 size-4" />
-            Create API
-          </Button>
-        </div>
-      </form>
-    </div>
+          <div className="flex justify-between">
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => navigate(-1)}
+            >
+              <ArrowLeft className="mr-2 h-5 w-5" />
+              Back
+            </Button>
+            <Button
+              type="submit"
+              variant="default"
+              className="flex items-center space-x-2"
+            >
+              <PlusCircle className="mr-2 h-5 w-5" />
+              Create API
+            </Button>
+          </div>
+        </form>
+      </div>
+    </ErrorBoundary>
   );
 };
 

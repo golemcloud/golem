@@ -4,6 +4,7 @@ import {ENDPOINT} from "@/service/endpoints.ts";
 import axios from "axios";
 import {Api} from "@/types/api.ts";
 import {fetch} from '@tauri-apps/plugin-http'
+import { toast } from "@/hooks/use-toast"
 
 
 const api = axios.create({
@@ -97,6 +98,36 @@ export class Service {
         return r;
     }
 
+    public getApiList =  async (): Promise<Api[]> => {
+      const r = await this.callApi(ENDPOINT.getApiList());
+      return r
+    } 
+
+    public getApi = async (id: string): Promise<Api[]> => {
+      const r = await this.callApi(ENDPOINT.getApi(id));
+      return r
+    }
+
+    public createApi = async (payload: Api) => {
+      const r = await this.callApi(ENDPOINT.createApi(), "POST", JSON.stringify(payload));
+      return r
+    }
+
+    public deleteApi = async (id: string, version: string) => {
+      const r = await this.callApi(ENDPOINT.deleteApi(id, version), "DELETE");
+      return r
+    }
+
+    public putApi = async (id: string, version: string, payload: Api) => {
+      const r = await this.callApi(ENDPOINT.putApi(id, version), "PUT", JSON.stringify(payload));
+      return r
+    }
+
+    public postApi = async (payload: Api) => {
+      const r = await this.callApi(ENDPOINT.postApi(), "POST", JSON.stringify(payload));
+      return r
+    }
+
     public getComponentByIdAsKey = async (): Promise<Record<string, Component>> => {
         const result: Record<string, Component> = {};
         const components = await this.getComponents();
@@ -123,7 +154,7 @@ export class Service {
 
 
     private callApi =
-        async (url: string, method: string = "GET", data: FormData | string | null = null): Promise<any> => {
+        async (url: string, method: string = "GET", data: any = null): Promise<any> => {
             const resp = await fetch(`${this.baseUrl}${url}`, {
                 method: method,
                 body: data,
@@ -133,12 +164,23 @@ export class Service {
             }).then(res => {
                 if (res.ok) {
                     return res.json()
-                } else {
+                } else { 
+                    let errorTitle = "Api is Failed check the api details"
+                    res.json().then(err => {  
+                        errorTitle = err?.golemError?.message || errorTitle
+                    })    
+                    toast({
+                        title: errorTitle,
+                        variant: "destructive",
+                      });   
                     throw res
                 }
 
             }).catch(err => {
-                console.log("callApi", err)
+                toast({
+                    title: err,
+                    variant: "destructive",
+                  });
                 throw err
             })
             // console.log("callApi", resp)

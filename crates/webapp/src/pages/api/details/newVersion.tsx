@@ -9,20 +9,24 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import ApiLeftNav from "./apiLeftNav.tsx";
-import { SERVICE } from "@/service";
+import { API } from "@/service";
 import { Api } from "@/types/api";
+import ErrorBoundary from "@/components/errorBoundary";
 
 export default function APINewVersion() {
   const navigate = useNavigate();
   const [version, setVersion] = useState("");
   const { apiName } = useParams();
+  const [error, setError] = useState(false);
   const [apiDetails, setApiDetails] = useState([] as Api[]);
   const [activeApiDetails, setActiveApiDetails] = useState({} as Api);
 
   useEffect(() => {
     if (apiName) {
-      SERVICE.getApi(apiName).then((response) => {
+      API.getApi(apiName).then((response) => {
         setApiDetails(response);
         setActiveApiDetails(response[response.length - 1]);
       });
@@ -30,91 +34,96 @@ export default function APINewVersion() {
   }, [apiName]);
 
   const onCreateApi = async () => {
+    if (!version) {
+      setError(true);
+      return;
+    }
     const payload = {
       ...activeApiDetails,
       version: version,
       createdAt: new Date().toISOString(),
     };
-    SERVICE.postApi(payload).then(() => {
+    API.postApi(payload).then(() => {
       navigate(`/apis/${apiName}`);
     });
   };
 
   return (
-    <div className="flex">
-      <ApiLeftNav />
-      <div className="flex-1">
-        <div className="flex items-center justify-between">
-          <header className="w-full border-b bg-background py-2">
-            <div className="max-w-7xl px-6 lg:px-8">
-              <div className="mx-auto max-w-2xl lg:max-w-none">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <h1 className="line-clamp-1 font-medium leading-tight sm:leading-normal">
-                      {apiName}
-                    </h1>
-                    <div className="flex items-center gap-1">
-                      {activeApiDetails.version && (
-                        <Select
-                          defaultValue={activeApiDetails.version}
-                          onValueChange={(version) => {
-                            const selectedApi = apiDetails.find(
-                              (api) => api.version === version
-                            );
-                            if (selectedApi) {
-                              setActiveApiDetails(selectedApi);
-                            }
-                          }}
-                        >
-                          <SelectTrigger className="w-20 h-6">
-                            <SelectValue>
-                              {activeApiDetails.version}
-                            </SelectValue>
-                          </SelectTrigger>
-                          <SelectContent>
-                            {apiDetails.map((api) => (
-                              <SelectItem value={api.version} key={api.version}>
-                                {api.version}{" "}
-                                {api.draft ? "(Draft)" : "(Published)"}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      )}
-                    </div>
-                  </div>
+    <ErrorBoundary>
+      <div className="flex bg-background text-foreground">
+        <ApiLeftNav />
+        <div className="flex-1">
+          <header className="w-full border-b bg-background py-4">
+            <div className="mx-auto px-6 lg:px-8">
+              <div className="flex items-center gap-4">
+                <h1 className="text-xl font-semibold text-foreground truncate">
+                  {apiName}
+                </h1>
+                <div className="flex items-center gap-2">
+                  {activeApiDetails.version && (
+                    <Select
+                      defaultValue={activeApiDetails.version}
+                      onValueChange={(version) => {
+                        const selectedApi = apiDetails.find(
+                          (api) => api.version === version
+                        );
+                        if (selectedApi) {
+                          setActiveApiDetails(selectedApi);
+                        }
+                      }}
+                    >
+                      <SelectTrigger className="w-28">
+                        <SelectValue>{activeApiDetails.version}</SelectValue>
+                      </SelectTrigger>
+                      <SelectContent>
+                        {apiDetails.map((api) => (
+                          <SelectItem value={api.version} key={api.version}>
+                            {api.version}{" "}
+                            {api.draft ? "(Draft)" : "(Published)"}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
                 </div>
               </div>
             </div>
           </header>
-        </div>
-        <div className="max-w-4xl mx-auto p-16">
-          <h1 className="block text-sm font-medium text-gray-700 mb-4 text-xl	">
-            New Version
-          </h1>
-          <input
-            type="text"
-            value={version}
-            onChange={(e) => setVersion(e.target.value)}
-            className="w-full border border-gray-200 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            placeholder="New Version prefix (0.0.0)"
-          />
-          <p className="mt-4 text-sm text-gray-500">
-            Creating copy of version {activeApiDetails.version}
-          </p>
-          <div className="flex justify-end mt-4">
-            <Button
-              type="submit"
-              className="flex items-center space-x-2"
-              onClick={onCreateApi}
-              disabled={!version}
-            >
-              <PlusCircle className="mr-2 size-4" />
-              Create New Version
-            </Button>
-          </div>
+
+          <main className="max-w-4xl mx-auto p-14">
+            <div className="space-y-4">
+              <Label htmlFor="version" className="text-sm font-medium">
+                New Version
+              </Label>
+              <Input
+                id="version"
+                type="text"
+                value={version}
+                onChange={(e) => {
+                  setError(false);
+                  setVersion(e.target.value);
+                }}
+                placeholder="New Version prefix (0.1.0)"
+                className={`w-full ${error ? "border-destructive" : ""}`}
+              />
+              {error && (
+                <p className="text-sm text-destructive mt-1">
+                  Version is required.
+                </p>
+              )}
+              <p className="text-sm text-muted-foreground">
+                Creating a copy of version {activeApiDetails.version}
+              </p>
+              <div className="flex justify-end">
+                <Button type="submit" onClick={onCreateApi}>
+                  <PlusCircle className="mr-2 h-5 w-5" />
+                  Create New Version
+                </Button>
+              </div>
+            </div>
+          </main>
         </div>
       </div>
-    </div>
+    </ErrorBoundary>
   );
 }

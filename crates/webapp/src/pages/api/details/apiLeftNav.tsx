@@ -6,6 +6,9 @@ import {
   ArrowLeft,
   CircleFadingPlusIcon,
 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
+import ErrorBoundary from "@/components/errorBoundary";
 
 const ApiLeftNav = () => {
   const navigate = useNavigate();
@@ -15,69 +18,82 @@ const ApiLeftNav = () => {
   const isActive = (path: string) => location.pathname.endsWith(path);
 
   return (
-    <nav className="w-64 border-r border-gray-200 p-4">
-      <div className="mb-8">
-        <button
-          onClick={() => navigate(`/apis`)}
-          className="text-xl  flex items-center text-gray-800 hover:text-gray-900 mb-4"
-        >
-          <ArrowLeft className="h-4 w-4 mr-2" />
-          <span>API</span>
-        </button>
-        <ul className="space-y-2">
-          <li>
-            <button
-              onClick={() => navigate(`/apis/${apiName}`)}
-              className={`w-full text-left px-3 py-2 rounded-md ${
-                isActive(apiName!) ? "bg-gray-200" : "hover:bg-gray-100"
-              }`}
-            >
-              <div className="flex items-center">
-                <Home className="h-4 w-4 mr-2" />
-                <span>Overview</span>
-              </div>
-            </button>
-          </li>
-          <li>
-            <button
-              onClick={() => navigate(`/apis/${apiName}/settings`)}
-              className={`w-full text-left px-3 py-2 rounded-md ${
-                isActive("settings") ? "bg-gray-200" : "hover:bg-gray-100"
-              }`}
-            >
-              <div className="flex items-center">
-                <Settings className="h-4 w-4 mr-2" />
-                <span>Settings</span>
-              </div>
-            </button>
-          </li>
-          <li>
-            <button
-              onClick={() => navigate(`/apis/${apiName}/newversion`)}
-              className={`w-full text-left px-3 py-2 rounded-md ${
-                isActive("newversion") ? "bg-gray-200" : "hover:bg-gray-100"
-              }`}
-            >
-              <div className="flex items-center">
-                <CircleFadingPlusIcon className="h-4 w-4 mr-2" />
-                <span>New version</span>
-              </div>
-            </button>
-          </li>
-        </ul>
-      </div>
+    <ErrorBoundary>
+      <nav className="w-64 border-r p-4 border-gray-200 dark:border-gray-700">
+        <div className="mb-6">
+          <div className="flex items-center mb-6">
+            <div onClick={() => navigate(`/apis`)}>
+              <ArrowLeft className="h-5 w-5 mr-2 text-gray-800 dark:text-gray-200 hover:text-gray-600 dark:hover:text-gray-400 cursor-pointer" />
+            </div>
+            <h1 className="text-lg font-semibold text-gray-800 dark:text-gray-200">
+              API
+            </h1>
+          </div>
 
-      <div>
-        <h2 className="text-sm font-medium text-gray-500 mb-4">Routes</h2>
-        <button
-          onClick={() => navigate(`/apis/${apiName}/routes/new`)}
-          className="flex items-center space-x-2 text-sm text-gray-600 px-3 py-2 flex items-center justify-center w-full border border-gray-300 rounded-lg hover:text-gray-900 hover:border-gray-400"
-        >
-          <Plus className="h-4 w-4" />
-          <span>Add</span>
-        </button>
-      </div>
-    </nav>
+          <ul className="space-y-1">
+            <li>
+              <Button
+                variant="ghost"
+                onClick={() => navigate(`/apis/${apiName}`)}
+                className={cn(
+                  "w-full flex items-center px-3 py-2 rounded-md text-sm font-medium justify-start",
+                  isActive(apiName ?? "")
+                    ? "bg-gray-200 dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                    : "hover:bg-gray-100 dark:hover:bg-gray-900 text-gray-600 dark:text-gray-400"
+                )}
+              >
+                <Home className="h-5 w-5 mr-3" />
+                <span>Overview</span>
+              </Button>
+            </li>
+            <li>
+              <Button
+                variant="ghost"
+                onClick={() => navigate(`/apis/${apiName}/settings`)}
+                className={cn(
+                  "w-full flex items-center px-3 py-2 rounded-md text-sm font-medium justify-start",
+                  isActive("settings")
+                    ? "bg-gray-200 dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                    : "hover:bg-gray-100 dark:hover:bg-gray-900 text-gray-600 dark:text-gray-400"
+                )}
+              >
+                <Settings className="h-5 w-5 mr-3" />
+                <span>Settings</span>
+              </Button>
+            </li>
+            <li>
+              <Button
+                variant="ghost"
+                onClick={() => navigate(`/apis/${apiName}/newversion`)}
+                className={cn(
+                  "w-full flex items-center px-3 py-2 rounded-md text-sm font-medium justify-start",
+                  isActive("newversion")
+                    ? "bg-gray-200 dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                    : "hover:bg-gray-100 dark:hover:bg-gray-900 text-gray-600 dark:text-gray-400"
+                )}
+              >
+                <CircleFadingPlusIcon className="h-5 w-5 mr-3" />
+                <span>New version</span>
+              </Button>
+            </li>
+          </ul>
+        </div>
+
+        <div>
+          <h2 className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-3">
+            Routes
+          </h2>
+          <Button
+            variant="outline"
+            onClick={() => navigate(`/apis/${apiName}/routes/new`)}
+            className="flex items-center justify-center text-sm px-3 py-2 w-full rounded-lg border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 hover:border-gray-400 dark:hover:border-gray-500"
+          >
+            <Plus className="h-5 w-5" />
+            <span>Add</span>
+          </Button>
+        </div>
+      </nav>
+    </ErrorBoundary>
   );
 };
 
