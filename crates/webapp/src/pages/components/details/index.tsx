@@ -8,7 +8,7 @@ import {API} from "@/service";
 import {Component} from "@/types/component.ts";
 import {Worker, WorkerStatus as IWorkerStatus} from "@/types/worker.ts";
 
-const ComponentDetails = () => {
+export const ComponentDetails = () => {
     const {componentId} = useParams();
     const [component, setComponent] = useState({} as Component)
     const [_, setWorkers] = useState({} as Worker[])
@@ -16,13 +16,11 @@ const ComponentDetails = () => {
 
     useEffect(() => {
         API.getComponentById(componentId!).then((res) => {
-            console.log(res);
             setComponent(res);
         });
 
         API.findWorker(componentId!).then((res) => {
             setWorkers(res.workers);
-            console.log("res.workers", res.workers);
             const status: IWorkerStatus = {};
             res.workers.forEach((worker: Worker) => {
                 status[worker.status] = (status[worker.status] || 0) + 1;
@@ -71,7 +69,6 @@ const ComponentDetails = () => {
     );
 };
 
-export default ComponentDetails;
 
 
 

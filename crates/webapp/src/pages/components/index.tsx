@@ -9,7 +9,7 @@ import {formatRelativeTime} from "@/lib/utils";
 import {Input} from "@/components/ui/input";
 import {API} from "@/service";
 import {Component} from "@/types/component";
-import {Worker, WorkerStatus} from "@/types/worker";
+import {Worker, WorkerStatus as IWorkerStatus, WorkerStatus} from "@/types/worker";
 
 const Metrix = ["Idle", "Running", "Suspended", "Failed"];
 
@@ -28,25 +28,26 @@ const Components = () => {
     );
 
     useEffect(() => {
-        API.getComponentByIdAsKey().then((response) => {
+        API.getComponentByIdAsKey().then(async (response) => {
             setComponentApiList(response);
             setComponentList(response);
             const componentStatus: { [key: string]: WorkerStatus } = {};
-            Promise.all(Object.values(response).map((comp) => {
-                if (comp.versionedComponentId && comp.versionedComponentId!.componentId) {
-                    API.findWorker(comp.versionedComponentId!.componentId!, {
+            Object.values(response).map((comp) => {
+                if (comp.componentId) {
+                    API.findWorker(comp.componentId!, {
                         "count": 100,
                         "precise": true
                     })
                         .then((worker) => {
-                            componentStatus[comp.versionedComponentId!.componentId!] = worker.workers.reduce((counts: any, w: Worker) => {
-                                counts[w.status] = (counts[w.status] || 0) + 1;
-                                return counts;
-                            }, {});
+                            const status: IWorkerStatus = {};
+                            worker.workers.forEach((worker: Worker) => {
+                                status[worker.status] = (status[worker.status] || 0) + 1;
+                            })
+                            componentStatus[comp.componentId!] = status;
+                            setWorkerList(componentStatus)
                         })
                 }
-            })).then(() => setWorkerList(componentStatus));
-
+            });
         });
     }, []);
 

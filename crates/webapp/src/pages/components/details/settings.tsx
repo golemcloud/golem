@@ -15,6 +15,7 @@ import ComponentLeftNav from "./componentsLeftNav";
 import {Card, CardContent, CardDescription, CardTitle} from "@/components/ui/card.tsx";
 import {Separator} from "@/components/ui/separator.tsx";
 import {API} from "@/service";
+import {Worker} from "@/types/worker.ts";
 
 export default function ComponentSettings() {
     const {toast} = useToast();
@@ -26,9 +27,9 @@ export default function ComponentSettings() {
     const handleDeleteAll = async () => {
         setIsDeleting(true);
         const response = await API.findWorker(componentId!, {"count": 100, "precise": true});
-        await Promise.all(response?.workers.map(async (worker) => {
+        await Promise.all(response?.workers.map(async (worker: Worker) => {
             await API.deleteWorker(componentId!, worker.workerId.workerName).then((res) => {
-                console.log(`deleted Worker response compoentname: ${worker.componentName} workername: ${worker.workerName}`, res);
+                console.log(`deleted Worker response compoentname: ${worker.workerId.componentId} workername: ${worker.workerId.workerName}`, res);
             });
         }));
         toast({

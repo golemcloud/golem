@@ -79,7 +79,7 @@ export function WorkerStatus({workerStatus}: { workerStatus: IWorkerStatus }) {
                                                     y={(viewBox.cy || 0) + 24}
                                                     className="fill-muted-foreground"
                                                 >
-                                                    Visitors
+                                                    Total Workers
                                                 </tspan>
                                             </text>
                                         )
