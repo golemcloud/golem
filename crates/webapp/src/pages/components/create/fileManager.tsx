@@ -3,6 +3,7 @@ import { Folder, File, ChevronDown, ChevronRight, Trash } from "lucide-react";
 import { useDropzone } from "react-dropzone";
 import { useDrag, useDrop, DndProvider } from "react-dnd";
 import { HTML5Backend } from "react-dnd-html5-backend";
+import ErrorBoundary from "@/components/errorBoundary";
 
 interface FileItem {
   id: string;
@@ -58,65 +59,67 @@ const DraggableFileItem: React.FC<{
     }
   };
 
-
   return (
-    <div
-      ref={dropRef}
-      className={`flex items-center px-${depth * 2} py-2 hover:bg-gray-50 ${
-        isDragging ? "opacity-50" : "opacity-100"
-      }`}
-    >
-      <span className={`w-${depth * 6}`} />
-      {item.type === "folder" && (
-        <button
-          onClick={() => toggleFolder(item.id)}
-          className="mr-2 text-gray-400"
-        >
-          {expandedFolders.has(item.id) ? (
-            <ChevronDown className="h-4 w-4" />
-          ) : (
-            <ChevronRight className="h-4 w-4" />
-          )}
-        </button>)}
-      
-      <div ref={dragRef} className="flex items-center w-full">
-        {item.type === "folder" ? (
-          <Folder className="h-5 w-5 text-gray-400 mr-2" />
-        ) : (
-          <File className="h-5 w-5 text-gray-400 mr-2" />
-        )}
-        {isEditing ? (
-          <input
-            type="text"
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-            onBlur={handleRename}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") handleRename();
-            }}
-            className="flex-1 p-1 border border-gray-300 rounded"
-          />
-        ) : (
-          <span
-            className="flex-1 cursor-pointer"
-            onClick={() => setIsEditing(true)}
+    <ErrorBoundary>
+      <div
+        ref={dropRef}
+        className={`flex items-center px-${depth * 2} py-2 hover:bg-gray-50 ${
+          isDragging ? "opacity-50" : "opacity-100"
+        }`}
+      >
+        <span className={`w-${depth * 6}`} />
+        {item.type === "folder" && (
+          <button
+            onClick={() => toggleFolder(item.id)}
+            className="mr-2 text-gray-400"
           >
-            {item.name}
-          </span>
+            {expandedFolders.has(item.id) ? (
+              <ChevronDown className="h-4 w-4" />
+            ) : (
+              <ChevronRight className="h-4 w-4" />
+            )}
+          </button>
         )}
-        {item.size && (
-          <span className="text-sm text-gray-500 mr-4">
-            {formatFileSize(item.size)}
-          </span>
-        )}
-        <button
-          className="p-1 text-gray-400 hover:text-gray-600"
-          onClick={() => handleDelete(item.id)}
-        >
-          <Trash className="h-4 w-4" />
-        </button>
+
+        <div ref={dragRef} className="flex items-center w-full">
+          {item.type === "folder" ? (
+            <Folder className="h-5 w-5 text-gray-400 mr-2" />
+          ) : (
+            <File className="h-5 w-5 text-gray-400 mr-2" />
+          )}
+          {isEditing ? (
+            <input
+              type="text"
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              onBlur={handleRename}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleRename();
+              }}
+              className="flex-1 p-1 border border-gray-300 rounded"
+            />
+          ) : (
+            <span
+              className="flex-1 cursor-pointer"
+              onClick={() => setIsEditing(true)}
+            >
+              {item.name}
+            </span>
+          )}
+          {item.size && (
+            <span className="text-sm text-gray-500 mr-4">
+              {formatFileSize(item.size)}
+            </span>
+          )}
+          <button
+            className="p-1 text-gray-400 hover:text-gray-600"
+            onClick={() => handleDelete(item.id)}
+          >
+            <Trash className="h-4 w-4" />
+          </button>
+        </div>
       </div>
-    </div>
+    </ErrorBoundary>
   );
 };
 
@@ -264,47 +267,51 @@ const FileManager = () => {
   };
 
   return (
-    <DndProvider backend={HTML5Backend}>
-      <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">
-          Initial Files
-        </label>
+    <ErrorBoundary>
+      <DndProvider backend={HTML5Backend}>
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Initial Files
+          </label>
 
-        <p className="text-sm text-gray-600 mb-3">
-          Files available to your workers at runtime.
-        </p>
+          <p className="text-sm text-gray-600 mb-3">
+            Files available to your workers at runtime.
+          </p>
 
-        <div
-          {...getRootProps()}
-          className="border-2 border-dashed border-gray-200 rounded-lg p-8 hover:border-gray-400"
-        >
-          <input {...getInputProps()} />
+          <div
+            {...getRootProps()}
+            className="border-2 border-dashed border-gray-200 rounded-lg p-8 hover:border-gray-400"
+          >
+            <input {...getInputProps()} />
 
-          <div className="flex flex-col items-center justify-center text-center">
-            <p className="text-sm text-gray-600">
-              {isDragActive ? "Drop files here" : "Select or Drop files"}
-            </p>
+            <div className="flex flex-col items-center justify-center text-center">
+              <p className="text-sm text-gray-600">
+                {isDragActive ? "Drop files here" : "Select or Drop files"}
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-4">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-sm text-gray-600">
+                Total Files: {files.length}
+              </p>
+
+              <button
+                onClick={createNewFolder}
+                className="text-sm text-blue-600 hover:text-blue-700 px-3 py-1 border border-gray-200 rounded"
+              >
+                New Folder
+              </button>
+            </div>
+
+            <div className="mt-4 p-2 border border-gray-200 rounded-lg ">
+              {renderTree(files)}
+            </div>
           </div>
         </div>
-
-        <div className="mt-4">
-          <div className="flex items-center justify-between mb-2">
-            <p className="text-sm text-gray-600">Total Files: {files.length}</p>
-
-            <button
-              onClick={createNewFolder}
-              className="text-sm text-blue-600 hover:text-blue-700 px-3 py-1 border border-gray-200 rounded"
-            >
-              New Folder
-            </button>
-          </div>
-
-          <div className="mt-4 p-2 border border-gray-200 rounded-lg ">
-            {renderTree(files)}
-          </div>
-        </div>
-      </div>
-    </DndProvider>
+      </DndProvider>
+    </ErrorBoundary>
   );
 };
 

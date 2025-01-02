@@ -1,73 +1,102 @@
-import {useLocation, useNavigate, useParams} from "react-router-dom";
-import {ArrowRightFromLine, Home, Pencil, Settings} from "lucide-react";
+import { useNavigate, useParams, useLocation } from "react-router-dom";
+import {
+  ArrowRightFromLine,
+  Home,
+  Pencil,
+  Settings,
+  ArrowLeft,
+} from "lucide-react";
 
-const ComponentLeftNav = () => {
-    const navigate = useNavigate();
-    const {componentId} = useParams();
-    const location = useLocation();
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
+import ErrorBoundary from "@/components/errorBoundary";
 
-    const isActive = (path: string) => location.pathname.endsWith(path);
+const ApiLeftNav = () => {
+  const navigate = useNavigate();
+  const { componentId } = useParams();
+  const location = useLocation();
 
-    return (
-        <nav className="w-64 border-r border-gray-200  p-4">
-            <div className="mb-8">
-                <ul className="space-y-2">
-                    <li>
-                        <button
-                            onClick={() => navigate(`/components/${componentId}`)}
-                            className={`w-full text-left px-3 py-2 rounded-md ${
-                                isActive(componentId!) ? "bg-gray-200" : "hover:bg-gray-100"
-                            }`}
-                        >
-                            <div className="flex items-center">
-                                <Home className="h-4 w-4 mr-2"/>
-                                <span>Overview</span>
-                            </div>
-                        </button>
-                    </li>
-                    <li>
-                        <button
-                            onClick={() => navigate(`/components/${componentId}/exports`)}
-                            className={`w-full text-left px-3 py-2 rounded-md ${
-                                isActive("exports") ? "bg-gray-200" : "hover:bg-gray-100"
-                            }`}
-                        >
-                            <div className="flex items-center">
-                                <ArrowRightFromLine className="h-4 w-4 mr-2"/>
-                                <span>Exports</span>
-                            </div>
-                        </button>
-                    </li>
-                    <li>
-                        <button
-                            onClick={() => navigate(`/components/${componentId}/update`)}
-                            className={`w-full text-left px-3 py-2 rounded-md ${
-                                isActive("update") ? "bg-gray-200" : "hover:bg-gray-100"
-                            }`}
-                        >
-                            <div className="flex items-center">
-                                <Pencil className="h-4 w-4 mr-2"/>
-                                <span>Update</span>
-                            </div>
-                        </button>
-                    </li>
-                    <li>
-                        <button
-                            onClick={() => navigate(`/components/${componentId}/settings`)}
-                            className={`w-full text-left px-3 py-2 rounded-md ${
-                                isActive("settings") ? "bg-gray-200" : "hover:bg-gray-100"
-                            }`}
-                        >
-                            <div className="flex items-center">
-                                <Settings className="h-4 w-4 mr-2"/>
-                                <span>Settings</span>
-                            </div>
-                        </button>
-                    </li>
-                </ul>
+  const isActive = (path: string) => location.pathname.endsWith(path);
+
+  return (
+    <ErrorBoundary>
+      <nav className="w-64 border-r p-4 border-gray-200 dark:border-gray-700 min-h-[94vh]">
+        <div className="mb-6">
+          <div className="flex items-center mb-6">
+            <div onClick={() => navigate(`/components`)}>
+              <ArrowLeft className="h-5 w-5 mr-2 text-gray-800 dark:text-gray-200 hover:text-gray-600 dark:hover:text-gray-400 cursor-pointer" />
             </div>
-        </nav>
-    );
+            <h1 className="text-lg font-semibold text-gray-800 dark:text-gray-200">
+              Component
+            </h1>
+          </div>
+
+          <ul className="space-y-1">
+            <li>
+              <Button
+                variant="ghost"
+                onClick={() => navigate(`/components/${componentId}`)}
+                className={cn(
+                  "w-full flex items-center px-3 py-2 rounded-md text-sm font-medium justify-start",
+                  isActive(componentId ?? "")
+                    ? "bg-gray-200 dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                    : "hover:bg-gray-100 dark:hover:bg-gray-900 text-gray-600 dark:text-gray-400"
+                )}
+              >
+                <Home className="h-5 w-5 mr-3" />
+                <span>Overview</span>
+              </Button>
+            </li>
+            <li>
+              <Button
+                variant="ghost"
+                onClick={() => navigate(`/components/${componentId}/exports`)}
+                className={cn(
+                  "w-full flex items-center px-3 py-2 rounded-md text-sm font-medium justify-start",
+                  isActive("exports")
+                    ? "bg-gray-200 dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                    : "hover:bg-gray-100 dark:hover:bg-gray-900 text-gray-600 dark:text-gray-400"
+                )}
+              >
+                <ArrowRightFromLine className="h-4 w-4 mr-2" />
+                <span>Exports</span>
+              </Button>
+            </li>
+            <li>
+              <Button
+                variant="ghost"
+                onClick={() => navigate(`/components/${componentId}/update`)}
+                className={cn(
+                  "w-full flex items-center px-3 py-2 rounded-md text-sm font-medium justify-start",
+                  isActive("update")
+                    ? "bg-gray-200 dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                    : "hover:bg-gray-100 dark:hover:bg-gray-900 text-gray-600 dark:text-gray-400"
+                )}
+              >
+                <Pencil className="h-4 w-4 mr-2" />
+                <span>Update</span>
+              </Button>
+            </li>
+            <li>
+              <Button
+                variant="ghost"
+                onClick={() => navigate(`/components/${componentId}/settings`)}
+                className={cn(
+                  "w-full flex items-center px-3 py-2 rounded-md text-sm font-medium justify-start",
+                  isActive("settings")
+                    ? "bg-gray-200 dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                    : "hover:bg-gray-100 dark:hover:bg-gray-900 text-gray-600 dark:text-gray-400"
+                )}
+              >
+                <Settings className="h-4 w-4 mr-2" />
+                <span>Settings</span>
+              </Button>
+            </li>
+          </ul>
+        </div>
+      </nav>
+    </ErrorBoundary>
+  );
 };
 
-export default ComponentLeftNav;
+export default ApiLeftNav;
