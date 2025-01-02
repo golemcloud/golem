@@ -14,7 +14,7 @@ const WorkerLeftNav = () => {
 
   return (
     <ErrorBoundary>
-      <nav className="w-64 border-r p-4 border-gray-200 dark:border-gray-700 min-h-[94vh]">
+      <nav className="w-64 border-r p-4 border-gray-200 dark:border-gray-700 min-h-[88vh]">
         <div className="mb-6">
           <div className="flex items-center mb-6">
             <div onClick={() => navigate(`/components/${componentId}/workers`)}>
