@@ -192,12 +192,12 @@ export class Service {
                         title: errorTitle,
                         variant: "destructive",
                       });   
-                    throw res
+                    throw res;
                 }
 
             }).catch(err => {
                 toast({
-                    title: err,
+                    title: "Api is Failed check the api details",
                     variant: "destructive",
                   });
                 throw err
