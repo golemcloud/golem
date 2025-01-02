@@ -81,9 +81,9 @@ export const fetcher = async (url: string, options?: RequestInit) => {
 };
 
 //we can replace with lodash.
-export function getFormErrorMessage<T extends Record<string, unknown>>(
+export function getFormErrorMessage(
   key: string,
-  errors: FieldErrors<T>
+  errors: FieldErrors
 ): string | undefined {
   const pathSegments = key.split(".");
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import { useForm, Controller } from "react-hook-form";
 import {
   Box,
@@ -67,18 +67,12 @@ const NewRouteForm = ({
   const components = (data?.data || null) as Component[];
 
 
-  useEffect(()=>{
-
-
-  }, [mode, routePath, apiId])
-
-
   if (apiDefinitonLoading || isLoading) {
     return <Loader />;
   }
 
   const versionNotFound = !apiDefinitonLoading && apiDefintionError;
-  const onSubmit = async (formData: any) => {
+  const onSubmit = async (formData: FormData) => {
     if (isExperimental) {
       return;
     }
