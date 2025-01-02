@@ -1,19 +1,13 @@
 import React, { useCallback, useMemo } from "react";
-import {
-  Typography,
-  List,
-  Box,
-  Divider,
-  Paper,
-} from "@mui/material";
+import { Typography, List, Box, Divider, Paper } from "@mui/material";
 import { EventMessage, InvocationStart } from "@/types/api";
+import { Button2 as Button } from "@/components/ui/button";
 
 type InovkeMeta = {
-  status: "Pending" | "Finished",
-  startTime: string
-  endTime: string
-}
-
+  status: "Pending" | "Finished";
+  startTime: string;
+  endTime: string;
+};
 
 export default function InvocationLogs({
   lastClearTimeStamp,
@@ -43,26 +37,30 @@ export default function InvocationLogs({
   console.log("messages in invokvelogs", messages);
   const invokeMessages = useMemo(() => {
     return Object.values(
-      messages?.reduce<Record<string, InvocationStart["InvocationStart"]&InovkeMeta>>((obj, message: EventMessage) => {
-       
+      messages?.reduce<
+        Record<string, InvocationStart["InvocationStart"] & InovkeMeta>
+      >((obj, message: EventMessage) => {
         if ("InvocationStart" in message) {
           const idempotency_key = message?.["InvocationStart"]?.idempotency_key;
           const isEligible =
             idempotency_key &&
-            checkLogIsAfterLastClearTime(message?.["InvocationStart"].timestamp);
-          if(isEligible) {
-          obj[idempotency_key] = {
-            ...obj[idempotency_key],
-            startTime: message["InvocationStart"].timestamp,
-            status:  obj[idempotency_key]?.status || "Pending",
-          };
-          }else {
-            delete obj[idempotency_key]
+            checkLogIsAfterLastClearTime(
+              message?.["InvocationStart"].timestamp
+            );
+          if (isEligible) {
+            obj[idempotency_key] = {
+              ...obj[idempotency_key],
+              startTime: message["InvocationStart"].timestamp,
+              status: obj[idempotency_key]?.status || "Pending",
+            };
+          } else {
+            delete obj[idempotency_key];
           }
         }
 
         if ("InvocationFinished" in message) {
-          const idempotency_key = message?.["InvocationFinished"]?.idempotency_key;
+          const idempotency_key =
+            message?.["InvocationFinished"]?.idempotency_key;
           obj[idempotency_key] = {
             ...obj[idempotency_key],
             ...message["InvocationFinished"],
@@ -106,7 +104,7 @@ export default function InvocationLogs({
         display="flex"
         justifyContent="center"
         alignItems="center"
-        height="100vh"
+        minHeight="100vh"
       >
         <Typography>No entries available.</Typography>
       </Box>
@@ -114,26 +112,33 @@ export default function InvocationLogs({
 
   return (
     <Box>
-      <Paper elevation={3} sx={{ px: 2 }}>
-        <List>
-          {invokeMessages.map((entry:InvocationStart["InvocationStart"]&InovkeMeta , index: number) => (
-            entry?.startTime ? <>
-              {index > 0 && <Divider sx={{ my: 1 }} color="" />}
-              <Typography variant="h6" gutterBottom>
-                {new Date(entry?.startTime).toLocaleString()} {entry?.function}{" "}
-                <span className="px-4 py-1 border">{entry.status}</span>
-                {"  "}
-                {entry.status === "Finished"
-                  ? `${
-                      new Date(entry.endTime).getTime() -
-                      new Date(entry.startTime).getTime()
-                    } ms`
-                  : ""}{" "}
-              </Typography>
-            </>: null
-          ))}
-        </List>
-      </Paper>
+      <List>
+        {invokeMessages.map(
+          (
+            entry: InvocationStart["InvocationStart"] & InovkeMeta,
+            index: number
+          ) =>
+            entry?.startTime ? (
+              <>
+                {index > 0 && <Divider className="my-1 bg-border" />}
+                <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
+                  {new Date(entry?.startTime).toLocaleString()}{" "}
+                  {entry?.function}{" "}
+                  <Button variant="success" size="icon_sm">
+                    {entry.status}
+                  </Button>
+                  {"  "}
+                  {entry.status === "Finished"
+                    ? `${
+                        new Date(entry.endTime).getTime() -
+                        new Date(entry.startTime).getTime()
+                      } ms`
+                    : ""}{" "}
+                </Typography>
+              </>
+            ) : null
+        )}
+      </List>
     </Box>
   );
 }

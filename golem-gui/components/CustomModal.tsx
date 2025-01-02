@@ -29,9 +29,8 @@ const CustomModal: React.FC<CustomModalProps> = ({ open, onClose, children, head
           minHeight:'300px',
           maxHeight: "calc(100vh - 120px)",
           overflowY: "auto",
-          border: "1px solid #444",
         }}
-        className="dark:bg-[#1e1e1e] bg-[#fff] dark:text-[#fff] text-[#333]"
+        className="dark:bg-[#1e1e1e] bg-[#fff] dark:text-[#fff] text-[#333] border"
       >
         {heading && (
           <Box
@@ -39,11 +38,10 @@ const CustomModal: React.FC<CustomModalProps> = ({ open, onClose, children, head
               position: "sticky",
               top: 0,
               zIndex: 1000,
-              bgcolor:'#1e1e1e',
               px: 2,
               py:1,
-              borderBottom: "0.1px solid #333",
             }}
+            className="dark:bg-[#1e1e1e] bg-[#fff] dark:text-[#fff] text-[#333] border-b border-border dark:border-[#333]"
           >
             <Box
               sx={{

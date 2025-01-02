@@ -13,9 +13,9 @@ import InvocationLogs from "./invoke-logs";
 import { Button2 } from "@/components/ui/button";
 import TerminalLogs from "./terminal";
 import { RotateCw, Ban } from "lucide-react";
+import { EventMessage } from "@/types/api"; 
 
-const TerminalPage = ({ messages }: { messages: Array<any> }) => {
-import { EventMessage } from "@/types/api";
+
 const TerminalPage = ({ messages }: { messages: Array<EventMessage> }) => {
   const [activeTab, setActiveTab] = useState(0);
   const [lastClearTimeStamp, setLastClearTimestamp] = useState<Date | null>(
@@ -31,7 +31,7 @@ const TerminalPage = ({ messages }: { messages: Array<EventMessage> }) => {
   return (
     <Box
       className="text-black dark:text-white"
-      sx={{ width: "100%", height: "100vh" }}
+      sx={{ width: "100%", minHeight: "100vh" }}
     >
       <Box className="flex justify-between border-b border-t dark:bg-[#151414]">
         <Box className=" ml-10 mt-1 mb-1 dark:bg-[#1e1e1e] rounded-md ">
@@ -101,7 +101,7 @@ const TerminalPage = ({ messages }: { messages: Array<EventMessage> }) => {
         </Box>
       </Box>
       <Box
-        sx={{ flex: 1, mt: 2, overflowY: "auto" }}
+        sx={{ flex: 1, mt: 2,paddingX:5}}
         className="text-gray-700 dark:text-gray-300"
       >
         {activeTab === 0 && (

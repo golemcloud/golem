@@ -95,17 +95,17 @@ body {
   }
 
   .MuiPaper-root {
-    background-color: #333;
+    background-color: #222;
     color:white
   }
 
   /* outline for input border initially */
   .MuiOutlinedInput-root .MuiOutlinedInput-notchedOutline {
-    border: 1px solid #333;
+    @apply border-border;
   }
   /* outline color on focus */
   .MuiOutlinedInput-root.Mui-focused .MuiOutlinedInput-notchedOutline {
-    border-color: #888;
+    border-color:#888;
   }
   /* placeholder color for input */
   .MuiInputBase-input::placeholder {
