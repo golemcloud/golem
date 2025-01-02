@@ -43,18 +43,6 @@ const ComponentsPage = () => {
     router.push(`/components/${id}/overview`);
   }
 
-  const finalComponents = useMemo(() => {
-    return Object.values(
-      components?.reduce<Record<string, Component>>((obj, component) => {
-        obj[component.versionedComponentId.componentId] = component;
-        return obj;
-      }, {}) || {}
-    ).sort(
-      (a, b) =>
-        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-    );
-  }, [components]);
-
   const checkForMatch = useCallback(
     (component: Component) => {
       if (!searchQuery || searchQuery?.length <= 2) {
@@ -66,6 +54,18 @@ const ComponentsPage = () => {
     },
     [searchQuery]
   );
+
+  const finalComponents = useMemo(() => {
+    return Object.values(
+      components?.reduce<Record<string, Component>>((obj, component) => {
+        obj[component.versionedComponentId.componentId] = component;
+        return obj;
+      }, {}) || {}
+    ).sort(
+      (a, b) =>
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+  }, [components]).filter(checkForMatch);
 
   return (
     <main className="mx-auto max-w-7xl px-6 lg:px-8">
@@ -137,25 +137,23 @@ const ComponentsPage = () => {
               viewMode === "card" ? (
                 <Box className="grid w-full grid-cols-1 lg:grid-cols-2 gap-6 xl:grid-cols-2">
                   {!isLoading &&
-                    finalComponents.map((item) =>
-                      checkForMatch(item) ? (
-                        <ComponentCard
-                          key={item.versionedComponentId.componentId}
-                          id={item.versionedComponentId.componentId}
-                          title={item.componentName}
-                          time={calculateHoursDifference(item.createdAt)}
-                          version={item.versionedComponentId.version}
-                          exports={item.metadata.exports.length}
-                          size={calculateSizeInMB(item.componentSize)}
-                          componentType={item.componentType}
-                          onClick={() =>
-                            handleComponentClick(
-                              item.versionedComponentId.componentId
-                            )
-                          }
-                        />
-                      ) : null
-                    )}
+                    finalComponents.map((item) => (
+                      <ComponentCard
+                        key={item.versionedComponentId.componentId}
+                        id={item.versionedComponentId.componentId}
+                        title={item.componentName}
+                        time={calculateHoursDifference(item.createdAt)}
+                        version={item.versionedComponentId.version}
+                        exports={item.metadata.exports.length}
+                        size={calculateSizeInMB(item.componentSize)}
+                        componentType={item.componentType}
+                        onClick={() =>
+                          handleComponentClick(
+                            item.versionedComponentId.componentId
+                          )
+                        }
+                      />
+                    ))}
                 </Box>
               ) : (
                 <ComponentTable<Component>
