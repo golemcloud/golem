@@ -1,4 +1,6 @@
-use serde::Serialize;
+use std::fs::File;
+use std::io::Write;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use golem_cli::config::{get_config_dir, Config, NamedProfile, OssProfile, Profile, ProfileName};
 use golem_cli::init::CliKind;
@@ -16,6 +18,8 @@ pub struct Response {
     pub data: Option<Value>,
     pub error: Option<String>,
 }
+
+
 
 
 lazy_static::lazy_static! {
@@ -86,11 +90,60 @@ async fn invoke_api(url: String, method: String, data: Option<Value>) -> Respons
     }
 }
 
+#[tauri::command]
+async fn process_multipart(name: String, file: Vec<u8>, filename: String) -> Result<String, String> {
+    let file_path = format!("./uploads/{}", filename);
+    let mut output = File::create(&file_path).map_err(|e| e.to_string())?;
+    output.write(&file).map_err(|e| e.to_string())?;
+
+    // Process additional form fields
+    Ok(format!("Data received: {}, File saved at: {}", name, file_path))
+}
+
+// #[tauri::command]
+// fn process_form(data: FormData) -> String {
+//     let data = format!(
+//         "Received form: Name: {}, Email: {}, Message: {}",
+//         data.name, data.email, data.message
+//     );
+//     println!("{data}");
+//     data
+// }
+
+
+// #[tauri::command]
+// async fn invoke_form_data_api(url: String, method: String, data: FormData) -> Response {
+//     let result = api::call_form_data_api(url, method, data).await;
+//     match result {
+//         Ok(data) => {
+//             if data.status().is_success() {
+//                 Response {
+//                     status: Status::Success,
+//                     data: Some(data.text().await.unwrap_or_default()),
+//                     error: None,
+//                 }
+//             } else {
+//                 Response {
+//                     status: Status::Error,
+//                     data: None,
+//                     error: Some(data.text().await.unwrap_or_default()),
+//                 }
+//             }
+//         },
+//         Err(error) => Response {
+//             status: Status::Error,
+//             data: None,
+//             error: Some(error.to_string()),
+//         },
+//     }
+// }
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![invoke_api])
+        .plugin(tauri_plugin_http::init())
+        .invoke_handler(tauri::generate_handler![invoke_api, process_multipart])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

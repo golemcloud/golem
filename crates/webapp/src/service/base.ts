@@ -1,6 +1,5 @@
 import {Component} from "@/types/component.ts";
 import {Api} from "@/types/api.ts";
-import {Worker} from "@/types/worker.ts";
 
 
 export interface GolemService {
@@ -10,7 +9,7 @@ export interface GolemService {
     getApi(id: string): Promise<Api[]>;
     deleteApi(id: string, version: string): Promise<any>;
     putApi(id: string, version: string, payload: Api): Promise<any>;
-    createApi(payload: Api): Promise<Any>;
+    createApi(payload: Api): Promise<any>;
     createComponent(): Promise<any>;
     getComponentById(): Promise<any>;
     getWorkers(): Promise<any>;

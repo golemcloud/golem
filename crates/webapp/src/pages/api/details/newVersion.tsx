@@ -9,7 +9,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import APILeftNav from "./apiLeftNav";
+import ApiLeftNav from "./apiLeftNav.tsx";
 import { SERVICE } from "@/service";
 import { Api } from "@/types/api";
 
@@ -42,7 +42,7 @@ export default function APINewVersion() {
 
   return (
     <div className="flex">
-      <APILeftNav />
+      <ApiLeftNav />
       <div className="flex-1">
         <div className="flex items-center justify-between">
           <header className="w-full border-b bg-background py-2">
