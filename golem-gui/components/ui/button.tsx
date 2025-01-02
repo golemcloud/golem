@@ -10,9 +10,10 @@ const buttonVariants = cva(
     variants: {
       variant: {
         default: "bg-button_bg border border-button_border",
-        primary:"bg-button_bg border border-button_border dark:hover:bg-[#2C3B78] hover:bg-[#A0AAE9]",
+        primary:"bg-button_bg border border-button_border dark:hover:bg-[#2C3B78] hover:bg-[#A0AAE9] dark:text-[#dddffe] text-[#1f2d5c]",
         dropdown: "border text-secondary-foreground hover:bg-secondary/80", 
         error: "bg-[#FFEFEF] dark:bg-[#3b191d] text-[#8e4e5a] dark:text-[#ffd1d9] border border-[#f9c6c6] dark:border-[#691D25] dark:hover:bg-[#782A2B] hover:bg-[#F29EA6] ",
+        success:"border text-xs dark:text-[#c2f0c2] text-[#213c25] rounded-md dark:bg-[#18271d] #b7dfba dark:border-[#24452d] bg-[#ebf9eb] hover:bg-[#a2cea8] dark:hover:bg-[#2e5d36]",
         destructive:
           "bg-destructive text-destructive-foreground hover:bg-destructive/90",
         outline:
@@ -31,6 +32,7 @@ const buttonVariants = cva(
         md: "h-10 rounded-md px-4",
         lg: "h-11 rounded-md px-8",
         icon: "h-10 w-10",
+        icon_sm: "h-5 rounded-sm px-2"
       },
     },
     defaultVariants: {

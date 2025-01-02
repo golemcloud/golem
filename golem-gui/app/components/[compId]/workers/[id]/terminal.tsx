@@ -52,7 +52,7 @@ export default function TerminalLogs({
         display="flex"
         justifyContent="center"
         alignItems="center"
-        height="100vh"
+        minHeight="100vh"
       >
         <Typography>No entries available.</Typography>
       </Box>
@@ -60,12 +60,11 @@ export default function TerminalLogs({
 
   return (
     <Box>
-      <Paper elevation={3} sx={{ px: 2 }}>
         <List>
           {entries.map((entry:StdOutMessage , index: number) => (
             <Stack key={index}>
-              {index > 0 && <Divider sx={{ my: 1 }} color="" />}
-              <Typography variant="h6" gutterBottom>
+              {index > 0 && <Divider className="my-1 bg-border"/>}
+              <Typography variant="body2" sx={{fontFamily:'monospace'}}>
                 {new Date(entry?.StdOut?.timestamp).toLocaleString()}{" "}
                 {entry?.StdOut?.bytes &&
                   String.fromCharCode(...entry?.StdOut?.bytes)}
@@ -73,7 +72,6 @@ export default function TerminalLogs({
             </Stack>
           ))}
         </List>
-      </Paper>
     </Box>
   );
 }

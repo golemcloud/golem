@@ -10,9 +10,8 @@ import TerminalPage from "./live";
 import FileComponent from "./files";
 import Manage from "./manage";
 
-import { useWebSocketWithPath, WebSocketMessage } from "@/lib/hooks/use-websocket";
+import { useWebSocketWithPath } from "@/lib/hooks/use-websocket";
 import SecondaryHeader from "@/components/ui/secondary-header";
-
 
 // interface CustomMessage extends WebSocketMessage {
 //   type: 'custom';
@@ -27,23 +26,20 @@ const WorkerListWithDropdowns = () => {
   //need to integrate the filter logic here. and pagination or scroll on load needs to implemented or addd show more at the end on click we need to next set of data
   const { worker, isLoading } = useWorker(compId, workerName);
 
-
-  const { messages, isConnected } = useWebSocketWithPath(`v1/components/${compId}/workers/${workerName}/connect`);
+  const { messages, isConnected } = useWebSocketWithPath(
+    `v1/components/${compId}/workers/${workerName}/connect`
+  );
 
   console.log("messages", messages);
-  console.log("isConnected", isConnected);  
+  console.log("isConnected", isConnected);
 
   const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
     setActiveTab(newValue);
   };
 
   return (
-    <Box
-      className="text-black dark:text-white"
-      // sx={{ width: "100%"}}
-    >
-      <SecondaryHeader variant="component" onClick={()=>{}}/>
-
+    <Box className="text-black dark:text-white">
+      <SecondaryHeader variant="component" onClick={() => {}} />
       <Tabs
         value={activeTab}
         variant="scrollable"
@@ -55,6 +51,7 @@ const WorkerListWithDropdowns = () => {
           paddingBottom: "5px",
           paddingLeft: "12px",
           "& .MuiTab-root": {
+            textTransform: "none",
             minWidth: "80px",
             padding: "2px 2px",
           },
@@ -63,12 +60,15 @@ const WorkerListWithDropdowns = () => {
           },
           "@media (max-width: 600px)": {
             "& .MuiTab-root": {
-              fontSize: "11px", 
+              fontSize: "11px",
               minWidth: "40px",
             },
             "& .MuiTabs-flexContainer": {
-              gap: "4px"
+              gap: "4px",
             },
+          },
+          "& .MuiTabs-indicator": {
+            bgcolor:"#373737",
           },
         }}
       >
@@ -80,10 +80,10 @@ const WorkerListWithDropdowns = () => {
         <Tab label="Invoke" />
       </Tabs>
       {activeTab === 0 && <Overview worker={worker} isLoading={isLoading} />}
-      {activeTab === 1 && <TerminalPage messages={messages}/>}
+      {activeTab === 1 && <TerminalPage messages={messages} />}
       {activeTab === 3 && <FileComponent />}
       {activeTab === 4 && <Manage />}
-      {activeTab === 5 && <InvokePage worker={worker}/>}
+      {activeTab === 5 && <InvokePage worker={worker} />}
     </Box>
   );
 };

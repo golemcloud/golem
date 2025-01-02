@@ -53,7 +53,6 @@ const Overview = ({
         <Box
           sx={{
             marginBottom: 3,
-            padding: 3,
             display: "flex",
             flexDirection: "column",
           }}
