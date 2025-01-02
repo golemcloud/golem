@@ -1,20 +1,13 @@
 import { useNavigate, useParams, useLocation } from "react-router-dom";
-import {
-  ArrowRightFromLine,
-  Home,
-  Pencil,
-  Settings,
-  ArrowLeft,
-  Pickaxe,
-} from "lucide-react";
+import { Container, Home, Settings, ArrowLeft, Tv } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import ErrorBoundary from "@/components/errorBoundary";
 
-const ApiLeftNav = () => {
+const WorkerLeftNav = () => {
   const navigate = useNavigate();
-  const { componentId } = useParams();
+  const { componentId, workerName } = useParams();
   const location = useLocation();
 
   const isActive = (path: string) => location.pathname.endsWith(path);
@@ -24,11 +17,11 @@ const ApiLeftNav = () => {
       <nav className="w-64 border-r p-4 border-gray-200 dark:border-gray-700 min-h-[94vh]">
         <div className="mb-6">
           <div className="flex items-center mb-6">
-            <div onClick={() => navigate(`/components`)}>
+            <div onClick={() => navigate(`/components/${componentId}/workers`)}>
               <ArrowLeft className="h-5 w-5 mr-2 text-gray-800 dark:text-gray-200 hover:text-gray-600 dark:hover:text-gray-400 cursor-pointer" />
             </div>
             <h1 className="text-lg font-semibold text-gray-800 dark:text-gray-200">
-              Component
+              Worker
             </h1>
           </div>
 
@@ -36,10 +29,12 @@ const ApiLeftNav = () => {
             <li>
               <Button
                 variant="ghost"
-                onClick={() => navigate(`/components/${componentId}`)}
+                onClick={() =>
+                  navigate(`/components/${componentId}/workers/${workerName}`)
+                }
                 className={cn(
                   "w-full flex items-center px-3 py-2 rounded-md text-sm font-medium justify-start",
-                  isActive(componentId ?? "")
+                  isActive(workerName ?? "")
                     ? "bg-gray-200 dark:bg-gray-800 text-gray-900 dark:text-gray-100"
                     : "hover:bg-gray-100 dark:hover:bg-gray-900 text-gray-600 dark:text-gray-400"
                 )}
@@ -51,62 +46,59 @@ const ApiLeftNav = () => {
             <li>
               <Button
                 variant="ghost"
-                onClick={() => navigate(`/components/${componentId}/workers`)}
+                onClick={() =>
+                  navigate(
+                    `/components/${componentId}/workers/${workerName}/live`
+                  )
+                }
                 className={cn(
                   "w-full flex items-center px-3 py-2 rounded-md text-sm font-medium justify-start",
-                  isActive("workers") || isActive("create")
+                  isActive("live")
                     ? "bg-gray-200 dark:bg-gray-800 text-gray-900 dark:text-gray-100"
                     : "hover:bg-gray-100 dark:hover:bg-gray-900 text-gray-600 dark:text-gray-400"
                 )}
               >
-                <Pickaxe className="h-5 w-5 mr-2" />
-                <span>Workers</span>
+                <Tv className="h-5 w-5 mr-2" />
+                <span>Live</span>
               </Button>
             </li>
 
             <li>
               <Button
                 variant="ghost"
-                onClick={() => navigate(`/components/${componentId}/exports`)}
+                onClick={() =>
+                  navigate(
+                    `/components/${componentId}/workers/${workerName}/environment`
+                  )
+                }
                 className={cn(
                   "w-full flex items-center px-3 py-2 rounded-md text-sm font-medium justify-start",
-                  isActive("exports")
+                  isActive("environment")
                     ? "bg-gray-200 dark:bg-gray-800 text-gray-900 dark:text-gray-100"
                     : "hover:bg-gray-100 dark:hover:bg-gray-900 text-gray-600 dark:text-gray-400"
                 )}
               >
-                <ArrowRightFromLine className="h-4 w-4 mr-2" />
-                <span>Exports</span>
+                <Container className="h-4 w-4 mr-2" />
+                <span>Environment</span>
               </Button>
             </li>
             <li>
               <Button
                 variant="ghost"
-                onClick={() => navigate(`/components/${componentId}/update`)}
+                onClick={() =>
+                  navigate(
+                    `/components/${componentId}/workers/${workerName}/manage`
+                  )
+                }
                 className={cn(
                   "w-full flex items-center px-3 py-2 rounded-md text-sm font-medium justify-start",
-                  isActive("update")
-                    ? "bg-gray-200 dark:bg-gray-800 text-gray-900 dark:text-gray-100"
-                    : "hover:bg-gray-100 dark:hover:bg-gray-900 text-gray-600 dark:text-gray-400"
-                )}
-              >
-                <Pencil className="h-5 w-5 mr-2" />
-                <span>Update</span>
-              </Button>
-            </li>
-            <li>
-              <Button
-                variant="ghost"
-                onClick={() => navigate(`/components/${componentId}/settings`)}
-                className={cn(
-                  "w-full flex items-center px-3 py-2 rounded-md text-sm font-medium justify-start",
-                  isActive("settings")
+                  isActive("manage")
                     ? "bg-gray-200 dark:bg-gray-800 text-gray-900 dark:text-gray-100"
                     : "hover:bg-gray-100 dark:hover:bg-gray-900 text-gray-600 dark:text-gray-400"
                 )}
               >
                 <Settings className="h-5 w-5 mr-2" />
-                <span>Settings</span>
+                <span>Manage</span>
               </Button>
             </li>
           </ul>
@@ -116,4 +108,4 @@ const ApiLeftNav = () => {
   );
 };
 
-export default ApiLeftNav;
+export default WorkerLeftNav;
