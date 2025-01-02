@@ -19,6 +19,7 @@ export const PluginsPage = () => {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const { data: plugins, isLoading } = usePlugins();
   const { mutate: deletePlugin } = useDeletePlugin();
+  document.title = `Plugins - Golem UI`;
 
   if (isLoading) {
     return (

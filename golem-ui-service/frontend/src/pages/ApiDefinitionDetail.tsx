@@ -16,11 +16,11 @@ import {
   useDeleteDeployment,
   useUpdateApiDefinition,
 } from "../api/api-definitions";
+import { useEffect, useState } from "react";
 
 import DeployModal from "../components/api/DeployModal";
 import RouteModal from "../components/api/ApiRoutesModal";
 import toast from "react-hot-toast";
-import { useState } from "react";
 
 export interface Route {
   method: string;
@@ -139,6 +139,11 @@ export const ApiDefinitionView = () => {
       </div>
     );
   }
+  useEffect(() => {
+    if (apiDefinition) {
+      document.title = `${apiDefinition.id} v${apiDefinition.version} - API Definition`;
+    }
+  }, [apiDefinition]);
 
   return (
     <div className="space-y-6">
@@ -150,7 +155,7 @@ export const ApiDefinitionView = () => {
             className="p-2 text-muted-foreground hover:text-gray-300 rounded-md hover:bg-card"
           >
             <ArrowLeft size={20} />
-          </Link> 
+          </Link>
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2">
               <Globe className="h-6 w-6 text-primary" />

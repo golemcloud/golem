@@ -116,6 +116,8 @@ export const Overview = () => {
   const { data: components, isLoading: componentsLoading } = useComponents();
   const { data: plugins, isLoading: pluginsLoading } = usePlugins();
 
+  document.title = `Overview - Golem UI`;
+  
   return (
     <div className="space-y-8">
       <div className="bg-card/50 p-6 rounded-lg">

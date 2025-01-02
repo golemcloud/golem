@@ -8,6 +8,7 @@ import {
     Terminal,
 } from "lucide-react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
+import { useEffect, useState } from "react";
 import { useInvokeWorker, useWorker } from "../api/workers";
 
 import { GolemError } from "../types/error";
@@ -15,7 +16,6 @@ import { apiClient } from "../lib/api-client";
 import toast from "react-hot-toast";
 import { useComponent } from "../api/components";
 import { useMutation } from "@tanstack/react-query";
-import { useState } from "react";
 
 const TypeBadge = ({ type }: { type: string }) => (
     <span className='px-2 py-0.5 rounded-full text-xs bg-blue-500/10 text-blue-400 font-mono'>
@@ -206,11 +206,18 @@ const FunctionInvoker = () => {
     const exportName = functionName?.split(".")[0];
     const navigate = useNavigate();
 
+
+
     const {
         data: worker,
         isLoading,
         error: workerError,
     } = useWorker(componentId!, workerName!);
+    useEffect(() => {
+        if (functionName && worker) {
+            document.title = `Invoke ${functionName} on ${worker.workerId.workerName} - Golem UI`;
+        }
+    }, [worker]);
     const { data: component } = useComponent(componentId!);
     const [parameters, setParameters] = useState<Record<string, any>>({});
     const [result, setResult] = useState<any>(null);

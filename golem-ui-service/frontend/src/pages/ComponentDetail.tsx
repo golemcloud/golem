@@ -17,13 +17,13 @@ import {
 } from "lucide-react";
 import { deleteComponent, useComponent } from "../api/components";
 import { useDeleteWorker, useWorkers } from "../api/workers";
+import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import CreateComponentModal from "../components/components/CreateComponentModal";
 import { CreateWorkerModal } from "../components/workers/CreateWorkerModal";
 import { Link } from "react-router-dom";
 import { WorkerActionModal } from "../components/workers/UpdateWorkerModal";
-import { useState } from "react";
 
 // Stats Card Component
 const StatCard = ({
@@ -77,6 +77,12 @@ export const ComponentDetail = () => {
 
   const { data: component, isLoading } = useComponent(id!);
   const { data: workers } = useWorkers(id!);
+
+  useEffect(() => {
+    if (component) {
+      document.title = `Component ${component.componentName} - Golem UI`;
+    }
+  }, [component]);
 
   if (isLoading) {
     return (
@@ -264,7 +270,7 @@ export const ComponentDetail = () => {
                     <CircleDot size={16} />
                   </div>
                   <div>
-                    
+
                     <h3 className="font-medium flex items-center gap-2">
                       <Link to={`/components/${id}/workers/${worker.workerId.workerName}`}>
                         {worker.workerId.workerName}

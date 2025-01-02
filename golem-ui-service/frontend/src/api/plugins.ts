@@ -150,7 +150,7 @@ export const usePluginVersion = (name: string, version: string) => {
     queryKey: pluginKeys.version(name, version),
     queryFn: () => getPluginVersion(name, version),
   });
-};
+}
 
 export const useCreatePlugin = () => {
   const queryClient = useQueryClient();

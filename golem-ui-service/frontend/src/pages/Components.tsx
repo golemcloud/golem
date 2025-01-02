@@ -10,12 +10,12 @@ import {
   Plus,
   Tag,
 } from "lucide-react";
+import { useEffect, useState } from "react";
 
 import CreateComponentModal from "../components/components/CreateComponentModal";
 import { Link } from "react-router-dom";
 import { format } from "date-fns";
 import { useComponents } from "../api/components";
-import { useState } from "react";
 
 export const Components = () => {
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -42,6 +42,8 @@ export const Components = () => {
         return <ComponentIcon className="text-purple-400" size={16} />;
     }
   };
+
+  document.title = `Components - Golem UI`;
 
   return (
     <div className="space-y-8">

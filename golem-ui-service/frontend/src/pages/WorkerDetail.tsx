@@ -111,6 +111,12 @@ export default function WorkerDetail() {
     } = useWorkerLogs(componentId!, workerName!, 100);
     // console.log("lgs", lgs);
     // setLogs(lgs.data?.logs || []);
+    
+    useEffect(() => {
+        if (worker) {
+          document.title = `worker ${worker.workerId.workerName} - ${worker.workerId.componentId} - Golem UI`;
+        }
+      }, [worker]);
 
     const handleAction = async (action: "interrupt" | "resume" | "delete") => {
         try {

@@ -7,14 +7,11 @@ import {
 import { ApiDefinition } from "../types/api";
 import { ApiDefinitionModal } from "../components/api/ApiDefinitionModal";
 import { Link } from "react-router-dom";
-import toast from "react-hot-toast";
+// import toast from "react-hot-toast";
 import { useState } from "react";
 
 const ApiDefinitionCard = ({ apiDef }: { apiDef: ApiDefinition }) => {
-  const { mutate: deleteDefinition } = useDeleteApiDefinition({
-    onSuccess: () => toast.success("API definition deleted"),
-    onError: () => toast.error("Failed to delete API definition"),
-  });
+  const { mutate: deleteDefinition } = useDeleteApiDefinition();
 
   return (
     <div className="bg-card rounded-lg p-4 hover:bg-gray-750">
@@ -64,7 +61,8 @@ const ApiDefinitionCard = ({ apiDef }: { apiDef: ApiDefinition }) => {
 export const ApiDefinitionsPage = () => {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const { data: apiDefinitions, isLoading } = useApiDefinitions();
-
+  
+  document.title = `API Definitions - Golem UI`;
   if (isLoading) {
     return <div className="text-muted-foreground">Loading...</div>;
   }

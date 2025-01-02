@@ -95,6 +95,12 @@ export const PluginDetailPage = () => {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const deletePlugin = useDeletePlugin();
   const navigate = useNavigate();
+  
+  useEffect(() => {
+    if (plugin) {
+        document.title = `Plugins: ${name}  - Golem UI`;
+    }
+}, [plugin]);
 
   const handleDelete = async () => {
     try {
