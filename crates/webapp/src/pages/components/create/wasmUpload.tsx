@@ -1,7 +1,7 @@
 import React, { useRef, useState } from "react";
 import { FileUp } from "lucide-react";
 
-const WASMUpload = () => {
+const WasmUpload = () => {
   const [file, setFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -41,7 +41,7 @@ const WASMUpload = () => {
           <input
             ref={fileInputRef}
             type="file"
-            accept=".wasm"
+            accept="application/wasm,.wasm"
             onChange={handleFileSelect}
             className="hidden"
           />
@@ -51,4 +51,4 @@ const WASMUpload = () => {
   );
 };
 
-export default WASMUpload;
+export default WasmUpload;

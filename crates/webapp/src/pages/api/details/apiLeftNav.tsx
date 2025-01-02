@@ -7,7 +7,7 @@ import {
   CircleFadingPlusIcon,
 } from "lucide-react";
 
-const APILeftNav = () => {
+const ApiLeftNav = () => {
   const navigate = useNavigate();
   const { apiName } = useParams();
   const location = useLocation();
@@ -81,4 +81,4 @@ const APILeftNav = () => {
   );
 };
 
-export default APILeftNav;
+export default ApiLeftNav;

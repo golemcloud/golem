@@ -1,8 +1,8 @@
 import { useParams } from "react-router-dom";
 
 import ComponentLeftNav from "./componentsLeftNav";
-import WASMUpload from "../create/wasmUpload";
-import FileManager from "../create/fileManager";
+import WasmUpload from "../create/wasmUpload.tsx";
+import FileManager from "../create/fileManager.tsx";
 
 export default function ComponentUpdate() {
   const { componentId } = useParams();
@@ -24,7 +24,7 @@ export default function ComponentUpdate() {
         <div className="max-w-4xl mx-auto p-6">
           <h1 className="text-3xl font-semibold mb-2">Update Component</h1>
           <p className="text-gray-500 text-lg mb-8">Update component version</p>
-          <WASMUpload />
+          <WasmUpload />
           <FileManager />
           <div className="flex justify-end">
             <button className="flex items-center space-x-2 bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
