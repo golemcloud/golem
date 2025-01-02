@@ -3,7 +3,6 @@ import { useForm, Controller, Control, FieldErrors } from "react-hook-form";
 import {
   TextField,
   Typography,
-  Button,
   Stack,
   Box,
   FormControlLabel,
@@ -17,6 +16,13 @@ import {
   AnalysedType_TypeVariant,
 } from "@/types/golem-data-types";
 import { getFormErrorMessage } from "@/lib/utils";
+import { Button2 as Button } from "@/components/ui/button";
+import {
+  Loader,
+  ChevronsLeftRight,
+  Triangle,
+  AlignVerticalSpaceAround,
+} from "lucide-react";
 
 type FormData = {
   [key: string]: unknown;
@@ -92,6 +98,7 @@ const generateField = (
             }
             render={({ field: _field }) => (
               <TextField
+                size="small"
                 {..._field}
                 label={parameter.name}
                 variant="outlined"
@@ -533,23 +540,38 @@ const DynamicForm: React.FC<{
   };
 
   return (
-    <form onSubmit={handleSubmit(onSubmit)}>
-      <Stack>
-        {config.map((field, index) => (
-          <Box key={`${id}__${field.name}__${index}`}>
-            {generateField(field, index, "", control, handleChange, errors)}
+    <>
+      <form onSubmit={handleSubmit(onSubmit)}>
+        <Stack
+          direction="row"
+          className="flex justify-between bg-[#dedede] dark:bg-[#0a0a0a] p-2 px-5 mb-10"
+        >
+          <Box className="flex gap-5">
+            <Button variant="dropdown" size="md">
+              Form (x)
+            </Button>
+            <Button variant="dropdown" size="md">
+              Preview <AlignVerticalSpaceAround />
+            </Button>
           </Box>
-        ))}
-      </Stack>
-      <Button
-        type="submit"
-        variant="contained"
-        color="primary"
-        className="mt-2"
-      >
-        Submit
-      </Button>
-    </form>
+          <Box className="flex gap-5">
+            <Button variant="secondary" size="md">
+              Types <ChevronsLeftRight />
+            </Button>
+            <Button variant="success" size="md" type="submit">
+              Invoke <Triangle className="rotate-90" />
+            </Button>
+          </Box>
+        </Stack>
+        <Stack>
+          {config.map((field, index) => (
+            <Box key={`${id}__${field.name}__${index}`}>
+              {generateField(field, index, "", control, handleChange, errors)}
+            </Box>
+          ))}
+        </Stack>
+      </form>
+    </>
   );
 };
 
