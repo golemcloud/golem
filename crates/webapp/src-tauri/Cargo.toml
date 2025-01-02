@@ -26,5 +26,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 lazy_static = "1.5.0"
 reqwest = "0.12.9"
-tauri-plugin-http = { version = "2.2.0", features = ["multipart" ] }
+tauri-plugin-http = { version = "2.2.0", features = ["multipart"] }
+tauri-plugin-websocket = { version = "2.2.0" }
 
