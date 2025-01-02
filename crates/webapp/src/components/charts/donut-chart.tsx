@@ -1,45 +1,55 @@
-import {Card, CardContent, CardHeader, CardTitle} from "@/components/ui/card"
-import {Clock} from 'lucide-react'
-import {WorkerStatus as IWorkerStatus} from "@/types/worker.ts";
 import * as React from "react"
+import {TrendingUp} from "lucide-react"
 import {Label, Pie, PieChart} from "recharts"
+
+import {Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle,} from "@/components/ui/card"
 import {ChartConfig, ChartContainer, ChartTooltip, ChartTooltipContent,} from "@/components/ui/chart"
-import {Separator} from "@/components/ui/separator.tsx";
+
+const chartData = [
+    {browser: "chrome", visitors: 275, fill: "var(--color-chrome)"},
+    {browser: "safari", visitors: 200, fill: "var(--color-safari)"},
+    {browser: "firefox", visitors: 287, fill: "var(--color-firefox)"},
+    {browser: "edge", visitors: 173, fill: "var(--color-edge)"},
+    {browser: "other", visitors: 190, fill: "var(--color-other)"},
+]
 
 const chartConfig = {
-    value: {
-        label: "Worker Count",
+    visitors: {
+        label: "Visitors",
     },
-    Idle: {
-        label: "Idle",
+    chrome: {
+        label: "Chrome",
         color: "hsl(var(--chart-1))",
     },
-    Running: {
-        label: "Running",
+    safari: {
+        label: "Safari",
         color: "hsl(var(--chart-2))",
     },
-    Suspended: {
-        label: "Suspended",
+    firefox: {
+        label: "Firefox",
         color: "hsl(var(--chart-3))",
     },
-    Failed: {
-        label: "Failed",
+    edge: {
+        label: "Edge",
         color: "hsl(var(--chart-4))",
+    },
+    other: {
+        label: "Other",
+        color: "hsl(var(--chart-5))",
     },
 } satisfies ChartConfig
 
-export function WorkerStatus({workerStatus}: { workerStatus: IWorkerStatus }) {
-    const total = React.useMemo(() => {
-        return Object.values(workerStatus).reduce((acc, val) => acc + val, 0)
-    }, [workerStatus])
+export function Component() {
+    const totalVisitors = React.useMemo(() => {
+        return chartData.reduce((acc, curr) => acc + curr.visitors, 0)
+    }, [])
 
     return (
         <Card className="flex flex-col">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-base font-medium">Worker Status</CardTitle>
-                <Clock className="h-4 w-4 text-muted-foreground"/>
+            <CardHeader className="items-center pb-0">
+                <CardTitle>Pie Chart - Donut with Text</CardTitle>
+                <CardDescription>January - June 2024</CardDescription>
             </CardHeader>
-            <Separator className="m-4 mx-auto"/>
             <CardContent className="flex-1 pb-0">
                 <ChartContainer
                     config={chartConfig}
@@ -51,9 +61,9 @@ export function WorkerStatus({workerStatus}: { workerStatus: IWorkerStatus }) {
                             content={<ChartTooltipContent hideLabel/>}
                         />
                         <Pie
-                            data={Object.entries(workerStatus).map(([key, value]) => ({key, value}))}
-                            dataKey="value"
-                            nameKey="key"
+                            data={chartData}
+                            dataKey="visitors"
+                            nameKey="browser"
                             innerRadius={60}
                             strokeWidth={5}
                         >
@@ -72,7 +82,7 @@ export function WorkerStatus({workerStatus}: { workerStatus: IWorkerStatus }) {
                                                     y={viewBox.cy}
                                                     className="fill-foreground text-3xl font-bold"
                                                 >
-                                                    {total.toLocaleString()}
+                                                    {totalVisitors.toLocaleString()}
                                                 </tspan>
                                                 <tspan
                                                     x={viewBox.cx}
@@ -90,7 +100,14 @@ export function WorkerStatus({workerStatus}: { workerStatus: IWorkerStatus }) {
                     </PieChart>
                 </ChartContainer>
             </CardContent>
+            <CardFooter className="flex-col gap-2 text-sm">
+                <div className="flex items-center gap-2 font-medium leading-none">
+                    Trending up by 5.2% this month <TrendingUp className="h-4 w-4"/>
+                </div>
+                <div className="leading-none text-muted-foreground">
+                    Showing total visitors for the last 6 months
+                </div>
+            </CardFooter>
         </Card>
     )
 }
-

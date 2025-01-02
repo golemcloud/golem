@@ -17,7 +17,7 @@ async function callApi(url: string, method: string = "GET", data: any = null): P
     console.log("callApi", url, method, data)
     const response = await fetch(`http://localhost:9881/${url}`, {
         method: method,
-        // body: data
+        body: data
     }).then(res => res.json())
     console.log("callApi", response)
     return response;
@@ -25,13 +25,7 @@ async function callApi(url: string, method: string = "GET", data: any = null): P
 
 
 export async function callFormDataApi(formData: FormData) {
-    // const r = await invoke("invoke_form_data_api", {url, method, data});
-    // {name, file, filename}
-    const response = await fetch('http://localhost:9881/v1/components', {
-        method: 'POST',
-        body: formData
-    }).then(res => res.json())
-    console.log("callFormDataApi", response)
+
 
 }
 
@@ -91,6 +85,32 @@ export class Service {
     public getComponents = async (): Promise<Component[]> => {
         const r = await this.callApi(ENDPOINT.getComponents());
         return r as Component[];
+    }
+
+    public createComponent = async (form: FormData) => {
+        // const headers = null
+        const response = await fetch('http://localhost:9881/v1/components', {
+            method: 'POST',
+            body: form
+        }).then(res => res.json())
+        // const r = await this.callApi(ENDPOINT.createComponent(), 'POST', form, headers)
+        //     .then(console.log).catch(console.log);
+        return response;
+    }
+
+    public findWorker = async (componentId: string, param = {"count": 100, "precise": true}) => {
+        const r = await this.callApi(ENDPOINT.findWorker(componentId), 'POST', JSON.stringify(param));
+        return r;
+    }
+
+    public deleteWorker = async (componentId: string, workName: string) => {
+        const r = await this.callApi(ENDPOINT.deleteWorker(componentId, workName), 'DELETE');
+        return r;
+    }
+
+    public getComponentById = async (componentId: string) => {
+        const r = await this.callApi(ENDPOINT.getComponentById(componentId));
+        return r as Component;
     }
 
     public createWorker = async (componentID: string, params: any) => {
@@ -154,13 +174,12 @@ export class Service {
 
 
     private callApi =
-        async (url: string, method: string = "GET", data: any = null): Promise<any> => {
+        async (url: string, method: string = "GET", data: FormData | string | null = null,
+               headers = {'Content-Type': 'application/json'}): Promise<any> => {
             const resp = await fetch(`${this.baseUrl}${url}`, {
                 method: method,
                 body: data,
-                headers: {
-                    'Content-Type': 'application/json'
-                }
+                headers: headers
             }).then(res => {
                 if (res.ok) {
                     return res.json()
@@ -183,7 +202,7 @@ export class Service {
                   });
                 throw err
             })
-            // console.log("callApi", resp)
+            console.log("callApi", resp)
             return resp;
         }
 

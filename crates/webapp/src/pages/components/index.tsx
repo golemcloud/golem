@@ -3,13 +3,13 @@ import { LayoutGrid, PlusCircle, Search } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 
-import { useNavigate } from "react-router-dom";
-import { Button } from "@/components/ui/button.tsx";
-import { formatRelativeTime } from "@/lib/utils";
-import { Input } from "@/components/ui/input";
-import { API, SERVICE } from "@/service";
-import { Component } from "@/types/component";
-import { Worker, WorkerStatus } from "@/types/worker";
+import {useNavigate} from "react-router-dom";
+import {Button} from "@/components/ui/button.tsx";
+import {formatRelativeTime} from "@/lib/utils";
+import {Input} from "@/components/ui/input";
+import {API} from "@/service";
+import {Component} from "@/types/component";
+import {Worker, WorkerStatus} from "@/types/worker";
 
 const Metrix = ["Idle", "Running", "Suspended", "Failed"];
 
@@ -88,28 +88,28 @@ const Components = () => {
       )
     );
 
-    setComponentList(filteredList);
-  };
+    useEffect(() => {
+        API.getComponentByIdAsKey().then((response) => {
+            setComponentApiList(response);
+            setComponentList(response);
+            const componentStatus: { [key: string]: WorkerStatus } = {};
+            Promise.all(Object.values(response).map((comp) => {
+                if (comp.versionedComponentId && comp.versionedComponentId!.componentId) {
+                    API.findWorker(comp.versionedComponentId!.componentId!, {
+                        "count": 100,
+                        "precise": true
+                    })
+                        .then((worker) => {
+                            componentStatus[comp.versionedComponentId!.componentId!] = worker.workers.reduce((counts: any, w: Worker) => {
+                                counts[w.status] = (counts[w.status] || 0) + 1;
+                                return counts;
+                            }, {});
+                        })
+                }
+            })).then(() => setWorkerList(componentStatus));
 
-  return (
-    <div className="container mx-auto px-4 py-8">
-      <div className="flex flex-wrap items-center justify-between gap-4 mb-8">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-5 w-5" />
-          <Input
-            type="text"
-            placeholder="Search Components..."
-            className="w-full pl-10 pr-4 py-2"
-            onChange={(e) => handleSearch(e)}
-          />
-        </div>
-        <div className="flex items-center gap-2">
-          <Button onClick={() => navigate("/components/create")}>
-            <PlusCircle className="mr-2 size-4" />
-            New
-          </Button>
-        </div>
-      </div>
+        });
+    }, []);
 
       {Object.keys(componentList).length === 0 ? (
         <div className="border-2 border-dashed border-gray-200 rounded-lg p-12 flex flex-col items-center justify-center">
