@@ -4,6 +4,7 @@ use std::sync::{Arc, RwLock};
 use crate::error::GolemError;
 use crate::metrics::workers::record_worker_call;
 use crate::model::ExecutionStatus;
+use crate::services::oplog::CommitLevel;
 use crate::services::{HasAll, HasOplog};
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
@@ -157,6 +158,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerFork
             let entry = source_oplog.read(OplogIndex::from_u64(index)).await;
             new_oplog.add(entry.clone()).await;
         }
+
+        new_oplog.commit(CommitLevel::Always).await;
 
         // We go through worker proxy to resume the worker
         // as we need to make sure as it may live in another worker executor,

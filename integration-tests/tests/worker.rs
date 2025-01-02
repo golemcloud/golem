@@ -1406,22 +1406,18 @@ async fn fork_worker_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         .invoke_and_await(&source_worker_id, "golem:it/api.{checkout}", vec![])
         .await;
 
-    let second_call_oplogs = deps
-        .search_oplog(&source_worker_id, "product-id:G1001")
-        .await;
-
-    let index = second_call_oplogs
-        .last()
-        .expect("Expect at least one entry for the product id G1001")
-        .oplog_index;
-
     let target_worker_id = WorkerId {
         component_id: component_id.clone(),
         worker_name: "forked-foo".to_string(),
     };
 
+    // This is invocation complete oplog for G1001 (invoked and log (12 and 13) oplogs are considered to be still running which fails resume)
     let _ = deps
-        .fork_worker(&source_worker_id, &target_worker_id, index)
+        .fork_worker(
+            &source_worker_id,
+            &target_worker_id,
+            OplogIndex::from_u64(14),
+        )
         .await;
 
     // Now executing the functions against the forked worker
@@ -1449,7 +1445,7 @@ async fn fork_worker_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let result1 = deps.search_oplog(&target_worker_id, "G1002").await;
     let result2 = deps.search_oplog(&target_worker_id, "G1001").await;
 
-    dbg!(result2.clone());
+    assert_eq!(result2.len(), 2); //  two invocations for G1001
     assert_eq!(result1.len(), 4); //  two invocations for G1002 and two log messages
 }
 
@@ -1556,8 +1552,6 @@ async fn fork_worker_4(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     .await
     .unwrap_err()
     .to_string();
-
-    dbg!(&error);
 
     assert!(error.contains("WorkerNotFound"));
 }
