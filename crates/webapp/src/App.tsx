@@ -7,7 +7,7 @@ import APIDetails from "@/pages/api/details";
 import APISettings from "@/pages/api/details/settings";
 import CreateRoute from "@/pages/api/details/createRoute.tsx";
 import Deployments from "@/pages/Deployments";
-import Plugin from "@/pages/plugin";
+import {PluginList} from "@/pages/plugin";
 import {ComponentDetails} from "@/pages/components/details";
 import ComponentSettings from "@/pages/components/details/settings";
 import Exports from "@/pages/components/details/export";
@@ -19,6 +19,7 @@ import APINewVersion from "./pages/api/details/newVersion";
 import {Dashboard} from "@/pages/dashboard";
 import CreateWorker from "@/pages/workers/create";
 import ErrorBoundary from "@/components/errorBoundary";
+import CreatePlugin from "@/pages/plugin/create.tsx";
 
 function App() {
     return (
@@ -60,7 +61,8 @@ function App() {
                         <Route path="/workers" element={<WorkerList/>}/>
                         <Route path="/workers/create" element={<CreateWorker/>}/>
                         <Route path="/deployments" element={<Deployments/>}/>
-                        <Route path="/plugins" element={<Plugin/>}/>
+                        <Route path="/plugins" element={<PluginList/>}/>
+                        <Route path="/plugins/create" element={<CreatePlugin/>}/>
                     </Routes>
                 </div>
             </Router>
