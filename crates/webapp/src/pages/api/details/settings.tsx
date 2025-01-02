@@ -91,18 +91,15 @@ export default function APISettings() {
       ...activeApiDetails,
       routes: [],
     };
-    API.putApi(activeApiDetails.id, activeApiDetails.version, payload)
-      .then((r) => {
-        console.log(r, "r");
+    API.putApi(activeApiDetails.id, activeApiDetails.version, payload).then(
+      () => {
         toast({
           title: "All routes deleted",
           description: "All routes have been deleted successfully.",
         });
         navigate(`/apis/${apiName}`);
-      })
-      .catch((error) => {
-        console.log(error);
-      });
+      }
+    );
   };
 
   return (
