@@ -12,17 +12,14 @@ import {
   Server,
   Settings,
   Terminal,
+  Trash2,
 } from "lucide-react";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { useDeletePlugin, usePluginVersion } from "../api/plugins";
 import { useEffect, useState } from "react";
 
 import DeleteConfirmDialog from "../components/shared/DeleteConfirmDialog";
-import { Link } from "react-router-dom";
-import { Trash2 } from "lucide-react";
 import toast from "react-hot-toast";
-import { useDeletePlugin } from "../api/plugins";
-import { useNavigate } from "react-router-dom";
-import { useParams } from "react-router-dom";
-import { usePluginVersion } from "../api/plugins";
 
 const JsonDisplay = ({ data }: { data: string }) => {
   const [formattedJson, setFormattedJson] = useState<string>("");
@@ -47,15 +44,16 @@ const JsonDisplay = ({ data }: { data: string }) => {
 
   return (
     <div className="relative">
-      <pre className="bg-gray-900 p-4 rounded-lg overflow-x-auto text-sm border border-gray-800">
+      <pre className="bg-gray-900 p-3 md:p-4 rounded-lg overflow-x-auto text-xs md:text-sm border border-gray-800">
         <code className="text-foreground/90 font-mono whitespace-pre">
           {formattedJson}
         </code>
       </pre>
       <button
         onClick={handleCopy}
-        className="absolute top-3 right-3 p-2 text-muted-foreground hover:text-gray-300 
-                         bg-card/50 hover:bg-card rounded-md transition-all group"
+        className="absolute top-2 right-2 md:top-3 md:right-3 p-2 text-muted-foreground hover:text-gray-300 
+                 bg-card/50 hover:bg-card rounded-md transition-all group"
+        aria-label={copied ? "Copied to clipboard" : "Copy to clipboard"}
       >
         {copied ? (
           <CheckCircle2 size={16} className="text-green-400" />
@@ -78,12 +76,12 @@ const DetailsCard: React.FC<DetailsCardProps> = ({
   icon: Icon,
   children,
 }) => (
-  <div className="bg-card/50 rounded-lg p-6 border border-gray-700/50">
-    <div className="flex items-center gap-3 mb-4">
+  <div className="bg-card/50 rounded-lg p-4 md:p-6 border border-gray-700/50">
+    <div className="flex items-center gap-2 md:gap-3 mb-3 md:mb-4">
       <div className="p-2 rounded-md bg-card/50 text-primary">
         <Icon size={18} />
       </div>
-      <h2 className="text-lg font-semibold">{title}</h2>
+      <h2 className="text-base md:text-lg font-semibold">{title}</h2>
     </div>
     {children}
   </div>
@@ -95,13 +93,13 @@ export const PluginDetailPage = () => {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const deletePlugin = useDeletePlugin();
   const navigate = useNavigate();
-  
+
   useEffect(() => {
     if (plugin) {
-        document.title = `Plugins: ${name}  - Golem UI`;
+      document.title = `Plugins: ${name} - Golem UI`;
     }
-}, [plugin]);
-
+  }, [plugin]);
+  
   const handleDelete = async () => {
     try {
       await deletePlugin.mutateAsync({
@@ -137,27 +135,27 @@ export const PluginDetailPage = () => {
   }
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-4 md:space-y-8 px-4 md:px-6">
       {/* Header */}
-      <div className="bg-card/50 p-6 rounded-lg border border-gray-700/50">
-        <div className="flex items-center justify-between">
+      <div className="bg-card/50 p-4 md:p-6 rounded-lg border border-gray-700/50">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div className="flex items-center gap-4">
             <Link
               to="/plugins"
               className="p-2 text-muted-foreground hover:text-gray-300 rounded-lg 
-                                     hover:bg-card/50 transition-colors"
+                       hover:bg-card/50 transition-colors"
             >
               <ArrowLeft size={20} />
             </Link>
-            <div className="flex items-center gap-3">
-              <div className="p-2 rounded-md bg-primary/10 text-primary">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="p-2 rounded-md bg-primary/10 text-primary flex-shrink-0">
                 <Puzzle size={24} />
               </div>
-              <div>
-                <h1 className="text-2xl font-bold">{plugin.name}</h1>
+              <div className="min-w-0">
+                <h1 className="text-xl md:text-2xl font-bold truncate">{plugin.name}</h1>
                 <div className="flex items-center gap-2 mt-1">
-                  <Package size={14} className="text-muted-foreground" />
-                  <span className="text-muted-foreground">
+                  <Package size={14} className="text-muted-foreground flex-shrink-0" />
+                  <span className="text-sm text-muted-foreground">
                     Version {plugin.version}
                   </span>
                 </div>
@@ -166,8 +164,8 @@ export const PluginDetailPage = () => {
           </div>
           <div className="flex items-center gap-3">
             <span
-              className={`px-3 py-1 rounded-full text-sm
-                            ${plugin.scope.type === "Global"
+              className={`px-3 py-1 rounded-full text-xs md:text-sm
+                      ${plugin.scope.type === "Global"
                   ? "bg-primary/10 text-primary"
                   : "bg-purple-500/10 text-purple-400"
                 }`}
@@ -177,7 +175,7 @@ export const PluginDetailPage = () => {
             <button
               onClick={() => setShowDeleteConfirm(true)}
               className="p-2 text-red-400 hover:text-red-300 rounded-lg 
-                                     hover:bg-red-500/10 transition-colors"
+                       hover:bg-red-500/10 transition-colors"
               title="Delete Plugin"
             >
               <Trash2 size={20} />
@@ -187,25 +185,25 @@ export const PluginDetailPage = () => {
       </div>
 
       {/* Main content */}
-      <div className="grid grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-6">
         {/* Info Panel */}
-        <div className="col-span-1 space-y-6">
+        <div className="space-y-4 md:space-y-6">
           <DetailsCard title="Plugin Details" icon={Settings}>
             <div className="space-y-4">
               <div>
-                <label className="text-sm text-muted-foreground block mb-1">Type</label>
-                <div className="flex items-center gap-2 text-muted-foreground/80">
+                <label className="text-xs md:text-sm text-muted-foreground block mb-1">Type</label>
+                <div className="flex items-center gap-2 text-muted-foreground/80 text-sm">
                   {plugin.specs.type === "ComponentTransformer" ? (
-                    <Code size={16} className="text-green-400" />
+                    <Code size={16} className="text-green-400 flex-shrink-0" />
                   ) : (
-                    <Server size={16} className="text-purple-400" />
+                    <Server size={16} className="text-purple-400 flex-shrink-0" />
                   )}
                   <span>{plugin.specs.type}</span>
                 </div>
               </div>
               {plugin.homepage && (
                 <div>
-                  <label className="text-sm text-muted-foreground block mb-1">
+                  <label className="text-xs md:text-sm text-muted-foreground block mb-1">
                     Homepage
                   </label>
                   <a
@@ -213,13 +211,13 @@ export const PluginDetailPage = () => {
                     target="_blank"
                     rel="noopener noreferrer"
                     className="flex items-center gap-2 text-primary hover:text-primary-accent 
-                                                 transition-colors group"
+                           transition-colors group text-sm break-all"
                   >
-                    <Globe size={16} />
+                    <Globe size={16} className="flex-shrink-0" />
                     <span>Visit Homepage</span>
                     <ExternalLink
                       size={14}
-                      className="transition-transform group-hover:translate-x-0.5"
+                      className="transition-transform group-hover:translate-x-0.5 flex-shrink-0"
                     />
                   </a>
                 </div>
@@ -229,7 +227,7 @@ export const PluginDetailPage = () => {
 
           {plugin.description && (
             <DetailsCard title="Description" icon={Terminal}>
-              <p className="text-gray-300 text-sm leading-relaxed">
+              <p className="text-gray-300 text-xs md:text-sm leading-relaxed break-words">
                 {plugin.description}
               </p>
             </DetailsCard>
@@ -237,30 +235,26 @@ export const PluginDetailPage = () => {
         </div>
 
         {/* Main Panel */}
-        <div className="col-span-2 space-y-6">
+        <div className="lg:col-span-2 space-y-4 md:space-y-6">
           {plugin.specs.type === "ComponentTransformer" ? (
             <>
               <DetailsCard title="Endpoints" icon={Globe}>
                 <div className="space-y-4">
                   <div>
-                    <label className="text-sm text-muted-foreground block mb-1">
+                    <label className="text-xs md:text-sm text-muted-foreground block mb-1">
                       Validate URL
                     </label>
-                    <div
-                      className="font-mono text-sm bg-gray-900/50 p-3 rounded-lg 
-                                                      border border-gray-700/50"
-                    >
+                    <div className="font-mono text-xs md:text-sm bg-gray-900/50 p-3 rounded-lg 
+                                border border-gray-700/50 break-all">
                       {plugin.specs.validateUrl}
                     </div>
                   </div>
                   <div>
-                    <label className="text-sm text-muted-foreground block mb-1">
+                    <label className="text-xs md:text-sm text-muted-foreground block mb-1">
                       Transform URL
                     </label>
-                    <div
-                      className="font-mono text-sm bg-gray-900/50 p-3 rounded-lg 
-                                                      border border-gray-700/50"
-                    >
+                    <div className="font-mono text-xs md:text-sm bg-gray-900/50 p-3 rounded-lg 
+                                border border-gray-700/50 break-all">
                       {plugin.specs.transformUrl}
                     </div>
                   </div>
@@ -277,39 +271,37 @@ export const PluginDetailPage = () => {
             <DetailsCard title="Component Reference" icon={Package}>
               <div className="space-y-4">
                 <div>
-                  <label className="text-sm text-muted-foreground block mb-1">
+                  <label className="text-xs md:text-sm text-muted-foreground block mb-1">
                     Component ID
                   </label>
-                  <div
-                    className="font-mono text-sm bg-gray-900/50 p-3 rounded-lg
-                                                  border border-gray-700/50"
-                  >
+                  <div className="font-mono text-xs md:text-sm bg-gray-900/50 p-3 rounded-lg
+                              border border-gray-700/50 break-all">
                     {plugin.specs.componentId}
                   </div>
                 </div>
                 <div>
-                  <label className="text-sm text-muted-foreground block mb-1">
+                  <label className="text-xs md:text-sm text-muted-foreground block mb-1">
                     Version
                   </label>
                   <div className="flex items-center gap-2">
-                    <Package size={16} className="text-muted-foreground" />
-                    <span>{plugin.specs.componentVersion}</span>
+                    <Package size={16} className="text-muted-foreground flex-shrink-0" />
+                    <span className="text-sm">{plugin.specs.componentVersion}</span>
                   </div>
                 </div>
               </div>
             </DetailsCard>
           )}
         </div>
-
-        <DeleteConfirmDialog
-          isOpen={showDeleteConfirm}
-          onClose={() => setShowDeleteConfirm(false)}
-          onConfirm={handleDelete}
-          pluginName={plugin.name}
-          isDeleting={deletePlugin.isLoading}
-          modelName="Plugin"
-        />
       </div>
+
+      <DeleteConfirmDialog
+        isOpen={showDeleteConfirm}
+        onClose={() => setShowDeleteConfirm(false)}
+        onConfirm={handleDelete}
+        pluginName={plugin.name}
+        isDeleting={deletePlugin.isLoading}
+        modelName="Plugin"
+      />
     </div>
   );
 };

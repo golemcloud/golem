@@ -3,6 +3,7 @@ import {
   Box,
   Code2,
   Globe,
+  Menu,
   Plus,
   Route as RouteIcon,
   Share2,
@@ -40,17 +41,19 @@ export const ApiDefinitionView = () => {
   const { id, version } = useParams<{ id: string; version: string }>();
   const [showRouteModal, setShowRouteModal] = useState(false);
   const [showDeployModal, setShowDeployModal] = useState(false);
-  const [editingRoute, setEditingRoute] = useState<
-    (Route & { index: number }) | null
-  >(null);
+  const [showMobileMenu, setShowMobileMenu] = useState(false);
+  const [editingRoute, setEditingRoute] = useState<(Route & { index: number }) | null>(null);
 
-  const { data: apiDefinition, isLoading: isLoadingDefinition } =
-    useApiDefinition(id!, version!);
-
-  const { data: deployments, isLoading: isLoadingDeployments } =
-    useApiDeployments(id!);
+  const { data: apiDefinition, isLoading: isLoadingDefinition } = useApiDefinition(id!, version!);
+  const { data: deployments, isLoading: isLoadingDeployments } = useApiDeployments(id!);
   const deleteDeployment = useDeleteDeployment();
   const updateDefinition = useUpdateApiDefinition();
+
+  useEffect(() => {
+    if (apiDefinition) {
+      document.title = `${apiDefinition.id} v${apiDefinition.version} - API Definition`;
+    }
+  }, [apiDefinition]);
 
   const handleAddRoute = (route: Route) => {
     if (!apiDefinition) return;
@@ -139,16 +142,11 @@ export const ApiDefinitionView = () => {
       </div>
     );
   }
-  useEffect(() => {
-    if (apiDefinition) {
-      document.title = `${apiDefinition.id} v${apiDefinition.version} - API Definition`;
-    }
-  }, [apiDefinition]);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 md:space-y-6 px-4 md:px-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div className="flex items-center gap-4">
           <Link
             to="/apis"
@@ -156,43 +154,54 @@ export const ApiDefinitionView = () => {
           >
             <ArrowLeft size={20} />
           </Link>
-          <div>
-            <h1 className="text-2xl font-bold flex items-center gap-2">
-              <Globe className="h-6 w-6 text-primary" />
-              {apiDefinition.id}
+          <div className="min-w-0">
+            <h1 className="text-xl md:text-2xl font-bold flex items-center gap-2 flex-wrap">
+              <Globe className="h-6 w-6 text-primary flex-shrink-0" />
+              <span className="truncate">{apiDefinition.id}</span>
               {apiDefinition.draft && (
                 <span className="text-sm bg-yellow-500/10 text-yellow-500 px-2 py-0.5 rounded">
                   Draft
                 </span>
               )}
             </h1>
-            <p className="text-muted-foreground">Version {apiDefinition.version}</p>
+            <p className="text-sm text-muted-foreground">Version {apiDefinition.version}</p>
           </div>
         </div>
 
-        <div className="flex gap-2">
+        {/* Mobile Menu Button */}
+        <div className="md:hidden">
+          <button
+            onClick={() => setShowMobileMenu(!showMobileMenu)}
+            className="p-2 text-muted-foreground hover:text-foreground rounded-lg hover:bg-card/60"
+          >
+            <Menu size={24} />
+          </button>
+        </div>
+
+        {/* Action Buttons */}
+        <div className={`flex flex-col sm:flex-row gap-2 ${showMobileMenu ? 'block' : 'hidden md:flex'}`}>
           <button
             onClick={() => setShowDeployModal(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600"
+            className="flex items-center justify-center gap-2 px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600"
           >
             <Upload size={18} />
-            Deploy
+            <span>Deploy</span>
           </button>
           <button
             onClick={() => setShowRouteModal(true)}
-            className="flex items-center gap-2 bg-primary text-white px-4 py-2 rounded hover:bg-blue-600"
+            className="flex items-center justify-center gap-2 bg-primary text-white px-4 py-2 rounded hover:bg-blue-600"
           >
             <Plus size={18} />
-            Add Route
+            <span>Add Route</span>
           </button>
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6">
         {/* Routes List */}
-        <div className="col-span-2 bg-card rounded-lg p-6">
+        <div className="md:col-span-2 bg-card rounded-lg p-4 md:p-6">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold flex items-center gap-2">
+            <h2 className="text-base md:text-lg font-semibold flex items-center gap-2">
               <RouteIcon className="h-5 w-5 text-primary" />
               Routes
               <span className="text-sm text-muted-foreground">
@@ -202,16 +211,14 @@ export const ApiDefinitionView = () => {
             {apiDefinition.routes.length > 0 && (
               <button
                 onClick={() => {
-                  const text = apiDefinition.routes
-                    .map((r) => `${r.method} ${r.path}`)
-                    .join("\n");
+                  const text = apiDefinition.routes.map((r) => `${r.method} ${r.path}`).join("\n");
                   navigator.clipboard.writeText(text);
                   toast.success("Routes copied to clipboard");
                 }}
                 className="text-sm text-muted-foreground hover:text-gray-300 flex items-center gap-1"
               >
                 <Share2 size={14} />
-                Copy All
+                <span className="hidden sm:inline">Copy All</span>
               </button>
             )}
           </div>
@@ -220,14 +227,14 @@ export const ApiDefinitionView = () => {
             {apiDefinition.routes.map((route, index) => (
               <div
                 key={index}
-                className="bg-card/80 hover:bg-card/60 border border-border/10 hover:border-border/20 rounded-lg p-4 transition-colors"
+                className="bg-card/80 hover:bg-card/60 border border-border/10 hover:border-border/20 rounded-lg p-3 md:p-4 transition-colors"
               >
-                <div className="flex items-start justify-between">
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-2">
+                <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+                  <div className="space-y-2 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
                       <span
                         className={`
-                        px-2 py-0.5 rounded text-sm font-medium
+                        px-2 py-0.5 rounded text-xs md:text-sm font-medium
                         ${route.method === "GET"
                             ? "bg-green-500/10 text-green-500"
                             : route.method === "POST"
@@ -239,33 +246,33 @@ export const ApiDefinitionView = () => {
                                   : route.method === "PATCH"
                                     ? "bg-purple-500/10 text-purple-500"
                                     : "bg-gray-500/10 text-gray-500"
-                          }
-                      `}
+                          }`}
                       >
                         {route.method}
                       </span>
-                      <span className="font-mono">{route.path}</span>
+                      <span className="font-mono text-sm break-all">{route.path}</span>
                     </div>
 
-                    <div className="text-sm text-muted-foreground space-y-1">
+                    <div className="text-xs md:text-sm text-muted-foreground space-y-1">
                       <div className="flex items-center gap-2">
-                        <Code2 className="h-4 w-4" />
-                        Component: {route.binding.componentId.componentId} (v
-                        {route.binding.componentId.version})
+                        <Code2 className="h-4 w-4 flex-shrink-0" />
+                        <span className="break-all">
+                          Component: {route.binding.componentId.componentId} (v{route.binding.componentId.version})
+                        </span>
                       </div>
                       <div className="flex items-center gap-2">
-                        <Box className="h-4 w-4" />
-                        Worker: {route.binding.workerName}
+                        <Box className="h-4 w-4 flex-shrink-0" />
+                        <span className="break-all">Worker: {route.binding.workerName}</span>
                       </div>
                       {route.binding.response && (
                         <div className="flex items-center gap-2 text-gray-500">
-                          Response Type: {route.binding.response}
+                          <span className="break-all">Response Type: {route.binding.response}</span>
                         </div>
                       )}
                     </div>
                   </div>
 
-                  <div className="flex gap-2">
+                  <div className="flex gap-2 sm:flex-shrink-0">
                     <button
                       onClick={() => handleEditRoute(route, index)}
                       className="p-1.5 text-primary hover:text-primary-accent rounded-md hover:bg-gray-600"
@@ -274,11 +281,7 @@ export const ApiDefinitionView = () => {
                     </button>
                     <button
                       onClick={() => {
-                        if (
-                          window.confirm(
-                            "Are you sure you want to delete this route?",
-                          )
-                        ) {
+                        if (window.confirm("Are you sure you want to delete this route?")) {
                           handleDeleteRoute(index);
                         }
                       }}
@@ -292,12 +295,12 @@ export const ApiDefinitionView = () => {
             ))}
 
             {apiDefinition.routes.length === 0 && (
-              <div className="text-center py-8 text-muted-foreground">
+              <div className="text-center py-6 md:py-8 text-muted-foreground">
                 <RouteIcon className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                <p>No routes defined yet</p>
+                <p className="text-sm md:text-base">No routes defined yet</p>
                 <button
                   onClick={() => setShowRouteModal(true)}
-                  className="text-primary hover:text-primary-accent mt-2"
+                  className="text-primary hover:text-primary-accent mt-2 text-sm"
                 >
                   Add your first route
                 </button>
@@ -307,8 +310,8 @@ export const ApiDefinitionView = () => {
         </div>
 
         {/* Deployments Panel */}
-        <div className="col-span-1 bg-card rounded-lg p-6">
-          <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+        <div className="bg-card rounded-lg p-4 md:p-6">
+          <h2 className="text-base md:text-lg font-semibold mb-4 flex items-center gap-2">
             <Upload className="h-5 w-5 text-green-400" />
             Deployments
           </h2>
@@ -320,30 +323,24 @@ export const ApiDefinitionView = () => {
                 className="bg-card/80 rounded-lg p-3"
               >
                 <div className="flex items-center justify-between">
-                  <div>
+                  <div className="min-w-0">
                     <div className="flex items-center gap-2">
-                      <Globe size={16} className="text-muted-foreground" />
-                      <span>{deployment.site.host}</span>
+                      <Globe size={16} className="text-muted-foreground flex-shrink-0" />
+                      <span className="truncate">{deployment.site.host}</span>
                     </div>
                     {deployment.site.subdomain && (
-                      <p className="text-sm text-muted-foreground mt-1">
+                      <p className="text-xs md:text-sm text-muted-foreground mt-1 truncate">
                         Subdomain: {deployment.site.subdomain}
                       </p>
                     )}
                   </div>
                   <button
                     onClick={() => {
-                      if (
-                        window.confirm(
-                          "Are you sure you want to delete this deployment?",
-                        )
-                      ) {
-                        handleDeleteDeployment(
-                          `${deployment.site.subdomain}.${deployment.site.host}`,
-                        );
+                      if (window.confirm("Are you sure you want to delete this deployment?")) {
+                        handleDeleteDeployment(`${deployment.site.subdomain}.${deployment.site.host}`);
                       }
                     }}
-                    className="p-1.5 text-red-400 hover:text-red-300 rounded-md hover:bg-gray-600"
+                    className="p-1.5 text-red-400 hover:text-red-300 rounded-md hover:bg-gray-600 flex-shrink-0"
                   >
                     <Trash2 size={16} />
                   </button>
@@ -353,10 +350,10 @@ export const ApiDefinitionView = () => {
 
             {(!deployments || deployments.length === 0) && (
               <div className="text-center py-4 text-muted-foreground">
-                <p>No active deployments</p>
+                <p className="text-sm md:text-base">No active deployments</p>
                 <button
                   onClick={() => setShowDeployModal(true)}
-                  className="text-green-400 hover:text-green-300 mt-2"
+                  className="text-green-400 hover:text-green-300 mt-2 text-sm"
                 >
                   Deploy this API
                 </button>
