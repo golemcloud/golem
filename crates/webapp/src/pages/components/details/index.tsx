@@ -12,7 +12,6 @@ import ErrorBoundary from "@/components/errorBoundary";
 export const ComponentDetails = () => {
   const { componentId } = useParams();
   const [component, setComponent] = useState({} as Component);
-  const [_, setWorkers] = useState({} as Worker[]);
   const [workerStatus, setWorkerStatus] = useState({} as IWorkerStatus);
 
   useEffect(() => {
@@ -21,7 +20,6 @@ export const ComponentDetails = () => {
     });
 
     API.findWorker(componentId!).then((res) => {
-      setWorkers(res.workers);
       const status: IWorkerStatus = {};
       res.workers.forEach((worker: Worker) => {
         status[worker.status] = (status[worker.status] || 0) + 1;

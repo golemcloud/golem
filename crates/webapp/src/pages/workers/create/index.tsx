@@ -1,4 +1,3 @@
-import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -7,13 +6,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import ComponentLeftNav from "../../components/details/componentsLeftNav";
 import { z } from "zod";
 import { useFieldArray, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -27,8 +20,10 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { API } from "@/service";
-import { Component } from "@/types/component.ts";
 import { v4 as uuidv4 } from "uuid";
+import ErrorBoundary from "@/components/errorBoundary";
+import { ArrowLeft } from "lucide-react";
+import { useNavigate, useParams } from "react-router-dom";
 
 const formSchema = z.object({
   componentID: z.string(),
@@ -45,13 +40,15 @@ const formSchema = z.object({
 });
 
 export default function CreateWorker() {
+  const navigate = useNavigate();
+  const { componentId } = useParams();
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
-      componentID: "",
+      componentID: componentId,
       name: "",
       env: [{ key: "", value: "" }],
-      args: [""],
+      args: [" "],
     },
   });
 
@@ -79,7 +76,6 @@ export default function CreateWorker() {
 
   function onSubmit(values: z.infer<typeof formSchema>) {
     const { componentID, ...rest } = values as any;
-    console.log("submit", rest);
     rest.env = rest.env.reduce(
       (acc: Record<string, string>, arg: { key: string; value: string }) => {
         if (arg.key) {
@@ -93,170 +89,167 @@ export default function CreateWorker() {
 
     console.log("submit before", rest);
     API.createWorker(componentID, rest).then((response) => {
-      console.log(response);
+      navigate(
+        `/components/${componentId}/workers/${response.workerId.workerName}`
+      );
     });
   }
 
-  const [components, setComponents] = useState<{ [key: string]: Component }>(
-    {}
-  );
-
-  useEffect(() => {
-    API.getComponentByIdAsKey().then((response) => setComponents(response));
-  }, []);
-
   return (
-    <div className="p-4 min-h-screen bg-background text-foreground mx-auto max-w-7xl px-6 lg:px-8 py-4">
-      <Card className="max-w-2xl mx-auto border-0 shadow-none">
-        <CardTitle>
-          <h1 className="text-2xl font-semibold mb-1">Create a new Worker</h1>
-        </CardTitle>
-        <CardDescription>
-          <p className="text-sm text-gray-400">Launch a new worker</p>
-        </CardDescription>
-        <CardContent className="p-6">
-          <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-8">
-              <FormField
-                control={form.control}
-                name="componentID"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Component</FormLabel>
-                    <FormControl>
-                      <Select
-                        onValueChange={field.onChange}
-                        defaultValue={field.value}
-                        {...field}
+    <ErrorBoundary>
+      <div className="flex">
+        <ComponentLeftNav />
+        <div className="p-4 min-h-screen bg-background text-foreground mx-auto max-w-7xl p-10">
+          <Card className="max-w-2xl mx-auto border-0 shadow-none">
+            <CardTitle>
+              <h1 className="text-2xl font-semibold mb-1">
+                Create a new Worker
+              </h1>
+            </CardTitle>
+            <CardDescription>
+              <p className="text-sm text-gray-400">Launch a new worker</p>
+            </CardDescription>
+            <CardContent className="py-6 px-0">
+              <Form {...form}>
+                <form
+                  onSubmit={form.handleSubmit(onSubmit)}
+                  className="space-y-8"
+                >
+                  <FormField
+                    control={form.control}
+                    name="name"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Worker Name</FormLabel>
+                        <FormControl>
+                          <div className="flex gap-2">
+                            <Input {...field} />
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              onClick={generateUUID}
+                            >
+                              Generate
+                            </Button>
+                          </div>
+                        </FormControl>
+                        <FormDescription>
+                          The name must be unique for this component.
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <div>
+                    <FormLabel>Environment Variables</FormLabel>
+                    {envFields.map((field, index) => (
+                      <div
+                        key={field.id}
+                        className="flex items-center gap-2 pt-2"
                       >
-                        <SelectTrigger id="componentID">
-                          <SelectValue placeholder="choose a component" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {Object.values(components).map((data: Component) => (
-                            <SelectItem value={data.componentId!}>
-                              {data?.componentName}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="name"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Worker Name</FormLabel>
-                    <FormControl>
-                      <div className="flex gap-2">
-                        <Input {...field} />
+                        <FormField
+                          control={form.control}
+                          name={`env.${index}.key`}
+                          render={({ field }) => (
+                            <FormControl>
+                              <Input placeholder="Key" {...field} />
+                            </FormControl>
+                          )}
+                        />
+                        <FormField
+                          control={form.control}
+                          name={`env.${index}.value`}
+                          render={({ field }) => (
+                            <FormControl>
+                              <Input
+                                placeholder="Value"
+                                {...field}
+                                type="password"
+                              />
+                            </FormControl>
+                          )}
+                        />
                         <Button
                           type="button"
                           variant="secondary"
-                          onClick={generateUUID}
+                          size="sm"
+                          disabled={envFields.length <= 1}
+                          onClick={() =>
+                            envFields.length > 1 && removeEnv(index)
+                          }
                         >
-                          Generate
+                          Remove
                         </Button>
                       </div>
-                    </FormControl>
-                    <FormDescription>
-                      The name must be unique for this component.
-                    </FormDescription>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <div>
-                <FormLabel>Environment Variables</FormLabel>
-                {envFields.map((field, index) => (
-                  <div key={field.id} className="flex items-center gap-2 pt-2">
-                    <FormField
-                      control={form.control}
-                      name={`env.${index}.key`}
-                      render={({ field }) => (
-                        <FormControl>
-                          <Input placeholder="Key" {...field} />
-                        </FormControl>
-                      )}
-                    />
-                    <FormField
-                      control={form.control}
-                      name={`env.${index}.value`}
-                      render={({ field }) => (
-                        <FormControl>
-                          <Input placeholder="Value" {...field} />
-                        </FormControl>
-                      )}
-                    />
+                    ))}
                     <Button
+                      className={"mt-4"}
                       type="button"
-                      variant="secondary"
+                      variant="outline"
                       size="sm"
-                      onClick={() => removeEnv(index)}
+                      onClick={() => appendEnv({ key: "", value: "" })}
                     >
-                      Remove
+                      Add Environment Variable
                     </Button>
                   </div>
-                ))}
-                <Button
-                  className={"mt-4"}
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => appendEnv({ key: "", value: "" })}
-                  disabled={envFields.some(
-                    (field) => !field.key && !field.value
-                  )}
-                >
-                  Add Environment Variable
-                </Button>
-              </div>
-              <div>
-                <div className="flex items-center gap-2 pb-2 w-full">
-                  <FormLabel>Arguments</FormLabel>
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => appendArg("")}
-                  >
-                    Add
-                  </Button>
-                </div>
+                  <div>
+                    <FormLabel>Arguments</FormLabel>
 
-                {argFields.map((field, index) => (
-                  <div key={field.id} className="flex items-center gap-2 pb-2">
-                    <FormField
-                      control={form.control}
-                      name={`args.${index}`}
-                      render={({ field }) => (
-                        <FormControl>
-                          <Input {...field} />
-                        </FormControl>
-                      )}
-                    />
+                    {argFields.map((field, index) => (
+                      <div
+                        key={field.id}
+                        className="flex items-center gap-2 pb-2"
+                      >
+                        <FormField
+                          control={form.control}
+                          name={`args.${index}`}
+                          render={({ field }) => (
+                            <FormControl>
+                              <Input {...field} />
+                            </FormControl>
+                          )}
+                        />
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          disabled={argFields.length <= 1}
+                          onClick={() =>
+                            argFields.length > 1 && removeArg(index)
+                          }
+                        >
+                          Remove
+                        </Button>
+                      </div>
+                    ))}
+                    <Button
+                      className={"mt-2"}
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => appendArg("")}
+                    >
+                      Add Arguments
+                    </Button>
+                  </div>
+
+                  <div className="flex justify-between">
                     <Button
                       type="button"
                       variant="secondary"
-                      size="sm"
-                      onClick={() => removeArg(index)}
+                      onClick={() => navigate(-1)}
                     >
-                      Remove
+                      <ArrowLeft className="mr-2 h-5 w-5" />
+                      Back
                     </Button>
+                    <Button type="submit">Submit</Button>
                   </div>
-                ))}
-              </div>
-              <div className="flex justify-end">
-                <Button type="submit">Submit</Button>
-              </div>
-            </form>
-          </Form>
-        </CardContent>
-      </Card>
-    </div>
+                </form>
+              </Form>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    </ErrorBoundary>
   );
 }

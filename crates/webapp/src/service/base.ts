@@ -1,5 +1,6 @@
 import {Component} from "@/types/component.ts";
 import {Api} from "@/types/api.ts";
+import {Worker} from "@/types/worker.ts";
 
 
 export interface GolemService {
@@ -13,4 +14,5 @@ export interface GolemService {
     createComponent(): Promise<any>;
     getComponentById(): Promise<any>;
     getWorkers(): Promise<any>;
+    getParticularWorker(componentId: string, workerName: string): Promise<Worker>;
 }

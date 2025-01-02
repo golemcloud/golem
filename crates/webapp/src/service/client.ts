@@ -157,6 +157,10 @@ export class Service {
         return r
     }
 
+    public getParticularWorker = async (componentId: string, workerName: string) => {
+      const r = await this.callApi(ENDPOINT.getParticularWorker(componentId, workerName));
+      return r
+    }
     public getComponentByIdAsKey = async (): Promise<Record<string, Component>> => {
         const result: Record<string, Component> = {};
         const components = await this.getComponents();

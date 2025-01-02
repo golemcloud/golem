@@ -44,4 +44,7 @@ export const ENDPOINT = {
     createWorker: (component_id: string) => {
         return `/v1/components/${component_id}/workers`;
     },
+    getParticularWorker: (componentId: string, workerName: string) => {
+        return `/v1/components/${componentId}/workers/${workerName}`;
+    }
 };
