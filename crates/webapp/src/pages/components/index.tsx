@@ -7,7 +7,7 @@ import {useNavigate} from "react-router-dom";
 import {Button} from "@/components/ui/button.tsx";
 import {formatRelativeTime} from "@/lib/utils";
 import {Input} from "@/components/ui/input";
-import {API, SERVICE} from "@/service";
+import {API} from "@/service";
 import {Component} from "@/types/component";
 import {Worker, WorkerStatus} from "@/types/worker";
 
@@ -31,50 +31,22 @@ const Components = () => {
         API.getComponentByIdAsKey().then((response) => {
             setComponentApiList(response);
             setComponentList(response);
-        });
-    }, []);
-
-    useEffect(() => {
-        SERVICE.getWorkers().then((response) => {
-            const workerData = {} as {
-                [key: string]: WorkerStatus;
-            };
-            response.workers.forEach((data: Worker) => {
-                const exisitngData = workerData[data.workerId.componentId] || {};
-                switch (data.status) {
-                    case "Idle":
-                        if (exisitngData.Idle) {
-                            exisitngData.Idle++;
-                        } else {
-                            exisitngData["Idle"] = 1;
-                        }
-                        break;
-                    case "Running":
-                        if (exisitngData.Running) {
-                            exisitngData.Running++;
-                        } else {
-                            exisitngData["Running"] = 1;
-                        }
-                        break;
-                    case "Suspended":
-                        if (exisitngData.Suspended) {
-                            exisitngData.Suspended++;
-                        } else {
-                            exisitngData["Suspended"] = 1;
-                        }
-                        break;
-                    case "Failed":
-                        if (exisitngData.Failed) {
-                            exisitngData.Failed++;
-                        } else {
-                            exisitngData["Failed"] = 1;
-                        }
-                        break;
-                    default:
+            const componentStatus: { [key: string]: WorkerStatus } = {};
+            Promise.all(Object.values(response).map((comp) => {
+                if (comp.versionedComponentId && comp.versionedComponentId!.componentId) {
+                    API.findWorker(comp.versionedComponentId!.componentId!, {
+                        "count": 100,
+                        "precise": true
+                    })
+                        .then((worker) => {
+                            componentStatus[comp.versionedComponentId!.componentId!] = worker.workers.reduce((counts: any, w: Worker) => {
+                                counts[w.status] = (counts[w.status] || 0) + 1;
+                                return counts;
+                            }, {});
+                        })
                 }
-                workerData[data.workerId.componentId] = exisitngData;
-            });
-            setWorkerList(workerData);
+            })).then(() => setWorkerList(componentStatus));
+
         });
     }, []);
 

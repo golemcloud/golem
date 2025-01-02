@@ -2,6 +2,15 @@ export const ENDPOINT = {
     getComponents: () => {
         return "/v1/components";
     },
+    createComponent: () => {
+        return "/v1/components";
+    },
+    deleteWorker: (id: string, workName: string) => {
+        return `/v1/components/${id}/workers/${workName}`;
+    },
+    findWorker: (componentId: string) => {
+        return `/v1/components/${componentId}/workers/find`;
+    },
     getComponent: (id: string) => {
         return `/v1/components/${id}/latest`;
     },

@@ -1,4 +1,4 @@
-export interface Worker   {
+export interface Worker {
     accountId: string;
     activePlugins: any[];
     args: any[];
@@ -17,12 +17,12 @@ export interface Worker   {
         componentId: string;
         workerName: string;
     };
-  }
+}
 
-  export interface WorkerStatus {
-    Idle: number;
-    Running: number;
-    Suspended: number;
-    Failed: number;
-  }
+export interface WorkerStatus {
+    Idle?: number;
+    Running?: number;
+    Suspended?: number;
+    Failed?: number;
+}
   

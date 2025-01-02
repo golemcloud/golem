@@ -2,7 +2,6 @@ import {useEffect, useState} from 'react'
 import {Button} from "@/components/ui/button"
 import {Card, CardContent, CardDescription, CardTitle} from "@/components/ui/card"
 import {Input} from "@/components/ui/input"
-import {v4 as uuidv4} from 'uuid';
 import {Select, SelectContent, SelectItem, SelectTrigger, SelectValue} from "@/components/ui/select"
 import {z} from "zod"
 import {useFieldArray, useForm} from "react-hook-form";
@@ -10,6 +9,7 @@ import {zodResolver} from "@hookform/resolvers/zod";
 import {Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage,} from "@/components/ui/form"
 import {API} from "@/service";
 import {Component} from "@/types/component.ts";
+import {v4 as uuidv4} from "uuid";
 
 const formSchema = z.object({
     componentID: z.string(),
