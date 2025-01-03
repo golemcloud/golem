@@ -4,6 +4,16 @@ import { Box, Button, Grid2 as Grid, Paper, Typography } from "@mui/material";
 import React, { useMemo } from "react";
 import { calculateHoursDifference, calculateSizeInMB } from "@/lib/utils";
 import GenericCard from "@/components/ui/generic-card";
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+} from "recharts";
 
 // const cardStyle = {
 //   padding: 3,
@@ -42,6 +52,28 @@ const Overview = ({
       },
     ];
   }, [worker]);
+
+  const data = [
+
+    {
+      name: "Page E",
+      uv: 1890,
+      pv: 4800,
+      amt: 2181,
+    },
+    {
+      name: "Page F",
+      uv: 2390,
+      pv: 3800,
+      amt: 2500,
+    },
+    {
+      name: "Page G",
+      uv: 3490,
+      pv: 4300,
+      amt: 2100,
+    },
+  ];
 
   if (isLoading) {
     return <Typography>Loading...</Typography>;
@@ -84,10 +116,30 @@ const Overview = ({
               ))}
 
               <Grid size={12}>
-                <GenericCard
+                {/* <GenericCard
                   title="Invocations"
                   emptyMessage="No data available here"
-                />
+                /> */}
+                {/* <ResponsiveContainer width="100%" height="100%"> */}
+                <Paper>
+                  <BarChart
+                    width={500}
+                    height={300}
+                    data={data}
+                    margin={{
+                      top: 20,
+                      right: 30,
+                      left: 20,
+                      bottom: 5,
+                    }}
+                    barCategoryGap={Math.max(1, 100 / data.length)}
+                  >
+                    <Bar dataKey="pv" stackId="a" fill="#8884d8" />
+                    <Bar dataKey="uv" stackId="a" fill="#82ca9d" />
+                  </BarChart>
+                </Paper>
+
+                {/* </ResponsiveContainer> */}
               </Grid>
               <Grid size={12}>
                 <GenericCard
@@ -109,12 +161,12 @@ const Overview = ({
                 borderRadius: 1,
               }}
             >
-              <Typography variant="h6" sx={{ mb: 1 }}>
+              {/* <Typography variant="h6" sx={{ mb: 1 }}>
                 No Workers Found
               </Typography>
               <Typography variant="body2" sx={{ mb: 2 }}>
                 Contact Support
-              </Typography>
+              </Typography> */}
               <Button
                 variant="contained"
                 sx={{

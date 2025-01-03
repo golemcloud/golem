@@ -45,7 +45,7 @@ export default function TerminalLogs({
       ) || []
     ) as StdOutMessage[];
   }, [checkLogIsAfterLastClearTime, messages]);
-
+  
   if (!entries || entries.length === 0)
     return (
       <Box
