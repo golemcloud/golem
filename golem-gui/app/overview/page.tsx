@@ -193,6 +193,7 @@ const ProjectDashboard = () => {
                   {error && <Alert severity="error">{componentError}</Alert>}
                 </Box>
               )}
+
               {!componentError && !componentsLoading && (
                 <Box className="grid w-full grid-cols-1 gap-3 lg:grid-cols-2 mt-2">
                   {components.slice(0, 8).map((component) => (

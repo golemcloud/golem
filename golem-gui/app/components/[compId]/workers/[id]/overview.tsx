@@ -1,9 +1,18 @@
-import { Worker } from "@/types/api";
+import { EventMessage, InvocationStart, Worker } from "@/types/api";
 import { Activity, Gauge, Cpu, Clock } from "lucide-react";
 import { Box, Button, Grid2 as Grid, Paper, Typography } from "@mui/material";
 import React, { useMemo } from "react";
 import { calculateHoursDifference, calculateSizeInMB } from "@/lib/utils";
-import GenericCard from "@/components/ui/generic-card";
+import { format } from "date-fns";
+
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  Tooltip,
+  ResponsiveContainer,
+} from "recharts";
+import TerminalLogs from "./terminal";
 
 // const cardStyle = {
 //   padding: 3,
@@ -11,12 +20,24 @@ import GenericCard from "@/components/ui/generic-card";
 //   bgcolor: "#1E1E1E",
 // };
 
+//TO DO: for now usng this harcoded colors. we need to maintian random color generator
+const colors = [
+  "#8884d8",
+  "#82ca9d",
+  "#ffc658",
+  "#ff7f50",
+  "#a83279",
+  "#50c878",
+];
+
 const Overview = ({
   worker,
   isLoading,
+  messages,
 }: {
   worker: Worker;
   isLoading: boolean;
+  messages: Array<EventMessage>;
 }) => {
   const workerStats = useMemo(() => {
     return [
@@ -43,6 +64,110 @@ const Overview = ({
     ];
   }, [worker]);
 
+  const invokeMessages = useMemo(() => {
+    return Object.values(
+      messages?.reduce<Record<string, InvocationStart["InvocationStart"]>>(
+        (obj, message: EventMessage) => {
+          if ("InvocationStart" in message) {
+            const idempotency_key =
+              message?.["InvocationStart"]?.idempotency_key;
+            obj[idempotency_key] = message?.["InvocationStart"];
+          }
+          return obj;
+        },
+        {}
+      ) || {}
+    );
+  }, [messages]);
+
+  const uniquefunctions = new Set<string>();
+  let graphKey = "live";
+  const graphKeyMap = {
+    daily: "",
+    monthly: "",
+    yearly: "",
+  };
+  // This can be improved further and needs to move to some other place where we can reuse it.
+  const dataMap =
+    invokeMessages?.reduce<Record<string, Record<string, number>>>(
+      (stats, message: InvocationStart["InvocationStart"]) => {
+        const currentDate = new Date(message.timestamp);
+        const fullDate = format(currentDate, "dd-MM-yyyy HH:mm");
+        const yearly = format(currentDate, "yyyy");
+        const monthly = format(currentDate, "MMM");
+        const daily = format(currentDate, "MMM dd");
+        const live = format(currentDate, "HH:mm");
+        const key = `${fullDate}`;
+        if (graphKeyMap["monthly"] && graphKeyMap["monthly"] !== monthly) {
+          graphKey = "monthly";
+        }
+        if (graphKeyMap["daily"] && graphKeyMap["daily"] !== daily) {
+          graphKey = "daily";
+        }
+        if (graphKeyMap["yearly"] && graphKeyMap["yearly"] !== yearly) {
+          graphKey = "yearly";
+        }
+
+        graphKeyMap["monthly"] = monthly;
+        graphKeyMap["yearly"] = yearly;
+        graphKeyMap["daily"] = daily;
+
+        if (graphKey === "live") {
+          stats[`live_${key}`] = stats[`live_${key}`] || {
+            name: message.function,
+            yearly: yearly, // "Jan 2025"
+            monthly: monthly, // "January"
+            daily: daily, // "Jan 03"
+            live: live,
+          };
+          stats[`live_${key}`][message.function] =
+            (stats[`live_${key}`][message.function] || 0) + 1;
+        }
+        if (["live", "daily"].includes(graphKey)) {
+          stats[`daily_${daily}`] = stats[`daily_${daily}`] || {
+            name: message.function,
+            yearly: yearly, // "Jan 2025"
+            monthly: monthly, // "January"
+            daily: daily, // "Jan 03"
+            live: live,
+          };
+          stats[`daily_${daily}`][message.function] =
+            (stats[`daily_${daily}`][message.function] || 0) + 1;
+        }
+
+        if (["live", "daily", "monthly"].includes(graphKey)) {
+          stats[`monthly_${monthly}`] = stats[`monthly_${monthly}`] || {
+            name: message.function,
+            yearly: yearly, // "Jan 2025"
+            monthly: monthly, // "January"
+            daily: daily, // "Jan 03"
+            live: live,
+          };
+          stats[`monthly_${monthly}`][message.function] =
+            (stats[`monthly_${monthly}`][message.function] || 0) + 1;
+        }
+
+        if (["live", "daily", "monthly", "yearly"].includes(graphKey)) {
+          stats[`yearly_${yearly}`] = stats[`yearly_${yearly}`] || {
+            name: message.function,
+            yearly: yearly, // "Jan 2025"
+            monthly: monthly, // "January"
+            daily: daily, // "Jan 03"
+            live: live,
+          };
+          stats[`yearly_${yearly}`][message.function] =
+            (stats[`yearly_${yearly}`][message.function] || 0) + 1;
+        }
+        uniquefunctions.add(message.function);
+        return stats;
+      },
+      {}
+    ) || {};
+
+  const data = Object.keys(dataMap)
+    .filter((key) => key.includes(graphKey))
+    .map((key) => dataMap[key])
+    .reverse();
   if (isLoading) {
     return <Typography>Loading...</Typography>;
   }
@@ -84,16 +209,121 @@ const Overview = ({
               ))}
 
               <Grid size={12}>
-                <GenericCard
+                {/* <GenericCard
                   title="Invocations"
                   emptyMessage="No data available here"
-                />
+                /> */}
+                <Paper elevation={2} className="border rounded-sm p-5">
+                  <Typography
+                    variant="h6"
+                    sx={{
+                      marginBottom: 2,
+                      fontWeight: "bold",
+                      fontSize: "0.875rem",
+                    }}
+                  >
+                    Invocations
+                  </Typography>
+                  {invokeMessages?.length === 0 ? (
+                    <Box
+                      sx={{
+                        minHeight: "300px",
+                        display: "flex",
+                        justifyContent: "center",
+                        alignItems: "center",
+                        borderRadius: 2,
+                        padding: 2,
+                      }}
+                    >
+                      <Typography variant="body2" sx={{ color: "#AAAAAA" }}>
+                        No data available here
+                      </Typography>
+                    </Box>
+                  ) : (
+                    <ResponsiveContainer
+                      width="100%"
+                      height="100%"
+                      aspect={500 / 150}
+                    >
+                      <BarChart
+                        data={data}
+                        margin={{
+                          top: 20,
+                          right: 30,
+                          left: 20,
+                          bottom: 5,
+                        }}
+                        barCategoryGap={Math.max(1, 100 / data.length)}
+                      >
+                        <XAxis
+                          dataKey={graphKey}
+                          interval="preserveStartEnd" // Adjusts the interval dynamically based on space
+                          tick={{ fontSize: 12 }} // Makes tick labels smaller
+                          tickSize={5} // Reduces the size of tick lines
+                          tickMargin={5} // Adds spacing between ticks and axis line
+                          minTickGap={5} // Ensures minimal gap between ticks
+                        />
+                        {/* <YAxis /> */}
+                        <Tooltip />
+                        {Array.from(uniquefunctions)?.map((bar, index) => {
+                          return (
+                            <Bar
+                              dataKey={bar}
+                              stackId="a"
+                              fill={colors[index % colors.length]} // Cycle through the colors array
+                              key={bar}
+                            />
+                          );
+                        })}
+                      </BarChart>
+                    </ResponsiveContainer>
+                  )}
+                </Paper>
               </Grid>
               <Grid size={12}>
-                <GenericCard
+                {/* <GenericCard
                   title="Terminal"
                   emptyMessage="No data available here"
-                />
+                  content={ }
+                /> */}
+                <Paper elevation={2} className="border rounded-sm p-5">
+                  <Typography
+                    variant="h6"
+                    sx={{
+                      marginBottom: 2,
+                      fontWeight: "bold",
+                      fontSize: "0.875rem",
+                    }}
+                  >
+                    Terminal
+                  </Typography>
+                  {invokeMessages?.length === 0 ? (
+                    <Box
+                      sx={{
+                        minHeight: "300px",
+                        display: "flex",
+                        justifyContent: "center",
+                        alignItems: "center",
+                        borderRadius: 2,
+                        padding: 2,
+                      }}
+                    >
+                      <Typography variant="body2" sx={{ color: "#AAAAAA" }}>
+                        No data available here
+                      </Typography>
+                    </Box>
+                  ) : (
+                    <Box
+                      sx={{
+                        minHeight: "300px",
+                        borderRadius: 2,
+                        padding: 2,
+                      }}
+                    >
+                      <TerminalLogs messages={messages} />
+                    </Box>
+                  )}
+                </Paper>
               </Grid>
             </Grid>
           ) : (
@@ -109,12 +339,12 @@ const Overview = ({
                 borderRadius: 1,
               }}
             >
-              <Typography variant="h6" sx={{ mb: 1 }}>
+              {/* <Typography variant="h6" sx={{ mb: 1 }}>
                 No Workers Found
               </Typography>
               <Typography variant="body2" sx={{ mb: 2 }}>
                 Contact Support
-              </Typography>
+              </Typography> */}
               <Button
                 variant="contained"
                 sx={{

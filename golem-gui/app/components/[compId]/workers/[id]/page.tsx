@@ -23,7 +23,7 @@ const WorkerListWithDropdowns = () => {
   //TO DO: let show filters in url so that user can share the url to others.
   const { compId } = useParams<{ compId: string }>();
   const { id: workerName } = useParams<{ id: string }>();
-  //need to integrate the filter logic here. and pagination or scroll on load needs to implemented or addd show more at the end on click we need to next set of data
+  //  need to integrate the filter logic here. and pagination or scroll on load needs to implemented or addd show more at the end on click we need to next set of data
   const { worker, isLoading } = useWorker(compId, workerName);
 
   const { messages, isConnected } = useWebSocketWithPath(
@@ -79,7 +79,7 @@ const WorkerListWithDropdowns = () => {
         <Tab label="Manage" />
         <Tab label="Invoke" />
       </Tabs>
-      {activeTab === 0 && <Overview worker={worker} isLoading={isLoading} />}
+      {activeTab === 0 && <Overview worker={worker} isLoading={isLoading} messages={messages}/>}
       {activeTab === 1 && <TerminalPage messages={messages} />}
       {activeTab === 3 && <FileComponent />}
       {activeTab === 4 && <Manage />}
