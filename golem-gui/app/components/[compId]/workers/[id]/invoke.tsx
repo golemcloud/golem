@@ -154,12 +154,12 @@ export default function InvokePage({ worker }: { worker: Worker }) {
                   key={item.name}
                   label={item.name}
                   onClick={() => setInvoke({ fun: item, instanceName: null })}
-                  color={
+                  className={`${
                     invoke?.fun?.name === item.name &&
                     invoke?.instanceName === null
-                      ? "primary"
-                      : "default"
-                  }
+                      ? "bg-green-800 hover:bg-green-800 text-white"
+                      : "bg-border hover:bg-border text-foreground"
+                  }`}
                 />
               )
             )}
