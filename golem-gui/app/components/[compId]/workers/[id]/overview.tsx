@@ -165,7 +165,7 @@ const Overview = ({
       {}
     ) || {};
 
-  const data = Object.keys(dataMap).filter((key)=>key.includes(graphKey)).map((key)=>dataMap[key]);
+  const data = Object.keys(dataMap).filter((key)=>key.includes(graphKey)).map((key)=>dataMap[key]).reverse();
   if (isLoading) {
     return <Typography>Loading...</Typography>;
   }
