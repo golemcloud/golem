@@ -19,7 +19,7 @@ import ComponentLeftNav from "./componentsLeftNav";
 import { useEffect, useState } from "react";
 import { API } from "@/service";
 import { useParams } from "react-router-dom";
-import { Export, Field, Parameter, Result, Typ } from "@/types/component.ts";
+import { Component, Field, Parameter, Result, Typ } from "@/types/component.ts";
 import ErrorBoundary from "@/components/errorBoundary";
 
 // Recursive utility function to parse JSON and identify patterns
@@ -67,14 +67,51 @@ function convertJsonToFunctionStructure(json: Parameter[] | Result[]) {
 
 export default function Exports() {
   const { componentId } = useParams();
-  const [exports, setExports] = useState({} as Export);
+  const [componentList, setComponentList] = useState([] as Component[]);
+  const [component, setComponent] = useState<Component>({});
+  const [versionList, setVersionList] = useState([] as number[]);
+  const [versionChange, setVersionChange] = useState("0" as string);
+  const [functions, setFunctions] = useState([] as any);
+
   useEffect(() => {
-    API.getComponentById(componentId!).then((res) => {
-      if (res.metadata!.exports && res.metadata!.exports.length > 0) {
-        setExports(res.metadata!.exports[0]);
+    if (componentId) {
+      API.getComponents().then((response) => {
+        setComponentList(response);
+      });
+
+      API.getComponentByIdAsKey().then((response) => {
+        setVersionList(response[componentId].versionId || []);
+        setComponent(response[componentId]);
+      });
+    }
+  }, [componentId]);
+
+  useEffect(() => {
+    if (component) {
+      setFunctions(component.exports?.[0].functions);
+    }
+  }, [component]);
+
+  const handleVersionChange = (version: string) => {
+    setVersionChange(version);
+    const componentDetails = componentList.find((component: Component) => {
+      if (component.versionedComponentId) {
+        return (
+          component.versionedComponentId.componentId === componentId &&
+          component.versionedComponentId.version?.toString() === version
+        );
       }
     });
-  }, [componentId]);
+    setComponent(componentDetails || {});
+  };
+
+  const handleSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    const searchResult = component.exports?.[0].functions.filter((fn) => {
+      return fn.name.includes(value);
+    });
+    setFunctions(searchResult);
+  };
 
   return (
     <ErrorBoundary>
@@ -95,21 +132,32 @@ export default function Exports() {
               <div className="flex justify-between items-center">
                 <h1 className="text-2xl font-bold">Exports</h1>
               </div>
-              <div className="flex items-center justify-between">
-                <div className="relative flex-1 max-w-xl">
+              <div className="flex items-center justify-between gap-10">
+                <div className="relative flex-1 max-full">
                   <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                  <Input placeholder="Search functions..." className="pl-9" />
+                  <Input
+                    placeholder="Search functions..."
+                    className="pl-9"
+                    onChange={(e) => handleSearch(e)}
+                  />
                 </div>
-                <Select defaultValue="v0">
-                  <SelectTrigger className="w-24">
-                    <SelectValue placeholder="Version" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="v0">v0</SelectItem>
-                    <SelectItem value="v1">v1</SelectItem>
-                    <SelectItem value="v2">v2</SelectItem>
-                  </SelectContent>
-                </Select>
+                {versionList.length > 0 && (
+                  <Select
+                    defaultValue={versionChange}
+                    onValueChange={(version) => handleVersionChange(version)}
+                  >
+                    <SelectTrigger className="w-[80px]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {versionList.map((version: any) => (
+                        <SelectItem key={version} value={String(version)}>
+                          v{version}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
               </div>
 
               <div className="border rounded-lg">
@@ -123,11 +171,11 @@ export default function Exports() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {exports.functions &&
-                      exports.functions.map((fn, index) => (
+                    {functions?.length > 0 ? (
+                      functions.map((fn, index) => (
                         <TableRow key={index}>
                           <TableCell className="font-mono text-sm">
-                            {exports.name}
+                            {component.exports?.[0].name}
                           </TableCell>
                           <TableCell className="font-mono text-sm">
                             {fn.name}
@@ -139,7 +187,12 @@ export default function Exports() {
                             {convertJsonToFunctionStructure(fn.results)}
                           </TableCell>
                         </TableRow>
-                      ))}
+                      ))
+                    ) : (
+                      <div className="p-4 align-center grid">
+                        No exports found.
+                      </div>
+                    )}
                   </TableBody>
                 </Table>
               </div>

@@ -1,11 +1,4 @@
-import {
-  Component,
-  ExternalLink,
-  Globe,
-  Plus,
-  Search,
-  LayoutGrid,
-} from "lucide-react";
+import { Component, Globe, Plus, Search, LayoutGrid } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -13,10 +6,9 @@ import {
   Card,
   CardContent,
   CardDescription,
-  CardFooter,
   CardHeader,
   CardTitle,
-} from "@/components/ui/card.tsx";
+} from "@/components/ui/card";
 import { useNavigate } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { API } from "@/service";
@@ -25,99 +17,103 @@ import { Plugin } from "@/types";
 export function PluginList() {
   const navigate = useNavigate();
   const [plugins, setPlugins] = useState<Plugin[]>([]);
+  const [pluginsApi, setPluginsApi] = useState<Plugin[]>([]);
 
   useEffect(() => {
-    API.getPlugins().then((res) => {
+    const fetchPlugins = async () => {
+      const res = await API.getPlugins();
+      setPluginsApi(res);
       setPlugins(res);
-    });
+    };
+    fetchPlugins();
   }, []);
 
+  const handleSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value.toLowerCase();
+    setPlugins(
+      pluginsApi.filter((plugin) => plugin.name.toLowerCase().includes(value))
+    );
+  };
+
   return (
-    <div className="p-4 min-h-screen bg-background text-foreground mx-auto max-w-7xl px-6 lg:px-8 py-4">
-      <div className="flex gap-2 mb-4">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground h-4 w-4" />
-          <Input className="w-full pl-10" placeholder="Plugin name..." />
+    <div className="p-6 min-h-screen text-gray-900 mx-auto max-w-7xl">
+      {/* Header Section */}
+      <div className="flex justify-between items-center mb-6">
+        <div className="relative w-full">
+          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-5 w-5" />
+          <Input
+            className="w-full pl-10 border-gray-300 rounded-md"
+            placeholder="Search plugins..."
+            onChange={handleSearch}
+          />
         </div>
-        <Button variant="default" onClick={() => navigate("/plugins/create")}>
-          <Plus className="h-4 w-4" />
+        <Button
+          variant="default"
+          className="ml-4"
+          onClick={() => navigate("/plugins/create")}
+        >
+          <Plus className="mr-2 h-5 w-5" />
           Create Plugin
         </Button>
       </div>
+
+      {/* Plugin List */}
       {plugins.length > 0 ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 overflow-scroll">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
           {plugins.map((plugin) => (
             <Card
               key={plugin.name}
-              className="flex flex-col h-full cursor-pointer"
+              className="flex flex-col h-full cursor-pointer hover:shadow-lg transition-shadow"
               onClick={() =>
                 navigate(`/plugins/${plugin.name}/${plugin.version}`)
               }
             >
               <CardHeader>
                 <div className="flex justify-between items-start">
-                  <CardTitle className="text-xl font-bold">
+                  <CardTitle className="text-lg font-bold">
                     {plugin.name}
                   </CardTitle>
-                  <Badge variant="secondary">{plugin.version}</Badge>
+                  <Badge variant="secondary" className="text-sm">
+                    {plugin.version}
+                  </Badge>
                 </div>
-                <CardDescription>{plugin.description}</CardDescription>
+                <CardDescription className="text-sm text-gray-500">
+                  {plugin.description}
+                </CardDescription>
               </CardHeader>
               <CardContent className="flex-grow">
-                <div className="space-y-2 flex items-center space-x-2">
-                  <Badge variant="outline" className={"rounded-full"}>
+                <div className="flex flex-wrap gap-2">
+                  <Badge variant="outline" className="rounded-full text-sm">
                     {plugin.specs.type}
                   </Badge>
                   {plugin.specs.type === "OplogProcessor" && (
-                    <Badge variant="outline" className={"rounded-full"}>
+                    <Badge variant="outline" className="rounded-full text-sm">
                       Component Version: {plugin.specs.componentVersion}
                     </Badge>
                   )}
-                  <Badge variant="outline" className={"rounded-full"}>
+                  <Badge
+                    variant="outline"
+                    className="flex items-center rounded-full text-sm"
+                  >
                     {plugin.scope.type === "Global" ? (
                       <Globe className="w-4 h-4 mr-1" />
                     ) : (
                       <Component className="w-4 h-4 mr-1" />
                     )}
-                    {plugin.scope.type}
-                    (scope)
+                    {plugin.scope.type} (scope)
                   </Badge>
                 </div>
               </CardContent>
-              <CardFooter className="flex justify-between">
-                {plugin.specs.validateUrl && (
-                  <Button
-                    variant="link"
-                    size="sm"
-                    onClick={() =>
-                      window.open(plugin.specs.validateUrl, "_blank")
-                    }
-                  >
-                    Validate <ExternalLink className="w-4 h-4" />
-                  </Button>
-                )}
-                {plugin.specs.transformUrl && (
-                  <Button
-                    variant="link"
-                    size="sm"
-                    onClick={() =>
-                      window.open(plugin.specs.transformUrl, "_blank")
-                    }
-                  >
-                    Transform <ExternalLink className="w-4 h-4" />
-                  </Button>
-                )}
-              </CardFooter>
             </Card>
           ))}
         </div>
       ) : (
-        <div className="border-2 border-dashed border-gray-200 rounded-lg p-12 flex flex-col items-center justify-center">
-          <div className="h-16 w-16 bg-gray-100 rounded-lg flex items-center justify-center mb-4">
-            <LayoutGrid className="h-8 w-8 text-gray-400" />
-          </div>
-          <h2 className="text-xl font-semibold mb-2 text-center">No Plugin</h2>
-          <p className="text-gray-500 mb-6 text-center">
+        <div className="flex flex-col items-center justify-center h-64 border-2 border-dashed border-gray-300 rounded-lg">
+          <LayoutGrid className="h-12 w-12 text-gray-400 mb-4" />
+          <h2 className="text-lg font-medium text-gray-700">
+            No Plugins Found
+          </h2>
+          <p className="text-sm text-gray-500">
             Create a new plugin to get started.
           </p>
         </div>

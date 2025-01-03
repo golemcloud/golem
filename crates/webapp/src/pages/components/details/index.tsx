@@ -27,6 +27,7 @@ export const ComponentDetails = () => {
       setWorkerStatus(status);
     });
   }, [componentId]);
+
   return (
     <ErrorBoundary>
       <div className="flex">
@@ -41,7 +42,7 @@ export const ComponentDetails = () => {
               </div>
             </div>
           </header>
-          <div className="flex-1 p-8 ">
+          <div className="flex-1 p-8">
             <div className="p-6 max-w-7xl mx-auto space-y-6">
               <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
                 <MetricCard

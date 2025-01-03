@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Plus, Search } from "lucide-react";
+import { LayoutGrid, Plus, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -81,72 +81,86 @@ export default function WorkerList() {
                 </Button>
               </div>
 
-              <div className="overflow-scroll h-[55vh]">
-                {filteredWorkers.map((worker, index) => (
-                  <Card
-                    key={index}
-                    className="rounded-lg mb-4 cursor-pointer"
-                    onClick={() =>
-                      navigate(
-                        `/components/${componentId}/workers/${worker.workerId.workerName}`
-                      )
-                    }
-                  >
-                    <CardHeader>
-                      <div className="flex justify-between items-center">
-                        <CardTitle>{worker.workerId.workerName}</CardTitle>
-                      </div>
-                    </CardHeader>
-                    <CardContent className="py-2">
-                      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                        <div>
-                          <div className="text-sm text-muted-foreground">
-                            Status
+              {Object.keys(filteredWorkers).length === 0 ? (
+                <div className="border-2 border-dashed border-gray-200 rounded-lg p-12 flex flex-col items-center justify-center">
+                  <div className="h-16 w-16 bg-gray-100 rounded-lg flex items-center justify-center mb-4">
+                    <LayoutGrid className="h-8 w-8 text-gray-400" />
+                  </div>
+                  <h2 className="text-xl font-semibold mb-2 text-center">
+                    No Worker
+                  </h2>
+                  <p className="text-gray-500 mb-6 text-center">
+                    Create a new worker to get started.
+                  </p>
+                </div>
+              ) : (
+                <div className="overflow-scroll h-[55vh]">
+                  {filteredWorkers.map((worker, index) => (
+                    <Card
+                      key={index}
+                      className="rounded-lg mb-4 cursor-pointer"
+                      onClick={() =>
+                        navigate(
+                          `/components/${componentId}/workers/${worker.workerId.workerName}`
+                        )
+                      }
+                    >
+                      <CardHeader>
+                        <div className="flex justify-between items-center">
+                          <CardTitle>{worker.workerId.workerName}</CardTitle>
+                        </div>
+                      </CardHeader>
+                      <CardContent className="py-2">
+                        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                          <div>
+                            <div className="text-sm text-muted-foreground">
+                              Status
+                            </div>
+                            <div className="flex items-center gap-1">
+                              {worker.status}
+                            </div>
                           </div>
-                          <div className="flex items-center gap-1">
-                            {worker.status}
+                          <div>
+                            <div className="text-sm text-muted-foreground">
+                              Memory
+                            </div>
+                            <div className="flex items-center gap-1">
+                              {worker.totalLinearMemorySize / 1024} KB
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-sm text-muted-foreground">
+                              Pending Invocations
+                            </div>
+                            <div className="flex items-center gap-1">
+                              {worker.pendingInvocationCount}
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-sm text-muted-foreground">
+                              Version
+                            </div>
+                            <div className="flex items-center gap-1">
+                              v{worker.componentVersion}
+                            </div>
                           </div>
                         </div>
-                        <div>
-                          <div className="text-sm text-muted-foreground">
-                            Memory
-                          </div>
-                          <div className="flex items-center gap-1">
-                            {worker.totalLinearMemorySize / 1024} KB
-                          </div>
+                        <div className="py-1 flex gap-2">
+                          <Badge variant="outline" className="rounded-sm">
+                            Args: {worker.args.length}
+                          </Badge>
+                          <Badge variant="outline" className="rounded-sm">
+                            Env: {Object.keys(worker.env).length}
+                          </Badge>
+                          <span className="text-sm text-muted-foreground ml-auto">
+                            {new Date(worker.createdAt).toLocaleString()}
+                          </span>
                         </div>
-                        <div>
-                          <div className="text-sm text-muted-foreground">
-                            Pending Invocations
-                          </div>
-                          <div className="flex items-center gap-1">
-                            {worker.pendingInvocationCount}
-                          </div>
-                        </div>
-                        <div>
-                          <div className="text-sm text-muted-foreground">
-                            Version
-                          </div>
-                          <div className="flex items-center gap-1">
-                            v{worker.componentVersion}
-                          </div>
-                        </div>
-                      </div>
-                      <div className="py-1 flex gap-2">
-                        <Badge variant="outline" className="rounded-sm">
-                          Args: {worker.args.length}
-                        </Badge>
-                        <Badge variant="outline" className="rounded-sm">
-                          Env: {Object.keys(worker.env).length}
-                        </Badge>
-                        <span className="text-sm text-muted-foreground ml-auto">
-                          {new Date(worker.createdAt).toLocaleString()}
-                        </span>
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </div>
