@@ -1524,7 +1524,7 @@ async fn fork_worker_3(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     .unwrap_err()
     .to_string();
 
-    assert!(error.contains("Invalid oplog index"));
+    assert!(error.contains("oplog_index_cut_off must be at least 2"));
 }
 
 #[test]
@@ -1547,7 +1547,7 @@ async fn fork_worker_4(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         deps,
         &source_worker_id,
         &target_worker_id,
-        OplogIndex::INITIAL,
+        OplogIndex::from_u64(14),
     )
     .await
     .unwrap_err()
