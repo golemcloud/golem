@@ -23,6 +23,7 @@ import ErrorBoundary from "@/components/errorBoundary";
 import WorkerEnvironments from "@/pages/workers/details/environments";
 import WorkerManage from "@/pages/workers/details/manage";
 import WorkerInvoke from "@/pages/workers/details/invoke";
+import WorkerLive from "@/pages/workers/details/live";
 import CreatePlugin from "@/pages/plugin/create.tsx";
 import { PluginView } from "@/pages/plugin/view.tsx";
 
@@ -77,6 +78,10 @@ function App() {
             <Route
               path="/components/:componentId/workers/:workerName/invoke"
               element={<WorkerInvoke />}
+            />
+            <Route
+              path="/components/:componentId/workers/:workerName/live"
+              element={<WorkerLive />}
             />
             <Route path="/apis" element={<APIs />} />
             <Route path="/apis/create" element={<CreateAPI />} />

@@ -72,8 +72,6 @@ export default function WorkerDetails() {
     }
   });
 
-  console.log(invocationData, "messages", terminal);
-
   return (
     <ErrorBoundary>
       <div className="flex">
