@@ -113,9 +113,17 @@ const ComponentInfoCard = ({
             display: "flex",
             justifyContent: "space-between",
             alignItems: "center",
+            gap:2
           }}
         >
-          <Typography variant="h6" component="div">
+          <Typography variant="h6" component="div"
+           sx={{
+            overflow: "hidden", // Ensures overflow content is hidden
+            textOverflow: "ellipsis", // Adds an ellipsis when text overflows
+            whiteSpace: "nowrap", // Prevents text wrapping to a new line
+            fontWeight: 500
+          }}
+          >
             {title}
           </Typography>
           {Dropdown(workloads)}

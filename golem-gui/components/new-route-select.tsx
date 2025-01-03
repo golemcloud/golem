@@ -55,7 +55,7 @@ export function ComponentSelect({
             disabled={isLoading || options.length === 0}
           >
             <SelectTrigger>
-              <SelectValue placeholder={field.value || label} />
+              <SelectValue placeholder={field.value ?? label} />
             </SelectTrigger>
             <SelectContent>
               <SelectGroup>

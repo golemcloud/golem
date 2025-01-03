@@ -21,13 +21,9 @@ export default function NodeMenu({
   id: string;
   triggerType: string;
 }) {
-  const stopPropagation = (e: React.MouseEvent<HTMLButtonElement>) => {
-    e.stopPropagation();
-  };
-  const hideMenu =
-    data?.type?.includes("empty") ||
-    id?.includes("end") ||
-    id?.includes("start");
+  // const stopPropagation = (e: React.MouseEvent<HTMLButtonElement>) => {
+  //   e.stopPropagation();
+  // };
   const { setSelectedNode, setTrigger } = useStore();
   const canDelete = checkForDeletion(data);
   const [open, setOpen] = React.useState(false);
@@ -110,12 +106,9 @@ export default function NodeMenu({
                   >
                     <MenuItem
                       onClick={(e) => {
-                        if (!canDelete) {
-                          return handleClose(e);
-                        }
                         setTrigger({
                           type: triggerType,
-                          operation: "delete",
+                          operation: "new_version",
                           id,
                         });
                         handleClose(e);
@@ -125,9 +118,12 @@ export default function NodeMenu({
                     </MenuItem>
                     <MenuItem
                       onClick={(e) => {
+                        if (!canDelete) {
+                          return handleClose(e);
+                        }
                         setTrigger({
                           type: triggerType,
-                          operation: "new_version",
+                          operation: "delete",
                           id,
                         });
                         handleClose(e);
