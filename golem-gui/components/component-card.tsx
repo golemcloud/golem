@@ -1,5 +1,5 @@
 import React from "react";
-import { Box, Typography, Button, Chip, Stack } from "@mui/material";
+import { Box, Typography, Chip, Stack } from "@mui/material";
 
 interface ComponentCardProps {
   name: string;
@@ -43,16 +43,26 @@ const ComponentCard: React.FC<ComponentCardProps> = ({
           justifyContent: "space-between",
           alignItems: "center",
           mb: 1,
+          gap:2
         }}
       >
-        <Box>
-            <Typography variant="subtitle1" sx={{ fontWeight: 500 }}>
+        <Stack sx={{
+          maxWidth:"80%"
+        }}>
+            <Typography variant="subtitle1"
+            sx={{
+              overflow: "hidden", // Ensures overflow content is hidden
+              textOverflow: "ellipsis", // Adds an ellipsis when text overflows
+              whiteSpace: "nowrap", // Prevents text wrapping to a new line
+              fontWeight: 500,
+            }}
+            >
                 {name}
             </Typography>
             <Typography variant="caption" color="#888">
                 {time}
             </Typography>
-        </Box>
+        </Stack>
         
         <Chip
           label={"v"+version }
@@ -62,6 +72,7 @@ const ComponentCard: React.FC<ComponentCardProps> = ({
             borderRadius: 1,
             bgcolor: "primary.main",
             color: "primary.contrastText",
+            alignSelf: "center"
           }}
         />
       </Box>
