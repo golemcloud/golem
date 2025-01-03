@@ -6,8 +6,7 @@ import { Loader } from "lucide-react";
 import { Paper, Typography, Divider, Box, Chip, Stack } from "@mui/material";
 import DynamicForm from "./form-generator";
 import { useWorkerInvocation } from "@/lib/hooks/use-worker";
-import FunctionInvocationPreview from "./form-preview"; 
-
+import { Button2 as Button } from "@/components/ui/button";
 
 export function InvokeForm({
   invoke,
@@ -35,11 +34,21 @@ export function InvokeForm({
       )}
       <DynamicForm config={paramsConfig} onSubmit={onSubmit} />
       {result && (
+        <>
+          {" "}
+          <Typography variant="subtitle1" sx={{ fontWeight: "bold", mt: 5 }}>
+            Result:
+          </Typography>
+          <Typography variant="body2" className="text-muted-foreground">
+            View the result of your latest worker invocation
+          </Typography>
+        </>
+      )}
+      {result && (
         <Box
           mt={2}
-          p={1}
-          bgcolor="#c0c0c0"
-          borderRadius={2}
+          p={3}
+          borderRadius={1}
           overflow="auto"
           sx={{
             whiteSpace: "pre-wrap",
@@ -47,21 +56,16 @@ export function InvokeForm({
             color: "black",
             fontSize: "0.9rem",
           }}
-          className="dark:bg-[#555] dark:text-white"
+          className="dark:bg-[#0a0a0a] bg-[#dedede] dark:text-[#dedede]"
         >
-          <Typography variant="subtitle1" sx={{ fontWeight: "bold" }}>
-            Result:
-          </Typography>
           <Box
             component="pre"
             sx={{
-              backgroundColor: "#f5f5f5",
               padding: "10px",
-              borderRadius: "5px",
               overflowX: "auto",
               marginTop: "8px",
             }}
-            className="dark:bg-[#1e1e1e] dark:text-[#f5f5f5]"
+            className="dark:bg-[#282c34] bg-white"
           >
             {JSON.stringify(result, null, 2)}
           </Box>
@@ -120,27 +124,31 @@ export default function InvokePage({ worker }: { worker: Worker }) {
             Select a Function
           </Typography>
           <Divider sx={{ marginY: 2, bgcolor: "#555" }} />
-          <Stack direction="row" spacing={2} flexWrap="wrap">
+          <Stack direction="row" flexWrap="wrap" gap={1}>
             {exports.map((item, index) =>
               item.type === "Instance" ? (
-                item?.functions?.map((fun) => (
-                  <Chip
-                    key={fun.name}
-                    label={`${item.name} - ${fun.name}`}
-                    onClick={() =>
-                      setInvoke({
-                        fun: fun,
-                        instanceName: item.name,
-                      })
-                    }
-                    color={
-                      invoke?.fun?.name === fun.name &&
-                      invoke?.instanceName === item.name
-                        ? "primary"
-                        : "default"
-                    }
-                  />
-                ))
+                item?.functions?.map((fun) => {
+                  const active =
+                    invoke?.fun?.name === fun.name &&
+                    invoke?.instanceName === item.name;
+                  return (
+                    <Chip
+                      key={fun.name}
+                      label={`${item.name} - ${fun.name}`}
+                      onClick={() =>
+                        setInvoke({
+                          fun: fun,
+                          instanceName: item.name,
+                        })
+                      }
+                      className={`text-foreground ${
+                        active
+                          ? "bg-green-800 hover:bg-green-800"
+                          : "bg-border hover:bg-border"
+                      }`}
+                    />
+                  );
+                })
               ) : (
                 <Chip
                   key={item.name}
@@ -155,28 +163,18 @@ export default function InvokePage({ worker }: { worker: Worker }) {
                 />
               )
             )}
-            
           </Stack>
           <Divider className="my-2 bg-border" />
           <Box mt={4}>
-              <Paper
-                sx={{
-                  boxShadow: 3,
-                  borderRadius: 2,
-                  padding: 3,
-                }}
-              >
-                {invoke ? (
-                  <InvokeForm invoke={invoke} />
-                ) : (
-                  <Typography variant="body1" color="textSecondary">
-                    Select a function to invoke.
-                  </Typography>
-                )}
-              </Paper>
-            </Box>
-            {/* need to be replace by form preview */}
-          {/* <FunctionInvocationPreview/> */} 
+            {invoke ? (
+              <InvokeForm invoke={invoke} />
+            ) : (
+              <Typography variant="body1" color="textSecondary">
+                Select a function to invoke.
+              </Typography>
+            )}
+          </Box>
+          {/* need to be replace by form preview */}
         </Paper>
       </div>
     </div>
