@@ -111,6 +111,8 @@ interface MultiSelectProps
 
   /** Mode of selection: "single" or "multi". Defaults to "multi". */
   selectMode?: "single" | "multi";
+
+  dropdownType?: string;
 }
 
 export const MultiSelect = React.forwardRef<
@@ -130,6 +132,7 @@ export const MultiSelect = React.forwardRef<
       asChild = false,
       className,
       selectMode = "multi",
+      dropdownType,
       ...props
     },
     ref
@@ -195,6 +198,7 @@ export const MultiSelect = React.forwardRef<
       >
         <div className="flex">
           <PopoverTrigger asChild className="min-w-36">
+            {/* { dropdownType!="icon" &&  */}
             <Button
               variant="dropdown"
               size="default"
@@ -234,7 +238,9 @@ export const MultiSelect = React.forwardRef<
                 )}
               </div>
             </Button>
+            {/* {dropdownType=="icon" && <Button variant="success" size="icon_sm">version</Button>} */}
           </PopoverTrigger>
+    
           <div
             className={`${
               selectedValues.length >= 1

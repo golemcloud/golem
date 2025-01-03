@@ -11,15 +11,10 @@ import PlayForWorkIcon from "@mui/icons-material/PlayForWork";
 import { useMemo, useState } from "react";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 import { Loader } from "lucide-react";
-import {
-  Stack,
-  Typography,
-  Select,
-  MenuItem,
-  Button,
-} from "@mui/material";
 import CreateNewApiVersion from "@/components/create-api-new-version";
 import CustomModal from "@/components/CustomModal";
+import SecondaryHeader from "@/components/ui/secondary-header";
+import {VersionFilter} from "./apis-filter"
 
 export default function APISLayout({
   children,
@@ -31,16 +26,9 @@ export default function APISLayout({
   const version = params.get("version");
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
-  const router = useRouter();
   const { apiDefinitions, getApiDefintion, isLoading } =
     useApiDefinitions(apiId);
   const { data: apiDefinition } = getApiDefintion(apiId, version);
-  const versions = useMemo(() => {
-    return apiDefinitions.map((api) => {
-      return api.version;
-    });
-  }, [apiDefinitions]);
-
   const navigationLinks = useMemo(() => {
     return [
       {
@@ -80,56 +68,47 @@ export default function APISLayout({
   }
 
   return (
-    <div style={{ display: "flex"}}>
+    <div style={{ display: "flex" }}>
+      
       <Sidebar id={apiId!} navigationLinks={navigationLinks} variant="apis" />
       <div
-        className="flex-1 p-[20px]"
+        className="flex-1 "
         // style={{
         //   overflowY: "auto",
         //   height: "100vh",
         // }}
       >
-        {tab !== "playground" && (
-          <>
-            <Stack direction="row" alignItems={"center"} marginBottom={2}>
-              <Typography className="">{apiDefinition?.id}</Typography>
-              <Select
-                name="version"
-                variant="outlined"
-                className="w-32 ml-2"
-                value={apiDefinition?.version}
-                onChange={(e) => {
-                  if(apiDefinition && e.target.value!== apiDefinition?.version){
-                    router.push(`/apis/${apiId}/${tab}?version=${e.target.value}`);
+      
+        <SecondaryHeader
+          variant="apis"
+          onClick={() => {
+            setOpen(true);
+          }}
+          apiTab={tab}
+          
+        /> 
 
-                  }
-                }}
-              >
-                {versions?.map((version: string) => (
-                  <MenuItem key={version} value={version}>
-                    {version}
-                  </MenuItem>
-                ))}
-              </Select>
-              {/* TODO: need to add menu for new api creation, deletion and other operations */}
-              <Button
-                type="button"
-                className="ml-auto"
-                onClick={(e) => {
-                  e.preventDefault();
-                  setOpen(true);
-                }}
-              >
-                New Version
-              </Button>
-            </Stack>
-          </>
-        )}
-        <CustomModal open={open} onClose={() => setOpen(false)} heading={"Create New version"}>
-              {apiDefinition && <CreateNewApiVersion apiId={apiId} version={apiDefinition.version} onSuccess={()=>setOpen(false)}/>}
-        </CustomModal>
-        {children}
+<VersionFilter/>
+        
+        <div className="mx-auto max-w-7xl px-6 lg:px-8">
+          <div className="mx-auto max-w-2xl lg:max-w-none py-4">
+            <CustomModal
+              open={open}
+              onClose={() => setOpen(false)}
+              heading={"Create New version"}
+            >
+              {apiDefinition && (
+                <CreateNewApiVersion
+                  apiId={apiId}
+                  version={apiDefinition.version}
+                  onSuccess={() => setOpen(false)}
+                />
+              )}
+            </CustomModal>
+            {children}
+          </div>
+        </div>
       </div>
     </div>
-  );
+  ); // dropdown bna rha hu yha kya kar rhe
 }

@@ -3,16 +3,16 @@ import React, { useState } from "react";
 import {
   Alert,
   Box,
-  Button,
   CircularProgress,
   Container,
-  Grid,
+  Grid2 as Grid,
   IconButton,
   Link,
   Paper,
   Tooltip,
   Typography,
 } from "@mui/material";
+import { Button2 as Button } from "@/components/ui/button";
 import {
   Add as AddIcon,
   Delete as DeleteIcon,
@@ -63,7 +63,9 @@ export const PluginsPage = () => {
     );
 
   return (
-    <Container maxWidth="lg">
+    <main className="mx-auto max-w-7xl px-6 lg:px-8">
+      <Box className="mx-auto max-w-2xl lg:max-w-none flex flex-col gap-6 py-6">
+    <Container maxWidth="lg" >
       <Box
         display="flex"
         justifyContent="space-between"
@@ -78,16 +80,16 @@ export const PluginsPage = () => {
             alignItems="center"
             gap={2}
           >
-            <PluginIcon color="primary" />
+            <PluginIcon  />
             Plugins
           </Typography>
-          <Typography variant="subtitle1" color="textSecondary">
+          <Typography variant="subtitle1"  className="text-muted-foreground">
             Manage your system plugins and extensions
           </Typography>
         </Box>
         <Button
-          variant="contained"
-          color="primary"
+          variant="primary"
+          size="md"
           startIcon={<AddIcon />}
           onClick={(e) => {
             e.preventDefault();
@@ -100,8 +102,8 @@ export const PluginsPage = () => {
 
       <Grid container spacing={3}>
         {plugins?.map((plugin: Plugin) => (
-          <Grid item xs={12} md={6} key={`${plugin.name}-${plugin.version}`}>
-            <Paper elevation={3} sx={{ p: 2 }}>
+          <Grid  size={{xs:12, md:6}} key={`${plugin.name}-${plugin.version}`}>
+            <Paper elevation={3}   className="border rounded-md"  sx={{p:2,"&:hover": { cursor: "pointer", boxShadow: "0px 5px 10px 0px #666" }}}>
               <Box
                 display="flex"
                 justifyContent="space-between"
@@ -115,9 +117,9 @@ export const PluginsPage = () => {
                     gap={1}
                   >
                     {plugin.specs.type === "OplogProcessor" ? (
-                      <WidgetsIcon color="secondary" />
+                      <WidgetsIcon />
                     ) : (
-                      <LinkIcon color="success" />
+                      <LinkIcon  />
                     )}
                     <Link
                       href={`/plugins/${plugin.name}/${plugin.version}`}
@@ -126,7 +128,7 @@ export const PluginsPage = () => {
                       {plugin.name}
                     </Link>
                   </Typography>
-                  <Typography variant="body2" color="textSecondary">
+                  <Typography variant="body2" >
                     <TagIcon fontSize="small" />
                     Version {plugin.version}
                   </Typography>
@@ -147,10 +149,10 @@ export const PluginsPage = () => {
                   justifyContent="space-between"
                   marginTop={2}
                 >
-                  <Typography variant="body2" color="textSecondary">
+                  <Typography variant="body2" className="text-muted-foreground" >
                     Type: {plugin.specs.type}
                   </Typography>
-                  <Typography variant="body2" color="textSecondary">
+                  <Typography variant="body2" className="text-muted-foreground">
                     Scope: {plugin.scope.type}
                   </Typography>
                 </Box>
@@ -159,13 +161,13 @@ export const PluginsPage = () => {
                   <Box
                     marginTop={2}
                     padding={2}
-                    bgcolor="grey.100"
+                  
                     borderRadius={1}
                   >
-                    <Typography variant="body2" color="textSecondary">
+                    <Typography variant="body2" className="text-muted-foreground">
                       Component ID: {plugin.specs.componentId}
                     </Typography>
-                    <Typography variant="body2" color="textSecondary">
+                    <Typography variant="body2" className="text-muted-foreground">
                       Version: {plugin.specs.componentVersion}
                     </Typography>
                   </Box>
@@ -175,7 +177,6 @@ export const PluginsPage = () => {
                   <Box marginTop={2}>
                     <Typography
                       variant="body2"
-                      color="primary"
                       component="a"
                       href={plugin.specs.validateUrl}
                       target="_blank"
@@ -185,7 +186,6 @@ export const PluginsPage = () => {
                     </Typography>
                     <Typography
                       variant="body2"
-                      color="primary"
                       component="a"
                       href={plugin.specs.transformUrl}
                       target="_blank"
@@ -201,16 +201,18 @@ export const PluginsPage = () => {
         ))}
 
         {(!plugins || plugins.length === 0) && (
-          <Grid item xs={12}>
-            <Paper elevation={3} sx={{ p: 4, textAlign: "center" }}>
-              <PluginIcon fontSize="large" color="disabled" />
-              <Typography variant="h6" color="textSecondary">
+          <Grid size={{xs:12}} >
+            <Box className="dark:bg-[#1a2242] bg-[#f0f5ff] p-4 text-center border border-[#c6d3fa] dark:border-[#25366e] rounded-md"
+            >
+              <PluginIcon fontSize="large" />
+              <Typography variant="h6" >
                 No plugins found
               </Typography>
-              <Typography variant="body2" color="textSecondary">
+              <Typography variant="body2" >
                 Create your first plugin to get started
               </Typography>
-            </Paper>
+           
+            </Box>
           </Grid>
         )}
       </Grid>
@@ -218,6 +220,8 @@ export const PluginsPage = () => {
         <CreatePluginForm />
       </CustomModal>
     </Container>
+    </Box>
+    </main>
   );
 };
 
