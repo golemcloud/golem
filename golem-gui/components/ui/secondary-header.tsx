@@ -7,8 +7,6 @@ import {
   ListItemText,
   Typography,
   Button,
-  Select,
-  MenuItem,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import { PanelRightClose } from "lucide-react";
@@ -29,6 +27,8 @@ import { Dropdown } from "@/components/ui/dropdown-button";
 import PlayForWorkIcon from "@mui/icons-material/PlayForWork";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 import { ApiDropdown } from "@/app/apis/[apiId]/api-dropdown";
+import { VersionFilter } from "@/app/apis/[apiId]/apis-filter";
+
 
 type secondaryHeaderProps = {
   onClick: () => void;
@@ -207,6 +207,11 @@ export default function SecondaryHeader({
 
           </Box>
           </>
+        {variant === "apis" && apiTab != "playground" && <VersionFilter />}
+        {variant === "apis" && apiTab != "playground" && (
+          <Button type="button" className="ml-auto" onClick={onClick}>
+            New Version
+          </Button>
         )}
         {pathname === `/components/${compId}/overview` && (
           <Box sx={{ marginLeft: "auto", display: "flex", gap: 2 }}>
