@@ -1,74 +1,10 @@
-import {GolemService} from "@/service/base.ts";
 import {Component} from "@/types/component.ts";
 import {ENDPOINT} from "@/service/endpoints.ts";
-import axios from "axios";
 import {Api} from "@/types/api.ts";
 import {fetch} from '@tauri-apps/plugin-http'
 import {toast} from "@/hooks/use-toast"
 import {Plugin} from "@/types";
 
-
-const api = axios.create({
-    baseURL: "http://localhost:9881"
-})
-
-
-async function callApi(url: string, method: string = "GET", data: any = null): Promise<any> {
-    // const r = await invoke("invoke_api", {url, method, data});
-    console.log("callApi", url, method, data)
-    const response = await fetch(`http://localhost:9881/${url}`, {
-        method: method,
-        body: data
-    }).then(res => res.json())
-    console.log("callApi", response)
-    return response;
-}
-
-
-export async function callFormDataApi(formData: FormData) {
-
-
-}
-
-export const APIService: GolemService = {
-    createComponent(): Promise<any> {
-        return Promise.resolve(undefined);
-    },
-    getComponentById(): Promise<any> {
-        return Promise.resolve(undefined);
-    },
-    // getComponents: Get the list of all components
-    // https://release.api.golem.cloud/v1/components?project-id=305e832c-f7c1-4da6-babc-cb2422e0f5aa
-    /**
-     * Get the list of all components
-     * @returns {Promise<Component[]>}
-     */
-    getComponents: async (): Promise<Component[]> => {
-        return callApi(ENDPOINT.getComponents()).then((r) => r as Component[]);
-        // return api.get(ENDPOINT.getComponents()).then((r) => JSON.parse(r.data) as Component[]);
-    },
-    getApiList: async (): Promise<Api[]> => {
-        return api.get(ENDPOINT.getApiList()).then((r) => JSON.parse(r.data) as Api[]);
-    },
-    createApi: async (payload: Api) => {
-        return api.post(ENDPOINT.createApi(), payload).then((r) => JSON.parse(r.data));
-    },
-    getApi: async (id: string): Promise<Api[]> => {
-        return api.get(ENDPOINT.getApi(id)).then((r) => JSON.parse(r.data) as Api[]);
-    },
-    postApi: async (payload: Api) => {
-        return api.post(ENDPOINT.postApi(), payload).then((r) => JSON.parse(r.data));
-    },
-    deleteApi: async (id: string, version: string) => {
-        return api.delete(ENDPOINT.deleteApi(id, version));
-    },
-    putApi: async (id: string, version: string, payload: Api) => {
-        return api.put(ENDPOINT.putApi(id, version), payload);
-    },
-    getWorkers: async (): Promise<{ cursor: string; workers: Worker[] }> => {
-        return api.get(ENDPOINT.getWorkers()).then((r) => JSON.parse(r.data) as { cursor: string; workers: Worker[] });
-    },
-}
 
 /// singleton service go call all the api
 export class Service {
@@ -162,18 +98,18 @@ export class Service {
     }
 
     public interruptWorker = async (componentId: string, workerName: string) => {
-      const r = await this.callApi(ENDPOINT.interruptWorker(componentId, workerName), "POST", JSON.stringify({}));
-      return r
+        const r = await this.callApi(ENDPOINT.interruptWorker(componentId, workerName), "POST", JSON.stringify({}));
+        return r
     }
 
     public resumeWorker = async (componentId: string, workerName: string) => {
-      const r = await this.callApi(ENDPOINT.resumeWorker(componentId, workerName), "POST", JSON.stringify({}));
-      return r
+        const r = await this.callApi(ENDPOINT.resumeWorker(componentId, workerName), "POST", JSON.stringify({}));
+        return r
     }
 
     public invokeWorkerAwait = async (componentId: string, workerName: string, functionName: string, payload: any) => {
-      const r = await this.callApi(ENDPOINT.invokeWorker(componentId, workerName, functionName), "POST", JSON.stringify(payload));
-      return r
+        const r = await this.callApi(ENDPOINT.invokeWorker(componentId, workerName, functionName), "POST", JSON.stringify(payload));
+        return r
     }
 
     public getComponentByIdAsKey = async (): Promise<Record<string, Component>> => {
@@ -211,6 +147,12 @@ export class Service {
     public downloadComponent = async (componentId: string, version: string): Promise<any> => {
         return await this.downloadApi(ENDPOINT.downloadComponent(componentId, version));
     }
+    public createPlugin = async (payload: FormData) => {
+        return await this.callApi(ENDPOINT.getPlugins(), 'POST', JSON.stringify(payload));
+    }
+    public deletePlugin = async (name: string, version: string) => {
+        return await this.callApi(ENDPOINT.deletePlugin(name, version), 'DELETE');
+    }
 
     private callApi =
         async (url: string, method: string = "GET", data: FormData | string | null = null,
@@ -225,6 +167,7 @@ export class Service {
                     return res.json()
                 } else {
                     let errorTitle = "Api is Failed check the api details"
+                    console.log(res)
                     res.json().then(err => {
                         errorTitle = err?.golemError?.message || errorTitle
                     })

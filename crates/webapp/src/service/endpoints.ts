@@ -62,4 +62,7 @@ export const ENDPOINT = {
     downloadComponent: (componentId: string, version: string) => {
         return `/v1/components/${componentId}/download?version=${version}`;
     },
+    deletePlugin: (name: string, version: string) => {
+        return `/v1/plugins/${name}/${version}`;
+    },
 };
