@@ -3,7 +3,7 @@ import { Loader } from "lucide-react";
 import { useParams } from "next/navigation";
 import ReactFlowBuilder from "./ReactFlowBuilder";
 import { ReactFlowProvider } from "@xyflow/react";
-import { Alert, Box, Paper } from "@mui/material";
+import { Paper } from "@mui/material";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 import ErrorBoundary from "@/components/erro-boundary";
 

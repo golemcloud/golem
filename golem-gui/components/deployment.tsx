@@ -5,7 +5,6 @@ import {
   Paper,
   Stack,
   List,
-  Alert,
 } from "@mui/material";
 import { Loader } from "lucide-react";
 import { ApiDeployment } from "@/types/api";
@@ -16,6 +15,7 @@ import DeploymentCreationPage from "@/components/deployment-creation";
 import useApiDeployments from "@/lib/hooks/use-api-deployments";
 import CustomModal from "./CustomModal";
 import { Button2 as Button } from "./ui/button";
+import ErrorBoundary from "./erro-boundary";
 
 export default function DeploymentPage({
   apiId,
@@ -84,9 +84,7 @@ export default function DeploymentPage({
             {isLoading && <Loader className="self-center" />}
           </Stack>
           {error && (
-            <Box sx={{ display: "flex", justifyContent: "center" }}>
-              <Alert severity="error">{error}</Alert>
-            </Box>
+           <ErrorBoundary message={error}/>
           )}
           {!isLoading && !error && deployments.length === 0 ? (
             <Typography variant="body2" className="text-muted-foreground">

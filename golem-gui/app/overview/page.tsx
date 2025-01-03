@@ -8,7 +8,6 @@ import {
   Grid2 as Grid,
   Stack,
   Divider,
-  Alert,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import FooterLinks from "@/components/ui/footer-links";
@@ -117,12 +116,7 @@ const ProjectDashboard = () => {
                   </Button>
                 )}
               </Box>
-              
-              {error && (
-                <Box sx={{ display: "flex", justifyContent: "center" }}>
-                  {error && <Alert severity="error">{error}</Alert>}
-                </Box>
-              )}
+              {error && <ErrorBoundary message={error} />}
               {uniquesApis?.length === 0 && (
                 <Box
                   textAlign="center"
@@ -135,12 +129,17 @@ const ProjectDashboard = () => {
                     Create your first api to get started
                   </Typography>
                   <br />
-                  <Button2 variant="primary" size="md" startIcon={<AddIcon />} onClick={()=> setOpen("api")}>
+                  <Button2
+                    variant="primary"
+                    size="md"
+                    startIcon={<AddIcon />}
+                    onClick={() => setOpen("api")}
+                  >
                     Create New
                   </Button2>
                 </Box>
               )}
-              {!error && !isLoading && uniquesApis?.length>0 && (
+              {!error && !isLoading && uniquesApis?.length > 0 && (
                 <Stack marginTop={2} sx={{ flex: 1, overflow: "hidden" }}>
                   {!isLoading &&
                     uniquesApis.slice(0, 10).map((api) => (
@@ -212,22 +211,25 @@ const ProjectDashboard = () => {
               )}
               {!componentError && !componentsLoading && (
                 <Box className="grid w-full grid-cols-1 gap-3 lg:grid-cols-2 mt-2">
-                  {!componentError && components.slice(0, 8).map((component) => (
-                    <ComponentCard
-                      key={component.versionedComponentId.componentId}
-                      name={component.componentName}
-                      time={calculateHoursDifference(component.createdAt)}
-                      version={component.versionedComponentId.version}
-                      exports={component.metadata.exports.length}
-                      size={calculateSizeInMB(component.componentSize)}
-                      type={component.componentType}
-                      onClick={() =>
-                        handleComponentClick(
-                          component.versionedComponentId.componentId!
-                        )
-                      }
-                    />
-                  ))}
+                  {!componentError &&
+                    components
+                      .slice(0, 8)
+                      .map((component) => (
+                        <ComponentCard
+                          key={component.versionedComponentId.componentId}
+                          name={component.componentName}
+                          time={calculateHoursDifference(component.createdAt)}
+                          version={component.versionedComponentId.version}
+                          exports={component.metadata.exports.length}
+                          size={calculateSizeInMB(component.componentSize)}
+                          type={component.componentType}
+                          onClick={() =>
+                            handleComponentClick(
+                              component.versionedComponentId.componentId!
+                            )
+                          }
+                        />
+                      ))}
                 </Box>
               )}
               {components.length === 0 && (
@@ -242,7 +244,12 @@ const ProjectDashboard = () => {
                     Create your first component to get started
                   </Typography>
                   <br />
-                  <Button2 variant="primary" size="md" startIcon={<AddIcon />} onClick={()=> setOpen("component")}>
+                  <Button2
+                    variant="primary"
+                    size="md"
+                    startIcon={<AddIcon />}
+                    onClick={() => setOpen("component")}
+                  >
                     Create New
                   </Button2>
                 </Box>
@@ -251,7 +258,11 @@ const ProjectDashboard = () => {
           </Grid>
         </Grid>
 
-        <CustomModal open={!!open} onClose={handleClose} heading="Create a new Component">
+        <CustomModal
+          open={!!open}
+          onClose={handleClose}
+          heading="Create a new Component"
+        >
           {open === "api" && <CreateAPI onCreation={handleClose} />}
           {open === "component" && (
             <CreateComponentForm mode="create" onSubmitSuccess={handleClose} />
