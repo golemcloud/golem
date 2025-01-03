@@ -2,7 +2,6 @@
 import { Paper, TextField } from "@mui/material";
 import React, { useEffect, useState } from "react";
 import useStore from "@/lib/hooks/use-react-flow-store";
-import CreateAPI from "@/components/create-api";
 import { useParams } from "next/navigation";
 import NewRouteForm from "@/components/new-route";
 import CustomModal from "@/components/CustomModal";
@@ -41,11 +40,11 @@ export default function Editors() {
               )}
               {trigger?.operation === "update" && (
                 // Chnage it to update modal. work in progress
-                <CreateAPI onCreation={handleClose} isExperimental={true} />
+                <CreateNewApiVersion onSuccess={handleClose} apiId={apiId}  isExperimental={true} />
               )}
                {trigger?.operation === "view" && (
                 // Chnage it to view modal. work in progress
-                <CreateAPI onCreation={handleClose} isExperimental={true} />
+                <CreateNewApiVersion onSuccess={handleClose} apiId={apiId}  isExperimental={true} />
               )}
             </>
           )}
