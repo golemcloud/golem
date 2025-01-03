@@ -1,5 +1,5 @@
 "use client";
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Box,
   InputAdornment,
@@ -7,6 +7,7 @@ import {
   Typography,
   IconButton,
   Alert,
+  Pagination,
 } from "@mui/material";
 import SearchIcon from "@mui/icons-material/Search";
 import AddIcon from "@mui/icons-material/Add";
@@ -27,10 +28,13 @@ import ComponentTable from "@/components/ui/generic-table";
 const ComponentsPage = () => {
   const [open, setOpen] = useState(false);
   const [activeButton, setActiveButton] = useState("grid");
-  const handleOpen = () => setOpen(true);
-  const handleClose = () => setOpen(false);
   const [viewMode, setViewMode] = useState("card");
   const [searchQuery, setSearchQuery] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 10; // Number of items per page
+
+  const handleOpen = () => setOpen(true);
+  const handleClose = () => setOpen(false);
   const handleActiveButton = (button: string) => {
     setActiveButton(button);
     setViewMode(button === "grid" ? "card" : "table");
@@ -67,6 +71,21 @@ const ComponentsPage = () => {
     );
   }, [components]).filter(checkForMatch);
 
+
+  useEffect(()=>{
+    if(searchQuery && searchQuery?.length>2){
+      setCurrentPage(1)
+    }
+  }, [finalComponents])
+
+  // Pagination Logic
+  const totalPages = Math.ceil(finalComponents.length / itemsPerPage);
+  const paginatedComponents = useMemo(() => {
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    const endIndex = startIndex + itemsPerPage;
+    return finalComponents.slice(startIndex, endIndex);
+  }, [finalComponents, currentPage]);
+
   return (
     <main className="mx-auto max-w-7xl px-6 lg:px-8">
       <Box className="mx-auto max-w-2xl lg:max-w-none flex flex-col gap-6 py-6">
@@ -83,6 +102,7 @@ const ComponentsPage = () => {
               mb={3}
               gap={2}
             >
+              {/* Need to debounce logic to reduce the computation*/}
               <TextField
                 placeholder="Worker Name..."
                 variant="outlined"
@@ -99,13 +119,13 @@ const ComponentsPage = () => {
                 className="flex-1"
               />
 
-              <Box className="flex  rounded-md dark:bg-[#333] bg-gray-200 p-1">
+              <Box className="flex rounded-md dark:bg-[#333] bg-gray-200 p-1">
                 <IconButton
                   onClick={() => handleActiveButton("grid")}
                   className={clsx(
                     "p-1 rounded-md transition-colors",
                     activeButton === "grid"
-                      ? "dark:bg-black  bg-gray-500 text-white hover:bg-gray-500"
+                      ? "dark:bg-black bg-gray-500 text-white hover:bg-gray-500"
                       : "dark:text-gray-200 text-gray-700"
                   )}
                 >
@@ -114,9 +134,9 @@ const ComponentsPage = () => {
                 <IconButton
                   onClick={() => handleActiveButton("list")}
                   className={clsx(
-                    "p-1 rounded-md ",
+                    "p-1 rounded-md",
                     activeButton === "list"
-                      ? "dark:bg-black bg-gray-500 text-white  hover:bg-gray-500"
+                      ? "dark:bg-black bg-gray-500 text-white hover:bg-gray-500"
                       : "dark:text-gray-200 text-gray-700"
                   )}
                 >
@@ -133,11 +153,11 @@ const ComponentsPage = () => {
               </Button2>
             </Box>
 
-            {finalComponents.length > 0 ? (
+            {paginatedComponents.length > 0 ? (
               viewMode === "card" ? (
                 <Box className="grid w-full grid-cols-1 lg:grid-cols-2 gap-6 xl:grid-cols-2">
                   {!isLoading &&
-                    finalComponents.map((item) => (
+                    paginatedComponents.map((item) => (
                       <ComponentCard
                         key={item.versionedComponentId.componentId}
                         id={item.versionedComponentId.componentId}
@@ -157,7 +177,7 @@ const ComponentsPage = () => {
                 </Box>
               ) : (
                 <ComponentTable<Component>
-                  data={finalComponents}
+                  data={paginatedComponents}
                   columns={[
                     {
                       key: "componentName",
@@ -206,6 +226,16 @@ const ComponentsPage = () => {
                 </Typography>
               </Box>
             )}
+            {/* Pagination Controls */}
+            {/* TODO handle pagination dark theme and light theme */}
+            <Box mt={4} display="flex" justifyContent="center">
+              <Pagination
+                count={totalPages}
+                page={currentPage}
+                onChange={(_, value) => setCurrentPage(value)}
+                color="primary"
+              />
+            </Box>
             {/* Modal for Creating New API/Component */}
             <CustomModal
               open={open}
@@ -225,3 +255,4 @@ const ComponentsPage = () => {
 };
 
 export default ComponentsPage;
+
