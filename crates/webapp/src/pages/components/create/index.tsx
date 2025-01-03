@@ -164,7 +164,7 @@ const CreateComponent = () => {
                 <FormField
                   control={form.control}
                   name="component"
-                  render={({ field: { onChange, value, ...fieldProps } }) => (
+                  render={({ field: { onChange } }) => (
                     <FormItem>
                       <FormLabel>Component</FormLabel>
                       <FormControl>
@@ -178,15 +178,13 @@ const CreateComponent = () => {
                               type="file"
                               accept="application/wasm,.wasm"
                               className="hidden"
-                              {...fieldProps}
                               ref={fileInputRef}
                               onChange={(event) => {
-                                setFile(
-                                  event.target.files && event.target.files[0]
-                                );
-                                return onChange(
-                                  event.target.files && event.target.files[0]
-                                );
+                                const file = event.target.files?.[0];
+                                if (file) {
+                                  setFile(file);
+                                  onChange(file);
+                                }
                               }}
                             />
                             <p className="text-sm text-gray-500 mb-4">

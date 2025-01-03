@@ -20,7 +20,7 @@ export const ComponentDetails = () => {
     });
 
     API.findWorker(componentId!).then((res) => {
-      const status: IWorkerStatus = {};
+      const status: Record<string, number> = {};
       res.workers.forEach((worker: Worker) => {
         status[worker.status] = (status[worker.status] || 0) + 1;
       });

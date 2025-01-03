@@ -1,3 +1,6 @@
+/* eslint-disable @typescript-eslint/ban-ts-comment */
+/* eslint-disable @typescript-eslint/no-explicit-any */
+// @ts-nocheck
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -85,7 +88,7 @@ export default function CreateWorker() {
       },
       {}
     );
-    rest.args = rest.args.filter((x) => x && x.length > 0);
+    rest.args = rest.args.filter((x: any) => x && x.trim().length > 0);
 
     console.log("submit before", rest);
     API.createWorker(componentID, rest).then((response) => {

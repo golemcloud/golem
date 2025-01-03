@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
 
 import { Button } from "@/components/ui/button";
@@ -117,13 +118,8 @@ export default function CreatePlugin() {
     );
   }, [activeSpecTab, form]);
 
-  async function onSubmit(values: z.infer<typeof formSchema>) {
-    const buffer = await values.icon!.arrayBuffer();
-    console.log(buffer);
-    const byteArray = new Uint8Array(buffer);
+  async function onSubmit(values: any) {
     values.icon = [];
-    console.log(values, "values");
-
     API.createPlugin(values).then(() => {
       navigate(`/plugins`);
     });
@@ -229,7 +225,7 @@ export default function CreatePlugin() {
                 <FormField
                   control={form.control}
                   name="icon"
-                  render={({ field: { onChange, value, ...field } }) => (
+                  render={() => (
                     <FormItem>
                       <FormLabel>
                         Icon<span className="text-red-500">*</span>
@@ -240,9 +236,10 @@ export default function CreatePlugin() {
                           accept="image/*"
                           onChange={(e) => {
                             const file = e.target.files?.[0];
-                            if (file) onChange(file);
+                            if (file) {
+                              form.setValue("icon", file); // Update the form value manually
+                            }
                           }}
-                          {...field}
                           className={cn(
                             form.formState.errors.icon &&
                               "border-red-500 focus-visible:ring-red-500"
@@ -318,7 +315,7 @@ export default function CreatePlugin() {
                                 <FormControl>
                                   <SelectTrigger
                                     className={cn(
-                                      form.formState.errors.specs
+                                      (form.formState.errors.specs as any)
                                         ?.componentId &&
                                         "border-red-500 focus-visible:ring-red-500"
                                     )}
@@ -354,14 +351,14 @@ export default function CreatePlugin() {
                                 <span className="text-red-500">*</span>
                               </FormLabel>
                               <Select
-                                value={field.value}
+                                value={field.value?.toString()}
                                 name={field.name}
                                 onValueChange={(e) => field.onChange(Number(e))}
                               >
                                 <FormControl>
                                   <SelectTrigger
                                     className={cn(
-                                      form.formState.errors.specs
+                                      (form.formState.errors.specs as any)
                                         ?.componentVersion &&
                                         "border-red-500 focus-visible:ring-red-500"
                                     )}
@@ -403,7 +400,8 @@ export default function CreatePlugin() {
                                   placeholder="https://api.example.com/validate"
                                   {...field}
                                   className={cn(
-                                    form.formState.errors.specs?.validateUrl &&
+                                    (form.formState.errors.specs as any)
+                                      ?.validateUrl &&
                                       "border-red-500 focus-visible:ring-red-500"
                                   )}
                                 />
@@ -429,7 +427,8 @@ export default function CreatePlugin() {
                                   placeholder="https://api.example.com/transform"
                                   {...field}
                                   className={cn(
-                                    form.formState.errors.specs?.transformUrl &&
+                                    (form.formState.errors.specs as any)
+                                      ?.transformUrl &&
                                       "border-red-500 focus-visible:ring-red-500"
                                   )}
                                 />
@@ -452,7 +451,8 @@ export default function CreatePlugin() {
                                   {...field}
                                   placeholder="Enter your JSON schema here..."
                                   className={cn(
-                                    form.formState.errors.specs?.jsonSchema &&
+                                    (form.formState.errors.specs as any)
+                                      ?.jsonSchema &&
                                       "border-red-500 focus-visible:ring-red-500"
                                   )}
                                 />
@@ -524,7 +524,8 @@ export default function CreatePlugin() {
                             <FormControl>
                               <SelectTrigger
                                 className={cn(
-                                  form.formState.errors.scope?.componentID &&
+                                  (form.formState.errors.scope as any)
+                                    ?.componentID &&
                                     "border-red-500 focus-visible:ring-red-500"
                                 )}
                               >

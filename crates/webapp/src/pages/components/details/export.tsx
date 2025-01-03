@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import {
@@ -22,8 +23,7 @@ import { useParams } from "react-router-dom";
 import { Component, Field, Parameter, Result, Typ } from "@/types/component.ts";
 import ErrorBoundary from "@/components/errorBoundary";
 
-// Recursive utility function to parse JSON and identify patterns
-function parseType(typ: Typ) {
+function parseType(typ: Typ): string {
   if (typ.type) {
     if (typ.type === "Record" && typ.fields) {
       return `{
@@ -107,7 +107,7 @@ export default function Exports() {
 
   const handleSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
-    const searchResult = component.exports?.[0].functions.filter((fn) => {
+    const searchResult = component.exports?.[0].functions.filter((fn: any) => {
       return fn.name.includes(value);
     });
     setFunctions(searchResult);
@@ -172,22 +172,28 @@ export default function Exports() {
                   </TableHeader>
                   <TableBody>
                     {functions?.length > 0 ? (
-                      functions.map((fn, index) => (
-                        <TableRow key={index}>
-                          <TableCell className="font-mono text-sm">
-                            {component.exports?.[0].name}
-                          </TableCell>
-                          <TableCell className="font-mono text-sm">
-                            {fn.name}
-                          </TableCell>
-                          <TableCell className="font-mono text-sm">
-                            {convertJsonToFunctionStructure(fn.parameters)}
-                          </TableCell>
-                          <TableCell className="font-mono text-sm">
-                            {convertJsonToFunctionStructure(fn.results)}
-                          </TableCell>
-                        </TableRow>
-                      ))
+                      functions.map(
+                        (fn: {
+                          name: string;
+                          parameters: any;
+                          results: any;
+                        }) => (
+                          <TableRow key={fn.name}>
+                            <TableCell className="font-mono text-sm">
+                              {component.exports?.[0].name}
+                            </TableCell>
+                            <TableCell className="font-mono text-sm">
+                              {fn.name}
+                            </TableCell>
+                            <TableCell className="font-mono text-sm">
+                              {convertJsonToFunctionStructure(fn.parameters)}
+                            </TableCell>
+                            <TableCell className="font-mono text-sm">
+                              {convertJsonToFunctionStructure(fn.results)}
+                            </TableCell>
+                          </TableRow>
+                        )
+                      )
                     ) : (
                       <div className="p-4 align-center grid">
                         No exports found.

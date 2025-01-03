@@ -9,11 +9,7 @@ import { formatRelativeTime } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { API } from "@/service";
 import { Component } from "@/types/component";
-import {
-  Worker,
-  WorkerStatus as IWorkerStatus,
-  WorkerStatus,
-} from "@/types/worker";
+import { Worker, WorkerStatus } from "@/types/worker";
 import ErrorBoundary from "@/components/errorBoundary";
 
 const Metrix = ["Idle", "Running", "Suspended", "Failed"];
@@ -43,7 +39,7 @@ const Components = () => {
             count: 100,
             precise: true,
           }).then((worker) => {
-            const status: IWorkerStatus = {};
+            const status: Record<string, number> = {};
             worker.workers.forEach((worker: Worker) => {
               status[worker.status] = (status[worker.status] || 0) + 1;
             });

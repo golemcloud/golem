@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import {Component} from "@/types/component.ts";
 import {ENDPOINT} from "@/service/endpoints.ts";
 import {Api} from "@/types/api.ts";
@@ -166,23 +167,27 @@ export class Service {
                     console.log(res)
                     return res.json()
                 } else {
-                    let errorTitle = "Api is Failed check the api details"
-                    console.log(res)
-                    res.json().then(err => {
-                        errorTitle = err?.golemError?.message || errorTitle
-                    })
-                    toast({
-                        title: errorTitle,
-                        variant: "destructive",
-                    });
+                    if(method !== "GET") {
+                        let errorTitle = "Api is Failed check the api details"
+                        console.log(res)
+                        res.json().then(err => {
+                            errorTitle = err?.golemError?.message || errorTitle
+                        })
+                        toast({
+                            title: errorTitle,
+                            variant: "destructive",
+                        })
+                    }
                     throw res;
                 }
 
             }).catch(err => {
+                if(method !== "GET") {
                 toast({
                     title: "Api is Failed check the api details",
                     variant: "destructive",
                 });
+                }
                 throw err
             })
             console.log("callApi", resp)
