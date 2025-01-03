@@ -7,6 +7,9 @@ import {zodResolver} from "@hookform/resolvers/zod";
 import {Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage,} from "@/components/ui/form";
 import {Textarea} from "@/components/ui/textarea.tsx";
 import {RadioGroup, RadioGroupItem} from "@/components/ui/radio-group.tsx";
+import {useEffect, useState} from "react";
+import {Component} from "@/types/component.ts";
+import {API} from "@/service";
 import {Select, SelectContent, SelectItem, SelectTrigger, SelectValue} from "@/components/ui/select.tsx";
 
 const OplogProcessorSpecSchema = z.object({
@@ -43,7 +46,7 @@ const formSchema = z.object({
     description: z.string().min(10, {
         message: "Description must be at least 10 characters.",
     }),
-    icon: z.instanceof(File),
+    // icon: z.instanceof(File),
     homepage: z.string().url({
         message: "Please enter a valid URL.",
     }),
@@ -57,12 +60,22 @@ const formSchema = z.object({
         OplogProcessorSpecSchema,
         ComponentTransformerSpecSchema
     ]),
-    scope: z.object({
-        type: z.string().default("Global"),
-    }),
+    scope: z.discriminatedUnion("type", [
+        z.object({
+            type: z.literal("Global"),
+        }),
+        z.object({
+            type: z.literal("Component"),
+            componentID: z.string().uuid(),
+        }),
+    ]),
 })
 
 export default function CreatePlugin() {
+
+    const [componentApiList, setComponentApiList] = useState<{
+        [key: string]: Component;
+    }>({});
     const form = useForm<z.infer<typeof formSchema>>({
         resolver: zodResolver(formSchema),
         defaultValues: {
@@ -80,6 +93,12 @@ export default function CreatePlugin() {
             },
         },
     });
+
+    useEffect(() => {
+        API.getComponentByIdAsKey().then(async (response) => {
+            setComponentApiList(response);
+        });
+    }, []);
 
 
     function onSubmit(values: z.infer<typeof formSchema>) {
@@ -147,30 +166,30 @@ export default function CreatePlugin() {
                                     </FormItem>
                                 )}
                             />
-                            <FormField
-                                control={form.control}
-                                name="icon"
-                                render={({field: {onChange, value, ...field}}) => (
-                                    <FormItem>
-                                        <FormLabel>Icon</FormLabel>
-                                        <FormControl>
-                                            <Input
-                                                type="file"
-                                                accept="image/*"
-                                                onChange={(e) => {
-                                                    const file = e.target.files?.[0]
-                                                    if (file) onChange(file)
-                                                }}
-                                                {...field}
-                                            />
-                                        </FormControl>
-                                        <FormDescription>
-                                            Upload an icon for your plugin.
-                                        </FormDescription>
-                                        <FormMessage/>
-                                    </FormItem>
-                                )}
-                            />
+                            {/*<FormField*/}
+                            {/*    control={form.control}*/}
+                            {/*    name="icon"*/}
+                            {/*    render={({field: {onChange, value, ...field}}) => (*/}
+                            {/*        <FormItem>*/}
+                            {/*            <FormLabel>Icon</FormLabel>*/}
+                            {/*            <FormControl>*/}
+                            {/*                <Input*/}
+                            {/*                    type="file"*/}
+                            {/*                    accept="image/*"*/}
+                            {/*                    onChange={(e) => {*/}
+                            {/*                        const file = e.target.files?.[0]*/}
+                            {/*                        if (file) onChange(file)*/}
+                            {/*                    }}*/}
+                            {/*                    {...field}*/}
+                            {/*                />*/}
+                            {/*            </FormControl>*/}
+                            {/*            <FormDescription>*/}
+                            {/*                Upload an icon for your plugin.*/}
+                            {/*            </FormDescription>*/}
+                            {/*            <FormMessage/>*/}
+                            {/*        </FormItem>*/}
+                            {/*    )}*/}
+                            {/*/>*/}
                             <FormField
                                 control={form.control}
                                 name="homepage"
@@ -230,9 +249,23 @@ export default function CreatePlugin() {
                                         render={({field}) => (
                                             <FormItem>
                                                 <FormLabel>Component ID</FormLabel>
-                                                <FormControl>
-                                                    <Input {...field} />
-                                                </FormControl>
+                                                <Select
+                                                    value={field.value} name={field.name}
+                                                    onValueChange={field.onChange}>
+                                                    <FormControl>
+                                                        <SelectTrigger>
+                                                            <SelectValue placeholder="Select a Component"/>
+                                                        </SelectTrigger>
+                                                    </FormControl>
+                                                    <SelectContent>
+                                                        {componentApiList && Object.values(componentApiList).map(data => (
+                                                            <SelectItem value={data.componentId!}
+                                                                        key={data.componentName}>
+                                                                {data.componentName}
+                                                            </SelectItem>
+                                                        ))}
+                                                    </SelectContent>
+                                                </Select>
                                                 <FormMessage/>
                                             </FormItem>
                                         )}
@@ -311,22 +344,54 @@ export default function CreatePlugin() {
                                 render={({field}) => (
                                     <FormItem>
                                         <FormLabel>Scope Type</FormLabel>
-                                        <Select onValueChange={field.onChange} defaultValue={field.value} {...field}>
-                                            <FormControl>
-                                                <SelectTrigger>
-                                                    <SelectValue placeholder="Select a scope type"/>
-                                                </SelectTrigger>
-                                            </FormControl>
-                                            <SelectContent>
-                                                <SelectItem value="Global">Global</SelectItem>
-                                                <SelectItem value="Local">Local</SelectItem>
-                                            </SelectContent>
-                                        </Select>
+                                        <FormControl>
+                                            <Select value={field.value} name={field.name}
+                                                    onValueChange={field.onChange}>
+                                                <FormControl>
+                                                    <SelectTrigger>
+                                                        <SelectValue placeholder="Select a scope type"/>
+                                                    </SelectTrigger>
+                                                </FormControl>
+                                                <SelectContent>
+                                                    <SelectItem value="Global">Global</SelectItem>
+                                                    <SelectItem value="Component">Component</SelectItem>
+                                                </SelectContent>
+                                            </Select>
+                                        </FormControl>
                                         <FormMessage/>
                                     </FormItem>
                                 )}
                             />
-
+                            {form.watch("scope.type") === "Component" && (
+                                <FormField
+                                    control={form.control}
+                                    name="scope.componentID"
+                                    render={({field}) => (
+                                        <FormItem>
+                                            <FormLabel>Component ID</FormLabel>
+                                            <Select
+                                                value={field.value} name={field.name}
+                                                onValueChange={field.onChange}>
+                                                <FormControl>
+                                                    <SelectTrigger>
+                                                        <SelectValue placeholder="Select a Component"/>
+                                                    </SelectTrigger>
+                                                </FormControl>
+                                                <SelectContent>
+                                                    {componentApiList && Object.values(componentApiList).map(data => (
+                                                        <SelectItem value={data.componentId!}
+                                                                    key={data.componentName}>
+                                                            {data.componentName}
+                                                        </SelectItem>
+                                                    ))}
+                                                </SelectContent>
+                                            </Select>
+                                            <FormMessage/>
+                                        </FormItem>
+                                    )}
+                                />
+                            )
+                            }
                             <div className="flex justify-end">
                                 <Button type="submit">Create Plugin</Button>
                             </div>

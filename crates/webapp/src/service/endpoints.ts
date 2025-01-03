@@ -46,5 +46,11 @@ export const ENDPOINT = {
     },
     getParticularWorker: (componentId: string, workerName: string) => {
         return `/v1/components/${componentId}/workers/${workerName}`;
-    }
+    },
+    getPlugins: () => {
+        return "/v1/plugins";
+    },
+    getPluginName: (name: string) => {
+        return `/v1/plugins/${name}`;
+    },
 };
