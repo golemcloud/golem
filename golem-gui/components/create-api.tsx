@@ -4,12 +4,12 @@ import {
   Button,
   TextField,
   Typography,
-  Paper,
 } from "@mui/material";
 import { useForm, Controller } from "react-hook-form";
 import { addNewApiDefinition } from "@/lib/hooks/use-api-definitons";
 import { ApiDefinition } from "@/types/api";
 import { getFormErrorMessage } from '../lib/utils';
+import { Button2 } from "@/components/ui/button";
 
 const CreateAPI = ({
   onCreation,
@@ -38,6 +38,7 @@ const CreateAPI = ({
       id: data.apiName,
       version: data.version,
       routes: [],
+      createdAt: new Date().toISOString(),
       draft: true,
     };
     const { error } = await addNewApiDefinition(newApi);
@@ -49,7 +50,7 @@ const CreateAPI = ({
   };
 
   return (
-    <Paper elevation={4} sx={{ p: 2 }}>
+    <div className="p-5">
       {isExperimental && (
         <Typography
           variant="h5"
@@ -75,6 +76,7 @@ const CreateAPI = ({
           }}
           render={({ field }) => (
             <TextField
+              size="small"
               {...field}
               label="API Name"
               placeholder="Enter API name"
@@ -99,6 +101,7 @@ const CreateAPI = ({
           }}
           render={({ field }) => (
             <TextField
+              size="small"
               {...field}
               label="Version"
               placeholder="0.1.0"
@@ -112,17 +115,18 @@ const CreateAPI = ({
 
         {/* Create API Button */}
         <Box display="flex" justifyContent="flex-end" mt={3}>
-          <Button
+          <Button2
             type="submit"
-            variant="contained"
+            size="lg"
+            variant="primary"
             color="primary"
             sx={{ textTransform: "none", fontWeight: "bold" }}
           >
             Create
-          </Button>
+          </Button2>
         </Box>
       </form>
-    </Paper>
+    </div>
   );
 };
 

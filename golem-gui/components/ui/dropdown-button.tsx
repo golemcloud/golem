@@ -21,7 +21,10 @@ export function Dropdown(list: { route: string; value: string }[]) {
           {list.map((item, ind) => (
             <DropdownMenuItem
               key={ind}
-              onClick={() => router.push(item.route)}
+              onClick={(e) => {
+                e.stopPropagation();
+                router.push(item.route);
+              }}
               className="cursor-pointer"
             >
               {item.value}
