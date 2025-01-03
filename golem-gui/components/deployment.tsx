@@ -5,7 +5,6 @@ import {
   Paper,
   Stack,
   List,
-  Button,
   Alert,
 } from "@mui/material";
 import { Loader } from "lucide-react";
@@ -16,6 +15,7 @@ import { useState } from "react";
 import DeploymentCreationPage from "@/components/deployment-creation";
 import useApiDeployments from "@/lib/hooks/use-api-deployments";
 import CustomModal from "./CustomModal";
+import { Button2 as Button } from "./ui/button";
 
 export default function DeploymentPage({
   apiId,
@@ -49,15 +49,11 @@ export default function DeploymentPage({
       <Box>
         {/* Active Deployments Section */}
         <Paper
-          className="bg-[#333]"
+          className="border"
           elevation={3}
           sx={{
             p: 3,
             mb: 3,
-            color: "text.primary",
-            backgroundColor: "#333", // Use this for the background color
-            border: 1,
-            borderColor: "divider",
             borderRadius: 2,
           }}
         >
@@ -73,15 +69,15 @@ export default function DeploymentPage({
             >
               <Typography variant="h6">Active Deployments</Typography>
               <Button
-                variant="outlined"
+                variant="primary"
+                className="rounded-lg"
                 startIcon={<AddIcon />}
                 sx={{
                   textTransform: "none",
-                  marginLeft: "2px",
                 }}
                 onClick={handleOpen}
               >
-                New
+                View All
               </Button>
             </Stack>
 
@@ -93,7 +89,7 @@ export default function DeploymentPage({
             </Box>
           )}
           {!isLoading && !error && deployments.length === 0 ? (
-            <Typography variant="body2">
+            <Typography variant="body2" className="text-muted-foreground">
               No Deployments for this API version.
             </Typography>
           ) : (
