@@ -19,4 +19,5 @@ export interface GolemService {
     resumeWorker(componentId: string, workerName: string): Promise<any>;
     deleteWorker(componentId: string, workName: string): Promise<any>;
     invokeWorkerAwait(componentId: string, workerName: string, functionName: string, payload: any): Promise<any>; 
+    downloadComponent(componentId: string, version: string): Promise<any>;
 }

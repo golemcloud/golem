@@ -62,8 +62,6 @@ export default function WorkerLive() {
     }
   });
 
-  console.log(invocationData, "messages", terminal);
-
   return (
     <ErrorBoundary>
       <div className="flex">

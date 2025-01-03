@@ -6,6 +6,7 @@ import {
   Settings,
   ArrowLeft,
   Pickaxe,
+  Info,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -92,6 +93,21 @@ const ApiLeftNav = () => {
               >
                 <Pencil className="h-5 w-5 mr-2" />
                 <span>Update</span>
+              </Button>
+            </li>
+            <li>
+              <Button
+                variant="ghost"
+                onClick={() => navigate(`/components/${componentId}/info`)}
+                className={cn(
+                  "w-full flex items-center px-3 py-2 rounded-md text-sm font-medium justify-start",
+                  isActive("info")
+                    ? "bg-gray-200 dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                    : "hover:bg-gray-100 dark:hover:bg-gray-900 text-gray-600 dark:text-gray-400"
+                )}
+              >
+                <Info className="h-5 w-5 mr-2" />
+                <span>Info</span>
               </Button>
             </li>
             <li>

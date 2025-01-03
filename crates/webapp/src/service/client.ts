@@ -208,6 +208,10 @@ export class Service {
         return await this.callApi(ENDPOINT.getPluginName(name));
     }
 
+    public downloadComponent = async (componentId: string, version: string): Promise<any> => {
+        return await this.downloadApi(ENDPOINT.downloadComponent(componentId, version));
+    }
+
     private callApi =
         async (url: string, method: string = "GET", data: FormData | string | null = null,
                headers = {'Content-Type': 'application/json'}): Promise<any> => {
@@ -231,6 +235,30 @@ export class Service {
                     throw res;
                 }
 
+            }).catch(err => {
+                toast({
+                    title: "Api is Failed check the api details",
+                    variant: "destructive",
+                });
+                throw err
+            })
+            console.log("callApi", resp)
+            return resp;
+        }
+
+
+        private downloadApi =
+        async (url: string, method: string = "GET", data: FormData | string | null = null,
+               headers = {'Content-Type': 'application/json'}): Promise<any> => {
+            const resp = await fetch(`${this.baseUrl}${url}`, {
+                method: method,
+                body: data,
+                headers: headers
+            }).then(res => {
+                if (res.ok) {
+                    console.log(res)
+                    return res
+                }
             }).catch(err => {
                 toast({
                     title: "Api is Failed check the api details",

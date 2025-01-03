@@ -10,6 +10,7 @@ import Deployments from "@/pages/Deployments";
 import { ComponentDetails } from "@/pages/components/details";
 import { PluginList } from "@/pages/plugin";
 import ComponentSettings from "@/pages/components/details/settings";
+import ComponentInfo from "@/pages/components/details/info";
 import Exports from "@/pages/components/details/export";
 import ComponentUpdate from "@/pages/components/details/update";
 import WorkerList from "@/pages/workers";
@@ -50,6 +51,10 @@ function App() {
             <Route
               path="/components/:componentId/update"
               element={<ComponentUpdate />}
+            />
+            <Route
+              path="/components/:componentId/info"
+              element={<ComponentInfo />}
             />
             <Route
               path="/components/:componentId/exports"

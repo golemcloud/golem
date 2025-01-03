@@ -21,6 +21,11 @@
         { "url": "http://localhost:1420" }
       ],
       "deny": []
+    },
+    {
+      "identifier": "fs:allow-download-write-recursive",
+      "allow": [{ "path": "$DOWNLOAD/**" }],
+      "deny": []
     }
   ]
 }

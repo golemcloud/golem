@@ -59,4 +59,7 @@ export const ENDPOINT = {
     getPluginName: (name: string) => {
         return `/v1/plugins/${name}`;
     },
+    downloadComponent: (componentId: string, version: string) => {
+        return `/v1/components/${componentId}/download?version=${version}`;
+    },
 };

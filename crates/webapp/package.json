@@ -27,6 +27,7 @@
     "@radix-ui/react-toast": "^1.2.4",
     "@radix-ui/react-tooltip": "^1.1.6",
     "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-fs": "^2.2.0",
     "@tauri-apps/plugin-http": "^2.2.0",
     "@tauri-apps/plugin-opener": "^2",
     "@tauri-apps/plugin-websocket": "^2.2.0",
