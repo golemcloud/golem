@@ -7,8 +7,6 @@ import {
   ListItemText,
   Typography,
   Button,
-  Select,
-  MenuItem,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import { PanelRightClose } from "lucide-react";
@@ -17,12 +15,18 @@ import { Home, Settings, RocketLaunch, Add } from "@mui/icons-material";
 import CodeIcon from "@mui/icons-material/Code";
 import ArticleIcon from "@mui/icons-material/Article";
 import Link from "next/link";
-import { usePathname, useParams, useSearchParams, useRouter } from "next/navigation";
+import {
+  usePathname,
+  useParams,
+  useSearchParams,
+  useRouter,
+} from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { Button2 } from "@/components/ui/button";
 import { Dropdown } from "@/components/ui/dropdown-button";
 import PlayForWorkIcon from "@mui/icons-material/PlayForWork";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
+import { VersionFilter } from "@/app/apis/[apiId]/apis-filter";
 
 type secondaryHeaderProps = {
   onClick: () => void;
@@ -36,7 +40,6 @@ export default function SecondaryHeader({
   variant,
   id,
   apiTab,
-  
 }: secondaryHeaderProps) {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const pathname = usePathname();
@@ -54,7 +57,6 @@ export default function SecondaryHeader({
     return parts[parts.length - 1] || "overview";
   }, [pathname]);
 
-
   const router = useRouter();
   const { apiDefinitions, getApiDefintion, isLoading } =
     useApiDefinitions(apiId);
@@ -64,7 +66,6 @@ export default function SecondaryHeader({
       return api.version;
     });
   }, [apiDefinitions]);
-
 
   let navigationLinks;
   if (variant === "apis") {
@@ -144,10 +145,9 @@ export default function SecondaryHeader({
   };
 
   return (
-    <Box className="dark:bg-[#0a0a0a] border-b p-2 pr-20 "
-    >
+    <Box className="dark:bg-[#0a0a0a] border-b p-2 pr-20 ">
       <Box className="flex items-center justify-between w-full">
-        <Box sx={{ display: { xs: "block", md: "none", } }}>
+        <Box sx={{ display: { xs: "block", md: "none" } }}>
           <Button
             startIcon={<PanelRightClose />}
             onClick={toggleDrawer(true)}
@@ -155,34 +155,11 @@ export default function SecondaryHeader({
           ></Button>
         </Box>
 
-        {variant === "apis" && apiTab!="playground" && (
-               <Select
-                name="version"
-                variant="outlined"
-                className="w-32 ml-2"
-                value={apiDefinition?.version}
-                onChange={(e) => {
-                  if(apiDefinition && e.target.value!== apiDefinition?.version){
-                    router.push(`/apis/${apiId}/${tab}?version=${e.target.value}`);
-
-                  }
-                }}
-              >
-                {versions?.map((version: string) => (
-                  <MenuItem key={version} value={version}>
-                    {version}
-                  </MenuItem>
-                ))}
-              </Select>
-        )}
-          {variant === "apis" && apiTab!="playground" && (
-            <Button
-              type="button"
-              className="ml-auto"
-              onClick={onClick}
-            >
-              New Version
-            </Button>
+        {variant === "apis" && apiTab != "playground" && <VersionFilter />}
+        {variant === "apis" && apiTab != "playground" && (
+          <Button type="button" className="ml-auto" onClick={onClick}>
+            New Version
+          </Button>
         )}
         {pathname === `/components/${compId}/overview` && (
           <Box sx={{ marginLeft: "auto", display: "flex", gap: 2 }}>

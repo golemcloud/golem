@@ -48,7 +48,6 @@ export function VersionFilter() {
     }, [pathname]);
   
     const handleChange = (e:any) => {
-      // const params = new URLSearchParams(params);
       router.push(`/apis/${apiId}/${tab}?version=${e.target.value}`);
     };
   
@@ -57,11 +56,11 @@ export function VersionFilter() {
       <div className="max-w-5">
         <MultiSelect
           selectMode="single"
-          dropdownType="icon"
+          buttonType={{variant:"success", size:"icon_sm"}}
           options={versions}
           onValueChange={(event)=> handleChange}
           defaultValue={selectedVersionRef.current}
-          placeholder="Version"
+          className="min-w-15"
           variant="inverted"
           animation={2}
           maxCount={2}
