@@ -4,11 +4,8 @@ import React from "react";
 import {
   Box,
   Typography,
-  Card,
   IconButton,
   Grid2 as MuiGrid,
-  Tooltip,
-  useTheme,
   Paper,
 } from "@mui/material";
 import DescriptionIcon from "@mui/icons-material/Description";
@@ -25,11 +22,11 @@ const Dashboard = () => {
   const router = useRouter();
   const { components } = useComponents();
   const { apiDefinitions } = useApiDefinitions();
-  const apis = [
-    { id: 1, name: "My Project A", components: 2, apis: 3 },
-    { id: 2, name: "My Project B", components: 4, apis: 0 },
-    { id: 3, name: "Project C", components: 1, apis: 2 },
-  ];
+  // const apis = [
+  //   { id: 1, name: "My Project A", components: 2, apis: 3 },
+  //   { id: 2, name: "My Project B", components: 4, apis: 0 },
+  //   { id: 3, name: "Project C", components: 1, apis: 2 },
+  // ];
 
   const buttonData = [
     {
@@ -55,24 +52,30 @@ const Dashboard = () => {
       icon: <BookOpenText />,
       description:
         "Learn how to setup your development environment and build your first component",
+        link:"https://learn.golem.cloud/docs/quickstart"
     },
     {
       label: "API Docs",
       icon: <Code />,
       description:
         "Explore the API Documentation and learn how to integrate with our platform",
+      link:"https://learn.golem.cloud/docs/rest-api/oss-rest-api"
+  
     },
     {
       label: "Language Guides",
       icon: <NotepadText />,
       description:
         "Check out our language specific tutorials and examples to get started",
+      link:"https://learn.golem.cloud/docs/develop-overview"  
     },
     {
       label: "Github",
       icon: <Github />,
       description:
         "Check out our Github repository to contribute and report issues",
+      link:"https://github.com/golemcloud"  
+  
     },
   ];
 
@@ -121,7 +124,7 @@ const Dashboard = () => {
               {apiDefinitions.length}
             </Typography>
             <Typography variant="subtitle2" sx={{ fontWeight: 500 }}>
-              Api's
+              Api&apos;s
             </Typography>
           </Box>
         </Box>
