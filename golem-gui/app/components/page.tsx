@@ -24,6 +24,7 @@ import { calculateHoursDifference, calculateSizeInMB } from "@/lib/utils";
 import { Button2 } from "@/components/ui/button";
 import clsx from "clsx";
 import ComponentTable from "@/components/ui/generic-table";
+import ErrorBoundary from "@/components/erro-boundary";
 
 const ComponentsPage = () => {
   const [open, setOpen] = useState(false);
@@ -89,9 +90,7 @@ const ComponentsPage = () => {
   return (
     <main className="mx-auto max-w-7xl px-6 lg:px-8">
       <Box className="mx-auto max-w-2xl lg:max-w-none flex flex-col gap-6 py-6">
-        <Box sx={{ display: "flex", justifyContent: "center" }}>
-          {error && <Alert severity="error">{error}</Alert>}
-        </Box>
+        {error && <ErrorBoundary message={error}/>}
         {!error && !isLoading && (
           <>
             {/* Search Bar and Buttons */}

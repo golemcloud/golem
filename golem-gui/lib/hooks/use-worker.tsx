@@ -11,7 +11,7 @@ import {
 } from "@/types/api";
 import { toast } from "react-toastify";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { WorkerFilter } from "../../types/api";
 const ROUTE_PATH = "v1/components";
 
@@ -242,12 +242,13 @@ export function useWorkerLogs(
   };
 }
 
-export function useWorkerFind(compId: string, limit?: number) {
+export function useWorkerFind(compId: string, limit?: number, slientToast?:boolean) {
   const [error, setError] = useState<string | null>(null);
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [cursor, setCursor] = useState<Cursor>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const searchParams = useSearchParams();
+  const didMount = useRef(false);
 
   const transformSearchParams = useCallback(
     (cursor?: Cursor) => {
@@ -389,6 +390,9 @@ export function useWorkerFind(compId: string, limit?: number) {
 
         if (response.error) {
           setError(response.error);
+          if(slientToast){
+            return;
+          }
           return toast.error(response.error);
         }
         setWorkers((prev) => [
@@ -400,6 +404,9 @@ export function useWorkerFind(compId: string, limit?: number) {
         //do nothing
         console.log("error occured while fetching the data", err);
         setError("Something went wrong");
+        if(slientToast){
+          return;
+        }
         return toast.error("Something went wrong");
       } finally {
         setIsLoading(false);
@@ -409,7 +416,10 @@ export function useWorkerFind(compId: string, limit?: number) {
   );
 
   useEffect(() => {
-    triggerQuery(null);
+    if(!didMount.current){
+      didMount.current = true;
+      triggerQuery(null);
+    }
   }, [triggerQuery]);
 
   return {

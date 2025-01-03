@@ -22,6 +22,7 @@ import CustomModal from "@/components/CustomModal";
 import ComponentCard from "../../components/component-card";
 import { calculateHoursDifference, calculateSizeInMB } from "@/lib/utils";
 import { NotepadText, Component, Globe, Bot } from "lucide-react";
+import ErrorBoundary from "@/components/erro-boundary";
 
 // working on overview page
 
@@ -32,28 +33,25 @@ const ProjectDashboard = () => {
       label: "Language Guides",
       icon: <NotepadText />,
       description: "Check our language and start building",
-      link:"https://learn.golem.cloud/docs/develop-overview"
+      link: "https://learn.golem.cloud/docs/develop-overview",
     },
     {
       label: "Components",
       icon: <Component />,
       description: "Create Wasm components that run on Golem",
-      link:"https://learn.golem.cloud/docs/concepts/components"
-
+      link: "https://learn.golem.cloud/docs/concepts/components",
     },
     {
       label: "APIs",
       icon: <Globe />,
       description: "Craft custom APIs to expose your components to the world",
-      link:"https://learn.golem.cloud/docs/rest-api/oss-rest-api"
-
+      link: "https://learn.golem.cloud/docs/rest-api/oss-rest-api",
     },
     {
       label: "Workers",
       icon: <Bot />,
       description: "Launch and manage efficient workers from your components",
-      link:"https://learn.golem.cloud/docs/concepts/workers"
-
+      link: "https://learn.golem.cloud/docs/concepts/workers",
     },
   ];
   const [open, setOpen] = useState<string | null>(null);
@@ -85,6 +83,8 @@ const ProjectDashboard = () => {
   return (
     <main className="mx-auto max-w-7xl px-6 lg:px-8 min-h-[calc(100svh-84px)] py-4 flex h-full w-full flex-1 flex-col">
       <Box className="mx-auto max-w-2xl lg:max-w-none gap-6 flex h-full w-full flex-1 flex-col">
+        {error === componentError && <ErrorBoundary message={error} />}
+
         <Grid container spacing={3} sx={{ flexWrap: "wrap" }}>
           <Grid size={{ xs: 12, md: 12, lg: 4 }}>
             <Paper
@@ -114,55 +114,80 @@ const ProjectDashboard = () => {
                   </Button>
                 )}
               </Box>
-              {error && (
-                <Box sx={{ display: "flex", justifyContent: "center" }}>
-                  {error && <Alert severity="error">{error}</Alert>}
-                </Box>
-              )}
-              {!error && !isLoading && (
-                <Stack marginTop={2} sx={{ flex: 1, overflow: "hidden" }}>
-                  {!isLoading &&
-                    uniquesApis.slice(0, 10).map((api) => (
-                      <React.Fragment key={api.id}>
-                        <Divider sx={{ bgcolor: "#555" }} />
-                        <Box
-                          key={api.id}
-                          padding={3}
-                          className="hover:bg-[#444] cursor-pointer"
-                          onClick={() =>
-                            router.push(
-                              `/apis/${api.id}/overview?version=${api.version}`
-                            )
-                          }
-                        >
-                          <Box display="flex" justifyContent="space-between">
-                            <Typography
-                              variant="body1"
-                              sx={{
-                                overflow: "hidden", // Ensures overflow content is hidden
-                                textOverflow: "ellipsis", // Adds an ellipsis when text overflows
-                                whiteSpace: "nowrap", // Prevents text wrapping to a new line
-                                maxWidth: "80%",
-                              }}
-                            >
-                              {api.id}
-                            </Typography>
-                            <Typography
-                              variant="body2"
-                              sx={{
-                                px: 1,
-                                border: "1px solid #555",
-                                borderRadius: 1,
-                              }}
-                            >
-                              {api.version}
-                            </Typography>
-                          </Box>
+              {error !== componentError && <ErrorBoundary message={error} />}
+              {!error && !isLoading && <Stack marginTop={2} sx={{ flex: 1, overflow: "hidden" }}>
+                {!isLoading &&
+                  uniquesApis.slice(0, 10).map((api) => (
+                    <React.Fragment key={api.id}>
+                      <Divider sx={{ bgcolor: "#555" }} />
+                      <Box
+                        key={api.id}
+                        padding={3}
+                        className="hover:bg-[#444] cursor-pointer"
+                        onClick={() =>
+                          router.push(
+                            `/apis/${api.id}/overview?version=${api.version}`
+                          )
+                        }
+                      >
+                        <Box display="flex" justifyContent="space-between">
+                          <Typography
+                            variant="body1"
+                            sx={{
+                              overflow: "hidden", // Ensures overflow content is hidden
+                              textOverflow: "ellipsis", // Adds an ellipsis when text overflows
+                              whiteSpace: "nowrap", // Prevents text wrapping to a new line
+                              maxWidth: "80%",
+                            }}
+                          >
+                            {api.id}
+                          </Typography>
+                          <Typography
+                            variant="body2"
+                            sx={{
+                              px: 1,
+                              border: "1px solid #555",
+                              borderRadius: 1,
+                            }}
+                          >
+                            {api.version}
+                          </Typography>
                         </Box>
-                      </React.Fragment>
-                    ))}
-                </Stack>
-              )}
+                      </Box>
+                    </React.Fragment>
+                  ))}
+              </Stack>}
+              {!isLoading && uniquesApis.length === 0 && (
+                    <Box
+                      textAlign="center"
+                      sx={{
+                        borderRadius: 2,
+                        border: "2px dashed #444",
+                        py: 6,
+                        px: 2,
+                      }}
+                    >
+                      <Typography variant="h6" color="text.secondary">
+                        No Apis
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        Create your first Api to get started
+                      </Typography>
+                      <Button
+                        variant="contained"
+                        startIcon={<AddIcon />}
+                        sx={{
+                          mt: 2,
+                          bgcolor: "#444",
+                          "&:hover": { bgcolor: "#555" },
+                        }}
+                        disabled={error}
+                        onClick={(e)=>{e.preventDefault(); setOpen("api")}}
+                      >
+                        Create New
+                      </Button>
+                    </Box>
+                  )}
             </Paper>
           </Grid>
 
@@ -195,15 +220,12 @@ const ProjectDashboard = () => {
                   </Button>
                 )}
               </Box>
-              {componentError && (
-                <Box sx={{ display: "flex", justifyContent: "center" }}>
-                  {error && <Alert severity="error">{componentError}</Alert>}
-                </Box>
+              {error !== componentError && (
+                <ErrorBoundary message={componentError} />
               )}
-
-              {!componentError && !componentsLoading && (
+              {!componentsLoading && (
                 <Box className="grid w-full grid-cols-1 gap-3 lg:grid-cols-2 mt-2">
-                  {components.slice(0, 8).map((component) => (
+                  {!componentError && components.slice(0, 8).map((component) => (
                     <ComponentCard
                       key={component.versionedComponentId.componentId}
                       name={component.componentName}
@@ -219,7 +241,9 @@ const ProjectDashboard = () => {
                       }
                     />
                   ))}
-                  {components.length === 0 && (
+                </Box>
+              )}
+               {!componentsLoading && components.length === 0 && (
                     <Box
                       textAlign="center"
                       sx={{
@@ -230,7 +254,7 @@ const ProjectDashboard = () => {
                       }}
                     >
                       <Typography variant="h6" color="text.secondary">
-                        No Project Components
+                        No Components
                       </Typography>
                       <Typography variant="body2" color="text.secondary">
                         Create your first component to get started
@@ -243,13 +267,13 @@ const ProjectDashboard = () => {
                           bgcolor: "#444",
                           "&:hover": { bgcolor: "#555" },
                         }}
+                        disabled={componentError}
+                        onClick={(e)=>{e.preventDefault(); setOpen("component")}}
                       >
                         Create New
                       </Button>
                     </Box>
                   )}
-                </Box>
-              )}
             </Paper>
           </Grid>
         </Grid>

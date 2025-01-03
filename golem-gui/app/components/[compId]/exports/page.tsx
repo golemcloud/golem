@@ -7,6 +7,7 @@ import { ComponentExport } from "@/types/api";
 import { useParams } from "next/navigation";
 import SecondaryHeader from "@/components/ui/secondary-header";
 import { Box } from "@mui/material";
+import ErrorBoundary from "@/components/erro-boundary";
 
 type Column<T> = {
   key: string;
@@ -33,7 +34,7 @@ export default function ExportsTable<T>({}: // data,
 // onRowClick,
 ExportsTableProps<T>) {
   const { compId } = useParams<{ compId: string }>();
-  const { components } = useComponents(compId, "latest");
+  const { components, error } = useComponents(compId, "latest");
   const [latestComponent] = components;
 
   const exports = useMemo(() => {
@@ -85,6 +86,7 @@ ExportsTableProps<T>) {
       <Box sx={{ display: { xs: "block", md: "none" } }}>
         <SecondaryHeader onClick={() => {}} variant="components" />
       </Box>
+      {error && <ErrorBoundary message={error}/>}
       <div className="mx-auto max-w-7xl px-6 lg:px-8">
         <div className="mx-auto max-w-2xl lg:max-w-none py-4">
           <GenericTable

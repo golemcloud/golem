@@ -26,6 +26,7 @@ import usePlugins, { useDeletePlugin } from "@/lib/hooks/use-plugin";
 import CreatePluginForm from "../../components/create-plugin";
 import CustomModal from "@/components/CustomModal";
 import { Plugin } from "@/types/api";
+import ErrorBoundary from "@/components/erro-boundary";
 
 export const PluginsPage = () => {
   const [open, setOpen] = useState(false);
@@ -50,17 +51,10 @@ export const PluginsPage = () => {
     );
   }
 
-  if (error)
-    return (
-      <Box
-        display="flex"
-        justifyContent="center"
-        alignItems="center"
-        height="100vh"
-      >
-        <Alert severity="error">Error: {error}</Alert>
-      </Box>
-    );
+  if (error){
+    return <ErrorBoundary message={error}/>
+  }
+  
 
   return (
     <Container maxWidth="lg">

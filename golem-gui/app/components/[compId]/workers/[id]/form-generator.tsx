@@ -18,7 +18,6 @@ import {
 import { getFormErrorMessage } from "@/lib/utils";
 import { Button2 as Button } from "@/components/ui/button";
 import {
-  Loader,
   ChevronsLeftRight,
   Triangle,
   AlignVerticalSpaceAround,

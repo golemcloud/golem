@@ -5,10 +5,11 @@ import FolderIcon from "@mui/icons-material/Folder";
 import { useWorkerFileContent } from "@/lib/hooks/use-worker";
 import { useParams } from "next/navigation";
 import SecondaryHeader from "@/components/ui/secondary-header";
+import ErrorBoundary from "@/components/erro-boundary";
 
 const NoFilesComponent = () => {
   const { compId } = useParams<{ compId: string }>();
-  const { data, isLoading } = useWorkerFileContent(
+  const { data, isLoading, error } = useWorkerFileContent(
     "test",
     compId,
     "file-service.wasm"
@@ -20,6 +21,7 @@ const NoFilesComponent = () => {
     <> <Box sx={{ display: { xs: "block", md: "none" } }}>
     <SecondaryHeader onClick={() => {}} variant="components" />
   </Box>
+  {error && <ErrorBoundary message={error}/>}  
     <div className="mx-auto max-w-7xl px-6 lg:px-8">
       <div className="mx-auto max-w-2xl lg:max-w-none py-4">
       <Paper

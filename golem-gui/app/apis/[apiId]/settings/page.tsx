@@ -4,6 +4,7 @@ import React from "react";
 import DangerZone from "@/components/settings";
 import { useParams, useSearchParams } from "next/navigation";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
+import ErrorBoundary from "@/components/erro-boundary";
 
 const ApiSettings = () => {
   const { apiId} = useParams<{apiId:string}>();
@@ -31,6 +32,7 @@ const ApiSettings = () => {
 
   return (
     <div>
+      {error && <ErrorBoundary message={error}/>}
       <DangerZone
         title="Danger Zone"
         description="Proceed with caution."

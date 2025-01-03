@@ -5,6 +5,7 @@ import { Typography, Paper, Alert, Box } from "@mui/material";
 import { useParams, useSearchParams } from "next/navigation";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 import { Loader } from "lucide-react";
+import ErrorBoundary from "@/components/erro-boundary";
 
 export default function Overview() {
   const { apiId } = useParams<{ apiId: string }>();
@@ -36,11 +37,7 @@ export default function Overview() {
           <Typography variant="h6" gutterBottom>
             Routes
           </Typography>
-          {(error || apiDefintionError) && (
-            <Box sx={{ display: "flex", justifyContent: "center" }}>
-              <Alert severity="error">{error || apiDefintionError}</Alert>
-            </Box>
-          )}
+          {error && <ErrorBoundary message={error}/>}
           {!error && !apiDefintionError && (
             <RoutePage apiId={apiId} limit={5} version={version} />
           )}
