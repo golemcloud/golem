@@ -50,9 +50,13 @@ export function PluginView() {
     }
 
     const handleDelete = () => {
-        // In a real application, you would call an API to delete the version
-        console.log(`Deleting version ${version} of plugin ${currentVersion.name}`)
-        navigate(`/plugins/${currentVersion.name}`)
+        API.deletePlugin(currentVersion.name, currentVersion.version).then(() => {
+            if ((plugin?.length || 0) > 1) {
+                navigate(`/plugins/${plugin![0].name}`)
+            } else {
+                navigate(`/plugins`)
+            }
+        }).catch(console.log);
     }
     return (
         <div className="container mx-auto py-10">
