@@ -4,7 +4,7 @@ import {ENDPOINT} from "@/service/endpoints.ts";
 import axios from "axios";
 import {Api} from "@/types/api.ts";
 import {fetch} from '@tauri-apps/plugin-http'
-import { toast } from "@/hooks/use-toast"
+import {toast} from "@/hooks/use-toast"
 
 
 const api = axios.create({
@@ -98,6 +98,15 @@ export class Service {
         return response;
     }
 
+    public updateComponent = async (componenetId: string, form: FormData) => {
+        // const headers = null
+        const response = await fetch(`http://localhost:9881/v1/components/${componenetId}/updates`, {
+            method: 'POST',
+            body: form
+        }).then(res => res.json())
+        return response;
+    }
+
     public findWorker = async (componentId: string, param = {"count": 100, "precise": true}) => {
         const r = await this.callApi(ENDPOINT.findWorker(componentId), 'POST', JSON.stringify(param));
         return r;
@@ -118,34 +127,34 @@ export class Service {
         return r;
     }
 
-    public getApiList =  async (): Promise<Api[]> => {
-      const r = await this.callApi(ENDPOINT.getApiList());
-      return r
-    } 
+    public getApiList = async (): Promise<Api[]> => {
+        const r = await this.callApi(ENDPOINT.getApiList());
+        return r
+    }
 
     public getApi = async (id: string): Promise<Api[]> => {
-      const r = await this.callApi(ENDPOINT.getApi(id));
-      return r
+        const r = await this.callApi(ENDPOINT.getApi(id));
+        return r
     }
 
     public createApi = async (payload: Api) => {
-      const r = await this.callApi(ENDPOINT.createApi(), "POST", JSON.stringify(payload));
-      return r
+        const r = await this.callApi(ENDPOINT.createApi(), "POST", JSON.stringify(payload));
+        return r
     }
 
     public deleteApi = async (id: string, version: string) => {
-      const r = await this.callApi(ENDPOINT.deleteApi(id, version), "DELETE");
-      return r
+        const r = await this.callApi(ENDPOINT.deleteApi(id, version), "DELETE");
+        return r
     }
 
     public putApi = async (id: string, version: string, payload: Api) => {
-      const r = await this.callApi(ENDPOINT.putApi(id, version), "PUT", JSON.stringify(payload));
-      return r
+        const r = await this.callApi(ENDPOINT.putApi(id, version), "PUT", JSON.stringify(payload));
+        return r
     }
 
     public postApi = async (payload: Api) => {
-      const r = await this.callApi(ENDPOINT.postApi(), "POST", JSON.stringify(payload));
-      return r
+        const r = await this.callApi(ENDPOINT.postApi(), "POST", JSON.stringify(payload));
+        return r
     }
 
     public getParticularWorker = async (componentId: string, workerName: string) => {
@@ -204,15 +213,15 @@ export class Service {
                 if (res.ok) {
                     console.log(res)
                     return res.json()
-                } else { 
+                } else {
                     let errorTitle = "Api is Failed check the api details"
-                    res.json().then(err => {  
+                    res.json().then(err => {
                         errorTitle = err?.golemError?.message || errorTitle
-                    })    
+                    })
                     toast({
                         title: errorTitle,
                         variant: "destructive",
-                      });   
+                    });
                     throw res;
                 }
 
@@ -220,7 +229,7 @@ export class Service {
                 toast({
                     title: "Api is Failed check the api details",
                     variant: "destructive",
-                  });
+                });
                 throw err
             })
             console.log("callApi", resp)

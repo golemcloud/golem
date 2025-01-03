@@ -1,0 +1,40 @@
+import WebSocket from '@tauri-apps/plugin-websocket'
+
+
+export class WSS {
+    private ws: WebSocket;
+
+    constructor(ws: WebSocket) {
+        this.ws = ws;
+    }
+
+    static async getConnection(url: string) {
+        return new WSS(await WebSocket.connect(url));
+    }
+
+
+    public send(data: any) {
+        this.ws.send(JSON.stringify(data)).then(() => {
+            console.log("Sent")
+        }).catch(console.error)
+    }
+
+    public close() {
+        this.ws.disconnect().then(() => {
+            console.log("Disconnected")
+        }).catch(console.error)
+    }
+
+    public onMessage(callback: (data: any) => void) {
+        this.ws.addListener((event) => {
+            const message = event.data;
+            try {
+                if (typeof message === "string") {
+                    callback(JSON.parse(message));
+                }
+            } catch (e) {
+                console.error("Failed to parse message", e);
+            }
+        });
+    }
+}
