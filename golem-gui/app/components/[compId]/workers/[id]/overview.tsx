@@ -91,7 +91,7 @@ const Overview = ({
     yearly: "",
   }
   const dataMap =
-    invokeMessages?.reduce<Record<string, Record<string, number>>>(
+  invokeMessages?.reduce<Record<string, Record<string, number>>>(
       (stats, message: InvocationStart["InvocationStart"]) => {
         const currentDate = new Date(message.timestamp);
         const fullDate = format(currentDate, "dd-MM-yyyy HH:mm");
@@ -114,22 +114,58 @@ const Overview = ({
         graphKeyMap["yearly"] = yearly;
         graphKeyMap["daily"] = daily;
 
-        stats[key] = stats[key] || {
+        if(graphKey === "live"){  
+        stats[`live_${key}`] = stats[`live_${key}`] || {
           name: message.function,
           yearly: yearly, // "Jan 2025"
           monthly: monthly,   // "January"
           daily: daily,   // "Jan 03"
           live: live,   
         };
-        stats[key][message.function] = (stats[key][message.function] || 0) + 1;
-        uniquefunctions.add(message.function);
+        stats[`live_${key}`][message.function] = (stats[`live_${key}`][message.function] || 0) + 1;
+      }
+      if(["live", "daily"].includes(graphKey)){  
+        stats[`daily_${daily}`] = stats[`daily_${daily}`] || {
+          name: message.function,
+          yearly: yearly, // "Jan 2025"
+          monthly: monthly,   // "January"
+          daily: daily,   // "Jan 03"
+          live: live,   
+        };
+        stats[`daily_${daily}`][message.function] = (stats[`daily_${daily}`][message.function] || 0) + 1;
 
+      }
+
+      if(["live", "daily", "monthly"].includes(graphKey)){  
+        stats[`monthly_${monthly}`] = stats[`monthly_${monthly}`] || {
+          name: message.function,
+          yearly: yearly, // "Jan 2025"
+          monthly: monthly,   // "January"
+          daily: daily,   // "Jan 03"
+          live: live,   
+        };
+        stats[`monthly_${monthly}`][message.function] = (stats[`monthly_${monthly}`][message.function] || 0) + 1;
+
+      }
+
+      if(["live", "daily", "monthly", "yearly"].includes(graphKey)){  
+        stats[`yearly_${yearly}`] = stats[`yearly_${yearly}`] || {
+          name: message.function,
+          yearly: yearly, // "Jan 2025"
+          monthly: monthly,   // "January"
+          daily: daily,   // "Jan 03"
+          live: live,   
+        };
+        stats[`yearly_${yearly}`][message.function] = (stats[`yearly_${yearly}`][message.function] || 0) + 1;
+
+      }  
+      uniquefunctions.add(message.function);
         return stats;
       },
       {}
     ) || {};
 
-  const data = Object.values(dataMap);
+  const data = Object.keys(dataMap).filter((key)=>key.includes(graphKey)).map((key)=>dataMap[key]);
   if (isLoading) {
     return <Typography>Loading...</Typography>;
   }
