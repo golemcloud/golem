@@ -162,7 +162,7 @@ export interface ApiDefinition {
   version: string;
   routes: ApiRoute[];
   draft: boolean;
-  createdAt?: string;
+  createdAt: string;
 }
 
 export type DeploymentApiDefinition = {
