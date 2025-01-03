@@ -195,7 +195,7 @@ const ProjectDashboard = () => {
               )}
               {!componentError && !componentsLoading && (
                 <Box className="grid w-full grid-cols-1 gap-3 lg:grid-cols-2 mt-2">
-                  {components.slice(0, 100).map((component) => (
+                  {components.slice(0, 8).map((component) => (
                     <ComponentCard
                       key={component.versionedComponentId.componentId}
                       name={component.componentName}
