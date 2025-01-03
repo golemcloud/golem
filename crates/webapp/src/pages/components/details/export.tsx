@@ -80,57 +80,70 @@ export default function Exports() {
     <ErrorBoundary>
       <div className="flex">
         <ComponentLeftNav />
-        <div className="p-6 max-w-7xl mx-auto space-y-6">
-          <div className="flex justify-between items-center">
-            <h1 className="text-2xl font-bold">Exports</h1>
-          </div>
-          <div className="flex items-center justify-between">
-            <div className="relative flex-1 max-w-xl">
-              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <Input placeholder="Search functions..." className="pl-9" />
+        <div className="flex-1 flex flex-col">
+          <header className="w-full border-b bg-background py-4">
+            <div className="mx-auto px-6 lg:px-8">
+              <div className="flex items-center gap-4">
+                <h1 className="text-xl font-semibold text-foreground truncate">
+                  {componentId}
+                </h1>
+              </div>
             </div>
-            <Select defaultValue="v0">
-              <SelectTrigger className="w-24">
-                <SelectValue placeholder="Version" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="v0">v0</SelectItem>
-                <SelectItem value="v1">v1</SelectItem>
-                <SelectItem value="v2">v2</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+          </header>
+          <div className="flex-1 p-8">
+            <div className="p-6 max-w-7xl mx-auto space-y-6">
+              <div className="flex justify-between items-center">
+                <h1 className="text-2xl font-bold">Exports</h1>
+              </div>
+              <div className="flex items-center justify-between">
+                <div className="relative flex-1 max-w-xl">
+                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input placeholder="Search functions..." className="pl-9" />
+                </div>
+                <Select defaultValue="v0">
+                  <SelectTrigger className="w-24">
+                    <SelectValue placeholder="Version" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="v0">v0</SelectItem>
+                    <SelectItem value="v1">v1</SelectItem>
+                    <SelectItem value="v2">v2</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
 
-          <div className="border rounded-lg">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-[250px]">Package</TableHead>
-                  <TableHead className="w-[200px]">Function</TableHead>
-                  <TableHead className="w-[300px]">Parameters</TableHead>
-                  <TableHead>Return Value</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {exports.functions &&
-                  exports.functions.map((fn, index) => (
-                    <TableRow key={index}>
-                      <TableCell className="font-mono text-sm">
-                        {exports.name}
-                      </TableCell>
-                      <TableCell className="font-mono text-sm">
-                        {fn.name}
-                      </TableCell>
-                      <TableCell className="font-mono text-sm">
-                        {convertJsonToFunctionStructure(fn.parameters)}
-                      </TableCell>
-                      <TableCell className="font-mono text-sm">
-                        {convertJsonToFunctionStructure(fn.results)}
-                      </TableCell>
+              <div className="border rounded-lg">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-[250px]">Package</TableHead>
+                      <TableHead className="w-[200px]">Function</TableHead>
+                      <TableHead className="w-[300px]">Parameters</TableHead>
+                      <TableHead>Return Value</TableHead>
                     </TableRow>
-                  ))}
-              </TableBody>
-            </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {exports.functions &&
+                      exports.functions.map((fn, index) => (
+                        <TableRow key={index}>
+                          <TableCell className="font-mono text-sm">
+                            {exports.name}
+                          </TableCell>
+                          <TableCell className="font-mono text-sm">
+                            {fn.name}
+                          </TableCell>
+                          <TableCell className="font-mono text-sm">
+                            {convertJsonToFunctionStructure(fn.parameters)}
+                          </TableCell>
+                          <TableCell className="font-mono text-sm">
+                            {convertJsonToFunctionStructure(fn.results)}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </div>
           </div>
         </div>
       </div>

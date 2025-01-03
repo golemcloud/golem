@@ -11,9 +11,6 @@ export const ENDPOINT = {
     findWorker: (componentId: string) => {
         return `/v1/components/${componentId}/workers/find`;
     },
-    getComponent: (id: string) => {
-        return `/v1/components/${id}/latest`;
-    },
     updateComponent: (id: string) => {
         return `/v1/components/${id}`;
     },
@@ -46,5 +43,14 @@ export const ENDPOINT = {
     },
     getParticularWorker: (componentId: string, workerName: string) => {
         return `/v1/components/${componentId}/workers/${workerName}`;
-    }
+    },
+    interruptWorker: (componentId: string, workerName: string) => {
+        return `/v1/components/${componentId}/workers/${workerName}/interrupt`;
+    },
+    resumeWorker: (componentId: string, workerName: string) => {
+        return `/v1/components/${componentId}/workers/${workerName}/resume`;
+    },
+    invokeWorker: (componentId: string, workerName: string, functionName: string) => {
+        return `/v1/components/${componentId}/workers/${workerName}/invoke-and-await?function=${functionName}`;
+    },
 };

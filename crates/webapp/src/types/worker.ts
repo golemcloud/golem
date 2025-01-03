@@ -5,7 +5,7 @@ export interface Worker {
     componentSize: number;
     componentVersion: number;
     createdAt: string;
-    env: any;
+    env: { [key: string]: string };
     lastError: any;
     ownedResources: any;
     pendingInvocationCount: number;

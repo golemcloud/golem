@@ -30,4 +30,11 @@ export function formatRelativeTime(dateString: string | number | Date) {
   return 'just now';
 }
 
+export const sanitizeInput = (input: string): string => {
+  return input
+    .replace(/\u201c|\u201d/g, '"') 
+    .replace(/'/g, '"'); 
+};
+
+
 

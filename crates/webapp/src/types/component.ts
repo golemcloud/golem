@@ -87,3 +87,9 @@ export interface Component {
     versionedComponentId?: VersionedComponentId;
 }
 
+export interface ComponentExportFunction {
+   name: string;
+   parameters: Parameter[]; 
+   results: Result[];
+}
+

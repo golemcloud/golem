@@ -20,6 +20,9 @@ import { Dashboard } from "@/pages/dashboard";
 import CreateWorker from "@/pages/workers/create";
 import WorkerDetails from "@/pages/workers/details";
 import ErrorBoundary from "@/components/errorBoundary";
+import WorkerEnvironments from "@/pages/workers/details/environments";
+import WorkerManage from "@/pages/workers/details/manage";
+import WorkerInvoke from "@/pages/workers/details/invoke";
 
 function App() {
   return (
@@ -60,6 +63,18 @@ function App() {
             <Route
               path="/components/:componentId/workers/:workerName"
               element={<WorkerDetails />}
+            />
+            <Route
+              path="/components/:componentId/workers/:workerName/environments"
+              element={<WorkerEnvironments />}
+            />
+            <Route
+              path="/components/:componentId/workers/:workerName/manage"
+              element={<WorkerManage />}
+            />
+            <Route
+              path="/components/:componentId/workers/:workerName/invoke"
+              element={<WorkerInvoke />}
             />
             <Route path="/apis" element={<APIs />} />
             <Route path="/apis/create" element={<CreateAPI />} />

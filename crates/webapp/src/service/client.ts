@@ -152,6 +152,22 @@ export class Service {
       const r = await this.callApi(ENDPOINT.getParticularWorker(componentId, workerName));
       return r
     }
+
+    public interruptWorker = async (componentId: string, workerName: string) => {
+      const r = await this.callApi(ENDPOINT.interruptWorker(componentId, workerName), "POST", JSON.stringify({}));
+      return r
+    }
+
+    public resumeWorker = async (componentId: string, workerName: string) => {
+      const r = await this.callApi(ENDPOINT.resumeWorker(componentId, workerName), "POST", JSON.stringify({}));
+      return r
+    }
+
+    public invokeWorkerAwait = async (componentId: string, workerName: string, functionName: string, payload: any) => {
+      const r = await this.callApi(ENDPOINT.invokeWorker(componentId, workerName, functionName), "POST", JSON.stringify(payload));
+      return r
+    }
+
     public getComponentByIdAsKey = async (): Promise<Record<string, Component>> => {
         const result: Record<string, Component> = {};
         const components = await this.getComponents();
@@ -186,6 +202,7 @@ export class Service {
                 headers: headers
             }).then(res => {
                 if (res.ok) {
+                    console.log(res)
                     return res.json()
                 } else { 
                     let errorTitle = "Api is Failed check the api details"
