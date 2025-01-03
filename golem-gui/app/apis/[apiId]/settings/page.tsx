@@ -34,8 +34,8 @@ const ApiSettings = () => {
     <div>
       {error && <ErrorBoundary message={error}/>}
       <DangerZone
-        title="Danger Zone"
-        description="Proceed with caution."
+        title="Api Settings"
+        description="Manage your API settings."
         actions={actions}
       />
     </div>

@@ -22,6 +22,7 @@ import CustomModal from "@/components/CustomModal";
 import ComponentCard from "../../components/component-card";
 import { calculateHoursDifference, calculateSizeInMB } from "@/lib/utils";
 import { NotepadText, Component, Globe, Bot } from "lucide-react";
+import { Button2 } from "@/components/ui/button";
 import ErrorBoundary from "@/components/erro-boundary";
 
 // working on overview page
@@ -86,6 +87,7 @@ const ProjectDashboard = () => {
         {error === componentError && <ErrorBoundary message={error} />}
 
         <Grid container spacing={3} sx={{ flexWrap: "wrap" }}>
+          {/* APIs Section */}
           <Grid size={{ xs: 12, md: 12, lg: 4 }}>
             <Paper
               elevation={3}
@@ -96,6 +98,7 @@ const ProjectDashboard = () => {
                 display: "flex",
                 flexDirection: "column",
               }}
+              className="border"
             >
               <Box className="flex justify-between">
                 <Typography variant="h5">APIs</Typography>
@@ -114,80 +117,63 @@ const ProjectDashboard = () => {
                   </Button>
                 )}
               </Box>
-              {error !== componentError && <ErrorBoundary message={error} />}
-              {!error && !isLoading && <Stack marginTop={2} sx={{ flex: 1, overflow: "hidden" }}>
-                {!isLoading &&
-                  uniquesApis.slice(0, 10).map((api) => (
-                    <React.Fragment key={api.id}>
-                      <Divider sx={{ bgcolor: "#555" }} />
-                      <Box
-                        key={api.id}
-                        padding={3}
-                        className="hover:bg-[#444] cursor-pointer"
-                        onClick={() =>
-                          router.push(
-                            `/apis/${api.id}/overview?version=${api.version}`
-                          )
-                        }
-                      >
-                        <Box display="flex" justifyContent="space-between">
-                          <Typography
-                            variant="body1"
-                            sx={{
-                              overflow: "hidden", // Ensures overflow content is hidden
-                              textOverflow: "ellipsis", // Adds an ellipsis when text overflows
-                              whiteSpace: "nowrap", // Prevents text wrapping to a new line
-                              maxWidth: "80%",
-                            }}
-                          >
-                            {api.id}
-                          </Typography>
-                          <Typography
-                            variant="body2"
-                            sx={{
-                              px: 1,
-                              border: "1px solid #555",
-                              borderRadius: 1,
-                            }}
-                          >
-                            {api.version}
-                          </Typography>
+              
+              {error && (
+                <Box sx={{ display: "flex", justifyContent: "center" }}>
+                  {error && <Alert severity="error">{error}</Alert>}
+                </Box>
+              )}
+              {uniquesApis?.length === 0 && (
+                <Box
+                  textAlign="center"
+                  className="border-dashed border rounded-md m-auto p-7"
+                >
+                  <Typography variant="h6" className="text-foreground">
+                    No APIs Available
+                  </Typography>
+                  <Typography variant="body2" className="text-muted-foreground">
+                    Create your first api to get started
+                  </Typography>
+                  <br />
+                  <Button2 variant="primary" size="md" startIcon={<AddIcon />} onClick={()=> setOpen("api")}>
+                    Create New
+                  </Button2>
+                </Box>
+              )}
+              {!error && !isLoading && uniquesApis?.length>0 && (
+                <Stack marginTop={2} sx={{ flex: 1, overflow: "hidden" }}>
+                  {!isLoading &&
+                    uniquesApis.slice(0, 10).map((api) => (
+                      <React.Fragment key={api.id}>
+                        <Divider sx={{ bgcolor: "#555" }} />
+                        <Box
+                          key={api.id}
+                          padding={3}
+                          className="hover:bg-[#444] cursor-pointer"
+                          onClick={() =>
+                            router.push(
+                              `/apis/${api.id}/overview?version=${api.version}`
+                            )
+                          }
+                        >
+                          <Box display="flex" justifyContent="space-between">
+                            <Typography variant="body1">{api.id}</Typography>
+                            <Typography
+                              variant="body2"
+                              sx={{
+                                px: 1,
+                                border: "1px solid #555",
+                                borderRadius: 1,
+                              }}
+                            >
+                              {api.version}
+                            </Typography>
+                          </Box>
                         </Box>
-                      </Box>
-                    </React.Fragment>
-                  ))}
-              </Stack>}
-              {!isLoading && uniquesApis.length === 0 && (
-                    <Box
-                      textAlign="center"
-                      sx={{
-                        borderRadius: 2,
-                        border: "2px dashed #444",
-                        py: 6,
-                        px: 2,
-                      }}
-                    >
-                      <Typography variant="h6" color="text.secondary">
-                        No Apis
-                      </Typography>
-                      <Typography variant="body2" color="text.secondary">
-                        Create your first Api to get started
-                      </Typography>
-                      <Button
-                        variant="contained"
-                        startIcon={<AddIcon />}
-                        sx={{
-                          mt: 2,
-                          bgcolor: "#444",
-                          "&:hover": { bgcolor: "#555" },
-                        }}
-                        disabled={error}
-                        onClick={(e)=>{e.preventDefault(); setOpen("api")}}
-                      >
-                        Create New
-                      </Button>
-                    </Box>
-                  )}
+                      </React.Fragment>
+                    ))}
+                </Stack>
+              )}
             </Paper>
           </Grid>
 
@@ -202,6 +188,7 @@ const ProjectDashboard = () => {
                 display: "flex",
                 flexDirection: "column",
               }}
+              className="border"
             >
               <Box className="flex justify-between">
                 <Typography variant="h5">Components</Typography>
@@ -223,7 +210,7 @@ const ProjectDashboard = () => {
               {error !== componentError && (
                 <ErrorBoundary message={componentError} />
               )}
-              {!componentsLoading && (
+              {!componentError && !componentsLoading && (
                 <Box className="grid w-full grid-cols-1 gap-3 lg:grid-cols-2 mt-2">
                   {!componentError && components.slice(0, 8).map((component) => (
                     <ComponentCard
@@ -243,42 +230,28 @@ const ProjectDashboard = () => {
                   ))}
                 </Box>
               )}
-               {!componentsLoading && components.length === 0 && (
-                    <Box
-                      textAlign="center"
-                      sx={{
-                        borderRadius: 2,
-                        border: "2px dashed #444",
-                        py: 6,
-                        px: 2,
-                      }}
-                    >
-                      <Typography variant="h6" color="text.secondary">
-                        No Components
-                      </Typography>
-                      <Typography variant="body2" color="text.secondary">
-                        Create your first component to get started
-                      </Typography>
-                      <Button
-                        variant="contained"
-                        startIcon={<AddIcon />}
-                        sx={{
-                          mt: 2,
-                          bgcolor: "#444",
-                          "&:hover": { bgcolor: "#555" },
-                        }}
-                        disabled={componentError}
-                        onClick={(e)=>{e.preventDefault(); setOpen("component")}}
-                      >
-                        Create New
-                      </Button>
-                    </Box>
-                  )}
+              {components.length === 0 && (
+                <Box
+                  textAlign="center"
+                  className="border-dashed border rounded-md m-auto p-16"
+                >
+                  <Typography variant="h6" className="text-foreground">
+                    No Project Components
+                  </Typography>
+                  <Typography variant="body2" className="text-muted-foreground">
+                    Create your first component to get started
+                  </Typography>
+                  <br />
+                  <Button2 variant="primary" size="md" startIcon={<AddIcon />} onClick={()=> setOpen("component")}>
+                    Create New
+                  </Button2>
+                </Box>
+              )}
             </Paper>
           </Grid>
         </Grid>
 
-        <CustomModal open={!!open} onClose={handleClose}>
+        <CustomModal open={!!open} onClose={handleClose} heading="Create a new Component">
           {open === "api" && <CreateAPI onCreation={handleClose} />}
           {open === "component" && (
             <CreateComponentForm mode="create" onSubmitSuccess={handleClose} />

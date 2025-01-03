@@ -68,15 +68,15 @@ const WorkerListWithDropdowns = () => {
           </Box>
 
           {/* Filters */}
-          <Stack direction="row" gap={7} mb={3}>
+          <Stack direction="row" gap={ 4 } mb={3}   sx={{ flexWrap: 'wrap' }}>
             <StatusFilter />
             <VersionFilter />
-            <Stack direction="row" gap={4}>
+         
               <CustomDatePickFilter label="Created After" searchKey={"workerAfter"}/>
               <CustomDatePickFilter label="Created Before" searchKey={"workerBefore"}/>
               {/* <DatePicker handleChange={handleChange}/> */}
               {/* <DatePicker handleChange={handleChange}/> */}
-            </Stack>
+         
           </Stack>
 
           {/* No Workers Found */}

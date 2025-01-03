@@ -111,6 +111,8 @@ interface MultiSelectProps
 
   /** Mode of selection: "single" or "multi". Defaults to "multi". */
   selectMode?: "single" | "multi";
+
+  buttonType?: {variant:"success" | "primary", size:"icon_sm" | "icon"};
 }
 
 export const MultiSelect = React.forwardRef<
@@ -130,6 +132,7 @@ export const MultiSelect = React.forwardRef<
       asChild = false,
       className,
       selectMode = "multi",
+      buttonType,
       ...props
     },
     ref
@@ -194,19 +197,18 @@ export const MultiSelect = React.forwardRef<
         modal={modalPopover}
       >
         <div className="flex">
-          <PopoverTrigger asChild className="min-w-36">
+          <PopoverTrigger asChild>
             <Button
-              variant="dropdown"
-              size="default"
+              variant={buttonType?.variant || "dropdown"}
+              size={buttonType?.size || "default"}
               ref={ref}
               {...props}
               onClick={handleTogglePopover}
               className={cn(
-                "flex w-full p-0 border min-h-10 h-auto items-center justify-between pl-3 rounded-l-full",
                 className
               )}
             >
-              <div className="flex justify-between items-center w-full">
+              <div className="flex justify-between items-center">
                 {selectedValues.length > 0 ? (
                   <div className="flex flex-wrap">
                     {selectedValues.slice(0, 1).map((value, index) => {
@@ -235,6 +237,8 @@ export const MultiSelect = React.forwardRef<
               </div>
             </Button>
           </PopoverTrigger>
+          
+          {!buttonType && 
           <div
             className={`${
               selectedValues.length >= 1
@@ -247,7 +251,7 @@ export const MultiSelect = React.forwardRef<
             }}
           >
             <XIcon size={16} />
-          </div>
+          </div>}
         </div>
 
         <PopoverContent

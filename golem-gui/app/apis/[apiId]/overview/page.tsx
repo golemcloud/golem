@@ -24,15 +24,13 @@ export default function Overview() {
       <>
         <Paper
           elevation={3}
-       
+         
           sx={{
             p: 3,
             mb: 3,
-            color: "text.primary",
-            border: 1,
-            borderColor: "divider",
             borderRadius: 2,
           }}
+          className="border"
         >
           <Typography variant="h6" gutterBottom>
             Routes
