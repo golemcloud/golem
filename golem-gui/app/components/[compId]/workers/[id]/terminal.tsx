@@ -4,7 +4,6 @@ import {
   List,
   Box,
   Divider,
-  Paper,
   Stack,
 } from "@mui/material";
 import { EventMessage, StdOutMessage } from "@/types/api";
@@ -13,7 +12,7 @@ export default function TerminalLogs({
   lastClearTimeStamp,
   messages,
 }: {
-  lastClearTimeStamp: Date | null;
+  lastClearTimeStamp?: Date | null;
   messages: Array<EventMessage>;
 }) {
   //TODO: we can make useCllaback and useMemo a custom hook. so that we can see this across all tabs.
