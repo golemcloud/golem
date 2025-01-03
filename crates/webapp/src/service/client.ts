@@ -5,6 +5,7 @@ import axios from "axios";
 import {Api} from "@/types/api.ts";
 import {fetch} from '@tauri-apps/plugin-http'
 import {toast} from "@/hooks/use-toast"
+import {Plugin} from "@/types";
 
 
 const api = axios.create({
@@ -138,13 +139,11 @@ export class Service {
     }
 
     public createApi = async (payload: Api) => {
-        const r = await this.callApi(ENDPOINT.createApi(), "POST", JSON.stringify(payload));
-        return r
+        return await this.callApi(ENDPOINT.createApi(), "POST", JSON.stringify(payload));
     }
 
     public deleteApi = async (id: string, version: string) => {
-        const r = await this.callApi(ENDPOINT.deleteApi(id, version), "DELETE");
-        return r
+        return await this.callApi(ENDPOINT.deleteApi(id, version), "DELETE");
     }
 
     public putApi = async (id: string, version: string, payload: Api) => {
@@ -158,8 +157,8 @@ export class Service {
     }
 
     public getParticularWorker = async (componentId: string, workerName: string) => {
-      const r = await this.callApi(ENDPOINT.getParticularWorker(componentId, workerName));
-      return r
+        const r = await this.callApi(ENDPOINT.getParticularWorker(componentId, workerName));
+        return r
     }
 
     public interruptWorker = async (componentId: string, workerName: string) => {
@@ -201,6 +200,13 @@ export class Service {
         return result;
     }
 
+    public getPlugins = async (): Promise<Plugin[]> => {
+        return await this.callApi(ENDPOINT.getPlugins());
+    }
+
+    public getPluginByName = async (name: string): Promise<Plugin[]> => {
+        return await this.callApi(ENDPOINT.getPluginName(name));
+    }
 
     private callApi =
         async (url: string, method: string = "GET", data: FormData | string | null = null,

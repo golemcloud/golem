@@ -13,7 +13,7 @@ export class WSS {
     }
 
 
-    public send(data: any) {
+    public send(data: never) {
         this.ws.send(JSON.stringify(data)).then(() => {
             console.log("Sent")
         }).catch(console.error)

@@ -53,4 +53,10 @@ export const ENDPOINT = {
     invokeWorker: (componentId: string, workerName: string, functionName: string) => {
         return `/v1/components/${componentId}/workers/${workerName}/invoke-and-await?function=${functionName}`;
     },
+    getPlugins: () => {
+        return "/v1/plugins";
+    },
+    getPluginName: (name: string) => {
+        return `/v1/plugins/${name}`;
+    },
 };

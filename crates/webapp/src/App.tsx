@@ -24,6 +24,7 @@ import WorkerEnvironments from "@/pages/workers/details/environments";
 import WorkerManage from "@/pages/workers/details/manage";
 import WorkerInvoke from "@/pages/workers/details/invoke";
 import CreatePlugin from "@/pages/plugin/create.tsx";
+import { PluginView } from "@/pages/plugin/view.tsx";
 
 function App() {
   return (
@@ -89,6 +90,15 @@ function App() {
             <Route path="/deployments" element={<Deployments />} />
             <Route path="/plugins" element={<PluginList />} />
             <Route path="/plugins/create" element={<CreatePlugin />} />
+            <Route path="/apis/:apiName/routes/new" element={<CreateRoute />} />
+            <Route path="/deployments" element={<Deployments />} />
+            <Route path="/plugins" element={<PluginList />} />
+            <Route path="/plugins/create" element={<CreatePlugin />} />
+            <Route path="/plugins/:pluginId" element={<PluginView />} />
+            <Route
+              path="/plugins/:pluginId/:version"
+              element={<PluginView />}
+            />
           </Routes>
         </div>
       </Router>
