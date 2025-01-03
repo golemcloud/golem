@@ -1,5 +1,6 @@
 "use client";
 import {
+  Box,
   Divider,
   InputLabel,
   MenuItem,
@@ -33,7 +34,7 @@ interface FormValues {
 export default function DeploymentCreationPage({
   addDeployment,
   apiId,
-  onSuccess
+  onSuccess,
 }: {
   onSuccess?: () => void;
   apiId?: string;
@@ -47,14 +48,19 @@ export default function DeploymentCreationPage({
   const { apiDefinitions: data, isLoading } = useApiDefinitions(apiId);
   const apiDefinitions = data.filter((api) => api.draft);
 
-  const { control, handleSubmit, watch, setValue, formState:{errors} } =
-    useForm<FormValues>({
-      defaultValues: {
-        domain: "",
-        subdomain: "",
-        definitions: [{ id: "", version: "" }] as KeyValue[],
-      },
-    });
+  const {
+    control,
+    handleSubmit,
+    watch,
+    setValue,
+    formState: { errors },
+  } = useForm<FormValues>({
+    defaultValues: {
+      domain: "",
+      subdomain: "",
+      definitions: [{ id: "", version: "" }] as KeyValue[],
+    },
+  });
 
   const definitions = watch("definitions");
   const onSubmit = async (formData: FormValues) => {
@@ -74,44 +80,44 @@ export default function DeploymentCreationPage({
     }
     const { error } = await addNewApiDeployment(newDeploy);
     setError(error || null);
-    if(error){
-      return toast.error(`Failed to deployed ${error}`)
+    if (error) {
+      return toast.error(`Failed to deployed ${error}`);
     }
-    toast.success("Sucessfully deployed.")
+    toast.success("Sucessfully deployed.");
     onSuccess?.();
   };
 
   return (
     <>
-      <Typography gutterBottom className="font-bold" variant="h3">
-        Deploy API
-      </Typography>
       <Typography gutterBottom>Deploy your API on Golem Cloud</Typography>
 
       <form onSubmit={handleSubmit(onSubmit)}>
-      <Stack className="w-full">
-          <InputLabel>Domain</InputLabel>
-          <Controller
-            name="domain"
-            control={control}
-            rules={{ required: "Domain is required." }}
-            render={({ field }) => (
-              <TextField {...field} />
-            )}
-          />
-          <Typography variant="caption" color="error">{getFormErrorMessage("domain", errors)}</Typography>
-          
+        <Stack gap={2} className="w-full">
+          <Stack>
+            <InputLabel>Domain</InputLabel>
+            <Controller
+              name="domain"
+              control={control}
+              rules={{ required: "Domain is required." }}
+              render={({ field }) => <TextField {...field} />}
+            />
 
-          <InputLabel>Subdomain</InputLabel>
-          <Controller
-            name="subdomain"
-            control={control}
-            rules={{ required: "Subdomain is required." }}
-            render={({ field }) => (
-              <TextField {...field} />
-            )}
-          />
-          <Typography variant="caption" color="error">{getFormErrorMessage("subdomain", errors)}</Typography>
+            <Typography variant="caption" color="error">
+              {getFormErrorMessage("domain", errors)}
+            </Typography>
+          </Stack>
+          <Stack>
+            <InputLabel>Subdomain</InputLabel>
+            <Controller
+              name="subdomain"
+              control={control}
+              rules={{ required: "Subdomain is required." }}
+              render={({ field }) => <TextField {...field} />}
+            />
+            <Typography variant="caption" color="error">
+              {getFormErrorMessage("subdomain", errors)}
+            </Typography>
+          </Stack>
         </Stack>
 
         <Typography gutterBottom className="font-bold" marginTop={2}>
@@ -246,7 +252,9 @@ export default function DeploymentCreationPage({
               );
             }}
           />
-          <Typography variant="caption" color="error">{getFormErrorMessage("definitions", errors)}</Typography>
+          <Typography variant="caption" color="error">
+            {getFormErrorMessage("definitions", errors)}
+          </Typography>
         </Stack>
         {error && <Typography className="text-red-500">{error}</Typography>}
         <Stack>

@@ -46,7 +46,7 @@ export function RouteList({
                 return (
                   <Card
                     key={`${apiDefintion.id}_${apiDefintion.version}_${route.method}_${route.path}`}
-                    className="px-4 py-6 flex hover:"
+                    className="px-4 py-6 flex border"
                     onClick={(e) => {
                       e.preventDefault();
                       setRoute(route);

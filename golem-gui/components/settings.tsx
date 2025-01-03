@@ -28,18 +28,18 @@ const DangerZone = ({ title, description, actions }: SettingProps) => {
       <Divider className="my-2 bg-border" />
 
       {/* Danger Zone Section */}
-      <div className="bg-white dark:bg-[#3B191D80] p-6 rounded-lg shadow-lg border border-red-500">
-        <h2 className="text-xl font-bold text-foreground mb-4">{title}</h2>
+      <div className="bg-white dark:bg-[#281619] p-6 rounded-lg shadow-lg border dark:border-[#6a1d25] border-[#f04444]">
+        <h2 className="text-lg font-bold text-foreground mb-2">Danger Zone</h2>
         <Divider className="my-2 bg-border" />
-        <p className="text-muted-foreground mb-4">{description}</p>
+        <p className="text-sm text-muted-foreground mb-4">Proceed with caution</p>
 
         {actions.map((action, index) => (
           <div key={index} className="flex justify-between items-center mb-4">
             <div>
-              <h3 className="text-lg font-semibold text-foreground">
+              <h3 className="text-md  text-foreground">
                 {action.title}
               </h3>
-              <p className="text-muted-foreground">{action.description}</p>
+              <p className="text-muted-foreground text-sm">{action.description}</p>
             </div>
             <Button
               variant="error"
