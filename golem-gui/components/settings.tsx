@@ -11,7 +11,8 @@ type SettingProps = {
         title: string;
         description: string;
         buttonText: string;
-        onClick: (e:any) => void;
+        disabled?: boolean
+        onClick: (e:React.MouseEvent<HTMLButtonElement>) => void;
     }[];
     };
 const DangerZone = ({ title, description, actions }: SettingProps) => {

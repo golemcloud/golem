@@ -45,7 +45,14 @@ const ApiInfoCard: React.FC<ApiInfoProps> = ({
           alignItems: "center",
         }}
       >
-        <Typography variant="subtitle1" fontWeight="bold">
+        <Typography variant="subtitle1" fontWeight="bold"
+        sx={{
+          overflow: "hidden", // Ensures overflow content is hidden
+          textOverflow: "ellipsis", // Adds an ellipsis when text overflows
+          whiteSpace: "nowrap", // Prevents text wrapping to a new line
+          maxWidth: "80%",
+        }}
+        >
           {name}
         </Typography>
         <Button2

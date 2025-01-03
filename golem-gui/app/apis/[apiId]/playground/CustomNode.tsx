@@ -15,16 +15,12 @@ import {
   getTriggerType,
 } from "@/lib/react-flow/utils";
 import DoneIcon from "@mui/icons-material/Done";
-import { Stack } from "@mui/material";
+import { Box, Paper, Stack, Typography, useTheme } from "@mui/material";
 
 function CustomNode({ id, data }: FlowNode) {
-  const {
-    selectedNode,
-    setSelectedNode,
-    errorNode,
-    synced,
-    setTrigger,
-  } = useStore();
+  const { selectedNode, setSelectedNode, errorNode, synced, setTrigger } =
+    useStore();
+  const theme = useTheme();
   const type = data?.type;
   const isEmptyNode = !!data?.type?.includes("empty");
   const specialNodeCheck = ["start", "end"].includes(type);
@@ -53,117 +49,140 @@ function CustomNode({ id, data }: FlowNode) {
   }
 
   return (
-    <>
+    <Paper
+      elevation={3}
+      color="transparent"
+      className="dark:bg-[#0a0a0a] bg-white dark:text-white"
+      sx={{
+        border: `2px solid ${
+          id === selectedNode || isEmptyNode
+            ? theme.palette.primary.main
+            : theme.palette.divider
+        }`,
+        opacity: data.isLayouted ? 1 : 0.7,
+        borderStyle: isEmptyNode ? "dashed" : "solid",
+        width: "100%",
+        height: "100%",
+        borderRadius: type === "start" ? "50%" : 2,
+      }}
+      onClick={handleNodeClick}
+    >
       {!specialNodeCheck && (
-        <div
-          className={`flex shadow-md rounded-md bg-white border-2 w-full h-full ${
-            id === selectedNode ? "border-orange-500" : "border-stone-400"
-          }`}
-          onClick={handleNodeClick}
-          style={{
-            opacity: data.isLayouted ? 1 : 0,
-            borderStyle: isEmptyNode ? "dashed" : "",
-            borderColor: errorNode == id ? "red" : "",
-          }}
+        <Box
+          display="flex"
+          flexDirection="column"
+          justifyContent="center"
+          sx={{ height: "100%" }}
         >
           {isEmptyNode && (
-            <div
-              className="p-2 flex-1 flex flex-col items-center justify-center"
+            <Box
+              display="flex"
+              flexDirection="column"
+              alignItems="center"
+              justifyContent="center"
               onClick={(e) => {
                 e.preventDefault();
                 setTrigger({ type: triggerType, operation: "create" });
               }}
             >
-              <GoPlus className="w-8 h-8 text-gray-600 font-bold p-0" />
-              {selectedNode === id && (
-                <div className="text-gray-600 font-bold text-center">
-                  {data.label || "Create New"}
-                </div>
-              )}
-            </div>
+              <GoPlus size={32} style={{ marginBottom: theme.spacing(1) }} />
+              <Typography variant="body2">
+                {data.label || "Create New"}
+              </Typography>
+            </Box>
           )}
           {errorNode === id && (
-            <BiSolidError className="size-16  text-red-500 absolute right-[-40px] top-[-40px]" />
+            <BiSolidError
+              size={24}
+              color={theme.palette.error.main}
+              style={{
+                position: "absolute",
+                right: -32,
+                top: -32,
+              }}
+            />
           )}
           {!isEmptyNode && (
-            <div className="container p-2 flex-1 flex flex-row items-start justify-between gap-2 flex-wrap">
-              {Icon && <Icon />}
-              {/*TODO: Refactor this with valid styles*/}
-              <div className="flex-1 flex-col flex-wrap truncate">
-                <div className="text-lg font-bold truncate">{data?.name}</div>
-                <Stack
-                  direction={"row"}
-                  justifyContent={"space-between"}
-                  alignItems={"center"}
-                >
-                  <div className="text-gray-500 truncate">
-                    {type}
-                    {getVersion(data)}
-                  </div>
-                </Stack>
-                {draft && (
-                  <Stack direction={"row"} alignItems={"center"}>
-                    <span className="border text-sm border-black px-2  ">
-                      {draft}
-                    </span>
-                    {draft === "Draft" && <DoneIcon />}
+            <Box
+              p={2}
+              display="flex"
+              flexDirection="row"
+              justifyContent={"space-between"}
+            >
+              <Stack direction="row" gap={2} overflow="hidden">
+                {Icon && <Icon className="mt-2" />}
+                <Box overflow="hidden">
+                  <Typography variant="h6" noWrap>
+                    {data?.name}
+                  </Typography>
+                  <Stack
+                    direction="row"
+                    justifyContent="space-between"
+                    alignItems="center"
+                  >
+                    <Typography variant="body2" noWrap>
+                      {type}
+                      {getVersion(data)}
+                    </Typography>
                   </Stack>
-                )}
-              </div>
-              <div>
-                {type !== "api_start" && (
-                  <NodeMenu data={data} id={id} triggerType={triggerType} />
-                )}
-              </div>
-            </div>
+                  {draft && (
+                    <Stack direction="row" alignItems="center" gap={1}>
+                      <Typography
+                        variant="caption"
+                        sx={{
+                          border: `1px solid`,
+                          px: 1,
+                        }}
+                      >
+                        {draft}
+                      </Typography>
+                      {draft === "Draft" && <DoneIcon color="primary" />}
+                    </Stack>
+                  )}
+                </Box>
+              </Stack>
+              {type !== "api_start" && (
+                <NodeMenu data={data} id={id} triggerType={triggerType} />
+              )}
+            </Box>
           )}
 
           <Handle type="target" position={Position.Top} className="w-32" />
           <Handle type="source" position={Position.Bottom} className="w-32" />
-        </div>
+        </Box>
       )}
 
       {specialNodeCheck && (
-        <div
-          style={{
-            opacity: data.isLayouted ? 1 : 0,
-          }}
-          onClick={(e) => {
-            e.stopPropagation();
-            if (!synced) {
-              toast(
-                "Please save the previous step or wait while properties sync with the workflow."
-              );
-              return;
-            }
-            if (specialNodeCheck || id?.includes("end")) {
-              return;
-            }
-            setSelectedNode(id);
-          }}
-        >
-          <div className={`flex flex-col items-center justify-center`}>
-            {type === "start" && (
-              <MdNotStarted className="size-20 bg-orange-500 text-white rounded-full font-bold mb-2" />
-            )}
-            {type === "end" && (
-              <GoSquareFill className="size-20 bg-orange-500 text-white rounded-full font-bold mb-2" />
-            )}
-            {"start" === type && (
-              <Handle
-                type="source"
-                position={Position.Bottom}
-                className="w-32"
-              />
-            )}
-
-            {"end" === type && (
-              <Handle type="target" position={Position.Top} className="w-32" />
-            )}
-          </div>
-        </div>
+        <>
+          {type === "start" && (
+            <MdNotStarted
+              style={{
+                backgroundColor: theme.palette.primary.main,
+                color: theme.palette.common.white,
+                borderRadius: "50%",
+              }}
+              className="w-full h-full"
+            />
+          )}
+          {type === "end" && (
+            <GoSquareFill
+              size={24}
+              style={{
+                backgroundColor: theme.palette.primary.main,
+                color: theme.palette.common.white,
+                borderRadius: "50%",
+              }}
+            />
+          )}
+          {"start" === type && (
+            <Handle type="source" position={Position.Bottom} className="w-32" />
+          )}
+          {"end" === type && (
+            <Handle type="target" position={Position.Top} className="w-32" />
+          )}
+        </>
       )}
-    </>
+    </Paper>
   );
 }
 

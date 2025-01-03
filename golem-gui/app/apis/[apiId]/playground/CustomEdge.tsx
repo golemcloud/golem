@@ -127,7 +127,7 @@ const CustomEdge: React.FC<CustomEdgeProps> = ({
             }}
           >
             <PlusIcon
-              className={`size-7 hover:text-black rounded text-sm bg-white border text-gray-700 ${
+              className={`size-7 rounded text-sm bg-white dark:bg-[#0a0a0a] border text-gray-700 dark:text-white ${
                 selectedEdge === id
                   ? "border-2 border-orange-500"
                   : "border-gray-700"

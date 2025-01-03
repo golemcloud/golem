@@ -103,6 +103,7 @@ function useApiDefinitions(defintionId?: string, version?: string | null) {
       const { data, error, success } = getApiDefintion(id, version);
       const noOfVersions = apiDefinitions.length;
       if (!success || !data) {
+        toast.error(error);
         return {
           success,
           error,

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import {
   Alert,
   Box,
@@ -32,10 +32,31 @@ const ComponentsPage = () => {
     router.push(`/apis/${apiId}/overview`);
   };
 
-  // Filter APIs based on search query
-  const filteredApis = apiDefinitions?.filter((api: ApiDefinition) =>
-    api.id.toLowerCase().includes(searchQuery.toLowerCase())
+  const checkForMatch = useCallback(
+    (api: ApiDefinition) => {
+      if (!searchQuery || searchQuery?.length <= 2) {
+        return true;
+      }
+
+      return api.id.toLowerCase().includes(searchQuery.toLowerCase());
+    },
+    [searchQuery]
   );
+
+  const finalApis = useMemo(() => {
+    return Object.values(
+      apiDefinitions?.reduce<Record<string, ApiDefinition>>(
+        (obj, api: ApiDefinition) => {
+          obj[api.id] = api;
+          return obj;
+        },
+        {}
+      ) || {}
+    ).sort(
+      (a, b) =>
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+  }, [apiDefinitions]).filter(checkForMatch);
 
   return (
     <main className="mx-auto max-w-7xl px-6 lg:px-8 min-h-[calc(100svh-84px)] py-4 flex h-full w-full flex-1 flex-col">
@@ -79,7 +100,7 @@ const ComponentsPage = () => {
               </Button2>
             </Box>
 
-            {filteredApis.length === 0 ? (
+            {finalApis.length === 0 ? (
               <Box
                 sx={{
                   color: "#aaa",
@@ -115,7 +136,7 @@ const ComponentsPage = () => {
             ) : (
               <Box className="grid w-full grid-cols-1 gap-3 lg:grid-cols-2 xl:grid-cols-3  mt-2">
                 {!isLoading &&
-                  filteredApis.map((api: ApiDefinition) => (
+                  finalApis.map((api: ApiDefinition) => (
                     <ApiInfoCard
                       key={api.id}
                       name={api.id}
