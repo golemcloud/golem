@@ -234,6 +234,7 @@ const ComponentsPage = () => {
                 page={currentPage}
                 onChange={(_, value) => setCurrentPage(value)}
                 color="primary"
+                className="pagination"
               />
             </Box>
             {/* Modal for Creating New API/Component */}

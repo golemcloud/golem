@@ -3,17 +3,13 @@ import { Activity, Gauge, Cpu, Clock } from "lucide-react";
 import { Box, Button, Grid2 as Grid, Paper, Typography } from "@mui/material";
 import React, { useMemo } from "react";
 import { calculateHoursDifference, calculateSizeInMB } from "@/lib/utils";
-import GenericCard from "@/components/ui/generic-card";
 import { format } from "date-fns";
 
 import {
   BarChart,
   Bar,
   XAxis,
-  YAxis,
-  CartesianGrid,
   Tooltip,
-  Legend,
   ResponsiveContainer,
 } from "recharts";
 import TerminalLogs from "./terminal";

@@ -141,3 +141,29 @@ body {
     background-color: white;
   }
 }
+
+/* Dark Mode Styles */
+.dark .pagination .MuiPaginationItem-root {
+  @apply bg-gray-800 text-gray-200 hover:bg-gray-700 hover:text-white;
+}
+
+.dark .pagination .Mui-selected {
+  @apply bg-blue-600 text-white;
+}
+
+.dark .pagination .MuiPaginationItem-icon {
+  @apply text-gray-200;
+}
+
+/* Light Mode Styles (default) */
+.pagination .MuiPaginationItem-root {
+  @apply bg-white text-gray-800 hover:bg-gray-100 hover:text-gray-900;
+}
+
+.pagination .Mui-selected {
+  @apply bg-blue-500 text-white;
+}
+
+.pagination .MuiPaginationItem-icon {
+  @apply text-gray-800;
+}
