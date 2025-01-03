@@ -1,3 +1,4 @@
+import CustomModal from "@/components/CustomModal";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -32,6 +33,7 @@ export function ApiDropdown({ dropdowns }: ApiDropdownProps) {
   const router = useRouter();
 
   return (
+    <>
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <ArrowDropDownIcon />
@@ -60,7 +62,14 @@ export function ApiDropdown({ dropdowns }: ApiDropdownProps) {
         ))}
       </DropdownMenuContent>
     </DropdownMenu>
-    
+
+    {/* <CustomModal open={!!open} onClose={handleClose}>
+    {open === "api" && <CreateAPI onCreation={handleClose} />}
+    {open === "component" && (
+      <CreateComponentForm mode="create" onSubmitSuccess={handleClose} />
+    )}
+    </CustomModal> */}
+  </>
   );
 
 }

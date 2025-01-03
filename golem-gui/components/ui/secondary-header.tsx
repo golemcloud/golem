@@ -29,7 +29,6 @@ import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 import { ApiDropdown } from "@/app/apis/[apiId]/api-dropdown";
 import { VersionFilter } from "@/app/apis/[apiId]/apis-filter";
 
-
 type secondaryHeaderProps = {
   onClick: () => void;
   variant: string;
@@ -126,6 +125,12 @@ export default function SecondaryHeader({
       },
     ];
   }
+
+  const dropdowns =[
+    { heading:'New Route', onClick:()=>router.push(`/apis/${apiId}/new-route`)},
+  ]
+
+
   useEffect(() => {
     const handleResize = () => {
       const screenWidth = window.innerWidth;
@@ -142,7 +147,6 @@ export default function SecondaryHeader({
     { route: `/components/${compId}/settings?activeTab=1`, value: "info" },
     { route: `/components/${compId}/settings?activeTab=2`, value: "update" },
   ];
-
 
   const toggleDrawer = (open: boolean) => () => {
     setDrawerOpen(open);
@@ -162,57 +166,31 @@ export default function SecondaryHeader({
         </Box>
 
         {variant === "apis" && apiTab != "playground" && (
-          <>
+          <Box className="flex gap-3 align-middle">
             <Typography variant="body2" sx={{ fontWeight: "bold" }}>
               {ApiName}
             </Typography>
-            <Select
-              name="version"
-              variant="outlined"
-              className="w-32 ml-2"
-              value={apiDefinition?.version}
-              onChange={(e) => {
-                if (
-                  apiDefinition &&
-                  e.target.value !== apiDefinition?.version
-                ) {
-                  router.push(
-                    `/apis/${apiId}/${tab}?version=${e.target.value}`
-                  );
-                }
-              }}
-            >
-              {versions?.map((version: string) => (
-                <MenuItem key={version} value={version}>
-                  {version}
-                </MenuItem>
-              ))}
-            </Select>
-          </>
+            <VersionFilter />
+          </Box>
         )}
 
         {variant === "apis" && apiTab != "playground" && (
           <>
-          <Button type="button" className="ml-auto" onClick={onClick}>
-            New Version
-          </Button>
+            <Button type="button" className="ml-auto" onClick={onClick}>
+              New Version
+            </Button>
             <Box className="py-1 px-2 border rounded-md hover:bg-[#222] cursor-pointer">
-            {/* <ApiDropdown 
-  dropdowns={[
-    { heading: "Create", list: [routeL'New Route', 'New Version'] },
-    { heading: "Actions", list: ['Deploy API', 'Download API'] },
-    { heading: "Delete", list: ['Delete All Routes', 'Delete Version','Delete All Versions'] },
-  ]} 
-/> */}
-
-          </Box>
+              {/* <ApiDropdown 
+                dropdowns={[
+                  { heading: "Create", list: [routeL'New Route', 'New Version'] },
+                  { heading: "Actions", list: ['Deploy API', 'Download API'] },
+                  { heading: "Delete", list: ['Delete All Routes', 'Delete Version','Delete All Versions'] },
+                ]} 
+              /> */}
+            </Box>
           </>
-        {variant === "apis" && apiTab != "playground" && <VersionFilter />}
-        {variant === "apis" && apiTab != "playground" && (
-          <Button type="button" className="ml-auto" onClick={onClick}>
-            New Version
-          </Button>
         )}
+
         {pathname === `/components/${compId}/overview` && (
           <Box sx={{ marginLeft: "auto", display: "flex", gap: 2 }}>
             <Button2
