@@ -1,17 +1,21 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import ErrorBoundary from "@/components/errorBoundary";
 import WorkerLeftNav from "./leftNav";
 import { API } from "@/service";
-import { Worker } from "@/types/worker.ts";
-import { useEffect, useState } from "react";
+import { Invocation, Terminal, Worker } from "@/types/worker.ts";
+import { useEffect, useState, useRef } from "react";
 import { useParams } from "react-router-dom";
 import { Activity, Clock, Cog } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { InvocationsChart } from "./widgets/invocationCharts";
 import { formatRelativeTime } from "@/lib/utils";
+import { WSS } from "@/service/wss";
 
 export default function WorkerDetails() {
   const { componentId, workerName } = useParams();
   const [workerDetails, setWorkerDetails] = useState({} as Worker);
+  const wsRef = useRef<WSS | null>(null);
+  const [messages, setMessages] = useState<any[]>([]);
 
   useEffect(() => {
     if (componentId && workerName) {
@@ -20,6 +24,55 @@ export default function WorkerDetails() {
       });
     }
   }, [componentId, workerName]);
+
+  useEffect(() => {
+    const initWebSocket = async () => {
+      try {
+        const ws = await WSS.getConnection(
+          `ws://localhost:9881/v1/components/${componentId}/workers/${workerName}/connect`
+        );
+        wsRef.current = ws;
+
+        ws.onMessage((data) => {
+          console.log("Received message:", data);
+          setMessages((prev) => [...prev, data]); // Update messages state
+        });
+
+        console.log("WebSocket connected");
+      } catch (error) {
+        console.error("Failed to connect WebSocket:", error);
+      }
+    };
+
+    initWebSocket();
+
+    return () => {
+      if (wsRef.current) {
+        wsRef.current.close();
+        console.log("WebSocket disconnected");
+      }
+    };
+  }, []);
+
+  const invocationData = [] as Invocation[];
+  const terminal = [] as Terminal[];
+  messages.forEach((message) => {
+    const invocationStart = message["InvocationStart"];
+    const stdOut = message["StdOut"];
+    if (invocationStart)
+      invocationData.push({
+        timestamp: invocationStart.timestamp,
+        function: invocationStart.function,
+      });
+    else if (stdOut) {
+      terminal.push({
+        timestamp: stdOut.timestamp,
+        message: String.fromCharCode(...stdOut.bytes),
+      });
+    }
+  });
+
+  console.log(invocationData, "messages", terminal);
 
   return (
     <ErrorBoundary>
@@ -100,8 +153,12 @@ export default function WorkerDetails() {
                 <CardTitle>Invocations</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="h-[200px] w-full">
-                  <InvocationsChart />
+                <div className="w-full">
+                  {invocationData.length > 0 ? (
+                    <InvocationsChart data={invocationData} />
+                  ) : (
+                    <>No messages</>
+                  )}
                 </div>
               </CardContent>
             </Card>
@@ -112,16 +169,15 @@ export default function WorkerDetails() {
               </CardHeader>
               <CardContent>
                 <div className="bg-background border rounded-md p-4 font-mono text-sm space-y-2">
-                  <div className="border-b">
-                    Initializing cart for user fgfgfg
-                  </div>
-                  <div className="border-b">
-                    Initializing cart for user fgfgfg
-                  </div>
-                  <div className="border-b">
-                    Initializing cart for user fgfgfg
-                  </div>
-                  <div className="border-b">Initializing cart for user</div>
+                  {terminal.length > 0 ? (
+                    terminal.map((message) => (
+                      <div key={message.timestamp} className="border-b">
+                        {message.message}
+                      </div>
+                    ))
+                  ) : (
+                    <>No messages</>
+                  )}
                 </div>
               </CardContent>
             </Card>

@@ -159,7 +159,7 @@ export default function WorkerInvoke() {
             </h1>
           </header>
 
-          <div className="p-10 space-y-6 max-w-7xl mx-auto overflow-scroll h-[78vh] min-w-[50%]">
+          <div className="p-10 space-y-6 max-w-7xl mx-auto overflow-scroll h-[90vh] min-w-[50%]">
             <main className="flex-1 overflow-y-auto p-6 space-y-6">
               <SectionCard
                 title="Preview"

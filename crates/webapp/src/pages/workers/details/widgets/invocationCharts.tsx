@@ -1,48 +1,87 @@
-import {
-  Bar,
-  BarChart,
-  ResponsiveContainer,
-  XAxis,
-  YAxis,
-  Tooltip,
-} from "recharts";
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
+import { ChartContainer, ChartTooltip } from "@/components/ui/chart";
+import { Invocation } from "@/types/worker";
 
-const invocationData = [
-  { time: "23:00", value: 80 },
-  { time: "01:00", value: 0 },
-  { time: "03:00", value: 0 },
-  { time: "05:00", value: 0 },
-  { time: "07:00", value: 0 },
-  { time: "09:00", value: 0 },
-  { time: "11:00", value: 0 },
-  { time: "13:00", value: 0 },
-  { time: "15:00", value: 0 },
-  { time: "17:00", value: 0 },
-  { time: "19:00", value: 0 },
-  { time: "21:00", value: 0 },
-];
+const processData = (data: Invocation[]) => {
+  return data.reduce((acc, curr) => {
+    const date = new Date(curr.timestamp);
+    const dateKey = date.toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+    });
+    const functionName = curr.function.split(".")[1].replace(/[{}]/g, "");
 
-export function InvocationsChart() {
+    const existingDate = acc.find((item) => item.date === dateKey);
+    if (existingDate) {
+      existingDate[functionName] = (existingDate[functionName] || 0) + 1;
+    } else {
+      acc.push({
+        date: dateKey,
+        [functionName]: 1,
+      });
+    }
+    return acc;
+  }, [] as any[]);
+};
+
+export function InvocationsChart({ data = [] as Invocation[] }) {
+  const chartData = processData(data);
+
   return (
-    <ResponsiveContainer width="100%" height={200}>
-      <BarChart data={invocationData}>
-        <XAxis
-          dataKey="time"
-          stroke="#888888"
-          fontSize={12}
-          tickLine={false}
-          axisLine={false}
+    <ChartContainer
+      config={{
+        "initialize-cart": {
+          label: "Initialize Cart",
+          color: "hsl(var(--success))",
+        },
+        "add-item": {
+          label: "Add Item",
+          color: "hsl(var(--primary))",
+        },
+      }}
+      className="h-[400px]"
+    >
+      <BarChart data={chartData}>
+        <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+        <XAxis dataKey="date" className="text-muted-foreground" />
+        <YAxis className="text-muted-foreground" />
+        <ChartTooltip
+          content={({ active, payload }) => {
+            if (active && payload?.length) {
+              return (
+                <div className="rounded-lg border bg-background p-2 shadow-sm">
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="flex flex-col">
+                      <span className="text-[0.70rem] uppercase text-muted-foreground">
+                        Date
+                      </span>
+                      <span className="font-bold">
+                        {payload[0].payload.date}
+                      </span>
+                    </div>
+                    {payload.map((entry) => (
+                      <div key={entry.name} className="flex flex-col">
+                        <span className="text-[0.70rem] uppercase text-muted-foreground">
+                          {entry.name}
+                        </span>
+                        <span className="font-bold">{entry.value}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            }
+            return null;
+          }}
         />
-        <YAxis
-          stroke="#888888"
-          fontSize={12}
-          tickLine={false}
-          axisLine={false}
-          tickFormatter={(value) => `${value}`}
+        <Bar
+          dataKey="initialize-cart"
+          fill="var(--success)"
+          radius={[4, 4, 0, 0]}
         />
-        <Tooltip />
-        <Bar dataKey="value" fill="hsl(var(--primary))" radius={[4, 4, 0, 0]} />
+        <Bar dataKey="add-item" fill="var(--primary)" radius={[4, 4, 0, 0]} />
       </BarChart>
-    </ResponsiveContainer>
+    </ChartContainer>
   );
 }

@@ -25,4 +25,14 @@ export interface WorkerStatus {
     Suspended?: number;
     Failed?: number;
 }
+
+export interface Invocation {
+    timestamp: string;
+    function: string;
+}
+
+export interface Terminal {
+    timestamp: string;
+    message: string;
+}
   

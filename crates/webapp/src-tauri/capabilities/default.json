@@ -8,7 +8,18 @@
     "opener:default",
     {
       "identifier": "http:default",
-      "allow": [{ "url": "http://localhost:9881" }, { "url": "http://localhost:1420" }],
+      "allow": [
+        { "url": "http://localhost:9881" },
+        { "url": "http://localhost:1420" }
+      ],
+      "deny": []
+    },
+    {
+      "identifier": "websocket:default",
+      "allow": [
+        { "url": "http://localhost:9881" },
+        { "url": "http://localhost:1420" }
+      ],
       "deny": []
     }
   ]
