@@ -44,6 +44,7 @@
     "react-dom": "^18.3.1",
     "react-dropzone": "^14.2.3",
     "react-hook-form": "^7.54.2",
+    "react-json-view": "^1.21.3",
     "react-router-dom": "^6.22.3",
     "recharts": "^2.15.0",
     "shadcn": "^2.1.8",
