@@ -28,6 +28,11 @@ import PlayForWorkIcon from "@mui/icons-material/PlayForWork";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 import { ApiDropdown } from "@/app/apis/[apiId]/api-dropdown";
 import { VersionFilter } from "@/app/apis/[apiId]/apis-filter";
+import { set } from "date-fns";
+import CustomModal from "../CustomModal";
+import CreateNewApiVersion from "../create-api-new-version";
+import DeploymentCreationPage from "../deployment-creation";
+import useApiDeployments from "@/lib/hooks/use-api-deployments";
 
 type secondaryHeaderProps = {
   onClick: () => void;
@@ -51,7 +56,7 @@ export default function SecondaryHeader({
   const params = useSearchParams();
   const version = params.get("version");
 
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState<string | null>(null);
 
   const tab = useMemo(() => {
     const parts = pathname?.split("/") || [];
@@ -126,10 +131,47 @@ export default function SecondaryHeader({
     ];
   }
 
-  const dropdowns =[
-    { heading:'New Route', onClick:()=>router.push(`/apis/${apiId}/new-route`)},
-  ]
+  const { apiDeployments, addApiDeployment } = useApiDeployments(apiId);
 
+  const dropdowns = [
+    {
+      heading: "Create",
+      list: [
+        {
+          label: "New Route",
+          onClick: () => router.push(`/apis/${apiId}/new-route`),
+        },
+        { label: "New Version", onClick: () => setOpen("newVersion") },
+      ],
+    },
+    {
+      heading: "Actions",
+      list: [
+        { label: "Deploy API", onClick: () => setOpen("deploy-api") },
+        {
+          label: "Download API",
+          onClick: () => router.push(`/apis/${apiId}/download`),
+        },
+      ],
+    },
+    {
+      heading: "Delete",
+      list: [
+        {
+          label: "Delete All Routes",
+          onClick: () => router.push(`/apis/${apiId}/delete-routes`),
+        },
+        {
+          label: "Delete Version",
+          onClick: () => router.push(`/apis/${apiId}/delete-version`),
+        },
+        {
+          label: "Delete All Versions",
+          onClick: () => router.push(`/apis/${apiId}/delete-all-versions`),
+        },
+      ],
+    },
+  ];
 
   useEffect(() => {
     const handleResize = () => {
@@ -175,20 +217,9 @@ export default function SecondaryHeader({
         )}
 
         {variant === "apis" && apiTab != "playground" && (
-          <>
-            <Button type="button" className="ml-auto" onClick={onClick}>
-              New Version
-            </Button>
-            <Box className="py-1 px-2 border rounded-md hover:bg-[#222] cursor-pointer">
-              {/* <ApiDropdown 
-                dropdowns={[
-                  { heading: "Create", list: [routeL'New Route', 'New Version'] },
-                  { heading: "Actions", list: ['Deploy API', 'Download API'] },
-                  { heading: "Delete", list: ['Delete All Routes', 'Delete Version','Delete All Versions'] },
-                ]} 
-              /> */}
-            </Box>
-          </>
+          <Box className="py-1 px-2 border rounded-md hover:bg-[#222] cursor-pointer">
+            <ApiDropdown dropdowns={dropdowns} />
+          </Box>
         )}
 
         {pathname === `/components/${compId}/overview` && (
@@ -307,6 +338,26 @@ export default function SecondaryHeader({
           </Link>
         )}
       </Drawer>
+      <CustomModal
+        open={!!open}
+        onClose={() => setOpen(null)}
+        heading={`Create ${open}`}
+      >
+        {open == "newVersion" && (
+          <CreateNewApiVersion
+            apiId={apiId}
+            // version={apiDefinition.version}
+            onSuccess={() => setOpen(null)}
+          />
+        )}
+        {open == "deploy-api" && (
+          <DeploymentCreationPage
+            addDeployment={addApiDeployment}
+            apiId={apiId}
+            onSuccess={() => setOpen(null)}
+          />
+        )}
+      </CustomModal>
     </Box>
   );
 }

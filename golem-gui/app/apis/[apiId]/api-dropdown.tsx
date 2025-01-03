@@ -17,8 +17,8 @@ import ArrowDropDownIcon from "@mui/icons-material/ArrowDropDown";
 import { useRouter } from "next/navigation";
 
 interface list {
-  route: string;
-  value: string;
+  onClick: () => void;
+  label: string;
 }
 interface DropdownGroup {
   heading: string;
@@ -33,7 +33,6 @@ export function ApiDropdown({ dropdowns }: ApiDropdownProps) {
   const router = useRouter();
 
   return (
-    <>
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <ArrowDropDownIcon />
@@ -47,13 +46,12 @@ export function ApiDropdown({ dropdowns }: ApiDropdownProps) {
               {dropdown.list.map((item, idx) => (
                 <DropdownMenuItem
                   key={idx}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    router.push(item.route);
+                  onClick={() => {
+                    item.onClick();
                   }}
                   className="cursor-pointer"
                 >
-                  {item.value}
+                  {item.label}
                 </DropdownMenuItem>
               ))}
             </DropdownMenuGroup>
@@ -62,14 +60,5 @@ export function ApiDropdown({ dropdowns }: ApiDropdownProps) {
         ))}
       </DropdownMenuContent>
     </DropdownMenu>
-
-    {/* <CustomModal open={!!open} onClose={handleClose}>
-    {open === "api" && <CreateAPI onCreation={handleClose} />}
-    {open === "component" && (
-      <CreateComponentForm mode="create" onSubmitSuccess={handleClose} />
-    )}
-    </CustomModal> */}
-  </>
   );
-
 }
