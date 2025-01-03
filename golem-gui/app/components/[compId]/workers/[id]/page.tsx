@@ -79,7 +79,7 @@ const WorkerListWithDropdowns = () => {
         <Tab label="Manage" />
         <Tab label="Invoke" />
       </Tabs>
-      {activeTab === 0 && <Overview worker={worker} isLoading={isLoading} />}
+      {activeTab === 0 && <Overview worker={worker} isLoading={isLoading} messages={messages}/>}
       {activeTab === 1 && <TerminalPage messages={messages} />}
       {activeTab === 3 && <FileComponent />}
       {activeTab === 4 && <Manage />}
