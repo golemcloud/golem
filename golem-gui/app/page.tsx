@@ -145,10 +145,10 @@ const Dashboard = () => {
           <MuiGrid container spacing={4}>
             {buttonData.map((item) => (
               <MuiGrid
-                className=" border dark:hover:bg-[#555] rounded-md"
+                className=" border dark:hover:bg-[#555] hover:bg-[#e4e4e4] rounded-md cursor-pointer"
                 key={item.label}
               >
-                <IconButton
+                <Box
                   onClick={item.onClick}
                   color="inherit"
                   className="dark:text-white"
@@ -166,7 +166,7 @@ const Dashboard = () => {
                   <Typography variant="caption" sx={{ mt: 1, fontWeight: 500 }}>
                     {item.label}
                   </Typography>
-                </IconButton>
+                </Box>
               </MuiGrid>
             ))}
           </MuiGrid>

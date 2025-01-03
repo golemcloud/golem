@@ -7,6 +7,8 @@ import {
   ListItemText,
   Typography,
   Button,
+  Select,
+  MenuItem,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import { PanelRightClose } from "lucide-react";
@@ -15,57 +17,126 @@ import { Home, Settings, RocketLaunch, Add } from "@mui/icons-material";
 import CodeIcon from "@mui/icons-material/Code";
 import ArticleIcon from "@mui/icons-material/Article";
 import Link from "next/link";
-import { usePathname, useParams } from "next/navigation";
-import { useState } from "react";
+import { usePathname, useParams, useSearchParams, useRouter } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
 import { Button2 } from "@/components/ui/button";
-import {Dropdown} from "@/components/ui/dropdown-button";
-
+import { Dropdown } from "@/components/ui/dropdown-button";
+import PlayForWorkIcon from "@mui/icons-material/PlayForWork";
+import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 
 type secondaryHeaderProps = {
   onClick: () => void;
   variant: string;
   id?: string;
+  apiTab?: string;
 };
 
 export default function SecondaryHeader({
   onClick,
   variant,
   id,
+  apiTab,
+  
 }: secondaryHeaderProps) {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const pathname = usePathname();
   const { compId } = useParams<{ compId: string }>();
   const { id: workerName } = useParams<{ id: string }>();
 
-  const navigationLinks = [
-    {
-      name: "Overview",
-      href: `/components/${compId}/overview`,
-      icon: <Home fontSize="small" />,
-    },
-    {
-      name: "Workers",
-      href: `/components/${compId}/workers`,
-      icon: <CodeIcon fontSize="small" />,
-    },
-    {
-      name: "Exports",
-      href: `/components/${compId}/exports`,
-      icon: <RocketLaunch fontSize="small" />,
-    },
-    {
-      name: "Files",
-      href: `/components/${compId}/files`,
-      icon: <ArticleIcon fontSize="small" />,
-    },
-    {
-      name: "Settings",
-      href: `/components/${compId}/settings`,
-      icon: <Settings fontSize="small" />,
-    },
-  ];
+  const { apiId } = useParams<{ apiId: string }>();
+  const params = useSearchParams();
+  const version = params.get("version");
+
+  const [open, setOpen] = useState(false);
+
+  const tab = useMemo(() => {
+    const parts = pathname?.split("/") || [];
+    return parts[parts.length - 1] || "overview";
+  }, [pathname]);
+
+
+  const router = useRouter();
+  const { apiDefinitions, getApiDefintion, isLoading } =
+    useApiDefinitions(apiId);
+  const { data: apiDefinition } = getApiDefintion(apiId, version);
+  const versions = useMemo(() => {
+    return apiDefinitions.map((api) => {
+      return api.version;
+    });
+  }, [apiDefinitions]);
+
+
+  let navigationLinks;
+  if (variant === "apis") {
+    navigationLinks = [
+      {
+        name: "Overview",
+        href: `/apis/${apiId}/overview${version ? `?version=${version}` : ""}`,
+        icon: <Home fontSize="small" />,
+      },
+      {
+        name: "Settings",
+        href: `/apis/${apiId}/settings${version ? `?version=${version}` : ""}`,
+        icon: <Settings fontSize="small" />,
+      },
+      {
+        name: "Deployments",
+        href: `/apis/${apiId}/deployments${
+          version ? `?version=${version}` : ""
+        }`,
+        icon: <RocketLaunch fontSize="small" />,
+      },
+      {
+        name: "Playground",
+        href: `/apis/${apiId}/playground${
+          version ? `?version=${version}` : ""
+        }`,
+        icon: <PlayForWorkIcon fontSize="small" />,
+      },
+    ];
+  } else {
+    navigationLinks = [
+      {
+        name: "Overview",
+        href: `/components/${compId}/overview`,
+        icon: <Home fontSize="small" />,
+      },
+      {
+        name: "Workers",
+        href: `/components/${compId}/workers`,
+        icon: <CodeIcon fontSize="small" />,
+      },
+      {
+        name: "Exports",
+        href: `/components/${compId}/exports`,
+        icon: <RocketLaunch fontSize="small" />,
+      },
+      {
+        name: "Files",
+        href: `/components/${compId}/files`,
+        icon: <ArticleIcon fontSize="small" />,
+      },
+      {
+        name: "Settings",
+        href: `/components/${compId}/settings`,
+        icon: <Settings fontSize="small" />,
+      },
+    ];
+  }
+  useEffect(() => {
+    const handleResize = () => {
+      const screenWidth = window.innerWidth;
+      if (screenWidth >= 895 && drawerOpen) {
+        setDrawerOpen((prev) => !prev);
+      }
+    };
+
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, [drawerOpen]);
+
   const workloads = [
-    { route: `/components/${compId}/settings?activeTab=1`, value: "info"},
+    { route: `/components/${compId}/settings?activeTab=1`, value: "info" },
     { route: `/components/${compId}/settings?activeTab=2`, value: "update" },
   ];
   const toggleDrawer = (open: boolean) => () => {
@@ -73,9 +144,10 @@ export default function SecondaryHeader({
   };
 
   return (
-    <Box className="dark:bg-[#0a0a0a] border-b p-2 pr-20 ">
+    <Box className="dark:bg-[#0a0a0a] border-b p-2 pr-20 "
+    >
       <Box className="flex items-center justify-between w-full">
-        <Box sx={{ display: { xs: "block", md: "none" } }}>
+        <Box sx={{ display: { xs: "block", md: "none", } }}>
           <Button
             startIcon={<PanelRightClose />}
             onClick={toggleDrawer(true)}
@@ -83,8 +155,37 @@ export default function SecondaryHeader({
           ></Button>
         </Box>
 
+        {variant === "apis" && apiTab!="playground" && (
+               <Select
+                name="version"
+                variant="outlined"
+                className="w-32 ml-2"
+                value={apiDefinition?.version}
+                onChange={(e) => {
+                  if(apiDefinition && e.target.value!== apiDefinition?.version){
+                    router.push(`/apis/${apiId}/${tab}?version=${e.target.value}`);
+
+                  }
+                }}
+              >
+                {versions?.map((version: string) => (
+                  <MenuItem key={version} value={version}>
+                    {version}
+                  </MenuItem>
+                ))}
+              </Select>
+        )}
+          {variant === "apis" && apiTab!="playground" && (
+            <Button
+              type="button"
+              className="ml-auto"
+              onClick={onClick}
+            >
+              New Version
+            </Button>
+        )}
         {pathname === `/components/${compId}/overview` && (
-          <Box sx={{ marginLeft: "auto" ,display:"flex",gap:2 }}>
+          <Box sx={{ marginLeft: "auto", display: "flex", gap: 2 }}>
             <Button2
               variant="primary"
               startIcon={<AddIcon />}
@@ -93,22 +194,22 @@ export default function SecondaryHeader({
             >
               New
             </Button2>
-            
+
             <Box className="py-1 px-2 border rounded-md hover:bg-[#222] cursor-pointer">
               {Dropdown(workloads)}
             </Box>
           </Box>
         )}
 
-     {pathname === `/components/${compId}/workers/${workerName}` && (
-         <Typography
+        {pathname === `/components/${compId}/workers/${workerName}` && (
+          <Typography
             variant="h6"
             sx={{ fontWeight: "bold" }}
             className="mx-auto text-gray-700 dark:text-gray-300"
           >
             {workerName}
           </Typography>
-        )}   
+        )}
       </Box>
 
       <Drawer
@@ -136,7 +237,7 @@ export default function SecondaryHeader({
           </Typography>
         )}
         <List>
-          {navigationLinks.map((link) => {
+          {navigationLinks?.map((link) => {
             const isActive =
               pathname === link.href ||
               (link.href !== "/" && pathname.startsWith(link.href));
