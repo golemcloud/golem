@@ -19,6 +19,7 @@ import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import CloudUploadIcon from "@mui/icons-material/CloudUpload";
 import { addNewcomponent } from "@/lib/hooks/use-component";
 import { getFormErrorMessage } from "../lib/utils";
+import { Button2 } from "@/components/ui/button";
 
 type FormData = {
   name: string;
@@ -63,12 +64,6 @@ export default function ComponentForm({
   const files = watch("files");
   const [error, setError] = React.useState<string | null>(null);
 
-  // const handleWasmUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-  //   if (e.target.files) {
-  //     setValue("component", e.target.files[0]);
-  //   }
-  // };
-
   const handleFilesUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const uploadedFiles = Array.from(e.target.files || []);
     setValue("files", [...getValues("files"), ...uploadedFiles]);
@@ -99,7 +94,7 @@ export default function ComponentForm({
         });
       }
       const { error } = await addNewcomponent(formData, componentId, mode);
-      setError(error || null); // Clear previous error
+      setError(error || null);
       onSubmitSuccess?.();
     } catch (err) {
       console.error("Error during submission:", err);
@@ -108,16 +103,9 @@ export default function ComponentForm({
   };
 
   return (
-    <Paper
-      elevation={4}
-      sx={{
-        width: "100%",
-        p: 2,
-      }}
-    >
-      <form onSubmit={handleSubmit(onSubmit)}>
-        {isCreateMode && (
-          <>
+    <form onSubmit={handleSubmit(onSubmit)} className="p-5">
+      {isCreateMode && (
+        <>
           <Box display="flex" gap={2}>
             <Controller
               name="name"
@@ -126,6 +114,7 @@ export default function ComponentForm({
               render={({ field }) => (
                 <TextField
                   label="Component Name"
+                  size="small"
                   variant="outlined"
                   fullWidth
                   {...field}
@@ -133,185 +122,179 @@ export default function ComponentForm({
               )}
             />
           </Box>
-            <Typography variant="caption" color="error">
+          <Typography variant="caption" color="error">
             {getFormErrorMessage("name", errors)}
           </Typography>
-          </>
-        )}
+        </>
+      )}
 
-        {/* Type Selection */}
-        {isCreateMode && (
-          <Box my={3}>
-            <Typography variant="body1" mb={1}>
-              Type
-            </Typography>
-            <Controller
-              name="componentType"
-              control={control}
-              render={({ field }) => (
-                <RadioGroup row {...field}>
-                  <FormControlLabel
-                    value="Durable"
-                    control={<Radio />}
-                    label={
-                      <Box>
-                        <Typography>
-                          <b>Durable</b>
-                        </Typography>
-                        <Typography variant="caption" color="gray">
-                          Workers are persistent and executed with transactional
-                          guarantees
-                        </Typography>
-                      </Box>
-                    }
-                  />
-                  <FormControlLabel
-                    value="Ephemeral"
-                    control={<Radio />}
-                    label={
-                      <Box>
-                        <Typography>
-                          <b>Ephemeral</b>
-                        </Typography>
-                        <Typography variant="caption">
-                          Workers are transient and executed normally
-                        </Typography>
-                      </Box>
-                    }
-                  />
-                </RadioGroup>
-              )}
-            />
-          </Box>
-        )}
-        {/* WASM File Upload */}
-        <Box mb={3}>
-          <Typography variant="body1">
-            Upload WASM File
-          </Typography>
-          <Typography variant="caption" mb={1} color="gray">
-          The compiled WASM binary of your component.
+      {/* Type Selection */}
+      {isCreateMode && (
+        <Box my={3}>
+          <Typography variant="body1" mb={1}>
+            Type
           </Typography>
           <Controller
-            name="component"
-            rules={{
-              required: "WASM file is mandatory!",
-              validate: (value) =>
-                value?.type === "application/wasm" || "Invalid file type!",
-            }}
+            name="componentType"
             control={control}
             render={({ field }) => (
-              <>
-                <input
-                  type="file"
-                  accept=".wasm"
-                  hidden
-                  id="wasm-upload"
-                  onChange={(e) =>
-                    field.onChange(e.target.files ? e.target.files[0] : null)
+              <RadioGroup row {...field}>
+                <FormControlLabel
+                  value="Durable"
+                  control={<Radio className="text-foreground" />}
+                  label={
+                    <Box>
+                      <Typography>
+                        <b>Durable</b>
+                      </Typography>
+                      <Typography
+                        variant="caption"
+                        className="text-muted-foreground"
+                      >
+                        Workers are persistent and executed with transactional
+                        guarantees
+                      </Typography>
+                    </Box>
                   }
                 />
-                <label htmlFor="wasm-upload">
-                  <Box
-                    textAlign="center"
-                    p={2}
-                    border="2px dashed #444"
-                    borderRadius="8px"
-                    sx={{ cursor: "pointer" }}
-                  >
-                    <UploadFileIcon sx={{ fontSize: 50 }} />
-                    <Typography variant="body2" sx={{ mt: 1 }}>
-                      {field.value ? field.value.name : "Upload Component WASM"}
-                    </Typography>
-                    <Typography variant="caption">File up to 50MB</Typography>
-                  </Box>
-                </label>
-                <Typography variant="caption" color="error">
-                  {getFormErrorMessage("component", errors)}
-                </Typography>
-              </>
+                <FormControlLabel
+                  value="Ephemeral"
+                  control={<Radio className="text-foreground" />}
+                  label={
+                    <Box>
+                      <Typography>
+                        <b>Ephemeral</b>
+                      </Typography>
+                      <Typography
+                        variant="caption"
+                        className="text-muted-foreground"
+                      >
+                        Workers are transient and executed normally
+                      </Typography>
+                    </Box>
+                  }
+                />
+              </RadioGroup>
             )}
           />
         </Box>
+      )}
+      {/* WASM File Upload */}
+      <Box mb={3}>
+        <Typography variant="body1">Upload WASM File</Typography>
+        <Typography variant="caption" mb={1} color="gray">
+          The compiled WASM binary of your component.
+        </Typography>
+        <Controller
+          name="component"
+          rules={{
+            required: "WASM file is mandatory!",
+            validate: (value) =>
+              value?.type === "application/wasm" || "Invalid file type!",
+          }}
+          control={control}
+          render={({ field }) => (
+            <>
+              <input
+                type="file"
+                accept=".wasm"
+                hidden
+                id="wasm-upload"
+                onChange={(e) =>
+                  field.onChange(e.target.files ? e.target.files[0] : null)
+                }
+              />
+              <label htmlFor="wasm-upload">
+                <Box
+                  textAlign="center"
+                  p={2}
+                  borderRadius="8px"
+                  className="cursor-pointer hover:border-[#888] border-dashed border-2"
+                >
+                  <UploadFileIcon sx={{ fontSize: 50 }} />
+                  <Typography variant="body2" sx={{ mt: 1 }}>
+                    {field.value ? field.value.name : "Upload Component WASM"}
+                  </Typography>
+                  <Typography variant="caption">File up to 50MB</Typography>
+                </Box>
+              </label>
+              <Typography variant="caption" color="error">
+                {getFormErrorMessage("component", errors)}
+              </Typography>
+            </>
+          )}
+        />
+      </Box>
 
-        {/* Initial Files Upload */}
-      
-        <Typography variant="body1">
-            Initial Files
-          </Typography>
-          <Typography variant="caption" mb={1} color="gray">
-          Files available to your workers at runtime.
-          </Typography>
-        <Box
-          mb={3}
-          p={2}
-          border="2px dashed #444"
-          borderRadius="8px"
-          textAlign="center"
-        >
-        
-          <input
-            type="file"
-            multiple
-            hidden
-            id="file-upload"
-            onChange={handleFilesUpload}
-          />
-          <label htmlFor="file-upload">
-            <Typography variant="body2">Select or Drop files</Typography>
-          </label>
-        </Box>
+      {/* Initial Files Upload */}
 
-        {/* File List */}
-        <Box
-          display="flex"
-          justifyContent="space-between"
-          alignItems="center"
-          border="1px solid #444"
-          borderRadius="8px"
-          p={2}
-          mb={3}
-        >
-          <Typography variant="caption" color="gray">
-            Total Files: {files.length}
-          </Typography>
-          <Button variant="contained" startIcon={<FolderIcon />}>
-            New Folder
-          </Button>
-        </Box>
+      <Typography variant="body1">Initial Files</Typography>
+      <Typography variant="caption" mb={1} color="gray">
+        Files available to your workers at runtime.
+      </Typography>
+      <Box
+        textAlign="center"
+        className="cursor-pointer hover:border-[#888] border-dashed border-2 p-3 mb-3 rounded-md"
+      >
+        <input
+          type="file"
+          multiple
+          hidden
+          id="file-upload"
+          onChange={handleFilesUpload}
+        />
+        <label htmlFor="file-upload">
+          <Typography variant="body2">Select or Drop files</Typography>
+        </label>
+      </Box>
 
-        {/* Files */}
-        <Box>
-          {files.map((file, index) => (
-            <Box
-              key={index}
-              display="flex"
-              justifyContent="space-between"
-              alignItems="center"
-              p={1}
-              borderBottom="1px solid #444"
-            >
-              <Typography variant="body2">{file.name}</Typography>
-              <IconButton onClick={() => handleFileDelete(index)} color="error">
-                <DeleteOutlineIcon />
-              </IconButton>
-            </Box>
-          ))}
-        </Box>
+      {/* File List */}
+      <Box
+        display="flex"
+        justifyContent="space-between"
+        alignItems="center"
+        className="cursor-pointer hover:border-[#888] border-dashed border-2 p-2 mb-3 rounded-md"
+      >
+        <Typography variant="caption" color="gray">
+          Total Files: {files.length}
+        </Typography>
+        <Button2 variant="primary" size="md" startIcon={<FolderIcon />}>
+          New Folder
+        </Button2>
+      </Box>
 
-        {error && <Typography className="text-red-500">{error}</Typography>}
-
-        {/* Submit Button */}
-        <Box display="flex" justifyContent="flex-end" mt={3}>
-          <Button
-            type="submit"
-            variant="contained"
-            startIcon={<CloudUploadIcon />}
+      {/* Files */}
+      <Box>
+        {files.map((file, index) => (
+          <Box
+            key={index}
+            display="flex"
+            justifyContent="space-between"
+            alignItems="center"
+            p={1}
+            borderBottom="1px solid #444"
           >
-            {isCreateMode ? "Create" : "Update"}
-          </Button>
-        </Box>
-      </form>
-    </Paper>
+            <Typography variant="body2">{file.name}</Typography>
+            <IconButton onClick={() => handleFileDelete(index)} color="error">
+              <DeleteOutlineIcon />
+            </IconButton>
+          </Box>
+        ))}
+      </Box>
+
+      {error && <Typography className="text-red-500">{error}</Typography>}
+
+      {/* Submit Button */}
+      <Box display="flex" justifyContent="flex-end" mt={3}>
+        <Button2
+          type="submit"
+          variant="primary"
+          size="lg"
+          startIcon={<CloudUploadIcon />}
+        >
+          {isCreateMode ? "Create" : "Update"}
+        </Button2>
+      </Box>
+    </form>
   );
 }

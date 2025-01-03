@@ -24,18 +24,16 @@ const ComponentCard: React.FC<ComponentCardProps> = ({
     <Box
       sx={{
         p: 2,
-        border: "1px solid #555",
-        borderRadius: 2,
         maxHeight: "fit-content",
         display: "flex",
         flexDirection: "column",
         cursor: "pointer",
         gap: 1,
         minWidth: "300px",
-        "&:hover": { boxShadow: 4 },
+        "&:hover": { boxShadow: "0px 5px 10px 0px #555" },
       }}
       onClick={onClick}
-      className="flex-1"
+      className="flex-1 border rounded-md"
     >
       <Box
         sx={{
@@ -64,27 +62,19 @@ const ComponentCard: React.FC<ComponentCardProps> = ({
             </Typography>
         </Stack>
         
-        <Chip
-          label={"v"+version }
-          sx={{
-            fontSize: "0.8rem",
-            fontWeight: 500,
-            borderRadius: 1,
-            bgcolor: "primary.main",
-            color: "primary.contrastText",
-            alignSelf: "center"
-          }}
-        />
+        <Typography className=" bg-button_bg border border-button_border px-2  rounded-sm text-sm">
+          {"v"+version}
+        </Typography>
       </Box>
 
       <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
-        <Typography variant="body1" className="border border-[#555] px-2 rounded-md">
+        <Typography variant="body1" className="border px-2 rounded-md text-muted-foreground">
             { exports+" Exports"}
         </Typography>
-        <Typography variant="body1" className="border border-[#555] px-2 rounded-md">
+        <Typography variant="body1" className="border px-2 rounded-md text-muted-foreground">
             {size + " MB"}
         </Typography>
-        <Typography variant="body1" className="border border-[#555] px-2 rounded-md">
+        <Typography variant="body1" className="border px-2 rounded-md text-muted-foreground">
             {type}
         </Typography>
       </Stack>
