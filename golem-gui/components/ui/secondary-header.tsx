@@ -25,14 +25,11 @@ import { useEffect, useMemo, useState } from "react";
 import { Button2 } from "@/components/ui/button";
 import { Dropdown } from "@/components/ui/dropdown-button";
 import PlayForWorkIcon from "@mui/icons-material/PlayForWork";
-import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 import { ApiDropdown } from "@/app/apis/[apiId]/api-dropdown";
 import { VersionFilter } from "@/app/apis/[apiId]/apis-filter";
-import { set } from "date-fns";
 import CustomModal from "../CustomModal";
 import CreateNewApiVersion from "../create-api-new-version";
 import DeploymentCreationPage from "../deployment-creation";
-import useApiDeployments from "@/lib/hooks/use-api-deployments";
 
 type secondaryHeaderProps = {
   onClick: () => void;
@@ -130,13 +127,13 @@ export default function SecondaryHeader({
           label: "New Route",
           onClick: () => router.push(`/apis/${apiId}/new-route`),
         },
-        { label: "New Version", onClick: () => setOpen("newVersion") },
+        { label: "New Version", onClick: () => setOpen("New Version") },
       ],
     },
     {
       heading: "Actions",
       list: [
-        { label: "Deploy API", onClick: () => setOpen("deploy-api") },
+        { label: "Deploy API", onClick: () => setOpen("deployment") },
         {
           label: "Download API",
           onClick: () => router.push(`/apis/${apiId}/download`),
@@ -196,18 +193,18 @@ export default function SecondaryHeader({
           ></Button>
         </Box>
 
-        {variant === "apis" && apiTab != "playground" && (
+        {variant === "apis" && (
           <Box className="flex gap-3 align-middle">
             <Typography variant="body2" sx={{ fontWeight: "bold" }}>
               {ApiName}
             </Typography>
-            <VersionFilter />
+            {apiTab != "playground" && <VersionFilter />}
           </Box>
         )}
 
         {variant === "apis" && apiTab != "playground" && (
-          <Box className="py-1 px-2 border rounded-md hover:bg-[#222] cursor-pointer">
-            <ApiDropdown dropdowns={dropdowns} />
+          <Box  className="border border-border rounded-md cursor-pointer dark:hover:bg-[#333] hover:bg-slate-100 py-1 px-2">
+            <ApiDropdown dropdowns={dropdowns}/>
           </Box>
         )}
 
@@ -222,7 +219,7 @@ export default function SecondaryHeader({
               New
             </Button2>
 
-            <Box className="py-1 px-2 border rounded-md hover:bg-[#222] cursor-pointer">
+            <Box className="border border-border rounded-md cursor-pointer dark:hover:bg-[#333] hover:bg-slate-100 py-1 px-2">
               {Dropdown(workloads)}
             </Box>
           </Box>
@@ -332,14 +329,14 @@ export default function SecondaryHeader({
         onClose={() => setOpen(null)}
         heading={`Create ${open}`}
       >
-        {open == "newVersion" && (
+        {open == "New Version" && (
           <CreateNewApiVersion
             apiId={apiId}
             // version={apiDefinition.version}
             onSuccess={() => setOpen(null)}
           />
         )}
-        {open == "deploy-api" && (
+        {open == "deployment" && (
           <DeploymentCreationPage
             apiId={apiId}
             onSuccess={() => setOpen(null)}

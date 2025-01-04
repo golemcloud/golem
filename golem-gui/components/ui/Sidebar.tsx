@@ -114,7 +114,7 @@ const Sidebar = ({ id, navigationLinks, variant }: SidebarProps) => {
               fontWeight: "500",
             }}
             fullWidth
-            className="border  border-black dark:border-white text-black dark:text-white dark:hover:bg-[#373737] hover:bg-[#C0C0C0]"
+            className="border border-border dark:hover:bg-[#333] hover:bg-[#c0c0c0] text-foreground"
           >
             Add
             <Add className="ml-2" />

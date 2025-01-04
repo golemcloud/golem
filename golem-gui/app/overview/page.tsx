@@ -213,7 +213,7 @@ const ProjectDashboard = () => {
                 <Box className="grid w-full grid-cols-1 gap-3 lg:grid-cols-2 mt-2">
                   {!componentError &&
                     components
-                      .slice(0, 8)
+                      .slice(0, 6)
                       .map((component) => (
                         <ComponentCard
                           key={component.versionedComponentId.componentId}

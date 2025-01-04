@@ -1,11 +1,6 @@
 "use client";
 import Sidebar from "@/components/ui/Sidebar";
-import {
-  useParams,
-  usePathname,
-  useRouter,
-  useSearchParams,
-} from "next/navigation";
+import { useParams, usePathname, useSearchParams } from "next/navigation";
 import { Home, Settings, RocketLaunch } from "@mui/icons-material";
 import PlayForWorkIcon from "@mui/icons-material/PlayForWork";
 import { useMemo, useState } from "react";
@@ -68,7 +63,6 @@ export default function APISLayout({
 
   return (
     <div style={{ display: "flex" }}>
-      
       <Sidebar id={apiId!} navigationLinks={navigationLinks} variant="apis" />
       <div
         className="flex-1 "
@@ -77,17 +71,16 @@ export default function APISLayout({
         //   height: "100vh",
         // }}
       >
-      
         <SecondaryHeader
           variant="apis"
           onClick={() => {
             setOpen(true);
           }}
           apiTab={tab}
-          
-        />         
+        />
+
         <div className="mx-auto max-w-7xl px-6 lg:px-8">
-          <div className="mx-auto max-w-2xl lg:max-w-none py-4">
+          <div className="mx-auto max-w-2xl lg:max-w-none p-5">
             <CustomModal
               open={open}
               onClose={() => setOpen(false)}

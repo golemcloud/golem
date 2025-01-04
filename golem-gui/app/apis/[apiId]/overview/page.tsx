@@ -14,6 +14,8 @@ export default function Overview() {
   const { getApiDefintion, isLoading, error } = useApiDefinitions(apiId);
   const { error: apiDefintionError } = getApiDefintion(apiId, version);
 
+  console.log("apiid: ",apiId, "version: ", version, "isLoading: ", isLoading, "error: ", error, "apiDefintionError: ", apiDefintionError);
+
   if (isLoading) {
     return <Loader />;
   }
