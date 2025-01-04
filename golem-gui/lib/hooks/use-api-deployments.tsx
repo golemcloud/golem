@@ -26,11 +26,11 @@ export async function addNewApiDeployment(
     toast.error("Failed to deploy:" + error);
     return { success: false, error };
   }
+  toast.success("Successfully deployed");
   mutate(`${ROUTE_PATH}`);
   if (path !== ROUTE_PATH) {
     mutate(path);
   }
-  toast.success("Successfully deployed");
   return { success: false, data: data };
 }
 

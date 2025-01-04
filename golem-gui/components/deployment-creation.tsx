@@ -1,6 +1,5 @@
 "use client";
 import {
-  Box,
   Divider,
   InputLabel,
   MenuItem,
@@ -12,13 +11,11 @@ import {
 import { Button2 as Button } from "@/components/ui/button";
 import React, { useState } from "react";
 import AddCircleOutlineIcon from "@mui/icons-material/AddCircleOutline";
-import DeleteIcon from "@mui/icons-material/Delete";
 import { ApiDefinition, ApiDeployment } from "@/types/api";
 import { useForm, Controller } from "react-hook-form";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 import { addNewApiDeployment } from "@/lib/hooks/use-api-deployments";
 import { getFormErrorMessage } from "@/lib/utils";
-import { toast } from "react-toastify";
 import RemoveIcon from "@mui/icons-material/Remove";
 
 interface KeyValue {
@@ -48,6 +45,11 @@ export default function DeploymentCreationPage({
   const [error, setError] = useState<string | null>(null);
   const { apiDefinitions: data, isLoading } = useApiDefinitions(apiId);
   const apiDefinitions = data.filter((api) => api.draft);
+
+  const uniqueApiDefintions = Object.values(apiDefinitions?.reduce<Record<string,ApiDefinition>>((obj, apiDefinition:ApiDefinition)=>{
+    obj[apiDefinition.id] = apiDefinition;
+    return obj;
+  }, {}) || {})
 
   const {
     control,
@@ -82,9 +84,8 @@ export default function DeploymentCreationPage({
     const { error } = await addNewApiDeployment(newDeploy);
     setError(error || null);
     if (error) {
-      return toast.error(`Failed to deployed ${error}`);
+      return;
     }
-    toast.success("Sucessfully deployed.");
     onSuccess?.();
   };
 
@@ -98,8 +99,12 @@ export default function DeploymentCreationPage({
             <Controller
               name="domain"
               control={control}
-              rules={{ required: "Domain is required." }}
-              render={({ field }) => <TextField size="small" {...field} />}
+              rules={{ required: "Domain is required.",
+                pattern: {
+                  value: /^(?!:\/\/)([a-zA-Z0-9-_]+\.)+[a-zA-Z]{2,}$/,
+                  message: "Please enter a valid domain.",
+                }}}
+              render={({ field }) => <TextField {...field} />}
             />
 
             <Typography variant="caption" color="error">
@@ -173,7 +178,7 @@ export default function DeploymentCreationPage({
                             size="small"
                             name={`definition[${index}].id`}
                             variant="outlined"
-                            disabled={isLoading || apiDefinitions?.length === 0}
+                            disabled={isLoading || uniqueApiDefintions?.length === 0}
                             value={definitions[index].id}
                             onChange={(e) => {
                               const newDef = {
@@ -188,7 +193,7 @@ export default function DeploymentCreationPage({
                             }}
                           >
                             {!isLoading &&
-                              apiDefinitions?.map(
+                              uniqueApiDefintions?.map(
                                 (apiDefintion: ApiDefinition) => (
                                   <MenuItem
                                     key={apiDefintion?.id}

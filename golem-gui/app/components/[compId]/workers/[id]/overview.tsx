@@ -20,10 +20,18 @@ import TerminalLogs from "./terminal";
 //   bgcolor: "#1E1E1E",
 // };
 
+interface PayloadItem {
+  dataKey: string; // Key in the data
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  payload: Record<string, any>; // The data object for this tooltip item
+  color?: string; // Color for the bar/line
+  fill?: string; // Fill color, if applicable
+}
+
 interface CustomTooltipProps {
   active?: boolean;
-  payload?: any[];
-  graphKey:string
+  payload?: PayloadItem[]; // The tooltip payload array
+  graphKey: string; // Key to display in the tooltip
 }
 
 const CustomTooltip: React.FC<CustomTooltipProps> = ({ active, payload, graphKey }) => {
@@ -40,7 +48,7 @@ const CustomTooltip: React.FC<CustomTooltipProps> = ({ active, payload, graphKey
         <Typography variant="body1" fontStyle={"bold"} >{barData?.payload?.[graphKey]}</Typography>
         <Box padding={1}>
            {payload?.map((data)=>{
-            return <Stack direction="row" gap={1} alignItems={"center"}>
+            return <Stack direction="row" gap={1} alignItems={"center"} key={data?.dataKey}>
               <Box sx={{height:10, width:10, backgroundColor:data?.color||data?.fill}}/>
                 <Typography variant="caption">{data?.dataKey}{" "}{data?.payload?.[data.dataKey]}</Typography>
             </Stack>
@@ -306,7 +314,7 @@ const Overview = ({
                           minTickGap={5}
                         />
                         <Tooltip content={<CustomTooltip graphKey={graphKey}/>}/>
-                        {Array.from(uniquefunctions)?.map((bar, index) => {
+                        {Array.from(uniquefunctions)?.map((bar) => {
                           return (
                             <Bar
                               dataKey={bar}

@@ -1,6 +1,10 @@
 "use client";
 import Sidebar from "@/components/ui/Sidebar";
-import { useParams, usePathname, useSearchParams } from "next/navigation";
+import {
+  useParams,
+  usePathname,
+  useSearchParams,
+} from "next/navigation";
 import { Home, Settings, RocketLaunch } from "@mui/icons-material";
 import PlayForWorkIcon from "@mui/icons-material/PlayForWork";
 import { useMemo, useState } from "react";
@@ -20,7 +24,7 @@ export default function APISLayout({
   const version = params.get("version");
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
-  const { apiDefinitions, getApiDefintion, isLoading } =
+  const { getApiDefintion, isLoading } =
     useApiDefinitions(apiId);
   const { data: apiDefinition } = getApiDefintion(apiId, version);
   const navigationLinks = useMemo(() => {

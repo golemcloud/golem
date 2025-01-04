@@ -27,11 +27,12 @@ const ErrorBoundary: React.FC<Props> = ({ children, message }) => {
     setHasError(true);
   };
 
+  console.log("entering this===>", errorMessage)
   if (hasError) {
     return (
       <Stack my={2} alignItems="center">
-        <Alert severity="error">
-          {errorMessage || "Something went wrong."}
+        <Alert severity="error" color="error">
+          {typeof errorMessage !== "string" ? "Something went wrong." : errorMessage }
         </Alert>
         {/* Optionally render children if needed */}
         {children}

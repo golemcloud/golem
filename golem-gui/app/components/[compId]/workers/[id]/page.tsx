@@ -38,10 +38,14 @@ const WorkerListWithDropdowns = () => {
     setActiveTab(newValue);
   };
 
+  if (error || websocketError) {
+      return <ErrorBoundary message={error|| websocketError}/>
+  }
+
   return (
     <Box className="text-black dark:text-white">
       <SecondaryHeader variant="component" onClick={() => {}} />
-      {error || websocketError && <ErrorBoundary message={error|| websocketError}/>}  
+      {/* {error || websocketError && } */}
       <Tabs
         value={activeTab}
         variant="scrollable"
