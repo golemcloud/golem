@@ -45,7 +45,7 @@ export default function ComponentUpdate() {
   function onSubmit() {
     const formData = new FormData();
     formData.append("component", file!);
-    API.updateComponent(componentId!, formData).then((res) => {
+    API.updateComponent(componentId!, formData).then(() => {
       form.reset();
       setFile(null);
       toast({
