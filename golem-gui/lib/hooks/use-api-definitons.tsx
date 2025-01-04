@@ -304,8 +304,8 @@ export const downloadApi = async(apiId:string, version?:string)=>{
         const {data:apiDefinition,error} = await fetcher(`${ROUTE_PATH}${version ? `/${apiId}/${version}`: `?api-definition-id=${apiId}`}`);
         
         const api = Array.isArray(apiDefinition)? apiDefinition[apiDefinition.length-1]: apiDefinition
-        if(!api){
-          return toast.error(`Fialed to downalod: ${error}`)
+        if(!api || error){
+          return toast.error(`Failed to downalod: ${error || 'No api found!'}`)
         }
         const jsonString = JSON.stringify(api, null, 2); // Pretty print with 2 spaces
         const blob = new Blob([jsonString], { type: "application/json" });

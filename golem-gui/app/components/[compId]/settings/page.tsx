@@ -17,13 +17,14 @@ import { useParams, useSearchParams } from "next/navigation";
 import CreateComponentForm from "@/components/new-component";
 
 import { toast } from "react-toastify";
-import useComponents from "@/lib/hooks/use-component";
+import useComponents, { downloadComponent } from "@/lib/hooks/use-component";
 import { Component } from "@/types/api";
 import SecondaryHeader from "@/components/ui/secondary-header";
 import ErrorBoundary from "@/components/erro-boundary";
+import { Button2 } from "@/components/ui/button";
+import { DownloadIcon } from "lucide-react";
 
 const WorkerSettings = () => {
-
   const { compId } = useParams<{ compId: string }>();
   const { components, error } = useComponents(compId);
   const [version, setVersion] = useState<number | null>(null);
@@ -61,7 +62,7 @@ const WorkerSettings = () => {
       <Box sx={{ display: { xs: "block", md: "none" } }}>
         <SecondaryHeader onClick={() => {}} variant="components" />
       </Box>
-      {error && <ErrorBoundary message={error}/>}
+      {error && <ErrorBoundary message={error} />}
       <div className="mx-auto max-w-7xl px-6 lg:px-8">
         <div className="mx-auto max-w-2xl lg:max-w-none py-4">
           <Stack
@@ -88,7 +89,12 @@ const WorkerSettings = () => {
               </Tabs>
             </Box>
             {activeTab === 1 && (
-              <Stack direction="row" alignItems="center" marginBottom={2}>
+              <Stack
+                direction="row"
+                alignItems="center"
+                marginBottom={2}
+                gap={1}
+              >
                 <Select
                   name="version"
                   variant="outlined"
@@ -105,7 +111,14 @@ const WorkerSettings = () => {
                     </MenuItem>
                   ))}
                 </Select>
-                {/* need to add download */}
+                <Button2
+                  onClick={(e) => {
+                    e.preventDefault();
+                    downloadComponent(compId, version!);
+                  }}
+                >
+                  <DownloadIcon />
+                </Button2>
               </Stack>
             )}
           </Stack>

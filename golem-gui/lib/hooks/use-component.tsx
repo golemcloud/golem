@@ -258,4 +258,37 @@ export function useUpdateInstallPlugin(
   };
 }
 
+export async function downloadComponent(
+  compId: string,
+  version: number | string
+) {
+  try {
+    const { data, error } = await fetcher(
+      `${ROUTE_PATH}/${compId}/download${version ? `?version=${version}` : ""}`
+    );
+    if (!data || error) {
+      return toast.error(
+        `Failed to downalod: ${error || "No component found!"}`
+      );
+    }
+    const blob = new Blob([data], { type: "application/wasm" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${compId}-${version}.wasm`; // The name of the file to download
+
+    // Trigger the download
+    document.body.appendChild(link);
+    link.click();
+
+    // Clean up and remove the link
+    link.remove();
+    URL.revokeObjectURL(url);
+    return toast.success("Successfully triggered");
+  } catch (err) {
+    console.error("error occurred while downlaoding the component", err);
+    toast.error("Something went wrong!");
+  }
+}
+
 export default useComponents;
