@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "webapp",
+  "productName": "Golem",
   "version": "0.1.0",
   "identifier": "cloud.golem.app",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "webapp",
+        "title": "Golem",
         "width": 800,
         "height": 600,
         "fullscreen": true
