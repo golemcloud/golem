@@ -4,7 +4,6 @@ import React from "react";
 import {
   Box,
   Typography,
-  IconButton,
   Grid2 as MuiGrid,
   Paper,
 } from "@mui/material";
@@ -17,22 +16,18 @@ import { useRouter } from "next/navigation";
 import useComponents from "@/lib/hooks/use-component";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 import FooterLinks from "@/components/ui/footer-links";
+import Link from "next/link";
 
 const Dashboard = () => {
   const router = useRouter();
   const { components } = useComponents();
   const { apiDefinitions } = useApiDefinitions();
-  // const apis = [
-  //   { id: 1, name: "My Project A", components: 2, apis: 3 },
-  //   { id: 2, name: "My Project B", components: 4, apis: 0 },
-  //   { id: 3, name: "Project C", components: 1, apis: 2 },
-  // ];
 
   const buttonData = [
     {
       label: "Docs",
       icon: <DescriptionIcon />,
-      onClick: () => router.push("/docs"),
+      link: "https://learn.golem.cloud/",
     },
     {
       label: "Overview",
@@ -52,30 +47,28 @@ const Dashboard = () => {
       icon: <BookOpenText />,
       description:
         "Learn how to setup your development environment and build your first component",
-        link:"https://learn.golem.cloud/docs/quickstart"
+      link: "https://learn.golem.cloud/docs/quickstart",
     },
     {
       label: "API Docs",
       icon: <Code />,
       description:
         "Explore the API Documentation and learn how to integrate with our platform",
-      link:"https://learn.golem.cloud/docs/rest-api/oss-rest-api"
-  
+      link: "https://learn.golem.cloud/docs/rest-api/oss-rest-api",
     },
     {
       label: "Language Guides",
       icon: <NotepadText />,
       description:
         "Check out our language specific tutorials and examples to get started",
-      link:"https://learn.golem.cloud/docs/develop-overview"  
+      link: "https://learn.golem.cloud/docs/develop-overview",
     },
     {
       label: "Github",
       icon: <Github />,
       description:
         "Check out our Github repository to contribute and report issues",
-      link:"https://github.com/golemcloud"  
-  
+      link: "https://github.com/golemcloud",
     },
   ];
 
@@ -151,25 +144,62 @@ const Dashboard = () => {
                 className=" border dark:hover:bg-[#555] hover:bg-[#e4e4e4] rounded-md cursor-pointer"
                 key={item.label}
               >
-                <Box
-                  onClick={item.onClick}
-                  color="inherit"
-                  className="dark:text-white"
-                  sx={{
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    height: "100px",
-                    width: "100px",
-                    padding: "1.5rem",
-                  }}
-                >
-                  {item.icon}
-                  <Typography variant="caption" sx={{ mt: 1, fontWeight: 500 }}>
-                    {item.label}
-                  </Typography>
-                </Box>
+                {item.link && (
+                  <Link
+                    href={item.link || "#"}
+                    style={{ textDecoration: "none", color: "inherit" }}
+                    passHref
+                    target="_blank" // Opens the link in a new tab
+                    rel="noopener noreferrer" // Improves security by preventing access to the window.opener object
+                  >
+                    <Box
+                      onClick={item?.onClick}
+                      color="inherit"
+                      className="dark:text-white"
+                      sx={{
+                        display: "flex",
+                        flexDirection: "column",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        height: "100px",
+                        width: "100px",
+                        padding: "1.5rem",
+                      }}
+                    >
+                      {item.icon}
+                      <Typography
+                        variant="caption"
+                        sx={{ mt: 1, fontWeight: 500 }}
+                      >
+                        {item.label}
+                      </Typography>
+                    </Box>
+                  </Link>
+                )}
+                {!item.link && (
+                  <Box
+                    onClick={item?.onClick}
+                    color="inherit"
+                    className="dark:text-white"
+                    sx={{
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      height: "100px",
+                      width: "100px",
+                      padding: "1.5rem",
+                    }}
+                  >
+                    {item.icon}
+                    <Typography
+                      variant="caption"
+                      sx={{ mt: 1, fontWeight: 500 }}
+                    >
+                      {item.label}
+                    </Typography>
+                  </Box>
+                )}
               </MuiGrid>
             ))}
           </MuiGrid>

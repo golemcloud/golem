@@ -3,10 +3,19 @@ import { Worker, WorkerFunction } from "@/types/api";
 import useComponents from "@/lib/hooks/use-component";
 import { useParams } from "next/navigation";
 import { Loader } from "lucide-react";
-import { Paper, Typography, Divider, Box, Chip, Stack } from "@mui/material";
+import {
+  Paper,
+  Typography,
+  Divider,
+  Box,
+  Chip,
+  Stack,
+  CardContent,
+  Card,
+} from "@mui/material";
 import DynamicForm from "./form-generator";
 import { useWorkerInvocation } from "@/lib/hooks/use-worker";
-import { Button2 as Button } from "@/components/ui/button";
+import JsonEditor from "@/components/json-editor";
 
 export function InvokeForm({
   invoke,
@@ -35,41 +44,33 @@ export function InvokeForm({
       <DynamicForm config={paramsConfig} onSubmit={onSubmit} />
       {result && (
         <>
-          {" "}
-          <Typography variant="subtitle1" sx={{ fontWeight: "bold", mt: 5 }}>
-            Result:
+        <Divider className="my-2 bg-border"/>
+        <Card sx={{ backgroundColor: "#1e1e1e", color: "#fff" }}>
+        <CardContent>
+          <Typography variant="h6" gutterBottom>
+            Result
           </Typography>
           <Typography variant="body2" className="text-muted-foreground">
             View the result of your latest worker invocation
           </Typography>
-        </>
-      )}
-      {result && (
-        <Box
-          mt={2}
-          p={3}
-          borderRadius={1}
-          overflow="auto"
-          sx={{
-            whiteSpace: "pre-wrap",
-            fontFamily: "monospace",
-            color: "black",
-            fontSize: "0.9rem",
-          }}
-          className="dark:bg-[#0a0a0a] bg-[#dedede] dark:text-[#dedede]"
-        >
           <Box
             component="pre"
             sx={{
-              padding: "10px",
-              overflowX: "auto",
-              marginTop: "8px",
+              backgroundColor: "#121212",
+              padding: 2,
+              borderRadius: 1,
+              color: "#9cdcfe",
+              overflow: "auto",
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
             }}
-            className="dark:bg-[#282c34] bg-white"
           >
-            {JSON.stringify(result, null, 2)}
+          <JsonEditor json={result}/>
           </Box>
-        </Box>
+        </CardContent>
+      </Card>
+      </>
+        
       )}
     </Box>
   );
@@ -125,7 +126,7 @@ export default function InvokePage({ worker }: { worker: Worker }) {
           </Typography>
           <Divider sx={{ marginY: 2, bgcolor: "#555" }} />
           <Stack direction="row" flexWrap="wrap" gap={1}>
-            {exports.map((item, index) =>
+            {exports.map((item) =>
               item.type === "Instance" ? (
                 item?.functions?.map((fun) => {
                   const active =

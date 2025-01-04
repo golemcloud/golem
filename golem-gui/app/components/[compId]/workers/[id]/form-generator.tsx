@@ -1,4 +1,4 @@
-import React, { useId, useMemo } from "react";
+import React, { useEffect, useId, useMemo, useState } from "react";
 import { useForm, Controller, Control, FieldErrors } from "react-hook-form";
 import {
   TextField,
@@ -9,6 +9,9 @@ import {
   Checkbox,
   Select,
   MenuItem,
+  Card,
+  CardContent,
+  Divider,
 } from "@mui/material";
 import { Parameter } from "@/types/api";
 import {
@@ -22,6 +25,9 @@ import {
   Triangle,
   AlignVerticalSpaceAround,
 } from "lucide-react";
+import { transform } from "@/lib/hooks/use-worker";
+import JsonEditor from "@/components/json-editor";
+import { RemoveCircle } from "@mui/icons-material";
 
 type FormData = {
   [key: string]: unknown;
@@ -88,6 +94,7 @@ const generateField = (
     case ["Str", "S8", "S32", "Chr", "S64", "S16"].includes(paramType):
       return (
         <>
+          {/* <Typography>{parameter?.name}</Typography> */}
           <Controller
             key={index}
             name={finalRootKey}
@@ -118,6 +125,7 @@ const generateField = (
     case paramType == "Bool":
       return (
         <>
+          <Typography>{parameter?.name}</Typography>
           <Controller
             key={index}
             name={finalRootKey}
@@ -132,7 +140,7 @@ const generateField = (
                     // }}
                   />
                 }
-                label={parameter.name}
+                label={""}
               />
             )}
           />
@@ -144,6 +152,7 @@ const generateField = (
     case ["F32", "F64", "U32", "U64", "U16", "U8"].includes(paramType):
       return (
         <>
+          {/* <Typography>{parameter?.name}</Typography> */}
           <Controller
             key={index}
             name={finalRootKey}
@@ -178,6 +187,8 @@ const generateField = (
     case paramType === "Record":
       return (
         <>
+          <Typography variant="h6">{parameter.name}</Typography>
+          <Divider className="my-2 bg-border" />
           <Controller
             key={index}
             name={finalRootKey}
@@ -191,8 +202,7 @@ const generateField = (
                   ? parameter?.typ?.fields || []
                   : [];
               return (
-                <div key={`${finalRootKey}`}>
-                  <Typography variant="h6">{parameter.name}</Typography>
+                <Box padding={1} key={`${finalRootKey}`}>
                   {fields?.map(
                     (nestedField: Parameter, nestedIndex: number) => (
                       <Box key={`${finalRootKey}_${nestedField.name}`}>
@@ -208,7 +218,7 @@ const generateField = (
                       </Box>
                     )
                   )}
-                </div>
+                </Box>
               );
             }}
           />
@@ -224,6 +234,8 @@ const generateField = (
       ) as AnalysedType_TypeVariant["cases"];
       return (
         <>
+          <Typography variant="h6">{parameter.name}</Typography>
+          <Divider className="my-2 bg-border" />
           <Controller
             name={`${finalRootKey}`}
             rules={{ required: `${parameter?.name || 0} is Mandatory` }}
@@ -306,44 +318,54 @@ const generateField = (
                   : undefined;
               const listValues = (value || []) as Array<unknown>;
               return inner ? (
-                <>
-                  <Stack
-                    direction="row"
-                    justifyContent={"space-between"}
-                    alignItems={"center"}
-                  >
-                    <Typography>{parameter?.name}</Typography>
-                    <Button
-                      type="button"
-                      onClick={(e) => {
-                        e.preventDefault();
-                        const newTuples = [...listValues, ""];
-                        handleChange(finalRootKey, newTuples);
-                      }}
+                <Box padding={1}>
+                  <>
+                    <Stack
+                      direction="row"
+                      justifyContent={"space-between"}
+                      alignItems={"center"}
                     >
-                      Add Tuple
-                    </Button>
-                  </Stack>
-                  {listValues?.map((_value: unknown, idx: number) => (
-                    <fieldset key={`${finalRootKey}__${idx}`}>
-                      <legend>
-                        {_field.name} {idx}
-                      </legend>
-
-                      {/* Button to Remove Tuple */}
+                      <Typography variant="h6">{parameter.name}</Typography>
                       <Button
                         type="button"
                         onClick={(e) => {
                           e.preventDefault();
-                          const updatedTuples = [
-                            ...listValues.slice(0, idx),
-                            ...listValues.slice(idx + 1),
-                          ];
-                          handleChange(finalRootKey, updatedTuples);
+                          const newTuples = [...listValues, ""];
+                          handleChange(finalRootKey, newTuples);
                         }}
                       >
-                        Remove Tuple
+                        Add Element
                       </Button>
+                    </Stack>
+
+                    <Divider className="my-2 bg-border" />
+                  </>
+                  {listValues?.map((_value: unknown, idx: number) => (
+                    <fieldset key={`${finalRootKey}__${idx}`}>
+                      <Stack
+                        direction={"row"}
+                        justifyContent={"space-between"}
+                        alignItems={"center"}
+                      >
+                        <legend>
+                          {_field.name} {idx}
+                        </legend>
+
+                        {/* Button to Remove Tuple */}
+                        <Button
+                          type="button"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            const updatedTuples = [
+                              ...listValues.slice(0, idx),
+                              ...listValues.slice(idx + 1),
+                            ];
+                            handleChange(finalRootKey, updatedTuples);
+                          }}
+                        >
+                          <RemoveCircle />
+                        </Button>
+                      </Stack>
                       <>
                         {generateField(
                           {
@@ -361,7 +383,7 @@ const generateField = (
                       </>
                     </fieldset>
                   ))}
-                </>
+                </Box>
               ) : (
                 <></>
               );
@@ -414,6 +436,8 @@ const generateField = (
     case paramType === "Tuple":
       return (
         <>
+          <Typography variant="h6">{parameter.name}</Typography>
+          <Divider className="my-2 bg-border" />
           <Controller
             key={index}
             name={finalRootKey}
@@ -519,6 +543,7 @@ const DynamicForm: React.FC<{
   onSubmit: (data: FormData) => void;
 }> = ({ config, onSubmit }) => {
   const id = useId();
+  const [tab, setTab] = useState<number>(0);
   const defaultValues = useMemo(() => {
     return generateDefaultValues(config);
   }, [config]);
@@ -528,11 +553,18 @@ const DynamicForm: React.FC<{
     handleSubmit,
     setValue,
     formState: { errors },
+    getValues,
+    reset,
   } = useForm<FormData>({
     defaultValues: defaultValues,
   });
 
   console.log("defaultValues", defaultValues);
+
+  useEffect(() => {
+    reset(defaultValues);
+    setTab(0);
+  }, [config, reset, defaultValues]);
 
   const handleChange = (key: string, value: unknown) => {
     setValue(key, value, { shouldDirty: true });
@@ -546,15 +578,36 @@ const DynamicForm: React.FC<{
           className="flex justify-between bg-[#dedede] dark:bg-[#0a0a0a] p-2 px-5 mb-10"
         >
           <Box className="flex gap-5">
-            <Button variant="dropdown" size="md">
+            <Button
+              variant="dropdown"
+              size="md"
+              onClick={(e) => {
+                e.preventDefault();
+                setTab(0);
+              }}
+            >
               Form (x)
             </Button>
-            <Button variant="dropdown" size="md">
+            <Button
+              variant="dropdown"
+              size="md"
+              onClick={(e) => {
+                e.preventDefault();
+                setTab(1);
+              }}
+            >
               Preview <AlignVerticalSpaceAround />
             </Button>
           </Box>
           <Box className="flex gap-5">
-            <Button variant="secondary" size="md">
+            <Button
+              variant="secondary"
+              size="md"
+              onClick={(e) => {
+                e.preventDefault();
+                setTab(2);
+              }}
+            >
               Types <ChevronsLeftRight />
             </Button>
             <Button variant="success" size="md" type="submit">
@@ -563,11 +616,61 @@ const DynamicForm: React.FC<{
           </Box>
         </Stack>
         <Stack>
-          {config.map((field, index) => (
-            <Box key={`${id}__${field.name}__${index}`}>
-              {generateField(field, index, "", control, handleChange, errors)}
-            </Box>
-          ))}
+          {tab === 0 &&
+            config.map((field, index) => (
+              <Box key={`${id}__${field.name}__${index}`}>
+                {generateField(field, index, "", control, handleChange, errors)}
+              </Box>
+            ))}
+          {tab === 1 && (
+            <Card sx={{ backgroundColor: "#1e1e1e", color: "#fff" }}>
+              <CardContent>
+                <Typography variant="h6" gutterBottom>
+                  Preview
+                </Typography>
+                <Box
+                  component="pre"
+                  sx={{
+                    backgroundColor: "#121212",
+                    padding: 2,
+                    borderRadius: 1,
+                    color: "#9cdcfe",
+                    overflow: "auto",
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-word",
+                  }}
+                >
+                  <JsonEditor json={getValues()} />
+                </Box>
+              </CardContent>
+            </Card>
+          )}
+          {tab === 2 && (
+            <Card sx={{ backgroundColor: "#1e1e1e", color: "#fff" }}>
+              <CardContent>
+                <Typography variant="h6" gutterBottom>
+                  Preview
+                </Typography>
+                <Box
+                  component="pre"
+                  sx={{
+                    backgroundColor: "#121212",
+                    padding: 2,
+                    borderRadius: 1,
+                    color: "#9cdcfe",
+                    overflow: "auto",
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-word",
+                  }}
+                >
+                  <JsonEditor
+                    // json={{ params: transform(config, getValues()) }}
+                    json={{ params: transform(config, getValues()) }}
+                  />
+                </Box>
+              </CardContent>
+            </Card>
+          )}
         </Stack>
       </form>
     </>
