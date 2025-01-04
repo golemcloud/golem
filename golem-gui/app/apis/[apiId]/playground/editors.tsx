@@ -1,15 +1,17 @@
 "use client";
-import { Paper, TextField } from "@mui/material";
 import React, { useEffect, useState } from "react";
 import useStore from "@/lib/hooks/use-react-flow-store";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import NewRouteForm from "@/components/new-route";
 import CustomModal from "@/components/CustomModal";
 import CreateNewApiVersion from "@/components/create-api-new-version";
+import DeleteApiVersion from "@/components/api-version-deletion";
 
 export default function Editors() {
   const [open, setOpen] = useState<string | null>(null);
   const { apiId } = useParams<{ apiId: string }>();
+  const params = useSearchParams();
+  const version = params.get("version")
   const { trigger, setTrigger, setSelectedNode, setSelectedEdge } = useStore();
   const handleClose = () => {
     setTrigger(null);
@@ -40,6 +42,7 @@ export default function Editors() {
                 <CreateNewApiVersion
                   onSuccess={handleClose}
                   apiId={apiId}
+                  version={version}
                   isExperimental={true}
                 />
               )}
@@ -52,16 +55,16 @@ export default function Editors() {
               )}
               {trigger?.operation === "delete" && (
                 // Chnage it to delete modal. work in progress
-                <TextField placeholder="Enter api version" />
+                <DeleteApiVersion apiId={apiId} version={version}/>
               )}
-              {trigger?.operation === "update" && (
+              {/* {trigger?.operation === "update" && (
                 // Chnage it to update modal. work in progress
                 <CreateNewApiVersion
                   onSuccess={handleClose}
                   apiId={apiId}
                   isExperimental={true}
                 />
-              )}
+              )} */}
               {trigger?.operation === "view" && (
                 // Chnage it to view modal. work in progress
                 <CreateNewApiVersion

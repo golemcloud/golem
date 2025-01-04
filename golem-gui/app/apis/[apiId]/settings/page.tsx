@@ -1,16 +1,21 @@
 "use client";
 
-import React from "react";
+import React, { useState } from "react";
 import DangerZone from "@/components/settings";
 import { useParams, useSearchParams } from "next/navigation";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 import ErrorBoundary from "@/components/erro-boundary";
+import CustomModal from "@/components/CustomModal";
+import DeleteApiVersion from "@/components/api-version-deletion";
 
 const ApiSettings = () => {
   const { apiId} = useParams<{apiId:string}>();
   const params = useSearchParams();
   const version = params.get("version");
-  const { deleteVersion, error, isLoading } = useApiDefinitions(apiId)
+  const { apiDefinitions,error, isLoading } = useApiDefinitions(apiId, version)
+    const [open, setOpen] = useState<boolean>(false);
+  
+  const handleClose = ()=>setOpen(false);
 
   const actions = [
     {
@@ -18,7 +23,7 @@ const ApiSettings = () => {
       description: "Once you delete an API, there is no going back. Please be certain.",
       buttonText: `Delete Version ${version || ""}`,
       disabled: !!error || isLoading,
-      onClick: (e:React.MouseEvent<HTMLButtonElement>) => {e?.preventDefault(); if(error){return}deleteVersion(apiId, version)},
+      onClick: (e:React.MouseEvent<HTMLButtonElement>) => {e?.preventDefault(); if(error){return}setOpen(true)},
     },
     {
       title: "Delete All API Versions",
@@ -38,6 +43,13 @@ const ApiSettings = () => {
         description="Manage your API settings."
         actions={actions}
       />
+        <CustomModal
+        open={!!open}
+        onClose={handleClose}
+        heading={`Delete Api version`}
+      >
+          <DeleteApiVersion apiId={apiId} version={apiDefinitions?.[apiDefinitions?.length-1]?.version} onSuccess={handleClose}/>
+      </CustomModal>
     </div>
   );
 };

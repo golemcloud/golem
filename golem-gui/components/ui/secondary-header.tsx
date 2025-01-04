@@ -21,7 +21,7 @@ import {
   useSearchParams,
   useRouter,
 } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Button2 } from "@/components/ui/button";
 import { Dropdown } from "@/components/ui/dropdown-button";
 import PlayForWorkIcon from "@mui/icons-material/PlayForWork";
@@ -30,7 +30,16 @@ import { VersionFilter } from "@/app/apis/[apiId]/apis-filter";
 import CustomModal from "../CustomModal";
 import CreateNewApiVersion from "../create-api-new-version";
 import DeploymentCreationPage from "../deployment-creation";
+import NewRouteForm from "../new-route";
+import DeleteApiVersion from "../api-version-deletion";
+import { downloadApi } from "@/lib/hooks/use-api-definitons";
 
+const actionsMap = {
+  new_version: "Create New Version",
+  new_route: "Create New Route",
+  delete_api_version: "Delete Api Version",
+  deployment: "Create New Deployment",
+} as Record<string,string>
 type secondaryHeaderProps = {
   onClick: () => void;
   variant: string;
@@ -55,10 +64,10 @@ export default function SecondaryHeader({
 
   const [open, setOpen] = useState<string | null>(null);
 
-  const tab = useMemo(() => {
-    const parts = pathname?.split("/") || [];
-    return parts[parts.length - 1] || "overview";
-  }, [pathname]);
+  // const tab = useMemo(() => {
+  //   const parts = pathname?.split("/") || [];
+  //   return parts[parts.length - 1] || "overview";
+  // }, [pathname]);
 
   const router = useRouter();
   let navigationLinks;
@@ -125,9 +134,9 @@ export default function SecondaryHeader({
       list: [
         {
           label: "New Route",
-          onClick: () => router.push(`/apis/${apiId}/new-route`),
+          onClick: () => setOpen("new_route"),
         },
-        { label: "New Version", onClick: () => setOpen("New Version") },
+        { label: "New Version", onClick: () => setOpen("new_version") },
       ],
     },
     {
@@ -136,7 +145,7 @@ export default function SecondaryHeader({
         { label: "Deploy API", onClick: () => setOpen("deployment") },
         {
           label: "Download API",
-          onClick: () => router.push(`/apis/${apiId}/download`),
+          onClick: () => {downloadApi(apiId, version ?? "")},
         },
       ],
     },
@@ -149,7 +158,7 @@ export default function SecondaryHeader({
         },
         {
           label: "Delete Version",
-          onClick: () => router.push(`/apis/${apiId}/delete-version`),
+          onClick: () => setOpen("delete_api_version"),
         },
         {
           label: "Delete All Versions",
@@ -179,6 +188,8 @@ export default function SecondaryHeader({
   const toggleDrawer = (open: boolean) => () => {
     setDrawerOpen(open);
   };
+
+  const handleClose = ()=>setOpen(null);
 
   const ApiName = decodeURIComponent(apiId);
 
@@ -325,22 +336,32 @@ export default function SecondaryHeader({
         )}
       </Drawer>
       <CustomModal
-        open={!!open}
+        open={!!actionsMap[open!]}
         onClose={() => setOpen(null)}
-        heading={`Create ${open}`}
+        heading={`${actionsMap[open!]}`}
       >
-        {open == "New Version" && (
+        {open == "new_version" && (
           <CreateNewApiVersion
             apiId={apiId}
-            // version={apiDefinition.version}
-            onSuccess={() => setOpen(null)}
+            version={version}
+            onSuccess={handleClose}
           />
         )}
         {open == "deployment" && (
           <DeploymentCreationPage
             apiId={apiId}
-            onSuccess={() => setOpen(null)}
+            onSuccess={handleClose}
           />
+        )}
+        {open == "new_route" && (
+          <NewRouteForm
+            apiId={apiId}
+            version={version}
+            onSuccess={handleClose}
+          />
+        )}
+        {open == "delete_api_version" && (
+          <DeleteApiVersion apiId={apiId} version={version} onSuccess={handleClose}/>
         )}
       </CustomModal>
     </Box>

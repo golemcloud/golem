@@ -37,7 +37,7 @@ const NewRouteForm = ({
   onSuccess,
 }: {
   apiId: string;
-  version?: string;
+  version?: string|null;
   onSuccess?: () => void;
   isModal?: boolean;
   isExperimental?: boolean;

@@ -1,6 +1,7 @@
 import { EventMessage } from '@/types/api';
 import { useEffect, useState } from 'react';
 import useSWR from 'swr';
+import { getErrorMessage } from '../utils';
 
 
 
@@ -9,7 +10,9 @@ const websocketFetcher = (url: string) => {
     const ws = new WebSocket(url);
 
     ws.onopen = () => resolve(ws);
-    ws.onerror = (err) => reject(err);
+    ws.onerror = (err) =>{ 
+      console.log("error occurred while connection to backend", err)
+      return reject("something went wrong!");}
   });
 };
 
@@ -82,5 +85,5 @@ export const useWebSocketWithPath = (path: string) => {
 
   const { messages, sendMessage, isConnected, error } = useWebSocket(fullUrl);
 
-  return { messages, sendMessage, isConnected, error };
+  return { messages, sendMessage, isConnected, error: getErrorMessage(error) };
 };

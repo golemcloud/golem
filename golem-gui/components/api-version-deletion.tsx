@@ -9,7 +9,7 @@ type FormData = {
   version: string;
 };
 
-const CreateNewApiVersion = ({
+const DeleteApiVersion = ({
   apiId,
   version,
   isExperimental,
@@ -20,7 +20,7 @@ const CreateNewApiVersion = ({
   isExperimental?: boolean;
   onSuccess?: () => void;
 }) => {
-  const { addNewApiVersionDefinition } = useApiDefinitions(apiId, version);
+  const { deleteVersion } = useApiDefinitions(apiId);
 
   // Initialize react-hook-form
   const {
@@ -35,12 +35,7 @@ const CreateNewApiVersion = ({
 
   const onSubmit = async (data: FormData) => {
     if (isExperimental) return; // Block submission if experimental
-    await addNewApiVersionDefinition(
-      { version: data.version },
-      apiId,
-      version,
-      isExperimental
-    );
+    await deleteVersion(apiId, data.version);
     onSuccess?.(); // Call success callback if provided
   };
 
@@ -68,24 +63,29 @@ const CreateNewApiVersion = ({
               value: /^[0-9]+\.[0-9]+\.[0-9]+$/, // Semantic version pattern
               message: "Version must be in semantic format (e.g., 1.0.0)",
             },
+            validate: (value) => {
+                return version && value !== version ? "Version does not match" : true;
+            }
           }}
           render={({ field }) => (
             <TextField
               {...field}
               label="Version"
               size="small"
-              placeholder="Enter API version (e.g., 1.0.0)"
+              placeholder={`Enter API version ${version}`}
               fullWidth
               margin="normal"
             />
           )}
         />
-        <Typography mb={3} variant="caption">
-          Create new version from API <strong>{version}</strong>
+        <Stack>
+        <Typography  variant="caption">
+          Delete version from API <strong>{version}</strong>
         </Typography>
-        <Typography variant="caption" color="error">
+        <Typography mb={3} variant="caption" color="error">
           {getFormErrorMessage("version", errors)}
         </Typography>
+        </Stack>
 
         {/* Submit Button */}
         <Stack>
@@ -97,7 +97,7 @@ const CreateNewApiVersion = ({
             color={isExperimental ? "error" : "primary"}
             disabled={isExperimental}
           >
-            {isExperimental ? "Experimental Feature" : "Create New"}
+            {isExperimental ? "Experimental Feature" : "Delete Version"}
           </Button>
         </Stack>
       </form>
@@ -105,4 +105,4 @@ const CreateNewApiVersion = ({
   );
 };
 
-export default CreateNewApiVersion;
+export default DeleteApiVersion;

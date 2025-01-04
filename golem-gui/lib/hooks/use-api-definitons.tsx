@@ -88,8 +88,11 @@ function useApiDefinitions(defintionId?: string, version?: string | null) {
     });
 
     if (requestError) {
+      toast.error(requestError);
       return { success: false, error: requestError };
     }
+    toast.success("Successfully created new version.");
+
     mutate(`${ROUTE_PATH}?api-definition-id=${newData.id}`);
     mutate(`${ROUTE_PATH}/${data.id}/${update.version}`);
     mutate(`${ROUTE_PATH}`);
@@ -202,6 +205,7 @@ function useApiDefinitions(defintionId?: string, version?: string | null) {
     }
   };
 
+ 
   const deleteRoute = async (defaultRoute: ApiRoute) => {
     try {
       if (defaultRoute) {
@@ -293,5 +297,36 @@ export async function addNewApiDefinition(
     return { success: false, error: "Something went wrong!. please try again" };
   }
 }
+
+export const downloadApi = async(apiId:string, version?:string)=>{
+
+    try{
+        const {data:apiDefinition,error} = await fetcher(`${ROUTE_PATH}${version ? `/${apiId}/${version}`: `?api-definition-id=${apiId}`}`);
+        
+        const api = Array.isArray(apiDefinition)? apiDefinition[apiDefinition.length-1]: apiDefinition
+        if(!api){
+          return toast.error(`Fialed to downalod: ${error}`)
+        }
+        const jsonString = JSON.stringify(api, null, 2); // Pretty print with 2 spaces
+        const blob = new Blob([jsonString], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `${api.id}-${api.version}.json`; // The name of the file to download
+    
+        // Trigger the download
+        document.body.appendChild(link);
+        link.click();
+    
+        // Clean up and remove the link
+        link.remove();
+        URL.revokeObjectURL(url);
+        return toast.success("Successfully triggered");
+    }catch(err){
+      console.error("error occurred while downlaoding the api", err);
+      toast.error("Something went wrong!")
+    }
+  }
+
 
 export default useApiDefinitions;

@@ -57,7 +57,7 @@ export function ComponentSelect({
             <SelectTrigger>
               <SelectValue placeholder={field.value ?? label} />
             </SelectTrigger>
-            <SelectContent>
+            <SelectContent className="absolute z-[1500]">
               <SelectGroup>
                 <SelectLabel>{label}</SelectLabel>
                 {isLoading ? (
