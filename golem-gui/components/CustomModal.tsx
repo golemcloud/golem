@@ -37,7 +37,7 @@ const CustomModal: React.FC<CustomModalProps> = ({ open, onClose, children, head
             sx={{
               position: "sticky",
               top: 0,
-              zIndex: 1000,
+              zIndex: 10,
               px: 2,
               py:1,
             }}

@@ -18,6 +18,9 @@ import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 import { DeleteForever } from "@mui/icons-material";
 import { ComponentSelect } from "./new-route-select";
 import { Button2 } from "./ui/button";
+import { PopoverDemo } from "./interpolate-tooltip";
+import { InterpolationExpressions,AvailableFunctions } from "./interpolate-tooltip";
+
 
 type FormData = {
   path: string;
@@ -283,9 +286,9 @@ const NewRouteForm = ({
                 fullWidth
                 size="small"
                 variant="outlined"
-                label="Worker Name"
                 placeholder="Worker name in Rib expression"
                 multiline
+                rows={2}
               />
             )}
           />
@@ -295,6 +298,13 @@ const NewRouteForm = ({
             </Typography>
           )}
         </Box>
+        <div className="mt-5 flex items-center">
+          <PopoverDemo>
+            <InterpolationExpressions/>
+          </PopoverDemo>
+          <p className="text-muted-foreground text-xs">Interpolate variables into your Worker ID</p>
+        </div>
+      {/* AvailableFunctions */}
       </Box>
 
       {/* Response */}
@@ -316,12 +326,15 @@ const NewRouteForm = ({
               placeholder="Enter response in Rib expression"
               multiline
               rows={3}
-              sx={{
-                marginTop: 2,
-              }}
             />
           )}
         />
+        <div className="mt-5 flex items-center">
+          <PopoverDemo>
+            <AvailableFunctions compId={component}/>
+          </PopoverDemo>
+          <p className="text-muted-foreground text-xs">Avilable functions</p>
+        </div>
         {errors && errors.response && (
           <Typography variant="inherit" color="error">
             {errors.response.message?.toString()}

@@ -53,36 +53,37 @@ export default function Navbar() {
         {/* Desktop Navigation */}
         <Box sx={{ display: { xs: "none", md: "flex" }, gap: 4 }}>
           {links.map((link) => {
-             const isActive =
-             pathname === link.to ||
-             (link.to !== "/" && pathname.startsWith(link.to));
+            const isActive =
+              pathname === link.to ||
+              (link.to !== "/" && pathname.startsWith(link.to));
             return (
-
-            <Link
-              key={link.name}
-              href={link.comingSoon ? "#" : link.to}
-              style={{ textDecoration: "none", color: "inherit" }}
-            >
-              <ListItem
-                sx={{
-                  padding: "0.3rem 0.8rem",
-                  marginBottom: "0.5rem",
-                  cursor: "pointer",
-                  borderRadius: "3px",
-                  borderBottom:
-                  isActive ? "1px solid #373737" : "transparent",
-                  "&:hover": {
-                    backgroundColor: "#373737",
-                  },
-                }}
-                className={`dark:hover:bg-[#373737] hover:bg-[#C0C0C0]`}
+              <Link
+                key={link.name}
+                href={link.comingSoon ? "#" : link.to}
+                style={{ textDecoration: "none", color: "inherit" }}
               >
-                <ListItemText
-                  primary={`${link.name}${link.comingSoon ? "" : ""}`}
-                />
-              </ListItem>
-            </Link>
-          )})}
+                <ListItem
+                  sx={{
+                    padding: "0.3rem 0.8rem",
+                    marginBottom: "0.5rem",
+                    cursor: "pointer",
+                    borderRadius: "3px",
+                    borderBottom: isActive
+                      ? "1px solid #373737"
+                      : "transparent",
+                    "&:hover": {
+                      backgroundColor: "#373737",
+                    },
+                  }}
+                  className={`dark:hover:bg-[#373737] hover:bg-[#C0C0C0]`}
+                >
+                  <ListItemText
+                    primary={`${link.name}${link.comingSoon ? "" : ""}`}
+                  />
+                </ListItem>
+              </Link>
+            );
+          })}
         </Box>
 
         {/* Mobile Menu and Dark Mode Toggle */}
@@ -106,40 +107,43 @@ export default function Navbar() {
         open={drawerOpen}
         onClose={toggleDrawer(false)}
         PaperProps={{
+          className:
+            "dark:bg-[#0a0a0a] bg-white p-4 border-r border-gray-300 dark:border-[#3f3f3f]",
           sx: {
             width: 250,
-            backgroundColor: "background.default",
           },
         }}
       >
         <List>
           {links.map((link) => {
             const isActive =
-            pathname === link.to ||
-            (link.to !== "/" && pathname.startsWith(link.to));
+              pathname === link.to ||
+              (link.to !== "/" && pathname.startsWith(link.to));
             return (
-            <Link
-              key={link.name}
-              href={link.comingSoon ? "#" : link.to}
-              style={{ textDecoration: "none", color: "inherit" }}
-            >
-              <ListItem
-                sx={{
-                  padding: "0.8rem 1.2rem",
-                  borderBottom:
-                  isActive ? "1px solid #373737" : "transparent",
-                }}
-                className={`dark:hover:bg-[#373737] hover:bg-[#C0C0C0]`}
-                onClick={toggleDrawer(false)}
+              <Link
+                key={link.name}
+                href={link.comingSoon ? "#" : link.to}
+                style={{ textDecoration: "none", color: "inherit" }}
               >
-                <ListItemText
-                  primary={`${link.name}${
-                    link.comingSoon ? " (Coming Soon)" : ""
-                  }`}
-                />
-              </ListItem>
-            </Link>
-          )})}
+                <ListItem
+                  sx={{
+                    padding: "0.8rem 1.2rem",
+                    borderBottom: isActive
+                      ? "1px solid #373737"
+                      : "transparent",
+                  }}
+                  className={`dark:hover:bg-[#373737] hover:bg-[#C0C0C0]`}
+                  onClick={toggleDrawer(false)}
+                >
+                  <ListItemText
+                    primary={`${link.name}${
+                      link.comingSoon ? " (Coming Soon)" : ""
+                    }`}
+                  />
+                </ListItem>
+              </Link>
+            );
+          })}
         </List>
       </Drawer>
     </AppBar>

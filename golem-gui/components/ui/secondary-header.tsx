@@ -354,11 +354,13 @@ export default function SecondaryHeader({
           />
         )}
         {open == "new_route" && (
-          <NewRouteForm
-            apiId={apiId}
-            version={version}
-            onSuccess={handleClose}
-          />
+          <div className="p-5">
+            <NewRouteForm
+              apiId={apiId}
+              version={version}
+              onSuccess={handleClose}
+            />
+          </div>
         )}
         {open == "delete_api_version" && (
           <DeleteApiVersion apiId={apiId} version={version} onSuccess={handleClose}/>
