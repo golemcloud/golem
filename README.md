@@ -11,7 +11,7 @@ See [Golem Cloud](https://golem.cloud) for more information.
 It is possible to start using Golem locally by using our published Docker containers. Please refer to the document link below on how to get golem OSS running using docker.
 https://learn.golem.cloud/docs/quickstart#setting-up-golem
 
-Once you have Golem running locally, you can use `golem-cli` to interact with Golem services.
+Once you have Golem running locally, you can use `golem-cli` to interact with Golem servic
 
 ```bash
 
