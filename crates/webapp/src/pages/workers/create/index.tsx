@@ -90,7 +90,6 @@ export default function CreateWorker() {
     );
     rest.args = rest.args.filter((x: any) => x && x.trim().length > 0);
 
-    console.log("submit before", rest);
     API.createWorker(componentID, rest).then((response) => {
       navigate(
         `/components/${componentId}/workers/${response.workerId.workerName}`

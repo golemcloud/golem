@@ -15,13 +15,11 @@ export class WSS {
 
     public send(data: never) {
         this.ws.send(JSON.stringify(data)).then(() => {
-            console.log("Sent")
         }).catch(console.error)
     }
 
     public close() {
         this.ws.disconnect().then(() => {
-            console.log("Disconnected")
         }).catch(console.error)
     }
 

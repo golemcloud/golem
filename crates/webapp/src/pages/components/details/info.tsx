@@ -66,7 +66,6 @@ export default function ComponentInfo() {
         async (response) => {
           const blob = await response.blob();
           const arrayBuffer = await blob.arrayBuffer();
-          console.log("arrayBuffer");
 
           // Specify the file name and path
           const fileName = `${componentId}.wasm`;

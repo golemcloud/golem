@@ -156,43 +156,43 @@ export class Service {
     }
 
     private callApi =
-        async (url: string, method: string = "GET", data: FormData | string | null = null,
-               headers = {'Content-Type': 'application/json'}): Promise<any> => {
-            const resp = await fetch(`${this.baseUrl}${url}`, {
+    async (url: string, method: string = "GET", data: FormData | string | null = null,
+           headers = { 'Content-Type': 'application/json' }): Promise<any> => {
+        try {
+            const response = await fetch(`${this.baseUrl}${url}`, {
                 method: method,
                 body: data,
                 headers: headers
-            }).then(res => {
-                if (res.ok) {
-                    console.log(res)
-                    return res.json()
-                } else {
-                    if(method !== "GET") {
-                        let errorTitle = "Api is Failed check the api details"
-                        console.log(res)
-                        res.json().then(err => {
-                            errorTitle = err?.golemError?.message || errorTitle
-                        })
-                        toast({
-                            title: errorTitle,
-                            variant: "destructive",
-                        })
-                    }
-                    throw res;
-                }
+            });
 
-            }).catch(err => {
-                if(method !== "GET") {
-                toast({
-                    title: "Api is Failed check the api details",
-                    variant: "destructive",
-                });
+            const contentType = response.headers.get('Content-Type');
+            let responseData: any;
+
+            if (contentType && contentType.includes('application/json')) {
+                responseData = await response.json();
+            } else {
+                responseData = await response.text();
+            }
+            if (response.ok) {
+                return responseData;
+            } else {
+                throw responseData;
+            }
+        } catch (response : any) {
+            if (method !== "GET") {
+                let descriptions = response;
+                if(response?.error) {
+                    descriptions = response?.error;
+                } 
+                    toast({
+                        title: "API request failed.",
+                        description: descriptions,
+                        variant: "destructive",
+                    });
                 }
-                throw err
-            })
-            console.log("callApi", resp)
-            return resp;
-        }
+                throw response;
+            }
+    }
 
 
         private downloadApi =
@@ -204,7 +204,6 @@ export class Service {
                 headers: headers
             }).then(res => {
                 if (res.ok) {
-                    console.log(res)
                     return res
                 }
             }).catch(err => {
@@ -214,7 +213,6 @@ export class Service {
                 });
                 throw err
             })
-            console.log("callApi", resp)
             return resp;
         }
 

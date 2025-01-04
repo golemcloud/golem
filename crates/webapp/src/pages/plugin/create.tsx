@@ -125,8 +125,6 @@ export default function CreatePlugin() {
     });
   }
 
-  console.log(form, "form");
-
   return (
     <div className="container mx-auto py-10">
       <Card className="max-w-4xl mx-auto">

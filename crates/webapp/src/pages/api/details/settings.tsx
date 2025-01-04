@@ -27,6 +27,7 @@ export default function APISettings() {
   const navigate = useNavigate();
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   const [showConfirmAllDialog, setShowConfirmAllDialog] = useState(false);
+  const [showConfirmAllRoutes, setShowConfirmAllRoutes] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const { apiName } = useParams();
   const [apiDetails, setApiDetails] = useState([] as Api[]);
@@ -60,8 +61,7 @@ export default function APISettings() {
         setShowConfirmDialog(false);
         setIsDeleting(false);
       })
-      .catch((error) => {
-        console.error(error);
+      .catch(() => {
         setIsDeleting(false);
       });
   };
@@ -79,27 +79,32 @@ export default function APISettings() {
         });
         setShowConfirmAllDialog(false);
         navigate(`/apis`);
+        setIsDeleting(false);
       })
-      .catch((error) => {
-        console.error(error);
+      .catch(() => {
         setIsDeleting(false);
       });
   };
 
   const handleDeleteAllRoutes = async () => {
+    setIsDeleting(true);
     const payload = {
       ...activeApiDetails,
       routes: [],
     };
-    API.putApi(activeApiDetails.id, activeApiDetails.version, payload).then(
-      () => {
+    API.putApi(activeApiDetails.id, activeApiDetails.version, payload)
+      .then(() => {
         toast({
           title: "All routes deleted",
           description: "All routes have been deleted successfully.",
         });
         navigate(`/apis/${apiName}`);
-      }
-    );
+        setShowConfirmAllRoutes(false);
+        setIsDeleting(false);
+      })
+      .catch(() => {
+        setIsDeleting(false);
+      });
   };
 
   return (
@@ -209,7 +214,7 @@ export default function APISettings() {
                   <Button
                     variant="outline"
                     className="border-destructive/20 text-destructive hover:bg-destructive/10"
-                    onClick={handleDeleteAllRoutes}
+                    onClick={() => setShowConfirmAllRoutes(true)}
                   >
                     Delete All Routes
                   </Button>
@@ -217,7 +222,6 @@ export default function APISettings() {
               </div>
             </div>
 
-            {/* Confirmation Dialog for Single Version Delete */}
             <Dialog
               open={showConfirmDialog}
               onOpenChange={setShowConfirmDialog}
@@ -232,13 +236,6 @@ export default function APISettings() {
                 </DialogHeader>
                 <DialogFooter>
                   <Button
-                    variant="outline"
-                    onClick={() => setShowConfirmDialog(false)}
-                    disabled={isDeleting}
-                  >
-                    Cancel
-                  </Button>
-                  <Button
                     variant="destructive"
                     onClick={handleDeleteVersion}
                     disabled={isDeleting}
@@ -249,7 +246,6 @@ export default function APISettings() {
               </DialogContent>
             </Dialog>
 
-            {/* Confirmation Dialog for Delete All */}
             <Dialog
               open={showConfirmAllDialog}
               onOpenChange={setShowConfirmAllDialog}
@@ -266,15 +262,34 @@ export default function APISettings() {
                 </DialogHeader>
                 <DialogFooter>
                   <Button
-                    variant="outline"
-                    onClick={() => setShowConfirmAllDialog(false)}
-                    disabled={isDeleting}
-                  >
-                    Cancel
-                  </Button>
-                  <Button
                     variant="destructive"
                     onClick={handleDeleteAll}
+                    disabled={isDeleting}
+                  >
+                    {isDeleting ? "Deleting..." : "Yes, delete all"}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
+            <Dialog
+              open={showConfirmAllRoutes}
+              onOpenChange={setShowConfirmAllRoutes}
+            >
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>
+                    Are you sure you want to delete all routes?
+                  </DialogTitle>
+                  <DialogDescription>
+                    This action cannot be undone. This will permanently delete
+                    all routes and remove all associated data.
+                  </DialogDescription>
+                </DialogHeader>
+                <DialogFooter>
+                  <Button
+                    variant="destructive"
+                    onClick={handleDeleteAllRoutes}
                     disabled={isDeleting}
                   >
                     {isDeleting ? "Deleting..." : "Yes, delete all"}

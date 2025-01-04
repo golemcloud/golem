@@ -99,7 +99,6 @@ export default function WorkerInvoke() {
           (functionItem: ComponentExportFunction) => functionItem.name === fn
         );
         setFunctionDetails(functions);
-        console.log(functions, "functions");
         const formatted = formatJSON(
           JSON.stringify(parseToJsonEditor(functions))
         );
@@ -124,7 +123,6 @@ export default function WorkerInvoke() {
       const sanitizedValue = sanitizeInput(value);
       const parsedValue = JSON.parse(sanitizedValue);
       const apiData = parseToApiPayload(parsedValue, functionDetails);
-      console.log(apiData, "apiData");
       const functionName = `${encodeURIComponent(
         name || ""
       )}.${encodeURIComponent(`{${fn}}`)}`;
@@ -134,8 +132,6 @@ export default function WorkerInvoke() {
         functionName,
         apiData
       );
-
-      console.log(response, "response");
 
       const formattedResponse = formatJSON(
         JSON.stringify(response?.result?.value)
