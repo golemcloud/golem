@@ -1561,7 +1561,7 @@ async fn fork_worker_4(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 #[tracing::instrument]
 #[timeout(120000)]
 async fn fork_worker_divergence(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let component_id = deps.store_component("shopping-cart").await;
+    let component_id = deps.store_component("environment-service").await;
 
     let source_worker_id = WorkerId {
         component_id: component_id.clone(),
