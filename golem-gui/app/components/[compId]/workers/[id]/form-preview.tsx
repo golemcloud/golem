@@ -5,7 +5,7 @@ const FunctionInvocationPreview = () => {
   const [formData, setFormData] = useState({ type: "Tuple", items: [{ type: "Str" }], value: [""] });
   const [view, setView] = useState("Form");
 
-  const handleInputChange = (event:any) => {
+  const handleInputChange = (event:React.ChangeEvent<HTMLInputElement>) => {
     const { value } = event.target;
     setFormData((prev) => ({
       ...prev,
