@@ -4,6 +4,7 @@ import React, { useCallback, useMemo, useState } from "react";
 import {
   Box,
   InputAdornment,
+  Pagination,
   TextField,
   Typography,
 } from "@mui/material";
@@ -23,6 +24,7 @@ const ComponentsPage = () => {
   const [open, setOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const { apiDefinitions, isLoading, error } = useApiDefinitions();
+  const [currentPage, setCurrentPage] = useState(1);
   const router = useRouter();
 
   const handleOpen = () => setOpen(true);
@@ -57,10 +59,17 @@ const ComponentsPage = () => {
         new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
     );
   }, [apiDefinitions]).filter(checkForMatch);
+ const itemsPerPage=15
+  const totalPages = Math.ceil(finalApis.length / itemsPerPage);
+  const paginatedApis = useMemo(() => {
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    const endIndex = startIndex + itemsPerPage;
+    return finalApis.slice(startIndex, endIndex);
+  }, [finalApis, currentPage]);
 
   return (
-    <main className="mx-auto max-w-7xl px-6 lg:px-8 min-h-[calc(100svh-84px)] py-4 flex h-full w-full flex-1 flex-col">
-      <Box className="mx-auto max-w-2xl lg:max-w-none gap-6 flex h-full w-full flex-1 flex-col">
+    <main className="mx-auto max-w-7xl px-6 lg:px-8">
+      <Box className="mx-auto max-w-2xl lg:max-w-none gap-6 flex flex-1 flex-col py-6">
        {error && <ErrorBoundary message={error}/>}
         {!error && !isLoading && (
           <>
@@ -68,7 +77,7 @@ const ComponentsPage = () => {
               display="flex"
               justifyContent="space-between"
               alignItems="center"
-              mb={1}
+              mb={2}
               gap={2}
             >
               <TextField
@@ -130,9 +139,9 @@ const ComponentsPage = () => {
                 </Typography>
               </Box>
             ) : (
-              <Box className="grid w-full grid-cols-1 gap-3 lg:grid-cols-2 xl:grid-cols-3  mt-2">
+              <Box className="grid w-full grid-cols-1  lg:grid-cols-2 xl:grid-cols-3  gap-6">
                 {!isLoading &&
-                  finalApis.map((api: ApiDefinition) => (
+                  paginatedApis.map((api: ApiDefinition) => (
                     <ApiInfoCard
                       key={api.id}
                       name={api.id}
@@ -144,7 +153,15 @@ const ComponentsPage = () => {
                   ))}
               </Box>
             )}
-
+            <Box mt={4} display="flex" justifyContent="center">
+              <Pagination
+                count={totalPages}
+                page={currentPage}
+                onChange={(_, value) => setCurrentPage(value)}
+                color="primary"
+                className="pagination"
+              />
+            </Box>
             <CustomModal
               open={open}
               onClose={handleClose}

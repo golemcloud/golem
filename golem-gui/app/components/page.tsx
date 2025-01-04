@@ -24,6 +24,7 @@ import { Button2 } from "@/components/ui/button";
 import clsx from "clsx";
 import ComponentTable from "@/components/ui/generic-table";
 import ErrorBoundary from "@/components/erro-boundary";
+import NotFoundCard from "@/components/not-found-card";
 
 const ComponentsPage = () => {
   const [open, setOpen] = useState(false);
@@ -97,7 +98,7 @@ const ComponentsPage = () => {
               display="flex"
               justifyContent="space-between"
               alignItems="center"
-              mb={3}
+              mb={2}
               gap={2}
             >
               {/* Need to debounce logic to reduce the computation*/}
@@ -204,25 +205,7 @@ const ComponentsPage = () => {
                 />
               )
             ) : (
-              <Box
-                sx={{
-                  color: "#aaa",
-                  textAlign: "center",
-                  py: 8,
-                  border: "2px dashed #333",
-                  borderRadius: 2,
-                }}
-              >
-                <Box display="flex" justifyContent="center" mb={2}>
-                  <WidgetsIcon sx={{ fontSize: 40, color: "#666" }} />
-                </Box>
-                <Typography variant="h6" fontWeight="bold" gutterBottom>
-                  No Project Components
-                </Typography>
-                <Typography variant="body2" color="grey.500">
-                  Create a new component to get started.
-                </Typography>
-              </Box>
+               <NotFoundCard heading="No Components available" subheading="Create a  new component to get started" icon={<WidgetsIcon fontSize="large"/>}/>
             )}
             {/* Pagination Controls */}
             {/* TODO handle pagination dark theme and light theme */}
