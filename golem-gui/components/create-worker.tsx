@@ -12,7 +12,6 @@ import {
   Select,
   TextField,
   Typography,
-  Paper
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import RemoveIcon from "@mui/icons-material/Remove";
@@ -23,6 +22,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { addNewWorker } from "@/lib/hooks/use-worker";
 import {getFormErrorMessage} from "@/lib/utils"
 import { useRouter } from "next/navigation";
+import { Button2 } from "./ui/button";
 
 interface FormData {
   component: string;
@@ -98,26 +98,18 @@ const removeArgumentVar = (index: number) => {
   };
 
   return (
-    <Paper
-      component="form"
-      elevation={4}
-      onSubmit={handleSubmit(onSubmit)}
-      sx={{
-        width: "100%",
-        p: 3,
-      }}
-    >
+    <form className="p-5" onSubmit={handleSubmit(onSubmit)}>
       <Box sx={{ display: "flex", gap: 2}}>
         <FormControl fullWidth>
           <Typography variant="body2" sx={{ mb: 1 }}>
-            Component
+            Select Component
           </Typography>
           <Controller
             name="component"
             control={control}
             rules={{required: 'Component is required!'}}
             render={({ field }) => (
-              <Select {...field}>
+              <Select {...field} size="small">
                 {components?.map((component: Component) => (
                   <MenuItem
                     key={component.versionedComponentId.componentId}
@@ -143,13 +135,15 @@ const removeArgumentVar = (index: number) => {
             <TextField
               {...field}
               fullWidth
+              size="small"
               label="Worker Name"
               variant="outlined"
             />
           )}
         />
-        <Button
-          variant="contained"
+        <Button2
+          variant="primary"
+          size="sm"
           sx={{ textTransform: "none" }}
           onClick={(e) => {
             e.preventDefault();
@@ -157,7 +151,7 @@ const removeArgumentVar = (index: number) => {
           }}
         >
           Generate
-        </Button>
+        </Button2>
       </Box>
       <Typography variant="caption" color="error">{getFormErrorMessage("workerName", errors)}</Typography>{}
       {/* Environment Variables */}
@@ -166,22 +160,24 @@ const removeArgumentVar = (index: number) => {
           sx={{
             display: "flex",
             justifyContent: "space-between",
-            alignItems: "center",
+            alignItems: "flex-end",
             gap: 2,
-            mb: 2,
+            my: 2,
+
           }}
         >
-          <Typography variant="body2" sx={{ mb: 1 }}>
+          <Typography variant="body2" >
             Environment Variables
           </Typography>
-          <Button
+          <Button2
             startIcon={<AddIcon />}
-            variant="outlined"
+            variant="primary"
+            size="sm"
             sx={{ textTransform: "none" }}
             onClick={addEnvVar}
           >
             Add
-          </Button>
+          </Button2>
         </Box>
         {fields.map((item, index) => (
           <Box
@@ -195,6 +191,7 @@ const removeArgumentVar = (index: number) => {
               render={({ field }) => (
                 <TextField
                   {...field}
+                  size="small"
                   fullWidth
                   label="Key"
                   variant="outlined"
@@ -206,12 +203,12 @@ const removeArgumentVar = (index: number) => {
               name={`envVars[${index}].value`}
               control={control}
               render={({ field }) => (
-                <OutlinedInput {...field} fullWidth type="password" />
+                <OutlinedInput size="small" {...field} fullWidth type="password" />
               )}
             />
-            <IconButton onClick={() => removeEnvVar(index)}>
-              <RemoveIcon sx={{ bgcolor: "#71bdf6", borderRadius: "50%" }} />
-            </IconButton>
+            <Button2 variant="error" size="sm" onClick={() => removeEnvVar(index)}>
+              <RemoveIcon />
+            </Button2>
           </Box>
         ))}
       </Box>
@@ -232,14 +229,14 @@ const removeArgumentVar = (index: number) => {
           <Typography variant="body2" sx={{ mb: 1 }}>
             Arguments
           </Typography>
-          <Button
+          <Button2
             startIcon={<AddIcon />}
-            variant="outlined"
-            sx={{ textTransform: "none" }}
+            variant="primary"
+            size="sm"
             onClick={addArgument}
           >
             Add
-          </Button>
+          </Button2>
         </Box>
         {argumentFields.map((item, index) => (
           <Box
@@ -253,36 +250,31 @@ const removeArgumentVar = (index: number) => {
               render={({ field }) => (
                 <TextField
                   {...field}
+                  size="small"
                   fullWidth
                   label={`Argument ${index + 1}`}
                   variant="outlined"
                 />
               )}
             />
-            <IconButton onClick={() => removeArgumentVar(index)}>
-              <RemoveIcon sx={{ bgcolor: "#71bdf6", borderRadius: "50%" }} />
-            </IconButton>
+            <Button2 variant="error" size="sm" onClick={() => removeArgumentVar(index)}>
+              <RemoveIcon />
+            </Button2>
           </Box>
         ))}
       </Box>
       {error && <Typography variant="caption" color="error">{error}</Typography>}  
       {/* Create Worker Button */}
-      <Box sx={{ textAlign: "center" }}>
-        <Button
+      <Box sx={{ textAlign: "end" }}>
+        <Button2
           type="submit"
-          variant="contained"
-          sx={{
-            textTransform: "none",
-            width: "100%",
-            py: 1.5,
-            backgroundColor: "#1976d2",
-            ":hover": { backgroundColor: "#125ea5" },
-          }}
+          variant="primary"
+          size="md"
         >
           Create Worker
-        </Button>
+        </Button2>
       </Box>
-    </Paper>
+    </form>
   );
 };
 

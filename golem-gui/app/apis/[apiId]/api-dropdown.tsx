@@ -1,16 +1,10 @@
-import CustomModal from "@/components/CustomModal";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
-  DropdownMenuPortal,
   DropdownMenuSeparator,
-  DropdownMenuShortcut,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import ArrowDropDownIcon from "@mui/icons-material/ArrowDropDown";
@@ -40,7 +34,7 @@ export function ApiDropdown({ dropdowns }: ApiDropdownProps) {
       <DropdownMenuContent className="w-56">
         {dropdowns.map((dropdown, index) => (
           <div key={index}>
-            <DropdownMenuLabel>{dropdown.heading}</DropdownMenuLabel>
+            <DropdownMenuLabel className="text-muted-foreground">{dropdown.heading}</DropdownMenuLabel>
             <DropdownMenuSeparator />
             <DropdownMenuGroup>
               {dropdown.list.map((item, idx) => (

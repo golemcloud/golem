@@ -11,7 +11,7 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
-import { Button2 as Button } from "@/components/ui/button";
+import { Button2 as Button, Button2 } from "@/components/ui/button";
 import {
   Add as AddIcon,
   Delete as DeleteIcon,
@@ -127,11 +127,11 @@ export const PluginsPage = () => {
                   </Typography>
                 </Box>
                 <Tooltip title="Delete plugin">
-                  <IconButton
+                  <Button2 variant="error" size="sm"
                     onClick={() => deletePlugin(plugin.name, plugin.version)}
                   >
                     <DeleteIcon color="error" />
-                  </IconButton>
+                  </Button2>
                 </Tooltip>
               </Box>
               <Box marginTop={2}>
@@ -153,8 +153,6 @@ export const PluginsPage = () => {
                 {plugin.specs.type === "OplogProcessor" && (
                   <Box
                     marginTop={2}
-                    padding={2}
-                  
                     borderRadius={1}
                   >
                     <Typography variant="body2" className="text-muted-foreground">
@@ -209,7 +207,7 @@ export const PluginsPage = () => {
           </Grid>
         )}
       </Grid>
-      <CustomModal open={open} onClose={handleClose} heading={"Create Plugin"}>
+      <CustomModal open={open} onClose={handleClose} heading={"Create New Plugin"}>
         <CreatePluginForm />
       </CustomModal>
     </Container>

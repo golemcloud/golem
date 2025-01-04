@@ -17,6 +17,7 @@ import { Loader } from "lucide-react";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 import { DeleteForever } from "@mui/icons-material";
 import { ComponentSelect } from "./new-route-select";
+import { Button2 } from "./ui/button";
 
 type FormData = {
   path: string;
@@ -122,7 +123,7 @@ const NewRouteForm = ({
       sx={{
         width: isModal ? "50%" : "100%",
         margin: "auto",
-        padding: 10,
+        // padding: 10,
       }}
     >
       {isExperimental && (
@@ -130,7 +131,7 @@ const NewRouteForm = ({
           variant="h5"
           fontWeight="bold"
           mb={2}
-          className="text-red-500 text-center"
+          className="text-red-600 text-center border border-red-300 rounded-lg shadow-lg font-thin"
         >
           Experimental. Coming soon!
         </Typography>
@@ -158,7 +159,7 @@ const NewRouteForm = ({
         <Typography variant="body2" sx={{ color: "#AAA" }}>
           Each API Route must have a unique Method + Path combination
         </Typography>
-        <Box className="my-5">
+        <Box className="flex flex-wrap gap-2 my-5">
           {[
             "Get",
             "Post",
@@ -183,7 +184,6 @@ const NewRouteForm = ({
                   sx={{
                     textTransform: "none",
                     padding: "4px 10px",
-                    marginInline: "5px",
                     borderRadius: "8px",
                     backgroundColor:
                       watch("method") === method ? "#696969" : "transparent",
@@ -336,22 +336,21 @@ const NewRouteForm = ({
       <Box
         sx={{ marginTop: 4, display: "flex", justifyContent: "space-between" }}
       >
-        <Button
-          variant="outlined"
-          sx={{ color: "#FFF", borderColor: "#555" }}
-          className="dark:text-[#FFF] dark:hover:bg-[#696969] text-gray-700 hover:bg-[#C0C0C0] dark:border-[#555]  "
+        <Button2
+          variant="dropdown"
+          size="lg"
           onClick={() => reset()}
         >
           Clear
-        </Button>
-        <Button
-          variant="contained"
-          color="primary"
+        </Button2>
+        <Button2
+          variant="primary"
+          size="lg"
           onClick={handleSubmit(onSubmit)}
           disabled={!!versionNotFound}
         >
           {defaultRoute ? "Update" : "Create"} Route
-        </Button>
+        </Button2>
       </Box>
     </Box>
   );

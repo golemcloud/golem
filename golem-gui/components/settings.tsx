@@ -17,7 +17,7 @@ type SettingProps = {
     };
 const DangerZone = ({ title, description, actions }: SettingProps) => {
   return (
-    <div className=" p-4">
+    <div >
       <Box className="flex flex-col">
         <Typography variant="h6">{title}</Typography>
         <Typography variant="subtitle1" gutterBottom className="text-muted-foreground">

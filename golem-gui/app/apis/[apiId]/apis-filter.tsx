@@ -20,7 +20,7 @@ export function VersionFilter() {
     }, [apiDefinitions]);
   
     // Using useRef to keep track of the selected version
-    const selectedVersionRef = useRef<string[]>(["-1"]);
+    const selectedVersionRef = useRef<string[]>([versions[0]?.value]);
   
     // Sync selected version from search params
     useEffect(() => {
@@ -47,8 +47,9 @@ export function VersionFilter() {
       return parts[parts.length - 1] || "overview";
     }, [pathname]);
   
-    const handleChange = (e:any) => {
-      router.push(`/apis/${apiId}/${tab}?version=${e.target.value}`);
+    const handleChange = (value: string[]) => {
+      console.log(value);
+      router.push(`/apis/${apiId}/${tab}?version=${value[0]}`);
     };
   
   
@@ -58,7 +59,7 @@ export function VersionFilter() {
           selectMode="single"
           buttonType={{variant:"success", size:"icon_sm"}}
           options={versions}
-          onValueChange={(event)=> handleChange}
+          onValueChange={handleChange}
           defaultValue={selectedVersionRef.current}
           className="min-w-15"
           variant="inverted"

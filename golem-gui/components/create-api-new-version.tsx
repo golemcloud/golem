@@ -1,14 +1,9 @@
 import React from "react";
-import {
-  Box,
-  Button,
-  TextField,
-  Typography,
-  Stack,
-} from "@mui/material";
+import { Box, TextField, Typography, Stack } from "@mui/material";
 import { useForm, Controller } from "react-hook-form";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 import { getFormErrorMessage } from "@/lib/utils";
+import {Button2 as Button} from "./ui/button";
 
 type FormData = {
   version: string;
@@ -52,7 +47,7 @@ const CreateNewApiVersion = ({
           variant="h5"
           fontWeight="bold"
           mb={2}
-          className="text-red-500 text-center"
+          className="text-red-600 text-center border border-red-300 rounded-lg shadow-lg font-thin"
         >
           Experimental. Coming soon!
         </Typography>
@@ -74,6 +69,7 @@ const CreateNewApiVersion = ({
             <TextField
               {...field}
               label="Version"
+              size="small"
               placeholder="Enter API version (e.g., 1.0.0)"
               fullWidth
               margin="normal"
@@ -84,15 +80,16 @@ const CreateNewApiVersion = ({
           Create new version from API <strong>{version}</strong>
         </Typography>
         <Typography variant="caption" color="error">
-                    {getFormErrorMessage("version", errors)}
-                  </Typography>
+          {getFormErrorMessage("version", errors)}
+        </Typography>
 
         {/* Submit Button */}
         <Stack>
           <Button
             type="submit"
             className="self-end"
-            variant="contained"
+            variant="primary"
+            size="md"
             color={isExperimental ? "error" : "primary"}
             disabled={isExperimental}
           >

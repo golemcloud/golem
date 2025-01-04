@@ -19,6 +19,7 @@ import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 import { addNewApiDeployment } from "@/lib/hooks/use-api-deployments";
 import { getFormErrorMessage } from "@/lib/utils";
 import { toast } from "react-toastify";
+import RemoveIcon from "@mui/icons-material/Remove";
 
 interface KeyValue {
   id: string;
@@ -88,9 +89,8 @@ export default function DeploymentCreationPage({
   };
 
   return (
-    <>
+    <div className="p-5">
       <Typography gutterBottom>Deploy your API on Golem Cloud</Typography>
-
       <form onSubmit={handleSubmit(onSubmit)}>
         <Stack gap={2} className="w-full">
           <Stack>
@@ -99,7 +99,7 @@ export default function DeploymentCreationPage({
               name="domain"
               control={control}
               rules={{ required: "Domain is required." }}
-              render={({ field }) => <TextField {...field} />}
+              render={({ field }) => <TextField size="small" {...field} />}
             />
 
             <Typography variant="caption" color="error">
@@ -112,7 +112,7 @@ export default function DeploymentCreationPage({
               name="subdomain"
               control={control}
               rules={{ required: "Subdomain is required." }}
-              render={({ field }) => <TextField {...field} />}
+              render={({ field }) => <TextField size="small" {...field} />}
             />
             <Typography variant="caption" color="error">
               {getFormErrorMessage("subdomain", errors)}
@@ -126,10 +126,12 @@ export default function DeploymentCreationPage({
         <Stack
           direction="row"
           justifyContent={"space-between"}
-          alignItems={"center"}
+          alignItems={"end"}
         >
           <Typography>Include one or more API definitions to deploy</Typography>
           <Button
+            variant="primary"
+            size="md"
             onClick={(e) => {
               e.preventDefault();
               setValue("definitions", [
@@ -141,7 +143,7 @@ export default function DeploymentCreationPage({
             Add <AddCircleOutlineIcon />
           </Button>
         </Stack>
-        <Divider className="my-2" />
+        <Divider className="my-2 bg-border" />
 
         <Stack>
           <Controller
@@ -168,6 +170,7 @@ export default function DeploymentCreationPage({
                         <Stack className="w-full">
                           {index === 0 && <InputLabel>Definition</InputLabel>}
                           <Select
+                            size="small"
                             name={`definition[${index}].id`}
                             variant="outlined"
                             disabled={isLoading || apiDefinitions?.length === 0}
@@ -201,8 +204,8 @@ export default function DeploymentCreationPage({
                           {index === 0 && <InputLabel>Version</InputLabel>}
                           <Select
                             name={`definition[${index}].version`}
+                            size="small"
                             value={definitions[index].version}
-                            variant="outlined"
                             disabled={isLoading || apiDefinitions?.length === 0}
                             onChange={(e) => {
                               const newDef = {
@@ -232,8 +235,8 @@ export default function DeploymentCreationPage({
                         <Stack>
                           <InputLabel>Delete</InputLabel>
                           <Button
-                            variant={"destructive"}
-                            size={"icon"}
+                            variant="error"
+                            size="sm"
                             onClick={(e) => {
                               e.preventDefault();
                               setValue("definitions", [
@@ -242,7 +245,7 @@ export default function DeploymentCreationPage({
                               ]);
                             }}
                           >
-                            <DeleteIcon />
+                            <RemoveIcon />
                           </Button>
                         </Stack>
                       </Stack>
@@ -258,11 +261,16 @@ export default function DeploymentCreationPage({
         </Stack>
         {error && <Typography className="text-red-500">{error}</Typography>}
         <Stack>
-          <Button type="submit" className="mt-4 self-end">
+          <Button
+            type="submit"
+            variant="primary"
+            size="lg"
+            className="mt-4 self-end"
+          >
             Deploy
           </Button>
         </Stack>
       </form>
-    </>
+    </div>
   );
 }

@@ -36,6 +36,7 @@ export default function DeploymentPage() {
           fullWidth
           variant="outlined"
           label="Domain"
+          size="small"
           name="domain"
           placeholder="Domain"
           InputLabelProps={{ style: { color: "#AAA" } }}
@@ -47,6 +48,7 @@ export default function DeploymentPage() {
         <TextField
           fullWidth
           variant="outlined"
+          size="small"
           label="Subdomain"
           name="subdomain"
           placeholder="Subdomain"

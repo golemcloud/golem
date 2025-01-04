@@ -136,7 +136,7 @@ export default function Page() {
         </Box>
         {isLoading && <Loader />}
         {deployments.length === 0 ? (
-          <Typography variant="body2">
+          <Typography variant="body2" className="text-muted-foreground">
             No routes defined for this API version.
           </Typography>
         ) : (

@@ -77,7 +77,7 @@ export default function DeploymentPage({
                 }}
                 onClick={handleOpen}
               >
-                View All
+                New
               </Button>
             </Stack>
 
