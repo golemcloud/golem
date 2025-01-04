@@ -148,7 +148,6 @@ const Dashboard = () => {
                   <Link
                     href={item.link || "#"}
                     style={{ textDecoration: "none", color: "inherit" }}
-                    passHref
                     target="_blank" // Opens the link in a new tab
                     rel="noopener noreferrer" // Improves security by preventing access to the window.opener object
                   >

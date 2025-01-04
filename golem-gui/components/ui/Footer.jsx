@@ -84,14 +84,12 @@ const Footer = () => {
           </Typography>
           <Stack spacing={0.5}>
             <Link href="https://www.golem.cloud/" color="inherit" underline="hover"
-             passHref
              target="_blank" // Opens the link in a new tab
              rel="noopener noreferrer"
             >
               About
             </Link>
             <Link href="https://learn.golem.cloud/" color="inherit" underline="hover"
-             passHref
              target="_blank" // Opens the link in a new tab
              rel="noopener noreferrer"
             >
@@ -114,14 +112,12 @@ const Footer = () => {
           </Typography>
           <Stack spacing={0.5}>
             <Link href="https://www.golem.cloud/blog" color="inherit" underline="hover"
-             passHref
              target="_blank" // Opens the link in a new tab
              rel="noopener noreferrer"
             >
               Blog
             </Link>
             <Link href="https://support.golem.cloud/" color="inherit" underline="hover"
-             passHref
              target="_blank" // Opens the link in a new tab
              rel="noopener noreferrer"
             >
