@@ -13765,10 +13765,6 @@ dependencies = [
 name = "webapp"
 version = "0.1.0"
 dependencies = [
- "lazy_static 1.5.0",
- "reqwest 0.12.9",
- "serde 1.0.216",
- "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-fs",
