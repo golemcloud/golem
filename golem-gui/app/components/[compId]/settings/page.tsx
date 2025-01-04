@@ -20,11 +20,12 @@ import { toast } from "react-toastify";
 import useComponents from "@/lib/hooks/use-component";
 import { Component } from "@/types/api";
 import SecondaryHeader from "@/components/ui/secondary-header";
+import ErrorBoundary from "@/components/erro-boundary";
 
 const WorkerSettings = () => {
 
   const { compId } = useParams<{ compId: string }>();
-  const { components } = useComponents(compId);
+  const { components, error } = useComponents(compId);
   const [version, setVersion] = useState<number | null>(null);
   const searchParams = useSearchParams();
   const activeTabFromQuery = Number(searchParams.get("activeTab")) || 0;
@@ -60,6 +61,7 @@ const WorkerSettings = () => {
       <Box sx={{ display: { xs: "block", md: "none" } }}>
         <SecondaryHeader onClick={() => {}} variant="components" />
       </Box>
+      {error && <ErrorBoundary message={error}/>}
       <div className="mx-auto max-w-7xl px-6 lg:px-8">
         <div className="mx-auto max-w-2xl lg:max-w-none py-4">
           <Stack

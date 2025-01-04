@@ -12,6 +12,7 @@ import Manage from "./manage";
 
 import { useWebSocketWithPath } from "@/lib/hooks/use-websocket";
 import SecondaryHeader from "@/components/ui/secondary-header";
+import ErrorBoundary from "@/components/erro-boundary";
 
 // interface CustomMessage extends WebSocketMessage {
 //   type: 'custom';
@@ -24,9 +25,9 @@ const WorkerListWithDropdowns = () => {
   const { compId } = useParams<{ compId: string }>();
   const { id: workerName } = useParams<{ id: string }>();
   //  need to integrate the filter logic here. and pagination or scroll on load needs to implemented or addd show more at the end on click we need to next set of data
-  const { worker, isLoading } = useWorker(compId, workerName);
+  const { worker, isLoading, error } = useWorker(compId, workerName);
 
-  const { messages, isConnected } = useWebSocketWithPath(
+  const { messages, isConnected, error: websocketError } = useWebSocketWithPath(
     `v1/components/${compId}/workers/${workerName}/connect`
   );
 
@@ -40,6 +41,7 @@ const WorkerListWithDropdowns = () => {
   return (
     <Box className="text-black dark:text-white">
       <SecondaryHeader variant="component" onClick={() => {}} />
+      {error || websocketError && <ErrorBoundary message={error|| websocketError}/>}  
       <Tabs
         value={activeTab}
         variant="scrollable"

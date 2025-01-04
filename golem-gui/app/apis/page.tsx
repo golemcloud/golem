@@ -2,7 +2,6 @@
 
 import React, { useCallback, useMemo, useState } from "react";
 import {
-  Alert,
   Box,
   InputAdornment,
   TextField,
@@ -18,6 +17,7 @@ import CustomModal from "@/components/CustomModal";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 import ApiInfoCard from "@/components/api-info-card";
 import { Button2 } from "@/components/ui/button";
+import ErrorBoundary from "@/components/erro-boundary";
 
 const ComponentsPage = () => {
   const [open, setOpen] = useState(false);
@@ -61,11 +61,7 @@ const ComponentsPage = () => {
   return (
     <main className="mx-auto max-w-7xl px-6 lg:px-8 min-h-[calc(100svh-84px)] py-4 flex h-full w-full flex-1 flex-col">
       <Box className="mx-auto max-w-2xl lg:max-w-none gap-6 flex h-full w-full flex-1 flex-col">
-        {error && (
-          <Box sx={{ display: "flex", justifyContent: "center" }}>
-            {error && <Alert severity="error">{error}</Alert>}
-          </Box>
-        )}
+       {error && <ErrorBoundary message={error}/>}
         {!error && !isLoading && (
           <>
             <Box

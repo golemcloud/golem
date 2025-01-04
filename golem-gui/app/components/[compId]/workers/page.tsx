@@ -18,6 +18,7 @@ import SecondaryHeader from "@/components/ui/secondary-header";
 import { Button2 } from "@/components/ui/button";
 import WorkerInfoCard from "@/components/worker-info-card";
 import {StatusFilter, VersionFilter, Search, CustomDatePickFilter} from "./workers-filter";
+import ErrorBoundary from "@/components/erro-boundary";
 
 
 const WorkerListWithDropdowns = () => {
@@ -37,6 +38,7 @@ const WorkerListWithDropdowns = () => {
       <Box sx={{ display: { xs: "block", md: "none" } }}>
         <SecondaryHeader onClick={() => {}} variant="components" />
       </Box>
+      {error && <ErrorBoundary message={error}/>}
       <div className="mx-auto max-w-7xl px-6 lg:px-8">
         <div className="mx-auto max-w-2xl lg:max-w-none py-4">
           {/* Search Box */}

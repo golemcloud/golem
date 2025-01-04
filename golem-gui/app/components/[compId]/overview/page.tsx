@@ -10,7 +10,6 @@ import {
   List,
   ListItem,
   ListItemText,
-  CircularProgress,
 } from "@mui/material";
 import {
   InsertChart,
@@ -26,19 +25,20 @@ import { useParams, useRouter } from "next/navigation";
 import { ComponentExport, WorkerFunction } from "@/types/api";
 import useWorkers, { getStateFromWorkersData } from "@/lib/hooks/use-worker";
 import SecondaryHeader from "@/components/ui/secondary-header";
+import ErrorBoundary from "@/components/erro-boundary";
 
 const Overview = () => {
   const [isOpen, setIsOpen] = useState(false);
   const { compId } = useParams<{ compId: string }>();
   const router = useRouter();
 
-  const { components, isLoading: componentDataLoading } = useComponents(
+  const { components, isLoading: componentDataLoading, error } = useComponents(
     compId,
     "latest"
   );
   const [latestComponent] = components;
 
-  const { workers, isLoading } = useWorkers(compId);
+  const { workers, isLoading, error:workerError } = useWorkers(compId);
 
   const getNewSearchParams = (
     key: string,
@@ -136,11 +136,17 @@ const Overview = () => {
     color: colors[index],
   }));
 
+  const isSameError = useMemo(()=>{
+    return error && error == workerError 
+  },[error, workerError])
+
   return (
     <>
       <SecondaryHeader onClick={() => setIsOpen(true)} variant="components" />
+      {isSameError && <ErrorBoundary message={error}/>}
       <div className="mx-auto max-w-7xl px-6 lg:px-8">
         <div className="mx-auto max-w-2xl lg:max-w-none py-4">
+          <ErrorBoundary message={!isSameError ? error: ""}/>
           <Grid container spacing={4}>
             {[...stats, ...workerStats].map((stat, index) => (
               <Grid
@@ -178,6 +184,7 @@ const Overview = () => {
                   Exports
                 </Typography>
                 <Divider className="my-1 bg-border" />
+                <ErrorBoundary message={!isSameError ? error: ""}>
                 <List className="px-7">
                   {exports.slice(0, 13).map((item, index) => (
                     <ListItem key={index} divider className="border-border">
@@ -185,6 +192,7 @@ const Overview = () => {
                     </ListItem>
                   ))}
                 </List>
+                </ErrorBoundary>
               </Paper>
             </Grid>
 
@@ -198,6 +206,7 @@ const Overview = () => {
                   Worker Status
                 </Typography>
                 <Divider className="my-1 bg-border" />
+                {!isSameError  && <ErrorBoundary message={workerError}/>}
                 {totalWorkers > 0 ? (
                   <Box
                     sx={{

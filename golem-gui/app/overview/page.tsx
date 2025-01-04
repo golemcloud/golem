@@ -8,7 +8,6 @@ import {
   Grid2 as Grid,
   Stack,
   Divider,
-  Alert,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import FooterLinks from "@/components/ui/footer-links";
@@ -23,6 +22,8 @@ import ComponentCard from "../../components/component-card";
 import { calculateHoursDifference, calculateSizeInMB } from "@/lib/utils";
 import { NotepadText, Component, Globe, Bot } from "lucide-react";
 import { Button2 } from "@/components/ui/button";
+import ErrorBoundary from "@/components/erro-boundary";
+
 // working on overview page
 
 const ProjectDashboard = () => {
@@ -32,28 +33,25 @@ const ProjectDashboard = () => {
       label: "Language Guides",
       icon: <NotepadText />,
       description: "Check our language and start building",
-      link:"https://learn.golem.cloud/docs/develop-overview"
+      link: "https://learn.golem.cloud/docs/develop-overview",
     },
     {
       label: "Components",
       icon: <Component />,
       description: "Create Wasm components that run on Golem",
-      link:"https://learn.golem.cloud/docs/concepts/components"
-
+      link: "https://learn.golem.cloud/docs/concepts/components",
     },
     {
       label: "APIs",
       icon: <Globe />,
       description: "Craft custom APIs to expose your components to the world",
-      link:"https://learn.golem.cloud/docs/rest-api/oss-rest-api"
-
+      link: "https://learn.golem.cloud/docs/rest-api/oss-rest-api",
     },
     {
       label: "Workers",
       icon: <Bot />,
       description: "Launch and manage efficient workers from your components",
-      link:"https://learn.golem.cloud/docs/concepts/workers"
-
+      link: "https://learn.golem.cloud/docs/concepts/workers",
     },
   ];
   const [open, setOpen] = useState<string | null>(null);
@@ -85,6 +83,8 @@ const ProjectDashboard = () => {
   return (
     <main className="mx-auto max-w-7xl px-6 lg:px-8 min-h-[calc(100svh-84px)] py-4 flex h-full w-full flex-1 flex-col">
       <Box className="mx-auto max-w-2xl lg:max-w-none gap-6 flex h-full w-full flex-1 flex-col">
+        {error === componentError && <ErrorBoundary message={error} />}
+
         <Grid container spacing={3} sx={{ flexWrap: "wrap" }}>
           {/* APIs Section */}
           <Grid size={{ xs: 12, md: 12, lg: 4 }}>
@@ -116,12 +116,7 @@ const ProjectDashboard = () => {
                   </Button>
                 )}
               </Box>
-              
-              {error && (
-                <Box sx={{ display: "flex", justifyContent: "center" }}>
-                  {error && <Alert severity="error">{error}</Alert>}
-                </Box>
-              )}
+              {error && <ErrorBoundary message={error} />}
               {uniquesApis?.length === 0 && (
                 <Box
                   textAlign="center"
@@ -134,12 +129,17 @@ const ProjectDashboard = () => {
                     Create your first api to get started
                   </Typography>
                   <br />
-                  <Button2 variant="primary" size="md" startIcon={<AddIcon />} onClick={()=> setOpen("api")}>
+                  <Button2
+                    variant="primary"
+                    size="md"
+                    startIcon={<AddIcon />}
+                    onClick={() => setOpen("api")}
+                  >
                     Create New
                   </Button2>
                 </Box>
               )}
-              {!error && !isLoading && uniquesApis?.length>0 && (
+              {!error && !isLoading && uniquesApis?.length > 0 && (
                 <Stack marginTop={2} sx={{ flex: 1, overflow: "hidden" }}>
                   {!isLoading &&
                     uniquesApis.slice(0, 10).map((api) => (
@@ -206,29 +206,30 @@ const ProjectDashboard = () => {
                   </Button>
                 )}
               </Box>
-              {componentError && (
-                <Box sx={{ display: "flex", justifyContent: "center" }}>
-                  {error && <Alert severity="error">{componentError}</Alert>}
-                </Box>
+              {error !== componentError && (
+                <ErrorBoundary message={componentError} />
               )}
               {!componentError && !componentsLoading && (
                 <Box className="grid w-full grid-cols-1 gap-3 lg:grid-cols-2 mt-2">
-                  {components.slice(0, 8).map((component) => (
-                    <ComponentCard
-                      key={component.versionedComponentId.componentId}
-                      name={component.componentName}
-                      time={calculateHoursDifference(component.createdAt)}
-                      version={component.versionedComponentId.version}
-                      exports={component.metadata.exports.length}
-                      size={calculateSizeInMB(component.componentSize)}
-                      type={component.componentType}
-                      onClick={() =>
-                        handleComponentClick(
-                          component.versionedComponentId.componentId!
-                        )
-                      }
-                    />
-                  ))}
+                  {!componentError &&
+                    components
+                      .slice(0, 8)
+                      .map((component) => (
+                        <ComponentCard
+                          key={component.versionedComponentId.componentId}
+                          name={component.componentName}
+                          time={calculateHoursDifference(component.createdAt)}
+                          version={component.versionedComponentId.version}
+                          exports={component.metadata.exports.length}
+                          size={calculateSizeInMB(component.componentSize)}
+                          type={component.componentType}
+                          onClick={() =>
+                            handleComponentClick(
+                              component.versionedComponentId.componentId!
+                            )
+                          }
+                        />
+                      ))}
                 </Box>
               )}
               {components.length === 0 && (
@@ -243,7 +244,12 @@ const ProjectDashboard = () => {
                     Create your first component to get started
                   </Typography>
                   <br />
-                  <Button2 variant="primary" size="md" startIcon={<AddIcon />} onClick={()=> setOpen("component")}>
+                  <Button2
+                    variant="primary"
+                    size="md"
+                    startIcon={<AddIcon />}
+                    onClick={() => setOpen("component")}
+                  >
                     Create New
                   </Button2>
                 </Box>
@@ -252,7 +258,11 @@ const ProjectDashboard = () => {
           </Grid>
         </Grid>
 
-        <CustomModal open={!!open} onClose={handleClose} heading="Create a new Component">
+        <CustomModal
+          open={!!open}
+          onClose={handleClose}
+          heading="Create a new Component"
+        >
           {open === "api" && <CreateAPI onCreation={handleClose} />}
           {open === "component" && (
             <CreateComponentForm mode="create" onSubmitSuccess={handleClose} />
