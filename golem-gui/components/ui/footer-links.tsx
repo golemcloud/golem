@@ -29,7 +29,6 @@ export default function FooterLinks({ resources, variant }: ResourcesProps) {
             <Link
               href={resource.link || "#"}
               style={{ textDecoration: "none", color: "inherit" }}
-              passHref
               target="_blank" // Opens the link in a new tab
               rel="noopener noreferrer" // Improves security by preventing access to the window.opener object
             >
