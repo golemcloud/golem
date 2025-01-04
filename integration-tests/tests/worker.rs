@@ -1556,6 +1556,67 @@ async fn fork_worker_4(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     assert!(error.contains("WorkerNotFound"));
 }
 
+
+#[test]
+#[tracing::instrument]
+#[timeout(120000)]
+async fn fork_worker_divergence(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    let component_id = deps.store_component("shopping-cart").await;
+
+    let source_worker_id = WorkerId {
+        component_id: component_id.clone(),
+        worker_name: "foo".to_string(),
+    };
+
+    let env = deps
+        .invoke_and_await(&source_worker_id, "golem:it/api.{get-environment}", vec![])
+        .await
+        .unwrap();
+
+    // The worker name is foo
+    check!(
+        env == vec![Value::Result(Ok(Some(Box::new(Value::List(vec![
+            Value::Tuple(vec![
+                Value::String("GOLEM_WORKER_NAME".to_string()),
+                Value::String("foo".to_string())
+            ]),
+            Value::Tuple(vec![
+                Value::String("GOLEM_COMPONENT_ID".to_string()),
+                Value::String(format!("{}", component_id))
+            ]),
+            Value::Tuple(vec![
+                Value::String("GOLEM_COMPONENT_VERSION".to_string()),
+                Value::String("0".to_string())
+            ]),
+        ])))))]
+    );
+
+    let target_worker_id = WorkerId {
+        component_id: component_id.clone(),
+        worker_name: "forked-foo".to_string(),
+    };
+
+    // We fork the worker post the completion and see if oplog corresponding to environment value
+    // has the same value as foo
+    // and it shouldn't be unless divergence is fixed.
+
+    let oplog = deps.get_oplog(&source_worker_id, OplogIndex::INITIAL).await;
+
+    dbg!(oplog);
+    let _ = deps
+        .fork_worker(
+            &source_worker_id,
+            &target_worker_id,
+            OplogIndex::from_u64(14),
+        )
+        .await;
+
+
+    let result = deps.search_oplog(&target_worker_id, "G1001").await;
+
+    assert_eq!(result.len(), 4); //  two invocations for G1002 and two log messages
+}
+
 #[test]
 #[tracing::instrument]
 #[timeout(600000)]
