@@ -14,7 +14,6 @@ import { Loader } from "lucide-react";
 import CreateNewApiVersion from "@/components/create-api-new-version";
 import CustomModal from "@/components/CustomModal";
 import SecondaryHeader from "@/components/ui/secondary-header";
-import {VersionFilter} from "./apis-filter"
 
 export default function APISLayout({
   children,
