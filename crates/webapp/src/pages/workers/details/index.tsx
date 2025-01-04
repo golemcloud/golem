@@ -34,11 +34,8 @@ export default function WorkerDetails() {
         wsRef.current = ws;
 
         ws.onMessage((data) => {
-          console.log("Received message:", data);
           setMessages((prev) => [...prev, data]); // Update messages state
         });
-
-        console.log("WebSocket connected");
       } catch (error) {
         console.error("Failed to connect WebSocket:", error);
       }
@@ -49,7 +46,6 @@ export default function WorkerDetails() {
     return () => {
       if (wsRef.current) {
         wsRef.current.close();
-        console.log("WebSocket disconnected");
       }
     };
   }, []);

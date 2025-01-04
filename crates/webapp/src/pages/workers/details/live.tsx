@@ -39,7 +39,6 @@ export default function WorkerLive() {
     return () => {
       if (wsRef.current) {
         wsRef.current.close();
-        console.log("WebSocket disconnected");
       }
     };
   }, [reload]);

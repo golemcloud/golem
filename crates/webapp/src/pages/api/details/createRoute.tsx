@@ -256,7 +256,7 @@ const CreateRoute = () => {
                           }`}
                         >
                           <SelectValue placeholder="Select a version">
-                            {version}
+                            V{version}
                           </SelectValue>
                         </SelectTrigger>
                         <SelectContent>

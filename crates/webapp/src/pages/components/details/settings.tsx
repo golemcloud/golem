@@ -39,12 +39,7 @@ export default function ComponentSettings() {
     await Promise.all(
       response?.workers.map(async (worker: Worker) => {
         await API.deleteWorker(componentId!, worker.workerId.workerName).then(
-          (res) => {
-            console.log(
-              `deleted Worker response compoentname: ${worker.workerId.componentId} workername: ${worker.workerId.workerName}`,
-              res
-            );
-          }
+          () => {}
         );
       })
     );
@@ -124,13 +119,6 @@ export default function ComponentSettings() {
                             </DialogDescription>
                           </DialogHeader>
                           <DialogFooter>
-                            <Button
-                              variant="outline"
-                              onClick={() => setShowConfirmAllDialog(false)}
-                              disabled={isDeleting}
-                            >
-                              Cancel
-                            </Button>
                             <Button
                               variant="destructive"
                               onClick={handleDeleteAll}
