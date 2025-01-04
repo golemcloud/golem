@@ -64,15 +64,6 @@ export default function SecondaryHeader({
   }, [pathname]);
 
   const router = useRouter();
-  const { apiDefinitions, getApiDefintion, isLoading } =
-    useApiDefinitions(apiId);
-  const { data: apiDefinition } = getApiDefintion(apiId, version);
-  const versions = useMemo(() => {
-    return apiDefinitions.map((api) => {
-      return api.version;
-    });
-  }, [apiDefinitions]);
-
   let navigationLinks;
   if (variant === "apis") {
     navigationLinks = [
@@ -130,8 +121,6 @@ export default function SecondaryHeader({
       },
     ];
   }
-
-  const { apiDeployments, addApiDeployment } = useApiDeployments(apiId);
 
   const dropdowns = [
     {
@@ -352,7 +341,6 @@ export default function SecondaryHeader({
         )}
         {open == "deploy-api" && (
           <DeploymentCreationPage
-            addDeployment={addApiDeployment}
             apiId={apiId}
             onSuccess={() => setOpen(null)}
           />

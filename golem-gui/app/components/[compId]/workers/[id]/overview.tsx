@@ -1,6 +1,6 @@
 import { EventMessage, InvocationStart, Worker } from "@/types/api";
 import { Activity, Gauge, Cpu, Clock } from "lucide-react";
-import { Box, Button, Grid2 as Grid, Paper, Typography } from "@mui/material";
+import { Box, Button, Grid2 as Grid, Paper, Stack, Typography, useMediaQuery, useTheme } from "@mui/material";
 import React, { useMemo } from "react";
 import { calculateHoursDifference, calculateSizeInMB } from "@/lib/utils";
 import { format } from "date-fns";
@@ -20,15 +20,56 @@ import TerminalLogs from "./terminal";
 //   bgcolor: "#1E1E1E",
 // };
 
-//TO DO: for now usng this harcoded colors. we need to maintian random color generator
-const colors = [
-  "#8884d8",
-  "#82ca9d",
-  "#ffc658",
-  "#ff7f50",
-  "#a83279",
-  "#50c878",
-];
+interface CustomTooltipProps {
+  active?: boolean;
+  payload?: any[];
+  graphKey:string
+}
+
+const CustomTooltip: React.FC<CustomTooltipProps> = ({ active, payload, graphKey }) => {
+  if (active && payload && payload.length) {
+    const barData = payload[0];
+    return (
+      <Paper
+      elevation={3}
+      sx={{
+        padding: 1
+      }}
+      className="dark:bg-[#0a0a0a] bg-white dark:text-white"
+      >
+        <Typography variant="body1" fontStyle={"bold"} >{barData?.payload?.[graphKey]}</Typography>
+        <Box padding={1}>
+           {payload?.map((data)=>{
+            return <Stack direction="row" gap={1} alignItems={"center"}>
+              <Box sx={{height:10, width:10, backgroundColor:data?.color||data?.fill}}/>
+                <Typography variant="caption">{data?.dataKey}{" "}{data?.payload?.[data.dataKey]}</Typography>
+            </Stack>
+           })}
+        </Box>
+      </Paper>
+       
+    );
+  }
+  return null;
+};
+
+const generateRandomColor = () => {
+  const letters = "0123456789ABCDEF";
+  let color = "#";
+  for (let i = 0; i < 6; i++) {
+    color += letters[Math.floor(Math.random() * 16)];
+  }
+  return color;
+};
+
+// const generateRandomColor = (theme: "light" | "dark") => {
+//   const isDark = theme === "dark";
+//   const randomChannel = () => Math.floor(Math.random() * 128) + (isDark ? 128 : 0); // Adjust range
+//   const r = randomChannel(); // Red
+//   const g = randomChannel(); // Green
+//   const b = randomChannel(); // Blue
+//   return `rgb(${r}, ${g}, ${b})`;
+// };
 
 const Overview = ({
   worker,
@@ -39,6 +80,9 @@ const Overview = ({
   isLoading: boolean;
   messages: Array<EventMessage>;
 }) => {
+  const isMobile = useMediaQuery("(max-width: 640px)");
+  //not sure theme.palette.mode is not giving right value. it is giving light always
+  const theme = useTheme();
   const workerStats = useMemo(() => {
     return [
       {
@@ -87,6 +131,7 @@ const Overview = ({
     monthly: "",
     yearly: "",
   };
+  console.log("thememode=======>", theme.palette.mode)
   // This can be improved further and needs to move to some other place where we can reuse it.
   const dataMap =
     invokeMessages?.reduce<Record<string, Record<string, number>>>(
@@ -114,7 +159,7 @@ const Overview = ({
 
         if (graphKey === "live") {
           stats[`live_${key}`] = stats[`live_${key}`] || {
-            name: message.function,
+            // name: message.function,
             yearly: yearly, // "Jan 2025"
             monthly: monthly, // "January"
             daily: daily, // "Jan 03"
@@ -125,7 +170,6 @@ const Overview = ({
         }
         if (["live", "daily"].includes(graphKey)) {
           stats[`daily_${daily}`] = stats[`daily_${daily}`] || {
-            name: message.function,
             yearly: yearly, // "Jan 2025"
             monthly: monthly, // "January"
             daily: daily, // "Jan 03"
@@ -137,7 +181,6 @@ const Overview = ({
 
         if (["live", "daily", "monthly"].includes(graphKey)) {
           stats[`monthly_${monthly}`] = stats[`monthly_${monthly}`] || {
-            name: message.function,
             yearly: yearly, // "Jan 2025"
             monthly: monthly, // "January"
             daily: daily, // "Jan 03"
@@ -149,7 +192,6 @@ const Overview = ({
 
         if (["live", "daily", "monthly", "yearly"].includes(graphKey)) {
           stats[`yearly_${yearly}`] = stats[`yearly_${yearly}`] || {
-            name: message.function,
             yearly: yearly, // "Jan 2025"
             monthly: monthly, // "January"
             daily: daily, // "Jan 03"
@@ -243,7 +285,7 @@ const Overview = ({
                     <ResponsiveContainer
                       width="100%"
                       height="100%"
-                      aspect={500 / 150}
+                      aspect={isMobile ? 500 / 200 : 500 / 150}
                     >
                       <BarChart
                         data={data}
@@ -257,20 +299,19 @@ const Overview = ({
                       >
                         <XAxis
                           dataKey={graphKey}
-                          interval="preserveStartEnd" // Adjusts the interval dynamically based on space
-                          tick={{ fontSize: 12 }} // Makes tick labels smaller
-                          tickSize={5} // Reduces the size of tick lines
-                          tickMargin={5} // Adds spacing between ticks and axis line
-                          minTickGap={5} // Ensures minimal gap between ticks
+                          interval="preserveStartEnd"
+                          tick={{ fontSize: 12 }}
+                          tickSize={5}
+                          tickMargin={5}
+                          minTickGap={5}
                         />
-                        {/* <YAxis /> */}
-                        <Tooltip />
+                        <Tooltip content={<CustomTooltip graphKey={graphKey}/>}/>
                         {Array.from(uniquefunctions)?.map((bar, index) => {
                           return (
                             <Bar
                               dataKey={bar}
                               stackId="a"
-                              fill={colors[index % colors.length]} // Cycle through the colors array
+                              fill={generateRandomColor()} // Cycle through the colors array
                               key={bar}
                             />
                           );
@@ -281,11 +322,6 @@ const Overview = ({
                 </Paper>
               </Grid>
               <Grid size={12}>
-                {/* <GenericCard
-                  title="Terminal"
-                  emptyMessage="No data available here"
-                  content={ }
-                /> */}
                 <Paper elevation={2} className="border rounded-sm p-5">
                   <Typography
                     variant="h6"
