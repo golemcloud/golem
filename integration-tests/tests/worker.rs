@@ -1558,6 +1558,74 @@ async fn fork_worker_4(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 
 #[test]
 #[tracing::instrument]
+#[timeout(120000)]
+async fn fork_worker_no_divergence_until_fork_point(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) {
+    let component_id = deps.store_component("environment-service").await;
+
+    let source_worker_id = WorkerId {
+        component_id: component_id.clone(),
+        worker_name: "foo".to_string(),
+    };
+
+    let _ = deps
+        .invoke_and_await(&source_worker_id, "golem:it/api.{get-environment}", vec![])
+        .await
+        .unwrap();
+
+    // The worker name is foo
+    let expected = Value::Tuple(vec![Value::Result(Ok(Some(Box::new(Value::List(vec![
+        Value::Tuple(vec![
+            Value::String("GOLEM_WORKER_NAME".to_string()),
+            Value::String("foo".to_string()),
+        ]),
+        Value::Tuple(vec![
+            Value::String("GOLEM_COMPONENT_ID".to_string()),
+            Value::String(format!("{}", component_id)),
+        ]),
+        Value::Tuple(vec![
+            Value::String("GOLEM_COMPONENT_VERSION".to_string()),
+            Value::String("0".to_string()),
+        ]),
+    ])))))]);
+
+    let target_worker_id = WorkerId {
+        component_id: component_id.clone(),
+        worker_name: "forked-foo".to_string(),
+    };
+
+    // We fork the worker post the completion and see if oplog corresponding to environment value
+    // has the same value as foo. As far as the fork cut off point is post the completion, there
+    // shouldn't be any divergence for worker information even if forked worker name
+    // is different from the source worker name
+    let _ = deps
+        .fork_worker(
+            &source_worker_id,
+            &target_worker_id,
+            OplogIndex::from_u64(7),
+        )
+        .await;
+
+    let result = deps
+        .get_oplog(&target_worker_id, OplogIndex::from_u64(7))
+        .await;
+
+    assert_eq!(result.len(), 1);
+
+    let entry = result.first().unwrap().clone();
+
+    match entry {
+        PublicOplogEntry::ExportedFunctionCompleted(parameters) => {
+            assert_eq!(parameters.response.value, expected);
+        }
+        _ => panic!("Expected ExportedFunctionCompleted"),
+    };
+}
+
+#[test]
+#[tracing::instrument]
 #[timeout(600000)]
 async fn worker_recreation(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let component_id = deps.store_unique_component("counters").await;
