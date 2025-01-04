@@ -34,7 +34,7 @@ const DangerZone = ({ title, description, actions }: SettingProps) => {
         <p className="text-sm text-muted-foreground mb-4">Proceed with caution</p>
 
         {actions.map((action, index) => (
-          <div key={index} className="flex justify-between items-center mb-4">
+          <div key={index} className="flex sm:flex-row flex-col justify-between mb-4">
             <div>
               <h3 className="text-md  text-foreground">
                 {action.title}
@@ -43,13 +43,12 @@ const DangerZone = ({ title, description, actions }: SettingProps) => {
             </div>
             <Button
               variant="error"
-              className="mt-2"
+              className="mt-2 text-xs"
               size="md"
               onClick={action.onClick}
             >
               {action.buttonText}
             </Button>
-
           </div>
         ))}
       </div>
