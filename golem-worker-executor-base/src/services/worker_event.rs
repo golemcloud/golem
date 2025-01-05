@@ -241,6 +241,7 @@ mod tests {
 
         for b in 1..=4u8 {
             svc.emit_event(WorkerEvent::stdout(vec![b]), true);
+            tokio::task::yield_now().await;
             tokio::time::sleep(Duration::from_millis(1)).await;
         }
 
@@ -276,6 +277,7 @@ mod tests {
 
         for b in 5..=8u8 {
             svc.emit_event(WorkerEvent::stdout(vec![b]), true);
+            tokio::task::yield_now().await;
             tokio::time::sleep(Duration::from_millis(1)).await;
         }
 
@@ -356,6 +358,7 @@ mod tests {
 
         for b in 1..=4u8 {
             svc.emit_event(WorkerEvent::stdout(vec![b]), true);
+            tokio::task::yield_now().await;
             tokio::time::sleep(Duration::from_millis(1)).await;
         }
 
@@ -390,6 +393,7 @@ mod tests {
 
         for b in 5..=8u8 {
             svc.emit_event(WorkerEvent::stdout(vec![b]), true);
+            tokio::task::yield_now().await;
             tokio::time::sleep(Duration::from_millis(1)).await;
         }
 
@@ -473,6 +477,7 @@ mod tests {
         for b in 1..=1000 {
             let s = format!("{}", b);
             svc.emit_event(WorkerEvent::stdout(s.as_bytes().into()), true);
+            tokio::task::yield_now().await;
             tokio::time::sleep(Duration::from_millis(1)).await;
         }
 
@@ -509,6 +514,7 @@ mod tests {
         for b in 1001..=1004 {
             let s = format!("{}", b);
             svc.emit_event(WorkerEvent::stdout(s.as_bytes().into()), true);
+            tokio::task::yield_now().await;
             tokio::time::sleep(Duration::from_millis(1)).await;
         }
 

@@ -39,7 +39,6 @@ use std::collections::HashMap;
 use std::env;
 use std::io::Write;
 use std::net::SocketAddr;
-use std::os::unix::fs::FileExt;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -1521,7 +1520,7 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
             .truncate(false)
             .open(&component_path)
             .expect("Failed to open component file");
-        file.write_at(&[1, 2, 3, 4], 0)
+        file.write_all(&[1, 2, 3, 4])
             .expect("Failed to write to component file");
         file.flush().expect("Failed to flush component file");
     }
@@ -1569,12 +1568,12 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
 
     {
         debug!("Corrupting {:?}", component_path);
-        let mut file = std::fs::File::options()
+        let mut file = std::fs::OpenOptions::new()
             .write(true)
             .truncate(false)
             .open(&component_path)
             .expect("Failed to open component file");
-        file.write_at(&[1, 2, 3, 4], 0)
+        file.write_all(&[1, 2, 3, 4])
             .expect("Failed to write to component file");
         file.flush().expect("Failed to flush component file");
 
@@ -1772,7 +1771,10 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
 
     fiber.await;
 
-    sleep(Duration::from_secs(1)).await;
+    // Ensure worker is running before setting second response
+    executor
+        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(1))
+        .await;
 
     {
         let mut response = response.lock().unwrap();
