@@ -29,8 +29,6 @@ type NavigationLinks = {
 
 const Sidebar = ({ id, navigationLinks, variant }: SidebarProps) => {
   const pathname = usePathname();
-  const [isOpen, setIsOpen] = React.useState(false);
-
   return (
     <Box
       sx={{

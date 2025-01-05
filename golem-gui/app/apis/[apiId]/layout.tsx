@@ -13,6 +13,7 @@ import { Loader } from "lucide-react";
 import CreateNewApiVersion from "@/components/create-api-new-version";
 import CustomModal from "@/components/CustomModal";
 import SecondaryHeader from "@/components/ui/secondary-header";
+import ErrorBoundary from "@/components/erro-boundary";
 
 export default function APISLayout({
   children,
@@ -26,7 +27,7 @@ export default function APISLayout({
   const [open, setOpen] = useState(false);
   const { getApiDefintion, isLoading } =
     useApiDefinitions(apiId);
-  const { data: apiDefinition } = getApiDefintion(apiId, version);
+  const { data: apiDefinition, error } = getApiDefintion(apiId, version);
   const navigationLinks = useMemo(() => {
     return [
       {
@@ -70,10 +71,6 @@ export default function APISLayout({
       <Sidebar id={apiId!} navigationLinks={navigationLinks} variant="apis" />
       <div
         className="flex-1 "
-        // style={{
-        //   overflowY: "auto",
-        //   height: "100vh",
-        // }}
       >
         <SecondaryHeader
           variant="apis"
@@ -82,6 +79,7 @@ export default function APISLayout({
           }}
           apiTab={tab}
         />
+        {error && <ErrorBoundary message={error}/>}
 
         <div className="mx-auto max-w-7xl px-6 lg:px-8">
           <div className="mx-auto max-w-2xl lg:max-w-none p-5">

@@ -6,9 +6,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import ArrowDropDownIcon from "@mui/icons-material/ArrowDropDown";
-import { Typography } from "@mui/material";
 import { useRouter } from "next/navigation";
-import { Button2 } from "./button";
 
 export function Dropdown(list: { route: string; value: string }[]) {
   const router = useRouter();
@@ -41,12 +39,13 @@ export function Dropdown(list: { route: string; value: string }[]) {
 export function DropdownV2({
   list,
   prefix,
-  icon,
+  icon
 }: {
   list: {
     label: string;
     value: string | number;
     onClick?: (value: string | number) => void;
+    disabled?:boolean
   }[];
   prefix?: string;
   icon?: React.ReactNode;
@@ -55,9 +54,15 @@ export function DropdownV2({
     <DropdownMenu>
       <DropdownMenuTrigger>
         {prefix && (
-          <Button2 variant={"outline"} size="md" endIcon={icon || <ArrowDropDownIcon />}>
-            <Typography>{prefix}</Typography>
-          </Button2>
+         <div
+         className="inline-flex items-center justify-between px-4 py-2 border rounded-md cursor-pointer 
+           bg-white text-gray-800 hover:bg-gray-100 
+           dark:bg-gray-800 dark:text-white dark:hover:bg-gray-700"
+       >
+         <span>{prefix}</span>
+         {icon || <ArrowDropDownIcon />}
+       </div>
+                
         )}
       </DropdownMenuTrigger>
       <DropdownMenuContent className="w-16">
@@ -71,6 +76,7 @@ export function DropdownV2({
                   item.onClick(item.value);
                 }
               }}
+              disabled={item.disabled}
               className="cursor-pointer"
             >
               {item.label}
