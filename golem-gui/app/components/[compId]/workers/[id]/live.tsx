@@ -28,8 +28,8 @@ const TerminalPage = ({ messages }: { messages: Array<EventMessage> }) => {
       className="text-black dark:text-white"
       sx={{ width: "100%", minHeight: "100vh" }}
     >
-      <Box className="flex justify-between border-b border-t dark:bg-[#151414]">
-        <Box className=" ml-10 mt-1 mb-1 dark:bg-[#1e1e1e] rounded-md ">
+      <Box className="flex  border-b border-t dark:bg-[#151414 justify-between items-center flex-col sm:flex-row">
+        <Box className="mt-1 mb-1 dark:bg-[#1e1e1e] rounded-md mx-2">
           <Tabs
             value={activeTab}
             onChange={handleTabChange}
@@ -40,6 +40,7 @@ const TerminalPage = ({ messages }: { messages: Array<EventMessage> }) => {
               textTransform: "none",
               fontSize: "0.75rem", 
               borderRadius: "2px",
+              width:'fit-content',
               },
               
               "& .MuiTabs-indicator": {
@@ -68,10 +69,9 @@ const TerminalPage = ({ messages }: { messages: Array<EventMessage> }) => {
             />
           </Tabs>
         </Box>
-        <Box>
+        <Box className="flex gap-3 mx-2">
           <Button2
             variant="error"
-            className="mt-2"
             size="md"
             endIcon={<Ban size="22px" />}
             onClick={(e) => {
@@ -83,7 +83,6 @@ const TerminalPage = ({ messages }: { messages: Array<EventMessage> }) => {
           </Button2>
           <Button2
             variant="primary"
-            className="m-2 mr-5"
             size="md"
             endIcon={<RotateCw size="22px" />}
             onClick={(e) => {

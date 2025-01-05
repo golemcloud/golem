@@ -68,15 +68,15 @@ const WorkerListWithDropdowns = () => {
           </Box>
 
           {/* Filters */}
-          <Stack direction="row" gap={ 4 } mb={3}   sx={{ flexWrap: 'wrap' }}>
-            <StatusFilter />
-            <VersionFilter />
-         
+          <Stack direction="row" className="flex gap-2" mb={3}   sx={{ flexWrap: 'wrap' }}>
+            <div className="flex flex-wrap gap-2 mr-9">
+              <div className="mr-9"><StatusFilter /></div>
+              <VersionFilter />
+            </div>
+            <div className="flex gap-3 flex-wrap">
               <CustomDatePickFilter label="Created After" searchKey={"workerAfter"}/>
               <CustomDatePickFilter label="Created Before" searchKey={"workerBefore"}/>
-              {/* <DatePicker handleChange={handleChange}/> */}
-              {/* <DatePicker handleChange={handleChange}/> */}
-         
+            </div>
           </Stack>
 
           {/* No Workers Found */}
@@ -99,14 +99,12 @@ const WorkerListWithDropdowns = () => {
               <Typography variant="body2" sx={{ mb: 2 }}>
                 No workers matched the current search
               </Typography>
-              <Button
-                variant="contained"
-                sx={{
-                  "&:hover": { backgroundColor: "#0039CB" },
-                }}
+              <Button2
+                variant="dropdown"
+                size="lg"
               >
                 Retry
-              </Button>
+              </Button2>
             </Box>
           )}
 

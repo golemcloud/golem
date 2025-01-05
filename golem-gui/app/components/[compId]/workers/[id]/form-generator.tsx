@@ -12,6 +12,7 @@ import {
   Card,
   CardContent,
   Divider,
+  Grid2 as Grid,
 } from "@mui/material";
 import { Parameter } from "@/types/api";
 import {
@@ -327,6 +328,8 @@ const generateField = (
                     >
                       <Typography variant="h6">{parameter.name}</Typography>
                       <Button
+                        variant="default"
+                        size="sm"
                         type="button"
                         onClick={(e) => {
                           e.preventDefault();
@@ -353,6 +356,8 @@ const generateField = (
 
                         {/* Button to Remove Tuple */}
                         <Button
+                          variant="error"
+                          size="sm"
                           type="button"
                           onClick={(e) => {
                             e.preventDefault();
@@ -573,48 +578,62 @@ const DynamicForm: React.FC<{
   return (
     <>
       <form onSubmit={handleSubmit(onSubmit)}>
-        <Stack
-          direction="row"
-          className="flex justify-between bg-[#dedede] dark:bg-[#0a0a0a] p-2 px-5 mb-10"
+        <Grid
+          container
+          spacing={3}
+          sx={{ flexWrap: "wrap" }}
+          className="bg-[#dedede] dark:bg-[#0a0a0a] p-2 px-2 mb-10"
         >
-          <Box className="flex gap-5">
-            <Button
-              variant="dropdown"
-              size="md"
-              onClick={(e) => {
-                e.preventDefault();
-                setTab(0);
-              }}
-            >
-              Form (x)
-            </Button>
-            <Button
-              variant="dropdown"
-              size="md"
-              onClick={(e) => {
-                e.preventDefault();
-                setTab(1);
-              }}
-            >
-              Preview <AlignVerticalSpaceAround />
-            </Button>
-          </Box>
-          <Box className="flex gap-5">
-            <Button
-              variant="secondary"
-              size="md"
-              onClick={(e) => {
-                e.preventDefault();
-                setTab(2);
-              }}
-            >
-              Types <ChevronsLeftRight />
-            </Button>
-            <Button variant="success" size="md" type="submit">
-              Invoke <Triangle className="rotate-90" />
-            </Button>
-          </Box>
-        </Stack>
+          <Grid size={{ xs: 12, sm: 6 }}>
+            <Box className="flex sm:justify-start justify-between">
+              <Button
+                variant="dropdown"
+                size="md"
+                className="mx-2"
+                onClick={(e) => {
+                  e.preventDefault();
+                  setTab(0);
+                }}
+              >
+                Form (x)
+              </Button>
+              <Button
+                variant="dropdown"
+                size="md"
+                className="mx-2"
+                onClick={(e) => {
+                  e.preventDefault();
+                  setTab(1);
+                }}
+              >
+                Preview <AlignVerticalSpaceAround />
+              </Button>
+            </Box>
+          </Grid>
+          <Grid size={{ xs: 12, sm: 6 }}>
+            <Box className="flex sm:justify-end justify-between">
+              <Button
+                variant="secondary"
+                size="md"
+                className="mx-2"
+                onClick={(e) => {
+                  e.preventDefault();
+                  setTab(2);
+                }}
+              >
+                Types <ChevronsLeftRight />
+              </Button>
+              <Button
+                variant="success"
+                size="md"
+                type="submit"
+                className="mx-2"
+              >
+                Invoke <Triangle className="rotate-90" />
+              </Button>
+            </Box>
+          </Grid>
+        </Grid>
         <Stack>
           {tab === 0 &&
             config.map((field, index) => (

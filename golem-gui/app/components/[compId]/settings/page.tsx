@@ -3,14 +3,7 @@
 import React, { useEffect, useState } from "react";
 import DangerZone from "@/components/settings";
 import ComponentInfo from "@/components/component-info-card";
-import {
-  Tabs,
-  Tab,
-  Box,
-  Typography,
-  Divider,
-  Stack,
-} from "@mui/material";
+import { Tabs, Tab, Box, Typography, Divider, Stack } from "@mui/material";
 import { useParams, useSearchParams } from "next/navigation";
 import CreateComponentForm from "@/components/new-component";
 
@@ -64,101 +57,117 @@ const WorkerSettings = () => {
       {error && <ErrorBoundary message={error} />}
       <div className="mx-auto max-w-7xl px-6 lg:px-8">
         <div className="mx-auto max-w-2xl lg:max-w-none py-4">
-          <Stack
-          >
-            <Box
-              sx={{
-                borderBottom: 1,
-                borderColor: "#444",
-                width: "fit-content",
-              }}
-            >
-              <Tabs
-                value={activeTab}
-                onChange={handleTabChange}
-                aria-label="Worker Settings Tabs"
-                textColor="inherit"
+          <div className="border rounded-b-lg">
+            <Stack>
+              <Box
+                sx={{
+                  bgcolor: "#101010",
+                  // width: "fit-content",
+                }}
               >
-                <Tab label="General" />
-                <Tab label="Info" />
-                <Tab label="Update" />
-              </Tabs>
-            </Box>
-            {activeTab === 1 && (
-              
-              <Stack
-                direction="row"
-                alignItems={"center"}
-                justifyContent={"space-between"}
-                className="p-1 pb-0 md:p-3 md:pb-0"
-              >
-                <Box className="flex flex-col">
-                <Typography variant="h6">Update Component</Typography>
-                <Typography variant="subtitle1" sx={{ color: "#888" }}>
-                  Update your component version.
-                </Typography>
-              </Box>
-              <Stack direction="row" gap={1} alignItems={"center"} className="self-start">
-                <DropdownV2  list={components?.map((component: Component) =>({
-                  value: component.versionedComponentId.version, 
-                  label: `V ${component.versionedComponentId.version}`,
-                  onClick: (value:string|number)=>{setVersion(Number(value))}
-                  }))}
-                  prefix={`V ${version}`} 
-                  />
-                <Button2
-                  className="py-0 pr-4"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    downloadComponent(compId, version!);
+                <Tabs
+                  value={activeTab}
+                  onChange={handleTabChange}
+                  aria-label="Worker Settings Tabs"
+                  textColor="inherit"
+                  sx={{
+                    "& .MuiTabs-indicator": {
+                      bgcolor: "#373737",
+                    },
                   }}
                 >
-                  <DownloadIcon />
-                </Button2>
-                </Stack>
-              </Stack>
-            )}
-          </Stack>
+                  <Tab label="General" />
+                  <Tab label="Info" />
+                  <Tab label="Update" />
+                </Tabs>
+              </Box>
+            </Stack>
 
-          <Box className={"p-1 md:p-3"}>
-            {activeTab === 0 && (
-              <div>
-                <DangerZone
-                  title="General Settings"
-                  description="Manage your component settings."
-                  actions={actions}
-                />
-              </div>
-            )}
-            {activeTab === 1 && (
-              <div>
-                <Divider sx={{ borderColor: "#555", marginBottom: "13px" }} />
-                {component ? (
-                  <ComponentInfo
-                    componentId={versionedComponentId.componentId}
-                    version={versionedComponentId.version}
-                    name={component.componentName}
-                    size={component.componentSize}
-                    createdAt={component.createdAt}
+            <Box className={"p-3"}>
+              {activeTab === 0 && (
+                <div>
+                  <DangerZone
+                    title="General Settings"
+                    description="Manage your component settings."
+                    actions={actions}
                   />
-                ) : (
-                  <Typography>Loading component info...</Typography>
-                )}
-              </div>
-            )}
-            {activeTab === 2 && (
-              <div>
-                <Box className="flex flex-col">
-                  <Typography variant="h6">Update Component</Typography>
-                  <Typography variant="subtitle1" sx={{ color: "#888" }}>
-                    Update your component version.
-                  </Typography>
-                </Box>
-                <Divider sx={{ borderColor: "#555", marginBottom: "13px" }} />
-                <CreateComponentForm mode="update" componentId={compId} />
-              </div>
-            )}
-          </Box>
+                </div>
+              )}
+              {activeTab === 1 && (
+                <div>
+                  <Stack
+                    direction="row"
+                    alignItems={"center"}
+                    justifyContent={"space-between"}
+                    // className="p-1"
+                  >
+                    <Box className="flex flex-col">
+                      <Typography variant="h6">
+                        Component Information
+                      </Typography>
+                      <Typography
+                        variant="subtitle1"
+                        className="text-muted-foreground"
+                      >
+                        View metadata about this component
+                      </Typography>
+                    </Box>
+                    <Stack
+                      direction="row"
+                      gap={1}
+                      alignItems={"center"}
+                      className="self-start"
+                    >
+                      <DropdownV2
+                        list={components?.map((component: Component) => ({
+                          value: component.versionedComponentId.version,
+                          label: `v${component.versionedComponentId.version}`,
+                          onClick: (value: string | number) => {
+                            setVersion(Number(value));
+                          },
+                        }))}
+                        prefix={`v${version}`}
+                      />
+                      <Button2
+                        variant="primary"
+                        size="sm"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          downloadComponent(compId, version!);
+                        }}
+                      >
+                        <DownloadIcon />
+                      </Button2>
+                    </Stack>
+                  </Stack>
+                  <Divider className="bg-border my-1" />
+                  {component ? (
+                    <ComponentInfo
+                      componentId={versionedComponentId.componentId}
+                      version={versionedComponentId.version}
+                      name={component.componentName}
+                      size={component.componentSize}
+                      createdAt={component.createdAt}
+                    />
+                  ) : (
+                    <Typography>Loading component info...</Typography>
+                  )}
+                </div>
+              )}
+              {activeTab === 2 && (
+                <div>
+                  <Box className="flex flex-col">
+                    <Typography variant="h6">Update Component</Typography>
+                    <Typography variant="subtitle1" sx={{ color: "#888" }}>
+                      Update your component version.
+                    </Typography>
+                  </Box>
+                  <Divider className="bg-border my-1" />
+                  <CreateComponentForm mode="update" componentId={compId} />
+                </div>
+              )}
+            </Box>
+          </div>
         </div>
       </div>
     </>

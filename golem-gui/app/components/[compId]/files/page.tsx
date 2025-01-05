@@ -1,78 +1,67 @@
 "use client";
 import React from "react";
-import { Box, Typography, Grid, Paper } from "@mui/material";
-import FolderIcon from "@mui/icons-material/Folder";
+import { Box, Typography, Grid2 as Grid, Paper } from "@mui/material";
+import { Folder } from 'lucide-react';
 import { useWorkerFileContent } from "@/lib/hooks/use-worker";
 import { useParams } from "next/navigation";
-import SecondaryHeader from "@/components/ui/secondary-header";
-import ErrorBoundary from "@/components/erro-boundary";
 
-const NoFilesComponent = () => {
+const FileComponent = () => {
   const { compId } = useParams<{ compId: string }>();
-  const { data, isLoading, error } = useWorkerFileContent(
+  const { data, isLoading } = useWorkerFileContent(
     "test",
     compId,
     "file-service.wasm"
-  );
+  ) as { data: unknown; isLoading: boolean; error?: string | null };
 
   console.log(data, isLoading);
 
   return (
-    <> <Box sx={{ display: { xs: "block", md: "none" } }}>
-    <SecondaryHeader onClick={() => {}} variant="components" />
-  </Box>
-  {error && <ErrorBoundary message={error}/>}  
     <div className="mx-auto max-w-7xl px-6 lg:px-8">
       <div className="mx-auto max-w-2xl lg:max-w-none py-4">
-      <Paper
-        elevation={3}
-        sx={{
-          backgroundColor: "#1c1c1c",
-          borderRadius: "8px",
-          overflow: "hidden",
-          height: "80%",
-        }}
-      >
-        <Grid
-          container
+        <Paper
+          elevation={3}
           sx={{
-            padding: "10px 16px",
-            backgroundColor: "#2c2c2c",
-            color: "#ffffff",
+            backgroundColor: "#1c1c1c",
+            borderRadius: "8px",
+            overflow: "hidden",
+            height: "80%",
           }}
         >
-          <Grid item xs={6}>
-            <Typography variant="body1" fontWeight="bold">
-              NAME
-            </Typography>
+          <Grid
+            container
+            sx={{
+              padding: "10px 16px",
+            }}
+            className="dark:bg-[#2c2c2c] bg-[#ebebeb]"
+          >
+            <Grid size={{ xs: 6 }}>
+              <Typography variant="body1" >
+                NAME
+              </Typography>
+            </Grid>
+            <Grid size={{ xs: 6 }} textAlign="right">
+              <Typography variant="body1">
+                PERMISSIONS
+              </Typography>
+            </Grid>
           </Grid>
-          <Grid item xs={6} textAlign="right">
-            <Typography variant="body1" fontWeight="bold">
-              PERMISSIONS
-            </Typography>
-          </Grid>
-        </Grid>
 
-        <Box
-          sx={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            flexDirection: "column",
-            height: "calc(100% - 50px)",
-            color: "#ffffff",
-          }}
-        >
-          <FolderIcon
-            sx={{ fontSize: 60, color: "#757575", marginBottom: 1 }}
-          />
-          <Typography variant="body2">No files found</Typography>
-        </Box>
-      </Paper>
+          <Box
+            sx={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              flexDirection: "column",
+              padding:'30px'
+            }}
+          >
+            <Folder size={48}/>
+            <Typography variant="body2" className="text-foreground">No files found</Typography>
+          </Box>
+        </Paper>
+      </div>
     </div>
-    </div>
-    </>
   );
 };
 
-export default NoFilesComponent;
+export default FileComponent;
