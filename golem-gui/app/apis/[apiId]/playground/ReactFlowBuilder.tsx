@@ -53,12 +53,9 @@ const ReactApiFlowBuilder = ({
     sx={{
       p: 3,
       mb: 3,
-      color: "text.primary",
-      border: 1,
-      borderColor: "divider",
-      borderRadius: 2,
       position:"realtive"
     }}
+    className="border"
      style={{ height: "100vh", width: "100%", margin: "0 auto" }}>
       <>
       <Box position={"absolute"} padding={1}  marginLeft={20} zIndex={100}>

@@ -39,7 +39,7 @@ const actionsMap = {
   new_route: "Create New Route",
   delete_api_version: "Delete Api Version",
   deployment: "Create New Deployment",
-} as Record<string,string>
+} as Record<string, string>;
 type secondaryHeaderProps = {
   onClick: () => void;
   variant: string;
@@ -145,7 +145,9 @@ export default function SecondaryHeader({
         { label: "Deploy API", onClick: () => setOpen("deployment") },
         {
           label: "Download API",
-          onClick: () => {downloadApi(apiId, version ?? "")},
+          onClick: () => {
+            downloadApi(apiId, version ?? "");
+          },
         },
       ],
     },
@@ -189,14 +191,19 @@ export default function SecondaryHeader({
     setDrawerOpen(open);
   };
 
-  const handleClose = ()=>setOpen(null);
+  const handleClose = () => setOpen(null);
 
   const ApiName = decodeURIComponent(apiId);
 
   return (
     <Box className="dark:bg-[#0a0a0a] border-b p-2 pr-20 ">
       <Box className="flex items-center justify-between w-full">
-        <Box sx={{ display: { xs: "block", md: "none" } }}>
+        <Box
+          sx={{
+            display:
+              apiTab === "playground" ? "block" : { xs: "block", md: "none" },
+          }}
+        >
           <Button
             startIcon={<PanelRightClose />}
             onClick={toggleDrawer(true)}
@@ -214,8 +221,8 @@ export default function SecondaryHeader({
         )}
 
         {variant === "apis" && apiTab != "playground" && (
-          <Box  className="border border-border rounded-md cursor-pointer dark:hover:bg-[#333] hover:bg-slate-100 py-1 px-2">
-            <ApiDropdown dropdowns={dropdowns}/>
+          <Box className="border border-border rounded-md cursor-pointer dark:hover:bg-[#333] hover:bg-slate-100 py-1 px-2">
+            <ApiDropdown dropdowns={dropdowns} />
           </Box>
         )}
 
@@ -348,10 +355,7 @@ export default function SecondaryHeader({
           />
         )}
         {open == "deployment" && (
-          <DeploymentCreationPage
-            apiId={apiId}
-            onSuccess={handleClose}
-          />
+          <DeploymentCreationPage apiId={apiId} onSuccess={handleClose} />
         )}
         {open == "new_route" && (
           <div className="p-5">
@@ -363,7 +367,11 @@ export default function SecondaryHeader({
           </div>
         )}
         {open == "delete_api_version" && (
-          <DeleteApiVersion apiId={apiId} version={version} onSuccess={handleClose}/>
+          <DeleteApiVersion
+            apiId={apiId}
+            version={version}
+            onSuccess={handleClose}
+          />
         )}
       </CustomModal>
     </Box>

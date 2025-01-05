@@ -19,6 +19,7 @@ type SidebarProps = {
   navigationLinks: NavigationLinks[];
   variant: string;
   version?: string;
+  apiTab?:string;
 };
 
 type NavigationLinks = {
@@ -27,7 +28,7 @@ type NavigationLinks = {
   icon: React.ReactNode;
 };
 
-const Sidebar = ({ id, navigationLinks, variant }: SidebarProps) => {
+const Sidebar = ({ id, navigationLinks, variant,apiTab}: SidebarProps) => {
   const pathname = usePathname();
   const [isOpen, setIsOpen] = React.useState(false);
 
@@ -38,7 +39,8 @@ const Sidebar = ({ id, navigationLinks, variant }: SidebarProps) => {
         flexDirection: "column",
         padding: 2,
         minHeight: "100vh",
-        display: { xs: "none", md: "flex" },
+        display:
+        apiTab === "playground" ? "none" : { xs: "none", md: "flex" },
       }}
       className="dark:bg-[#0a0a0a] bg-white border-r border-gray-300 dark:border-[#3f3f3f] "
     >

@@ -67,7 +67,7 @@ export default function APISLayout({
 
   return (
     <div style={{ display: "flex" }}>
-      <Sidebar id={apiId!} navigationLinks={navigationLinks} variant="apis" />
+      <Sidebar id={apiId!} navigationLinks={navigationLinks} variant="apis" apiTab={tab} />
       <div
         className="flex-1 "
         // style={{
