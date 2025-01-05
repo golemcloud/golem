@@ -57,7 +57,6 @@ golem-service-base = { path = "../golem-service-base" }
 golem-rib = { path = "../golem-rib" }
 golem-wasm-ast = { path = "../wasm-ast", version = "0.0.0" }
 golem-wasm-rpc = { path = "../wasm-rpc", version = "0.0.0", default-features = false, features = ["host"] }
-schematools = "0.19.2"
 string-interner = "0.18.0"
 
 axum = { version = "0.7", features = ["macros"] }
@@ -122,11 +121,8 @@ tracing-subscriber = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 wasm-wave = { workspace = true }
-utoipa = { version = "5.3.0", features = ["axum_extras"] }
-utoipa-swagger-ui = { version = "8.1.0", features = ["axum"] }
 indexmap = "2.2.3"
 api-response = "0.16.3"
-
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 fastrand = "2.3.0"
@@ -144,8 +140,6 @@ hyper = { version = "1.0", features = ["full"] }
 hyper-util = { version = "0.1", features = ["full"] }
 http-body-util = "0.1"
 reqwest = { version = "0.11", features = ["json"] }
-utoipa = { version = "5.3.0", features = ["axum_extras", "yaml", "chrono", "uuid", "openapi_extensions"] }
-utoipa-gen = "5.3.0"
 tokio = { version = "1.0", features = ["full"] }
 serde_yaml = "0.9"
 serde_json = "1.0"
@@ -153,8 +147,6 @@ async-trait = "0.1"
 chrono = "0.4"
 oauth2 = { version = "4.4", default-features = false }
 api-response = "0.16.3"
-opener = "0.6"
-
 [[bench]]
 name = "tree"
 harness = false
