@@ -58,7 +58,7 @@ export default function APISLayout({
 
   const tab = useMemo(() => {
     const parts = pathname?.split("/") || [];
-    return parts[parts.length - 1] || "overview"; // Default to "overview"
+    return parts[parts.length - 1] || "overview";
   }, [pathname]);
 
   if (isLoading) {
@@ -103,5 +103,5 @@ export default function APISLayout({
         </div>
       </div>
     </div>
-  ); // dropdown bna rha hu yha kya kar rhe
+  ); 
 }

@@ -8,13 +8,19 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Controller } from "react-hook-form";
+import { Control, Controller} from "react-hook-form";
+
+interface Option {
+  id: string | number;
+  name: string;
+  componentName: string;
+}
 
 interface CustomSelectProps {
   name: string;
   label: string;
-  control?: any;
-  options: any;
+  control?:Control;
+  options: Option[];
   isLoading: boolean;
 }
 
@@ -49,7 +55,7 @@ export function CustomSelect({
                     Loading...
                   </SelectItem>
                 ) : (
-                  options.map((option: any) => {
+                  options.map((option: Option) => {
                     return (
                       <SelectItem
                         key={option?.id}

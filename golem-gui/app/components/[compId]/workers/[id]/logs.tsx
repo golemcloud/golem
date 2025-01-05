@@ -19,7 +19,6 @@ export default function WorkerLogs() {
     count: 1,
   });
 
-  console.log(logs, error, isLoading);
 
   const entries = logs?.entries || [];
 
@@ -47,7 +46,7 @@ export default function WorkerLogs() {
   return (
     <Box p={3}>
       <List>
-        {entries.map((log: any, index: number) => (
+        {entries.map((log:any, index: number) => (
           <Paper
             key={index}
             variant="outlined"

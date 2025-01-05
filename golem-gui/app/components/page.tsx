@@ -4,7 +4,6 @@ import {
   Box,
   InputAdornment,
   TextField,
-  Typography,
   IconButton,
   Pagination,
 } from "@mui/material";

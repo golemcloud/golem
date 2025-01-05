@@ -29,7 +29,7 @@ type DataItem = {
   returnType: string;
 };
 
-export default function ExportsTable<T>({}: // data,
+export  function ExportsTable<T>({}: // data,
 // columns,
 // onRowClick,
 ExportsTableProps<T>) {
@@ -57,7 +57,6 @@ ExportsTableProps<T>) {
     );
   }, [latestComponent?.versionedComponentId?.version]);
 
-  console.log(exports);
   const tableData: DataItem[] = exports.map((func) => ({
     package: func.name,
     method: func.functionName,

@@ -123,13 +123,9 @@ export const MultiSelect = React.forwardRef<
     {
       options,
       onValueChange,
-      variant,
       defaultValue = [],
       placeholder = "Select options",
-      animation = 0,
-      maxCount = 2,
       modalPopover = false,
-      asChild = false,
       className,
       selectMode = "multi",
       buttonType,

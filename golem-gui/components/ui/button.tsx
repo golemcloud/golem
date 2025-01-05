@@ -24,6 +24,7 @@ const buttonVariants = cva(
         link: "text-primary underline-offset-4 hover:underline",
         custom:
           "inline-flex items-center justify-center rounded-md text-sm font-medium px-4 py-2 h-10",
+        inverted:""
       },
       size: {
         default: "h-10 px-4 py-2",

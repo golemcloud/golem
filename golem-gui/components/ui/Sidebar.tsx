@@ -12,14 +12,14 @@ import {
 } from "@mui/material";
 import { Add } from "@mui/icons-material";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname,useRouter } from "next/navigation";
 
 type SidebarProps = {
   id: string;
   navigationLinks: NavigationLinks[];
   variant: string;
   version?: string;
-  apiTab?:string;
+  apiTab?: string;
 };
 
 type NavigationLinks = {
@@ -28,9 +28,9 @@ type NavigationLinks = {
   icon: React.ReactNode;
 };
 
-const Sidebar = ({ id, navigationLinks, variant,apiTab}: SidebarProps) => {
+const Sidebar = ({ id, navigationLinks, variant, apiTab }: SidebarProps) => {
   const pathname = usePathname();
-  const [isOpen, setIsOpen] = React.useState(false);
+  const router=useRouter();
 
   return (
     <Box
@@ -39,8 +39,7 @@ const Sidebar = ({ id, navigationLinks, variant,apiTab}: SidebarProps) => {
         flexDirection: "column",
         padding: 2,
         minHeight: "100vh",
-        display:
-        apiTab === "playground" ? "none" : { xs: "none", md: "flex" },
+        display: apiTab === "playground" ? "none" : { xs: "none", md: "flex" },
       }}
       className="dark:bg-[#0a0a0a] bg-white border-r border-gray-300 dark:border-[#3f3f3f] "
     >
@@ -106,22 +105,21 @@ const Sidebar = ({ id, navigationLinks, variant,apiTab}: SidebarProps) => {
       )}
 
       {variant === "apis" && (
-        <Link href={`/apis/${id}/new-route`}>
-          <Button
-            variant="outlined"
-            sx={{
-              textTransform: "none",
-              padding: "6px 12px",
-              fontSize: "16px",
-              fontWeight: "500",
-            }}
-            fullWidth
-            className="border border-border dark:hover:bg-[#333] hover:bg-[#c0c0c0] text-foreground"
-          >
-            Add
-            <Add className="ml-2" />
-          </Button>
-        </Link>
+        <Button
+          onClick={() => router.push(`/apis/${id}/new-route`)}
+          variant="outlined"
+          sx={{
+            textTransform: "none",
+            padding: "6px 12px",
+            fontSize: "16px",
+            fontWeight: "500",
+          }}
+          fullWidth
+          className="border border-border dark:hover:bg-[#333] hover:bg-[#c0c0c0] text-foreground"
+        >
+          Add
+          <Add className="ml-2" />
+        </Button>
       )}
     </Box>
   );
