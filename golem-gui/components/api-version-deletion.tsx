@@ -13,11 +13,13 @@ const DeleteApiVersion = ({
   apiId,
   version,
   isExperimental,
+  noRedirect,
   onSuccess,
 }: {
   apiId: string;
   version?: string|null;
   isExperimental?: boolean;
+  noRedirect?:boolean;
   onSuccess?: () => void;
 }) => {
   const { deleteVersion } = useApiDefinitions(apiId);
@@ -35,7 +37,7 @@ const DeleteApiVersion = ({
 
   const onSubmit = async (data: FormData) => {
     if (isExperimental) return; // Block submission if experimental
-    await deleteVersion(apiId, data.version);
+    await deleteVersion(apiId, data.version, noRedirect);
     onSuccess?.(); // Call success callback if provided
   };
 

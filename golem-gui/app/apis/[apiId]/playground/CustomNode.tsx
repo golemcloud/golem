@@ -25,7 +25,7 @@ function CustomNode({ id, data }: FlowNode) {
   const isEmptyNode = !!data?.type?.includes("empty");
   const specialNodeCheck = ["start", "end"].includes(type);
   const Icon = getIconBasedOnType(data);
-  const draft = getStatus(data);
+  const status = getStatus(data);
   const triggerType = getTriggerType(id);
 
   function handleNodeClick(e: React.MouseEvent<HTMLDivElement>) {
@@ -52,7 +52,7 @@ function CustomNode({ id, data }: FlowNode) {
     <Paper
       elevation={3}
       color="transparent"
-      className="dark:bg-[#0a0a0a] bg-white dark:text-white"
+      className="dark:bg-[#0a0a0a] bg-slate-50 dark:text-white"
       sx={{
         border: `2px solid ${
           id === selectedNode || isEmptyNode
@@ -82,7 +82,10 @@ function CustomNode({ id, data }: FlowNode) {
               justifyContent="center"
               onClick={(e) => {
                 e.preventDefault();
-                setTrigger({ type: triggerType, operation: "create" });
+                if(status!=="Draft"){
+                  return alert("Can't perform this operation on published api");
+                }
+                setTrigger({ type: triggerType, operation: triggerType === "api" ? "create": "new_route"});
               }}
             >
               <GoPlus size={32} style={{ marginBottom: theme.spacing(1) }} />
@@ -125,7 +128,7 @@ function CustomNode({ id, data }: FlowNode) {
                       {getVersion(data)}
                     </Typography>
                   </Stack>
-                  {draft && (
+                  {status && (
                     <Stack direction="row" alignItems="center" gap={1}>
                       <Typography
                         variant="caption"
@@ -133,10 +136,11 @@ function CustomNode({ id, data }: FlowNode) {
                           border: `1px solid`,
                           px: 1,
                         }}
+                        className={status !== "Draft" ? "bg-green-600" : ""}
                       >
-                        {draft}
+                        {status}
                       </Typography>
-                      {draft === "Draft" && <DoneIcon color="primary" />}
+                      {status === "Draft" && <DoneIcon color="primary" />}
                     </Stack>
                   )}
                 </Box>

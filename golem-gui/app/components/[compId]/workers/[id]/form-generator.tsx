@@ -556,15 +556,15 @@ const DynamicForm: React.FC<{
     getValues,
     reset,
   } = useForm<FormData>({
-    defaultValues: defaultValues,
+    defaultValues: {},
   });
 
   console.log("defaultValues", defaultValues);
 
   useEffect(() => {
-    reset(defaultValues);
-    setTab(0);
-  }, [config, reset, defaultValues]);
+    reset(defaultValues || {}); // Reset with fresh default values
+    setTab(0); // Reset tab to the initial state
+  }, [config, reset, defaultValues])
 
   const handleChange = (key: string, value: unknown) => {
     setValue(key, value, { shouldDirty: true });
@@ -640,7 +640,7 @@ const DynamicForm: React.FC<{
                     wordBreak: "break-word",
                   }}
                 >
-                  <JsonEditor json={getValues()} />
+                  <JsonEditor json={config.length ? getValues(): {}} />
                 </Box>
               </CardContent>
             </Card>
@@ -664,8 +664,7 @@ const DynamicForm: React.FC<{
                   }}
                 >
                   <JsonEditor
-                    // json={{ params: transform(config, getValues()) }}
-                    json={{ params: transform(config, getValues()) }}
+                    json={{ params: transform(config, config.length ? getValues(): {}) }}
                   />
                 </Box>
               </CardContent>

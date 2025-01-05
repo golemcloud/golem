@@ -67,7 +67,7 @@ function useApiDefinitions(defintionId?: string, version?: string | null) {
     update: { version: string },
     id: string,
     version?: string | null,
-    noRedirect?: boolean
+    noRedirect?: boolean | undefined
   ) => {
     const { data, error, success } = getApiDefintion(id, version);
 
@@ -101,7 +101,7 @@ function useApiDefinitions(defintionId?: string, version?: string | null) {
     }
   };
 
-  const deleteVersion = async (id: string, version?: string | null) => {
+  const deleteVersion = async (id: string, version?: string | null, noRedirect?:boolean) => {
     try {
       const { data, error, success } = getApiDefintion(id, version);
       const noOfVersions = apiDefinitions.length;
@@ -134,7 +134,9 @@ function useApiDefinitions(defintionId?: string, version?: string | null) {
       toast.success("Api version deleted");
 
       //If version we are deleting is the last version. then  redirect to api's page.
-      router.push(noOfVersions > 1 ? `/apis/${id}/overview` : `/apis`);
+      if(!noRedirect){
+        router.push(noOfVersions > 1 ? `/apis/${id}/overview` : `/apis`);
+      }
     } catch (error) {
       console.error("Error deleting version:", error);
       toast.error(`Version Deletion failed. Something went wrong`);

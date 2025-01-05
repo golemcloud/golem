@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import React from "react";
+import React, { useMemo, useState } from "react";
 import {
   ReactFlow,
   Background,
@@ -12,7 +12,8 @@ import useApiInitialization from "@/lib/hooks/use-api-initilisation";
 import "@xyflow/react/dist/style.css";
 import { ApiDefinition } from "@/types/api";
 import Editors from "./editors";
-import { Paper } from "@mui/material";
+import { Box, Paper } from "@mui/material";
+import { DropdownV2 } from "@/components/ui/dropdown-button";
 
 const nodeTypes = { custom: CustomNode as any };
 const edgeTypes: EdgeTypesType = {
@@ -24,6 +25,17 @@ const ReactApiFlowBuilder = ({
 }: {
   apiDefnitions: ApiDefinition[];
 }) => {
+
+  const [show, setShow] = useState("all");
+
+  const finalApiDefintions = useMemo(()=>{
+    return apiDefnitions?.filter((api:ApiDefinition)=>{
+      const status = api.draft ? "Draft" : "Published"
+      return show === "all" || show === status;
+    })
+
+  }, [show, apiDefnitions])
+
   const {
     nodes,
     edges,
@@ -33,7 +45,7 @@ const ReactApiFlowBuilder = ({
     onConnect,
     onDragOver,
     onDrop,
-  } = useApiInitialization(apiDefnitions);
+  } = useApiInitialization(finalApiDefintions);
 
   return (
     <Paper
@@ -45,9 +57,19 @@ const ReactApiFlowBuilder = ({
       border: 1,
       borderColor: "divider",
       borderRadius: 2,
+      position:"realtive"
     }}
      style={{ height: "100vh", width: "100%", margin: "0 auto" }}>
       <>
+      <Box position={"absolute"} padding={1}  marginLeft={20} zIndex={100}>
+      <DropdownV2 
+       list={[ 
+        {label:"All", value:"all", onClick:()=>setShow("all")},
+        {label: "Published Only", value:"Published", onClick:()=>setShow("Published")},
+        {label: "Draft Only", value:"Draft", onClick:()=>setShow("Draft")}]}
+       prefix={show}
+      />
+      </Box>
       {!isLoading && (
         <ReactFlow
           nodes={nodes}

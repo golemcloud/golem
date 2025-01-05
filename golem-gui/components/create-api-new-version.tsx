@@ -13,12 +13,14 @@ const CreateNewApiVersion = ({
   apiId,
   version,
   isExperimental,
+  noRedirect,
   onSuccess,
 }: {
   apiId: string;
   version?: string|null;
   isExperimental?: boolean;
-  onSuccess?: () => void;
+  noRedirect?: boolean;
+  onSuccess?: (data:{version: string}) => void;
 }) => {
   const { addNewApiVersionDefinition } = useApiDefinitions(apiId, version);
 
@@ -39,9 +41,9 @@ const CreateNewApiVersion = ({
       { version: data.version },
       apiId,
       version,
-      isExperimental
+      noRedirect,
     );
-    onSuccess?.(); // Call success callback if provided
+    onSuccess?.({ version: data.version }); // Call success callback if provided
   };
 
   return (

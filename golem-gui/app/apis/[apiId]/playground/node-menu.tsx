@@ -72,10 +72,9 @@ export default function NodeMenu({
           aria-expanded={open ? "true" : undefined}
           aria-haspopup="true"
           onClick={handleToggle}
-          size="icon"
           variant={"ghost"}
         >
-          <CiSquareChevDown className="size-6 text-gray-500 hover:text-gray-700 p-0 m-0" />
+          <CiSquareChevDown className="size-24 text-gray-500 hover:text-gray-700" />
         </Button>
         <Popper
           open={open}
@@ -95,7 +94,7 @@ export default function NodeMenu({
               }}
             >
               <Paper
-                className="dark:bg-[#0c0c0c] bg-white border border-gray-300 dark:border-[#3f3f3f] dark:text-white border-solid"
+                className="dark:bg-[#0c0c0c] bg-slate-50 border border-gray-300 dark:border-[#3f3f3f] dark:text-white border-solid"
               >
                 <ClickAwayListener onClickAway={handleClose}>
                   <MenuList
@@ -104,19 +103,36 @@ export default function NodeMenu({
                     aria-labelledby="composition-button"
                     onKeyDown={handleListKeyDown}
                   >
-                    <MenuItem
+                     {triggerType !== "route" && <MenuItem
+                      disabled={!canDelete}
                       onClick={(e) => {
                         setTrigger({
                           type: triggerType,
-                          operation: "new_version",
+                          operation: "new_route",
                           id,
+                          meta: {version: triggerType=="api" ? data.version: data?.apiInfo?.version}
+                        });
+                        handleClose(e);
+                      }}
+                    >
+                      New Route
+                    </MenuItem>}
+                    {triggerType !== "route" &&  <MenuItem
+                      disabled={!canDelete}
+                      onClick={(e) => {
+                        setTrigger({
+                          type: triggerType,
+                          operation: "create",
+                          id,
+                          meta: {version: triggerType=="api" ? data.version: data?.apiInfo?.version}
                         });
                         handleClose(e);
                       }}
                     >
                       New Version
-                    </MenuItem>
+                    </MenuItem>}
                     <MenuItem
+                      disabled={!canDelete}
                       onClick={(e) => {
                         if (!canDelete) {
                           return handleClose(e);
@@ -125,6 +141,7 @@ export default function NodeMenu({
                           type: triggerType,
                           operation: "delete",
                           id,
+                          meta: {version: triggerType=="api" ? data.version: data?.apiInfo?.version}
                         });
                         handleClose(e);
                       }}
@@ -137,6 +154,7 @@ export default function NodeMenu({
                           type: triggerType,
                           operation: "view",
                           id,
+                          meta: {version: triggerType=="api" ? data.version: data?.apiInfo?.version}
                         });
                         setSelectedNode(id);
                         handleClose(e);
@@ -144,7 +162,7 @@ export default function NodeMenu({
                     >
                       View Details
                     </MenuItem>
-                    <MenuItem
+                    {triggerType !== "api" && <MenuItem
                       onClick={(e) => {
                         if (!canDelete) {
                           return handleClose(e);
@@ -153,13 +171,32 @@ export default function NodeMenu({
                           type: triggerType,
                           operation: "update",
                           id,
+                          meta: {version: triggerType=="api" ? data.version: data?.apiInfo?.version}
+                        });
+                        setSelectedNode(id);
+                        handleClose(e);
+                      }}
+                      disabled={!canDelete}
+                    >
+                      Update
+                    </MenuItem>}
+                    {triggerType !== "route" && <MenuItem
+                      onClick={(e) => {
+                        if (!canDelete) {
+                          return handleClose(e);
+                        }
+                        setTrigger({
+                          type: triggerType,
+                          operation: "download",
+                          id,
+                          meta: {version: triggerType=="api" ? data.version: data?.apiInfo?.version}
                         });
                         setSelectedNode(id);
                         handleClose(e);
                       }}
                     >
-                      Update
-                    </MenuItem>
+                      Download
+                    </MenuItem>}
                   </MenuList>
                 </ClickAwayListener>
               </Paper>
