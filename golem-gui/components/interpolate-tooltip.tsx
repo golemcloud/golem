@@ -71,8 +71,8 @@ export function InterpolationExpressions() {
   );
 }
 
-export function AvailableFunctions({ compId }: { compId: string }) {
-  const { components } = useComponents(compId, "latest");
+export function AvailableFunctions({ compId, version }: { compId: string, version: string | number }) {
+  const { components } = useComponents(compId, version || "latest");
   const [latestComponent] = components;
 
   const exports = useMemo(() => {
@@ -81,11 +81,11 @@ export function AvailableFunctions({ compId }: { compId: string }) {
     return metaExports.flatMap((expo: ComponentExport) =>
       "functions" in expo
         ? expo.functions?.map(
-            (fun: WorkerFunction) => `${expo.name}.${fun.name}`
-          )
+          (fun: WorkerFunction) => `${expo.name}.${fun.name}`
+        )
         : expo.name
     );
-  }, [latestComponent?.versionedComponentId?.version]);
+  }, [latestComponent]);
 
   const handleCopy = (func: string) => {
     navigator.clipboard.writeText(func);
@@ -93,13 +93,9 @@ export function AvailableFunctions({ compId }: { compId: string }) {
   };
 
   return (
-    <Box>
-      <Typography variant="body2" gutterBottom>
-        Available Functions
-      </Typography>
-      <Divider className="bg-border my-1" />
+    <>
       <Box>
-        {exports.map((func, index) => (
+        {exports?.length && exports.map((func, index) => (
           <Box key={index} gap={2}>
             <Button
               variant="ghost"
@@ -111,7 +107,8 @@ export function AvailableFunctions({ compId }: { compId: string }) {
             </Button>
           </Box>
         ))}
+        {exports?.length ===0 && <Typography>No Functions available</Typography>}
       </Box>
-    </Box>
+    </>
   );
 }

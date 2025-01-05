@@ -156,7 +156,17 @@ const ProjectDashboard = () => {
                           }
                         >
                           <Box display="flex" justifyContent="space-between">
-                            <Typography variant="body1">{api.id}</Typography>
+                            <Typography
+                              variant="body1"
+                              sx={{
+                                overflow: "hidden", // Ensures overflow content is hidden
+                                textOverflow: "ellipsis", // Adds an ellipsis when text overflows
+                                whiteSpace: "nowrap", // Prevents text wrapping to a new line
+                                fontWeight: 500,
+                              }}
+                            >
+                              {api.id}
+                            </Typography>
                             <Typography
                               variant="body2"
                               sx={{

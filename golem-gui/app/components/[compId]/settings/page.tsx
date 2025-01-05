@@ -65,7 +65,6 @@ const WorkerSettings = () => {
       <div className="mx-auto max-w-7xl px-6 lg:px-8">
         <div className="mx-auto max-w-2xl lg:max-w-none py-4">
           <Stack
-          gap={3}
           >
             <Box
               sx={{
@@ -91,7 +90,7 @@ const WorkerSettings = () => {
                 direction="row"
                 alignItems={"center"}
                 justifyContent={"space-between"}
-                className="p-1 md:p-3"
+                className="p-1 pb-0 md:p-3 md:pb-0"
               >
                 <Box className="flex flex-col">
                 <Typography variant="h6">Update Component</Typography>

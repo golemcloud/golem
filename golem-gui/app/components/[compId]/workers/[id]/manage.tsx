@@ -100,7 +100,12 @@ export default function Manage() {
           </Stack>
         </Paper>
 
-        <Paper className="border">
+        <Paper elevation={3}
+          sx={{
+            p: 3,
+            mb: 3,
+            borderRadius: 2,
+          }} className="border">
           <DangerZone
             title="Danger Zone"
             description="Proceed with caution."

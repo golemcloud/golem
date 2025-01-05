@@ -1,5 +1,5 @@
 import React from "react";
-import { Box, Typography, Chip, Stack } from "@mui/material";
+import { Box, Typography, Stack } from "@mui/material";
 
 interface ComponentCardProps {
   name: string;
