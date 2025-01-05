@@ -47,6 +47,8 @@ const ReactApiFlowBuilder = ({
     onDrop,
   } = useApiInitialization(finalApiDefintions);
 
+  const isPublished = useMemo(()=>!!apiDefnitions?.find((api)=>api.draft!==true), [apiDefnitions])
+
   return (
     <Paper
     elevation={3}
@@ -65,12 +67,17 @@ const ReactApiFlowBuilder = ({
       <DropdownV2 
        list={[ 
         {label:"All", value:"all", onClick:()=>setShow("all")},
-        {label: "Published Only", value:"Published", onClick:()=>setShow("Published")},
+        {
+          label: "Published Only", value:"Published", 
+        onClick:()=>{if(isPublished){setShow("Published")}},
+        disabled: isPublished
+
+      },
         {label: "Draft Only", value:"Draft", onClick:()=>setShow("Draft")}]}
        prefix={show}
       />
       </Box>
-      {!isLoading && (
+      {!isLoading && finalApiDefintions.length ?  (
         <ReactFlow
           nodes={nodes}
           edges={edges}
@@ -86,7 +93,7 @@ const ReactApiFlowBuilder = ({
           <Controls orientation="horizontal" position="top-left" className="text-black"/>
           <Background />
         </ReactFlow>
-      )}
+      ): null}
       <Editors />
       </>
     </Paper>
