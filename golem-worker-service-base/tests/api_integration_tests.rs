@@ -2,18 +2,19 @@
 mod api_integration_tests {
     use axum::{
         routing::{get, post},
-        Router, Json, response::IntoResponse,
+        Router, response::IntoResponse,
         http::header,
+        Json as AxumJson,
     };
     use golem_worker_service_base::gateway_api_definition::http::{
-        swagger_ui::{SwaggerUiConfig, generate_swagger_ui},
+        swagger_ui::{SwaggerUiConfig, create_swagger_ui},
     };
     use serde::{Deserialize, Serialize};
     use std::net::SocketAddr;
     use tokio::net::TcpListener;
     use tower::ServiceBuilder;
     use tower_http::trace::TraceLayer;
-    use utoipa::{OpenApi, ToSchema};
+    use poem_openapi::{OpenApi, Object, payload::Json};
     use hyper_util::client::legacy::connect::HttpConnector;
     use hyper_util::client::legacy::Client;
     use hyper::body::Bytes;
@@ -21,7 +22,7 @@ mod api_integration_tests {
     use reqwest;
 
     // Types matching our OpenAPI spec
-    #[derive(Debug, Serialize, Deserialize, ToSchema)]
+    #[derive(Debug, Serialize, Deserialize, Object)]
     struct ComplexRequest {
         id: u32,
         name: String,
@@ -29,64 +30,62 @@ mod api_integration_tests {
         status: Status,
     }
 
-    #[derive(Debug, Serialize, Deserialize, ToSchema)]
-    #[serde(tag = "discriminator", content = "value")]
-    enum Status {
-        #[serde(rename = "Active")]
-        Active,
-        #[serde(rename = "Inactive")]
-        Inactive { reason: String },
+    #[derive(Debug, Serialize, Deserialize, Object)]
+    #[oai(skip_serializing_if_is_none)]
+    struct Status {
+        #[oai(rename = "type")]
+        status_type: String,
+        reason: Option<String>,
     }
 
-    #[derive(Debug, Serialize, Deserialize, ToSchema)]
-    struct ApiResponse {
+    #[derive(Debug, Serialize, Deserialize, Object)]
+    struct CustomApiResponse {
         success: bool,
         received: ComplexRequest,
     }
 
-    #[derive(OpenApi)]
-    #[openapi(
-        paths(handle_complex_request),
-        components(schemas(ComplexRequest, Status, ApiResponse))
-    )]
+    #[derive(Clone)]
     struct ApiDoc;
 
-    #[utoipa::path(
-        post,
-        path = "/api/v1/complex",
-        request_body = ComplexRequest,
-        responses(
-            (status = 200, description = "Success response", body = ApiResponse)
-        )
-    )]
-    async fn handle_complex_request(
-        Json(request): Json<ComplexRequest>,
-    ) -> Json<ApiResponse> {
-        // Echo back the request as success response
-        Json(ApiResponse {
-            success: true,
-            received: request,
-        })
+    #[OpenApi]
+    impl ApiDoc {
+        /// Handle a complex request
+        #[oai(path = "/api/v1/complex", method = "post")]
+        async fn handle_complex_request(
+            &self,
+            request: Json<ComplexRequest>,
+        ) -> Json<CustomApiResponse> {
+            // Echo back the request as success response
+            Json(CustomApiResponse {
+                success: true,
+                received: request.0,
+            })
+        }
     }
 
     async fn serve_openapi(
         axum::extract::Path((_api_id, _version)): axum::extract::Path<(String, String)>,
-    ) -> Json<serde_json::Value> {
-        let doc = ApiDoc::openapi();
-        Json(serde_json::json!(doc))
+    ) -> AxumJson<serde_json::Value> {
+        let service = create_swagger_ui(ApiDoc, &SwaggerUiConfig {
+            enabled: true,
+            title: Some("Test API".to_string()),
+            version: Some("1.0".to_string()),
+            server_url: None,
+        });
+        let spec = service.spec();
+        AxumJson(serde_json::from_str(&spec).unwrap())
     }
 
     async fn serve_swagger_ui() -> impl IntoResponse {
         let config = SwaggerUiConfig {
             enabled: true,
-            path: "/docs".to_string(),
             title: Some("Test API".to_string()),
-            theme: None,
-            api_id: "test-api".to_string(),
-            version: "1.0.0".to_string(),
+            version: Some("1.0".to_string()),
+            server_url: None,
         };
 
-        let html = generate_swagger_ui(&config);
+        let service = create_swagger_ui(ApiDoc, &config);
+        let html = service.swagger_ui_html();
         
         (
             [(header::CONTENT_TYPE, "text/html")],
@@ -94,11 +93,20 @@ mod api_integration_tests {
         )
     }
 
+    async fn handle_complex_request_axum(
+        AxumJson(request): AxumJson<ComplexRequest>,
+    ) -> AxumJson<CustomApiResponse> {
+        AxumJson(CustomApiResponse {
+            success: true,
+            received: request,
+        })
+    }
+
     // Test server setup
     async fn setup_test_server() -> SocketAddr {
         // Create API routes
         let app = Router::new()
-            .route("/api/v1/complex", post(handle_complex_request))
+            .route("/api/v1/complex", post(handle_complex_request_axum))
             .route("/v1/api/definitions/:api_id/version/:version/export", get(serve_openapi))
             .route("/docs", get(serve_swagger_ui))
             .layer(ServiceBuilder::new().layer(TraceLayer::new_for_http()));
@@ -133,7 +141,7 @@ mod api_integration_tests {
         let body = resp.into_body().collect().await?.to_bytes();
         let spec_json: serde_json::Value = serde_json::from_slice(&body)?;
         
-        // Write OpenAPI spec to files
+        // Write OpenAPI spec to files for debugging
         let target_dir = std::path::Path::new("target");
         if !target_dir.exists() {
             std::fs::create_dir_all(target_dir)?;
@@ -151,12 +159,21 @@ mod api_integration_tests {
             serde_yaml::to_string(&spec_json)?
         )?;
         
-        // Verify OpenAPI spec content
-        assert!(spec_json["paths"]["/api/v1/complex"]["post"]["requestBody"]["content"]["application/json"]["schema"]["$ref"]
-            .as_str()
-            .unwrap()
-            .contains("ComplexRequest")
-        );
+        // Print the spec for debugging
+        println!("OpenAPI Spec: {}", serde_json::to_string_pretty(&spec_json)?);
+        
+        // Verify OpenAPI spec content with more detailed error handling
+        let paths = spec_json.get("paths").expect("OpenAPI spec should have paths");
+        let complex_path = paths.get("/api/v1/complex").expect("Should have /api/v1/complex path");
+        let post_method = complex_path.get("post").expect("Should have POST method");
+        let request_body = post_method.get("requestBody").expect("Should have requestBody");
+        let content = request_body.get("content").expect("Should have content");
+        let json_content = content.get("application/json; charset=utf-8").expect("Should have application/json content");
+        let schema = json_content.get("schema").expect("Should have schema");
+        let schema_ref = schema.get("$ref").expect("Should have $ref");
+        
+        assert!(schema_ref.as_str().unwrap().contains("ComplexRequest"), 
+            "Schema ref should reference ComplexRequest, got: {}", schema_ref);
 
         // Test 2: Verify Swagger UI is served
         let docs_url = format!("{}/docs", base_url);
@@ -175,26 +192,9 @@ mod api_integration_tests {
             id: 42,
             name: "test".to_string(),
             flags: vec![true, false],
-            status: Status::Active,
-        };
-
-        let resp = client.post(format!("{}/api/v1/complex", base_url))
-            .json(&request)
-            .send()
-            .await?;
-        assert_eq!(resp.status(), 200);
-        
-        let result: ApiResponse = resp.json().await?;
-        assert!(result.success);
-        assert_eq!(result.received.id, 42);
-
-        // Error case
-        let request = ComplexRequest {
-            id: 42,
-            name: "test".to_string(),
-            flags: vec![true, false],
-            status: Status::Inactive { 
-                reason: "testing error".to_string() 
+            status: Status {
+                status_type: "Active".to_string(),
+                reason: None,
             },
         };
 
@@ -204,11 +204,32 @@ mod api_integration_tests {
             .await?;
         assert_eq!(resp.status(), 200);
         
-        let result: ApiResponse = resp.json().await?;
+        let result: CustomApiResponse = resp.json().await?;
+        assert!(result.success);
+        assert_eq!(result.received.id, 42);
+
+        // Error case
+        let request = ComplexRequest {
+            id: 42,
+            name: "test".to_string(),
+            flags: vec![true, false],
+            status: Status {
+                status_type: "Inactive".to_string(),
+                reason: Some("testing error".to_string()),
+            },
+        };
+
+        let resp = client.post(format!("{}/api/v1/complex", base_url))
+            .json(&request)
+            .send()
+            .await?;
+        assert_eq!(resp.status(), 200);
+        
+        let result: CustomApiResponse = resp.json().await?;
         assert!(result.success);
         assert!(matches!(
-            result.received.status,
-            Status::Inactive { reason } if reason == "testing error"
+            result.received.status.reason,
+            Some(reason) if reason == "testing error"
         ));
 
         Ok(())

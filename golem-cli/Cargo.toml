@@ -29,6 +29,7 @@ golem-rib = { path = "../golem-rib", version = "0.0.0", default-features = false
 golem-wasm-ast = { path = "../wasm-ast", version = "0.0.0", default-features = false, features = ["analysis"] }
 golem-wasm-rpc = { path = "../wasm-rpc", version = "0.0.0", default-features = false }
 golem-wasm-rpc-stubgen = { path = "../wasm-rpc-stubgen", version = "0.0.0" }
+golem-worker-service-base = { path = "../golem-worker-service-base", version = "0.0.0" }
 
 anyhow.workspace = true
 assert2 = { workspace = true }
@@ -59,6 +60,8 @@ log = { workspace = true }
 native-tls = "0.2.12"
 openapiv3 = { workspace = true }
 phf = { workspace = true }
+poem = { version = "3.1.6", features = ["websocket"] }
+poem-openapi = { version = "5.1.5", features = ["swagger-ui"] }
 rand = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true }

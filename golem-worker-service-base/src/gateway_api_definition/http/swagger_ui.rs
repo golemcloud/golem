@@ -1,94 +1,46 @@
+use poem::Route;
+use poem_openapi::{OpenApi, OpenApiService};
 use serde::{Deserialize, Serialize};
-use crate::gateway_api_definition::http::openapi_export::OpenApiExporter;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SwaggerUiConfig {
     pub enabled: bool,
-    pub path: String,
     pub title: Option<String>,
-    pub theme: Option<String>,
-    pub api_id: String,
-    pub version: String,
+    pub version: Option<String>,
+    pub server_url: Option<String>,
 }
 
 impl Default for SwaggerUiConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            path: "/docs".to_string(),
             title: None,
-            theme: None,
-            api_id: "default".to_string(),
-            version: "1.0".to_string(),
+            version: None,
+            server_url: None,
         }
     }
 }
 
-/// Generates Swagger UI HTML content for a given OpenAPI spec URL
-pub fn generate_swagger_ui(config: &SwaggerUiConfig) -> String {
-    if !config.enabled {
-        return String::new();
+/// Creates an OpenAPI service with optional Swagger UI
+pub fn create_swagger_ui<T: OpenApi>(api: T, config: &SwaggerUiConfig) -> OpenApiService<T, ()> {
+    let title = config.title.clone().unwrap_or_else(|| "API Documentation".to_string());
+    let version = config.version.clone().unwrap_or_else(|| "1.0".to_string());
+    let mut service = OpenApiService::new(api, title, version);
+    if let Some(url) = &config.server_url {
+        service = service.server(url);
     }
+    service
+}
 
-    let openapi_url = OpenApiExporter::get_export_path(&config.api_id, &config.version);
-
-    // Generate basic HTML with Swagger UI
-    format!(
-        r#"
-        <!DOCTYPE html>
-        <html lang="en">
-        <head>
-            <meta charset="utf-8" />
-            <meta name="viewport" content="width=device-width, initial-scale=1" />
-            <title>{}</title>
-            <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@latest/swagger-ui.css" />
-            <style>
-                {}
-            </style>
-        </head>
-        <body>
-            <div id="swagger-ui"></div>
-            <script src="https://unpkg.com/swagger-ui-dist@latest/swagger-ui-bundle.js"></script>
-            <script>
-                window.onload = () => {{
-                    window.ui = SwaggerUIBundle({{
-                        url: '{}',
-                        dom_id: '#swagger-ui',
-                        deepLinking: true,
-                        presets: [
-                            SwaggerUIBundle.presets.apis,
-                            SwaggerUIBundle.SwaggerUIStandalonePreset
-                        ],
-                        layout: "BaseLayout",
-                        {} // Theme configuration
-                    }});
-                }};
-            </script>
-        </body>
-        </html>
-        "#,
-        config.title.as_deref().unwrap_or("API Documentation"),
-        if config.theme.as_deref() == Some("dark") {
-            r#"
-            body {
-                background-color: #1a1a1a;
-                color: #ffffff;
-            }
-            .swagger-ui {
-                filter: invert(88%) hue-rotate(180deg);
-            }
-            .swagger-ui .topbar {
-                background-color: #1a1a1a;
-            }
-            "#
-        } else {
-            ""
-        },
-        openapi_url,
-        if config.theme.as_deref() == Some("dark") {
-            r#"syntaxHighlight: { theme: "monokai" }"#
-        } else {
-            ""
-        }
-    )
+/// Creates a route that includes both the API service and optionally the Swagger UI
+pub fn create_api_route<T: OpenApi + Clone + 'static>(api: T, config: &SwaggerUiConfig) -> Route {
+    let service = create_swagger_ui(api.clone(), config);
+    let mut route = Route::new().nest("/", service);
+    
+    if config.enabled {
+        let ui_service = create_swagger_ui(api, config);
+        route = route.nest("/docs", ui_service.swagger_ui());
+    }
+    
+    route
 }

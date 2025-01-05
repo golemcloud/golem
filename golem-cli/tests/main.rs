@@ -25,6 +25,7 @@ use tracing::info;
 pub mod cli;
 
 mod api_definition;
+mod api_definition_export_ui;
 mod api_deployment;
 mod api_deployment_fileserver;
 mod component;

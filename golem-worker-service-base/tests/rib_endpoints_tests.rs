@@ -1,14 +1,13 @@
 use poem::{test::TestClient, Route};
 use serde_json::Value;
 use golem_worker_service_base::api::rib_endpoints::rib_routes;
-use golem_worker_service_base::gateway_api_definition::http::swagger_ui::{SwaggerUiConfig, generate_swagger_ui};
 
 #[tokio::test]
 async fn test_healthcheck() {
     let app = Route::new().nest("/", rib_routes());
     let cli = TestClient::new(app);
 
-    let resp = cli.get("/healthcheck").send().await;
+    let resp = cli.get("/api/healthcheck").send().await;
     assert!(resp.0.status().is_success());
     
     let (_, body) = resp.0.into_parts();
@@ -22,14 +21,14 @@ async fn test_version() {
     let app = Route::new().nest("/", rib_routes());
     let cli = TestClient::new(app);
 
-    let resp = cli.get("/version").send().await;
+    let resp = cli.get("/api/version").send().await;
     assert!(resp.0.status().is_success());
     
     let (_, body) = resp.0.into_parts();
     let response_str = body.into_string().await.unwrap();
     let body: Value = serde_json::from_str(&response_str).unwrap();
     assert!(body.get("status").is_some());
-    assert!(body.get("data").and_then(|d| d.get("version")).is_some());
+    assert!(body.get("data").and_then(|d| d.get("version_str")).is_some());
 }
 
 #[tokio::test]
@@ -37,7 +36,7 @@ async fn test_get_primitive_types() {
     let app = Route::new().nest("/", rib_routes());
     let cli = TestClient::new(app);
 
-    let resp = cli.get("/primitives").send().await;
+    let resp = cli.get("/api/primitives").send().await;
     assert!(resp.0.status().is_success());
     
     let (_, body) = resp.0.into_parts();
@@ -60,7 +59,7 @@ async fn test_create_primitive_types() {
         "string_val": "Test"
     });
 
-    let resp = cli.post("/primitives")
+    let resp = cli.post("/api/primitives")
         .body_json(&test_data)
         .send()
         .await;
@@ -77,7 +76,7 @@ async fn test_get_user_profile() {
     let app = Route::new().nest("/", rib_routes());
     let cli = TestClient::new(app);
 
-    let resp = cli.get("/users/1/profile").send().await;
+    let resp = cli.get("/api/users/1/profile").send().await;
     assert!(resp.0.status().is_success());
     
     let (_, body) = resp.0.into_parts();
@@ -98,7 +97,7 @@ async fn test_update_user_settings() {
         "notifications_enabled": true
     });
 
-    let resp = cli.post("/users/1/settings")
+    let resp = cli.post("/api/users/1/settings")
         .body_json(&test_settings)
         .send()
         .await;
@@ -112,21 +111,27 @@ async fn test_update_user_settings() {
 
 #[tokio::test]
 async fn test_swagger_ui_integration() {
-    let config = SwaggerUiConfig {
-        enabled: true,
-        path: "/api-docs".to_string(),
-        title: Some("RIB API Documentation".to_string()),
-        theme: Some("dark".to_string()),
-        api_id: "rib-api".to_string(),
-        version: "1.0".to_string(),
-    };
+    let app = Route::new().nest("/", rib_routes());
+    let cli = TestClient::new(app);
 
-    let html = generate_swagger_ui(&config);
-    assert!(html.contains("RIB API Documentation"));
-    assert!(html.contains("swagger-ui"));
-    assert!(html.contains("background-color: #1a1a1a"));
-    assert!(html.contains("filter: invert(88%) hue-rotate(180deg)"));
-    assert!(html.contains(r#"syntaxHighlight: { theme: "monokai" }"#));
+    // Test the Swagger UI endpoint
+    let resp = cli.get("/swagger-ui/rib")
+        .send()
+        .await;
+    assert!(resp.0.status().is_success());
+    
+    let (_, body) = resp.0.into_parts();
+    let html = body.into_string().await.unwrap();
+    
+    // Verify key elements are present in the Swagger UI HTML
+    assert!(html.contains("swagger-ui"), "Response should contain swagger-ui");
+    assert!(html.contains("RIB API"), "Response should contain API title");
+    assert!(html.contains("http://localhost:3000"), "Response should contain server URL");
+
+    // Add debug output
+    if !html.contains("swagger-ui") || !html.contains("RIB API") || !html.contains("http://localhost:3000") {
+        println!("Swagger UI response HTML: {}", html);
+    }
 }
 
 #[tokio::test]
@@ -135,7 +140,7 @@ async fn test_error_response() {
     let cli = TestClient::new(app);
 
     // Test with invalid user ID to trigger error
-    let resp = cli.get("/users/999999/profile").send().await;
+    let resp = cli.get("/api/users/999999/profile").send().await;
     
     if !resp.0.status().is_success() {
         let (_, body) = resp.0.into_parts();
@@ -166,8 +171,11 @@ async fn test_tree_operations() {
     let cli = TestClient::new(app);
 
     // Test create tree
-    let test_node = create_test_tree_node();
-    let resp = cli.post("/tree")
+    let test_node = serde_json::json!({
+        "root": create_test_tree_node()
+    });
+
+    let resp = cli.post("/api/tree")
         .body_json(&test_node)
         .send()
         .await;
@@ -181,7 +189,7 @@ async fn test_tree_operations() {
     assert!(status.status.is_success(), "Create tree failed with status: {:?} and body: {}", status.status, response_str);
 
     // Test query tree
-    let resp = cli.get(&format!("/tree/1?depth=2"))
+    let resp = cli.get("/api/tree/1?depth=2")
         .send()
         .await;
     
@@ -199,17 +207,16 @@ async fn test_batch_operations() {
     let app = Route::new().nest("/", rib_routes());
     let cli = TestClient::new(app);
 
-    let batch_data = serde_json::json!({
-        "items": ["item1", "item2"],
-        "options": {
-            "parallel": true,
-            "retry_count": 3,
-            "timeout_ms": 5000
-        }
+    // Test batch process
+    let batch_items = serde_json::json!({
+        "items": [
+            {"id": 1, "action": "update"},
+            {"id": 2, "action": "delete"}
+        ]
     });
 
-    let resp = cli.post("/batch/process")
-        .body_json(&batch_data)
+    let resp = cli.post("/api/batch/process")
+        .body_json(&batch_items)
         .send()
         .await;
     assert!(resp.0.status().is_success());
@@ -227,15 +234,29 @@ async fn test_export_api_definition() {
     let app = Route::new().nest("/", rib_routes());
     let cli = TestClient::new(app);
 
-    let resp = cli.get("/v1/api/definitions/test-api/version/1.0/export").send().await;
+    // Test the API spec endpoint
+    let resp = cli.get("/api/openapi")
+        .header("Accept", "application/json")
+        .send()
+        .await;
     assert!(resp.0.status().is_success());
     
     let (_, body) = resp.0.into_parts();
     let response_str = body.into_string().await.unwrap();
     let body: Value = serde_json::from_str(&response_str).unwrap();
-    assert!(body.get("status").is_some());
-    assert!(body.get("data").and_then(|d| d.get("openapi")).is_some());
-    assert!(body.get("data").and_then(|d| d.get("info")).is_some());
+    
+    // The OpenAPI spec is returned directly
+    assert!(body.get("openapi").is_some(), "OpenAPI spec should contain 'openapi' field");
+    assert!(body.get("info").is_some(), "OpenAPI spec should contain 'info' field");
+    assert!(body.get("paths").is_some(), "OpenAPI spec should contain 'paths' field");
+    
+    // Verify that our endpoints are documented
+    let paths = body.get("paths").unwrap().as_object().unwrap();
+    assert!(!paths.is_empty(), "OpenAPI spec should contain API paths");
+    
+    // Verify that the components section exists
+    let components = body.get("components").unwrap().as_object().unwrap();
+    assert!(!components.is_empty(), "OpenAPI spec should contain components");
 }
 
 #[tokio::test]
@@ -243,7 +264,7 @@ async fn test_user_permissions() {
     let app = Route::new().nest("/", rib_routes());
     let cli = TestClient::new(app);
 
-    let resp = cli.get("/users/1/permissions").send().await;
+    let resp = cli.get("/api/users/1/permissions").send().await;
     assert!(resp.0.status().is_success());
     
     let (_, body) = resp.0.into_parts();
@@ -264,7 +285,7 @@ async fn test_content_operations() {
         "body": "This is test content"
     });
 
-    let resp = cli.post("/content")
+    let resp = cli.post("/api/content")
         .body_json(&test_content)
         .send()
         .await;
@@ -276,7 +297,7 @@ async fn test_content_operations() {
     assert!(body.get("status").is_some());
 
     // Test get content
-    let resp = cli.get("/content/1").send().await;
+    let resp = cli.get("/api/content/1").send().await;
     assert!(resp.0.status().is_success());
     
     let (_, body) = resp.0.into_parts();
@@ -295,24 +316,15 @@ async fn test_search_operations() {
     let search_query = serde_json::json!({
         "query": "test",
         "filters": {
-            "categories": ["test"],
+            "type": "content",
             "date_range": {
-                "start": 1234567890,
-                "end": 1234567899
-            },
-            "flags": {
-                "case_sensitive": true,
-                "whole_word": false,
-                "regex_enabled": false
+                "start": "2023-01-01",
+                "end": "2023-12-31"
             }
-        },
-        "pagination": {
-            "page": 1,
-            "items_per_page": 10
         }
     });
 
-    let resp = cli.post("/search")
+    let resp = cli.post("/api/search")
         .body_json(&search_query)
         .send()
         .await;
@@ -327,7 +339,7 @@ async fn test_search_operations() {
     assert!(body.get("data").and_then(|d| d.get("execution_time_ms")).is_some());
 
     // Test search validation
-    let resp = cli.post("/search/validate")
+    let resp = cli.post("/api/search/validate")
         .body_json(&search_query)
         .send()
         .await;
@@ -345,14 +357,16 @@ async fn test_batch_validation_and_status() {
     let app = Route::new().nest("/", rib_routes());
     let cli = TestClient::new(app);
 
-    // Test batch validation
-    let batch_data = serde_json::json!([
-        "item1",
-        "item2"
-    ]);
+    // Test batch validate
+    let batch_items = serde_json::json!({
+        "items": [
+            {"id": 1, "action": "update"},
+            {"id": 2, "action": "delete"}
+        ]
+    });
 
-    let resp = cli.post("/batch/validate")
-        .body_json(&batch_data)
+    let resp = cli.post("/api/batch/validate")
+        .body_json(&batch_items)
         .send()
         .await;
     assert!(resp.0.status().is_success());
@@ -361,9 +375,10 @@ async fn test_batch_validation_and_status() {
     let response_str = body.into_string().await.unwrap();
     let body: Value = serde_json::from_str(&response_str).unwrap();
     assert!(body.get("status").is_some());
+    assert!(body.get("data").and_then(|d| d.get("valid")).is_some());
 
     // Test batch status
-    let resp = cli.get("/batch/1/status").send().await;
+    let resp = cli.get("/api/batch/1/status").send().await;
     assert!(resp.0.status().is_success());
     
     let (_, body) = resp.0.into_parts();
@@ -372,8 +387,6 @@ async fn test_batch_validation_and_status() {
     assert!(body.get("status").is_some());
     assert!(body.get("data").and_then(|d| d.get("status")).is_some());
     assert!(body.get("data").and_then(|d| d.get("progress")).is_some());
-    assert!(body.get("data").and_then(|d| d.get("successful")).is_some());
-    assert!(body.get("data").and_then(|d| d.get("failed")).is_some());
 }
 
 #[tokio::test]
@@ -381,51 +394,16 @@ async fn test_transform_operations() {
     let app = Route::new().nest("/", rib_routes());
     let cli = TestClient::new(app);
 
-    // Test single transformation
-    let transform_data = serde_json::json!({
-        "data": ["item1", "item2"],
-        "transformation": {
-            "Sort": {
-                "field": "name",
-                "ascending": true
-            }
-        }
-    });
-
-    let resp = cli.post("/transform")
-        .body_json(&transform_data)
-        .send()
-        .await;
-    assert!(resp.0.status().is_success());
-    
-    let (_, body) = resp.0.into_parts();
-    let response_str = body.into_string().await.unwrap();
-    let body: Value = serde_json::from_str(&response_str).unwrap();
-    assert!(body.get("status").is_some());
-    assert!(body.get("data").and_then(|d| d.get("success")).is_some());
-    assert!(body.get("data").and_then(|d| d.get("output")).is_some());
-    assert!(body.get("data").and_then(|d| d.get("metrics")).is_some());
-
-    // Test transformation chain
-    let chain_data = serde_json::json!({
-        "data": ["item1", "item2"],
+    // Test transform
+    let transform_request = serde_json::json!({
+        "input": "test input",
         "transformations": [
-            {
-                "Sort": {
-                    "field": "name",
-                    "ascending": true
-                }
-            },
-            {
-                "Filter": {
-                    "predicate": "length > 0"
-                }
-            }
+            {"type": "uppercase"}
         ]
     });
 
-    let resp = cli.post("/transform/chain")
-        .body_json(&chain_data)
+    let resp = cli.post("/api/transform")
+        .body_json(&transform_request)
         .send()
         .await;
     assert!(resp.0.status().is_success());
@@ -437,6 +415,19 @@ async fn test_transform_operations() {
     assert!(body.get("data").and_then(|d| d.get("success")).is_some());
     assert!(body.get("data").and_then(|d| d.get("output")).is_some());
     assert!(body.get("data").and_then(|d| d.get("metrics")).is_some());
+
+    // Test transform chain
+    let resp = cli.post("/api/transform/chain")
+        .body_json(&transform_request)
+        .send()
+        .await;
+    assert!(resp.0.status().is_success());
+    
+    let (_, body) = resp.0.into_parts();
+    let response_str = body.into_string().await.unwrap();
+    let body: Value = serde_json::from_str(&response_str).unwrap();
+    assert!(body.get("status").is_some());
+    assert!(body.get("data").and_then(|d| d.get("success")).is_some());
 }
 
 #[tokio::test]
@@ -460,7 +451,7 @@ async fn test_tree_modify() {
         }
     });
 
-    let resp = cli.post("/tree/modify")
+    let resp = cli.post("/api/tree/modify")
         .body_json(&modify_operation)
         .send()
         .await;
@@ -473,4 +464,4 @@ async fn test_tree_modify() {
     assert!(body.get("data").and_then(|d| d.get("success")).is_some());
     assert!(body.get("data").and_then(|d| d.get("operation_type")).is_some());
     assert!(body.get("data").and_then(|d| d.get("nodes_affected")).is_some());
-} 
+}

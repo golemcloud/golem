@@ -14,10 +14,13 @@
 
 use poem_openapi::payload::Json;
 use poem_openapi::*;
+use poem::{Route, Endpoint, EndpointExt, IntoEndpoint};
 
 use crate::VERSION;
 use golem_service_base::api_tags::ApiTags;
+use super::routes::create_cors_middleware;
 
+#[derive(Clone)]
 pub struct HealthcheckApi;
 
 #[derive(
@@ -43,7 +46,7 @@ pub struct VersionInfo {
     data: VersionData,
 }
 
-#[OpenApi(prefix_path = "/", tag = ApiTags::HealthCheck)]
+#[OpenApi(prefix_path = "", tag = ApiTags::HealthCheck)]
 impl HealthcheckApi {
     #[oai(path = "/healthcheck", method = "get", operation_id = "healthcheck")]
     async fn healthcheck(&self) -> Json<HealthcheckResponse> {
@@ -64,4 +67,19 @@ impl HealthcheckApi {
             },
         })
     }
+}
+
+/// Create Health API routes with CORS configuration
+pub fn healthcheck_routes() -> impl Endpoint {
+    let api_service = OpenApiService::new(HealthcheckApi, "Health API", "1.0.0")
+        .server("http://localhost:3000")
+        .url_prefix("/api/v1");
+
+    Route::new()
+        .nest("", api_service.clone().with(create_cors_middleware()))
+        .nest("/doc", api_service.spec_endpoint().with(create_cors_middleware()))
+        .nest("/swagger-ui", api_service.swagger_ui().with(create_cors_middleware()))
+        .with(poem::middleware::AddData::new(()))
+        .with(create_cors_middleware())
+        .into_endpoint()
 }

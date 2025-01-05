@@ -24,16 +24,16 @@ pub use type_registry::*;
 pub use variable_id::*;
 
 mod call_type;
-mod compiler;
+pub mod compiler;
 mod expr;
 mod function_name;
 mod inferred_type;
 mod interpreter;
 mod parser;
-mod text;
+pub mod text;
 mod type_checker;
 mod type_inference;
-mod type_refinement;
+pub mod type_refinement;
 mod type_registry;
 mod variable_id;
 

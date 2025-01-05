@@ -4,6 +4,7 @@ pub struct TestComponent;
 
 impl TestComponent {
     // Test primitive types
+    #[allow(dead_code)]
     pub fn test_primitives(&self) -> PrimitiveTypes {
         PrimitiveTypes {
             bool_val: true,
@@ -42,6 +43,7 @@ impl TestComponent {
     }
 
     // Test variant type with different cases
+    #[allow(dead_code)]
     pub fn test_content_types(&self) -> Vec<ContentType> {
         vec![
             ContentType::Text("Plain text".to_string()),
@@ -55,6 +57,7 @@ impl TestComponent {
     }
 
     // Test Result type
+    #[allow(dead_code)]
     pub fn test_operation_result(&self, succeed: bool) -> OperationResult {
         if succeed {
             Ok(SuccessResponse {

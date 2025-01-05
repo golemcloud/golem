@@ -74,6 +74,7 @@ pub struct ErrorDetails {
     pub details: Option<Vec<String>>,
 }
 
+#[allow(dead_code)]
 pub type OperationResult = Result<SuccessResponse, ErrorDetails>;
 
 #[derive(Debug, Clone)]

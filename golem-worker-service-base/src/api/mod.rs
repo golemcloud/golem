@@ -16,9 +16,10 @@
 mod common;
 mod custom_http_request_api;
 mod error;
-mod healthcheck;
+pub mod healthcheck;
 mod register_api_definition_api;
-mod routes;
+pub mod routes;
+pub mod wit_types_api;
 
 pub mod rib_endpoints;
 
@@ -29,4 +30,5 @@ pub use error::*;
 pub use healthcheck::*;
 pub use register_api_definition_api::*;
 pub use rib_endpoints::*;
+pub use wit_types_api::*;
 pub use routes::create_api_router;

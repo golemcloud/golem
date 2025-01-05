@@ -120,6 +120,46 @@ pub enum ApiDefinitionSubcommand<ProjectRef: clap::Args> {
         #[arg(short = 'V', long)]
         version: ApiDefinitionVersion,
     },
+
+    /// Export OpenAPI specification for an API definition
+    #[command()]
+    Export {
+        /// The newly created component's owner project
+        #[command(flatten)]
+        project_ref: ProjectRef,
+
+        /// Api definition id
+        #[arg(short, long)]
+        id: ApiDefinitionId,
+
+        /// Version of the api definition
+        #[arg(short = 'V', long)]
+        version: ApiDefinitionVersion,
+
+        /// Output format (json or yaml)
+        #[arg(short, long)]
+        format: Option<ApiDefinitionFileFormat>,
+    },
+
+    /// Launch SwaggerUI for API definition exploration
+    #[command()]
+    Ui {
+        /// The newly created component's owner project
+        #[command(flatten)]
+        project_ref: ProjectRef,
+
+        /// Api definition id
+        #[arg(short, long)]
+        id: ApiDefinitionId,
+
+        /// Version of the api definition
+        #[arg(short = 'V', long)]
+        version: ApiDefinitionVersion,
+
+        /// Port to run the SwaggerUI server on
+        #[arg(short, long, default_value = "3000")]
+        port: u16,
+    },
 }
 
 impl<ProjectRef: clap::Args + Send + Sync + 'static> ApiDefinitionSubcommand<ProjectRef> {
@@ -181,6 +221,24 @@ impl<ProjectRef: clap::Args + Send + Sync + 'static> ApiDefinitionSubcommand<Pro
             } => {
                 let project_id = projects.resolve_id_or_default(project_ref).await?;
                 service.delete(id, version, &project_id).await
+            }
+            ApiDefinitionSubcommand::Export {
+                project_ref,
+                id,
+                version,
+                format,
+            } => {
+                let project_id = projects.resolve_id_or_default(project_ref).await?;
+                service.export(id, version, &project_id, &with_default(format)).await
+            }
+            ApiDefinitionSubcommand::Ui {
+                project_ref,
+                id,
+                version,
+                port,
+            } => {
+                let project_id = projects.resolve_id_or_default(project_ref).await?;
+                service.ui(id, version, &project_id, port).await
             }
         }
     }

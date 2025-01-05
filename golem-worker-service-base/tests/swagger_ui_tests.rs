@@ -1,6 +1,6 @@
 use anyhow::Result;
-use golem_worker_service_base::gateway_api_definition::http::swagger_ui::{generate_swagger_ui, SwaggerUiConfig};
-use golem_worker_service_base::gateway_api_definition::http::openapi_export::OpenApiExporter;
+use golem_worker_service_base::gateway_api_definition::http::swagger_ui::{create_swagger_ui, SwaggerUiConfig};
+use poem_openapi::{payload::{Json, PlainText}, Object, ApiResponse};
 
 test_r::enable!();
 
@@ -14,111 +14,174 @@ mod swagger_ui_tests {
         rt.block_on(async {
             let config = SwaggerUiConfig::default();
             assert!(!config.enabled);
-            assert_eq!(config.path, "/docs");
             assert_eq!(config.title, None);
-            assert_eq!(config.theme, None);
-            assert_eq!(config.api_id, "default");
-            assert_eq!(config.version, "1.0");
+            assert_eq!(config.version, None);
+            assert_eq!(config.server_url, None);
             Ok(())
         })
     }
 
     #[test]
-    fn test_swagger_ui_generation() -> Result<()> {
+    fn test_swagger_ui_custom_config() -> Result<()> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let config = SwaggerUiConfig {
                 enabled: true,
-                path: "/custom/docs".to_string(),
                 title: Some("Custom API".to_string()),
-                theme: Some("dark".to_string()),
-                api_id: "test-api".to_string(),
-                version: "1.0.0".to_string(),
+                version: Some("1.0.0".to_string()),
+                server_url: Some("http://localhost:8080".to_string()),
             };
-            let html = generate_swagger_ui(&config);
             
-            // Verify HTML structure
-            assert!(html.contains("<!DOCTYPE html>"));
-            assert!(html.contains("<html lang=\"en\">"));
-            assert!(html.contains("<meta charset=\"utf-8\" />"));
-            assert!(html.contains("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />"));
-            
-            // Verify title configuration
-            assert!(html.contains("<title>Custom API</title>"));
-            
-            // Verify OpenAPI URL generation and usage
-            let expected_url = OpenApiExporter::get_export_path("test-api", "1.0.0");
-            assert!(html.contains(&format!(r#"url: '{}'"#, expected_url)));
-            
-            // Verify theme configuration
-            assert!(html.contains("background-color: #1a1a1a"));
-            assert!(html.contains("filter: invert(88%) hue-rotate(180deg)"));
-            assert!(html.contains(r#"syntaxHighlight: { theme: "monokai" }"#));
-            
-            // Verify SwaggerUI configuration
-            assert!(html.contains("deepLinking: true"));
-            assert!(html.contains("layout: \"BaseLayout\""));
-            assert!(html.contains("SwaggerUIBundle.presets.apis"));
-            assert!(html.contains("SwaggerUIBundle.SwaggerUIStandalonePreset"));
+            assert!(config.enabled);
+            assert_eq!(config.title, Some("Custom API".to_string()));
+            assert_eq!(config.version, Some("1.0.0".to_string()));
+            assert_eq!(config.server_url, Some("http://localhost:8080".to_string()));
             Ok(())
         })
     }
 
     #[test]
-    fn test_swagger_ui_default_title() -> Result<()> {
+    fn test_create_swagger_ui() -> Result<()> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let config = SwaggerUiConfig {
                 enabled: true,
-                title: None,
-                ..SwaggerUiConfig::default()
+                title: Some("Test API".to_string()),
+                version: Some("1.0".to_string()),
+                server_url: Some("http://localhost:8080".to_string()),
             };
-            
-            let html = generate_swagger_ui(&config);
-            assert!(html.contains("<title>API Documentation</title>"));
+
+            // Note: We can't directly test the OpenApiService result since it's opaque
+            // But we can verify it doesn't panic
+            let _service = create_swagger_ui(MockApi, &config);
             Ok(())
         })
     }
 
     #[test]
-    fn test_swagger_ui_theme_variants() -> Result<()> {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            // Test light theme (None)
-            let light_config = SwaggerUiConfig {
-                enabled: true,
-                theme: None,
-                ..SwaggerUiConfig::default()
-            };
-            let light_html = generate_swagger_ui(&light_config);
-            assert!(!light_html.contains("background-color: #1a1a1a"));
-            assert!(!light_html.contains("filter: invert(88%) hue-rotate(180deg)"));
-            assert!(!light_html.contains(r#"syntaxHighlight: { theme: "monokai" }"#));
-            
-            // Test dark theme
-            let dark_config = SwaggerUiConfig {
-                enabled: true,
-                theme: Some("dark".to_string()),
-                ..SwaggerUiConfig::default()
-            };
-            let dark_html = generate_swagger_ui(&dark_config);
-            assert!(dark_html.contains("background-color: #1a1a1a"));
-            assert!(dark_html.contains("filter: invert(88%) hue-rotate(180deg)"));
-            assert!(dark_html.contains(r#"syntaxHighlight: { theme: "monokai" }"#));
-            Ok(())
-        })
-    }
-
-    #[test]
-    fn test_swagger_ui_disabled() -> Result<()> {
+    fn test_openapi_service_configuration() -> Result<()> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let config = SwaggerUiConfig {
-                enabled: false,
-                ..SwaggerUiConfig::default()
+                enabled: true,
+                title: Some("Full Config API".to_string()),
+                version: Some("1.0".to_string()),
+                server_url: Some("http://localhost:8080".to_string()),
             };
-            assert_eq!(generate_swagger_ui(&config), String::new());
+
+            let service = create_swagger_ui(MockApi, &config)
+                .summary("API Summary")
+                .description("Detailed API description")
+                .terms_of_service("https://example.com/terms");
+
+            // Test available endpoint generation methods
+            let _swagger_ui = service.swagger_ui();
+            let _swagger_html = service.swagger_ui_html();
+            let _spec_endpoint = service.spec_endpoint();
+            let _spec_yaml = service.spec_endpoint_yaml();
+            let spec_json = service.spec();
+
+            // Verify some basic content in the OpenAPI spec
+            assert!(spec_json.contains("Full Config API"));
+            assert!(spec_json.contains("API Summary"));
+            assert!(spec_json.contains("Detailed API description"));
+            assert!(spec_json.contains("https://example.com/terms"));
+
             Ok(())
         })
+    }
+
+    #[test]
+    fn test_api_responses() -> Result<()> {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let config = SwaggerUiConfig {
+                enabled: true,
+                title: Some("Test API".to_string()),
+                version: Some("1.0".to_string()),
+                server_url: None,
+            };
+
+            let api = MockApiWithResponses::new();
+            let service = create_swagger_ui(api, &config);
+            let spec = service.spec();
+
+            // Verify response definitions in OpenAPI spec
+            assert!(spec.contains("200")); // OK response
+            assert!(spec.contains("201")); // Created response
+            assert!(spec.contains("400")); // BadRequest response
+            assert!(spec.contains("404")); // NotFound response
+
+            Ok(())
+        })
+    }
+}
+
+// Mock API for testing
+struct MockApi;
+
+#[poem_openapi::OpenApi]
+impl MockApi {
+    #[oai(path = "/test", method = "get")]
+    async fn test(&self) -> poem_openapi::payload::PlainText<String> {
+        poem_openapi::payload::PlainText("test".to_string())
+    }
+}
+
+// Mock API with various response types for testing
+#[derive(ApiResponse)]
+enum TestResponse {
+    /// Successful response
+    #[oai(status = 200)]
+    OK(PlainText<String>),
+    /// Resource created
+    #[oai(status = 201)]
+    Created,
+    /// Bad request
+    #[oai(status = 400)]
+    BadRequest(PlainText<String>),
+    /// Resource not found
+    #[oai(status = 404)]
+    NotFound(PlainText<String>),
+}
+
+#[derive(Object)]
+struct TestObject {
+    id: String,
+    name: String,
+}
+
+struct MockApiWithResponses;
+
+impl MockApiWithResponses {
+    fn new() -> Self {
+        Self
+    }
+}
+
+#[poem_openapi::OpenApi]
+impl MockApiWithResponses {
+    /// Test endpoint with various response types
+    #[oai(path = "/test", method = "post")]
+    async fn test(&self, _data: Json<TestObject>) -> TestResponse {
+        TestResponse::OK(PlainText("Success".to_string()))
+    }
+
+    /// Test endpoint for created response
+    #[oai(path = "/test/create", method = "post")]
+    async fn test_create(&self, _data: Json<TestObject>) -> TestResponse {
+        TestResponse::Created
+    }
+
+    /// Test endpoint for bad request response
+    #[oai(path = "/test/bad", method = "post")]
+    async fn test_bad_request(&self, _data: Json<TestObject>) -> TestResponse {
+        TestResponse::BadRequest(PlainText("Invalid request".to_string()))
+    }
+
+    /// Test endpoint for not found response
+    #[oai(path = "/test/notfound", method = "get")]
+    async fn test_not_found(&self) -> TestResponse {
+        TestResponse::NotFound(PlainText("Resource not found".to_string()))
     }
 } 

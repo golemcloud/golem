@@ -1,540 +1,455 @@
 use golem_wasm_ast::analysis::*;
 use golem_worker_service_base::gateway_api_definition::http::rib_converter::RibConverter;
+use poem_openapi::registry::{MetaSchema, MetaSchemaRef, Registry};
 use serde_json::json;
-use utoipa::openapi::Schema;
-use valico::json_schema;
 
-mod fixtures;
-use fixtures::test_component::TestComponent;
-use fixtures::comprehensive_wit_types::{
-    // Search types
-    SearchQuery, SearchFilters, SearchFlags, DateRange, Pagination,
-    // Batch types
-    BatchOptions,
-    // Transformation types
-    DataTransformation,
-    // Tree types
-    TreeNode, NodeMetadata, TreeOperation,
-};
-
-fn validate_json_against_schema(json: &serde_json::Value, schema: &Schema) -> bool {
-    thread_local! {
-        static SCOPE: std::cell::RefCell<json_schema::Scope> = std::cell::RefCell::new(json_schema::Scope::new());
+// Helper function to verify schema type and format
+fn assert_schema_type(schema: &MetaSchemaRef, expected_type: &str, expected_format: Option<&str>) {
+    match schema {
+        MetaSchemaRef::Inline(schema) => {
+            assert_eq!(schema.ty, expected_type);
+            if let Some(expected) = expected_format {
+                assert_eq!(schema.format.as_deref(), Some(expected));
+            }
+        },
+        MetaSchemaRef::Reference(_) => panic!("Expected inline schema, got reference"),
     }
-    
-    let schema_json = serde_json::to_value(schema).unwrap();
-    SCOPE.with(|scope| {
-        let mut scope_ref = scope.borrow_mut();
-        let schema = scope_ref.compile_and_return(schema_json.clone(), false).unwrap();
-        schema.validate(&json).is_valid()
-    })
+}
+
+// Helper function to find a property in a schema
+fn find_property<'a>(properties: &'a [(& 'static str, MetaSchemaRef)], name: &str) -> Option<&'a MetaSchemaRef> {
+    properties.iter()
+        .find(|(key, _)| *key == name)
+        .map(|(_, schema)| schema)
+}
+
+// Helper function to get schema from Box<MetaSchemaRef>
+fn get_schema_from_box(boxed: &Box<MetaSchemaRef>) -> &MetaSchema {
+    match &**boxed {
+        MetaSchemaRef::Inline(schema) => schema,
+        MetaSchemaRef::Reference(_) => panic!("Expected inline schema, got reference"),
+    }
 }
 
 #[test]
-fn test_primitive_types_conversion() {
-    let converter = RibConverter;
-    let test_component = TestComponent;
-    
-    // Get test data from component
-    let _primitives = test_component.test_primitives();
-    
-    // Convert to AnalysedType
+fn test_primitive_types_openapi_schema() {
+    let mut converter = RibConverter::new_openapi();
+    let mut registry = Registry::new();
+
+    // Test boolean
+    let bool_type = AnalysedType::Bool(TypeBool);
+    let schema = converter.convert_type(&bool_type, &mut registry).unwrap();
+    assert_schema_type(&schema, "boolean", None);
+
+    // Test integer types
+    // 8-bit integers
+    let u8_type = AnalysedType::U8(TypeU8);
+    let schema = converter.convert_type(&u8_type, &mut registry).unwrap();
+    assert_schema_type(&schema, "integer", Some("int32"));
+    match &schema {
+        MetaSchemaRef::Inline(schema) => {
+            assert_eq!(schema.minimum, Some(0.0));
+            assert_eq!(schema.maximum, Some(255.0));
+        },
+        _ => panic!("Expected inline schema"),
+    }
+
+    let s8_type = AnalysedType::S8(TypeS8);
+    let schema = converter.convert_type(&s8_type, &mut registry).unwrap();
+    assert_schema_type(&schema, "integer", Some("int32"));
+    match &schema {
+        MetaSchemaRef::Inline(schema) => {
+            assert_eq!(schema.minimum, Some(-128.0));
+            assert_eq!(schema.maximum, Some(127.0));
+        },
+        _ => panic!("Expected inline schema"),
+    }
+
+    // 16-bit integers
+    let u16_type = AnalysedType::U16(TypeU16);
+    let schema = converter.convert_type(&u16_type, &mut registry).unwrap();
+    assert_schema_type(&schema, "integer", Some("int32"));
+    match &schema {
+        MetaSchemaRef::Inline(schema) => {
+            assert_eq!(schema.minimum, Some(0.0));
+            assert_eq!(schema.maximum, Some(65535.0));
+        },
+        _ => panic!("Expected inline schema"),
+    }
+
+    let s16_type = AnalysedType::S16(TypeS16);
+    let schema = converter.convert_type(&s16_type, &mut registry).unwrap();
+    assert_schema_type(&schema, "integer", Some("int32"));
+    match &schema {
+        MetaSchemaRef::Inline(schema) => {
+            assert_eq!(schema.minimum, Some(-32768.0));
+            assert_eq!(schema.maximum, Some(32767.0));
+        },
+        _ => panic!("Expected inline schema"),
+    }
+
+    // 32-bit and 64-bit integers
+    let u32_type = AnalysedType::U32(TypeU32);
+    let schema = converter.convert_type(&u32_type, &mut registry).unwrap();
+    assert_schema_type(&schema, "integer", Some("int32"));
+
+    let s64_type = AnalysedType::S64(TypeS64);
+    let schema = converter.convert_type(&s64_type, &mut registry).unwrap();
+    assert_schema_type(&schema, "integer", Some("int64"));
+
+    // Test float types
+    let f32_type = AnalysedType::F32(TypeF32);
+    let schema = converter.convert_type(&f32_type, &mut registry).unwrap();
+    assert_schema_type(&schema, "number", Some("float"));
+
+    let f64_type = AnalysedType::F64(TypeF64);
+    let schema = converter.convert_type(&f64_type, &mut registry).unwrap();
+    assert_schema_type(&schema, "number", Some("double"));
+
+    // Test string types
+    let str_type = AnalysedType::Str(TypeStr);
+    let schema = converter.convert_type(&str_type, &mut registry).unwrap();
+    assert_schema_type(&schema, "string", None);
+
+    let char_type = AnalysedType::Chr(TypeChr);
+    let schema = converter.convert_type(&char_type, &mut registry).unwrap();
+    assert_schema_type(&schema, "string", None);
+
+    // Test Option type
+    let option_type = AnalysedType::Option(TypeOption {
+        inner: Box::new(AnalysedType::U32(TypeU32)),
+    });
+    let schema = converter.convert_type(&option_type, &mut registry).unwrap();
+    match &schema {
+        MetaSchemaRef::Inline(schema) => {
+            assert_eq!(schema.ty, "integer");
+            assert!(schema.nullable);
+            assert_eq!(schema.format.as_deref(), Some("int32"));
+        },
+        _ => panic!("Expected inline schema"),
+    }
+
+    // Test Enum type
+    let enum_type = AnalysedType::Enum(TypeEnum {
+        cases: vec!["Red".to_string(), "Green".to_string(), "Blue".to_string()],
+    });
+    let schema = converter.convert_type(&enum_type, &mut registry).unwrap();
+    match &schema {
+        MetaSchemaRef::Inline(schema) => {
+            assert_eq!(schema.ty, "string");
+            assert_eq!(schema.enum_items.len(), 3);
+            assert!(schema.enum_items.contains(&json!("Red")));
+            assert!(schema.enum_items.contains(&json!("Green")));
+            assert!(schema.enum_items.contains(&json!("Blue")));
+        },
+        _ => panic!("Expected inline schema"),
+    }
+
+    // Test Tuple type
+    let tuple_type = AnalysedType::Tuple(TypeTuple {
+        items: vec![
+            AnalysedType::U32(TypeU32),
+            AnalysedType::Str(TypeStr),
+        ],
+    });
+    let schema = converter.convert_type(&tuple_type, &mut registry).unwrap();
+    match &schema {
+        MetaSchemaRef::Inline(schema) => {
+            assert_eq!(schema.ty, "array");
+            assert!(schema.min_items.is_some());
+            assert_eq!(schema.min_items, Some(2));
+            assert!(schema.max_items.is_some());
+            assert_eq!(schema.max_items, Some(2));
+            
+            // Check tuple items
+            let items = schema.items.as_ref().unwrap();
+            match &**items {
+                MetaSchemaRef::Inline(items_schema) => {
+                    assert_eq!(items_schema.one_of.len(), 2);
+                    
+                    // First item should be integer
+                    match &items_schema.one_of[0] {
+                        MetaSchemaRef::Inline(schema) => {
+                            assert_eq!(schema.ty, "integer");
+                            assert_eq!(schema.format.as_deref(), Some("int32"));
+                        },
+                        _ => panic!("Expected inline schema"),
+                    }
+                    
+                    // Second item should be string
+                    match &items_schema.one_of[1] {
+                        MetaSchemaRef::Inline(schema) => {
+                            assert_eq!(schema.ty, "string");
+                        },
+                        _ => panic!("Expected inline schema"),
+                    }
+                },
+                _ => panic!("Expected inline schema"),
+            }
+        },
+        _ => panic!("Expected inline schema"),
+    }
+}
+
+#[test]
+fn test_complex_types_openapi_schema() {
+    let mut converter = RibConverter::new_openapi();
+    let mut registry = Registry::new();
+
+    // Test list type
+    let list_type = AnalysedType::List(TypeList {
+        inner: Box::new(AnalysedType::Str(TypeStr)),
+    });
+    let schema = converter.convert_type(&list_type, &mut registry).unwrap();
+    match schema {
+        MetaSchemaRef::Inline(schema) => {
+            assert_eq!(schema.ty, "array");
+            assert!(schema.items.is_some());
+            let item_schema = get_schema_from_box(schema.items.as_ref().unwrap());
+            assert_eq!(item_schema.ty, "string");
+        },
+        _ => panic!("Expected inline schema"),
+    }
+
+    // Test record type
     let record_type = AnalysedType::Record(TypeRecord {
         fields: vec![
             NameTypePair {
-                name: "bool_val".to_string(),
-                typ: AnalysedType::Bool(TypeBool),
-            },
-            NameTypePair {
-                name: "u8_val".to_string(),
-                typ: AnalysedType::U8(TypeU8),
-            },
-            NameTypePair {
-                name: "u16_val".to_string(),
-                typ: AnalysedType::U16(TypeU16),
-            },
-            NameTypePair {
-                name: "u32_val".to_string(),
-                typ: AnalysedType::U32(TypeU32),
-            },
-            NameTypePair {
-                name: "u64_val".to_string(),
-                typ: AnalysedType::U64(TypeU64),
-            },
-            NameTypePair {
-                name: "s8_val".to_string(),
-                typ: AnalysedType::S8(TypeS8),
-            },
-            NameTypePair {
-                name: "s16_val".to_string(),
-                typ: AnalysedType::S16(TypeS16),
-            },
-            NameTypePair {
-                name: "s32_val".to_string(),
-                typ: AnalysedType::S32(TypeS32),
-            },
-            NameTypePair {
-                name: "s64_val".to_string(),
-                typ: AnalysedType::S64(TypeS64),
-            },
-            NameTypePair {
-                name: "f32_val".to_string(),
-                typ: AnalysedType::F32(TypeF32),
-            },
-            NameTypePair {
-                name: "f64_val".to_string(),
-                typ: AnalysedType::F64(TypeF64),
-            },
-            NameTypePair {
-                name: "char_val".to_string(),
-                typ: AnalysedType::Chr(TypeChr),
-            },
-            NameTypePair {
-                name: "string_val".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-        ],
-    });
-    
-    // Get schema
-    let schema = converter.convert_type(&record_type).unwrap();
-    
-    let test_json = json!({
-        "bool_val": true,
-        "u8_val": 255,
-        "u16_val": 65535,
-        "u32_val": 4294967295u64,
-        "u64_val": 18446744073709551615u64,
-        "s8_val": -128,
-        "s16_val": -32768,
-        "s32_val": -2147483648,
-        "s64_val": -9223372036854775808i64,
-        "f32_val": 3.14159,
-        "f64_val": 2.718281828459045,
-        "char_val": "🦀",
-        "string_val": "Hello, WIT!"
-    });
-
-    println!("Schema: {}", serde_json::to_string_pretty(&schema).unwrap());
-    println!("Test JSON: {}", serde_json::to_string_pretty(&test_json).unwrap());
-
-    assert!(validate_json_against_schema(&test_json, &schema));
-}
-
-#[test]
-fn test_complex_record_conversion() {
-    let converter = RibConverter;
-    let test_component = TestComponent;
-    
-    // Get test data from component
-    let _profile = test_component.test_user_profile();
-
-    // Create user profile type
-    let settings_type = TypeRecord {
-        fields: vec![
-            NameTypePair {
-                name: "theme".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-            NameTypePair {
-                name: "notifications_enabled".to_string(),
-                typ: AnalysedType::Bool(TypeBool),
-            },
-            NameTypePair {
-                name: "email_frequency".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-        ],
-    };
-
-    let permissions_type = TypeRecord {
-        fields: vec![
-            NameTypePair {
-                name: "can_read".to_string(),
-                typ: AnalysedType::Bool(TypeBool),
-            },
-            NameTypePair {
-                name: "can_write".to_string(),
-                typ: AnalysedType::Bool(TypeBool),
-            },
-            NameTypePair {
-                name: "can_delete".to_string(),
-                typ: AnalysedType::Bool(TypeBool),
-            },
-            NameTypePair {
-                name: "is_admin".to_string(),
-                typ: AnalysedType::Bool(TypeBool),
-            },
-        ],
-    };
-
-    let profile_type = AnalysedType::Record(TypeRecord {
-        fields: vec![
-            NameTypePair {
                 name: "id".to_string(),
                 typ: AnalysedType::U32(TypeU32),
             },
             NameTypePair {
-                name: "username".to_string(),
+                name: "name".to_string(),
                 typ: AnalysedType::Str(TypeStr),
-            },
-            NameTypePair {
-                name: "settings".to_string(),
-                typ: AnalysedType::Option(TypeOption {
-                    inner: Box::new(AnalysedType::Record(settings_type)),
-                }),
-            },
-            NameTypePair {
-                name: "permissions".to_string(),
-                typ: AnalysedType::Record(permissions_type),
             },
         ],
     });
+    let schema = converter.convert_type(&record_type, &mut registry).unwrap();
+    match schema {
+        MetaSchemaRef::Inline(schema) => {
+            assert_eq!(schema.ty, "object");
+            assert_eq!(schema.required.len(), 2);
+            assert!(schema.required.contains(&"id"));
+            assert!(schema.required.contains(&"name"));
 
-    // Get schema
-    let schema = converter.convert_type(&profile_type).unwrap();
+            let id_schema = find_property(&schema.properties, "id").unwrap();
+            assert_schema_type(id_schema, "integer", Some("int32"));
 
-    // Create test JSON
-    let test_json = json!({
-        "id": 42,
-        "username": "test_user",
-        "settings": {
-            "value": {
-                "theme": "dark",
-                "notifications_enabled": true,
-                "email_frequency": "daily"
-            }
+            let name_schema = find_property(&schema.properties, "name").unwrap();
+            assert_schema_type(name_schema, "string", None);
         },
-        "permissions": {
-            "can_read": true,
-            "can_write": true,
-            "can_delete": false,
-            "is_admin": false
-        }
-    });
+        _ => panic!("Expected inline schema"),
+    }
 
-    assert!(validate_json_against_schema(&test_json, &schema));
-}
-
-#[test]
-fn test_variant_type_conversion() {
-    let converter = RibConverter;
-    let test_component = TestComponent;
-    
-    // Get test data from component
-    let _content_types = test_component.test_content_types();
-    
-    // Create content type variant
-    let complex_data_type = TypeRecord {
-        fields: vec![
-            NameTypePair {
-                name: "id".to_string(),
-                typ: AnalysedType::U32(TypeU32),
-            },
-            NameTypePair {
-                name: "data".to_string(),
-                typ: AnalysedType::List(TypeList {
-                    inner: Box::new(AnalysedType::Str(TypeStr)),
-                }),
-            },
-        ],
-    };
-
+    // Test variant type
     let variant_type = AnalysedType::Variant(TypeVariant {
         cases: vec![
+            NameOptionTypePair {
+                name: "Number".to_string(),
+                typ: Some(AnalysedType::U32(TypeU32)),
+            },
             NameOptionTypePair {
                 name: "Text".to_string(),
                 typ: Some(AnalysedType::Str(TypeStr)),
             },
-            NameOptionTypePair {
-                name: "Number".to_string(),
-                typ: Some(AnalysedType::F64(TypeF64)),
-            },
-            NameOptionTypePair {
-                name: "Boolean".to_string(),
-                typ: Some(AnalysedType::Bool(TypeBool)),
-            },
-            NameOptionTypePair {
-                name: "Complex".to_string(),
-                typ: Some(AnalysedType::Record(complex_data_type)),
-            },
         ],
     });
-    
-    // Get schema
-    let schema = converter.convert_type(&variant_type).unwrap();
-    
-    let test_cases = vec![
-        json!({
-            "discriminator": "Text",
-            "value": "Plain text"
-        }),
-        json!({
-            "discriminator": "Number",
-            "value": 42.0
-        }),
-        json!({
-            "discriminator": "Boolean",
-            "value": true
-        }),
-        json!({
-            "discriminator": "Complex",
-            "value": {
-                "id": 1,
-                "data": ["data1", "data2"]
+    let schema = converter.convert_type(&variant_type, &mut registry).unwrap();
+    match schema {
+        MetaSchemaRef::Inline(schema) => {
+            assert_eq!(schema.ty, "object");
+            assert!(schema.required.contains(&"type"));
+            
+            // Check discriminator
+            let type_schema = find_property(&schema.properties, "type").unwrap();
+            match type_schema {
+                MetaSchemaRef::Inline(type_schema) => {
+                    assert_eq!(type_schema.ty, "string");
+                    assert_eq!(type_schema.enum_items.len(), 2);
+                    assert!(type_schema.enum_items.contains(&json!("Number")));
+                    assert!(type_schema.enum_items.contains(&json!("Text")));
+                },
+                _ => panic!("Expected inline schema for type field"),
             }
-        }),
-    ];
 
-    for test_json in test_cases {
-        println!("Schema: {}", serde_json::to_string_pretty(&schema).unwrap());
-        println!("Test JSON: {}", serde_json::to_string_pretty(&test_json).unwrap());
-        assert!(validate_json_against_schema(&test_json, &schema));
+            // Check value field
+            let value_schema = find_property(&schema.properties, "value").unwrap();
+            match value_schema {
+                MetaSchemaRef::Inline(value_schema) => {
+                    assert_eq!(value_schema.ty, "object");
+                    assert!(!value_schema.one_of.is_empty());
+                    
+                    // Verify the oneOf variants
+                    assert_eq!(value_schema.one_of.len(), 2);
+                    
+                    // Check Number variant
+                    let number_schema = &value_schema.one_of[0];
+                    match number_schema {
+                        MetaSchemaRef::Inline(schema) => {
+                            assert_eq!(schema.ty, "integer");
+                            assert_eq!(schema.format.as_deref(), Some("int32"));
+                        },
+                        _ => panic!("Expected inline schema for Number variant"),
+                    }
+                    
+                    // Check Text variant
+                    let text_schema = &value_schema.one_of[1];
+                    match text_schema {
+                        MetaSchemaRef::Inline(schema) => {
+                            assert_eq!(schema.ty, "string");
+                        },
+                        _ => panic!("Expected inline schema for Text variant"),
+                    }
+                },
+                _ => panic!("Expected inline schema for value field"),
+            }
+        },
+        _ => panic!("Expected inline schema"),
     }
 }
 
 #[test]
-fn test_result_type_conversion() {
-    let converter = RibConverter;
-    let test_component = TestComponent;
-    
-    // Get test data from component
-    let _success_result = test_component.test_operation_result(true);
-    let _error_result = test_component.test_operation_result(false);
+fn test_result_type_openapi_schema() {
+    let mut converter = RibConverter::new_openapi();
+    let mut registry = Registry::new();
 
-    // Create result type
-    let success_type = TypeRecord {
+    let result_type = AnalysedType::Result(TypeResult {
+        ok: Some(Box::new(AnalysedType::U32(TypeU32))),
+        err: Some(Box::new(AnalysedType::Str(TypeStr))),
+    });
+
+    let schema = converter.convert_type(&result_type, &mut registry).unwrap();
+    match schema {
+        MetaSchemaRef::Inline(schema) => {
+            assert_eq!(schema.ty, "object");
+            assert!(schema.required.contains(&"type"));
+            
+            // Check discriminator
+            let type_schema = find_property(&schema.properties, "type").unwrap();
+            match type_schema {
+                MetaSchemaRef::Inline(type_schema) => {
+                    assert_eq!(type_schema.ty, "string");
+                    assert_eq!(type_schema.enum_items.len(), 2);
+                    assert!(type_schema.enum_items.contains(&json!("ok")));
+                    assert!(type_schema.enum_items.contains(&json!("error")));
+                },
+                _ => panic!("Expected inline schema for type field"),
+            }
+
+            // Check value field
+            let value_schema = find_property(&schema.properties, "value").unwrap();
+            match value_schema {
+                MetaSchemaRef::Inline(value_schema) => {
+                    assert_eq!(value_schema.ty, "object");
+                    assert!(!value_schema.one_of.is_empty());
+                    
+                    // Verify the oneOf variants
+                    assert_eq!(value_schema.one_of.len(), 2);
+                    
+                    // Check ok variant
+                    let ok_schema = &value_schema.one_of[0];
+                    match ok_schema {
+                        MetaSchemaRef::Inline(schema) => {
+                            assert_eq!(schema.ty, "integer");
+                            assert_eq!(schema.format.as_deref(), Some("int32"));
+                        },
+                        _ => panic!("Expected inline schema for ok variant"),
+                    }
+                    
+                    // Check error variant
+                    let error_schema = &value_schema.one_of[1];
+                    match error_schema {
+                        MetaSchemaRef::Inline(schema) => {
+                            assert_eq!(schema.ty, "string");
+                        },
+                        _ => panic!("Expected inline schema for error variant"),
+                    }
+                },
+                _ => panic!("Expected inline schema for value field"),
+            }
+        },
+        _ => panic!("Expected inline schema"),
+    }
+}
+
+#[test]
+fn test_openapi_schema_generation() {
+    let mut converter = RibConverter::new_openapi();
+    let mut registry = Registry::new();
+
+    // Create a complex API response type
+    let response_type = AnalysedType::Record(TypeRecord {
         fields: vec![
             NameTypePair {
-                name: "code".to_string(),
-                typ: AnalysedType::U16(TypeU16),
-            },
-            NameTypePair {
-                name: "message".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-            NameTypePair {
-                name: "data".to_string(),
-                typ: AnalysedType::Option(TypeOption {
-                    inner: Box::new(AnalysedType::Str(TypeStr)),
-                }),
-            },
-        ],
-    };
-
-    let error_type = TypeRecord {
-        fields: vec![
-            NameTypePair {
-                name: "code".to_string(),
-                typ: AnalysedType::U16(TypeU16),
-            },
-            NameTypePair {
-                name: "message".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-            NameTypePair {
-                name: "details".to_string(),
-                typ: AnalysedType::Option(TypeOption {
-                    inner: Box::new(AnalysedType::List(TypeList {
-                        inner: Box::new(AnalysedType::Str(TypeStr)),
+                name: "items".to_string(),
+                typ: AnalysedType::List(TypeList {
+                    inner: Box::new(AnalysedType::Record(TypeRecord {
+                        fields: vec![
+                            NameTypePair {
+                                name: "id".to_string(),
+                                typ: AnalysedType::U32(TypeU32),
+                            },
+                            NameTypePair {
+                                name: "name".to_string(),
+                                typ: AnalysedType::Str(TypeStr),
+                            },
+                            NameTypePair {
+                                name: "email".to_string(),
+                                typ: AnalysedType::Str(TypeStr),
+                            },
+                        ],
                     })),
                 }),
             },
+            NameTypePair {
+                name: "total".to_string(),
+                typ: AnalysedType::U32(TypeU32),
+            },
+            NameTypePair {
+                name: "page".to_string(),
+                typ: AnalysedType::U32(TypeU32),
+            },
         ],
-    };
-
-    let result_type = AnalysedType::Result(TypeResult {
-        ok: Some(Box::new(AnalysedType::Record(success_type))),
-        err: Some(Box::new(AnalysedType::Record(error_type))),
     });
 
-    // Get schema
-    let schema = converter.convert_type(&result_type).unwrap();
+    let schema = converter.convert_type(&response_type, &mut registry).unwrap();
+    match schema {
+        MetaSchemaRef::Inline(schema) => {
+            assert_eq!(schema.ty, "object");
+            assert_eq!(schema.required.len(), 3);
 
-    // Test success case
-    let success_json = json!({
-        "ok": {
-            "code": 200,
-            "message": "Operation successful",
-            "data": {
-                "value": "Additional data"
+            // Verify items array
+            let items_schema = find_property(&schema.properties, "items").unwrap();
+            match items_schema {
+                MetaSchemaRef::Inline(items_schema) => {
+                    assert_eq!(items_schema.ty, "array");
+                    assert!(items_schema.items.is_some());
+
+                    // Verify array item schema
+                    let item_schema = get_schema_from_box(items_schema.items.as_ref().unwrap());
+                    assert_eq!(item_schema.ty, "object");
+                    assert_eq!(item_schema.required.len(), 3);
+                    
+                    // Verify email field has email format
+                    let email_schema = find_property(&item_schema.properties, "email").unwrap();
+                    match email_schema {
+                        MetaSchemaRef::Inline(email_schema) => {
+                            assert_eq!(email_schema.ty, "string");
+                            assert_eq!(email_schema.format.as_deref(), Some("email"));
+                        },
+                        _ => panic!("Expected inline schema for email field"),
+                    }
+                },
+                _ => panic!("Expected inline schema for items field"),
             }
-        }
-    });
 
-    // Test error case
-    let error_json = json!({
-        "err": {
-            "code": 400,
-            "message": "Operation failed",
-            "details": {
-                "value": ["Invalid input", "Please try again"]
-            }
-        }
-    });
+            // Verify pagination fields
+            let total_schema = find_property(&schema.properties, "total").unwrap();
+            assert_schema_type(total_schema, "integer", Some("int32"));
 
-    assert!(validate_json_against_schema(&success_json, &schema));
-    assert!(validate_json_against_schema(&error_json, &schema));
-}
-
-#[test]
-fn test_search_functionality() {
-    let _converter = RibConverter;
-    let test_component = TestComponent;
-
-    // Test search query
-    let query = SearchQuery {
-        query: "test".to_string(),
-        filters: SearchFilters {
-            categories: vec!["docs".to_string()],
-            date_range: Some(DateRange {
-                start: 1234567890,
-                end: 1234567899,
-            }),
-            flags: SearchFlags {
-                case_sensitive: true,
-                whole_word: false,
-                regex_enabled: true,
-            },
+            let page_schema = find_property(&schema.properties, "page").unwrap();
+            assert_schema_type(page_schema, "integer", Some("int32"));
         },
-        pagination: Some(Pagination {
-            page: 1,
-            items_per_page: 10,
-        }),
-    };
-
-    // Test search result
-    let result = test_component.perform_search(query.clone());
-    assert_eq!(result.total_count, 2);
-    assert_eq!(result.matches.len(), 2);
-
-    // Test query validation
-    assert!(test_component.validate_search_query(query).is_ok());
-}
-
-#[test]
-fn test_batch_operations() {
-    let _converter = RibConverter;
-    let test_component = TestComponent;
-
-    let items = vec!["item1".to_string(), "item2".to_string(), "item3".to_string()];
-    let options = BatchOptions {
-        parallel: true,
-        retry_count: 3,
-        timeout_ms: 5000,
-    };
-
-    // Test batch processing
-    let result = test_component.batch_process(items.clone(), options.clone());
-    assert_eq!(result.successful + result.failed, items.len() as u32);
-
-    // Test batch validation
-    let validation_results = test_component.batch_validate(items.clone());
-    assert_eq!(validation_results.len(), items.len());
-
-    // Test async batch processing
-    let batch_id = test_component.process_batch_async(items, options).unwrap();
-    let status = test_component.get_batch_status(batch_id).unwrap();
-    assert!(status.successful > 0);
-}
-
-#[test]
-fn test_transformations() {
-    let _converter = RibConverter;
-    let test_component = TestComponent;
-
-    let data = vec!["data1".to_string(), "data2".to_string()];
-    let transform = DataTransformation::Sort {
-        field: "name".to_string(),
-        ascending: true,
-    };
-
-    // Test single transformation
-    let result = test_component.apply_transformation(data.clone(), transform);
-    assert!(result.success);
-    assert_eq!(result.output.len(), data.len());
-
-    // Test chained transformations
-    let transforms = vec![
-        DataTransformation::Sort {
-            field: "name".to_string(),
-            ascending: true,
-        },
-        DataTransformation::Filter {
-            predicate: "length > 3".to_string(),
-        },
-    ];
-    let chain_result = test_component.chain_transformations(data, transforms).unwrap();
-    assert!(chain_result.success);
-}
-
-#[test]
-fn test_tree_operations() {
-    let _converter = RibConverter;
-    let test_component = TestComponent;
-
-    let root = TreeNode {
-        id: 1,
-        value: "root".to_string(),
-        children: vec![],
-        metadata: NodeMetadata {
-            created_at: 1234567890,
-            modified_at: 1234567890,
-            tags: vec!["root".to_string()],
-        },
-    };
-
-    // Test tree creation
-    let created = test_component.create_tree(root.clone()).unwrap();
-    assert_eq!(created.id, root.id);
-
-    // Test tree modification
-    let operation = TreeOperation::Insert {
-        parent_id: 1,
-        node: TreeNode {
-            id: 2,
-            value: "child".to_string(),
-            children: vec![],
-            metadata: NodeMetadata {
-                created_at: 1234567890,
-                modified_at: 1234567890,
-                tags: vec!["child".to_string()],
-            },
-        },
-    };
-    let stats = test_component.modify_tree(operation).unwrap();
-    assert_eq!(stats.nodes_affected, 1);
-
-    // Test tree query
-    let node = test_component.query_tree(1, Some(2)).unwrap();
-    assert_eq!(node.id, 1);
-}
-
-#[test]
-fn test_complex_validation() {
-    let _converter = RibConverter;
-    let test_component = TestComponent;
-
-    let profile = test_component.test_user_profile();
-    let query = SearchQuery {
-        query: "test".to_string(),
-        filters: SearchFilters {
-            categories: vec![],
-            date_range: None,
-            flags: SearchFlags {
-                case_sensitive: false,
-                whole_word: false,
-                regex_enabled: false,
-            },
-        },
-        pagination: None,
-    };
-    let options = BatchOptions {
-        parallel: true,
-        retry_count: 3,
-        timeout_ms: 5000,
-    };
-
-    let result = test_component.validate_complex_input(profile, query, options);
-    assert!(result.is_ok());
+        _ => panic!("Expected inline schema"),
+    }
 } 

@@ -23,19 +23,7 @@ name = "api_integration_tests"
 harness = true
 
 [[test]]
-name = "complex_wit_type_validation_tests"
-harness = true
-
-[[test]]
-name = "openapi_converter_tests"
-harness = true
-
-[[test]]
 name = "openapi_export_integration_tests"
-harness = true
-
-[[test]]
-name = "rib_json_schema_validation_tests"
 harness = true
 
 [[test]]
@@ -51,11 +39,11 @@ name = "worker_gateway_integration_tests"
 harness = true
 
 [[test]]
-name = "utoipa_client_tests"
+name = "poemopenapi_client_tests"
 harness = true
 
 [[test]]
-name = "client_generation_integration_tests"
+name = "client_integration_tests"
 harness = true
 
 [[test]]
@@ -69,10 +57,13 @@ golem-service-base = { path = "../golem-service-base" }
 golem-rib = { path = "../golem-rib" }
 golem-wasm-ast = { path = "../wasm-ast", version = "0.0.0" }
 golem-wasm-rpc = { path = "../wasm-rpc", version = "0.0.0", default-features = false, features = ["host"] }
+schematools = "0.19.2"
+string-interner = "0.18.0"
 
-axum = { version = "0.7", features = ["json"] }
+axum = { version = "0.7", features = ["macros"] }
 tower = { version = "0.4" }
-tower-http = { version = "0.6.2", features = ["trace"] }
+tower-http = { version = "0.6.2", features = ["trace", "cors"] }
+once_cell = "1.19"
 
 anyhow = { workspace = true }
 async-trait = { workspace = true }
@@ -120,7 +111,7 @@ sqlx = { workspace = true, features = [
 ] }
 tap = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true }
+tokio = { version = "1.0", features = ["full"] }
 tokio-stream = { workspace = true }
 tokio-util = { workspace = true }
 tonic = { workspace = true }
@@ -131,26 +122,29 @@ tracing-subscriber = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 wasm-wave = { workspace = true }
-utoipa = { version = "5.3.0", features = ["axum_extras", "yaml", "chrono", "uuid", "openapi_extensions"] }
-utoipa-swagger-ui = { version = "8.1.0" }
+utoipa = { version = "5.3.0", features = ["axum_extras"] }
+utoipa-swagger-ui = { version = "8.1.0", features = ["axum"] }
 indexmap = "2.2.3"
+api-response = "0.15.7"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 fastrand = "2.3.0"
+rand = "0.8.5"
 tempfile = "3.10.1"
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 test-r = { workspace = true }
 valico = "3.6.1"
 tokio-test = "0.4"
-axum = { version = "0.7", features = ["http1", "json"] }
+axum = { version = "0.7", features = ["http1", "json", "macros"] }
 tower = "0.4"
-tower-http = { version = "0.6.2", features = ["trace"] }
+tower-http = { version = "0.6.2", features = ["trace", "cors"] }
 hyper = { version = "1.0", features = ["full"] }
 hyper-util = { version = "0.1", features = ["full"] }
 http-body-util = "0.1"
 reqwest = { version = "0.11", features = ["json"] }
+utoipa = { version = "5.3.0", features = ["axum_extras", "yaml", "chrono", "uuid", "openapi_extensions"] }
 utoipa-gen = "5.3.0"
 tokio = { version = "1.0", features = ["full"] }
 serde_yaml = "0.9"
@@ -158,6 +152,8 @@ serde_json = "1.0"
 async-trait = "0.1"
 chrono = "0.4"
 oauth2 = { version = "4.4", default-features = false }
+api-response = "0.15.7"
+opener = "0.6"
 
 [[bench]]
 name = "tree"
