@@ -19,8 +19,10 @@ import { DeleteForever } from "@mui/icons-material";
 import { ComponentSelect } from "./new-route-select";
 import { Button2 } from "./ui/button";
 import { PopoverDemo } from "./interpolate-tooltip";
-import { InterpolationExpressions,AvailableFunctions } from "./interpolate-tooltip";
-
+import {
+  InterpolationExpressions,
+  AvailableFunctions,
+} from "./interpolate-tooltip";
 
 type FormData = {
   path: string;
@@ -40,7 +42,7 @@ const NewRouteForm = ({
   onSuccess,
 }: {
   apiId: string;
-  version?: string|null;
+  version?: string | null;
   onSuccess?: () => void;
   isModal?: boolean;
   isExperimental?: boolean;
@@ -66,10 +68,15 @@ const NewRouteForm = ({
   const component = watch("component");
   const [error, setError] = useState<string | null>(null);
   const { data, isLoading } = useSWR("v1/components", fetcher);
-  const { getApiDefintion, isLoading: apiDefinitonLoading, upsertRoute, deleteRoute } = useApiDefinitions(apiId, version);
+  const {
+    getApiDefintion,
+    isLoading: apiDefinitonLoading,
+    upsertRoute,
+    deleteRoute,
+  } = useApiDefinitions(apiId, version);
   const { error: apiDefintionError } = getApiDefintion(apiId, version);
   const components = (data?.data || null) as Component[];
-
+  const selectedVersion = watch("version");
 
   if (apiDefinitonLoading || isLoading) {
     return <Loader />;
@@ -300,11 +307,12 @@ const NewRouteForm = ({
         </Box>
         <div className="mt-5 flex items-center">
           <PopoverDemo>
-            <InterpolationExpressions/>
+            <InterpolationExpressions />
           </PopoverDemo>
-          <p className="text-muted-foreground text-xs">Interpolate variables into your Worker ID</p>
+          <p className="text-muted-foreground text-xs">
+            Interpolate variables into your Worker ID
+          </p>
         </div>
-      {/* AvailableFunctions */}
       </Box>
 
       {/* Response */}
@@ -331,7 +339,23 @@ const NewRouteForm = ({
         />
         <div className="mt-5 flex items-center">
           <PopoverDemo>
-            <AvailableFunctions compId={component}/>
+            <Box>
+              <Typography variant="body2" gutterBottom>
+                Available Functions
+              </Typography>
+              <Divider className="bg-border my-1" />
+              {component &&
+              (selectedVersion || typeof selectedVersion == "number") ? (
+                <AvailableFunctions
+                  compId={component}
+                  version={`${selectedVersion}`}
+                />
+              ) : (
+                <Typography variant="body2" padding={1}>
+                  No Functions Available
+                </Typography>
+              )}
+            </Box>
           </PopoverDemo>
           <p className="text-muted-foreground text-xs">Avilable functions</p>
         </div>
@@ -349,11 +373,7 @@ const NewRouteForm = ({
       <Box
         sx={{ marginTop: 4, display: "flex", justifyContent: "space-between" }}
       >
-        <Button2
-          variant="dropdown"
-          size="lg"
-          onClick={() => reset()}
-        >
+        <Button2 variant="dropdown" size="lg" onClick={() => reset()}>
           Clear
         </Button2>
         <Button2
