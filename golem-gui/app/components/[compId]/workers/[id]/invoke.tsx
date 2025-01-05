@@ -44,33 +44,28 @@ export function InvokeForm({
       <DynamicForm config={paramsConfig} onSubmit={onSubmit} />
       {result && (
         <>
-        <Divider className="my-2 bg-border"/>
-        <Card sx={{ backgroundColor: "#1e1e1e", color: "#fff" }}>
-        <CardContent>
-          <Typography variant="h6" gutterBottom>
-            Result
-          </Typography>
-          <Typography variant="body2" className="text-muted-foreground">
-            View the result of your latest worker invocation
-          </Typography>
-          <Box
-            component="pre"
-            sx={{
-              backgroundColor: "#121212",
-              padding: 2,
-              borderRadius: 1,
-              color: "#9cdcfe",
-              overflow: "auto",
-              whiteSpace: "pre-wrap",
-              wordBreak: "break-word",
-            }}
-          >
-          <JsonEditor json={result}/>
+          <Divider className="my-2 bg-border" />
+          <Box>
+            <Typography variant="h6">Result</Typography>
+            <Typography variant="body2" className="text-muted-foreground mb-1">
+              View the result of your latest worker invocation
+            </Typography>
+            <Box
+              component="pre"
+              sx={{
+                padding: 2,
+                borderRadius: 1,
+                color: "#9cdcfe",
+                overflow: "auto",
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+              }}
+              className="dark:bg-[#121212] bg-[#dedede]"
+            >
+              <JsonEditor json={result} />
+            </Box>
           </Box>
-        </CardContent>
-      </Card>
-      </>
-        
+        </>
       )}
     </Box>
   );

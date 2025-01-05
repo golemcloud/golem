@@ -11,7 +11,7 @@ interface ComponentInfoProps {
 
 const ComponentInfo: React.FC<ComponentInfoProps> = ({ componentId, version, name, size, createdAt }) => {
   return (
-    <Paper sx={{width:"100%" }} elevation={4}>
+    <Paper sx={{width:"100%" }} elevation={4} className='border'>
       <CardContent>
         <Typography variant="body2" gutterBottom>
           <strong>Component ID</strong>

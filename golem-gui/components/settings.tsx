@@ -20,12 +20,12 @@ const DangerZone = ({ title, description, actions }: SettingProps) => {
     <div >
       <Box className="flex flex-col">
         <Typography variant="h6">{title}</Typography>
-        <Typography variant="subtitle1" gutterBottom className="text-muted-foreground">
+        <Typography variant="subtitle1" className="text-muted-foreground">
             {description}
         </Typography>
       </Box>
 
-      <Divider className="my-2 bg-border" />
+      <Divider className="my-1 bg-border" />
 
       {/* Danger Zone Section */}
       <div className="bg-white dark:bg-[#281619] p-6 rounded-lg shadow-lg border dark:border-[#6a1d25] border-[#f04444]">

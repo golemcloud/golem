@@ -55,7 +55,7 @@ export function DropdownV2({
     <DropdownMenu>
       <DropdownMenuTrigger>
         {prefix && (
-          <Button2 variant={"outline"} endIcon={icon || <ArrowDropDownIcon />}>
+          <Button2 variant={"outline"} size="md" endIcon={icon || <ArrowDropDownIcon />}>
             <Typography>{prefix}</Typography>
           </Button2>
         )}

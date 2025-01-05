@@ -18,10 +18,10 @@ const JsonEditor = ({ json }: {json:Record<string,unknown>|Array<unknown>|string
     <div
       style={{
         height: "50vh",
-        overflow: "auto", // Scrollable container
-        border: "1px solid #ddd", // Optional styling
+        overflow: "auto",
         borderRadius: "4px",
       }}
+      className="border"
     >
       <Editor
         defaultLanguage="json"
@@ -31,7 +31,7 @@ const JsonEditor = ({ json }: {json:Record<string,unknown>|Array<unknown>|string
           formatOnPaste: true,
           formatOnType: true,
           wordWrap: "on",
-          scrollBeyondLastLine: false, // Prevent extra spacing at the bottom
+          scrollBeyondLastLine: false,
         }}
         theme={theme == "dark" ? "vs-dark" : "light"  }
         onMount={handleEditorDidMount}
