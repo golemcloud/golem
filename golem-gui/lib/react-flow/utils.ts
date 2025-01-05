@@ -157,7 +157,7 @@ export const processApiFlow = (
 
     if (routes.length === 0) {
       const emptyRoute = getRouteEmptyNode(nodeId);
-      newNodes.push(createDefaultNodeV2({...emptyRoute, id: nodeId}, emptyRoute.id));
+      newNodes.push(createDefaultNodeV2({...emptyRoute, apiInfo:{...nodeData}, id: nodeId}, emptyRoute.id));
       newEdges = [
         ...newEdges, 
         ...createCustomEdgeMeta(nodeId, emptyRoute.id)]

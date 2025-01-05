@@ -61,7 +61,9 @@ export type Trigger = {
   id?:string;
   type: string;
   operation: string;
+  meta?: {version: string}
 } | null
+
 
 export type ApiStep = ApiDefinition & BasicStep;
 export type RouteStep = ApiRoute &
@@ -84,7 +86,7 @@ export type FlowState = {
   edges: Edge[];
   selectedNode: string | null;
   trigger: Trigger;
-  setTrigger: (triiger: Trigger) => void;
+  setTrigger: (trigger: Trigger) => void;
   onNodesChange: OnNodesChange<FlowNode>;
   onEdgesChange: OnEdgesChange<Edge>;
   onConnect: OnConnect;
