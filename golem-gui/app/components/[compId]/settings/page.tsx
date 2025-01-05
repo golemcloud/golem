@@ -55,16 +55,11 @@ const WorkerSettings = () => {
         <SecondaryHeader onClick={() => {}} variant="components" />
       </Box>
       {error && <ErrorBoundary message={error} />}
-      <div className="mx-auto max-w-7xl px-6 lg:px-8">
+      <div className="mx-auto max-w-7xl px-2 md:px-6 lg:px-8">
         <div className="mx-auto max-w-2xl lg:max-w-none py-4">
           <div className="border rounded-b-lg">
             <Stack>
-              <Box
-                sx={{
-                  bgcolor: "#101010",
-                  // width: "fit-content",
-                }}
-              >
+              <Box className="dark:bg-[#101010] bg-[#c0c0c0]">
                 <Tabs
                   value={activeTab}
                   onChange={handleTabChange}
@@ -99,7 +94,6 @@ const WorkerSettings = () => {
                     direction="row"
                     alignItems={"center"}
                     justifyContent={"space-between"}
-                    // className="p-1"
                   >
                     <Box className="flex flex-col">
                       <Typography variant="h6">

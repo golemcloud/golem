@@ -28,7 +28,7 @@ const TerminalPage = ({ messages }: { messages: Array<EventMessage> }) => {
       className="text-black dark:text-white"
       sx={{ width: "100%", minHeight: "100vh" }}
     >
-      <Box className="flex  border-b border-t dark:bg-[#151414 justify-between items-center flex-col sm:flex-row">
+      <Box className="flex border-b pb-1 border-t dark:bg-[#151414 justify-between items-center flex-col sm:flex-row">
         <Box className="mt-1 mb-1 dark:bg-[#1e1e1e] rounded-md mx-2">
           <Tabs
             value={activeTab}

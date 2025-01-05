@@ -39,11 +39,6 @@ export default function DeploymentPage() {
           size="small"
           name="domain"
           placeholder="Domain"
-          InputLabelProps={{ style: { color: "#AAA" } }}
-          InputProps={{
-            style: { color: "#FFF", borderColor: "#555" },
-          }}
-          sx={{ marginTop: 2 }}
         />
         <TextField
           fullWidth

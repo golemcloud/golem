@@ -28,9 +28,7 @@ export default function ComponentsLayout({
   return (
     <div style={{ display: "flex"}}>
       <Sidebar id={compId!} navigationLinks={navigationLinks} variant="components" />
-      <div
-        className="flex-1"
-      >
+      <div className="flex-1">
         {children}
       </div>
     </div>

@@ -76,14 +76,7 @@ const Dashboard = () => {
     <main className="container mx-auto flex flex-col gap-8 px-4 py-8 md:px-6 lg:px-8">
       <Paper
         elevation={2}
-        sx={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          p: 3,
-          borderRadius: "5px",
-        }}
-        className="border"
+        className="border flex flex-col sm:flex-row justify-between items-center p-3 rounded-md gap-3"
       >
         <Box>
           <Typography variant="h4" sx={{ fontWeight: 700 }}>
@@ -93,7 +86,7 @@ const Dashboard = () => {
             Here is a quick overview of your account
           </Typography>
         </Box>
-        <Box className="flex gap-3 pr-3">
+        <Box className="flex gap-10 pr-3">
           <Box textAlign="center">
             <Typography
               variant="h2"

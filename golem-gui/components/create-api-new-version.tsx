@@ -47,7 +47,7 @@ const CreateNewApiVersion = ({
   };
 
   return (
-    <Box sx={{ p: 2 }}>
+    <Box>
       {isExperimental && (
         <Typography
           variant="h5"
@@ -61,33 +61,32 @@ const CreateNewApiVersion = ({
 
       <form onSubmit={handleSubmit(onSubmit)}>
         {/* API Version Input */}
-        <Controller
-          name="version"
-          control={control}
-          rules={{
-            required: "Version is required",
-            pattern: {
-              value: /^[0-9]+\.[0-9]+\.[0-9]+$/, // Semantic version pattern
-              message: "Version must be in semantic format (e.g., 1.0.0)",
-            },
-          }}
-          render={({ field }) => (
-            <TextField
-              {...field}
-              label="Version"
-              size="small"
-              placeholder="Enter API version (e.g., 1.0.0)"
-              fullWidth
-              margin="normal"
-            />
-          )}
-        />
-        <Typography mb={3} variant="caption">
-          Create new version from API <strong>{version}</strong>
-        </Typography>
-        <Typography variant="caption" color="error">
-          {getFormErrorMessage("version", errors)}
-        </Typography>
+        <Box className="mb-2">
+          <Typography className="text-foreground">New Version</Typography>
+          <Controller
+            name="version"
+            control={control}
+            rules={{
+              required: "Version is required",
+              pattern: {
+                value: /^[0-9]+\.[0-9]+\.[0-9]+$/, // Semantic version pattern
+                message: "Version must be in semantic format (e.g., 1.0.0)",
+              },
+            }}
+            render={({ field }) => (
+              <TextField
+                {...field}
+                size="small"
+                placeholder="Enter API version (e.g., 1.0.0)"
+                fullWidth
+              />
+            )}
+          />
+          <p className="text-muted-foreground text-xs mt-1">Create new version from API <strong>{version}</strong></p>
+          <Typography variant="caption" color="error">
+            {getFormErrorMessage("version", errors)}
+          </Typography>
+        </Box>
 
         {/* Submit Button */}
         <Stack>
@@ -101,7 +100,7 @@ const CreateNewApiVersion = ({
           >
             {isExperimental ? "Experimental Feature" : "Create New"}
           </Button>
-        </Stack>
+          </Stack>
       </form>
     </Box>
   );

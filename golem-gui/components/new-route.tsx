@@ -133,7 +133,6 @@ const NewRouteForm = ({
       sx={{
         width: isModal ? "50%" : "100%",
         margin: "auto",
-        // padding: 10,
       }}
     >
       {isExperimental && (
@@ -246,7 +245,7 @@ const NewRouteForm = ({
         <Typography variant="subtitle1" gutterBottom>
           Worker Binding
         </Typography>
-        <Box sx={{ display: "flex", gap: 2, marginTop: 2 }}>
+        <Box className="flex gap-2 mt-2 md:flex-row flex-col">
           <FormControl fullWidth>
             <ComponentSelect
               name={"component"}
@@ -255,6 +254,7 @@ const NewRouteForm = ({
               options={components}
               isLoading={isLoading}
             />
+            <span className="text-muted-foreground text-xs mt-1">Select component</span>
             {errors && errors.component && (
               <Typography variant="inherit" color="error">
                 {errors.component.message?.toString()}
@@ -271,6 +271,7 @@ const NewRouteForm = ({
               options={components}
               isLoading={isLoading}
             />
+            <span className="text-muted-foreground text-xs mt-1">Select version</span>
             {errors && errors.version && (
               <Typography variant="inherit" color="error">
                 {errors.version.message?.toString()}
