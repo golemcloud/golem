@@ -125,7 +125,7 @@ wasm-wave = { workspace = true }
 utoipa = { version = "5.3.0", features = ["axum_extras"] }
 utoipa-swagger-ui = { version = "8.1.0", features = ["axum"] }
 indexmap = "2.2.3"
-api-response = "0.15.7"
+api-response = "0.16.3"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
@@ -152,7 +152,7 @@ serde_json = "1.0"
 async-trait = "0.1"
 chrono = "0.4"
 oauth2 = { version = "4.4", default-features = false }
-api-response = "0.15.7"
+api-response = "0.16.3"
 opener = "0.6"
 
 [[bench]]
