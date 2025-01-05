@@ -2,78 +2,69 @@ use golem_worker_service_base::gateway_api_definition::http::{
     openapi_export::{OpenApiExporter, OpenApiFormat},
     client_generator::ClientGenerator,
 };
-use utoipa::openapi::{
-    path::{PathItem, OperationBuilder, HttpMethod, PathsBuilder, Parameter, ParameterIn},
-    response::Response,
-    schema::{Schema, SchemaType, Type, ObjectBuilder},
-    Info, OpenApi, OpenApiVersion, Required, RefOr,
+use poem_openapi::{
+    payload::PlainText,
+    param::Path,
+    ApiResponse, OpenApi, OpenApiService,
 };
 use tempfile::tempdir;
 use std::fs;
 
+#[derive(ApiResponse)]
+enum HealthCheckResponse {
+    #[oai(status = 200)]
+    Ok(PlainText<String>),
+}
+
+#[derive(ApiResponse)]
+enum VersionResponse {
+    #[oai(status = 200)]
+    Ok(PlainText<String>),
+}
+
+#[derive(ApiResponse)]
+enum ExportResponse {
+    #[oai(status = 200)]
+    Ok(PlainText<String>),
+}
+
+#[derive(Clone)]
+struct Api;
+
+#[OpenApi]
+impl Api {
+    #[oai(path = "/healthcheck", method = "get")]
+    async fn get_health_check(&self) -> HealthCheckResponse {
+        HealthCheckResponse::Ok(PlainText("Healthy".to_string()))
+    }
+
+    #[oai(path = "/version", method = "get")]
+    async fn get_version(&self) -> VersionResponse {
+        VersionResponse::Ok(PlainText("1.0.0".to_string()))
+    }
+
+    #[oai(path = "/v1/api/definitions/{api_id}/version/{version}/export", method = "get")]
+    async fn export_api_definition(
+        &self,
+        _api_id: Path<String>,
+        _version: Path<String>,
+    ) -> ExportResponse {
+        ExportResponse::Ok(PlainText("API definition".to_string()))
+    }
+}
+
 #[tokio::test]
 async fn test_client_generation() -> anyhow::Result<()> {
-    // Create a test OpenAPI spec
-    let mut openapi = OpenApi::new(
-        Info::new("test-api", "1.0.0"),
-        PathsBuilder::new(),
-    );
-
-    // Add /healthcheck endpoint
-    let healthcheck_op = OperationBuilder::new()
-        .operation_id(Some("getHealthCheck"))
-        .response("200", Response::new("Health check response"))
-        .build();
-    let healthcheck_path = PathItem::new(HttpMethod::Get, healthcheck_op);
-    openapi.paths.paths.insert("/healthcheck".to_string(), healthcheck_path);
-
-    // Add /version endpoint
-    let version_op = OperationBuilder::new()
-        .operation_id(Some("getVersion"))
-        .response("200", Response::new("Version response"))
-        .build();
-    let version_path = PathItem::new(HttpMethod::Get, version_op);
-    openapi.paths.paths.insert("/version".to_string(), version_path);
-
-    // Add /v1/api/definitions/{api_id}/version/{version}/export endpoint
-    let mut api_id_param = Parameter::new("api_id");
-    api_id_param.required = Required::True;
-    api_id_param.parameter_in = ParameterIn::Path;
-    api_id_param.schema = Some(RefOr::T(Schema::Object(
-        ObjectBuilder::new()
-            .schema_type(SchemaType::Type(Type::String))
-            .build()
-    )));
-
-    let mut version_param = Parameter::new("version");
-    version_param.required = Required::True;
-    version_param.parameter_in = ParameterIn::Path;
-    version_param.schema = Some(RefOr::T(Schema::Object(
-        ObjectBuilder::new()
-            .schema_type(SchemaType::Type(Type::String))
-            .build()
-    )));
-
-    let export_op = OperationBuilder::new()
-        .operation_id(Some("exportApiDefinition"))
-        .parameter(api_id_param)
-        .parameter(version_param)
-        .response("200", Response::new("API definition response"))
-        .build();
-    let export_path = PathItem::new(HttpMethod::Get, export_op);
-    openapi.paths.paths.insert("/v1/api/definitions/{api_id}/version/{version}/export".to_string(), export_path);
-
-    // Set OpenAPI version
-    openapi.openapi = OpenApiVersion::Version31;
-
+    let api = Api;
+    let _api_service = OpenApiService::new(api.clone(), "Test API", "1.0.0")
+        .server("http://localhost:3000");
+    
     // Export OpenAPI schema
     let temp_dir = tempdir()?;
     let openapi_exporter = OpenApiExporter;
     let format = OpenApiFormat { json: true };
     let json_content = openapi_exporter.export_openapi(
-        "test-api",
-        "1.0.0",
-        openapi.clone(),
+        api.clone(),
         &format
     );
 
@@ -84,7 +75,7 @@ async fn test_client_generation() -> anyhow::Result<()> {
     // Generate Rust client
     let generator = ClientGenerator::new(temp_dir.path());
     let rust_client_dir = generator
-        .generate_rust_client("test-api", "1.0.0", openapi.clone(), "test_client")
+        .generate_rust_client("test-api", "1.0.0", api.clone(), "test_client")
         .await?;
 
     // Verify Rust client
@@ -94,7 +85,7 @@ async fn test_client_generation() -> anyhow::Result<()> {
 
     // Generate TypeScript client
     let ts_client_dir = generator
-        .generate_typescript_client("test-api", "1.0.0", openapi.clone(), "@test/client")
+        .generate_typescript_client("test-api", "1.0.0", api, "@test/client")
         .await?;
 
     // Verify TypeScript client

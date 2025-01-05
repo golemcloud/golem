@@ -1,118 +1,21 @@
 openapi: 3.1.0
 info:
-  title: Golem Worker Service Base API
+  title: Golem RIB API
   version: 1.0.0
-  description: API for the Golem Worker Service Base
+  description: Runtime Interface Builder (RIB) API provides endpoints for managing and converting runtime interfaces, supporting complex type operations, batch processing, and tree-based data structures.
 
 servers:
-  - url: http://localhost:8080
+  - url: http://localhost:3000
     description: Local development server
 
 paths:
-  /healthcheck:
+  /api/v1/rib/healthcheck:
     get:
       summary: Health check endpoint
       description: Returns the health status of the service
-      operationId: getHealthCheck
-      responses:
-        '200':
-          description: Service is healthy
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  status:
-                    type: string
-                    enum: ["success"]
-                  data:
-                    type: object
-                required:
-                  - status
-                  - data
-
-  /version:
-    get:
-      summary: Get service version
-      description: Returns the version information of the service
-      operationId: getVersion
-      responses:
-        '200':
-          description: Version information
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  status:
-                    type: string
-                    enum: ["success"]
-                  data:
-                    type: object
-                    properties:
-                      version:
-                        type: string
-                        example: "1.0.0"
-                    required:
-                      - version
-                required:
-                  - status
-                  - data
-
-  /v1/api/definitions/{api_id}/version/{version}/export:
-    get:
-      summary: Export API definition
-      description: Exports the OpenAPI specification for a specific API version
-      operationId: exportApiDefinition
-      parameters:
-        - name: api_id
-          in: path
-          required: true
-          schema:
-            type: string
-        - name: version
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        '200':
-          description: OpenAPI specification
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  status:
-                    type: string
-                    enum: ["success"]
-                  data:
-                    type: object
-                    properties:
-                      openapi:
-                        type: string
-                        example: "3.1.0"
-                      info:
-                        type: object
-                        properties:
-                          title:
-                            type: string
-                            example: "Test API"
-                          version:
-                            type: string
-                            example: "1.0.0"
-                    required:
-                      - openapi
-                      - info
-                required:
-                  - status
-                  - data
-
-  /api/v1/rib/healthcheck:
-    get:
-      summary: Get RIB health status
-      description: Returns the health status of the RIB service
-      operationId: getRibHealthCheck
+      operationId: healthcheck
+      tags:
+        - RIB API
       responses:
         '200':
           description: Service is healthy
@@ -132,9 +35,11 @@ paths:
 
   /api/v1/rib/version:
     get:
-      summary: Get RIB version information
-      description: Returns the version information of the RIB service
-      operationId: getRibVersion
+      summary: Get version information
+      description: Returns the version information of the service
+      operationId: version
+      tags:
+        - RIB API
       responses:
         '200':
           description: Version information
@@ -149,20 +54,22 @@ paths:
                   data:
                     type: object
                     properties:
-                      version:
+                      version_str:
                         type: string
                         example: "1.0.0"
                     required:
-                      - version
+                      - version_str
                 required:
                   - status
                   - data
 
-  /primitives:
+  /api/v1/rib/primitives:
     get:
       summary: Get primitive types
       description: Returns example primitive types and their schema
       operationId: getPrimitiveTypes
+      tags:
+        - RIB API
       responses:
         '200':
           description: Primitive types schema and example
@@ -198,11 +105,12 @@ paths:
                 required:
                   - status
                   - data
-
     post:
       summary: Create primitive types
       description: Creates primitive types from provided data
       operationId: createPrimitiveTypes
+      tags:
+        - RIB API
       requestBody:
         required: true
         content:
@@ -226,11 +134,13 @@ paths:
                   - status
                   - data
 
-  /users/{id}/profile:
+  /api/v1/rib/users/{id}/profile:
     get:
       summary: Get user profile
       description: Returns the profile information for a specific user
       operationId: getUserProfile
+      tags:
+        - RIB API
       parameters:
         - name: id
           in: path
@@ -251,45 +161,17 @@ paths:
                     enum: ["success"]
                   data:
                     type: object
-                    properties:
-                      schema:
-                        type: object
-                      profile:
-                        type: object
-                        properties:
-                          id:
-                            type: integer
-                            format: int32
-                          username:
-                            type: string
-                          settings:
-                            type: object
-                            properties:
-                              value:
-                                type: object
-                                properties:
-                                  theme:
-                                    type: string
-                                  notifications_enabled:
-                                    type: boolean
-                          permissions:
-                            type: object
-                            properties:
-                              can_read:
-                                type: boolean
-                              can_write:
-                                type: boolean
-                              is_admin:
-                                type: boolean
                 required:
                   - status
                   - data
 
-  /users/{id}/settings:
+  /api/v1/rib/users/{id}/settings:
     post:
       summary: Update user settings
-      description: Updates settings for a specific user
+      description: Updates the settings for a specific user
       operationId: updateUserSettings
+      tags:
+        - RIB API
       parameters:
         - name: id
           in: path
@@ -303,6 +185,14 @@ paths:
           application/json:
             schema:
               type: object
+              properties:
+                theme:
+                  type: string
+                notifications_enabled:
+                  type: boolean
+              required:
+                - theme
+                - notifications_enabled
       responses:
         '200':
           description: Updated user settings
@@ -316,68 +206,31 @@ paths:
                     enum: ["success"]
                   data:
                     type: object
-                    properties:
-                      id:
-                        type: integer
-                        format: int32
-                      settings:
-                        type: object
                 required:
                   - status
                   - data
 
-  /users/{id}/permissions:
-    get:
-      summary: Get user permissions
-      description: Returns the permissions for a specific user
-      operationId: getUserPermissions
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: integer
-            format: int32
-      responses:
-        '200':
-          description: User permissions
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  status:
-                    type: string
-                    enum: ["success"]
-                  data:
-                    type: object
-                    properties:
-                      permissions:
-                        type: object
-                        properties:
-                          can_read:
-                            type: boolean
-                          can_write:
-                            type: boolean
-                          can_delete:
-                            type: boolean
-                          is_admin:
-                            type: boolean
-                required:
-                  - status
-                  - data
-
-  /content:
+  /api/v1/rib/content:
     post:
       summary: Create content
       description: Creates new content
       operationId: createContent
+      tags:
+        - RIB API
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              properties:
+                title:
+                  type: string
+                body:
+                  type: string
+              required:
+                - title
+                - body
       responses:
         '200':
           description: Created content
@@ -395,57 +248,39 @@ paths:
                   - status
                   - data
 
-  /content/{id}:
-    get:
-      summary: Get content
-      description: Returns content by ID
-      operationId: getContent
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: integer
-            format: int32
-      responses:
-        '200':
-          description: Content information
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  status:
-                    type: string
-                    enum: ["success"]
-                  data:
-                    type: object
-                    properties:
-                      content:
-                        type: object
-                        properties:
-                          id:
-                            type: integer
-                            format: int32
-                          title:
-                            type: string
-                          body:
-                            type: string
-                required:
-                  - status
-                  - data
-
-  /search:
+  /api/v1/rib/search:
     post:
-      summary: Perform search
-      description: Performs a search with given query and filters
-      operationId: performSearch
+      summary: Search content
+      description: Searches content based on provided criteria
+      operationId: searchContent
+      tags:
+        - RIB API
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/SearchQuery'
+              type: object
+              properties:
+                query:
+                  type: string
+                filters:
+                  type: object
+                  properties:
+                    type:
+                      type: string
+                    date_range:
+                      type: object
+                      properties:
+                        start:
+                          type: string
+                        end:
+                          type: string
+                      required:
+                        - start
+                        - end
+              required:
+                - query
       responses:
         '200':
           description: Search results
@@ -478,321 +313,77 @@ paths:
                   - status
                   - data
 
-  /search/validate:
+  /api/v1/rib/batch/process:
     post:
-      summary: Validate search query
-      description: Validates a search query
-      operationId: validateSearch
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/SearchQuery'
-      responses:
-        '200':
-          description: Validation result
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  status:
-                    type: string
-                    enum: ["success"]
-                  data:
-                    type: object
-                    properties:
-                      valid:
-                        type: boolean
-                required:
-                  - status
-                  - data
-
-  /batch/process:
-    post:
-      summary: Process batch operation
-      description: Processes a batch of operations
+      summary: Process batch items
+      description: Processes multiple items in a batch
       operationId: processBatch
+      tags:
+        - RIB API
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: array
-              items:
-                type: string
-      responses:
-        '200':
-          description: Batch processing result
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  status:
-                    type: string
-                    enum: ["success"]
-                  data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
                     type: object
                     properties:
-                      successful:
-                        type: array
-                        items:
-                          type: string
-                      failed:
-                        type: array
-                        items:
-                          type: string
-                    required:
-                      - successful
-                      - failed
-                required:
-                  - status
-                  - data
-
-  /batch/validate:
-    post:
-      summary: Validate batch operation
-      description: Validates a batch of operations
-      operationId: validateBatch
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: array
-              items:
-                type: string
-      responses:
-        '200':
-          description: Batch validation result
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  status:
-                    type: string
-                    enum: ["success"]
-                  data:
-                    type: object
-                    properties:
-                      valid:
-                        type: boolean
-                required:
-                  - status
-                  - data
-
-  /batch/{id}/status:
-    get:
-      summary: Get batch status
-      description: Returns the status of a batch operation
-      operationId: getBatchStatus
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: integer
-            format: int32
-      responses:
-        '200':
-          description: Batch status
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  status:
-                    type: string
-                    enum: ["success"]
-                  data:
-                    type: object
-                    properties:
-                      status:
+                      id:
+                        type: integer
+                        format: int32
+                      action:
                         type: string
-                      progress:
-                        type: integer
-                        format: int32
-                      successful:
+                    required:
+                      - id
+                      - action
+              required:
+                - items
+      responses:
+        '200':
+          description: Batch processing results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: ["success"]
+                  data:
+                    type: object
+                    properties:
+                      processed:
                         type: integer
                         format: int32
                       failed:
                         type: integer
                         format: int32
-                required:
-                  - status
-                  - data
-
-  /transform:
-    post:
-      summary: Apply transformation
-      description: Applies a transformation to data
-      operationId: applyTransformation
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                data:
-                  type: array
-                  items:
-                    type: string
-                transformation:
-                  $ref: '#/components/schemas/DataTransformation'
-      responses:
-        '200':
-          description: Transformation result
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  status:
-                    type: string
-                    enum: ["success"]
-                  data:
-                    type: object
-                    properties:
-                      success:
-                        type: boolean
-                      output:
+                      results:
                         type: array
                         items:
-                          type: string
-                      metrics:
-                        type: object
-                        properties:
-                          input_size:
-                            type: integer
-                            format: int32
-                          output_size:
-                            type: integer
-                            format: int32
-                          duration_ms:
-                            type: integer
-                            format: int32
+                          type: object
                     required:
-                      - success
-                      - output
-                      - metrics
+                      - processed
+                      - failed
+                      - results
                 required:
                   - status
                   - data
 
-  /transform/chain:
-    post:
-      summary: Chain transformations
-      description: Applies a chain of transformations to data
-      operationId: chainTransformations
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                data:
-                  type: array
-                  items:
-                    type: string
-                transformations:
-                  type: array
-                  items:
-                    $ref: '#/components/schemas/DataTransformation'
-      responses:
-        '200':
-          description: Chained transformation result
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  status:
-                    type: string
-                    enum: ["success"]
-                  data:
-                    type: object
-                    properties:
-                      success:
-                        type: boolean
-                      output:
-                        type: array
-                        items:
-                          type: string
-                      metrics:
-                        type: object
-                        properties:
-                          input_size:
-                            type: integer
-                            format: int32
-                          output_size:
-                            type: integer
-                            format: int32
-                          duration_ms:
-                            type: integer
-                            format: int32
-                    required:
-                      - success
-                      - output
-                      - metrics
-                required:
-                  - status
-                  - data
-
-  /tree:
-    post:
-      summary: Create tree
-      description: Creates a new tree structure
-      operationId: createTree
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/TreeNode'
-      responses:
-        '200':
-          description: Created tree
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  status:
-                    type: string
-                    enum: ["success"]
-                  data:
-                    $ref: '#/components/schemas/TreeNode'
-                required:
-                  - status
-                  - data
-
-  /tree/{id}:
+  /api/v1/rib/tree:
     get:
-      summary: Query tree
-      description: Queries a tree structure
-      operationId: queryTree
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: integer
-            format: int32
-        - name: depth
-          in: query
-          required: false
-          schema:
-            type: integer
-            format: int32
-            default: 1
+      summary: Get tree structure
+      description: Returns a tree-based data structure
+      operationId: getTree
+      tags:
+        - RIB API
       responses:
         '200':
-          description: Tree query result
+          description: Tree structure
           content:
             application/json:
               schema:
@@ -807,30 +398,46 @@ paths:
                       id:
                         type: integer
                         format: int32
-                      depth:
-                        type: integer
-                        format: int32
                       node:
-                        $ref: '#/components/schemas/TreeNode'
+                        type: object
+                      metadata:
+                        type: object
+                        properties:
+                          created_at:
+                            type: integer
+                            format: int64
+                          modified_at:
+                            type: integer
+                            format: int64
+                          tags:
+                            type: array
+                            items:
+                              type: string
+                        required:
+                          - created_at
+                          - modified_at
+                          - tags
                     required:
                       - id
-                      - depth
                       - node
+                      - metadata
                 required:
                   - status
                   - data
 
-  /tree/modify:
+  /api/v1/rib/tree/modify:
     post:
       summary: Modify tree
-      description: Modifies a tree structure
+      description: Modifies the tree structure
       operationId: modifyTree
+      tags:
+        - RIB API
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/TreeOperation'
+              type: object
       responses:
         '200':
           description: Tree modification result
@@ -860,160 +467,43 @@ paths:
                   - status
                   - data
 
-components:
-  schemas:
-    SearchQuery:
-      type: object
-      properties:
-        query:
-          type: string
-        filters:
-          $ref: '#/components/schemas/SearchFilters'
-        pagination:
-          $ref: '#/components/schemas/Pagination'
+  /api/v1/rib/export:
+    get:
+      summary: Export OpenAPI specification
+      description: Returns the OpenAPI specification for the RIB API
+      operationId: exportApi
+      tags:
+        - RIB API
+      responses:
+        '200':
+          description: OpenAPI specification
+          content:
+            application/json:
+              schema:
+                type: object
 
-    SearchFilters:
-      type: object
-      properties:
-        categories:
-          type: array
-          items:
+  /api/v1/rib/api/definitions/{api_id}/version/{version}/export:
+    get:
+      summary: Export API definition
+      description: Exports the OpenAPI specification for a specific API version
+      operationId: exportApiDefinition
+      tags:
+        - RIB API
+      parameters:
+        - name: api_id
+          in: path
+          required: true
+          schema:
             type: string
-        date_range:
-          $ref: '#/components/schemas/DateRange'
-        flags:
-          $ref: '#/components/schemas/SearchFlags'
-
-    SearchFlags:
-      type: object
-      properties:
-        case_sensitive:
-          type: boolean
-        whole_word:
-          type: boolean
-        regex_enabled:
-          type: boolean
-
-    DateRange:
-      type: object
-      properties:
-        start:
-          type: integer
-          format: int64
-        end:
-          type: integer
-          format: int64
-
-    Pagination:
-      type: object
-      properties:
-        page:
-          type: integer
-          format: int32
-        items_per_page:
-          type: integer
-          format: int32
-
-    DataTransformation:
-      oneOf:
-        - type: object
-          properties:
-            Sort:
-              type: object
-              properties:
-                field:
-                  type: string
-                ascending:
-                  type: boolean
-        - type: object
-          properties:
-            Filter:
-              type: object
-              properties:
-                predicate:
-                  type: string
-        - type: object
-          properties:
-            Map:
-              type: object
-              properties:
-                expression:
-                  type: string
-        - type: object
-          properties:
-            GroupBy:
-              type: object
-              properties:
-                key:
-                  type: string
-
-    TreeNode:
-      type: object
-      properties:
-        id:
-          type: integer
-          format: int32
-        value:
-          type: string
-        children:
-          type: array
-          items:
-            $ref: '#/components/schemas/TreeNode'
-        metadata:
-          $ref: '#/components/schemas/NodeMetadata'
-
-    NodeMetadata:
-      type: object
-      properties:
-        created_at:
-          type: integer
-          format: int64
-        modified_at:
-          type: integer
-          format: int64
-        tags:
-          type: array
-          items:
+        - name: version
+          in: path
+          required: true
+          schema:
             type: string
-
-    TreeOperation:
-      oneOf:
-        - type: object
-          properties:
-            Insert:
-              type: object
-              properties:
-                parent_id:
-                  type: integer
-                  format: int32
-                node:
-                  $ref: '#/components/schemas/TreeNode'
-        - type: object
-          properties:
-            Delete:
-              type: object
-              properties:
-                node_id:
-                  type: integer
-                  format: int32
-        - type: object
-          properties:
-            Move:
-              type: object
-              properties:
-                node_id:
-                  type: integer
-                  format: int32
-                new_parent_id:
-                  type: integer
-                  format: int32
-        - type: object
-          properties:
-            Update:
-              type: object
-              properties:
-                node_id:
-                  type: integer
-                  format: int32
-                new_value:
-                  type: string 
+      responses:
+        '200':
+          description: OpenAPI specification
+          content:
+            application/json:
+              schema:
+                type: object 

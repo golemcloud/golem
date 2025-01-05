@@ -3,8 +3,8 @@ use std::fs;
 use tokio::process::Command;
 use thiserror::Error;
 use crate::gateway_api_definition::http::openapi_export::{OpenApiExporter, OpenApiFormat};
-use utoipa::openapi::OpenApi;
 use url::Url;
+use poem_openapi::OpenApi;
 
 #[derive(Debug, Error)]
 pub enum ClientGenerationError {
@@ -66,7 +66,7 @@ impl ClientGenerator {
             "-o".to_string(),
             output_dir_str,
             format!("--additional-properties={}", additional_properties),
-            "--skip-validate-spec".to_string(), // Skip validation to avoid path issues
+            "--skip-validate-spec".to_string(),
         ];
 
         #[cfg(windows)]
@@ -107,7 +107,7 @@ impl ClientGenerator {
         &self,
         api_id: &str,
         version: &str,
-        openapi: OpenApi,
+        api: impl OpenApi + Clone,
         package_name: &str,
     ) -> Result<PathBuf, ClientGenerationError> {
         // Create output directory with forward slashes
@@ -116,7 +116,7 @@ impl ClientGenerator {
 
         // Export OpenAPI spec
         let format = OpenApiFormat { json: true };
-        let exported = self.exporter.export_openapi(api_id, version, openapi, &format);
+        let exported = self.exporter.export_openapi(api.clone(), &format);
 
         // Write OpenAPI spec to file
         let spec_path = client_dir.join("openapi.json");
@@ -138,7 +138,7 @@ impl ClientGenerator {
         &self,
         api_id: &str,
         version: &str,
-        openapi: OpenApi,
+        api: impl OpenApi + Clone,
         package_name: &str,
     ) -> Result<PathBuf, ClientGenerationError> {
         // Create output directory with forward slashes
@@ -147,7 +147,7 @@ impl ClientGenerator {
 
         // Export OpenAPI spec
         let format = OpenApiFormat { json: true };
-        let exported = self.exporter.export_openapi(api_id, version, openapi, &format);
+        let exported = self.exporter.export_openapi(api.clone(), &format);
 
         // Write OpenAPI spec to file
         let spec_path = client_dir.join("openapi.json");
@@ -164,13 +164,56 @@ impl ClientGenerator {
 
         Ok(client_dir)
     }
+
+    pub fn generate_client(
+        &self,
+        _api_id: &str,
+        _version: &str,
+        api: impl OpenApi + Clone,
+        format: &OpenApiFormat,
+    ) -> Result<String, ClientGenerationError> {
+        Ok(self.exporter.export_openapi(api.clone(), format))
+    }
+
+    pub fn generate_client_with_converter(
+        &self,
+        _api_id: &str,
+        _version: &str,
+        api: impl OpenApi + Clone,
+        format: &OpenApiFormat,
+    ) -> Result<String, ClientGenerationError> {
+        Ok(self.exporter.export_openapi(api.clone(), format))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use utoipa::openapi::{Info, OpenApiVersion};
     use tempfile::tempdir;
+    use poem_openapi::{ApiResponse, Object};
+
+    #[derive(Object)]
+    struct TestEndpoint {
+        message: String,
+    }
+
+    #[derive(ApiResponse)]
+    enum TestResponse {
+        #[oai(status = 200)]
+        Success(Json<TestEndpoint>),
+    }
+
+    struct TestApi;
+
+    #[OpenApi]
+    impl TestApi {
+        #[oai(path = "/test", method = "get")]
+        async fn test_endpoint(&self) -> TestResponse {
+            TestResponse::Success(Json(TestEndpoint {
+                message: "Success".to_string(),
+            }))
+        }
+    }
 
     #[tokio::test]
     async fn test_rust_client_generation() {
@@ -178,25 +221,8 @@ mod tests {
         let temp_path = temp_dir.path().to_str().unwrap().replace('\\', "/");
         let generator = ClientGenerator::new(temp_path);
 
-        // Create test OpenAPI spec
-        let mut openapi = OpenApi::new(
-            Info::new("Test API", "1.0.0"),
-            OpenApiVersion::V3_0_3,
-        );
-
-        // Add a test endpoint
-        let mut path_item = utoipa::openapi::path::PathItem::new();
-        let operation = utoipa::openapi::path::OperationBuilder::new()
-            .operation_id(Some("testEndpoint"))
-            .description(Some("A test endpoint"))
-            .response("200", utoipa::openapi::Response::new("Success"))
-            .build();
-        path_item.get = Some(operation);
-        openapi.paths.paths.insert("/test".to_string(), path_item);
-
-        // Generate client
         let result = generator
-            .generate_rust_client("test-api", "1.0.0", openapi, "test_client")
+            .generate_rust_client("test-api", "1.0.0", TestApi, "test_client")
             .await;
 
         assert!(result.is_ok());
@@ -212,25 +238,8 @@ mod tests {
         let temp_path = temp_dir.path().to_str().unwrap().replace('\\', "/");
         let generator = ClientGenerator::new(temp_path);
 
-        // Create test OpenAPI spec
-        let mut openapi = OpenApi::new(
-            Info::new("Test API", "1.0.0"),
-            OpenApiVersion::V3_0_3,
-        );
-
-        // Add a test endpoint
-        let mut path_item = utoipa::openapi::path::PathItem::new();
-        let operation = utoipa::openapi::path::OperationBuilder::new()
-            .operation_id(Some("testEndpoint"))
-            .description(Some("A test endpoint"))
-            .response("200", utoipa::openapi::Response::new("Success"))
-            .build();
-        path_item.get = Some(operation);
-        openapi.paths.paths.insert("/test".to_string(), path_item);
-
-        // Generate client
         let result = generator
-            .generate_typescript_client("test-api", "1.0.0", openapi, "@test/client")
+            .generate_typescript_client("test-api", "1.0.0", TestApi, "@test/client")
             .await;
 
         assert!(result.is_ok());

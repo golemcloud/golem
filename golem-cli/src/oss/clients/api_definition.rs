@@ -13,16 +13,26 @@
 // limitations under the License.
 
 use std::fmt::Display;
-
 use std::io::Read;
+use std::net::SocketAddr;
 
 use async_trait::async_trait;
 use golem_client::model::{HttpApiDefinitionRequest, HttpApiDefinitionResponseData};
-
-use crate::clients::api_definition::ApiDefinitionClient;
-use tokio::fs::read_to_string;
+use golem_worker_service_base::gateway_api_definition::http::{
+    openapi_export::{OpenApiExporter, OpenApiFormat},
+    swagger_ui::{create_api_route, SwaggerUiConfig},
+};
+use poem::listener::TcpListener;
+use poem_openapi::{
+    OpenApi,
+    Tags,
+    payload::Json,
+};
+use serde_json::Value;
+use tokio::fs::{read_to_string, write};
 use tracing::info;
 
+use crate::clients::api_definition::ApiDefinitionClient;
 use crate::model::{
     decode_api_definition, ApiDefinitionFileFormat, ApiDefinitionId, ApiDefinitionVersion,
     GolemError, PathBufOrStdin,
@@ -97,6 +107,45 @@ async fn create_or_update_api_definition<
     }
 }
 
+#[derive(Tags)]
+enum ApiTags {
+    /// API Definition operations
+    ApiDefinition,
+}
+
+#[derive(Clone)]
+struct ApiSpec(Value);
+
+#[OpenApi]
+impl ApiSpec {
+    /// Get OpenAPI specification
+    #[oai(path = "/openapi", method = "get", tag = "ApiTags::ApiDefinition")]
+    async fn get_openapi(&self) -> Json<Value> {
+        Json(self.0.clone())
+    }
+}
+
+impl<C: golem_client::api::ApiDefinitionClient + Sync + Send> ApiDefinitionClientLive<C> {
+    async fn export_openapi(
+        &self,
+        api_def: &HttpApiDefinitionResponseData,
+        format: &ApiDefinitionFileFormat,
+    ) -> Result<String, GolemError> {
+        // First convert to JSON Value
+        let api_value = serde_json::to_value(api_def)
+            .map_err(|e| GolemError(format!("Failed to convert API definition to JSON: {}", e)))?;
+
+        // Create OpenAPI exporter
+        let exporter = OpenApiExporter;
+        let openapi_format = OpenApiFormat {
+            json: matches!(format, ApiDefinitionFileFormat::Json),
+        };
+
+        // Export using the exporter - pass ApiSpec directly, not as a reference
+        Ok(exporter.export_openapi(ApiSpec(api_value), &openapi_format))
+    }
+}
+
 #[async_trait]
 impl<C: golem_client::api::ApiDefinitionClient + Sync + Send> ApiDefinitionClient
     for ApiDefinitionClientLive<C>
@@ -168,5 +217,79 @@ impl<C: golem_client::api::ApiDefinitionClient + Sync + Send> ApiDefinitionClien
             .client
             .delete_definition(id.0.as_str(), version.0.as_str())
             .await?)
+    }
+
+    async fn export(
+        &self,
+        id: ApiDefinitionId,
+        version: ApiDefinitionVersion,
+        _project: &Self::ProjectContext,
+        format: &ApiDefinitionFileFormat,
+    ) -> Result<String, GolemError> {
+        info!("Exporting OpenAPI spec for {}/{}", id.0, version.0);
+
+        // Get the API definition
+        let api_def = self.client.get_definition(id.0.as_str(), version.0.as_str()).await?;
+
+        // Export to OpenAPI format
+        let spec = self.export_openapi(&api_def, format).await?;
+
+        // Save to file
+        let filename = format!("api_definition_{}_{}.{}", id.0, version.0, 
+            if matches!(format, ApiDefinitionFileFormat::Json) { "json" } else { "yaml" });
+        write(&filename, &spec).await
+            .map_err(|e| GolemError(format!("Failed to write OpenAPI spec to file: {}", e)))?;
+
+        Ok(format!("OpenAPI specification exported to {}", filename))
+    }
+
+    async fn ui(
+        &self,
+        id: ApiDefinitionId,
+        version: ApiDefinitionVersion,
+        _project: &Self::ProjectContext,
+        port: u16,
+    ) -> Result<String, GolemError> {
+        info!("Starting SwaggerUI for {}/{} on port {}", id.0, version.0, port);
+
+        // Get the API definition
+        let api_def = self.client.get_definition(id.0.as_str(), version.0.as_str()).await?;
+
+        // Export to OpenAPI format (always JSON for SwaggerUI)
+        let spec = self.export_openapi(&api_def, &ApiDefinitionFileFormat::Json).await?;
+
+        // Parse the spec into a JSON Value
+        let spec_value: Value = serde_json::from_str(&spec)
+            .map_err(|e| GolemError(format!("Failed to parse OpenAPI spec: {}", e)))?;
+
+        // Configure SwaggerUI
+        let config = SwaggerUiConfig {
+            enabled: true,
+            title: Some(format!("API Definition: {} ({})", id.0, version.0)),
+            version: Some(version.0.clone()),
+            server_url: Some(format!("http://localhost:{}", port)),
+        };
+
+        // Create API route with SwaggerUI
+        let route = create_api_route(ApiSpec(spec_value), &config);
+        
+        // Start server
+        let addr = SocketAddr::from(([127, 0, 0, 1], port));
+        info!("SwaggerUI available at http://{}/docs", addr);
+        
+        // Run in background
+        tokio::spawn(async move {
+            if let Err(e) = poem::Server::new(TcpListener::bind(addr))
+                .run(route)
+                .await
+            {
+                eprintln!("Server error: {}", e);
+            }
+        });
+
+        Ok(format!(
+            "SwaggerUI started at http://127.0.0.1:{}/docs\nPress Ctrl+C to stop",
+            port
+        ))
     }
 }

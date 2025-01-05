@@ -28,6 +28,7 @@ pub struct HttpCors {
     expose_headers: Option<String>,
     allow_credentials: Option<bool>,
     max_age: Option<u64>,
+    vary: Option<Vec<String>>,
 }
 
 impl Default for HttpCors {
@@ -39,6 +40,7 @@ impl Default for HttpCors {
             expose_headers: None,
             max_age: None,
             allow_credentials: None,
+            vary: Some(vec!["Origin".to_string(), "Access-Control-Request-Method".to_string(), "Access-Control-Request-Headers".to_string()]),
         }
     }
 }
@@ -59,6 +61,7 @@ impl HttpCors {
             expose_headers: expose_headers.map(|x| x.to_string()),
             allow_credentials,
             max_age,
+            vary: Some(vec!["Origin".to_string(), "Access-Control-Request-Method".to_string(), "Access-Control-Request-Headers".to_string()]),
         }
     }
 
@@ -86,6 +89,10 @@ impl HttpCors {
         self.max_age
     }
 
+    pub fn get_vary(&self) -> Option<Vec<String>> {
+        self.vary.clone()
+    }
+
     pub fn from_parameters(
         allow_origin: Option<String>,
         allow_methods: Option<String>,
@@ -93,6 +100,7 @@ impl HttpCors {
         expose_headers: Option<String>,
         allow_credentials: Option<bool>,
         max_age: Option<u64>,
+        vary: Option<Vec<String>>,
     ) -> Result<HttpCors, String> {
         let mut cors_preflight = HttpCors::default();
 
@@ -107,6 +115,7 @@ impl HttpCors {
         if let Some(allow_headers) = allow_headers {
             cors_preflight.set_allow_headers(allow_headers.as_str())?;
         }
+
         if let Some(expose_headers) = expose_headers {
             cors_preflight.set_expose_headers(expose_headers.as_str())?;
         }
@@ -117,6 +126,10 @@ impl HttpCors {
 
         if let Some(max_age) = max_age {
             cors_preflight.set_max_age(max_age);
+        }
+
+        if let Some(vary) = vary {
+            cors_preflight.set_vary(vary);
         }
 
         Ok(cors_preflight)
@@ -208,6 +221,10 @@ impl HttpCors {
     pub fn set_max_age(&mut self, max_age: u64) {
         self.max_age = Some(max_age);
     }
+
+    pub fn set_vary(&mut self, vary: Vec<String>) {
+        self.vary = Some(vary);
+    }
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CorsPreflight> for HttpCors {
@@ -223,6 +240,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CorsPreflight> for Htt
             expose_headers: value.expose_headers,
             max_age: value.max_age,
             allow_credentials: value.allow_credentials,
+            vary: Some(vec!["Origin".to_string(), "Access-Control-Request-Method".to_string(), "Access-Control-Request-Headers".to_string()]),
         })
     }
 }
@@ -287,45 +305,34 @@ impl CorsPreflightExpr {
 }
 
 mod internal {
-    use crate::gateway_middleware::HttpCors;
+    use super::HttpCors;
 
     pub(crate) fn set_cors_field(
         cors: &mut HttpCors,
         key: &str,
         value: &str,
     ) -> Result<(), String> {
-        match key.to_lowercase().as_str() {
-            "access-control-allow-origin" => {
-                cors.set_allow_origin(value)
-            },
-            "access-control-allow-methods" => {
-                cors.set_allow_methods(value)
-            },
-            "access-control-allow-headers" => {
-                cors.set_allow_headers(value)
-            },
-            "access-control-expose-headers" => {
-                cors.set_expose_headers(value)
-            },
-            "access-control-allow-credentials" => {
-                let allow = value
-                    .parse::<bool>()
-                    .map_err(|_| "Invalid value for max age".to_string())?;
-
-                cors.set_allow_credentials(allow);
-
+        match key {
+            "allowOrigin" => cors.set_allow_origin(value),
+            "allowMethods" => cors.set_allow_methods(value),
+            "allowHeaders" => cors.set_allow_headers(value),
+            "exposeHeaders" => cors.set_expose_headers(value),
+            "allowCredentials" => {
+                let allow_credentials = value.parse::<bool>().map_err(|e| e.to_string())?;
+                cors.set_allow_credentials(allow_credentials);
                 Ok(())
-
-            },
-            "access-control-max-age" => {
-                let max_age = value
-                    .parse::<u64>()
-                    .map_err(|_| "Invalid value for max age".to_string())?;
-
+            }
+            "maxAge" => {
+                let max_age = value.parse::<u64>().map_err(|e| e.to_string())?;
                 cors.set_max_age(max_age);
                 Ok(())
-            },
-            _ => Err("Invalid cors header in the rib for pre-flight. Allowed keys: access-control-allow-origin, access-control-allow-methods, access-control-allow-headers, access-control-expose-headers, and access-control-max-age".to_string()),
+            }
+            "vary" => {
+                let vary = value.split(',').map(|s| s.trim().to_string()).collect();
+                cors.set_vary(vary);
+                Ok(())
+            }
+            _ => Err(format!("Unknown CORS field: {}", key)),
         }
     }
 }

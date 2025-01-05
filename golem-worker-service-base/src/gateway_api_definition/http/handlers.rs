@@ -2,21 +2,20 @@ use poem::{
     web::{Path, Query, Data},
     Result, handler,
 };
-use utoipa::openapi::OpenApi;
+use poem_openapi::OpenApi;
 use crate::gateway_api_definition::http::{
-    openapi_export::OpenApiFormat,
-    openapi_converter::OpenApiConverter,
+    openapi_export::{OpenApiFormat, OpenApiExporter},
 };
 use poem::web::Json;
 
 pub struct OpenApiHandler {
-    converter: OpenApiConverter,
+    exporter: OpenApiExporter,
 }
 
 impl OpenApiHandler {
     pub fn new() -> Self {
         Self {
-            converter: OpenApiConverter::new(),
+            exporter: OpenApiExporter,
         }
     }
 }
@@ -28,6 +27,6 @@ pub async fn export_openapi(
     Query(format): Query<OpenApiFormat>,
     Json(openapi): Json<OpenApi>,
 ) -> Result<String> {
-    let content = handler.converter.exporter.export_openapi(&id, &version, openapi, &format);
+    let content = handler.exporter.export_openapi(&id, &version, openapi, &format);
     Ok(content)
 } 

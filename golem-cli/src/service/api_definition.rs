@@ -60,6 +60,22 @@ pub trait ApiDefinitionService {
         version: ApiDefinitionVersion,
         project: &Self::ProjectContext,
     ) -> Result<GolemResult, GolemError>;
+    /// Export OpenAPI specification for an API definition
+    async fn export(
+        &self,
+        id: ApiDefinitionId,
+        version: ApiDefinitionVersion,
+        project: &Self::ProjectContext,
+        format: &ApiDefinitionFileFormat,
+    ) -> Result<GolemResult, GolemError>;
+    /// Launch SwaggerUI for API definition exploration
+    async fn ui(
+        &self,
+        id: ApiDefinitionId,
+        version: ApiDefinitionVersion,
+        project: &Self::ProjectContext,
+        port: u16,
+    ) -> Result<GolemResult, GolemError>;
 }
 
 pub struct ApiDefinitionServiceLive<ProjectContext> {
@@ -132,6 +148,28 @@ impl<ProjectContext: Send + Sync> ApiDefinitionService
         project: &Self::ProjectContext,
     ) -> Result<GolemResult, GolemError> {
         let result = self.client.delete(id, version, project).await?;
+        Ok(GolemResult::Str(result))
+    }
+
+    async fn export(
+        &self,
+        id: ApiDefinitionId,
+        version: ApiDefinitionVersion,
+        project: &Self::ProjectContext,
+        format: &ApiDefinitionFileFormat,
+    ) -> Result<GolemResult, GolemError> {
+        let result = self.client.export(id, version, project, format).await?;
+        Ok(GolemResult::Str(result))
+    }
+
+    async fn ui(
+        &self,
+        id: ApiDefinitionId,
+        version: ApiDefinitionVersion,
+        project: &Self::ProjectContext,
+        port: u16,
+    ) -> Result<GolemResult, GolemError> {
+        let result = self.client.ui(id, version, project, port).await?;
         Ok(GolemResult::Str(result))
     }
 }

@@ -18,7 +18,11 @@ use crate::gateway_security::{IdentityProvider, SecuritySchemeWithProviderMetada
 pub use http::*;
 use std::sync::Arc;
 
-mod http;
+pub mod http;
+
+pub use http::cors::HttpCors;
+pub use http::http_middleware::HttpMiddleware;
+pub use http::cors::CorsPreflightExpr;
 
 // Middlewares will be processed in a sequential order.
 // The information contained in each middleware is made available to

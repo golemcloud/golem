@@ -9,18 +9,19 @@ mod worker_gateway_integration_tests {
     use rib::{RibResult, RibByteCode, RibInput};
     use std::collections::HashMap;
     use serde_json::json;
+    use poem_openapi::{
+        OpenApi as PoemOpenApi, OpenApiService, ApiResponse, Object, payload::Json,
+        param::Path,
+    };
     use golem_worker_service_base::{
         gateway_api_definition::http::{
             HttpApiDefinition, CompiledHttpApiDefinition, HttpApiDefinitionRequest, 
             RouteRequest, MethodPattern, AllPathPatterns, ComponentMetadataDictionary,
-            openapi_export::{OpenApiExporter, OpenApiFormat},
-            rib_converter::RibConverter,
         },
         gateway_binding::{
             GatewayBinding,
             worker_binding::WorkerBinding,
             worker_binding::ResponseMapping,
-            gateway_binding_compiled::GatewayBindingCompiled,
         },
         gateway_execution::{
             gateway_http_input_executor::{DefaultGatewayInputExecutor, GatewayHttpInputExecutor},
@@ -56,13 +57,6 @@ mod worker_gateway_integration_tests {
     };
     use oauth2::{basic::BasicTokenType, Scope, CsrfToken, StandardTokenResponse, EmptyExtraTokenFields};
     use golem_worker_service_base::gateway_security::AuthorizationUrl;
-    use utoipa::openapi::{
-        OpenApi, PathItem, path::Operation, HttpMethod,
-        request_body::RequestBody,
-        response::{Response, Responses},
-        content::Content,
-        RefOr,
-    };
     use golem_wasm_ast::analysis::{
         AnalysedType,
         TypeStr,
@@ -76,7 +70,6 @@ mod worker_gateway_integration_tests {
         AnalysedFunctionResult,
         AnalysedInstance,
     };
-    use rib::RibOutputTypeInfo;
 
     // Test component setup
     struct TestComponent;
@@ -88,13 +81,6 @@ mod worker_gateway_integration_tests {
                 version: 0,
             }
         }
-    }
-
-    // Helper function to convert RibOutputTypeInfo to AnalysedType
-    fn convert_rib_output_to_analysed_type(_output_type: &RibOutputTypeInfo) -> AnalysedType {
-        // For now, we'll just convert everything to a string type
-        // You should implement proper conversion based on your RibOutputTypeInfo structure
-        AnalysedType::Str(TypeStr)
     }
 
     // Test API definition
@@ -565,6 +551,83 @@ mod worker_gateway_integration_tests {
         }
     }
 
+    // Define API response types
+    #[derive(ApiResponse)]
+    enum ApiError {
+        /// Returns when there is an internal error
+        #[oai(status = 500)]
+        InternalError(Json<serde_json::Value>),
+    }
+
+    #[derive(ApiResponse)]
+    enum ApiSuccess {
+        /// Returns when the operation is successful
+        #[oai(status = 200)]
+        Ok(Json<serde_json::Value>),
+    }
+
+    // Define request/response objects
+    #[derive(Object)]
+    struct UserSettings {
+        settings: serde_json::Value,
+    }
+
+    // Define the API
+    struct TestApi;
+
+    #[PoemOpenApi]
+    impl TestApi {
+        /// Health check endpoint
+        #[oai(path = "/healthcheck", method = "get")]
+        async fn healthcheck(&self) -> Result<ApiSuccess, ApiError> {
+            Ok(ApiSuccess::Ok(Json(json!({
+                "status": "ok",
+                "version": "1.0.0"
+            }))))
+        }
+
+        /// Version endpoint
+        #[oai(path = "/version", method = "get")]
+        async fn version(&self) -> Result<ApiSuccess, ApiError> {
+            // Simulate an internal error scenario
+            if rand::random::<bool>() {
+                return Err(ApiError::InternalError(Json(json!({
+                    "error": "Internal server error occurred while fetching version"
+                }))));
+            }
+            Ok(ApiSuccess::Ok(Json(json!({
+                "version": "1.0.0"
+            }))))
+        }
+
+        /// Get user profile
+        #[oai(path = "/users/:user_id/profile", method = "get")]
+        async fn get_user_profile(
+            &self,
+            user_id: Path<i32>,
+        ) -> Result<ApiSuccess, ApiError> {
+            Ok(ApiSuccess::Ok(Json(json!({
+                "id": user_id.0,
+                "name": "Test User",
+                "email": "test@example.com"
+            }))))
+        }
+
+        /// Update user settings
+        #[oai(path = "/users/:user_id/settings", method = "post")]
+        async fn update_user_settings(
+            &self,
+            user_id: Path<i32>,
+            settings: Json<UserSettings>,
+        ) -> Result<ApiSuccess, ApiError> {
+            Ok(ApiSuccess::Ok(Json(json!({
+                "id": user_id.0,
+                "settings": settings.0.settings,
+                "updated": true
+            }))))
+        }
+    }
+
     #[tokio::test]
     async fn test_worker_gateway_setup_and_api_serving() {
         // Create test API definition
@@ -643,76 +706,11 @@ mod worker_gateway_integration_tests {
         ).unwrap();
         println!("\nCompiled API definition: {:?}", compiled_api_definition);
 
-        // Convert to OpenAPI for validation
-        let exporter = OpenApiExporter;
-        let mut openapi = OpenApi::new(
-            utoipa::openapi::Info::new("test-api", "1.0.0"),
-            utoipa::openapi::Paths::default(),
-        );
-
-        // Convert the API definition using RibConverter
-        let rib_converter = RibConverter;
-        let mut paths = utoipa::openapi::Paths::default();
-
-        for route in &compiled_api_definition.routes {
-            let mut operation = Operation::default();
-            operation.description = Some("Test endpoint for worker gateway".to_string());
-            
-            let mut responses = Responses::default();
-            responses.responses.insert(
-                "200".to_string(), 
-                RefOr::T(Response::new("Success"))
-            );
-            
-            // Convert request/response schemas if they exist
-            if let GatewayBindingCompiled::Worker(worker_binding) = &route.binding {
-                // Add request schema if available
-                if let Some(request_schema) = rib_converter.convert_input_type(&worker_binding.response_compiled.rib_input) {
-                    let mut request_body = RequestBody::default();
-                    let mut content = Content::default();
-                    content.schema = Some(RefOr::T(request_schema));
-                    request_body.content.insert("application/json".to_string(), content);
-                    operation.request_body = Some(request_body);
-                }
-
-                // Add response schema if available
-                if let Some(response_type) = &worker_binding.response_compiled.rib_output {
-                    // Convert RibOutputTypeInfo to AnalysedType
-                    let analysed_type = convert_rib_output_to_analysed_type(response_type);
-                    if let Some(response_schema) = rib_converter.convert_type(&analysed_type) {
-                        let mut response = Response::new("Success with schema");
-                        let mut content = Content::default();
-                        content.schema = Some(RefOr::T(response_schema));
-                        response.content.insert("application/json".to_string(), content);
-                        
-                        let mut updated_responses = responses.clone();
-                        updated_responses.responses.insert("200".to_string(), RefOr::T(response));
-                        responses = updated_responses;
-                    }
-                }
-            }
-
-            operation.responses = responses;
-
-            let path_item = match route.method {
-                MethodPattern::Get => PathItem::new(HttpMethod::Get, operation),
-                MethodPattern::Post => PathItem::new(HttpMethod::Post, operation),
-                MethodPattern::Put => PathItem::new(HttpMethod::Put, operation),
-                MethodPattern::Delete => PathItem::new(HttpMethod::Delete, operation),
-                _ => continue,
-            };
-
-            paths.paths.insert(route.path.to_string(), path_item);
-        }
-
-        openapi.paths = paths;
-        
-        let _openapi = exporter.export_openapi(
-            "test-api",
-            "1.0.0",
-            openapi,
-            &OpenApiFormat::default(),
-        );
+        // Create OpenAPI service and store it to be used later
+        let _api_service = OpenApiService::new(TestApi, "Test API", "1.0.0")
+            .server("http://localhost:8000")
+            .description("Test API for Worker Gateway")
+            .external_document("https://example.com/docs");
         
         // Create and bind TCP listener for the Worker Gateway
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

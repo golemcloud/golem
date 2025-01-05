@@ -11,7 +11,6 @@ mod rib_openapi_conversion_tests {
         TypeF32,
         TypeF64,
         TypeList,
-        TypeOption,
         TypeRecord,
         TypeResult,
         TypeS16,
@@ -28,460 +27,445 @@ mod rib_openapi_conversion_tests {
         NameOptionTypePair,
     };
     use serde_json::Value;
-    use utoipa::openapi::{Schema, RefOr, schema::{ArrayItems, SchemaType}};
-    use golem_worker_service_base::gateway_api_definition::http::rib_converter::{RibConverter, CustomSchemaType};
-
-    // Wrapper types for testing
-    struct TestRibConverter(RibConverter);
-    struct TestTypeStr(TypeStr);
-    struct TestTypeList(TypeList);
-
-    impl TestRibConverter {
-        fn new() -> Self {
-            TestRibConverter(RibConverter)
-        }
-
-        fn convert_type(&self, typ: &AnalysedType) -> Option<Schema> {
-            self.0.convert_type(typ)
-        }
-    }
-
-    impl TestTypeStr {
-        fn new() -> Self {
-            TestTypeStr(TypeStr)
-        }
-    }
-
-    impl TestTypeList {
-        fn new(inner: Box<AnalysedType>) -> Self {
-            TestTypeList(TypeList { inner })
-        }
-    }
+    use poem_openapi::registry::{MetaSchemaRef, Registry};
+    use golem_worker_service_base::gateway_api_definition::http::rib_converter::RibConverter;
 
     // Helper function to verify schema type
-    fn assert_schema_type(schema: &Schema, expected_type: CustomSchemaType) {
+    fn assert_schema_type(schema: &MetaSchemaRef, expected_type: &str) {
         match schema {
-            Schema::Object(obj) => {
-                let schema_type = match &obj.schema_type {
-                    SchemaType::Type(t) => CustomSchemaType::from(t.clone()),
-                    SchemaType::Array(_) => panic!("Expected single type, got array"),
-                    SchemaType::AnyValue => panic!("Expected single type, got any value"),
-                };
-                assert_eq!(schema_type, expected_type);
+            MetaSchemaRef::Inline(schema) => {
+                assert_eq!(schema.ty, expected_type);
             },
-            Schema::Array(arr) => {
-                match &arr.items {
-                    ArrayItems::RefOrSchema(item) => {
-                        match get_schema_from_ref_or(item) {
-                            Schema::Object(obj) => {
-                                let schema_type = match &obj.schema_type {
-                                    SchemaType::Type(t) => CustomSchemaType::from(t.clone()),
-                                    SchemaType::Array(_) => panic!("Expected single type, got array"),
-                                    SchemaType::AnyValue => panic!("Expected single type, got any value"),
-                                };
-                                assert_eq!(schema_type, expected_type);
-                            },
-                            _ => panic!("Array items should be a Schema::Object"),
-                        }
-                    },
-                    ArrayItems::False => panic!("Expected array items, got False"),
-                }
-            },
-            _ => panic!("Unexpected schema type"),
+            MetaSchemaRef::Reference(_) => panic!("Expected inline schema, got reference"),
         }
     }
 
-    // Helper function to get schema from RefOr<Schema>
-    fn get_schema_from_ref_or(schema_ref: &RefOr<Schema>) -> &Schema {
-        match schema_ref {
-            RefOr::T(schema) => schema,
-            RefOr::Ref { .. } => panic!("Expected Schema, got Ref"),
+    // Helper function to find property in schema
+    fn find_property<'a>(properties: &'a [(&'static str, MetaSchemaRef)], key: &str) -> Option<&'a MetaSchemaRef> {
+        properties.iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, v)| v)
+    }
+
+    // Helper function to check if property exists
+    fn has_property(properties: &[(&'static str, MetaSchemaRef)], key: &str) -> bool {
+        properties.iter().any(|(k, _)| *k == key)
+    }
+
+    // Helper function to verify schema format
+    fn assert_schema_format(schema: &MetaSchemaRef, expected_format: &str) {
+        match schema {
+            MetaSchemaRef::Inline(schema) => {
+                assert_eq!(schema.format.as_deref(), Some(expected_format));
+            },
+            MetaSchemaRef::Reference(_) => panic!("Expected inline schema, got reference"),
         }
     }
 
     #[test]
     fn test_primitive_types() {
-        let converter = TestRibConverter::new();
+        let mut converter = RibConverter::new_openapi();
+        let mut registry = Registry::new();
 
         // Boolean
         let bool_type = AnalysedType::Bool(TypeBool);
-        let schema = converter.convert_type(&bool_type).unwrap();
-        assert_schema_type(&schema, CustomSchemaType::Boolean);
+        let schema = converter.convert_type(&bool_type, &mut registry).unwrap();
+        assert_schema_type(&schema, "boolean");
 
-        // Integer types
+        // Integer types with proper formats
         let u8_type = AnalysedType::U8(TypeU8);
-        let schema = converter.convert_type(&u8_type).unwrap();
-        assert_schema_type(&schema, CustomSchemaType::Integer);
+        let schema = converter.convert_type(&u8_type, &mut registry).unwrap();
+        assert_schema_type(&schema, "integer");
+        assert_schema_format(&schema, "int32");
 
         let u16_type = AnalysedType::U16(TypeU16);
-        let schema = converter.convert_type(&u16_type).unwrap();
-        assert_schema_type(&schema, CustomSchemaType::Integer);
+        let schema = converter.convert_type(&u16_type, &mut registry).unwrap();
+        assert_schema_type(&schema, "integer");
+        assert_schema_format(&schema, "int32");
 
         let u32_type = AnalysedType::U32(TypeU32);
-        let schema = converter.convert_type(&u32_type).unwrap();
-        assert_schema_type(&schema, CustomSchemaType::Integer);
+        let schema = converter.convert_type(&u32_type, &mut registry).unwrap();
+        assert_schema_type(&schema, "integer");
+        assert_schema_format(&schema, "int32");
 
         let u64_type = AnalysedType::U64(TypeU64);
-        let schema = converter.convert_type(&u64_type).unwrap();
-        assert_schema_type(&schema, CustomSchemaType::Integer);
+        let schema = converter.convert_type(&u64_type, &mut registry).unwrap();
+        assert_schema_type(&schema, "integer");
+        assert_schema_format(&schema, "int64");
 
         let s8_type = AnalysedType::S8(TypeS8);
-        let schema = converter.convert_type(&s8_type).unwrap();
-        assert_schema_type(&schema, CustomSchemaType::Integer);
+        let schema = converter.convert_type(&s8_type, &mut registry).unwrap();
+        assert_schema_type(&schema, "integer");
+        assert_schema_format(&schema, "int32");
 
         let s16_type = AnalysedType::S16(TypeS16);
-        let schema = converter.convert_type(&s16_type).unwrap();
-        assert_schema_type(&schema, CustomSchemaType::Integer);
+        let schema = converter.convert_type(&s16_type, &mut registry).unwrap();
+        assert_schema_type(&schema, "integer");
+        assert_schema_format(&schema, "int32");
 
         let s32_type = AnalysedType::S32(TypeS32);
-        let schema = converter.convert_type(&s32_type).unwrap();
-        assert_schema_type(&schema, CustomSchemaType::Integer);
+        let schema = converter.convert_type(&s32_type, &mut registry).unwrap();
+        assert_schema_type(&schema, "integer");
+        assert_schema_format(&schema, "int32");
 
         let s64_type = AnalysedType::S64(TypeS64);
-        let schema = converter.convert_type(&s64_type).unwrap();
-        assert_schema_type(&schema, CustomSchemaType::Integer);
+        let schema = converter.convert_type(&s64_type, &mut registry).unwrap();
+        assert_schema_type(&schema, "integer");
+        assert_schema_format(&schema, "int64");
 
-        // Float types
+        // Float types with proper formats
         let f32_type = AnalysedType::F32(TypeF32);
-        let schema = converter.convert_type(&f32_type).unwrap();
-        assert_schema_type(&schema, CustomSchemaType::Number);
+        let schema = converter.convert_type(&f32_type, &mut registry).unwrap();
+        assert_schema_type(&schema, "number");
+        assert_schema_format(&schema, "float");
 
         let f64_type = AnalysedType::F64(TypeF64);
-        let schema = converter.convert_type(&f64_type).unwrap();
-        assert_schema_type(&schema, CustomSchemaType::Number);
+        let schema = converter.convert_type(&f64_type, &mut registry).unwrap();
+        assert_schema_type(&schema, "number");
+        assert_schema_format(&schema, "double");
 
         // String and Char
         let str_type = AnalysedType::Str(TypeStr);
-        let schema = converter.convert_type(&str_type).unwrap();
-        assert_schema_type(&schema, CustomSchemaType::String);
+        let schema = converter.convert_type(&str_type, &mut registry).unwrap();
+        assert_schema_type(&schema, "string");
 
         let char_type = AnalysedType::Chr(TypeChr);
-        let schema = converter.convert_type(&char_type).unwrap();
-        assert_schema_type(&schema, CustomSchemaType::String);
+        let schema = converter.convert_type(&char_type, &mut registry).unwrap();
+        assert_schema_type(&schema, "string");
+        match &schema {
+            MetaSchemaRef::Inline(schema) => {
+                assert_eq!(schema.min_length, Some(1));
+                assert_eq!(schema.max_length, Some(1));
+            },
+            _ => panic!("Expected inline schema"),
+        }
     }
 
     #[test]
     fn test_list_type() {
-        let converter = TestRibConverter::new();
-        let inner_type = TestTypeStr::new();
-        let list_type = TestTypeList::new(Box::new(AnalysedType::Str(inner_type.0)));
-        let schema = converter.convert_type(&AnalysedType::List(list_type.0)).unwrap();
+        let mut converter = RibConverter::new_openapi();
+        let mut registry = Registry::new();
 
-        if let Schema::Array(arr) = schema {
-            match &arr.items {
-                ArrayItems::RefOrSchema(item) => {
-                    match get_schema_from_ref_or(item) {
-                        Schema::Object(obj) => {
-                            let schema_type = match &obj.schema_type {
-                                SchemaType::Type(t) => CustomSchemaType::from(t.clone()),
-                                SchemaType::Array(_) => panic!("Expected single type, got array"),
-                                SchemaType::AnyValue => panic!("Expected single type, got any value"),
-                            };
-                            assert_eq!(schema_type, CustomSchemaType::String);
+        let list_type = AnalysedType::List(TypeList {
+            inner: Box::new(AnalysedType::Str(TypeStr)),
+        });
+
+        let schema = converter.convert_type(&list_type, &mut registry).unwrap();
+        match schema {
+            MetaSchemaRef::Inline(schema) => {
+                assert_eq!(schema.ty, "array");
+                assert!(schema.items.is_some());
+                if let Some(items) = &schema.items {
+                    match &**items {
+                        MetaSchemaRef::Inline(items_schema) => {
+                            assert_eq!(items_schema.ty, "string");
                         },
-                        _ => panic!("Array items should be a Schema::Object"),
+                        MetaSchemaRef::Reference(_) => panic!("Expected inline schema"),
                     }
-                },
-                ArrayItems::False => panic!("Expected array items, got False"),
-            }
-        } else {
-            panic!("Expected Schema::Array");
+                }
+                // Verify array constraints
+                assert_eq!(schema.min_items, Some(0));
+                assert_eq!(schema.unique_items, Some(false));
+            },
+            MetaSchemaRef::Reference(_) => panic!("Expected inline schema"),
         }
     }
 
     #[test]
     fn test_record_type() {
-        let converter = TestRibConverter::new();
-        let field1_type = AnalysedType::U32(TypeU32);
-        let field2_type = AnalysedType::Str(TypeStr);
+        let mut converter = RibConverter::new_openapi();
+        let mut registry = Registry::new();
+
         let record_type = AnalysedType::Record(TypeRecord {
             fields: vec![
                 NameTypePair {
                     name: "field1".to_string(),
-                    typ: *Box::new(field1_type),
+                    typ: AnalysedType::U32(TypeU32),
                 },
                 NameTypePair {
                     name: "field2".to_string(),
-                    typ: *Box::new(field2_type),
+                    typ: AnalysedType::Str(TypeStr),
+                },
+                NameTypePair {
+                    name: "email".to_string(), // Special field name to test format
+                    typ: AnalysedType::Str(TypeStr),
                 },
             ],
         });
 
-        let schema = converter.convert_type(&record_type).unwrap();
-        match &schema {
-            Schema::Object(obj) => {
-                assert_schema_type(&schema, CustomSchemaType::Object);
-                assert_eq!(obj.required.len(), 2);
-                assert!(obj.required.contains(&"field1".to_string()));
-                assert!(obj.required.contains(&"field2".to_string()));
+        let schema = converter.convert_type(&record_type, &mut registry).unwrap();
+        match schema {
+            MetaSchemaRef::Inline(schema) => {
+                assert_eq!(schema.ty, "object");
+                assert!(has_property(&schema.properties, "field1"));
+                assert!(has_property(&schema.properties, "field2"));
+                assert!(has_property(&schema.properties, "email"));
+                assert_eq!(schema.required.len(), 3);
+                assert!(schema.required.contains(&"field1"));
+                assert!(schema.required.contains(&"field2"));
+                assert!(schema.required.contains(&"email"));
 
-                let field1_schema = get_schema_from_ref_or(obj.properties.get("field1").unwrap());
-                assert_schema_type(field1_schema, CustomSchemaType::Integer);
+                let field1_schema = find_property(&schema.properties, "field1").unwrap();
+                assert_schema_type(field1_schema, "integer");
 
-                let field2_schema = get_schema_from_ref_or(obj.properties.get("field2").unwrap());
-                assert_schema_type(field2_schema, CustomSchemaType::String);
+                let field2_schema = find_property(&schema.properties, "field2").unwrap();
+                assert_schema_type(field2_schema, "string");
+
+                let email_schema = find_property(&schema.properties, "email").unwrap();
+                assert_schema_type(email_schema, "string");
+                match email_schema {
+                    MetaSchemaRef::Inline(schema) => {
+                        assert_eq!(schema.format.as_deref(), Some("email"));
+                    },
+                    _ => panic!("Expected inline schema"),
+                }
+
+                // Verify additionalProperties is false
+                match schema.additional_properties.as_deref() {
+                    Some(MetaSchemaRef::Inline(additional_props)) => {
+                        assert_eq!(additional_props.ty, "boolean");
+                    },
+                    _ => panic!("Expected additional_properties to be false"),
+                }
             },
-            _ => panic!("Expected object schema"),
-        }
-    }
-
-    #[test]
-    fn test_enum_type() {
-        let converter = TestRibConverter::new();
-        let enum_type = AnalysedType::Enum(TypeEnum {
-            cases: vec!["Variant1".to_string(), "Variant2".to_string()],
-        });
-
-        let schema = converter.convert_type(&enum_type).unwrap();
-        match &schema {
-            Schema::Object(obj) => {
-                assert_schema_type(&schema, CustomSchemaType::String);
-                let enum_values = obj.enum_values.as_ref().unwrap();
-                assert_eq!(enum_values.len(), 2);
-                assert!(enum_values.contains(&Value::String("Variant1".to_string())));
-                assert!(enum_values.contains(&Value::String("Variant2".to_string())));
-            },
-            _ => panic!("Expected object schema"),
+            MetaSchemaRef::Reference(_) => panic!("Expected inline schema"),
         }
     }
 
     #[test]
     fn test_variant_type() {
-        let converter = TestRibConverter::new();
+        let mut converter = RibConverter::new_openapi();
+        let mut registry = Registry::new();
+
         let variant_type = AnalysedType::Variant(TypeVariant {
             cases: vec![
                 NameOptionTypePair {
-                    name: "Variant1".to_string(),
-                    typ: Some(*Box::new(AnalysedType::U32(TypeU32))),
+                    name: "Case1".to_string(),
+                    typ: Some(AnalysedType::U32(TypeU32)),
                 },
                 NameOptionTypePair {
-                    name: "Variant2".to_string(),
+                    name: "Case2".to_string(),
+                    typ: Some(AnalysedType::Str(TypeStr)),
+                },
+                NameOptionTypePair {
+                    name: "Case3".to_string(),
                     typ: None,
                 },
             ],
         });
 
-        let schema = converter.convert_type(&variant_type).unwrap();
-        match &schema {
-            Schema::Object(obj) => {
-                assert_schema_type(&schema, CustomSchemaType::Object);
-                assert!(obj.properties.contains_key("discriminator"));
-                assert!(obj.properties.contains_key("value"));
+        let schema = converter.convert_type(&variant_type, &mut registry).unwrap();
+        match schema {
+            MetaSchemaRef::Inline(schema) => {
+                assert_eq!(schema.ty, "object");
+                assert!(schema.required.contains(&"type"));
 
-                let discriminator = get_schema_from_ref_or(obj.properties.get("discriminator").unwrap());
-                assert_schema_type(discriminator, CustomSchemaType::String);
+                // Verify type discriminator
+                let type_schema = find_property(&schema.properties, "type").unwrap();
+                match type_schema {
+                    MetaSchemaRef::Inline(schema) => {
+                        assert_eq!(schema.ty, "string");
+                        assert_eq!(schema.enum_items.len(), 3);
+                        assert!(schema.enum_items.contains(&Value::String("Case1".to_string())));
+                        assert!(schema.enum_items.contains(&Value::String("Case2".to_string())));
+                        assert!(schema.enum_items.contains(&Value::String("Case3".to_string())));
+                    },
+                    _ => panic!("Expected inline schema"),
+                }
 
-                let value = get_schema_from_ref_or(obj.properties.get("value").unwrap());
-                if let Schema::OneOf(one_of) = value {
-                    // Verify variant schemas
-                    assert_eq!(one_of.items.len(), 2);
-                    // Additional variant schema verification could be added here
-                } else {
-                    panic!("Expected OneOf schema for value");
+                // Verify value property for cases with types
+                if let Some(value_schema) = find_property(&schema.properties, "value") {
+                    match value_schema {
+                        MetaSchemaRef::Inline(schema) => {
+                            assert_eq!(schema.ty, "object");
+                            assert!(!schema.one_of.is_empty());
+                            assert_eq!(schema.one_of.len(), 2); // Only Case1 and Case2 have types
+                        },
+                        _ => panic!("Expected inline schema"),
+                    }
                 }
             },
-            _ => panic!("Expected object schema"),
-        }
-    }
-
-    #[test]
-    fn test_option_type() {
-        let converter = TestRibConverter::new();
-        let option_type = AnalysedType::Option(TypeOption {
-            inner: Box::new(AnalysedType::U32(TypeU32)),
-        });
-
-        let schema = converter.convert_type(&option_type).unwrap();
-        match &schema {
-            Schema::Object(obj) => {
-                assert_schema_type(&schema, CustomSchemaType::Object);
-                assert!(obj.properties.contains_key("value"));
-                assert!(obj.required.is_empty()); // Optional field
-
-                let value_schema = get_schema_from_ref_or(obj.properties.get("value").unwrap());
-                assert_schema_type(value_schema, CustomSchemaType::Integer);
-            },
-            _ => panic!("Expected object schema"),
+            MetaSchemaRef::Reference(_) => panic!("Expected inline schema"),
         }
     }
 
     #[test]
     fn test_result_type() {
-        let converter = TestRibConverter::new();
+        let mut converter = RibConverter::new_openapi();
+        let mut registry = Registry::new();
+
         let result_type = AnalysedType::Result(TypeResult {
             ok: Some(Box::new(AnalysedType::U32(TypeU32))),
             err: Some(Box::new(AnalysedType::Str(TypeStr))),
         });
 
-        let schema = converter.convert_type(&result_type).unwrap();
-        match &schema {
-            Schema::Object(obj) => {
-                assert_schema_type(&schema, CustomSchemaType::Object);
-                assert!(obj.properties.contains_key("ok"));
-                assert!(obj.properties.contains_key("err"));
+        let schema = converter.convert_type(&result_type, &mut registry).unwrap();
+        match schema {
+            MetaSchemaRef::Inline(schema) => {
+                assert_eq!(schema.ty, "object");
+                assert!(schema.required.contains(&"type"));
 
-                let ok_schema = get_schema_from_ref_or(obj.properties.get("ok").unwrap());
-                assert_schema_type(ok_schema, CustomSchemaType::Integer);
+                // Verify type discriminator
+                let type_schema = find_property(&schema.properties, "type").unwrap();
+                match type_schema {
+                    MetaSchemaRef::Inline(schema) => {
+                        assert_eq!(schema.ty, "string");
+                        assert_eq!(schema.enum_items.len(), 2);
+                        assert!(schema.enum_items.contains(&Value::String("ok".to_string())));
+                        assert!(schema.enum_items.contains(&Value::String("error".to_string())));
+                    },
+                    _ => panic!("Expected inline schema"),
+                }
 
-                let err_schema = get_schema_from_ref_or(obj.properties.get("err").unwrap());
-                assert_schema_type(err_schema, CustomSchemaType::String);
+                // Verify value property
+                if let Some(value_schema) = find_property(&schema.properties, "value") {
+                    match value_schema {
+                        MetaSchemaRef::Inline(schema) => {
+                            assert_eq!(schema.ty, "object");
+                            assert!(!schema.one_of.is_empty());
+                            assert_eq!(schema.one_of.len(), 2);
+                        },
+                        _ => panic!("Expected inline schema"),
+                    }
+                }
             },
-            _ => panic!("Expected object schema"),
+            _ => panic!("Expected inline schema"),
+        }
+    }
+
+    #[test]
+    fn test_enum_type() {
+        let mut converter = RibConverter::new_openapi();
+        let mut registry = Registry::new();
+
+        let enum_type = AnalysedType::Enum(TypeEnum {
+            cases: vec!["Variant1".to_string(), "Variant2".to_string(), "Variant3".to_string()],
+        });
+
+        let schema = converter.convert_type(&enum_type, &mut registry).unwrap();
+        match schema {
+            MetaSchemaRef::Inline(schema) => {
+                assert_eq!(schema.ty, "string");
+                assert_eq!(schema.enum_items.len(), 3);
+                assert!(schema.enum_items.contains(&Value::String("Variant1".to_string())));
+                assert!(schema.enum_items.contains(&Value::String("Variant2".to_string())));
+                assert!(schema.enum_items.contains(&Value::String("Variant3".to_string())));
+            },
+            MetaSchemaRef::Reference(_) => panic!("Expected inline schema"),
         }
     }
 
     #[test]
     fn test_complex_nested_type() {
-        let converter = TestRibConverter::new();
-        let inner_type = TestTypeStr::new();
-        let list_type = TestTypeList::new(Box::new(AnalysedType::Str(inner_type.0)));
-        let schema = converter.convert_type(&AnalysedType::List(list_type.0)).unwrap();
+        let mut converter = RibConverter::new_openapi();
+        let mut registry = Registry::new();
 
-        if let Schema::Array(arr) = schema {
-            match &arr.items {
-                ArrayItems::RefOrSchema(item) => {
-                    match get_schema_from_ref_or(item) {
-                        Schema::Object(obj) => {
-                            let schema_type = match &obj.schema_type {
-                                SchemaType::Type(t) => CustomSchemaType::from(t.clone()),
-                                SchemaType::Array(_) => panic!("Expected single type, got array"),
-                                SchemaType::AnyValue => panic!("Expected single type, got any value"),
-                            };
-                            assert_eq!(schema_type, CustomSchemaType::String);
-                        },
-                        _ => panic!("Array items should be a Schema::Object"),
-                    }
+        // Create a complex nested type with all RIB features
+        let nested_type = AnalysedType::Record(TypeRecord {
+            fields: vec![
+                NameTypePair {
+                    name: "id".to_string(),
+                    typ: AnalysedType::U32(TypeU32),
                 },
-                ArrayItems::False => panic!("Expected array items, got False"),
-            }
-        } else {
-            panic!("Expected Schema::Array");
-        }
-    }
+                NameTypePair {
+                    name: "status".to_string(),
+                    typ: AnalysedType::Enum(TypeEnum {
+                        cases: vec!["Active".to_string(), "Inactive".to_string()],
+                    }),
+                },
+                NameTypePair {
+                    name: "data".to_string(),
+                    typ: AnalysedType::Record(TypeRecord {
+                        fields: vec![
+                            NameTypePair {
+                                name: "value".to_string(),
+                                typ: AnalysedType::Variant(TypeVariant {
+                                    cases: vec![
+                                        NameOptionTypePair {
+                                            name: "Number".to_string(),
+                                            typ: Some(AnalysedType::U32(TypeU32)),
+                                        },
+                                        NameOptionTypePair {
+                                            name: "Text".to_string(),
+                                            typ: Some(AnalysedType::Str(TypeStr)),
+                                        },
+                                    ],
+                                }),
+                            },
+                            NameTypePair {
+                                name: "tags".to_string(),
+                                typ: AnalysedType::List(TypeList {
+                                    inner: Box::new(AnalysedType::Str(TypeStr)),
+                                }),
+                            },
+                        ],
+                    }),
+                },
+            ],
+        });
 
-    #[test]
-    fn test_convert_input_type() {
-        use rib::RibInputTypeInfo;
-        use std::collections::HashMap;
-
-        let converter = TestRibConverter::new();
-
-        // Test empty input type
-        let empty_input = RibInputTypeInfo {
-            types: HashMap::new(),
-        };
-        assert!(converter.0.convert_input_type(&empty_input).is_none());
-
-        // Test input type with single field
-        let mut single_field_input = RibInputTypeInfo {
-            types: HashMap::new(),
-        };
-        single_field_input.types.insert(
-            "field1".to_string(),
-            AnalysedType::U32(TypeU32),
-        );
-        let schema = converter.0.convert_input_type(&single_field_input).unwrap();
+        let schema = converter.convert_type(&nested_type, &mut registry).unwrap();
         match schema {
-            Schema::Object(obj) => {
-                assert_eq!(obj.properties.len(), 1);
-                assert!(obj.properties.contains_key("field1"));
-                let field_schema = get_schema_from_ref_or(obj.properties.get("field1").unwrap());
-                assert_schema_type(field_schema, CustomSchemaType::Integer);
-            },
-            _ => panic!("Expected object schema"),
-        }
+            MetaSchemaRef::Inline(schema) => {
+                assert_eq!(schema.ty, "object");
+                assert!(has_property(&schema.properties, "id"));
+                assert!(has_property(&schema.properties, "status"));
+                assert!(has_property(&schema.properties, "data"));
+                assert_eq!(schema.required.len(), 3);
+                assert!(schema.required.contains(&"id"));
+                assert!(schema.required.contains(&"status"));
+                assert!(schema.required.contains(&"data"));
 
-        // Test input type with multiple fields of different types
-        let mut multi_field_input = RibInputTypeInfo {
-            types: HashMap::new(),
-        };
-        multi_field_input.types.insert(
-            "string_field".to_string(),
-            AnalysedType::Str(TypeStr),
-        );
-        multi_field_input.types.insert(
-            "bool_field".to_string(),
-            AnalysedType::Bool(TypeBool),
-        );
-        multi_field_input.types.insert(
-            "number_field".to_string(),
-            AnalysedType::F64(TypeF64),
-        );
-        let schema = converter.0.convert_input_type(&multi_field_input).unwrap();
-        match schema {
-            Schema::Object(obj) => {
-                assert_eq!(obj.properties.len(), 3);
-                
-                // Check string field
-                assert!(obj.properties.contains_key("string_field"));
-                let string_schema = get_schema_from_ref_or(obj.properties.get("string_field").unwrap());
-                assert_schema_type(string_schema, CustomSchemaType::String);
-                
-                // Check bool field
-                assert!(obj.properties.contains_key("bool_field"));
-                let bool_schema = get_schema_from_ref_or(obj.properties.get("bool_field").unwrap());
-                assert_schema_type(bool_schema, CustomSchemaType::Boolean);
-                
-                // Check number field
-                assert!(obj.properties.contains_key("number_field"));
-                let number_schema = get_schema_from_ref_or(obj.properties.get("number_field").unwrap());
-                assert_schema_type(number_schema, CustomSchemaType::Number);
-            },
-            _ => panic!("Expected object schema"),
-        }
+                // Verify id field
+                let id_schema = find_property(&schema.properties, "id").unwrap();
+                assert_schema_type(id_schema, "integer");
+                assert_schema_format(id_schema, "int32");
 
-        // Test input type with complex nested types
-        let mut complex_input = RibInputTypeInfo {
-            types: HashMap::new(),
-        };
-        
-        // Add a list type
-        complex_input.types.insert(
-            "list_field".to_string(),
-            AnalysedType::List(TypeList {
-                inner: Box::new(AnalysedType::U32(TypeU32)),
-            }),
-        );
-        
-        // Add a record type
-        complex_input.types.insert(
-            "record_field".to_string(),
-            AnalysedType::Record(TypeRecord {
-                fields: vec![
-                    NameTypePair {
-                        name: "sub_field".to_string(),
-                        typ: AnalysedType::Str(TypeStr),
+                // Verify status field (enum)
+                let status_schema = find_property(&schema.properties, "status").unwrap();
+                match status_schema {
+                    MetaSchemaRef::Inline(schema) => {
+                        assert_eq!(schema.ty, "string");
+                        assert_eq!(schema.enum_items.len(), 2);
+                        assert!(schema.enum_items.contains(&Value::String("Active".to_string())));
+                        assert!(schema.enum_items.contains(&Value::String("Inactive".to_string())));
                     },
-                ],
-            }),
-        );
-        
-        let schema = converter.0.convert_input_type(&complex_input).unwrap();
-        match schema {
-            Schema::Object(obj) => {
-                assert_eq!(obj.properties.len(), 2);
-                
-                // Check list field
-                assert!(obj.properties.contains_key("list_field"));
-                let list_schema = get_schema_from_ref_or(obj.properties.get("list_field").unwrap());
-                match list_schema {
-                    Schema::Array(_) => (),
-                    _ => panic!("Expected array schema for list field"),
+                    _ => panic!("Expected inline schema"),
                 }
-                
-                // Check record field
-                assert!(obj.properties.contains_key("record_field"));
-                let record_schema = get_schema_from_ref_or(obj.properties.get("record_field").unwrap());
-                match record_schema {
-                    Schema::Object(record_obj) => {
-                        assert!(record_obj.properties.contains_key("sub_field"));
-                        let sub_field_schema = get_schema_from_ref_or(record_obj.properties.get("sub_field").unwrap());
-                        assert_schema_type(sub_field_schema, CustomSchemaType::String);
+
+                // Verify data field (record)
+                let data_schema = find_property(&schema.properties, "data").unwrap();
+                match data_schema {
+                    MetaSchemaRef::Inline(schema) => {
+                        assert_eq!(schema.ty, "object");
+                        assert!(has_property(&schema.properties, "value"));
+                        assert!(has_property(&schema.properties, "tags"));
+
+                        // Verify value field (variant)
+                        let value_schema = find_property(&schema.properties, "value").unwrap();
+                        match value_schema {
+                            MetaSchemaRef::Inline(schema) => {
+                                assert_eq!(schema.ty, "object");
+                                assert!(has_property(&schema.properties, "type"));
+                                assert!(schema.required.contains(&"type"));
+                            },
+                            _ => panic!("Expected inline schema"),
+                        }
+
+                        // Verify tags field (list)
+                        let tags_schema = find_property(&schema.properties, "tags").unwrap();
+                        match tags_schema {
+                            MetaSchemaRef::Inline(schema) => {
+                                assert_eq!(schema.ty, "array");
+                                assert!(schema.items.is_some());
+                            },
+                            _ => panic!("Expected inline schema"),
+                        }
                     },
-                    _ => panic!("Expected object schema for record field"),
+                    _ => panic!("Expected inline schema"),
                 }
             },
-            _ => panic!("Expected object schema"),
+            MetaSchemaRef::Reference(_) => panic!("Expected inline schema"),
         }
     }
 } 
