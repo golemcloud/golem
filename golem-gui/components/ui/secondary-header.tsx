@@ -317,7 +317,7 @@ export default function SecondaryHeader({
         )}
 
         {variant === "apis" && (
-          <Link href={`/apis/${id}/new-route`}>
+          <Link href={`/apis/${apiId}/new-route`}>
             <Button
               variant="outlined"
               sx={{
