@@ -34,7 +34,16 @@ const ComponentInfo: React.FC<ComponentInfoProps> = ({ componentId, version, nam
         <Typography variant="body2" gutterBottom>
           <strong>Name</strong>
         </Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ color: '#aaa' }}>
+        <Typography variant="body2" color="text.secondary"
+        sx={{
+          overflow: "hidden", // Ensures overflow content is hidden
+          textOverflow: "ellipsis", // Adds an ellipsis when text overflows
+          whiteSpace: "nowrap", // Prevents text wrapping to a new line
+          fontWeight: 500,
+          color: '#aaa',
+        }}
+        className='max-w-[250px] md:max-w-full'
+        >
           {name}
         </Typography>
 

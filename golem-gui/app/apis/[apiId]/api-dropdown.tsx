@@ -8,7 +8,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import ArrowDropDownIcon from "@mui/icons-material/ArrowDropDown";
-import { useRouter } from "next/navigation";
 
 interface list {
   onClick: () => void;
@@ -24,7 +23,6 @@ interface ApiDropdownProps {
 }
 
 export function ApiDropdown({ dropdowns }: ApiDropdownProps) {
-  const router = useRouter();
 
   return (
     <DropdownMenu>

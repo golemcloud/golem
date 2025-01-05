@@ -61,7 +61,6 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
       asChild = false,
       startIcon,
       endIcon,
-      sx,
       ...props
     },
     ref

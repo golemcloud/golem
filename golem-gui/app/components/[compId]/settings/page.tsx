@@ -10,8 +10,6 @@ import {
   Typography,
   Divider,
   Stack,
-  MenuItem,
-  Select,
 } from "@mui/material";
 import { useParams, useSearchParams } from "next/navigation";
 import CreateComponentForm from "@/components/new-component";
@@ -23,6 +21,7 @@ import SecondaryHeader from "@/components/ui/secondary-header";
 import ErrorBoundary from "@/components/erro-boundary";
 import { Button2 } from "@/components/ui/button";
 import { DownloadIcon } from "lucide-react";
+import { DropdownV2 } from "@/components/ui/dropdown-button";
 
 const WorkerSettings = () => {
   const { compId } = useParams<{ compId: string }>();
@@ -66,9 +65,7 @@ const WorkerSettings = () => {
       <div className="mx-auto max-w-7xl px-6 lg:px-8">
         <div className="mx-auto max-w-2xl lg:max-w-none py-4">
           <Stack
-            direction="row"
-            alignItems={"center"}
-            justifyContent={"space-between"}
+          gap={3}
           >
             <Box
               sx={{
@@ -89,29 +86,29 @@ const WorkerSettings = () => {
               </Tabs>
             </Box>
             {activeTab === 1 && (
+              
               <Stack
                 direction="row"
-                alignItems="center"
-                marginBottom={2}
-                gap={1}
+                alignItems={"center"}
+                justifyContent={"space-between"}
+                className="p-1 md:p-3"
               >
-                <Select
-                  name="version"
-                  variant="outlined"
-                  className="max-w-max"
-                  value={version}
-                  onChange={(e) => setVersion(Number(e.target.value))}
-                >
-                  {components?.map((component: Component) => (
-                    <MenuItem
-                      key={component?.versionedComponentId?.version}
-                      value={component?.versionedComponentId?.version}
-                    >
-                      V{component?.versionedComponentId?.version}
-                    </MenuItem>
-                  ))}
-                </Select>
+                <Box className="flex flex-col">
+                <Typography variant="h6">Update Component</Typography>
+                <Typography variant="subtitle1" sx={{ color: "#888" }}>
+                  Update your component version.
+                </Typography>
+              </Box>
+              <Stack direction="row" gap={1} alignItems={"center"} className="self-start">
+                <DropdownV2  list={components?.map((component: Component) =>({
+                  value: component.versionedComponentId.version, 
+                  label: `V ${component.versionedComponentId.version}`,
+                  onClick: (value:string|number)=>{setVersion(Number(value))}
+                  }))}
+                  prefix={`V ${version}`} 
+                  />
                 <Button2
+                  className="py-0 pr-4"
                   onClick={(e) => {
                     e.preventDefault();
                     downloadComponent(compId, version!);
@@ -119,11 +116,12 @@ const WorkerSettings = () => {
                 >
                   <DownloadIcon />
                 </Button2>
+                </Stack>
               </Stack>
             )}
           </Stack>
 
-          <Box sx={{ p: 3 }}>
+          <Box className={"p-1 md:p-3"}>
             {activeTab === 0 && (
               <div>
                 <DangerZone
@@ -135,6 +133,7 @@ const WorkerSettings = () => {
             )}
             {activeTab === 1 && (
               <div>
+                <Divider sx={{ borderColor: "#555", marginBottom: "13px" }} />
                 {component ? (
                   <ComponentInfo
                     componentId={versionedComponentId.componentId}
