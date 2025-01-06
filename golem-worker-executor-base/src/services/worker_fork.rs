@@ -124,8 +124,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerFork
         )
         .await?;
 
-
-
         let source_oplog = source_worker_instance.oplog();
 
         let initial_oplog_entry = source_oplog.read(OplogIndex::INITIAL).await;
