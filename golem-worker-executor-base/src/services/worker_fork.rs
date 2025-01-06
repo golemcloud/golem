@@ -143,7 +143,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerFork
                 target_initial_oplog_entry,
                 target_worker_metadata,
                 Arc::new(RwLock::new(ExecutionStatus::Suspended {
-                    last_known_status: WorkerStatusRecord::default(), // default is idle, TODO: check if we need to update this or derive from the source last known status
+                    last_known_status: WorkerStatusRecord::default(),
                     component_type: ComponentType::Durable, // Probably forking should fail if component type is ephemeral, or not?
                     timestamp: Timestamp::now_utc(),
                 })),
