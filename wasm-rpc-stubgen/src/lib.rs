@@ -17,7 +17,6 @@ pub mod commands;
 pub mod compilation;
 pub mod fs;
 pub mod log;
-pub mod make;
 pub mod model;
 pub mod naming;
 pub mod rust;
@@ -271,20 +270,6 @@ pub fn add_stub_dependency(args: AddStubDependencyArgs) -> anyhow::Result<()> {
 
 pub async fn compose(args: ComposeArgs) -> anyhow::Result<()> {
     commands::composition::compose(&args.source_wasm, &args.stub_wasm, &args.dest_wasm).await
-}
-
-pub fn initialize_workspace(
-    args: InitializeWorkspaceArgs,
-    stubgen_command: &str,
-    stubgen_prefix: &[&str],
-) -> anyhow::Result<()> {
-    make::initialize_workspace(
-        &args.targets,
-        &args.callers,
-        args.wasm_rpc_override,
-        stubgen_command,
-        stubgen_prefix,
-    )
 }
 
 pub async fn run_app_command<CPE: ComponentPropertiesExtensions>(
