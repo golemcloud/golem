@@ -394,7 +394,6 @@ fn generate_function_stub_source(
     );
 
     let rpc = match mode {
-        // TODO: these restrictions on static seems to be arbitrary, let's recheck
         FunctionMode::Static => {
             let first_param = function
                 .params
