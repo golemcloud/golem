@@ -1457,7 +1457,7 @@ async fn fork_worker_2(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 
     let source_worker_id = WorkerId {
         component_id: component_id.clone(),
-        worker_name: "fork".to_string(),
+        worker_name: "bar".to_string(),
     };
 
     let _ = deps
@@ -1498,7 +1498,7 @@ async fn fork_worker_3(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 
     let source_worker_id = WorkerId {
         component_id: component_id.clone(),
-        worker_name: "fork".to_string(),
+        worker_name: "baz".to_string(),
     };
 
     let _ = deps
@@ -1511,7 +1511,7 @@ async fn fork_worker_3(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 
     let target_worker_id = WorkerId {
         component_id: component_id.clone(),
-        worker_name: "forked-foo".to_string(),
+        worker_name: "forked-baz".to_string(),
     };
 
     let error = golem_test_framework::dsl::TestDsl::fork_worker(
@@ -1535,12 +1535,12 @@ async fn fork_worker_4(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 
     let source_worker_id = WorkerId {
         component_id: component_id.clone(),
-        worker_name: "fork".to_string(),
+        worker_name: "buz".to_string(),
     };
 
     let target_worker_id = WorkerId {
         component_id: component_id.clone(),
-        worker_name: "forked-foo".to_string(),
+        worker_name: "forked-buz".to_string(),
     };
 
     let error = golem_test_framework::dsl::TestDsl::fork_worker(
