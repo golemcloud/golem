@@ -686,6 +686,7 @@ mod worker_gateway_integration_tests {
                 ],
                 producers: vec![],
                 memories: vec![],
+                dynamic_linking: HashMap::new(),
             },
             created_at: Some(chrono::Utc::now()),
             component_type: None,

@@ -31,6 +31,7 @@ use std::fmt::Display;
 use golem_service_base::auth::DefaultNamespace;
 use golem_worker_service_base::service::gateway::security_scheme::SecuritySchemeServiceError;
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
+use std::collections::HashMap;
 
 // Simple namespace type for testing
 #[derive(Debug, Clone, Default)]
@@ -82,6 +83,7 @@ where
                 exports: vec![],
                 producers: vec![],
                 memories: vec![],
+                dynamic_linking: HashMap::new(),
             },
             created_at: Some(Utc::now()),
             component_type: None,
@@ -343,6 +345,7 @@ async fn setup_golem_server() -> (SocketAddr, tokio::task::JoinHandle<()>) {
         deployment_repo,
         security_scheme_service,
         api_definition_validator,
+        None,
     ).await.expect("Failed to create API router");
 
     // Configure CORS for Swagger UI and API endpoints

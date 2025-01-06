@@ -216,6 +216,7 @@ async fn setup_golem_server() -> SocketAddr {
         deployment_repo,
         security_scheme_service,
         api_definition_validator,
+        None,
     ).await.expect("Failed to create API router")
         .with(Cors::new()
             .allow_origin("*")
