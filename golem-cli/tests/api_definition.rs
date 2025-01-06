@@ -181,6 +181,25 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
             api_definition_delete((deps, name.to_string(), cli.with_args(short)))
         }
     );
+    add_test!(
+        r,
+        format!("api_definition_export{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            api_definition_export(
+                (deps, name.to_string(), cli.with_args(short)),
+                &ApiDefinitionFileFormat::Json,
+            )
+        }
+    );
+    add_test!(
+        r,
+        format!("api_definition_ui{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            api_definition_ui((deps, name.to_string(), cli.with_args(short)))
+        }
+    );
 }
 
 pub fn make_shopping_cart_component(
@@ -1011,6 +1030,84 @@ fn api_definition_delete(
     ])?;
 
     assert!(res_list.is_empty());
+
+    Ok(())
+}
+
+fn api_definition_export(
+    (deps, name, cli): (
+        &(impl TestDependencies + Send + Sync + 'static),
+        String,
+        CliLive,
+    ),
+    api_definition_format: &ApiDefinitionFileFormat,
+) -> anyhow::Result<()> {
+    let component_name = format!("api_definition_export{name}");
+    let component = make_shopping_cart_component(deps, &component_name, &cli)?;
+    let component_id = component.component_urn.id.0.to_string();
+    let path = "/{user-id}/get-cart-contents";
+    let def = native_api_definition_request(&component_name, &component_id, None, path);
+    let path = make_json_file(&def.id, &def)?;
+
+    // First create an API definition
+    let _: HttpApiDefinitionResponseData = cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
+
+    let cfg = &cli.config;
+
+    // Then export it
+    let res: String = cli.run(&[
+        "api-definition",
+        "export",
+        &cfg.arg('i', "id"),
+        &component_name,
+        &cfg.arg('V', "version"),
+        "0.1.0",
+        &cfg.arg('f', "format"),
+        api_definition_format.to_string().as_str(),
+    ])?;
+
+    // Verify the export contains expected content
+    assert!(res.contains(&component_name));
+    assert!(res.contains(&component_id));
+    assert!(res.contains(path));
+
+    Ok(())
+}
+
+fn api_definition_ui(
+    (deps, name, cli): (
+        &(impl TestDependencies + Send + Sync + 'static),
+        String,
+        CliLive,
+    ),
+) -> anyhow::Result<()> {
+    let component_name = format!("api_definition_ui{name}");
+    let component = make_shopping_cart_component(deps, &component_name, &cli)?;
+    let component_id = component.component_urn.id.0.to_string();
+    let path = "/{user-id}/get-cart-contents";
+    let def = native_api_definition_request(&component_name, &component_id, None, path);
+    let path = make_json_file(&def.id, &def)?;
+
+    // First create an API definition
+    let _: HttpApiDefinitionResponseData = cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
+
+    let cfg = &cli.config;
+    let test_port = 3001;
+
+    // Then start the UI
+    let res: String = cli.run(&[
+        "api-definition",
+        "ui",
+        &cfg.arg('i', "id"),
+        &component_name,
+        &cfg.arg('V', "version"),
+        "0.1.0",
+        &cfg.arg('p', "port"),
+        &test_port.to_string(),
+    ])?;
+
+    // Verify the response contains the expected URL
+    assert!(res.contains(&format!("http://127.0.0.1:{}/docs", test_port)));
 
     Ok(())
 }

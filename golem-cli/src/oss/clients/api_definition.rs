@@ -21,12 +21,15 @@ use golem_client::model::{HttpApiDefinitionRequest, HttpApiDefinitionResponseDat
 use golem_worker_service_base::gateway_api_definition::http::{
     openapi_export::{OpenApiExporter, OpenApiFormat},
     swagger_ui::{create_api_route, SwaggerUiConfig, SwaggerUiAuthConfig},
+    rib_converter::{RibConverter, fix_additional_properties},
 };
+use golem_wasm_ast::analysis::{AnalysedType, TypeRecord, NameTypePair, TypeStr, TypeList, TypeBool};
 use poem::listener::TcpListener;
 use poem_openapi::{
     OpenApi,
     Tags,
     payload::Json,
+    registry::Registry,
 };
 use serde_json::Value;
 use tokio::fs::{read_to_string, write};
@@ -131,9 +134,23 @@ impl<C: golem_client::api::ApiDefinitionClient + Sync + Send> ApiDefinitionClien
         api_def: &HttpApiDefinitionResponseData,
         format: &ApiDefinitionFileFormat,
     ) -> Result<String, GolemError> {
-        // First convert to JSON Value
-        let api_value = serde_json::to_value(api_def)
-            .map_err(|e| GolemError(format!("Failed to convert API definition to JSON: {}", e)))?;
+        // Create RibConverter in OpenAPI mode
+        let mut converter = RibConverter::new_openapi();
+        
+        // Create a new Registry for OpenAPI schema generation
+        let mut registry = Registry::new();
+
+        // Convert API definition to OpenAPI schema
+        let schema = converter
+            .convert_type(&api_def.into(), &registry)
+            .map_err(|e| GolemError(format!("Failed to convert API definition to OpenAPI: {}", e)))?;
+
+        // Convert schema to JSON Value
+        let mut api_value = serde_json::to_value(schema)
+            .map_err(|e| GolemError(format!("Failed to convert schema to JSON: {}", e)))?;
+
+        // Clean up the schema
+        fix_additional_properties(&mut api_value);
 
         // Create OpenAPI exporter
         let exporter = OpenApiExporter;
@@ -141,8 +158,47 @@ impl<C: golem_client::api::ApiDefinitionClient + Sync + Send> ApiDefinitionClien
             json: matches!(format, ApiDefinitionFileFormat::Json),
         };
 
-        // Export using the exporter - pass ApiSpec directly, not as a reference
+        // Export using the exporter - pass ApiSpec directly
         Ok(exporter.export_openapi(ApiSpec(api_value), &openapi_format))
+    }
+}
+
+impl From<&HttpApiDefinitionResponseData> for AnalysedType {
+    fn from(data: &HttpApiDefinitionResponseData) -> Self {
+        // Convert HttpApiDefinitionResponseData to a record type
+        AnalysedType::Record(TypeRecord {
+            fields: vec![
+                NameTypePair {
+                    name: "id".to_string(),
+                    typ: AnalysedType::Str(TypeStr),
+                },
+                NameTypePair {
+                    name: "version".to_string(),
+                    typ: AnalysedType::Str(TypeStr),
+                },
+                NameTypePair {
+                    name: "routes".to_string(),
+                    typ: AnalysedType::List(TypeList {
+                        inner: Box::new(AnalysedType::Record(TypeRecord {
+                            fields: vec![
+                                NameTypePair {
+                                    name: "method".to_string(),
+                                    typ: AnalysedType::Str(TypeStr),
+                                },
+                                NameTypePair {
+                                    name: "path".to_string(),
+                                    typ: AnalysedType::Str(TypeStr),
+                                },
+                            ],
+                        })),
+                    }),
+                },
+                NameTypePair {
+                    name: "draft".to_string(),
+                    typ: AnalysedType::Bool(TypeBool),
+                },
+            ],
+        })
     }
 }
 
