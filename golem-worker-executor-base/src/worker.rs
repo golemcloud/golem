@@ -665,6 +665,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         map.remove(key);
     }
 
+    pub fn component_type(&self) -> ComponentType {
+        self.execution_status.read().unwrap().component_type()
+    }
+
     pub async fn update_status(&self, status_value: WorkerStatusRecord) {
         // Need to make sure the oplog is committed, because the updated status stores the current
         // last oplog index as reference.

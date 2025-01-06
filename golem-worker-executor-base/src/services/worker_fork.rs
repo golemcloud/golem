@@ -5,7 +5,7 @@ use crate::error::GolemError;
 use crate::metrics::workers::record_worker_call;
 use crate::model::ExecutionStatus;
 use crate::services::oplog::CommitLevel;
-use crate::services::{HasAll, HasOplog};
+use crate::services::{HasAll, HasComponentService, HasConfig, HasOplog};
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
@@ -124,6 +124,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerFork
         )
         .await?;
 
+
+
         let source_oplog = source_worker_instance.oplog();
 
         let initial_oplog_entry = source_oplog.read(OplogIndex::INITIAL).await;
@@ -144,7 +146,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerFork
                 target_worker_metadata,
                 Arc::new(RwLock::new(ExecutionStatus::Suspended {
                     last_known_status: WorkerStatusRecord::default(),
-                    component_type: ComponentType::Durable, // Probably forking should fail if component type is ephemeral, or not?
+                    component_type: source_worker_instance.component_type(),
                     timestamp: Timestamp::now_utc(),
                 })),
             )
