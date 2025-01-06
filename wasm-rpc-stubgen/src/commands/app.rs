@@ -61,6 +61,7 @@ pub enum ApplicationSourceMode {
     Explicit(Vec<PathBuf>),
 }
 
+#[derive(Debug)]
 pub struct ComponentStubInterfaces {
     stub_interface_name: String,
     exported_interfaces: Vec<String>,
@@ -325,14 +326,15 @@ impl<CPE: ComponentPropertiesExtensions> ApplicationContext<CPE> {
             version: stub_def.source_package_name.version.clone(),
         };
 
-        Ok(ComponentStubInterfaces {
+        let result = ComponentStubInterfaces {
             stub_interface_name: stub_package_name.interface_id(&stub_def.target_interface_name()),
-            exported_interfaces: vec![stub_def
+            exported_interfaces: stub_def
                 .stub_imported_interfaces()
                 .iter()
-                .flat_map(|interface| interface.owner_interface.clone())
-                .collect()],
-        })
+                .filter_map(|interface| interface.owner_interface.clone())
+                .collect(),
+        };
+        Ok(result)
     }
 
     fn common_wit_deps(&self) -> anyhow::Result<&WitDepsResolver> {
@@ -1293,8 +1295,9 @@ async fn build_stub<CPE: ComponentPropertiesExtensions>(
         );
         fs::create_dir_all(&target_root)?;
 
-        let result =
-            commands::generate::build(&stub_def, &stub_wasm, &stub_wit, ctx.config.offline).await;
+        let offline = ctx.config.offline;
+        let stub_def = ctx.component_stub_def(component_name)?;
+        let result = commands::generate::build(&stub_def, &stub_wasm, &stub_wit, offline).await;
         match result {
             Ok(()) => {
                 task_result_marker.success()?;

@@ -327,7 +327,7 @@ impl<
             } => {
                 let project_id = projects.resolve_id_or_default(project_ref).await?;
 
-                let ctx = ApplicationComponentContext::new(
+                let mut ctx = ApplicationComponentContext::new(
                     app,
                     build_profile.map(|profile| profile.into()),
                     &component_name.0,
@@ -401,7 +401,7 @@ impl<
 
                 let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
 
-                let ctx = ApplicationComponentContext::new(
+                let mut ctx = ApplicationComponentContext::new(
                     app,
                     build_profile.map(|profile| profile.into()),
                     &component_name,
@@ -576,15 +576,21 @@ impl ApplicationComponentContext {
         })
     }
 
-    fn dynamic_linking(&self) -> Option<DynamicLinking> {
+    fn dynamic_linking(&mut self) -> Option<DynamicLinking> {
         let mapping = Vec::new();
 
         let wasm_rpc_deps = self
             .app_ctx
             .application
-            .component_wasm_rpc_dependencies(&self.name);
+            .component_wasm_rpc_dependencies(&self.name)
+            .clone();
 
         for wasm_rpc_dep in wasm_rpc_deps {
+            let ifaces = self
+                .app_ctx
+                .component_stub_interfaces(&wasm_rpc_dep)
+                .unwrap(); // TODO
+            println!("{:?}", ifaces);
             // let target_props = self
             //     .app_ctx
             //     .application

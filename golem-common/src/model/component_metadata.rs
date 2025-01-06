@@ -48,7 +48,7 @@ impl ComponentMetadata {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
 #[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
@@ -56,19 +56,22 @@ pub enum DynamicLinkedInstance {
     WasmRpc(DynamicLinkedWasmRpc),
 }
 
-#[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Encode, Decode,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct DynamicLinkedWasmRpc {
-    pub target_interface_name: String,
+    /// Maps resource names within the dynamic linked interface to target interfaces
+    pub target_interface_name: HashMap<String, String>,
 }
 
 impl DynamicLinkedWasmRpc {
-    pub fn target_site(&self) -> Result<ParsedFunctionSite, String> {
-        ParsedFunctionSite::parse(&self.target_interface_name)
+    pub fn target_site(&self, stub_resource: &str) -> Result<ParsedFunctionSite, String> {
+        let target_interface = self
+            .target_interface_name
+            .get(stub_resource)
+            .ok_or("Resource not found in dynamic linked interface")?;
+        ParsedFunctionSite::parse(&target_interface)
     }
 }
 
