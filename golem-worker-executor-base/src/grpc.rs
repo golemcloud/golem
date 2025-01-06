@@ -426,10 +426,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Ok(())
     }
 
-    async fn get_worker_ids(
+    async fn fork_worker_internal(
         &self,
-        request: &ForkWorkerRequest,
-    ) -> Result<(OwnedWorkerId, OwnedWorkerId), GolemError> {
+        request: ForkWorkerRequest,
+    ) -> Result<ForkWorkerResponse, GolemError> {
         let account_id_proto = request
             .account_id
             .clone()
@@ -447,15 +447,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .try_into()
             .map_err(GolemError::invalid_request)?;
 
-        // We assume the target worker is also owned by the same account
         let owned_target_worker_id = OwnedWorkerId::new(&account_id, &target_worker_id);
-
-        let target_metadata = self.worker_service().get(&owned_target_worker_id).await;
-
-        // We allow forking only if the target worker does not exist
-        if target_metadata.is_some() {
-            return Err(GolemError::worker_already_exists(target_worker_id));
-        }
 
         let source_worker_id_proto = request
             .source_worker_id
@@ -467,16 +459,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .map_err(GolemError::invalid_request)?;
 
         let owned_source_worker_id = OwnedWorkerId::new(&account_id, &source_worker_id);
-
-        Ok((owned_source_worker_id, owned_target_worker_id))
-    }
-
-    async fn fork_worker_internal(
-        &self,
-        request: ForkWorkerRequest,
-    ) -> Result<ForkWorkerResponse, GolemError> {
-        let (owned_source_worker_id, owned_target_worker_id) =
-            self.get_worker_ids(&request).await?;
 
         self.worker_fork
             .fork(
