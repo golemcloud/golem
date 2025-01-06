@@ -124,6 +124,13 @@ const PluginsPage = () => {
             New
           </Button2>
         </Box>
+        {(!plugins || plugins.length === 0) && (
+          <NotFoundCard
+            heading="No plugins found"
+            subheading="Create your first plugin to get started"
+            icon={<PluginIcon fontSize="large" />}
+          />
+        )}
         <Grid container spacing={3}>
           {paginatedComponents?.map((plugin: Plugin) => (
             <Grid
@@ -245,17 +252,8 @@ const PluginsPage = () => {
               </Paper>
             </Grid>
           ))}
-
-          {(!plugins || plugins.length === 0) && (
-            <Grid size={{ sm: 12 }}>
-              <NotFoundCard
-                heading="No plugins found"
-                subheading="Create your first plugin to get started"
-                icon={<PluginIcon fontSize="large" />}
-              />
-            </Grid>
-          )}
         </Grid>
+        
         <Box mt={4} display="flex" justifyContent="center">
           <Pagination
             count={totalPages}

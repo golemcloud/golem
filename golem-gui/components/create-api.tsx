@@ -1,13 +1,9 @@
 import React from "react";
-import {
-  Box,
-  TextField,
-  Typography,
-} from "@mui/material";
+import { Box, TextField, Typography } from "@mui/material";
 import { useForm, Controller } from "react-hook-form";
 import { addNewApiDefinition } from "@/lib/hooks/use-api-definitons";
 import { ApiDefinition } from "@/types/api";
-import { getFormErrorMessage } from '../lib/utils';
+import { getFormErrorMessage } from "../lib/utils";
 import { Button2 } from "@/components/ui/button";
 
 const CreateAPI = ({
@@ -28,7 +24,10 @@ const CreateAPI = ({
     },
   });
 
-  const handleCreateAPI = async (data: { apiName: string; version: string }) => {
+  const handleCreateAPI = async (data: {
+    apiName: string;
+    version: string;
+  }) => {
     if (isExperimental) {
       return;
     }
@@ -49,7 +48,7 @@ const CreateAPI = ({
   };
 
   return (
-    <div className="p-5">
+    <>
       {isExperimental && (
         <Typography
           variant="h5"
@@ -60,57 +59,58 @@ const CreateAPI = ({
           Experimental. Coming soon!
         </Typography>
       )}
-
       <form onSubmit={handleSubmit(handleCreateAPI)}>
         {/* API Name Input */}
-        <Controller
-          name="apiName"
-          control={control}
-          rules={{
-            required: "API Name is required",
-            maxLength: {
-              value: 50,
-              message: "API Name cannot exceed 50 characters",
-            },
-          }}
-          render={({ field }) => (
-            <TextField
-              size="small"
-              {...field}
-              label="API Name"
-              placeholder="Enter API name"
-              fullWidth
-              margin="normal"
-            />
-          )}
-        />
-        <Typography variant="caption">Must be unique per project</Typography>
-        <Typography variant="caption" color="error">{getFormErrorMessage("apiName", errors)}</Typography>
-
+        <Box className="mb-2">
+          <Controller
+            name="apiName"
+            control={control}
+            rules={{
+              required: "API Name is required",
+              maxLength: {
+                value: 50,
+                message: "API Name cannot exceed 50 characters",
+              },
+            }}
+            render={({ field }) => (
+              <TextField size="small" fullWidth {...field} placeholder="Enter API Name" />
+            )}
+          />
+          <Typography variant="caption" className="text-muted-foreground">Must be unique per project</Typography>
+          <Typography variant="caption" color="error">
+            {getFormErrorMessage("apiName", errors)}
+          </Typography>
+        </Box>
         {/* Version Input */}
-        <Controller
-          name="version"
-          control={control}
-          rules={{
-            required: "Version is required",
-            pattern: {
-              value: /^\d+\.\d+\.\d+$/,
-              message: "Version must follow semantic versioning (e.g., 1.0.0)",
-            },
-          }}
-          render={({ field }) => (
-            <TextField
-              size="small"
-              {...field}
-              label="Version"
-              placeholder="0.1.0"
-              fullWidth
-              margin="normal"
-            />
-          )}
-        />
-        <Typography variant="caption">Version prefix for your API</Typography>
-        <Typography variant="caption" color="error">{getFormErrorMessage("version", errors)}</Typography>
+        <Box>
+          <Controller
+            name="version"
+            control={control}
+            rules={{
+              required: "Version is required",
+              pattern: {
+                value: /^\d+\.\d+\.\d+$/,
+                message:
+                  "Version must follow semantic versioning (e.g., 1.0.0)",
+              },
+            }}
+            render={({ field }) => (
+              <TextField
+                fullWidth
+                size="small"
+                {...field}
+                placeholder="Version"
+                
+              />
+            )}
+          />
+          <Box>
+          <Typography variant="caption" className="text-muted-foreground">Version prefix for your API</Typography>
+          <Typography variant="caption" color="error">
+            {getFormErrorMessage("version", errors)}
+          </Typography>
+          </Box>
+        </Box>
 
         {/* Create API Button */}
         <Box display="flex" justifyContent="flex-end" mt={3}>
@@ -125,9 +125,8 @@ const CreateAPI = ({
           </Button2>
         </Box>
       </form>
-    </div>
+    </>
   );
 };
 
 export default CreateAPI;
-

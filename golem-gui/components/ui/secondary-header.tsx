@@ -195,7 +195,7 @@ export default function SecondaryHeader({
   const ApiName = decodeURIComponent(apiId);
 
   return (
-    <Box className="dark:bg-[#0a0a0a] border-b p-2 pr-20 ">
+    <Box className="dark:bg-[#0a0a0a] border-b p-2 pr-5 sm:pr-20">
       <Box className="flex items-center justify-between w-full">
         <Box
           sx={{
@@ -206,18 +206,19 @@ export default function SecondaryHeader({
           <Button
             startIcon={<PanelRightClose />}
             onClick={toggleDrawer(true)}
-            className="dark:text-white text-9xl ml-2"
+            className="dark:text-white"
           ></Button>
         </Box>
 
         {variant === "apis" && (
-          <Box className="flex gap-3 align-middle">
-            <Typography variant="body2" sx={{ fontWeight: "bold" }}>
-              {ApiName}
+          <Box className="flex gap-3">
+            <div className="w-12">{apiTab != "playground" && <VersionFilter />}</div>
+            <Typography variant="body2" className="text-bold">
+              {ApiName.length > 15 ? `${ApiName.slice(0, 15)}...` : ApiName}
             </Typography>
-            {apiTab != "playground" && <VersionFilter />}
           </Box>
         )}
+        </Box>
 
         {variant === "apis" && apiTab != "playground" && (
           <Box className="border border-border rounded-md cursor-pointer dark:hover:bg-[#333] hover:bg-slate-100 py-1 px-2">
@@ -357,13 +358,11 @@ export default function SecondaryHeader({
           <DeploymentCreationPage apiId={apiId} onSuccess={handleClose} />
         )}
         {open == "new_route" && (
-          <div className="p-5">
-            <NewRouteForm
-              apiId={apiId}
-              version={version}
-              onSuccess={handleClose}
-            />
-          </div>
+          <NewRouteForm
+            apiId={apiId}
+            version={version}
+            onSuccess={handleClose}
+          />
         )}
         {open == "delete_api_version" && (
           <DeleteApiVersion

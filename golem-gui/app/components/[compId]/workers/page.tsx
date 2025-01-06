@@ -38,7 +38,7 @@ const WorkerListWithDropdowns = () => {
         <SecondaryHeader onClick={() => {}} variant="components" />
       </Box>
       {error && <ErrorBoundary message={error}/>}
-      <div className="mx-auto max-w-7xl px-6 lg:px-8">
+      <div className="mx-auto max-w-7xl px-2 md:px-6 lg:px-8">
         <div className="mx-auto max-w-2xl lg:max-w-none py-4">
           {/* Search Box */}
           <Box
@@ -67,15 +67,11 @@ const WorkerListWithDropdowns = () => {
           </Box>
 
           {/* Filters */}
-          <Stack direction="row" className="flex gap-2" mb={3}   sx={{ flexWrap: 'wrap' }}>
-            <div className="flex flex-wrap gap-2 mr-9">
-              <div className="mr-9"><StatusFilter /></div>
-              <VersionFilter />
-            </div>
-            <div className="flex gap-3 flex-wrap">
+          <Stack direction="row" className="flex gap-2 justify-center" mb={3} sx={{ flexWrap: 'wrap' }}>
+              <div className="w-[220px]"><StatusFilter /></div>
+              <div className="w-[220px]"><VersionFilter /></div>
               <CustomDatePickFilter label="Created After" searchKey={"workerAfter"}/>
               <CustomDatePickFilter label="Created Before" searchKey={"workerBefore"}/>
-            </div>
           </Stack>
 
           {/* No Workers Found */}

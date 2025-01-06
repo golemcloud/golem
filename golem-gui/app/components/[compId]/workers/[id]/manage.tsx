@@ -35,7 +35,7 @@ export default function Manage() {
   );
 
   return (
-    <div className="mx-auto max-w-7xl px-6 lg:px-8">
+    <div className="mx-auto max-w-7xl px-2 md:px-6 lg:px-8">
       <div className="mx-auto max-w-2xl lg:max-w-none py-4">
         <Paper
           elevation={3}
@@ -67,6 +67,7 @@ export default function Manage() {
               <Button
                 variant="primary"
                 size="sm"
+                className="text-xs"
                 onClick={(e) => {
                   e.preventDefault();
                   interruptWorker(compId, workerName);
@@ -89,6 +90,7 @@ export default function Manage() {
               <Button
                 variant="primary"
                 size="sm"
+                className="text-xs"
                 onClick={(e) => {
                   e.preventDefault();
                   resumeWorker(compId, workerName);

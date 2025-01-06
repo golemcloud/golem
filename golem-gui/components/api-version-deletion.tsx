@@ -42,7 +42,7 @@ const DeleteApiVersion = ({
   };
 
   return (
-    <Box sx={{ p: 2 }}>
+    <Box>
       {isExperimental && (
         <Typography
           variant="h5"
