@@ -152,6 +152,7 @@ async fn test_repo_component_id_unique(
         &data,
         vec![],
         vec![],
+        HashMap::new(),
         owner1.clone(),
     )
     .unwrap();
@@ -200,6 +201,7 @@ async fn test_repo_component_name_unique_in_namespace(
         &data,
         vec![],
         vec![],
+        HashMap::new(),
         owner1.clone(),
     )
     .unwrap();
@@ -210,6 +212,7 @@ async fn test_repo_component_name_unique_in_namespace(
         &data,
         vec![],
         vec![],
+        HashMap::new(),
         owner2.clone(),
     )
     .unwrap();
@@ -263,6 +266,7 @@ async fn test_repo_component_delete(
         &data,
         vec![],
         vec![],
+        HashMap::new(),
         DefaultComponentOwner,
     )
     .unwrap();
@@ -322,6 +326,7 @@ async fn test_repo_component_constraints(
         &data,
         vec![],
         vec![],
+        HashMap::new(),
         owner1.clone(),
     )
     .unwrap();
@@ -415,6 +420,7 @@ async fn test_default_plugin_repo(
         &get_component_data("shopping-cart"),
         vec![],
         vec![],
+        HashMap::new(),
         owner.clone(),
     )
     .unwrap();
@@ -425,6 +431,7 @@ async fn test_default_plugin_repo(
         &get_component_data("shopping-cart"),
         vec![],
         vec![],
+        HashMap::new(),
         owner.clone(),
     )
     .unwrap();
@@ -558,6 +565,7 @@ async fn test_default_component_plugin_installation(
         &get_component_data("shopping-cart"),
         vec![],
         vec![],
+        HashMap::new(),
         component_owner.clone(),
     )
     .unwrap();

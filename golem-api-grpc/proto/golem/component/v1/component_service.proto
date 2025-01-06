@@ -7,6 +7,7 @@ import public "golem/common/project_id.proto";
 import public "golem/common/empty.proto";
 import public "golem/component/component.proto";
 import public "golem/component/component_type.proto";
+import public "golem/component/dynamic_linked_instance.proto";
 import public "golem/component/v1/component_error.proto";
 import public "golem/component/component_id.proto";
 import public "golem/component/component_constraints.proto";
@@ -74,6 +75,7 @@ message CreateComponentRequestHeader {
   optional ComponentType componentType = 3;
   // All files need to be uploaded to the blob storage before providing them here
   repeated InitialComponentFile files = 4;
+  map<string, golem.component.DynamicLinkedInstance> dynamic_linking = 5;
 }
 
 message CreateComponentRequestChunk {
@@ -148,6 +150,7 @@ message UpdateComponentRequestHeader {
   bool updateFiles = 3;
   // All files need to be uploaded to the blob storage before providing them here
   repeated InitialComponentFile files = 4;
+  map<string, golem.component.DynamicLinkedInstance> dynamic_linking = 5;
 }
 
 message UpdateComponentRequestChunk {
