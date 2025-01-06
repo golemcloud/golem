@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,6 +24,10 @@ use std::path::PathBuf;
 pub enum SingleExecutableCommand {
     #[clap(name = "start", about = "Start a golem server for local development")]
     Start {
+        /// Address to serve the main API on
+        #[clap(long, default_value = "0.0.0.0")]
+        router_addr: String,
+
         /// Port to serve the main API on
         #[clap(long, default_value_t = 9881)]
         router_port: u16,
@@ -46,6 +50,7 @@ impl<Ctx> CliCommand<Ctx> for SingleExecutableCommand {
     async fn run(self, _ctx: Ctx) -> Result<GolemResult, GolemError> {
         match self {
             SingleExecutableCommand::Start {
+                router_addr: router_host,
                 router_port,
                 custom_request_port,
                 data_dir,
@@ -63,6 +68,7 @@ impl<Ctx> CliCommand<Ctx> for SingleExecutableCommand {
                 };
 
                 match launch_golem_services(&LaunchArgs {
+                    router_host,
                     router_port,
                     custom_request_port,
                     data_dir,
