@@ -584,13 +584,14 @@ impl ApplicationComponentContext {
             .application
             .component_wasm_rpc_dependencies(&self.name);
 
-        for _wasm_rpc_dep in wasm_rpc_deps {
+        for wasm_rpc_dep in wasm_rpc_deps {
             // let target_props = self
             //     .app_ctx
             //     .application
             //     .component_properties(&self.name, self.build_profile.as_ref());
 
             // TODO: figure out source->target names and add to `mapping`
+            // TODO: use: self.app_ctx.component_stub_interfaces(wasm_rpc_dep);
         }
 
         if mapping.is_empty() {
