@@ -2099,6 +2099,7 @@ where
             owned_resources,
             total_linear_memory_size,
             extensions: WorkerStatusRecordExtensions::Extension1 { active_plugins },
+            shadow_worker_id: last_known.shadow_worker_id
         };
         Ok(result)
     }
@@ -2204,6 +2205,7 @@ fn calculate_latest_worker_status(
             OplogEntry::SuccessfulUpdateV1 { .. } => {}
             OplogEntry::ActivatePlugin { .. } => {}
             OplogEntry::DeactivatePlugin { .. } => {}
+            OplogEntry::SetShadowWorkerId { .. } => {}
         }
     }
     result

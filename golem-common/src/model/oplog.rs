@@ -465,6 +465,11 @@ pub enum OplogEntry {
         new_component_size: u64,
         new_active_plugins: HashSet<PluginInstallationId>,
     },
+
+    SetShadowWorkerId {
+        timestamp: Timestamp,
+        shadow_worker_id: WorkerId,
+    },
 }
 
 impl OplogEntry {
@@ -660,6 +665,13 @@ impl OplogEntry {
         }
     }
 
+    pub fn set_shadow_worker_id(shadow_worker_id: WorkerId) -> OplogEntry {
+        OplogEntry::SetShadowWorkerId {
+            timestamp: Timestamp::now_utc(),
+            shadow_worker_id,
+        }
+    }
+
     pub fn is_end_atomic_region(&self, idx: OplogIndex) -> bool {
         matches!(self, OplogEntry::EndAtomicRegion { begin_index, .. } if *begin_index == idx)
     }
@@ -746,6 +758,7 @@ impl OplogEntry {
             | OplogEntry::CreateV1 { timestamp, .. }
             | OplogEntry::SuccessfulUpdateV1 { timestamp, .. }
             | OplogEntry::ActivatePlugin { timestamp, .. }
+            | OplogEntry::SetShadowWorkerId { timestamp, .. }
             | OplogEntry::DeactivatePlugin { timestamp, .. } => *timestamp,
         }
     }

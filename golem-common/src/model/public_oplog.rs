@@ -819,6 +819,28 @@ impl IntoValue for DeactivatePluginParameters {
     }
 }
 
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+pub struct ShadowWorkerIdParameters {
+    pub timestamp: Timestamp,
+    pub shadow_worker_id: WorkerId,
+}
+
+impl IntoValue for ShadowWorkerIdParameters {
+    fn into_value(self) -> Value {
+        Value::Record(vec![self.timestamp.into_value(), self.shadow_worker_id.into_value()])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("timestamp", Timestamp::get_type()),
+            field("worker_id", WorkerId::get_type()),
+        ])
+    }
+}
+
+
+
 /// A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
 ///
 /// Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
@@ -895,6 +917,8 @@ pub enum PublicOplogEntry {
     ActivatePlugin(ActivatePluginParameters),
     /// Deactivates a plugin
     DeactivatePlugin(DeactivatePluginParameters),
+    /// Shadowed worker id
+    ShadowWorkerId(ShadowWorkerIdParameters)
 }
 
 impl PublicOplogEntry {

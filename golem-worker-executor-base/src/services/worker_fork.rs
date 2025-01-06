@@ -9,7 +9,7 @@ use crate::services::{HasAll, HasOplog};
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
-use golem_common::model::oplog::OplogIndex;
+use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{
     AccountId, ComponentType, OwnedWorkerId, Timestamp, WorkerId, WorkerMetadata,
     WorkerStatusRecord,
@@ -158,6 +158,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerFork
             let entry = source_oplog.read(OplogIndex::from_u64(index)).await;
             new_oplog.add(entry.clone()).await;
         }
+
+        new_oplog.add(OplogEntry::set_shadow_worker_id(source_worker_id.worker_id.clone()))
+            .await;
 
         new_oplog.commit(CommitLevel::Always).await;
 

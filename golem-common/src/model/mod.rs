@@ -840,6 +840,7 @@ pub struct WorkerStatusRecord {
     pub owned_resources: HashMap<WorkerResourceId, WorkerResourceDescription>,
     pub oplog_idx: OplogIndex,
     pub extensions: WorkerStatusRecordExtensions,
+    pub shadow_worker_id: Option<WorkerId>
 }
 
 #[derive(Clone, Debug, PartialEq, Encode, Decode)]
@@ -875,6 +876,7 @@ impl ::bincode::Decode for WorkerStatusRecord {
                     Err(err)
                 }
             })?,
+            shadow_worker_id: Decode::decode(decoder)?
         })
     }
 }
@@ -904,6 +906,7 @@ impl<'__de> BorrowDecode<'__de> for WorkerStatusRecord {
                     Err(err)
                 }
             })?,
+            shadow_worker_id: BorrowDecode::borrow_decode(decoder)?
         })
     }
 }
@@ -942,6 +945,7 @@ impl Default for WorkerStatusRecord {
             extensions: WorkerStatusRecordExtensions::Extension1 {
                 active_plugins: HashSet::new(),
             },
+            shadow_worker_id: None
         }
     }
 }
