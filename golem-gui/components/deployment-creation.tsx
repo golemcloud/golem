@@ -90,7 +90,7 @@ export default function DeploymentCreationPage({
   };
 
   return (
-    <div className="p-5">
+    <div>
       <Typography gutterBottom>Deploy your API on Golem Cloud</Typography>
       <form onSubmit={handleSubmit(onSubmit)}>
         <Stack gap={2} className="w-full">
@@ -104,7 +104,7 @@ export default function DeploymentCreationPage({
                   value: /^(?!:\/\/)([a-zA-Z0-9-_]+\.)+[a-zA-Z]{2,}$/,
                   message: "Please enter a valid domain.",
                 }}}
-              render={({ field }) => <TextField {...field} />}
+              render={({ field }) => <TextField size="small" {...field} />}
             />
 
             <Typography variant="caption" color="error">

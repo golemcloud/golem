@@ -66,7 +66,7 @@ export function StatusFilter() {
         onValueChange={handleChange}
         defaultValue={selectedStatusRef.current} // Use ref value
         placeholder="Status"
-        className="flex w-full p-0 border min-h-10 h-auto items-center justify-between pl-3 rounded-l-full min-w-36"
+        className="flex w-full p-0 border min-h-10 h-auto items-center justify-between pl-3 rounded-l-full min-w-[179px]"
         variant="inverted"
         animation={2}
         maxCount={2}
@@ -140,7 +140,7 @@ export function VersionFilter() {
         onValueChange={handleChange}
         defaultValue={selectedVersionRef.current}
         placeholder="Version"
-        className="flex w-full p-0 border min-h-10 h-auto items-center justify-between pl-3 rounded-l-full min-w-36"
+        className="flex w-full p-0 border min-h-10 h-auto items-center justify-between pl-3 rounded-l-full min-w-[179px]"
         variant="inverted"
         animation={2}
         maxCount={2}

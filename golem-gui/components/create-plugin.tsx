@@ -72,8 +72,8 @@ const CreatePluginForm = () => {
   console.log("error===>", errors);
 
   return (
-    <form onSubmit={handleSubmit(onSubmit)} className="p-5">
-      <Box display="grid" gridTemplateColumns="1fr 1fr" gap={2}>
+    <form onSubmit={handleSubmit(onSubmit)}>
+      <Box display="grid" className="md:grid-cols-2 grid-cols-1" gap={2}>
         {/* Plugin Name */}
         <Controller
           name="name"

@@ -19,14 +19,14 @@ const CustomModal: React.FC<CustomModalProps> = ({ open, onClose, children, head
           top: "50%",
           left: "50%",
           transform: "translate(-50%, -50%)",
-          width: "70%",
+          width: "95%",
           minWidth: "fit-content",
           maxWidth: 600,
           color: "white",
           boxShadow: 24,
           p: 0,
           borderRadius: 2,
-          minHeight:'300px',
+          minHeight:'200px',
           maxHeight: "calc(100vh - 120px)",
           overflowY: "auto",
         }}
@@ -50,30 +50,21 @@ const CustomModal: React.FC<CustomModalProps> = ({ open, onClose, children, head
                 justifyContent: "space-between",
               }}
             >
-              <Typography variant="h5" component="h2">
+              <Typography className="md:text-2xl sm:text-xl text-lg">
                 {heading}
               </Typography>
-              <IconButton
-                onClick={onClose}
-              className="dark:text-[#fff] text-[#333]"
-              >
+              <IconButton onClick={onClose} className="text-muted-foreground">
                 <CloseIcon />
               </IconButton>
             </Box>
             {subheading && (
-              <Typography
-                variant="body1"
-                sx={{
-                  mt: 1,
-                  color: "#cccccc",
-                }}
-              >
+              <Typography variant="body2" className="text-muted-foreground">
                 {subheading}
               </Typography>
             )}
           </Box>
         )}
-        <Box sx={{ p: 2 }}>{children}</Box>
+        <Box className="md:p-5 sm:p-3 p-2">{children}</Box>
       </Box>
     </Modal>
   );

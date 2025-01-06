@@ -98,7 +98,7 @@ const removeArgumentVar = (index: number) => {
   };
 
   return (
-    <form className="p-5" onSubmit={handleSubmit(onSubmit)}>
+    <form onSubmit={handleSubmit(onSubmit)}>
       <Box sx={{ display: "flex", gap: 2}}>
         <FormControl fullWidth>
           <Typography variant="body2" sx={{ mb: 1 }}>

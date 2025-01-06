@@ -144,7 +144,7 @@ const Overview = () => {
     <>
       <SecondaryHeader onClick={() => setIsOpen(true)} variant="components" />
       {isSameError && <ErrorBoundary message={error}/>}
-      <div className="mx-auto max-w-7xl px-6 lg:px-8">
+      <div className="mx-auto max-w-7xl px-2 md:px-6 lg:px-8">
         <div className="mx-auto max-w-2xl lg:max-w-none py-4">
           <ErrorBoundary message={!isSameError ? error: ""}/>
           <Grid container spacing={4}>

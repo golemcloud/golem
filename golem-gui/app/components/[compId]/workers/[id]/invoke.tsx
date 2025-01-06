@@ -107,7 +107,7 @@ export default function InvokePage({ worker }: { worker: Worker }) {
   }
 
   return (
-    <div className="mx-auto max-w-7xl px-6 lg:px-8">
+    <div className="mx-auto max-w-7xl px-2 md:px-6 lg:px-8">
       <div className="mx-auto max-w-2xl lg:max-w-none py-4">
         <Paper
           sx={{

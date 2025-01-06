@@ -96,7 +96,7 @@ export default function Editors() {
             </>
           )}
           {trigger?.type === "route" && (
-            <div className="p-5">
+            <>
               {trigger?.operation === "new_route" && (
                 <NewRouteForm
                   apiId={apiId}
@@ -129,7 +129,7 @@ export default function Editors() {
                   isExperimental={true}
                 />
               )}
-            </div>
+            </>
           )}
         </>
       </CustomModal>

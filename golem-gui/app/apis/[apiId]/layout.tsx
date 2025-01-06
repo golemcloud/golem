@@ -81,8 +81,8 @@ export default function APISLayout({
         />
         {error && <ErrorBoundary message={error}/>}
 
-        <div className="mx-auto max-w-7xl px-6 lg:px-8">
-          <div className="mx-auto max-w-2xl lg:max-w-none p-5">
+        <div className="mx-auto max-w-7xl px-2 md:px-4 lg:px-8">
+          <div className="mx-auto max-w-2xl lg:max-w-none py-5 md:p-5">
             <CustomModal
               open={open}
               onClose={() => setOpen(false)}
