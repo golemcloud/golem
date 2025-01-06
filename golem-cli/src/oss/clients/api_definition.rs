@@ -20,7 +20,7 @@ use async_trait::async_trait;
 use golem_client::model::{HttpApiDefinitionRequest, HttpApiDefinitionResponseData};
 use golem_worker_service_base::gateway_api_definition::http::{
     openapi_export::{OpenApiExporter, OpenApiFormat},
-    swagger_ui::{create_api_route, SwaggerUiConfig},
+    swagger_ui::{create_api_route, SwaggerUiConfig, SwaggerUiAuthConfig},
 };
 use poem::listener::TcpListener;
 use poem_openapi::{
@@ -268,6 +268,9 @@ impl<C: golem_client::api::ApiDefinitionClient + Sync + Send> ApiDefinitionClien
             title: Some(format!("API Definition: {} ({})", id.0, version.0)),
             version: Some(version.0.clone()),
             server_url: Some(format!("http://localhost:{}", port)),
+            auth: SwaggerUiAuthConfig::default(),
+            worker_binding: None,
+            golem_extensions: std::collections::HashMap::new(),
         };
 
         // Create API route with SwaggerUI
