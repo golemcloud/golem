@@ -12,6 +12,35 @@ import {
   Paper,
 } from "@mui/material";
 
+//this type is temporary for now as we haven't worked on logs yet
+
+type LogEntry = {
+  type: string;
+  timestamp: string;
+  worker_id: {
+    componentId: string;
+    workerName: string;
+  };
+  env: Record<string, string | number | boolean>;
+  account_id: string;
+  parent?: {
+    componentId: string;
+    workerName: string;
+  };
+  initial_total_linear_memory_size: number;
+  initial_active_plugins: Array<{
+    plugin_name: string;
+    plugin_version: string;
+    installation_id: string;
+    parameters: Record<string, string | number | boolean>;
+  }>;
+};
+
+type Log = {
+  entry: LogEntry;
+};
+
+
 export default function WorkerLogs() {
   const { compId } = useParams<{ compId: string }>();
   const { id: workerName } = useParams<{ id: string }>();
@@ -46,7 +75,7 @@ export default function WorkerLogs() {
   return (
     <Box p={3}>
       <List>
-        {entries.map((log:any, index: number) => (
+        {entries.map((log:Log , index: number) => (
           <Paper
             key={index}
             variant="outlined"
@@ -103,7 +132,7 @@ export default function WorkerLogs() {
               Active Plugins:
             </Typography>
             <List dense>
-              {log.entry.initial_active_plugins.map((plugin: any, idx: number) => (
+              {log.entry.initial_active_plugins.map((plugin, idx: number) => (
                 <Box key={idx} sx={{ mb: 2 }}>
                   <Typography>Plugin Name: {plugin.plugin_name}</Typography>
                   <Typography>Plugin Version: {plugin.plugin_version}</Typography>

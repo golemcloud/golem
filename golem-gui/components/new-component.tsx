@@ -62,10 +62,6 @@ export default function ComponentForm({
   const files = watch("files");
   const [error, setError] = React.useState<string | null>(null);
 
-  const handleFilesUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const uploadedFiles = Array.from(e.target.files || []);
-    setValue("files", [...getValues("files"), ...uploadedFiles]);
-  };
 
   const handleFileDelete = (index: number) => {
     const updatedFiles = files?.filter((_, i) => i !== index);
@@ -100,8 +96,8 @@ export default function ComponentForm({
     }
   };
   const onDrop = useCallback(
-    (acceptedFiles: any) => {
-      setValue("files", [...getValues("files"), ...acceptedFiles]);
+    (acceptedFiles: File[]) => {
+      setValue("files", [...getValues().files, ...acceptedFiles]);
     },
     [getValues, setValue]
   );

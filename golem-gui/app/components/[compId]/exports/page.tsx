@@ -9,19 +9,6 @@ import SecondaryHeader from "@/components/ui/secondary-header";
 import { Box } from "@mui/material";
 import ErrorBoundary from "@/components/erro-boundary";
 
-type Column<T> = {
-  key: string;
-  label: string;
-  accessor: (item: T) => React.ReactNode;
-  align?: "left" | "center" | "right";
-};
-
-type ExportsTableProps<T> = {
-  data: T[];
-  columns: Column<T>[];
-  onRowClick?: (item: T) => void;
-};
-
 type DataItem = {
   package: string;
   method: string;
@@ -29,17 +16,13 @@ type DataItem = {
   returnType: string;
 };
 
-export  function ExportsTable<T>({}: // data,
-// columns,
-// onRowClick,
-ExportsTableProps<T>) {
+export default function ExportsPage() {
   const { compId } = useParams<{ compId: string }>();
   const { components, error } = useComponents(compId, "latest");
   const [latestComponent] = components;
 
   const exports = useMemo(() => {
-    const metaExports = (latestComponent?.metadata?.exports ||
-      []) as ComponentExport[];
+    const metaExports = (latestComponent?.metadata?.exports || []) as ComponentExport[];
     return metaExports.flatMap((exportItem) =>
       exportItem.type === "Instance"
         ? exportItem.functions.map((func) => ({
@@ -67,9 +50,7 @@ ExportsTableProps<T>) {
       .map((result) => {
         if (result?.typ?.type === "Variant") {
           return result?.typ?.cases
-            ?.map(
-              (variant) => `${variant.name}(${variant?.typ?.type || "Record"})`
-            )
+            ?.map((variant) => `${variant.name}(${variant?.typ?.type || "Record"})`)
             .join(" | ");
         } else if (result?.typ?.type === "List") {
           return `List<Record>`;
@@ -85,7 +66,7 @@ ExportsTableProps<T>) {
       <Box sx={{ display: { xs: "block", md: "none" } }}>
         <SecondaryHeader onClick={() => {}} variant="components" />
       </Box>
-      {error && <ErrorBoundary message={error}/>}
+      {error && <ErrorBoundary message={error} />}
       <div className="mx-auto max-w-7xl px-6 lg:px-8">
         <div className="mx-auto max-w-2xl lg:max-w-none py-4">
           <GenericTable
@@ -109,8 +90,7 @@ ExportsTableProps<T>) {
                     .split(", ")
                     .map((param: string, index: number) => (
                       <div key={index}>
-                        <strong>{param.split(":")[0]}:</strong>{" "}
-                        {param.split(":")[1]}
+                        <strong>{param.split(":")[0]}:</strong> {param.split(":")[1]}
                       </div>
                     )),
               },
@@ -122,13 +102,12 @@ ExportsTableProps<T>) {
                     .split(", ")
                     .map((result: string, index: number) => (
                       <div key={index}>
-                        <strong>{result.split(":")[0]}:</strong>{" "}
-                        {result.split(":")[1]}
+                        <strong>{result.split(":")[0]}:</strong> {result.split(":")[1]}
                       </div>
                     )),
               },
             ]}
-            //   onRowClick={onRowClick}
+            // onRowClick={onRowClick}
           />
         </div>
       </div>

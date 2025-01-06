@@ -30,7 +30,7 @@ import ErrorBoundary from "@/components/erro-boundary";
 import NotFoundCard from "@/components/not-found-card";
 import SearchIcon from "@mui/icons-material/Search";
 
-export const PluginsPage = () => {
+const PluginsPage = () => {
   const [open, setOpen] = useState(false);
   const { plugins, isLoading, error } = usePlugins();
   const { deletePlugin } = useDeletePlugin();

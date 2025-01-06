@@ -27,6 +27,8 @@ import {
  * Variants for the multi-select component to handle different styles.
  * Uses class-variance-authority (cva) to define different styles based on "variant" prop.
  */
+
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const multiSelectVariants = cva(
   "m-1 transition ease-in-out delay-150 hover:-translate-y-1 hover:scale-110 duration-300",
   {
