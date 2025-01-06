@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+package golem.workerexecutor.v1;
+
+enum StandardHttpMethod {
+  GET = 0;
+  HEAD = 1;
+  POST = 2;
+  PUT = 3;
+  DELETE = 4;
+  CONNECT = 5;
+  OPTIONS = 6;
+  TRACE = 7;
+  PATCH = 8;
+}
+
+message HttpMethod {
+  // only one of these should be set
+  optional StandardHttpMethod standard_method = 1;
+  optional string custom_method = 2;
+}
+
+enum StandardHttpScheme {
+  HTTP = 0;
+  HTTPS = 1;
+}
+
+message HttpScheme {
+  // only one of these should be set
+  optional StandardHttpScheme standard_scheme = 1;
+  optional string custom_scheme = 2;
+}
+
+message HttpField {
+  string name = 1;
+  string value = 2;
+}
+
+// Either http headers or trailers
+message HttpFields {
+  repeated HttpField fields = 1;
+}

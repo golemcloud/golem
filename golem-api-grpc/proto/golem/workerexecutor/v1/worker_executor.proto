@@ -21,6 +21,7 @@ import public "golem/worker/worker_status.proto";
 import public "golem/worker/worker_filter.proto";
 import public "golem/worker/v1/worker_execution_error.proto";
 import public "golem/worker/filesystem.proto";
+import public "golem/workerexecutor/v1/http.proto";
 
 import public "wasm/rpc/val.proto";
 import public "wasm/rpc/type_annotated_value.proto";
@@ -32,6 +33,7 @@ service WorkerExecutor {
   rpc InvokeAndAwaitWorker(InvokeAndAwaitWorkerRequest) returns (InvokeAndAwaitWorkerResponse);
   rpc InvokeAndAwaitWorkerTyped(InvokeAndAwaitWorkerRequest) returns (InvokeAndAwaitWorkerResponseTyped);
   rpc InvokeWorker(InvokeWorkerRequest) returns (InvokeWorkerResponse);
+  rpc InvokeWorkerHttpHandler(stream InvokeWorkerHttpHandlerRequest) returns (stream InvokeWorkerHttpHandlerResponse);
   rpc ConnectWorker(ConnectWorkerRequest) returns (stream golem.worker.LogEvent);
   rpc DeleteWorker(DeleteWorkerRequest) returns (DeleteWorkerResponse);
   rpc CompletePromise(CompletePromiseRequest) returns (CompletePromiseResponse);
@@ -155,6 +157,60 @@ message InvokeWorkerRequest {
   golem.common.AccountId account_id = 5;
   golem.common.ResourceLimits account_limits = 6;
   optional golem.worker.InvocationContext context = 7;
+}
+
+message InvokeWorkerHttpHandlerRequest {
+  oneof data {
+    InvokeWorkerHttpHandlerRequestHeader header = 1;
+    InvokeWorkerHttpHandlerRequestChunk chunk = 2;
+    InvokeWorkerHttpHandlerRequestTrailer trailer = 3;
+  }
+}
+
+message InvokeWorkerHttpHandlerRequestHeader {
+  golem.worker.TargetWorkerId worker_id = 1;
+  golem.common.AccountId account_id = 2;
+  golem.common.ResourceLimits account_limits = 3;
+  optional golem.worker.InvocationContext context = 4;
+  HttpMethod method = 5;
+  string path_with_query = 6;
+  HttpScheme scheme = 7;
+  string authority = 8;
+  HttpFields headers = 9;
+}
+
+message InvokeWorkerHttpHandlerRequestChunk {
+  bytes bodyChunk = 1;
+}
+
+message InvokeWorkerHttpHandlerRequestTrailer {
+  HttpFields trailers = 1;
+}
+
+message InvokeWorkerHttpHandlerResponse {
+  oneof data {
+    InvokeWorkerHttpHandlerResponseHeader header = 1;
+    InvokeWorkerHttpHandlerResponseChunk chunk = 2;
+    InvokeWorkerHttpHandlerResponseTrailer trailer = 3;
+  }
+}
+
+message InvokeWorkerHttpHandlerResponseHeader {
+  InvokeWorkerHttpHandlerResponseHeaderSuccess success = 1;
+  golem.worker.v1.WorkerExecutionError failure = 2;
+}
+
+message InvokeWorkerHttpHandlerResponseHeaderSuccess {
+  int32 status_code = 1;
+  HttpFields headers = 2;
+}
+
+message InvokeWorkerHttpHandlerResponseChunk {
+  bytes body_chunk = 1;
+}
+
+message InvokeWorkerHttpHandlerResponseTrailer {
+  HttpFields headers = 1;
 }
 
 message ConnectWorkerRequest {
