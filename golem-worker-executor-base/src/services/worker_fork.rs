@@ -9,7 +9,7 @@ use crate::services::{HasAll, HasComponentService, HasConfig, HasOplog};
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
-use golem_common::model::oplog::OplogIndex;
+use golem_common::model::oplog::{OplogIndex, OplogIndexRange};
 use golem_common::model::{
     AccountId, ComponentType, OwnedWorkerId, Timestamp, WorkerId, WorkerMetadata,
     WorkerStatusRecord,
@@ -150,11 +150,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerFork
             )
             .await;
 
-        let second_index = u64::from(OplogIndex::INITIAL.next());
-        let cut_off_index = u64::from(oplog_index_cut_off);
+        let oplog_range =
+            OplogIndexRange::new(OplogIndex::INITIAL.next(), oplog_index_cut_off);
 
-        for index in second_index..=cut_off_index {
-            let entry = source_oplog.read(OplogIndex::from_u64(index)).await;
+        for oplog_index in oplog_range {
+            let entry = source_oplog.read(oplog_index).await;
             new_oplog.add(entry.clone()).await;
         }
 
