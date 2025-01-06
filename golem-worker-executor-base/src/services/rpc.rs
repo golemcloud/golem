@@ -149,6 +149,19 @@ impl From<WorkerProxyError> for RpcError {
     }
 }
 
+impl From<golem_wasm_rpc::RpcError> for RpcError {
+    fn from(value: golem_wasm_rpc::RpcError) -> Self {
+        match value {
+            golem_wasm_rpc::RpcError::ProtocolError(details) => Self::ProtocolError { details },
+            golem_wasm_rpc::RpcError::Denied(details) => Self::Denied { details },
+            golem_wasm_rpc::RpcError::NotFound(details) => Self::NotFound { details },
+            golem_wasm_rpc::RpcError::RemoteInternalError(details) => {
+                Self::RemoteInternalError { details }
+            }
+        }
+    }
+}
+
 pub trait RpcDemand: Send + Sync {}
 
 pub struct RemoteInvocationRpc {

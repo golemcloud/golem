@@ -34,6 +34,7 @@ use golem_api_grpc::proto::golem::worker::v1::{
 use golem_api_grpc::proto::golem::worker::{
     log_event, InvokeParameters, LogEvent, StdErrLog, StdOutLog, UpdateMode,
 };
+use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::oplog::{
     OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerResourceId,
 };
@@ -79,6 +80,17 @@ pub trait TestDsl {
         component_type: ComponentType,
         files: &[InitialComponentFile],
     ) -> ComponentId;
+    async fn store_component_with_dynamic_linking(
+        &self,
+        name: &str,
+        dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
+    ) -> ComponentId;
+    async fn store_unique_component_with_dynamic_linking(
+        &self,
+        name: &str,
+        dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
+    ) -> ComponentId;
+
     async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion;
 
     async fn update_component_with_files(
@@ -306,7 +318,13 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         let uuid = Uuid::new_v4();
         let unique_name = format!("{name}-{uuid}");
         self.component_service()
-            .add_component_with_files(&source_path, &unique_name, component_type, files)
+            .add_component_with_files(
+                &source_path,
+                &unique_name,
+                component_type,
+                files,
+                &HashMap::new(),
+            )
             .await
             .expect("Failed to store component")
     }
@@ -319,9 +337,57 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
     ) -> ComponentId {
         let source_path = self.component_directory().join(format!("{name}.wasm"));
         self.component_service()
-            .add_component_with_files(&source_path, name, component_type, files)
+            .add_component_with_files(&source_path, name, component_type, files, &HashMap::new())
             .await
             .expect("Failed to store component with id {component_id}")
+    }
+
+    async fn store_component_with_dynamic_linking(
+        &self,
+        name: &str,
+        dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
+    ) -> ComponentId {
+        let source_path = self.component_directory().join(format!("{name}.wasm"));
+        let dynamic_linking = HashMap::from_iter(
+            dynamic_linking
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.clone())),
+        );
+        self.component_service()
+            .add_component_with_files(
+                &source_path,
+                name,
+                ComponentType::Durable,
+                &[],
+                &dynamic_linking,
+            )
+            .await
+            .expect("Failed to store component with id {component_id}")
+    }
+
+    async fn store_unique_component_with_dynamic_linking(
+        &self,
+        name: &str,
+        dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
+    ) -> ComponentId {
+        let source_path = self.component_directory().join(format!("{name}.wasm"));
+        let uuid = Uuid::new_v4();
+        let unique_name = format!("{name}-{uuid}");
+        let dynamic_linking = HashMap::from_iter(
+            dynamic_linking
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.clone())),
+        );
+        self.component_service()
+            .add_component_with_files(
+                &source_path,
+                &unique_name,
+                ComponentType::Durable,
+                &[],
+                &dynamic_linking,
+            )
+            .await
+            .expect("Failed to store component")
     }
 
     async fn add_initial_component_file(
@@ -355,7 +421,13 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
     ) -> ComponentVersion {
         let source_path = self.component_directory().join(format!("{name}.wasm"));
         self.component_service()
-            .update_component_with_files(component_id, &source_path, ComponentType::Durable, files)
+            .update_component_with_files(
+                component_id,
+                &source_path,
+                ComponentType::Durable,
+                files,
+                &HashMap::new(),
+            )
             .await
     }
 
@@ -1436,6 +1508,17 @@ pub trait TestDslUnsafe {
         component_type: ComponentType,
         files: &[InitialComponentFile],
     ) -> ComponentId;
+    async fn store_component_with_dynamic_linking(
+        &self,
+        name: &str,
+        dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
+    ) -> ComponentId;
+    async fn store_unique_component_with_dynamic_linking(
+        &self,
+        name: &str,
+        dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
+    ) -> ComponentId;
+
     async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion;
     async fn update_component_with_files(
         &self,
@@ -1618,6 +1701,23 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         files: &[InitialComponentFile],
     ) -> ComponentId {
         <T as TestDsl>::store_component_with_files(self, name, component_type, files).await
+    }
+
+    async fn store_component_with_dynamic_linking(
+        &self,
+        name: &str,
+        dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
+    ) -> ComponentId {
+        <T as TestDsl>::store_component_with_dynamic_linking(self, name, dynamic_linking).await
+    }
+
+    async fn store_unique_component_with_dynamic_linking(
+        &self,
+        name: &str,
+        dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
+    ) -> ComponentId {
+        <T as TestDsl>::store_unique_component_with_dynamic_linking(self, name, dynamic_linking)
+            .await
     }
 
     async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion {

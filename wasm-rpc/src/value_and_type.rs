@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::Value;
-use golem_wasm_ast::analysis::analysed_type::{list, option, result, result_err, result_ok, tuple};
+use crate::{RpcError, Value};
+use golem_wasm_ast::analysis::analysed_type::{
+    list, option, result, result_err, result_ok, tuple, variant,
+};
 use golem_wasm_ast::analysis::{analysed_type, AnalysedType};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -530,5 +532,40 @@ impl IntoValue for Duration {
 
     fn get_type() -> AnalysedType {
         analysed_type::u64()
+    }
+}
+
+#[cfg(feature = "host-bindings")]
+impl IntoValue for crate::RpcError {
+    fn into_value(self) -> Value {
+        match self {
+            RpcError::ProtocolError(value) => Value::Variant {
+                case_idx: 0,
+                case_value: Some(Box::new(Value::String(value))),
+            },
+            RpcError::Denied(value) => Value::Variant {
+                case_idx: 1,
+                case_value: Some(Box::new(Value::String(value))),
+            },
+            RpcError::NotFound(value) => Value::Variant {
+                case_idx: 2,
+                case_value: Some(Box::new(Value::String(value))),
+            },
+            RpcError::RemoteInternalError(value) => Value::Variant {
+                case_idx: 3,
+                case_value: Some(Box::new(Value::String(value))),
+            },
+        }
+    }
+
+    fn get_type() -> AnalysedType {
+        use analysed_type::case;
+
+        variant(vec![
+            case("protocol-error", analysed_type::str()),
+            case("denied", analysed_type::str()),
+            case("not-found", analysed_type::str()),
+            case("remote-internal-error", analysed_type::str()),
+        ])
     }
 }

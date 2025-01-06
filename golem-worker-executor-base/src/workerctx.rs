@@ -15,12 +15,6 @@
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock, Weak};
 
-use async_trait::async_trait;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::wasmtime::ResourceStore;
-use golem_wasm_rpc::Value;
-use wasmtime::{AsContextMut, ResourceLimiterAsync};
-
 use crate::error::GolemError;
 use crate::model::{
     CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, ListDirectoryResult,
@@ -44,13 +38,22 @@ use crate::services::{
     worker_enumeration, HasAll, HasConfig, HasOplog, HasOplogService, HasWorker,
 };
 use crate::worker::{RetryDecision, Worker};
+use async_trait::async_trait;
 use golem_common::model::component::ComponentOwner;
 use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::plugin::PluginScope;
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentVersion, IdempotencyKey, OwnedWorkerId,
-    PluginInstallationId, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+    PluginInstallationId, TargetWorkerId, WorkerId, WorkerMetadata, WorkerStatus,
+    WorkerStatusRecord,
 };
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::wasmtime::ResourceStore;
+use golem_wasm_rpc::Value;
+use wasmtime::component::{Component, Linker};
+use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
+use wasmtime_wasi::WasiView;
+use wasmtime_wasi_http::WasiHttpView;
 
 /// WorkerCtx is the primary customization and extension point of worker executor. It is the context
 /// associated with each running worker, and it is responsible for initializing the WASM linker as
@@ -66,6 +69,7 @@ pub trait WorkerCtx:
     + IndexedResourceStore
     + UpdateManagement
     + FileSystemReading
+    + DynamicLinking<Self>
     + Send
     + Sync
     + Sized
@@ -132,6 +136,9 @@ pub trait WorkerCtx:
         >,
     ) -> Result<Self, GolemError>;
 
+    fn as_wasi_view(&mut self) -> impl WasiView;
+    fn as_wasi_http_view(&mut self) -> impl WasiHttpView;
+
     /// Get the public part of the worker context
     fn get_public_state(&self) -> &Self::PublicState;
 
@@ -143,6 +150,9 @@ pub trait WorkerCtx:
 
     /// Get the worker ID associated with this worker context
     fn worker_id(&self) -> &WorkerId;
+
+    /// Get the owned worker ID associated with this worker context
+    fn owned_worker_id(&self) -> &OwnedWorkerId;
 
     fn component_metadata(&self) -> &ComponentMetadata;
 
@@ -157,6 +167,12 @@ pub trait WorkerCtx:
     /// Gets an interface to the worker-proxy which can direct calls to other worker executors
     /// in the cluster
     fn worker_proxy(&self) -> Arc<dyn WorkerProxy + Send + Sync>;
+
+    // TODO: where do this belong
+    async fn generate_unique_local_worker_id(
+        &mut self,
+        remote_worker_id: TargetWorkerId,
+    ) -> Result<WorkerId, GolemError>;
 }
 
 /// The fuel management interface of a worker context is responsible for borrowing and returning
@@ -399,4 +415,15 @@ pub trait FileSystemReading {
         path: &ComponentFilePath,
     ) -> Result<ListDirectoryResult, GolemError>;
     async fn read_file(&self, path: &ComponentFilePath) -> Result<ReadFileResult, GolemError>;
+}
+
+#[async_trait]
+pub trait DynamicLinking<Ctx: WorkerCtx> {
+    fn link(
+        &mut self,
+        engine: &Engine,
+        linker: &mut Linker<Ctx>,
+        component: &Component,
+        component_metadata: &ComponentMetadata,
+    ) -> anyhow::Result<()>;
 }

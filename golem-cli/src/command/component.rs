@@ -23,7 +23,9 @@ use crate::service::component::ComponentService;
 use crate::service::deploy::DeployService;
 use crate::service::project::ProjectResolver;
 use clap::Subcommand;
-use golem_client::model::ComponentType;
+use golem_client::model::{
+    ComponentType, DynamicLinkedInstance, DynamicLinkedWasmRpc, DynamicLinking,
+};
 use golem_common::model::PluginInstallationId;
 use golem_wasm_rpc_stubgen::commands::app::{ApplicationContext, ApplicationSourceMode, Config};
 use golem_wasm_rpc_stubgen::log::Output;
@@ -307,6 +309,7 @@ impl<
                         non_interactive,
                         format,
                         vec![],
+                        None,
                     )
                     .await?;
                 Ok(GolemResult::Ok(Box::new(ComponentAddView(
@@ -324,12 +327,13 @@ impl<
             } => {
                 let project_id = projects.resolve_id_or_default(project_ref).await?;
 
-                let ctx = ApplicationComponentContext::new(
+                let mut ctx = ApplicationComponentContext::new(
                     app,
                     build_profile.map(|profile| profile.into()),
                     &component_name.0,
                 )?;
 
+                let dynamic_linking = ctx.dynamic_linking()?;
                 let component = service
                     .add(
                         component_name,
@@ -339,6 +343,7 @@ impl<
                         non_interactive,
                         format,
                         ctx.extensions.files,
+                        dynamic_linking,
                     )
                     .await?;
                 Ok(GolemResult::Ok(Box::new(ComponentAddView(
@@ -366,6 +371,7 @@ impl<
                         non_interactive,
                         format,
                         vec![],
+                        None,
                     )
                     .await?;
 
@@ -395,12 +401,13 @@ impl<
 
                 let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
 
-                let ctx = ApplicationComponentContext::new(
+                let mut ctx = ApplicationComponentContext::new(
                     app,
                     build_profile.map(|profile| profile.into()),
                     &component_name,
                 )?;
 
+                let dynamic_linking = ctx.dynamic_linking()?;
                 let mut result = service
                     .update(
                         component_name_or_uri.clone(),
@@ -410,6 +417,7 @@ impl<
                         non_interactive,
                         format,
                         ctx.extensions.files,
+                        dynamic_linking,
                     )
                     .await?;
 
@@ -566,5 +574,41 @@ impl ApplicationComponentContext {
             linked_wasm,
             extensions,
         })
+    }
+
+    fn dynamic_linking(&mut self) -> Result<Option<DynamicLinking>, GolemError> {
+        let mut mapping = Vec::new();
+
+        let wasm_rpc_deps = self
+            .app_ctx
+            .application
+            .component_wasm_rpc_dependencies(&self.name)
+            .clone();
+
+        for wasm_rpc_dep in wasm_rpc_deps {
+            let ifaces = self
+                .app_ctx
+                .component_stub_interfaces(&wasm_rpc_dep)
+                .map_err(|err| GolemError(err.to_string()))?;
+
+            mapping.push(ifaces);
+        }
+
+        if mapping.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(DynamicLinking {
+                dynamic_linking: HashMap::from_iter(mapping.into_iter().map(|stub_interfaces| {
+                    (
+                        stub_interfaces.stub_interface_name,
+                        DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
+                            target_interface_name: HashMap::from_iter(
+                                stub_interfaces.exported_interfaces_per_stub_resource,
+                            ),
+                        }),
+                    )
+                })),
+            }))
+        }
     }
 }

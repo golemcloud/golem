@@ -2317,6 +2317,8 @@ paths:
                 files:
                   type: string
                   format: binary
+                dynamicLinking:
+                  $ref: '#/components/schemas/DynamicLinking'
               required:
               - name
               - component
@@ -2472,6 +2474,8 @@ paths:
                 files:
                   type: string
                   format: binary
+                dynamicLinking:
+                  $ref: '#/components/schemas/DynamicLinking'
               required:
               - component
         required: true
@@ -6305,10 +6309,15 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/LinearMemory'
+        dynamicLinking:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/DynamicLinkedInstance'
       required:
       - exports
       - producers
       - memories
+      - dynamicLinking
     ComponentPluginScope:
       type: object
       properties:
@@ -6372,6 +6381,45 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/Empty'
+    DynamicLinkedInstance:
+      discriminator:
+        propertyName: type
+        mapping:
+          WasmRpc: '#/components/schemas/DynamicLinkedInstance_DynamicLinkedWasmRpc'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/DynamicLinkedInstance_DynamicLinkedWasmRpc'
+    DynamicLinkedInstance_DynamicLinkedWasmRpc:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: WasmRpc
+            type: string
+            enum:
+            - WasmRpc
+        required:
+        - type
+      - $ref: '#/components/schemas/DynamicLinkedWasmRpc'
+    DynamicLinkedWasmRpc:
+      type: object
+      properties:
+        targetInterfaceName:
+          description: Maps resource names within the dynamic linked interface to target interfaces
+          type: object
+          additionalProperties:
+            type: string
+      required:
+      - targetInterfaceName
+    DynamicLinking:
+      type: object
+      properties:
+        dynamicLinking:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/DynamicLinkedInstance'
+      required:
+      - dynamicLinking
     InitialComponentFile:
       type: object
       properties:
