@@ -51,6 +51,8 @@ service WorkerExecutor {
 
   rpc ActivatePlugin(ActivatePluginRequest) returns (ActivatePluginResponse);
   rpc DeactivatePlugin(DeactivatePluginRequest) returns (DeactivatePluginResponse);
+
+  rpc GetSwaggerUiContents(GetSwaggerUiContentsRequest) returns (GetSwaggerUiContentsResponse);
 }
 
 message InvokeWorkerResponse {
@@ -377,5 +379,17 @@ message DeactivatePluginResponse {
   oneof result {
     golem.common.Empty success = 1;
     golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message GetSwaggerUiContentsRequest {
+  string worker_id = 1;
+  string mount_path = 2;
+}
+
+message GetSwaggerUiContentsResponse {
+  oneof result {
+    bytes success = 1;
+    string failure = 2;
   }
 }

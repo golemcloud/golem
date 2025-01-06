@@ -79,6 +79,112 @@ impl ToJSON for WitValue {
 #[derive(Debug, Object)]
 struct WitInput {
     /// The raw WIT-formatted value to be converted
+    /// Example for test endpoint:
+    /// ```json
+    /// {
+    ///   "optional_numbers": [42, null, 123],
+    ///   "feature_flags": 7,
+    ///   "nested_data": {
+    ///     "name": "test_nested",
+    ///     "values": [{"string_val": "test"}],
+    ///     "metadata": "Additional info"
+    ///   }
+    /// }
+    /// ```
+    /// Example for primitives endpoint:
+    /// ```json
+    /// {
+    ///   "bool_val": true,
+    ///   "u8_val": 255,
+    ///   "u16_val": 65535,
+    ///   "u32_val": 4294967295,
+    ///   "u64_val": "18446744073709551615",
+    ///   "s8_val": -128,
+    ///   "s16_val": -32768,
+    ///   "s32_val": -2147483648,
+    ///   "s64_val": "-9223372036854775808",
+    ///   "f32_val": 3.14,
+    ///   "f64_val": 3.141592653589793,
+    ///   "char_val": 65,
+    ///   "string_val": "Hello, World!"
+    /// }
+    /// ```
+    /// Example for user profile endpoint:
+    /// ```json
+    /// {
+    ///   "id": 1,
+    ///   "username": "testuser",
+    ///   "settings": {
+    ///     "theme": "dark",
+    ///     "notifications_enabled": true,
+    ///     "email_frequency": "daily"
+    ///   },
+    ///   "permissions": {
+    ///     "can_read": true,
+    ///     "can_write": true,
+    ///     "can_delete": false,
+    ///     "is_admin": false
+    ///   }
+    /// }
+    /// ```
+    /// Example for search endpoint:
+    /// ```json
+    /// {
+    ///   "query": "test search",
+    ///   "filters": {
+    ///     "categories": ["docs", "code"],
+    ///     "date_range": {
+    ///       "start": 1672531200,
+    ///       "end": 1704067200
+    ///     },
+    ///     "flags": {
+    ///       "case_sensitive": true,
+    ///       "whole_word": false,
+    ///       "regex_enabled": true
+    ///     }
+    ///   },
+    ///   "pagination": {
+    ///     "page": 1,
+    ///     "items_per_page": 10
+    ///   }
+    /// }
+    /// ```
+    /// Example for batch endpoint:
+    /// ```json
+    /// {
+    ///   "successful": 42,
+    ///   "failed": 3,
+    ///   "errors": [
+    ///     "Error processing item 1",
+    ///     "Error processing item 2",
+    ///     "Error processing item 3"
+    ///   ]
+    /// }
+    /// ```
+    /// Example for tree endpoint:
+    /// ```json
+    /// {
+    ///   "id": 1,
+    ///   "value": "root",
+    ///   "children": [
+    ///     {
+    ///       "id": 2,
+    ///       "value": "child1",
+    ///       "children": [],
+    ///       "metadata": {
+    ///         "created_at": 1672531200,
+    ///         "modified_at": 1704067200,
+    ///         "tags": ["tag1", "tag2"]
+    ///       }
+    ///     }
+    ///   ],
+    ///   "metadata": {
+    ///     "created_at": 1672531200,
+    ///     "modified_at": 1704067200,
+    ///     "tags": ["root", "main"]
+    ///   }
+    /// }
+    /// ```
     value: WitValue,
 }
 
@@ -324,6 +430,21 @@ struct GenericWitInput {
 #[OpenApi]
 impl WitTypesApi {
     /// Test endpoint that accepts and returns complex WIT types
+    /// 
+    /// Example request:
+    /// ```json
+    /// {
+    ///   "value": {
+    ///     "optional_numbers": [42, null, 123],
+    ///     "feature_flags": 7,
+    ///     "nested_data": {
+    ///       "name": "test_nested",
+    ///       "values": [{"string_val": "test"}],
+    ///       "metadata": "Additional info"
+    ///     }
+    ///   }
+    /// }
+    /// ```
     #[oai(path = "/test", method = "post", tag = "WitTypes")]
     async fn test_wit_types(&self, payload: Json<WitInput>) -> Result<Json<ComplexNestedTypes>> {
         let mut converter = RibConverter::new_wit();
@@ -368,6 +489,27 @@ impl WitTypesApi {
     }
 
     /// Test primitive types
+    /// 
+    /// Example request:
+    /// ```json
+    /// {
+    ///   "value": {
+    ///     "bool_val": true,
+    ///     "u8_val": 255,
+    ///     "u16_val": 65535,
+    ///     "u32_val": 4294967295,
+    ///     "u64_val": "18446744073709551615",
+    ///     "s8_val": -128,
+    ///     "s16_val": -32768,
+    ///     "s32_val": -2147483648,
+    ///     "s64_val": "-9223372036854775808",
+    ///     "f32_val": 3.14,
+    ///     "f64_val": 3.141592653589793,
+    ///     "char_val": 65,
+    ///     "string_val": "Hello, World!"
+    ///   }
+    /// }
+    /// ```
     #[oai(path = "/primitives", method = "post", tag = "WitTypes")]
     async fn test_primitives(&self, payload: Json<WitInput>) -> Result<Json<PrimitiveTypes>> {
         let mut converter = RibConverter::new_wit();
@@ -410,6 +552,27 @@ impl WitTypesApi {
     }
 
     /// Create user profile
+    /// 
+    /// Example request:
+    /// ```json
+    /// {
+    ///   "value": {
+    ///     "id": 1,
+    ///     "username": "testuser",
+    ///     "settings": {
+    ///       "theme": "dark",
+    ///       "notifications_enabled": true,
+    ///       "email_frequency": "daily"
+    ///     },
+    ///     "permissions": {
+    ///       "can_read": true,
+    ///       "can_write": true,
+    ///       "can_delete": false,
+    ///       "is_admin": false
+    ///     }
+    ///   }
+    /// }
+    /// ```
     #[oai(path = "/users/profile", method = "post", tag = "WitTypes")]
     async fn create_user_profile(&self, payload: Json<WitInput>) -> Result<Json<UserProfile>> {
         let mut converter = RibConverter::new_wit();
@@ -452,6 +615,31 @@ impl WitTypesApi {
     }
 
     /// Perform search operation
+    /// 
+    /// Example request:
+    /// ```json
+    /// {
+    ///   "value": {
+    ///     "query": "test search",
+    ///     "filters": {
+    ///       "categories": ["docs", "code"],
+    ///       "date_range": {
+    ///         "start": 1672531200,
+    ///         "end": 1704067200
+    ///       },
+    ///       "flags": {
+    ///         "case_sensitive": true,
+    ///         "whole_word": false,
+    ///         "regex_enabled": true
+    ///       }
+    ///     },
+    ///     "pagination": {
+    ///       "page": 1,
+    ///       "items_per_page": 10
+    ///     }
+    ///   }
+    /// }
+    /// ```
     #[oai(path = "/search", method = "post", tag = "WitTypes")]
     async fn perform_search(&self, payload: Json<WitInput>) -> Result<Json<SearchResult>> {
         let mut converter = RibConverter::new_wit();
@@ -494,6 +682,21 @@ impl WitTypesApi {
     }
 
     /// Execute batch operation
+    /// 
+    /// Example request:
+    /// ```json
+    /// {
+    ///   "value": {
+    ///     "successful": 42,
+    ///     "failed": 3,
+    ///     "errors": [
+    ///       "Error processing item 1",
+    ///       "Error processing item 2",
+    ///       "Error processing item 3"
+    ///     ]
+    ///   }
+    /// }
+    /// ```
     #[oai(path = "/batch", method = "post", tag = "WitTypes")]
     async fn execute_batch(&self, payload: Json<WitInput>) -> Result<Json<BatchResult>> {
         let mut converter = RibConverter::new_wit();
@@ -536,6 +739,33 @@ impl WitTypesApi {
     }
 
     /// Create tree node
+    /// 
+    /// Example request:
+    /// ```json
+    /// {
+    ///   "value": {
+    ///     "id": 1,
+    ///     "value": "root",
+    ///     "children": [
+    ///       {
+    ///         "id": 2,
+    ///         "value": "child1",
+    ///         "children": [],
+    ///         "metadata": {
+    ///           "created_at": 1672531200,
+    ///           "modified_at": 1704067200,
+    ///           "tags": ["tag1", "tag2"]
+    ///         }
+    ///       }
+    ///     ],
+    ///     "metadata": {
+    ///       "created_at": 1672531200,
+    ///       "modified_at": 1704067200,
+    ///       "tags": ["root", "main"]
+    ///     }
+    ///   }
+    /// }
+    /// ```
     #[oai(path = "/tree", method = "post", tag = "WitTypes")]
     async fn create_tree(&self, payload: Json<WitInput>) -> Result<Json<TreeNode>> {
         let mut converter = RibConverter::new_wit();

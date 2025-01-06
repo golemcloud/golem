@@ -4,7 +4,7 @@ use golem_worker_service_base::{
     },
     gateway_api_definition::http::{
         openapi_export::{OpenApiExporter, OpenApiFormat},
-        swagger_ui::{SwaggerUiConfig, create_swagger_ui},
+        swagger_ui::{SwaggerUiConfig, SwaggerUiAuthConfig, create_swagger_ui},
     },
 };
 use std::net::SocketAddr;
@@ -32,6 +32,9 @@ async fn setup_golem_server() -> SocketAddr {
         enabled: true,
         title: Some("RIB API Documentation".to_string()),
         version: Some("1.0".to_string()),
+        auth: SwaggerUiAuthConfig::default(),
+        worker_binding: None,
+        golem_extensions: std::collections::HashMap::new(),
     };
 
     // Create RIB API service with Swagger UI
@@ -452,6 +455,9 @@ async fn export_golem_swagger_ui(base_url: &str) -> anyhow::Result<()> {
         enabled: true,
         title: Some("RIB API Documentation".to_string()),
         version: Some("1.0".to_string()),
+        auth: SwaggerUiAuthConfig::default(),
+        worker_binding: None,
+        golem_extensions: std::collections::HashMap::new(),
     };
 
     let service = create_swagger_ui(api, &config);

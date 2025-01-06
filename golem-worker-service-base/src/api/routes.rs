@@ -5,6 +5,9 @@ use std::sync::Arc;
 use crate::service::gateway::api_definition::ApiDefinitionError;
 use crate::gateway_middleware::{HttpCors, HttpMiddleware};
 use poem::middleware::Middleware;
+use poem::web::{Path, Json};
+use poem::handler;
+use serde::{Serialize, Deserialize};
 
 use super::healthcheck::healthcheck_routes;
 use super::rib_endpoints::RibApi;
@@ -17,6 +20,29 @@ use crate::repo::api_deployment::ApiDeploymentRepo;
 use crate::service::gateway::security_scheme::SecuritySchemeService;
 use golem_service_base::auth::DefaultNamespace;
 use crate::gateway_api_definition::http::HttpApiDefinition;
+use crate::gateway_api_definition::http::swagger_ui::SwaggerUiConfig;
+
+#[derive(Debug, Serialize, Deserialize)]
+struct DynamicRequest {
+    message: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct DynamicResponse {
+    result: String,
+}
+
+#[handler]
+async fn handle_test() -> poem::Result<String> {
+    Ok("test".to_string())
+}
+
+#[handler]
+async fn handle_dynamic(path: Path<String>, payload: Json<DynamicRequest>) -> poem::Result<Json<DynamicResponse>> {
+    Ok(Json(DynamicResponse {
+        result: format!("dynamic: {} - {}", path.0, payload.0.message),
+    }))
+}
 
 /// Creates a consistent CORS middleware configuration used across the application
 pub fn create_cors_middleware<E: Endpoint>() -> impl Middleware<E> {
@@ -44,6 +70,7 @@ pub async fn create_api_router<AuthCtx>(
     _deployment_repo: Arc<dyn ApiDeploymentRepo + Sync + Send>,
     _security_scheme_service: Arc<dyn SecuritySchemeService<DefaultNamespace> + Sync + Send>,
     _api_definition_validator: Arc<dyn ApiDefinitionValidatorService<HttpApiDefinition> + Sync + Send>,
+    swagger_config: Option<SwaggerUiConfig>,
 ) -> Result<impl Endpoint, ApiDefinitionError>
 where
     AuthCtx: Send + Sync + Default + 'static,
@@ -69,8 +96,8 @@ where
     let rib_spec = rib_api.spec_endpoint();
     let wit_spec = wit_api.spec_endpoint();
 
-    // Create the route tree
-    let base_route = Route::new()
+    // Create the base route tree
+    let mut base_route = Route::new()
         .at("/api/openapi", rib_spec)
         .at("/api/wit-types/doc", wit_spec)
         .nest("/api/v1/swagger-ui", rib_ui)
@@ -78,6 +105,21 @@ where
         .nest("/api", rib_api)
         .nest("/api/wit-types", wit_api)
         .nest("/api/v1", health_api);
+
+    // If swagger config is provided, add dynamic routes
+    if let Some(config) = swagger_config {
+        if let Some(worker_binding) = config.worker_binding {
+            // Add dynamic routes based on worker binding configuration
+            let mount_path = worker_binding.mount_path.trim_start_matches('/');
+            base_route = base_route
+                .nest(
+                    &format!("/{}", mount_path),
+                    Route::new()
+                        .at("/test", handle_test)
+                        .at("/dynamic/:path", handle_dynamic)
+                );
+        }
+    }
 
     // Apply middleware to the base route
     Ok(base_route

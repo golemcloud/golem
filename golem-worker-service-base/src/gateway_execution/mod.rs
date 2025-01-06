@@ -21,6 +21,7 @@ pub mod file_server_binding_handler;
 pub mod gateway_binding_resolver;
 pub mod gateway_http_input_executor;
 pub mod gateway_session;
+pub mod swagger_ui_binding_handler;
 mod gateway_worker_request_executor;
 mod http_content_type_mapper;
 pub mod rib_input_value_resolver;

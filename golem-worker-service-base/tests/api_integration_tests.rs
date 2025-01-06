@@ -7,7 +7,7 @@ mod api_integration_tests {
         Json as AxumJson,
     };
     use golem_worker_service_base::gateway_api_definition::http::{
-        swagger_ui::{SwaggerUiConfig, create_swagger_ui},
+        swagger_ui::{SwaggerUiConfig, create_swagger_ui, SwaggerUiAuthConfig},
     };
     use serde::{Deserialize, Serialize};
     use std::net::SocketAddr;
@@ -71,6 +71,9 @@ mod api_integration_tests {
             title: Some("Test API".to_string()),
             version: Some("1.0".to_string()),
             server_url: None,
+            auth: SwaggerUiAuthConfig::default(),
+            worker_binding: None,
+            golem_extensions: std::collections::HashMap::new(),
         });
         let spec = service.spec();
         AxumJson(serde_json::from_str(&spec).unwrap())
@@ -82,6 +85,9 @@ mod api_integration_tests {
             title: Some("Test API".to_string()),
             version: Some("1.0".to_string()),
             server_url: None,
+            auth: SwaggerUiAuthConfig::default(),
+            worker_binding: None,
+            golem_extensions: std::collections::HashMap::new(),
         };
 
         let service = create_swagger_ui(ApiDoc, &config);

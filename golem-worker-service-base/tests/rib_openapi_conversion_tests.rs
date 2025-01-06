@@ -1,8 +1,5 @@
-test_r::enable!();
-
 #[cfg(test)]
-mod rib_openapi_conversion_tests {
-    use test_r::test;
+mod tests {
     use golem_wasm_ast::analysis::{
         AnalysedType,
         TypeBool,
@@ -468,4 +465,4 @@ mod rib_openapi_conversion_tests {
             MetaSchemaRef::Reference(_) => panic!("Expected inline schema"),
         }
     }
-} 
+}

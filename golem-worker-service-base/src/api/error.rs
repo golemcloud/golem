@@ -100,27 +100,15 @@ impl From<WorkerServiceError> for WorkerApiBaseError {
                 errors: vec![error.to_safe_string()],
             })),
             ServiceError::VersionedComponentIdNotFound(_)
-            | ServiceError::ComponentNotFound(_)
-            | ServiceError::AccountIdNotFound(_)
+            | ServiceError::FileNotFound(_)
+            | ServiceError::BadFileType(_)
             | ServiceError::WorkerNotFound(_) => WorkerApiBaseError::NotFound(Json(ErrorBody {
                 error: error.to_safe_string(),
             })),
-            ServiceError::Golem(golem_error) => match golem_error {
-                GolemError::WorkerNotFound(error) => {
-                    WorkerApiBaseError::NotFound(Json(ErrorBody {
-                        error: error.to_safe_string(),
-                    }))
-                }
-                _ => WorkerApiBaseError::InternalError(Json(GolemErrorBody { golem_error })),
-            },
-            ServiceError::Component(error) => error.into(),
-            ServiceError::InternalCallError(_) => internal(error.to_safe_string()),
-            ServiceError::FileNotFound(_) => WorkerApiBaseError::NotFound(Json(ErrorBody {
-                error: error.to_safe_string(),
+            ServiceError::InvalidRequest(msg) => WorkerApiBaseError::BadRequest(Json(ErrorsBody {
+                errors: vec![msg],
             })),
-            ServiceError::BadFileType(_) => WorkerApiBaseError::BadRequest(Json(ErrorsBody {
-                errors: vec![error.to_safe_string()],
-            })),
+            ServiceError::InternalCallError(err) => internal(err.to_string()),
         }
     }
 }

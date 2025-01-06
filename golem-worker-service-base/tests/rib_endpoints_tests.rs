@@ -1,6 +1,7 @@
 use poem::{test::TestClient, Route};
 use serde_json::Value;
 use golem_worker_service_base::api::rib_endpoints::rib_routes;
+use golem_worker_service_base::api::swagger_ui::{SwaggerUiConfig, SwaggerUiAuthConfig};
 
 #[tokio::test]
 async fn test_healthcheck() {
@@ -111,6 +112,16 @@ async fn test_update_user_settings() {
 
 #[tokio::test]
 async fn test_swagger_ui_integration() {
+    let swagger_config = SwaggerUiConfig {
+        enabled: true,
+        title: Some("RIB API".to_string()),
+        version: Some("1.0".to_string()),
+        server_url: Some("http://localhost:3000".to_string()),
+        auth: SwaggerUiAuthConfig::default(),
+        worker_binding: None,
+        golem_extensions: std::collections::HashMap::new(),
+    };
+
     let app = Route::new().nest("/", rib_routes());
     let cli = TestClient::new(app);
 

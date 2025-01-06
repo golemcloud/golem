@@ -28,7 +28,7 @@ harness = true
 
 [[test]]
 name = "rib_openapi_conversion_tests"
-harness = false
+harness = true
 
 [[test]]
 name = "swagger_ui_tests"
@@ -40,6 +40,10 @@ harness = true
 
 [[test]]
 name = "poemopenapi_client_tests"
+harness = true
+
+[[test]]
+name = "dynamic_swagger_ui_worker_binding_tests"
 harness = true
 
 [[test]]

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use golem_worker_service_base::gateway_api_definition::http::swagger_ui::{create_swagger_ui, SwaggerUiConfig};
+use golem_worker_service_base::gateway_api_definition::http::swagger_ui::{create_swagger_ui, SwaggerUiConfig, SwaggerUiAuthConfig};
 use serde::{Serialize, Deserialize};
 
 #[cfg(test)]
@@ -87,6 +87,9 @@ mod utoipa_client_tests {
             title: Some("Workflow API".to_string()),
             version: Some("1.0.0".to_string()),
             server_url: Some("http://localhost:3000".to_string()),
+            auth: SwaggerUiAuthConfig::default(),
+            worker_binding: None,
+            golem_extensions: std::collections::HashMap::new(),
         };
 
         let api_service = OpenApiService::new(TestApi, "Workflow API", "1.0.0")

@@ -255,6 +255,12 @@ pub trait WorkerService {
         plugin_installation_id: &PluginInstallationId,
         metadata: WorkerRequestMetadata,
     ) -> WorkerResult<()>;
+
+    async fn get_swagger_ui_contents(
+        &self,
+        worker_id: &TargetWorkerId,
+        mount_path: String,
+    ) -> WorkerResult<Pin<Box<dyn Stream<Item = WorkerResult<Bytes>> + Send + 'static>>>;
 }
 
 pub struct TypedResult {
@@ -266,6 +272,13 @@ pub struct TypedResult {
 pub struct WorkerRequestMetadata {
     pub account_id: Option<AccountId>,
     pub limits: Option<ResourceLimits>,
+}
+
+pub fn empty_worker_metadata() -> WorkerRequestMetadata {
+    WorkerRequestMetadata {
+        account_id: None,
+        limits: None,
+    }
 }
 
 #[derive(Clone)]
@@ -375,7 +388,7 @@ impl WorkerService for WorkerServiceDefault {
                     CallWorkerExecutorError::FailedToConnectToPod(status)
                         if status.code() == Code::NotFound =>
                     {
-                        WorkerServiceError::WorkerNotFound(worker_id_err.clone())
+                        WorkerServiceError::WorkerNotFound(worker_id_err.to_string())
                     }
                     _ => WorkerServiceError::InternalCallError(error),
                 },
@@ -1187,6 +1200,40 @@ impl WorkerService for WorkerServiceDefault {
             .await?;
 
         Ok(())
+    }
+
+    async fn get_swagger_ui_contents(
+        &self,
+        worker_id: &TargetWorkerId,
+        mount_path: String,
+    ) -> WorkerResult<Pin<Box<dyn Stream<Item = WorkerResult<Bytes>> + Send + 'static>>> {
+        let request = workerexecutor::v1::GetSwaggerUiContentsRequest {
+            worker_id: worker_id.to_string(),
+            mount_path,
+        };
+
+        let response = self
+            .worker_executor_clients
+            .call(
+                "get_swagger_ui_contents",
+                worker_id.uri().parse().expect("Invalid URI"),
+                |client| Box::pin(client.get_swagger_ui_contents(request.clone())),
+            )
+            .await
+            .map_err(|e| WorkerServiceError::Internal(e.to_string()))?;
+
+        match response.into_inner().result {
+            Some(workerexecutor::v1::get_swagger_ui_contents_response::Result::Success(bytes)) => {
+                let stream = futures::stream::once(async move { Ok(Bytes::from(bytes)) });
+                Ok(Box::pin(stream))
+            }
+            Some(workerexecutor::v1::get_swagger_ui_contents_response::Result::Failure(err)) => {
+                Err(WorkerServiceError::Internal(err))
+            }
+            None => Err(WorkerServiceError::Internal(
+                "No result in GetSwaggerUiContentsResponse".to_string(),
+            )),
+        }
     }
 }
 

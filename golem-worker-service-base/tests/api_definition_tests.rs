@@ -6,7 +6,7 @@ use poem_openapi::{
     registry::Registry,
     types::Type,
 };
-use golem_worker_service_base::gateway_api_definition::http::swagger_ui::SwaggerUiConfig;
+use golem_worker_service_base::gateway_api_definition::http::swagger_ui::{SwaggerUiConfig, SwaggerUiAuthConfig};
 use golem_worker_service_base::gateway_api_definition::http::openapi_export::{OpenApiExporter, OpenApiFormat};
 
 // Test API structures
@@ -96,6 +96,9 @@ async fn test_swagger_ui_integration() -> anyhow::Result<()> {
         enabled: true,
         title: Some("Test API Documentation".to_string()),
         version: Some("1.0.0".to_string()),
+        auth: SwaggerUiAuthConfig::default(),
+        worker_binding: None,
+        golem_extensions: std::collections::HashMap::new(),
     };
 
     let api = TestApi;

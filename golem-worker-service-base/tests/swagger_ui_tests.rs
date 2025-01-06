@@ -1,6 +1,9 @@
 use anyhow::Result;
-use golem_worker_service_base::gateway_api_definition::http::swagger_ui::{create_swagger_ui, SwaggerUiConfig};
+use golem_worker_service_base::gateway_api_definition::http::swagger_ui::{
+    create_swagger_ui, SwaggerUiConfig, SwaggerUiAuthConfig,
+};
 use poem_openapi::{payload::{Json, PlainText}, Object, ApiResponse};
+use std::collections::HashMap;
 
 test_r::enable!();
 
@@ -12,7 +15,15 @@ mod swagger_ui_tests {
     fn test_swagger_ui_config_default() -> Result<()> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            let config = SwaggerUiConfig::default();
+            let config = SwaggerUiConfig {
+                enabled: false,
+                title: None,
+                version: None,
+                server_url: None,
+                auth: SwaggerUiAuthConfig::default(),
+                worker_binding: None,
+                golem_extensions: HashMap::new(),
+            };
             assert!(!config.enabled);
             assert_eq!(config.title, None);
             assert_eq!(config.version, None);
@@ -30,6 +41,9 @@ mod swagger_ui_tests {
                 title: Some("Custom API".to_string()),
                 version: Some("1.0.0".to_string()),
                 server_url: Some("http://localhost:8080".to_string()),
+                auth: SwaggerUiAuthConfig::default(),
+                worker_binding: None,
+                golem_extensions: HashMap::new(),
             };
             
             assert!(config.enabled);
@@ -49,6 +63,9 @@ mod swagger_ui_tests {
                 title: Some("Test API".to_string()),
                 version: Some("1.0".to_string()),
                 server_url: Some("http://localhost:8080".to_string()),
+                auth: SwaggerUiAuthConfig::default(),
+                worker_binding: None,
+                golem_extensions: HashMap::new(),
             };
 
             // Note: We can't directly test the OpenApiService result since it's opaque
@@ -67,6 +84,9 @@ mod swagger_ui_tests {
                 title: Some("Full Config API".to_string()),
                 version: Some("1.0".to_string()),
                 server_url: Some("http://localhost:8080".to_string()),
+                auth: SwaggerUiAuthConfig::default(),
+                worker_binding: None,
+                golem_extensions: HashMap::new(),
             };
 
             let service = create_swagger_ui(MockApi, &config)
@@ -100,6 +120,9 @@ mod swagger_ui_tests {
                 title: Some("Test API".to_string()),
                 version: Some("1.0".to_string()),
                 server_url: None,
+                auth: SwaggerUiAuthConfig::default(),
+                worker_binding: None,
+                golem_extensions: HashMap::new(),
             };
 
             let api = MockApiWithResponses::new();
