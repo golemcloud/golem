@@ -531,7 +531,12 @@ impl RibConverter {
         match &value.value {
             Value::Bool(b) => Ok(serde_json::Value::Bool(*b)),
             Value::String(s) => Ok(serde_json::Value::String(s.clone())),
-            Value::Char(c) => Ok(serde_json::Value::String(char::from_u32(*c as u32).unwrap().to_string())),
+            Value::Char(c) => {
+                match char::from_u32(*c as u32) {
+                    Some(ch) => Ok(serde_json::Value::String(ch.to_string())),
+                    None => Err(format!("Invalid Unicode scalar value: {}", c))
+                }
+            },
             
             // Unsigned integers
             Value::U8(n) => Ok(serde_json::Value::Number((*n).into())),
