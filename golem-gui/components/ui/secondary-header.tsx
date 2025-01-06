@@ -50,7 +50,6 @@ type secondaryHeaderProps = {
 export default function SecondaryHeader({
   onClick,
   variant,
-  id,
   apiTab,
 }: secondaryHeaderProps) {
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -324,7 +323,7 @@ export default function SecondaryHeader({
         )}
 
         {variant === "apis" && (
-          <Link href={`/apis/${id}/new-route`}>
+          <Link href={`/apis/${apiId}/new-route`}>
             <Button
               variant="outlined"
               sx={{

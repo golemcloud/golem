@@ -31,7 +31,6 @@ type NavigationLinks = {
 const Sidebar = ({ id, navigationLinks, variant, apiTab }: SidebarProps) => {
   const pathname = usePathname();
   const router=useRouter();
-
   return (
     <Box
       sx={{
