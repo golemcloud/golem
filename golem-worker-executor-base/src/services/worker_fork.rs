@@ -54,7 +54,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx>> DefaultWorkerFork<Ctx, Svcs> {
             ));
         }
 
-        // We assume the target worker is also owned by the same account
         let owned_target_worker_id = OwnedWorkerId::new(account_id, target_worker_id);
 
         let target_metadata = self.all.worker_service().get(&owned_target_worker_id).await;
