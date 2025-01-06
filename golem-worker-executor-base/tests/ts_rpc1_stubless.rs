@@ -45,7 +45,10 @@ async fn counter_resource_test_1(
             &[(
                 "rpc:counters-stub/stub-counters",
                 DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                    target_interface_name: "rpc:counters/api".to_string(),
+                    target_interface_name: HashMap::from_iter(vec![
+                        ("api".to_string(), "rpc:counters/api".to_string()),
+                        ("counter".to_string(), "rpc:counters/api".to_string()),
+                    ]),
                 }),
             )],
         )
@@ -90,7 +93,10 @@ async fn counter_resource_test_1_with_restart(
             &[(
                 "rpc:counters-stub/stub-counters",
                 DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                    target_interface_name: "rpc:counters/api".to_string(),
+                    target_interface_name: HashMap::from_iter(vec![
+                        ("api".to_string(), "rpc:counters/api".to_string()),
+                        ("counter".to_string(), "rpc:counters/api".to_string()),
+                    ]),
                 }),
             )],
         )
@@ -139,7 +145,10 @@ async fn context_inheritance(
             &[(
                 "rpc:counters-stub/stub-counters",
                 DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                    target_interface_name: "rpc:counters/api".to_string(),
+                    target_interface_name: HashMap::from_iter(vec![
+                        ("api".to_string(), "rpc:counters/api".to_string()),
+                        ("counter".to_string(), "rpc:counters/api".to_string()),
+                    ]),
                 }),
             )],
         )

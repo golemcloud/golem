@@ -103,14 +103,20 @@ pub fn dynamic_wasm_rpc_link<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResu
                 )?;
             }
             Some(DynamicRpcResource::Stub) | Some(DynamicRpcResource::ResourceStub) => {
-                let interface_name_clone = rpc_metadata.target_interface_name.clone();
+                let interface_name = rpc_metadata
+                    .target_interface_name
+                    .get(&resource_name)
+                    .cloned()
+                    .ok_or(anyhow!(
+                        "Failed to get target interface name for resource {resource_name}"
+                    ))?;
                 let resource_name_clone = resource_name.clone();
 
                 instance.resource_async(
                     &resource_name,
                     ResourceType::host::<WasmRpcEntry>(),
                     move |store, rep| {
-                        let interface_name = interface_name_clone.clone();
+                        let interface_name = interface_name.clone();
                         let resource_name = resource_name_clone.clone();
 
                         Box::new(
@@ -624,8 +630,8 @@ impl DynamicRpcCall {
                 Some(DynamicRpcResource::Stub) => Ok(Some(DynamicRpcCall::GlobalStubConstructor)),
                 Some(DynamicRpcResource::ResourceStub) => {
                     let target_constructor_name = ParsedFunctionName {
-                        site: rpc_metadata.target_site().map_err(|err| anyhow!("Failed to parse mapped target site ({}) from dynamic linking metadata: {}",
-                            rpc_metadata.target_interface_name,
+                        site: rpc_metadata.target_site(resource_name).map_err(|err| anyhow!("Failed to get mapped target site ({}) from dynamic linking metadata: {}",
+                            rpc_metadata.target_interface_name.iter().map(|(k, v)| format!("{k}=>{v}")).collect::<Vec<_>>().join(", "),
                             err
                         ))?,
                         function: ParsedFunctionReference::RawResourceConstructor {
@@ -674,8 +680,8 @@ impl DynamicRpcCall {
                     };
 
                     let target_function_name = ParsedFunctionName {
-                        site: rpc_metadata.target_site().map_err(|err| anyhow!("Failed to parse mapped target site ({}) from dynamic linking metadata: {}",
-                            rpc_metadata.target_interface_name,
+                        site: rpc_metadata.target_site(resource_name).map_err(|err| anyhow!("Failed to get mapped target site ({}) from dynamic linking metadata: {}",
+                            rpc_metadata.target_interface_name.iter().map(|(k, v)| format!("{k}=>{v}")).collect::<Vec<_>>().join(", "),
                             err
                         ))?,
                         function: target_function,
@@ -728,13 +734,16 @@ impl DynamicRpcResource {
             if Self::first_parameter_is_uri(&constructor.params) {
                 if constructor.params.len() > 1 {
                     Ok(Some(DynamicRpcResource::ResourceStub))
-                } else if rpc_metadata
-                    .target_interface_name
-                    .ends_with(&format!("/{resource_name}"))
+                } else if let Some(target_interface_name) =
+                    rpc_metadata.target_interface_name.get(resource_name)
                 {
-                    Ok(Some(DynamicRpcResource::Stub))
+                    if target_interface_name.ends_with(&format!("/{resource_name}")) {
+                        Ok(Some(DynamicRpcResource::Stub))
+                    } else {
+                        Ok(Some(DynamicRpcResource::ResourceStub))
+                    }
                 } else {
-                    Ok(Some(DynamicRpcResource::ResourceStub))
+                    Ok(Some(DynamicRpcResource::Stub))
                 }
             } else {
                 // First constructor parameter is not a Uri => not a stub

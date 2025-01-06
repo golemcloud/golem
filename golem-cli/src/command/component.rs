@@ -333,7 +333,7 @@ impl<
                     &component_name.0,
                 )?;
 
-                let dynamic_linking = ctx.dynamic_linking();
+                let dynamic_linking = ctx.dynamic_linking()?;
                 let component = service
                     .add(
                         component_name,
@@ -407,7 +407,7 @@ impl<
                     &component_name,
                 )?;
 
-                let dynamic_linking = ctx.dynamic_linking();
+                let dynamic_linking = ctx.dynamic_linking()?;
                 let mut result = service
                     .update(
                         component_name_or_uri.clone(),
@@ -576,8 +576,8 @@ impl ApplicationComponentContext {
         })
     }
 
-    fn dynamic_linking(&mut self) -> Option<DynamicLinking> {
-        let mapping = Vec::new();
+    fn dynamic_linking(&mut self) -> Result<Option<DynamicLinking>, GolemError> {
+        let mut mapping = Vec::new();
 
         let wasm_rpc_deps = self
             .app_ctx
@@ -589,30 +589,26 @@ impl ApplicationComponentContext {
             let ifaces = self
                 .app_ctx
                 .component_stub_interfaces(&wasm_rpc_dep)
-                .unwrap(); // TODO
-            println!("{:?}", ifaces);
-            // let target_props = self
-            //     .app_ctx
-            //     .application
-            //     .component_properties(&self.name, self.build_profile.as_ref());
+                .map_err(|err| GolemError(err.to_string()))?;
 
-            // TODO: figure out source->target names and add to `mapping`
-            // TODO: use: self.app_ctx.component_stub_interfaces(wasm_rpc_dep);
+            mapping.push(ifaces);
         }
 
         if mapping.is_empty() {
-            None
+            Ok(None)
         } else {
-            Some(DynamicLinking {
-                dynamic_linking: HashMap::from_iter(mapping.into_iter().map(|(from, to)| {
+            Ok(Some(DynamicLinking {
+                dynamic_linking: HashMap::from_iter(mapping.into_iter().map(|stub_interfaces| {
                     (
-                        from,
+                        stub_interfaces.stub_interface_name,
                         DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                            target_interface_name: to,
+                            target_interface_name: HashMap::from_iter(
+                                stub_interfaces.exported_interfaces_per_stub_resource,
+                            ),
                         }),
                     )
                 })),
-            })
+            }))
         }
     }
 }

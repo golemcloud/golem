@@ -9,5 +9,5 @@ message DynamicLinkedInstance {
 }
 
 message DynamicLinkedWasmRpc {
-  string target_interface_name = 1;
+  map<string, string> target_interface_name = 1;
 }

@@ -71,7 +71,7 @@ impl DynamicLinkedWasmRpc {
             .target_interface_name
             .get(stub_resource)
             .ok_or("Resource not found in dynamic linked interface")?;
-        ParsedFunctionSite::parse(&target_interface)
+        ParsedFunctionSite::parse(target_interface)
     }
 }
 

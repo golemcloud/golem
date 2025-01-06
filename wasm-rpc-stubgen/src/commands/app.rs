@@ -63,8 +63,8 @@ pub enum ApplicationSourceMode {
 
 #[derive(Debug)]
 pub struct ComponentStubInterfaces {
-    stub_interface_name: String,
-    exported_interfaces: Vec<String>,
+    pub stub_interface_name: String,
+    pub exported_interfaces_per_stub_resource: BTreeMap<String, String>,
 }
 
 pub struct ApplicationContext<CPE: ComponentPropertiesExtensions> {
@@ -328,11 +328,17 @@ impl<CPE: ComponentPropertiesExtensions> ApplicationContext<CPE> {
 
         let result = ComponentStubInterfaces {
             stub_interface_name: stub_package_name.interface_id(&stub_def.target_interface_name()),
-            exported_interfaces: stub_def
-                .stub_imported_interfaces()
-                .iter()
-                .filter_map(|interface| interface.owner_interface.clone())
-                .collect(),
+            exported_interfaces_per_stub_resource: BTreeMap::from_iter(
+                stub_def
+                    .stub_imported_interfaces()
+                    .iter()
+                    .filter_map(|interface| {
+                        interface
+                            .owner_interface
+                            .clone()
+                            .map(|owner| (interface.name.clone(), owner))
+                    }),
+            ),
         };
         Ok(result)
     }
@@ -1297,7 +1303,7 @@ async fn build_stub<CPE: ComponentPropertiesExtensions>(
 
         let offline = ctx.config.offline;
         let stub_def = ctx.component_stub_def(component_name)?;
-        let result = commands::generate::build(&stub_def, &stub_wasm, &stub_wit, offline).await;
+        let result = commands::generate::build(stub_def, &stub_wasm, &stub_wit, offline).await;
         match result {
             Ok(()) => {
                 task_result_marker.success()?;

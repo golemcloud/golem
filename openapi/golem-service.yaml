@@ -6405,7 +6405,10 @@ components:
       type: object
       properties:
         targetInterfaceName:
-          type: string
+          description: Maps resource names within the dynamic linked interface to target interfaces
+          type: object
+          additionalProperties:
+            type: string
       required:
       - targetInterfaceName
     DynamicLinking:
