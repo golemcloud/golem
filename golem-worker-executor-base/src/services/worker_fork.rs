@@ -164,6 +164,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerFork
         // We go through worker proxy to resume the worker
         // as we need to make sure as it may live in another worker executor,
         // depending on sharding.
+        // This will replay until the fork point in the forked worker
         self.all
             .worker_proxy()
             .resume(&target_worker_id)
