@@ -10,6 +10,7 @@ use heck::{
 };
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Formatter;
 use std::fmt::{Debug, Display};
@@ -144,16 +145,45 @@ pub struct ComponentEffectivePropertySource<'a> {
     pub any_template_overrides: bool,
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum DependencyType {
+    /// Dynamic (stubless) wasm-rpc
+    DynamicWasmRpc,
+    /// Static (composed with compiled stub) wasm-rpc
+    StaticWasmRpc,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DependentComponent {
+    pub name: ComponentName,
+    pub dep_type: DependencyType,
+}
+
+impl PartialOrd for DependentComponent {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for DependentComponent {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.name.cmp(&other.name)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Application<CPE: ComponentPropertiesExtensions> {
     temp_dir: Option<String>,
     wit_deps: Vec<String>,
     components: BTreeMap<ComponentName, Component<CPE>>,
-    dependencies: BTreeMap<ComponentName, BTreeSet<ComponentName>>,
-    no_dependencies: BTreeSet<ComponentName>,
+    dependencies: BTreeMap<ComponentName, BTreeSet<DependentComponent>>,
+    no_dependencies: BTreeSet<DependentComponent>,
 }
 
 impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
+    const STATIC_WASM_RPC: &'static str = "static-wasm-rpc";
+    const WASM_RPC: &'static str = "wasm-rpc";
+
     pub fn from_raw_apps(apps: Vec<app_raw::ApplicationWithSource>) -> ValidatedResult<Self> {
         let mut validation = ValidationBuilder::new();
 
@@ -169,7 +199,7 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
         let mut templates = HashMap::<TemplateName, app_raw::ComponentTemplate>::new();
         let mut template_sources = HashMap::<TemplateName, Vec<PathBuf>>::new();
 
-        let mut dependencies = BTreeMap::<ComponentName, BTreeSet<ComponentName>>::new();
+        let mut dependencies = BTreeMap::<ComponentName, BTreeSet<DependentComponent>>::new();
         let mut dependency_sources =
             HashMap::<ComponentName, HashMap<ComponentName, Vec<PathBuf>>>::new();
 
@@ -272,7 +302,9 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
                 validation.push_context("component", component_name.to_string());
 
                 for dependency in component_dependencies {
-                    if dependency.type_ == "wasm-rpc" {
+                    if dependency.type_ == Self::STATIC_WASM_RPC
+                        || dependency.type_ == Self::WASM_RPC
+                    {
                         match dependency.target {
                             Some(target) => {
                                 let target_component_name = ComponentName::from(target);
@@ -280,10 +312,19 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
                                 if !dependencies.contains_key(&component_name) {
                                     dependencies.insert(component_name.clone(), BTreeSet::new());
                                 }
-                                dependencies
-                                    .get_mut(&component_name)
-                                    .unwrap()
-                                    .insert(target_component_name.clone());
+
+                                let dep_type = if dependency.type_ == Self::STATIC_WASM_RPC {
+                                    DependencyType::StaticWasmRpc
+                                } else {
+                                    DependencyType::DynamicWasmRpc
+                                };
+
+                                dependencies.get_mut(&component_name).unwrap().insert(
+                                    DependentComponent {
+                                        name: target_component_name.clone(),
+                                        dep_type,
+                                    },
+                                );
 
                                 if !dependency_sources.contains_key(&component_name) {
                                     dependency_sources
@@ -825,7 +866,7 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
         self.wit_deps.iter().map(PathBuf::from).collect()
     }
 
-    pub fn all_wasm_rpc_dependencies(&self) -> BTreeSet<ComponentName> {
+    pub fn all_wasm_rpc_dependencies(&self) -> BTreeSet<DependentComponent> {
         self.dependencies.values().flatten().cloned().collect()
     }
 
@@ -884,7 +925,7 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
     pub fn component_wasm_rpc_dependencies(
         &self,
         component_name: &ComponentName,
-    ) -> &BTreeSet<ComponentName> {
+    ) -> &BTreeSet<DependentComponent> {
         self.dependencies
             .get(component_name)
             .unwrap_or(&self.no_dependencies)
