@@ -332,6 +332,7 @@ impl ResolvedWitApplication {
                     .component_wasm_rpc_dependencies(component_name)
                     .iter()
                     .cloned()
+                    .map(|dep| dep.name)
                     .collect();
 
                 Ok(ResolvedWitComponent {
