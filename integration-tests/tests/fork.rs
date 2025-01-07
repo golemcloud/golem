@@ -12,12 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use axum::routing::get;
+use axum::Router;
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 
 use crate::Tracing;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::PublicOplogEntry;
-use golem_common::model::WorkerId;
+use golem_common::model::{WorkerId, WorkerStatus};
 
 use golem_test_framework::config::EnvBasedTestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
@@ -26,6 +32,85 @@ use golem_wasm_rpc::Value;
 
 inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
+
+#[test]
+#[tracing::instrument]
+#[timeout(120000)]
+async fn fork_interrupted_worker_to_completion(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) {
+    let response = Arc::new(Mutex::new("initial".to_string()));
+    let response_clone = response.clone();
+    let host_http_port = 8585;
+
+    let http_server = tokio::spawn(async move {
+        let route = Router::new().route(
+            "/poll",
+            get(move || async move {
+                let body = response_clone.lock().unwrap();
+                body.clone()
+            }),
+        );
+
+        let listener = tokio::net::TcpListener::bind(
+            format!("0.0.0.0:{}", host_http_port)
+                .parse::<SocketAddr>()
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        axum::serve(listener, route).await.unwrap();
+    });
+
+    let component_id = deps.store_component("http-client-2").await;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+
+    let worker_id = deps
+        .start_worker_with(&component_id, "poll-loop-parent-component-0", vec![], env)
+        .await;
+
+    let target = WorkerId {
+        component_id: component_id.clone(),
+        worker_name: "poll-loop-with-fork-component-0".to_string(),
+    };
+
+    deps.log_output(&worker_id).await;
+
+    deps.invoke(
+        &worker_id,
+        "golem:it/api.{start-polling}",
+        vec![Value::String("first".to_string())],
+    )
+    .await
+    .unwrap();
+
+    deps.wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
+        .await;
+
+    deps.interrupt(&worker_id).await;
+
+    let oplog = deps.get_oplog(&worker_id, OplogIndex::INITIAL).await;
+
+    let last_index = OplogIndex::from_u64(oplog.len() as u64);
+
+    deps.fork_worker(&worker_id, &target, last_index).await;
+
+    {
+        let mut response = response.lock().unwrap();
+        *response = "first".to_string();
+    }
+
+    deps.wait_for_status(&target, WorkerStatus::Idle, Duration::from_secs(10))
+        .await;
+
+    let result = deps.search_oplog(&target, "Received first").await;
+
+    http_server.abort();
+
+    assert_eq!(result.len(), 1);
+}
 
 #[test]
 #[tracing::instrument]
@@ -200,7 +285,10 @@ async fn fork_running_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing
 #[test]
 #[tracing::instrument]
 #[timeout(120000)]
-async fn fork_worker_2(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+async fn fork_worker_when_target_already_exists(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) {
     let component_id = deps.store_component("shopping-cart").await;
 
     let source_worker_id = WorkerId {
@@ -241,7 +329,7 @@ async fn fork_worker_2(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 #[test]
 #[tracing::instrument]
 #[timeout(120000)]
-async fn fork_worker_3(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+async fn fork_worker_with_invalid_cut_off(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let component_id = deps.store_component("shopping-cart").await;
 
     let source_worker_id = WorkerId {
