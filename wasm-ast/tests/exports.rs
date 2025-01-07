@@ -700,3 +700,77 @@ fn exports_caller_composed_component() {
 
     pretty_assertions::assert_eq!(metadata, expected);
 }
+
+#[test]
+fn exports_caller_component() {
+    // NOTE: Same as caller_composed.wasm but not composed with the generated stub
+    let source_bytes = include_bytes!("../wasm/caller.wasm");
+    let component: Component<IgnoreAllButMetadata> = Component::from_bytes(source_bytes).unwrap();
+
+    let state = AnalysisContext::new(component);
+    let metadata = state.get_top_level_exports().unwrap();
+
+    let expected = vec![
+        AnalysedExport::Function(AnalysedFunction {
+            name: "test1".to_string(),
+            parameters: vec![],
+            results: vec![AnalysedFunctionResult {
+                name: None,
+                typ: list(tuple(vec![str(), u64()])),
+            }],
+        }),
+        AnalysedExport::Function(AnalysedFunction {
+            name: "test2".to_string(),
+            parameters: vec![],
+            results: vec![AnalysedFunctionResult {
+                name: None,
+                typ: u64(),
+            }],
+        }),
+        AnalysedExport::Function(AnalysedFunction {
+            name: "test3".to_string(),
+            parameters: vec![],
+            results: vec![AnalysedFunctionResult {
+                name: None,
+                typ: u64(),
+            }],
+        }),
+        AnalysedExport::Function(AnalysedFunction {
+            name: "test4".to_string(),
+            parameters: vec![],
+            results: vec![AnalysedFunctionResult {
+                name: None,
+                typ: tuple(vec![list(str()), list(tuple(vec![str(), str()]))]),
+            }],
+        }),
+        AnalysedExport::Function(AnalysedFunction {
+            name: "test5".to_string(),
+            parameters: vec![],
+            results: vec![AnalysedFunctionResult {
+                name: None,
+                typ: list(u64()),
+            }],
+        }),
+        AnalysedExport::Function(AnalysedFunction {
+            name: "bug-wasm-rpc-i32".to_string(),
+            parameters: vec![AnalysedFunctionParameter {
+                name: "in".to_string(),
+                typ: variant(vec![unit_case("leaf")]),
+            }],
+            results: vec![AnalysedFunctionResult {
+                name: None,
+                typ: variant(vec![unit_case("leaf")]),
+            }],
+        }),
+        AnalysedExport::Function(AnalysedFunction {
+            name: "ephemeral-test1".to_string(),
+            parameters: vec![],
+            results: vec![AnalysedFunctionResult {
+                name: None,
+                typ: list(tuple(vec![str(), str()])),
+            }],
+        }),
+    ];
+
+    pretty_assertions::assert_eq!(metadata, expected);
+}

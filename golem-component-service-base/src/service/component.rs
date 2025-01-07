@@ -28,7 +28,9 @@ use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component::v1::component_error;
 use golem_common::model::component::ComponentOwner;
 use golem_common::model::component_constraint::FunctionConstraintCollection;
-use golem_common::model::component_metadata::{ComponentMetadata, ComponentProcessingError};
+use golem_common::model::component_metadata::{
+    ComponentMetadata, ComponentProcessingError, DynamicLinkedInstance,
+};
 use golem_common::model::plugin::{
     ComponentPluginInstallationTarget, PluginInstallation, PluginInstallationCreation,
     PluginInstallationUpdate, PluginScope, PluginTypeSpecificDefinition,
@@ -304,6 +306,7 @@ pub trait ComponentService<Owner: ComponentOwner>: Debug {
         data: Vec<u8>,
         files: Option<InitialComponentFilesArchiveAndPermissions>,
         installed_plugins: Vec<PluginInstallation>,
+        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         owner: &Owner,
     ) -> Result<Component<Owner>, ComponentError>;
 
@@ -316,6 +319,7 @@ pub trait ComponentService<Owner: ComponentOwner>: Debug {
         data: Vec<u8>,
         files: Vec<InitialComponentFile>,
         installed_plugins: Vec<PluginInstallation>,
+        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         owner: &Owner,
     ) -> Result<Component<Owner>, ComponentError>;
 
@@ -325,6 +329,7 @@ pub trait ComponentService<Owner: ComponentOwner>: Debug {
         data: Vec<u8>,
         component_type: Option<ComponentType>,
         files: Option<InitialComponentFilesArchiveAndPermissions>,
+        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         owner: &Owner,
     ) -> Result<Component<Owner>, ComponentError>;
 
@@ -336,6 +341,7 @@ pub trait ComponentService<Owner: ComponentOwner>: Debug {
         component_type: Option<ComponentType>,
         // None signals that files should be reused from the previous version
         files: Option<Vec<InitialComponentFile>>,
+        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         owner: &Owner,
     ) -> Result<Component<Owner>, ComponentError>;
 
@@ -639,6 +645,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
         data: Vec<u8>,
         uploaded_files: Vec<InitialComponentFile>,
         installed_plugins: Vec<PluginInstallation>,
+        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         owner: &Owner,
     ) -> Result<Component<Owner>, ComponentError> {
         let component = Component::new(
@@ -648,6 +655,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
             &data,
             uploaded_files,
             installed_plugins,
+            dynamic_linking,
             owner.clone(),
         )?;
 
@@ -686,10 +694,12 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
         data: Vec<u8>,
         component_type: Option<ComponentType>,
         files: Option<Vec<InitialComponentFile>>,
+        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         owner: &Owner,
     ) -> Result<Component<Owner>, ComponentError> {
-        let metadata = ComponentMetadata::analyse_component(&data)
+        let mut metadata = ComponentMetadata::analyse_component(&data)
             .map_err(ComponentError::ComponentProcessingError)?;
+        metadata.dynamic_linking = dynamic_linking;
 
         let constraints = self
             .component_repo
@@ -1004,6 +1014,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
         data: Vec<u8>,
         files: Option<InitialComponentFilesArchiveAndPermissions>,
         installed_plugins: Vec<PluginInstallation>,
+        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         owner: &Owner,
     ) -> Result<Component<Owner>, ComponentError> {
         info!(owner = %owner, "Create component");
@@ -1027,6 +1038,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
             data,
             uploaded_files,
             installed_plugins,
+            dynamic_linking,
             owner,
         )
         .await
@@ -1040,6 +1052,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
         data: Vec<u8>,
         files: Vec<InitialComponentFile>,
         installed_plugins: Vec<PluginInstallation>,
+        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         owner: &Owner,
     ) -> Result<Component<Owner>, ComponentError> {
         info!(owner = %owner, "Create component");
@@ -1074,6 +1087,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
             data,
             files,
             installed_plugins,
+            dynamic_linking,
             owner,
         )
         .await
@@ -1085,6 +1099,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
         data: Vec<u8>,
         component_type: Option<ComponentType>,
         files: Option<InitialComponentFilesArchiveAndPermissions>,
+        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         owner: &Owner,
     ) -> Result<Component<Owner>, ComponentError> {
         info!(owner = %owner, "Update component");
@@ -1097,8 +1112,15 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
             None => None,
         };
 
-        self.update_unchecked(component_id, data, component_type, uploaded_files, owner)
-            .await
+        self.update_unchecked(
+            component_id,
+            data,
+            component_type,
+            uploaded_files,
+            dynamic_linking,
+            owner,
+        )
+        .await
     }
 
     async fn update_internal(
@@ -1107,6 +1129,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
         data: Vec<u8>,
         component_type: Option<ComponentType>,
         files: Option<Vec<InitialComponentFile>>,
+        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         owner: &Owner,
     ) -> Result<Component<Owner>, ComponentError> {
         info!(owner = %owner, "Update component");
@@ -1130,8 +1153,15 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
             }
         }
 
-        self.update_unchecked(component_id, data, component_type, files, owner)
-            .await
+        self.update_unchecked(
+            component_id,
+            data,
+            component_type,
+            files,
+            dynamic_linking,
+            owner,
+        )
+        .await
     }
 
     async fn download(
