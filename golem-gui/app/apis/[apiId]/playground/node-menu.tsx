@@ -118,7 +118,6 @@ export default function NodeMenu({
                       New Route
                     </MenuItem>}
                     {triggerType !== "route" &&  <MenuItem
-                      disabled={!canDelete}
                       onClick={(e) => {
                         setTrigger({
                           type: triggerType,

@@ -221,7 +221,12 @@ const NewRouteForm = ({
           name="path"
           control={control}
           //we can add regex for path
-          rules={{ required: "path is mandatory!" }}
+          rules={{ required: "path is mandatory!",
+            validate: (value:string)=>{
+              return value?.[0] !='/' ? 'Api path should always start with /': true
+            }
+           }}
+
           render={({ field }) => (
             <TextField
               size="small"

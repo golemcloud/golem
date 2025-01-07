@@ -4,9 +4,11 @@ import { Box, Card, CardContent, Typography } from "@mui/material";
 import { Dropdown } from "./ui/dropdown-button";
 import { Worker } from "@/types/api";
 import { calculateHoursDifference, calculateSizeInMB } from "@/lib/utils";
+import { useParams } from "next/navigation";
 
 
 export default function WorkerInfoCard({ worker, onClick }: { worker: Worker; onClick: () => void }) {
+  const {compId} = useParams<{compId:string}>()
   const workerInfo = [
     `v${worker.componentVersion}`,
     `Env: ${Object.values(worker.env).length}`,
@@ -14,7 +16,7 @@ export default function WorkerInfoCard({ worker, onClick }: { worker: Worker; on
   ];
 
   const workloads = [
-    { route: `/components/${worker.workerId.workerName}/overview`, value: "View Details" },
+    { route: `/components/${compId}/workers/${worker.workerId.workerName}`, value: "View Details" },
   ];
 
   return (

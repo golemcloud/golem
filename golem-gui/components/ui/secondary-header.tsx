@@ -50,7 +50,6 @@ type secondaryHeaderProps = {
 export default function SecondaryHeader({
   onClick,
   variant,
-  id,
   apiTab,
 }: secondaryHeaderProps) {
   const [drawerOpen, setDrawerOpen] = useState(false);
