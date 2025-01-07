@@ -46,6 +46,7 @@ mod common;
 pub mod api;
 pub mod blobstore;
 pub mod compatibility;
+pub mod fork;
 pub mod guest_languages1;
 pub mod guest_languages2;
 pub mod guest_languages3;
@@ -90,6 +91,8 @@ tag_suite!(guest_languages3, group7);
 
 tag_suite!(ts_rpc2, group8);
 tag_suite!(ts_rpc2_stubless, group8);
+
+tag_suite!(fork, group9);
 
 #[derive(Clone)]
 pub struct WorkerExecutorPerTestDependencies {
