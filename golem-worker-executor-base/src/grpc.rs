@@ -52,6 +52,7 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::marker::PhantomData;
 use std::pin::Pin;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::sync::broadcast::error::RecvError;
@@ -695,9 +696,38 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
     async fn invoke_worker_http_handler_internal(
         &self,
-        _header: golem::workerexecutor::v1::InvokeWorkerHttpHandlerRequestHeader,
+        header: golem::workerexecutor::v1::InvokeWorkerHttpHandlerRequestHeader,
         _remaining: Streaming<golem::workerexecutor::v1::InvokeWorkerHttpHandlerRequest>,
     ) -> Result<(), GolemError> {
+        // let hyper_method = match header.method {
+        //     golem::worker::METHOD_GET => Method::Get,
+        //     golem::workerexecutor::v1::Method::POST => Method::Post,
+        //     golem::workerexecutor::v1::Method::PUT => Method::Put,
+        //     golem::workerexecutor::v1::Method::DELETE => Method::Delete,
+        // };
+
+        // let hyper_method = match header.method {
+        //     golem::worker::METHOD_GET => hyper::Method::GET,
+        // }
+
+        // let hyper_method = match header.method {
+        //     golem::worker::HttpMethod()
+        // }
+
+        // let hyper_method =
+
+        let http_method = grpc_method_to_hyper_method(header.method)?;
+
+        let mut builder = hyper::Request::builder()
+            .uri(header.uri)
+            .method(http_method);
+
+        if let Some(headers) = header.headers {
+            for golem::worker::HttpField { name, value } in headers.fields {
+                builder = builder.header(name.as_str(), value);
+            }
+        }
+
         todo!("implement");
     }
 
@@ -1783,7 +1813,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             let record = recorded_grpc_api_request!(
                 "invoke_worker_http_handler",
                 worker_id = proto_target_worker_id_string(&header.worker_id),
-                method = header.method,
                 path = header.path_with_query,
             );
             self.invoke_worker_http_handler_internal(
@@ -2684,4 +2713,32 @@ impl Stream for WorkerEventStream {
             Poll::Pending => Poll::Pending,
         }
     }
+}
+
+fn grpc_method_to_hyper_method(method: Option<golem::worker::HttpMethod>) -> Result<hyper::Method, GolemError> {
+    let known_http_method = method.and_then(|m| m.value).unwrap();
+
+    let hyper_method = match known_http_method {
+        golem::worker::http_method::Value::StandardMethod(inner) => {
+            if let Ok(converted) = golem::worker::StandardHttpMethod::try_from(inner) {
+                match converted {
+                    golem::worker::StandardHttpMethod::MethodGet => hyper::Method::GET,
+                    golem::worker::StandardHttpMethod::MethodPost => hyper::Method::POST,
+                    golem::worker::StandardHttpMethod::MethodPut => hyper::Method::PUT,
+                    golem::worker::StandardHttpMethod::MethodDelete => hyper::Method::DELETE,
+                    golem::worker::StandardHttpMethod::MethodPatch => hyper::Method::PATCH,
+                    golem::worker::StandardHttpMethod::MethodHead => hyper::Method::HEAD,
+                    golem::worker::StandardHttpMethod::MethodOptions => hyper::Method::OPTIONS,
+                    golem::worker::StandardHttpMethod::MethodConnect => hyper::Method::CONNECT,
+                    golem::worker::StandardHttpMethod::MethodTrace => hyper::Method::TRACE,
+                }
+            } else {
+                todo!("failing")
+            }
+        },
+        golem::worker::http_method::Value::CustomMethod(inner)  =>
+            hyper::Method::from_bytes(inner.as_bytes()).unwrap(),
+    };
+
+    Ok(hyper_method)
 }

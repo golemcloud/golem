@@ -15,9 +15,10 @@ enum StandardHttpMethod {
 }
 
 message HttpMethod {
-  // only one of these should be set
-  optional StandardHttpMethod standard_method = 1;
-  optional string custom_method = 2;
+  oneof value {
+    StandardHttpMethod standard_method = 1;
+    string custom_method = 2;
+  }
 }
 
 enum StandardHttpScheme {
@@ -26,9 +27,10 @@ enum StandardHttpScheme {
 }
 
 message HttpScheme {
-  // only one of these should be set
-  optional StandardHttpScheme standard_scheme = 1;
-  optional string custom_scheme = 2;
+  oneof value {
+    StandardHttpScheme standard_scheme = 1;
+    string custom_scheme = 2;
+  }
 }
 
 message HttpField {

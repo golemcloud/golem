@@ -20,11 +20,63 @@ use rib::{ParsedFunctionName, ParsedFunctionReference};
 use tracing::{debug, error};
 use wasmtime::component::{Func, Val};
 use wasmtime::{AsContextMut, StoreContextMut};
+use wasmtime_wasi_http::WasiHttpView;
+use wasmtime_wasi_http::WasiHttpCtx;
+use wasmtime_wasi_http::bindings::http::types::Scheme;
+use wasmtime_wasi_http::bindings::{Proxy, ProxyPre};
 
+use crate::durable_host::DurableWorkerCtxView;
 use crate::error::GolemError;
 use crate::metrics::wasm::{record_invocation, record_invocation_consumption};
 use crate::model::{InterruptKind, TrapType};
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
+
+pub async fn invoke_worker_incoming_http_handler<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>>(
+    request: hyper::Request<hyper::body::Incoming>,
+    store: &mut impl AsContextMut<Data = Ctx>,
+    instance: & wasmtime::component::Instance,
+) -> Result<InvokeResult, GolemError> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+
+    let mut store = store.as_context_mut();
+    let incoming = store.data_mut().durable_ctx_mut().as_wasi_http_view().new_incoming_request(Scheme::Http, request).unwrap();
+    let outgoing = store.data_mut().durable_ctx_mut().as_wasi_http_view().new_response_outparam(sender).unwrap();
+
+    let proxy = Proxy::new(store, instance).unwrap();
+
+    let task = tokio::task::spawn(async move {
+        if let Err(e) = proxy
+            .wasi_http_incoming_handler()
+            .call_handle(store, incoming, outgoing)
+            .await
+        {
+            todo!("task failed");
+        }
+
+        Ok(())
+    });
+
+    match receiver.await {
+        Ok(Ok(resp)) => Ok(resp),
+        Ok(Err(e)) => Err(e.into()),
+        Err(_) => {
+            // An error in the receiver (`RecvError`) only indicates that the
+            // task exited before a response was sent (i.e., the sender was
+            // dropped); it does not describe the underlying cause of failure.
+            // Instead we retrieve and propagate the error from inside the task
+            // which should more clearly tell the user what went wrong. Note
+            // that we assume the task has already exited at this point so the
+            // `await` should resolve immediately.
+            let e = match task.await {
+                Ok(r) => r.expect_err("if the receiver has an error, the task must have failed"),
+                Err(e) => e.into(),
+            };
+            todo!("guest never invoked `response-outparam::set` method: {e:?}")
+        }
+    }
+
+    unimplemented!("invoke_worker_incoming_http_handler");
+}
 
 /// Invokes a function on a worker.
 ///

@@ -173,9 +173,7 @@ message InvokeWorkerHttpHandlerRequestHeader {
   golem.common.ResourceLimits account_limits = 3;
   optional golem.worker.InvocationContext context = 4;
   golem.worker.HttpMethod method = 5;
-  string path_with_query = 6;
-  golem.worker.HttpScheme scheme = 7;
-  string authority = 8;
+  string uri = 6;
   golem.worker.HttpFields headers = 9;
 }
 
