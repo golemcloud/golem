@@ -11,7 +11,7 @@ import {
 } from "@/types/api";
 import { toast } from "react-toastify";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { WorkerFilter } from "../../types/api";
 const ROUTE_PATH = "v1/components";
 
@@ -248,10 +248,8 @@ export function useWorkerFind(compId: string, limit?: number, slientToast?:boole
   const [cursor, setCursor] = useState<Cursor>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const searchParams = useSearchParams();
-  const didMount = useRef(false);
-
   const transformSearchParams = useCallback(
-    (cursor?: Cursor) => {
+    (cursor?: Cursor, triggerNext?:boolean) => {
       // Parse the query string into an object
       const params = new URLSearchParams(searchParams);
 
@@ -282,7 +280,7 @@ export function useWorkerFind(compId: string, limit?: number, slientToast?:boole
         count: limit || 10,
         precise: true,
       };
-      if (cursor) {
+      if (cursor && triggerNext) {
         defaultFilter = {
           ...defaultFilter,
           cursor: cursor,
@@ -377,7 +375,7 @@ export function useWorkerFind(compId: string, limit?: number, slientToast?:boole
 
   const triggerQuery = useCallback(
     async (cursor: Cursor, triggerNext?: boolean) => {
-      const payload = transformSearchParams(cursor);
+      const payload = transformSearchParams(cursor, triggerNext);
       try {
         setIsLoading(true);
         const response = await fetcher(`${ROUTE_PATH}/${compId}/workers/find`, {
@@ -412,14 +410,11 @@ export function useWorkerFind(compId: string, limit?: number, slientToast?:boole
         setIsLoading(false);
       }
     },
-    [compId, transformSearchParams]
+    [compId, slientToast, transformSearchParams]
   );
 
   useEffect(() => {
-    if(!didMount.current){
-      didMount.current = true;
-      triggerQuery(null);
-    }
+      triggerQuery(null)
   }, [triggerQuery]);
 
   return {
@@ -427,6 +422,7 @@ export function useWorkerFind(compId: string, limit?: number, slientToast?:boole
     data: workers,
     isLoading,
     triggerNext: cursor ? () => triggerQuery(cursor, true) : null,
+    triggerQuery: triggerQuery
   };
 }
 
