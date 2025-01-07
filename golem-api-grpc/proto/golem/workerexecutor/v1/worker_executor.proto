@@ -221,6 +221,7 @@ message GetWorkerMetadataResponse {
 message ResumeWorkerRequest {
   golem.worker.WorkerId worker_id = 1;
   golem.common.AccountId account_id = 2;
+  optional bool force = 3;
 }
 
 message ResumeWorkerResponse {

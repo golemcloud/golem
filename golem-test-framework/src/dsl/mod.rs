@@ -216,7 +216,7 @@ pub trait TestDsl {
         worker_id: &WorkerId,
     ) -> UnboundedReceiver<Option<LogEvent>>;
     async fn log_output(&self, worker_id: &WorkerId);
-    async fn resume(&self, worker_id: &WorkerId) -> crate::Result<()>;
+    async fn resume(&self, worker_id: &WorkerId, force: bool) -> crate::Result<()>;
     async fn interrupt(&self, worker_id: &WorkerId) -> crate::Result<()>;
     async fn simulated_crash(&self, worker_id: &WorkerId) -> crate::Result<()>;
     async fn auto_update_worker(
@@ -871,11 +871,12 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         });
     }
 
-    async fn resume(&self, worker_id: &WorkerId) -> crate::Result<()> {
+    async fn resume(&self, worker_id: &WorkerId, force: bool) -> crate::Result<()> {
         let response = self
             .worker_service()
             .resume_worker(ResumeWorkerRequest {
                 worker_id: Some(worker_id.clone().into()),
+                force: Some(force),
             })
             .await?;
 
@@ -1660,7 +1661,7 @@ pub trait TestDslUnsafe {
         worker_id: &WorkerId,
     ) -> UnboundedReceiver<Option<LogEvent>>;
     async fn log_output(&self, worker_id: &WorkerId);
-    async fn resume(&self, worker_id: &WorkerId);
+    async fn resume(&self, worker_id: &WorkerId, force: bool);
     async fn interrupt(&self, worker_id: &WorkerId);
     async fn simulated_crash(&self, worker_id: &WorkerId);
     async fn auto_update_worker(&self, worker_id: &WorkerId, target_version: ComponentVersion);
@@ -1935,8 +1936,8 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         <T as TestDsl>::log_output(self, worker_id).await
     }
 
-    async fn resume(&self, worker_id: &WorkerId) {
-        <T as TestDsl>::resume(self, worker_id)
+    async fn resume(&self, worker_id: &WorkerId, force: bool) {
+        <T as TestDsl>::resume(self, worker_id, force)
             .await
             .expect("Failed to resume worker")
     }

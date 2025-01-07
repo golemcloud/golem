@@ -775,7 +775,7 @@ impl OplogEntry {
                 parent,
                 component_size,
                 initial_total_linear_memory_size,
-                ..
+                worker_id: _,
             } => Some(OplogEntry::CreateV1 {
                 timestamp: *timestamp,
                 worker_id: worker_id.clone(),
@@ -797,7 +797,7 @@ impl OplogEntry {
                 component_size,
                 initial_total_linear_memory_size,
                 initial_active_plugins,
-                ..
+                worker_id: _,
             } => Some(OplogEntry::Create {
                 timestamp: *timestamp,
                 worker_id: worker_id.clone(),

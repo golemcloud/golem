@@ -200,6 +200,7 @@ pub trait WorkerService {
         &self,
         worker_id: &WorkerId,
         metadata: WorkerRequestMetadata,
+        force: bool,
     ) -> WorkerResult<()>;
 
     async fn update(
@@ -776,6 +777,7 @@ impl WorkerService for WorkerServiceDefault {
         &self,
         worker_id: &WorkerId,
         metadata: WorkerRequestMetadata,
+        force: bool,
     ) -> WorkerResult<()> {
         let worker_id = worker_id.clone();
         self.call_worker_executor(
@@ -786,6 +788,7 @@ impl WorkerService for WorkerServiceDefault {
                 Box::pin(worker_executor_client.resume_worker(ResumeWorkerRequest {
                     worker_id: Some(worker_id.into()),
                     account_id: metadata.account_id.clone().map(|id| id.into()),
+                    force: Some(force),
                 }))
             },
             |response| match response.into_inner() {

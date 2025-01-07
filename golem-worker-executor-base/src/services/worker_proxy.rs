@@ -68,7 +68,8 @@ pub trait WorkerProxy {
         mode: UpdateMode,
     ) -> Result<(), WorkerProxyError>;
 
-    async fn resume(&self, owned_worker_id: &WorkerId) -> Result<(), WorkerProxyError>;
+    async fn resume(&self, owned_worker_id: &WorkerId, force: bool)
+        -> Result<(), WorkerProxyError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
@@ -336,7 +337,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         }
     }
 
-    async fn resume(&self, worker_id: &WorkerId) -> Result<(), WorkerProxyError> {
+    async fn resume(&self, worker_id: &WorkerId, force: bool) -> Result<(), WorkerProxyError> {
         debug!("Resuming remote worker");
 
         let response: ResumeWorkerResponse = self
@@ -345,6 +346,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                 Box::pin(client.resume_worker(authorised_grpc_request(
                     ResumeWorkerRequest {
                         worker_id: Some(worker_id.clone().into()),
+                        force: Some(force),
                     },
                     &self.access_token,
                 )))

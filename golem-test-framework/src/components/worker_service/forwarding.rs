@@ -457,6 +457,7 @@ impl WorkerService for ForwardingWorkerService {
                         }
                         .into(),
                     ),
+                    force: request.force,
                 })
                 .await;
 

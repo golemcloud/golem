@@ -2004,7 +2004,7 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume(
     let _ = drain_connection(rx).await;
     let (status2, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
-    executor.resume(&worker_id).await;
+    executor.resume(&worker_id, false).await;
     executor
         .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
         .await;

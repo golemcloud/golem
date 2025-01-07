@@ -200,6 +200,7 @@ message InvokeJsonRequest {
 
 message ResumeWorkerRequest {
   golem.worker.WorkerId workerId = 1;
+  optional bool force = 2;
 }
 
 message ResumeWorkerResponse {

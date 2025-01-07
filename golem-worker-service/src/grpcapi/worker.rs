@@ -982,7 +982,11 @@ impl WorkerGrpcApi {
         let worker_id = validate_protobuf_worker_id(request.worker_id)?;
 
         self.worker_service
-            .resume(&worker_id, empty_worker_metadata())
+            .resume(
+                &worker_id,
+                empty_worker_metadata(),
+                request.force.unwrap_or(false),
+            )
             .await?;
 
         Ok(())

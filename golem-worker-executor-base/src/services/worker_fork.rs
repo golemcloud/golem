@@ -134,7 +134,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerFork
             env: source_worker_metadata.env.clone(),
             args: source_worker_metadata.args.clone(),
             created_at: Timestamp::now_utc(),
-            parent: source_worker_metadata.parent.clone(),
+            parent: None,
             last_known_status: WorkerStatusRecord::default(),
         };
 
@@ -179,7 +179,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerFork
         // This will replay until the fork point in the forked worker
         self.all
             .worker_proxy()
-            .resume(&target_worker_id)
+            .resume(&target_worker_id, true)
             .await
             .map_err(|err| {
                 GolemError::failed_to_resume_worker(target_worker_id.clone(), err.into())
