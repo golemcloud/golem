@@ -202,10 +202,12 @@ mod tests {
         Success(Json<TestEndpoint>),
     }
 
+    #[allow(dead_code)]
     struct TestApi;
 
     #[OpenApi]
     impl TestApi {
+        #[allow(dead_code)]
         #[oai(path = "/test", method = "get")]
         async fn test_endpoint(&self) -> TestResponse {
             TestResponse::Success(Json(TestEndpoint {

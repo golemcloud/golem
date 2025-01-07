@@ -134,6 +134,7 @@ impl WorkerService for MockWorkerService {
         &self,
         _worker_id: &TargetWorkerId,
         _mount_path: String,
+        _metadata: WorkerRequestMetadata,
     ) -> WorkerResult<Pin<Box<dyn Stream<Item = WorkerResult<Bytes>> + Send + 'static>>> {
         let bytes = Bytes::from("mock swagger ui contents");
         let stream = futures::stream::once(async move { Ok(bytes) });
