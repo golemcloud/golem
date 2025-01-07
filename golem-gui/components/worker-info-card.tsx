@@ -43,57 +43,47 @@ export default function WorkerInfoCard({ worker, onClick }: { worker: Worker; on
 
   
         {/* Worker Info */}
-        <Box
-          sx={{
-            display: "flex",
-            width: "80%",
-            justifyContent: "space-between",
-            alignItems: "center",
-            mt: 2,
-            mb: 2,
-          }}
-        >
-          <Box>
+        <Box className="flex sm:w-[80%] w-[100%] items-center justify-between mt-2 mb-2 gap-2">
+          <Box className="w-fit">
             <Typography
               className="text-muted-foreground"
               variant="subtitle2"
-              sx={{ fontWeight: 600, marginBottom: 0.5 }}
             >
               Status
             </Typography>
             <Typography variant="body2">{worker.status} </Typography>
           </Box>
-          <Box>
+
+          <Box className="w-fit">
             <Typography
               className="text-muted-foreground"
               variant="subtitle2"
-              sx={{ fontWeight: 600, marginBottom: 0.5 }}
             >
               Memory
             </Typography>
             <Typography variant="body2">{`${calculateSizeInMB(worker.totalLinearMemorySize)} MB`}</Typography>
           </Box>
-          <Box>
+
+          <Box className="w-fit">
             <Typography
               className="text-muted-foreground"
               variant="subtitle2"
-              sx={{ fontWeight: 600, marginBottom: 0.5 }}
             >
               Pending Invocation
             </Typography>
             <Typography variant="body2">{worker.pendingInvocationCount}</Typography>
           </Box>
-          <Box>
 
+          <Box className="w-fit">
             <Typography
               className="text-muted-foreground"
               variant="subtitle2"
-              sx={{ fontWeight: 600, marginBottom: 0.5 }}
             >
               Resources
             </Typography>
             <Typography variant="body2">{Object.values(worker.ownedResources).length}</Typography>
           </Box>
+
         </Box>
         <Box sx={{ display: "flex", gap: 1, alignItems: "center", flexWrap: "wrap" }}>
           {workerInfo.map((info, index) => (

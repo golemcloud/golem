@@ -216,6 +216,7 @@ const NewRouteForm = ({
             {errors.method.message?.toString()}
           </Typography>
         )}
+        <Typography variant="subtitle1">Path</Typography>
         <Controller
           name="path"
           control={control}
@@ -227,7 +228,6 @@ const NewRouteForm = ({
               {...field}
               fullWidth
               variant="outlined"
-              label="Path"
               placeholder="/api/endpoint/{VARIABLE_NAME}"
               className="border border-input"
             />
