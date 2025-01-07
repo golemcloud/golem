@@ -50,7 +50,7 @@ async fn all_wit_types() {
 
     let def = StubDefinition::new(StubConfig {
         source_wit_root: source_wit_root.path().to_path_buf(),
-        target_root: canonical_target_root,
+        client_root: canonical_target_root,
         selected_world: None,
         stub_crate_version: "1.0.0".to_string(),
         wasm_rpc_override: wasm_rpc_override(),
@@ -359,7 +359,7 @@ async fn resource() {
 
     let def = StubDefinition::new(StubConfig {
         source_wit_root: source_wit_root.path().to_path_buf(),
-        target_root: canonical_target_root,
+        client_root: canonical_target_root,
         selected_world: None,
         stub_crate_version: "1.0.0".to_string(),
         wasm_rpc_override: wasm_rpc_override(),

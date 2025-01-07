@@ -26,8 +26,8 @@ use itertools::Itertools;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use wit_encoder::{
-    Ident, Interface, InterfaceItem, Package, PackageItem, PackageName, Params, ResourceFunc,
-    ResourceFuncKind, Results, StandaloneFunc, Type, TypeDef, TypeDefKind, Use, World, WorldItem,
+    Ident, Interface, InterfaceItem, Package, PackageItem, Params, ResourceFunc, ResourceFuncKind,
+    Results, StandaloneFunc, Type, TypeDef, TypeDefKind, Use, World, WorldItem,
 };
 use wit_parser::PackageId;
 
@@ -36,13 +36,13 @@ pub fn generate_client_wit_to_target(def: &StubDefinition) -> anyhow::Result<()>
         "Generating",
         format!(
             "client WIT to {}",
-            def.target_wit_path().log_color_highlight()
+            def.client_wit_path().log_color_highlight()
         ),
     );
 
     let out = generate_client_wit_from_stub_def(def)?;
-    fs::create_dir_all(def.target_wit_root())?;
-    fs::write(def.target_wit_path(), out)?;
+    fs::create_dir_all(def.client_wit_root())?;
+    fs::write(def.client_wit_path(), out)?;
     Ok(())
 }
 
@@ -51,13 +51,9 @@ pub fn generate_client_wit_from_stub_def(def: &StubDefinition) -> anyhow::Result
 }
 
 pub fn generate_client_package_from_stub_def(def: &StubDefinition) -> anyhow::Result<Package> {
-    let mut package = Package::new(PackageName::new(
-        def.source_package_name.namespace.clone(),
-        format!("{}-client", def.source_package_name.name),
-        def.source_package_name.version.clone(),
-    ));
+    let mut package = Package::new(def.client_encoder_package_name());
 
-    let interface_identifier = def.target_interface_name();
+    let interface_identifier = def.client_interface_name();
 
     // Stub interface
     {
@@ -120,7 +116,7 @@ pub fn generate_client_package_from_stub_def(def: &StubDefinition) -> anyhow::Re
                 // Blocking
                 {
                     let mut blocking_function = {
-                        let function_name = format!("blocking-{}", function.name.clone());
+                        let function_name = naming::wit::blocking_function_name(function);
                         if is_static {
                             ResourceFunc::static_(function_name)
                         } else {
@@ -161,7 +157,7 @@ pub fn generate_client_package_from_stub_def(def: &StubDefinition) -> anyhow::Re
 
     // Stub world
     {
-        let mut stub_world = World::new(def.target_world_name());
+        let mut stub_world = World::new(def.client_world_name());
         stub_world.named_interface_export(interface_identifier);
         package.world(stub_world);
     }
@@ -221,7 +217,7 @@ pub fn add_dependencies_to_stub_wit_dir(def: &StubDefinition) -> anyhow::Result<
         format!(
             "WIT dependencies from {} to {}",
             def.config.source_wit_root.log_color_highlight(),
-            def.config.target_root.log_color_highlight(),
+            def.config.client_root.log_color_highlight(),
         ),
     );
 
@@ -229,7 +225,7 @@ pub fn add_dependencies_to_stub_wit_dir(def: &StubDefinition) -> anyhow::Result<
 
     let stub_dep_packages = def.stub_dep_package_ids();
 
-    let target_wit_root = def.target_wit_root();
+    let target_wit_root = def.client_wit_root();
     let target_deps = target_wit_root.join(naming::wit::DEPS_DIR);
 
     for (package_id, package, package_sources) in def.packages_with_wit_sources() {

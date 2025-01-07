@@ -77,7 +77,7 @@ async fn init_stub(name: &str) -> (TempDir, TempDir, PathBuf) {
 
     let def = StubDefinition::new(StubConfig {
         source_wit_root,
-        target_root: canonical_target_root,
+        client_root: canonical_target_root,
         selected_world: None,
         stub_crate_version: "1.0.0".to_string(),
         wasm_rpc_override: wasm_rpc_override(),

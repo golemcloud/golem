@@ -45,7 +45,7 @@ pub async fn build(
     fs::create_dir_all(dest_wit_root).context("Failed to create the target WIT root directory")?;
 
     fs_extra::dir::copy(
-        stub_def.config.target_root.join(naming::wit::WIT_DIR),
+        stub_def.config.client_root.join(naming::wit::WIT_DIR),
         dest_wit_root,
         &CopyOptions::new().content_only(true).overwrite(true),
     )
@@ -65,12 +65,12 @@ pub async fn generate_and_build_client(
     compile(
         &stub_def
             .config
-            .target_root
+            .client_root
             .canonicalize()
             .with_context(|| {
                 anyhow!(
                     "Failed to canonicalize client target root {}",
-                    stub_def.config.target_root.log_color_error_highlight()
+                    stub_def.config.client_root.log_color_error_highlight()
                 )
             })?,
         offline,
@@ -80,13 +80,13 @@ pub async fn generate_and_build_client(
 
     let wasm_path = stub_def
         .config
-        .target_root
+        .client_root
         .join("target")
         .join("wasm32-wasi")
         .join("release")
         .join(format!(
             "{}.wasm",
-            stub_def.target_crate_name().to_snake_case()
+            stub_def.client_crate_name().to_snake_case()
         ));
     Ok(wasm_path)
 }
@@ -96,13 +96,13 @@ pub fn generate_client_wit_dir(stub_def: &StubDefinition) -> anyhow::Result<Reso
         "Generating",
         format!(
             "client WIT directory to {}",
-            stub_def.config.target_root.log_color_highlight()
+            stub_def.config.client_root.log_color_highlight()
         ),
     );
     let _indent = LogIndent::new();
     generate_client_wit_to_target(stub_def).context("Failed to generate the client wit file")?;
     add_dependencies_to_stub_wit_dir(stub_def).context("Failed to copy the dependent wit files")?;
     stub_def
-        .resolve_target_wit()
+        .resolve_client_wit()
         .context("Failed to resolve the result WIT root")
 }

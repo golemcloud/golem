@@ -33,7 +33,7 @@ fn all_wit_types() {
 
     let def = StubDefinition::new(StubConfig {
         source_wit_root: source_wit_root.path().to_path_buf(),
-        target_root: target_root.path().to_path_buf(),
+        client_root: target_root.path().to_path_buf(),
         selected_world: None,
         stub_crate_version: "1.0.0".to_string(),
         wasm_rpc_override: WasmRpcOverride::default(),
@@ -124,7 +124,7 @@ fn many_ways_to_export() {
 
     let def = StubDefinition::new(StubConfig {
         source_wit_root: source_wit_root.path().to_path_buf(),
-        target_root: target_root.path().to_path_buf(),
+        client_root: target_root.path().to_path_buf(),
         selected_world: None,
         stub_crate_version: "1.0.0".to_string(),
         wasm_rpc_override: WasmRpcOverride::default(),

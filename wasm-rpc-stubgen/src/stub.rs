@@ -19,6 +19,7 @@ use crate::{naming, WasmRpcOverride};
 use anyhow::{anyhow, Context};
 use indexmap::IndexMap;
 use itertools::Itertools;
+use proc_macro2::Span;
 use std::cell::OnceCell;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -30,7 +31,7 @@ use wit_parser::{
 #[derive(Clone, Debug)]
 pub struct StubConfig {
     pub source_wit_root: PathBuf,
-    pub target_root: PathBuf,
+    pub client_root: PathBuf,
     pub selected_world: Option<String>,
     pub stub_crate_version: String,
     pub wasm_rpc_override: WasmRpcOverride,
@@ -122,8 +123,12 @@ impl StubDefinition {
             })
     }
 
-    pub fn stub_package_name(&self) -> PackageName {
-        naming::wit::client_package_name(&self.source_package_name)
+    pub fn client_parser_package_name(&self) -> PackageName {
+        naming::wit::client_parser_package_name(&self.source_package_name)
+    }
+
+    pub fn client_encoder_package_name(&self) -> wit_encoder::PackageName {
+        naming::wit::client_encoder_package_name(&self.source_package_name)
     }
 
     pub fn source_world(&self) -> &World {
@@ -141,37 +146,58 @@ impl StubDefinition {
         EncodedWitDir::new(&self.resolve)
     }
 
-    pub fn target_cargo_path(&self) -> PathBuf {
-        self.config.target_root.join("Cargo.toml")
+    pub fn client_cargo_path(&self) -> PathBuf {
+        self.config.client_root.join(naming::rust::CARGO_TOML)
     }
 
-    pub fn target_crate_name(&self) -> String {
-        format!("{}-client", self.source_world_name())
+    pub fn client_crate_name(&self) -> String {
+        naming::rust::client_crate_name(self.source_world())
     }
 
-    pub fn target_rust_path(&self) -> PathBuf {
-        self.config.target_root.join("src/lib.rs")
+    pub fn rust_client_interface_name(&self) -> proc_macro2::Ident {
+        proc_macro2::Ident::new(
+            &naming::rust::client_interface_name(self.source_world()),
+            Span::call_site(),
+        )
     }
 
-    pub fn target_interface_name(&self) -> String {
-        format!("{}-client", self.source_world_name())
+    pub fn rust_root_namespace(&self) -> proc_macro2::Ident {
+        proc_macro2::Ident::new(
+            &naming::rust::root_namespace(&self.source_package_name),
+            Span::call_site(),
+        )
     }
 
-    pub fn target_world_name(&self) -> String {
-        format!("wasm-rpc-client-{}", self.source_world_name())
+    pub fn rust_client_root_name(&self) -> proc_macro2::Ident {
+        proc_macro2::Ident::new(
+            &naming::rust::client_root_name(&self.source_package_name),
+            Span::call_site(),
+        )
     }
 
-    pub fn target_wit_root(&self) -> PathBuf {
-        self.config.target_root.join(naming::wit::WIT_DIR)
+    pub fn client_rust_path(&self) -> PathBuf {
+        self.config.client_root.join(naming::rust::SRC)
     }
 
-    pub fn target_wit_path(&self) -> PathBuf {
-        self.target_wit_root()
+    pub fn client_interface_name(&self) -> String {
+        naming::wit::client_interface_name(self.source_world())
+    }
+
+    pub fn client_world_name(&self) -> String {
+        naming::rust::client_world_name(self.source_world())
+    }
+
+    pub fn client_wit_root(&self) -> PathBuf {
+        self.config.client_root.join(naming::wit::WIT_DIR)
+    }
+
+    pub fn client_wit_path(&self) -> PathBuf {
+        self.client_wit_root()
             .join(naming::wit::CLIENT_WIT_FILE_NAME)
     }
 
-    pub fn resolve_target_wit(&self) -> anyhow::Result<ResolvedWitDir> {
-        ResolvedWitDir::new(&self.target_wit_root())
+    pub fn resolve_client_wit(&self) -> anyhow::Result<ResolvedWitDir> {
+        ResolvedWitDir::new(&self.client_wit_root())
     }
 
     pub fn stub_imported_interfaces(&self) -> &Vec<InterfaceStub> {

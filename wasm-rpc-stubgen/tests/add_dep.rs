@@ -577,7 +577,7 @@ fn init_stub(name: &str) -> (TempDir, TempDir) {
 
     let def = StubDefinition::new(StubConfig {
         source_wit_root: canonical_source,
-        target_root: canonical_target,
+        client_root: canonical_target,
         selected_world: None,
         stub_crate_version: "1.0.0".to_string(),
         wasm_rpc_override: WasmRpcOverride::default(),
@@ -592,7 +592,7 @@ fn init_stub(name: &str) -> (TempDir, TempDir) {
 fn regenerate_stub(stub_dir: &Path, source_wit_root: &Path) {
     let def = StubDefinition::new(StubConfig {
         source_wit_root: source_wit_root.to_path_buf(),
-        target_root: stub_dir.to_path_buf(),
+        client_root: stub_dir.to_path_buf(),
         selected_world: None,
         stub_crate_version: "1.0.0".to_string(),
         wasm_rpc_override: WasmRpcOverride::default(),

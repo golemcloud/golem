@@ -1329,7 +1329,7 @@ async fn build_client<CPE: ComponentPropertiesExtensions>(
 
     let client_def = StubDefinition::new(StubConfig {
         source_wit_root: ctx.application.component_generated_base_wit(component_name),
-        target_root: target_root.clone(),
+        client_root: target_root.clone(),
         selected_world: None,
         stub_crate_version: WASM_RPC_VERSION.to_string(),
         // NOTE: these overrides are deliberately not part of cli flags or the app manifest, at least for now

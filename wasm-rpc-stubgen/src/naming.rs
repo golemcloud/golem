@@ -1,5 +1,6 @@
 pub mod wit {
     use crate::log::LogColorize;
+    use crate::stub::FunctionStub;
     use anyhow::{anyhow, bail};
     use std::path::{Path, PathBuf};
 
@@ -9,12 +10,28 @@ pub mod wit {
     pub static CLIENT_WIT_FILE_NAME: &str = "client.wit";
     pub static EXPORTS_WIT_FILE_NAME: &str = "exports.wit";
 
-    pub fn client_package_name(package_name: &wit_parser::PackageName) -> wit_parser::PackageName {
+    pub fn client_parser_package_name(
+        package_name: &wit_parser::PackageName,
+    ) -> wit_parser::PackageName {
         wit_parser::PackageName {
             namespace: package_name.namespace.clone(),
             name: format!("{}-client", package_name.name),
             version: package_name.version.clone(),
         }
+    }
+
+    pub fn client_encoder_package_name(
+        package_name: &wit_parser::PackageName,
+    ) -> wit_encoder::PackageName {
+        wit_encoder::PackageName::new(
+            package_name.namespace.clone(),
+            format!("{}-client", package_name.name),
+            package_name.version.clone(),
+        )
+    }
+
+    pub fn client_interface_name(source_world: &wit_parser::World) -> String {
+        format!("{}-client", source_world.name)
     }
 
     pub fn exports_parser_package_name(
@@ -128,5 +145,54 @@ pub mod wit {
 
     pub fn package_wit_dep_dir_from_encode(package_name: &wit_encoder::PackageName) -> PathBuf {
         package_wit_dep_dir_from_package_dir_name(&package_dep_dir_name_from_encoder(package_name))
+    }
+
+    pub fn blocking_function_name(function: &FunctionStub) -> String {
+        format!("blocking-{}", function.name)
+    }
+}
+
+pub mod rust {
+    use crate::stub::{FunctionStub, InterfaceStub};
+    use heck::{ToSnakeCase, ToUpperCamelCase};
+    use proc_macro2::{Ident, Span};
+    use wit_bindgen_rust::to_rust_ident;
+
+    pub static CARGO_TOML: &str = "Cargo.toml";
+    pub static SRC: &str = "src/lib.rs";
+
+    pub fn root_namespace(source_package_name: &wit_parser::PackageName) -> String {
+        source_package_name.namespace.to_snake_case()
+    }
+    
+    pub fn client_root_name(source_package_name: &wit_parser::PackageName) -> String {
+        format!("{}_client", source_package_name.name.to_snake_case())
+    }
+
+    pub fn client_crate_name(source_world: &wit_parser::World) -> String {
+        format!("{}-client", source_world.name)
+    }
+
+    pub fn client_interface_name(source_world: &wit_parser::World) -> String {
+        to_rust_ident(&format!("{}-client", source_world.name)).to_snake_case()
+    }
+
+    pub fn client_world_name(source_world: &wit_parser::World) -> String {
+        format!("wasm-rpc-client-{}", source_world.name)
+    }
+
+    pub fn result_wrapper_ident(function: &FunctionStub, owner: &InterfaceStub) -> Ident {
+        Ident::new(
+            &to_rust_ident(&function.async_result_type(owner)).to_upper_camel_case(),
+            Span::call_site(),
+        )
+    }
+
+    pub fn result_wrapper_interface_ident(function: &FunctionStub, owner: &InterfaceStub) -> Ident {
+        Ident::new(
+            &to_rust_ident(&format!("guest-{}", function.async_result_type(owner)))
+                .to_upper_camel_case(),
+            Span::call_site(),
+        )
     }
 }

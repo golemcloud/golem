@@ -252,7 +252,7 @@ impl ResolvedWitApplication {
             component_name.clone(),
         );
         self.stub_package_to_component.insert(
-            naming::wit::client_package_name(&resolved_component.main_package_name),
+            naming::wit::client_parser_package_name(&resolved_component.main_package_name),
             component_name.clone(),
         );
         self.interface_package_to_component.insert(
