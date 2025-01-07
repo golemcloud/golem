@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use bincode::{Decode, Encode};
+use crate::model::RetryConfig;
 use figment::providers::{Env, Format, Serialized, Toml};
 use figment::value::Value;
 use figment::Figment;
@@ -376,17 +376,6 @@ impl Default for RedisConfig {
             password: None,
         }
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Encode, Decode)]
-pub struct RetryConfig {
-    pub max_attempts: u32,
-    #[serde(with = "humantime_serde")]
-    pub min_delay: Duration,
-    #[serde(with = "humantime_serde")]
-    pub max_delay: Duration,
-    pub multiplier: f64,
-    pub max_jitter_factor: Option<f64>,
 }
 
 impl Default for RetryConfig {

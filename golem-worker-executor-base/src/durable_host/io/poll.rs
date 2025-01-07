@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -27,7 +27,6 @@ use crate::workerctx::WorkerCtx;
 #[async_trait]
 impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
     async fn ready(&mut self, self_: Resource<Pollable>) -> anyhow::Result<bool> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("io::poll:pollable", "ready");
         HostPollable::ready(&mut self.as_wasi_view(), self_).await
     }
@@ -36,7 +35,7 @@ impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
         record_host_function_call("io::poll:pollable", "block");
         let in_ = vec![self_];
         let _ = self.poll(in_).await?;
-        let _permit = self.begin_async_host_function().await?;
+
         Ok(())
     }
 
@@ -53,8 +52,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             self,
             "golem io::poll",
             "poll",
-            WrappedFunctionType::ReadLocal
-        ).await?;
+            WrappedFunctionType::ReadLocal,
+        )
+        .await?;
 
         let result = if durability.is_live() {
             let result = Host::poll(&mut self.as_wasi_view(), in_).await;
@@ -74,28 +74,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             }
             None => result,
         }
-    }
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> HostPollable for &mut DurableWorkerCtx<Ctx> {
-    async fn ready(&mut self, self_: Resource<Pollable>) -> anyhow::Result<bool> {
-        (*self).ready(self_).await
-    }
-
-    async fn block(&mut self, self_: Resource<Pollable>) -> anyhow::Result<()> {
-        (*self).block(self_).await
-    }
-
-    fn drop(&mut self, rep: Resource<Pollable>) -> anyhow::Result<()> {
-        (*self).drop(rep)
-    }
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {
-    async fn poll(&mut self, in_: Vec<Resource<Pollable>>) -> anyhow::Result<Vec<u32>> {
-        (*self).poll(in_).await
     }
 }
 

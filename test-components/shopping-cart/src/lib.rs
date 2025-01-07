@@ -157,6 +157,12 @@ impl Guest for Component {
             state.items.clone()
         })
     }
+
+    fn force_commit(count: u8) {
+        for _ in 0..count {
+            oplog_commit(1);
+        }
+    }
 }
 
 bindings::export!(Component with_types_in bindings);

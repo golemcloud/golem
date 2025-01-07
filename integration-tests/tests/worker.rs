@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,6 +24,9 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use crate::Tracing;
+use axum::extract::Query;
+use axum::routing::get;
+use axum::Router;
 use golem_common::model::oplog::{OplogIndex, WorkerResourceId};
 use golem_common::model::public_oplog::{ExportedFunctionInvokedParameters, PublicOplogEntry};
 use golem_common::model::{
@@ -38,9 +41,6 @@ use serde_json::json;
 use std::time::{Duration, SystemTime};
 use tokio::time::sleep;
 use tracing::log::info;
-use warp::http::{Response, StatusCode};
-use warp::hyper::Body;
-use warp::Filter;
 
 inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
@@ -971,10 +971,9 @@ async fn get_running_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing
     let polling_worker_ids_clone = polling_worker_ids.clone();
 
     let http_server = tokio::spawn(async move {
-        let route = warp::path::path("poll")
-            .and(warp::get())
-            .and(warp::query::<HashMap<String, String>>())
-            .map(move |query: HashMap<String, String>| {
+        let route = Router::new().route(
+            "/poll",
+            get(move |query: Query<HashMap<String, String>>| async move {
                 let component_id = query.get("component_id");
                 let worker_name = query.get("worker_name");
                 if let (Some(component_id), Some(worker_name)) = (component_id, worker_name) {
@@ -986,19 +985,18 @@ async fn get_running_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing
                     let mut ids = polling_worker_ids_clone.lock().unwrap();
                     ids.insert(worker_id.clone());
                 }
-                Response::builder()
-                    .status(StatusCode::OK)
-                    .body(Body::from("initial"))
-                    .unwrap()
-            });
+                "initial"
+            }),
+        );
 
-        warp::serve(route)
-            .run(
-                format!("0.0.0.0:{}", host_http_port)
-                    .parse::<SocketAddr>()
-                    .unwrap(),
-            )
-            .await;
+        let listener = tokio::net::TcpListener::bind(
+            format!("0.0.0.0:{}", host_http_port)
+                .parse::<SocketAddr>()
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        axum::serve(listener, route).await.unwrap();
     });
 
     let mut env = HashMap::new();

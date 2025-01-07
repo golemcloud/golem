@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -93,6 +93,7 @@ where
 mod tests {
     use crate::VariableId;
     use crate::{Expr, TypeName};
+    use bigdecimal::BigDecimal;
     use test_r::test;
 
     #[test]
@@ -104,8 +105,11 @@ mod tests {
             Expr::list_reduce(
                 VariableId::list_reduce_identifier("z"),
                 VariableId::list_comprehension_identifier("p"),
-                Expr::sequence(vec![Expr::untyped_number(1f64), Expr::untyped_number(2f64)]),
-                Expr::untyped_number(0f64),
+                Expr::sequence(vec![
+                    Expr::untyped_number(BigDecimal::from(1)),
+                    Expr::untyped_number(BigDecimal::from(2))
+                ]),
+                Expr::untyped_number(BigDecimal::from(0)),
                 Expr::expr_block(vec![Expr::plus(
                     Expr::identifier("z"),
                     Expr::identifier("p")
@@ -130,16 +134,16 @@ mod tests {
                     "ages",
                     TypeName::List(Box::new(TypeName::U16)),
                     Expr::sequence(vec![
-                        Expr::untyped_number(1f64),
-                        Expr::untyped_number(2f64),
-                        Expr::untyped_number(3f64)
+                        Expr::untyped_number(BigDecimal::from(1)),
+                        Expr::untyped_number(BigDecimal::from(2)),
+                        Expr::untyped_number(BigDecimal::from(3))
                     ])
                 ),
                 Expr::list_reduce(
                     VariableId::list_reduce_identifier("z"),
                     VariableId::list_comprehension_identifier("a"),
                     Expr::identifier("ages"),
-                    Expr::untyped_number(0f64),
+                    Expr::untyped_number(BigDecimal::from(0)),
                     Expr::expr_block(vec![Expr::plus(
                         Expr::identifier("z"),
                         Expr::identifier("a")

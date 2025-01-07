@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -30,13 +30,3 @@ impl<Ctx: WorkerCtx> HostTerminalOutput for DurableWorkerCtx<Ctx> {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> HostTerminalOutput for &mut DurableWorkerCtx<Ctx> {
-    fn drop(&mut self, rep: Resource<TerminalOutput>) -> anyhow::Result<()> {
-        (*self).drop(rep)
-    }
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {}

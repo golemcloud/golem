@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -25,15 +25,16 @@ use wasmtime_wasi::bindings::sockets::udp::{
 };
 use wasmtime_wasi::SocketError;
 
+#[async_trait]
 impl<Ctx: WorkerCtx> HostUdpSocket for DurableWorkerCtx<Ctx> {
-    fn start_bind(
+    async fn start_bind(
         &mut self,
         self_: Resource<UdpSocket>,
         network: Resource<Network>,
         local_address: IpSocketAddress,
     ) -> Result<(), SocketError> {
         record_host_function_call("sockets::udp", "start_bind");
-        HostUdpSocket::start_bind(&mut self.as_wasi_view(), self_, network, local_address)
+        HostUdpSocket::start_bind(&mut self.as_wasi_view(), self_, network, local_address).await
     }
 
     fn finish_bind(&mut self, self_: Resource<UdpSocket>) -> Result<(), SocketError> {
@@ -41,7 +42,7 @@ impl<Ctx: WorkerCtx> HostUdpSocket for DurableWorkerCtx<Ctx> {
         HostUdpSocket::finish_bind(&mut self.as_wasi_view(), self_)
     }
 
-    fn stream(
+    async fn stream(
         &mut self,
         self_: Resource<UdpSocket>,
         remote_address: Option<IpSocketAddress>,
@@ -53,7 +54,7 @@ impl<Ctx: WorkerCtx> HostUdpSocket for DurableWorkerCtx<Ctx> {
         SocketError,
     > {
         record_host_function_call("sockets::udp", "stream");
-        HostUdpSocket::stream(&mut self.as_wasi_view(), self_, remote_address)
+        HostUdpSocket::stream(&mut self.as_wasi_view(), self_, remote_address).await
     }
 
     fn local_address(
@@ -154,19 +155,20 @@ impl<Ctx: WorkerCtx> HostIncomingDatagramStream for DurableWorkerCtx<Ctx> {
     }
 }
 
+#[async_trait]
 impl<Ctx: WorkerCtx> HostOutgoingDatagramStream for DurableWorkerCtx<Ctx> {
     fn check_send(&mut self, self_: Resource<OutgoingDatagramStream>) -> Result<u64, SocketError> {
         record_host_function_call("sockets::udp", "check_send");
         HostOutgoingDatagramStream::check_send(&mut self.as_wasi_view(), self_)
     }
 
-    fn send(
+    async fn send(
         &mut self,
         self_: Resource<OutgoingDatagramStream>,
         datagrams: Vec<OutgoingDatagram>,
     ) -> Result<u64, SocketError> {
         record_host_function_call("sockets::udp", "send");
-        HostOutgoingDatagramStream::send(&mut self.as_wasi_view(), self_, datagrams)
+        HostOutgoingDatagramStream::send(&mut self.as_wasi_view(), self_, datagrams).await
     }
 
     fn subscribe(
@@ -185,146 +187,3 @@ impl<Ctx: WorkerCtx> HostOutgoingDatagramStream for DurableWorkerCtx<Ctx> {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> HostUdpSocket for &mut DurableWorkerCtx<Ctx> {
-    fn start_bind(
-        &mut self,
-        self_: Resource<UdpSocket>,
-        network: Resource<Network>,
-        local_address: IpSocketAddress,
-    ) -> Result<(), SocketError> {
-        (*self).start_bind(self_, network, local_address)
-    }
-
-    fn finish_bind(&mut self, self_: Resource<UdpSocket>) -> Result<(), SocketError> {
-        (*self).finish_bind(self_)
-    }
-
-    fn stream(
-        &mut self,
-        self_: Resource<UdpSocket>,
-        remote_address: Option<IpSocketAddress>,
-    ) -> Result<
-        (
-            Resource<IncomingDatagramStream>,
-            Resource<OutgoingDatagramStream>,
-        ),
-        SocketError,
-    > {
-        (*self).stream(self_, remote_address)
-    }
-
-    fn local_address(
-        &mut self,
-        self_: Resource<UdpSocket>,
-    ) -> Result<IpSocketAddress, SocketError> {
-        (*self).local_address(self_)
-    }
-
-    fn remote_address(
-        &mut self,
-        self_: Resource<UdpSocket>,
-    ) -> Result<IpSocketAddress, SocketError> {
-        (*self).remote_address(self_)
-    }
-
-    fn address_family(&mut self, self_: Resource<UdpSocket>) -> anyhow::Result<IpAddressFamily> {
-        (*self).address_family(self_)
-    }
-
-    fn unicast_hop_limit(&mut self, self_: Resource<UdpSocket>) -> Result<u8, SocketError> {
-        (*self).unicast_hop_limit(self_)
-    }
-
-    fn set_unicast_hop_limit(
-        &mut self,
-        self_: Resource<UdpSocket>,
-        value: u8,
-    ) -> Result<(), SocketError> {
-        (*self).set_unicast_hop_limit(self_, value)
-    }
-
-    fn receive_buffer_size(&mut self, self_: Resource<UdpSocket>) -> Result<u64, SocketError> {
-        (*self).receive_buffer_size(self_)
-    }
-
-    fn set_receive_buffer_size(
-        &mut self,
-        self_: Resource<UdpSocket>,
-        value: u64,
-    ) -> Result<(), SocketError> {
-        (*self).set_receive_buffer_size(self_, value)
-    }
-
-    fn send_buffer_size(&mut self, self_: Resource<UdpSocket>) -> Result<u64, SocketError> {
-        (*self).send_buffer_size(self_)
-    }
-
-    fn set_send_buffer_size(
-        &mut self,
-        self_: Resource<UdpSocket>,
-        value: u64,
-    ) -> Result<(), SocketError> {
-        (*self).set_send_buffer_size(self_, value)
-    }
-
-    fn subscribe(&mut self, self_: Resource<UdpSocket>) -> anyhow::Result<Resource<Pollable>> {
-        HostUdpSocket::subscribe(*self, self_)
-    }
-
-    fn drop(&mut self, rep: Resource<UdpSocket>) -> anyhow::Result<()> {
-        HostUdpSocket::drop(*self, rep)
-    }
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> HostOutgoingDatagramStream for &mut DurableWorkerCtx<Ctx> {
-    fn check_send(&mut self, self_: Resource<OutgoingDatagramStream>) -> Result<u64, SocketError> {
-        (*self).check_send(self_)
-    }
-
-    fn send(
-        &mut self,
-        self_: Resource<OutgoingDatagramStream>,
-        datagrams: Vec<OutgoingDatagram>,
-    ) -> Result<u64, SocketError> {
-        (*self).send(self_, datagrams)
-    }
-
-    fn subscribe(
-        &mut self,
-        self_: Resource<OutgoingDatagramStream>,
-    ) -> anyhow::Result<Resource<Pollable>> {
-        HostOutgoingDatagramStream::subscribe(*self, self_)
-    }
-
-    fn drop(&mut self, rep: Resource<OutgoingDatagramStream>) -> anyhow::Result<()> {
-        HostOutgoingDatagramStream::drop(*self, rep)
-    }
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> HostIncomingDatagramStream for &mut DurableWorkerCtx<Ctx> {
-    fn receive(
-        &mut self,
-        self_: Resource<IncomingDatagramStream>,
-        max_results: u64,
-    ) -> Result<Vec<IncomingDatagram>, SocketError> {
-        (*self).receive(self_, max_results)
-    }
-
-    fn subscribe(
-        &mut self,
-        self_: Resource<IncomingDatagramStream>,
-    ) -> anyhow::Result<Resource<Pollable>> {
-        HostIncomingDatagramStream::subscribe(*self, self_)
-    }
-
-    fn drop(&mut self, rep: Resource<IncomingDatagramStream>) -> anyhow::Result<()> {
-        HostIncomingDatagramStream::drop(*self, rep)
-    }
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {}

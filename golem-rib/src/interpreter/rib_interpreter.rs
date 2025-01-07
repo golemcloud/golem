@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -275,23 +275,20 @@ mod internal {
     };
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_ast::analysis::TypeResult;
-    use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-    use golem_wasm_rpc::protobuf::typed_result::ResultValue;
-    use golem_wasm_rpc::protobuf::{NameValuePair, TypedRecord, TypedTuple};
-    use golem_wasm_rpc::type_annotated_value_to_string;
+    use golem_wasm_rpc::{print_value_and_type, IntoValueAndType, Value, ValueAndType};
 
     use crate::interpreter::instruction_cursor::RibByteCodeCursor;
-    use golem_wasm_ast::analysis::analysed_type::str;
+    use golem_wasm_ast::analysis::analysed_type::{str, tuple};
     use std::ops::Deref;
     use std::sync::Arc;
 
     pub(crate) fn default_worker_invoke_async() -> RibFunctionInvoke {
         Arc::new(|_, _| {
             Box::pin(async {
-                Ok(TypeAnnotatedValue::Tuple(TypedTuple {
-                    typ: vec![],
-                    value: vec![],
-                }))
+                Ok(ValueAndType {
+                    value: Value::Tuple(vec![]),
+                    typ: tuple(vec![]),
+                })
             })
         })
     }
@@ -304,9 +301,10 @@ mod internal {
         )?;
 
         let bool_opt = match rib_result {
-            RibInterpreterStackValue::Val(TypeAnnotatedValue::List(typed_list)) => {
-                Some(typed_list.values.is_empty())
-            }
+            RibInterpreterStackValue::Val(ValueAndType {
+                value: Value::List(items),
+                ..
+            }) => Some(items.is_empty()),
             RibInterpreterStackValue::Iterator(iter) => {
                 let mut peekable_iter = iter.peekable();
                 let result = peekable_iter.peek().is_some();
@@ -337,7 +335,7 @@ mod internal {
         };
 
         let bool = bool_opt.ok_or("Internal Error: Failed to run instruction is_empty")?;
-        interpreter_stack.push_val(TypeAnnotatedValue::Bool(bool));
+        interpreter_stack.push_val(bool.into_value_and_type());
         Ok(())
     }
 
@@ -362,15 +360,14 @@ mod internal {
     pub(crate) fn run_list_to_iterator_instruction(
         interpreter_stack: &mut InterpreterStack,
     ) -> Result<(), String> {
-        if let Some(RibInterpreterStackValue::Val(TypeAnnotatedValue::List(items))) =
-            interpreter_stack.pop()
+        if let Some(items) = interpreter_stack
+            .pop()
+            .and_then(|v| v.get_val())
+            .and_then(|v| v.into_list_items())
         {
-            let iter = items
-                .values
-                .into_iter()
-                .map(|x| x.clone().type_annotated_value.unwrap());
-
-            interpreter_stack.push(RibInterpreterStackValue::Iterator(Box::new(iter)));
+            interpreter_stack.push(RibInterpreterStackValue::Iterator(Box::new(
+                items.into_iter(),
+            )));
 
             Ok(())
         } else {
@@ -456,7 +453,7 @@ mod internal {
         let result = interpreter_stack
             .pop_sink()
             .ok_or("Failed to retrieve items from sink")?;
-        interpreter_stack.push_list(result, &str());
+        interpreter_stack.push_list(result.into_iter().map(|vnt| vnt.value).collect(), &str());
 
         Ok(())
     }
@@ -507,14 +504,7 @@ mod internal {
         interpreter_stack: &mut InterpreterStack,
     ) -> Result<(), String> {
         let name_type_pair = match analysed_type {
-            AnalysedType::Record(type_record) => type_record
-                .fields
-                .into_iter()
-                .map(|field| golem_wasm_ast::analysis::protobuf::NameTypePair {
-                    name: field.name,
-                    typ: Some((&field.typ).into()),
-                })
-                .collect(),
+            AnalysedType::Record(type_record) => type_record.fields,
             _ => {
                 return Err(format!(
                     "Internal Error: Expected a record type to create a record. But obtained {:?}",
@@ -531,25 +521,30 @@ mod internal {
         field_name: String,
         interpreter_stack: &mut InterpreterStack,
     ) -> Result<(), String> {
-        let current_record = interpreter_stack.try_pop_record()?;
+        let (current_record_fields, record_type) = interpreter_stack.try_pop_record()?;
 
+        let idx = record_type
+            .fields
+            .iter()
+            .position(|pair| pair.name == field_name)
+            .ok_or(format!(
+                "Invalid field name {field_name}, should be one of {}",
+                record_type
+                    .fields
+                    .iter()
+                    .map(|pair| pair.name.clone())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))?;
         let value = interpreter_stack.try_pop_val()?;
 
-        let mut existing_fields = current_record.value;
+        let mut fields = current_record_fields;
+        fields[idx] = value.value;
 
-        let name_value_pair = NameValuePair {
-            name: field_name.clone(),
-            value: Some(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
-                type_annotated_value: Some(value),
-            }),
-        };
-
-        existing_fields.push(name_value_pair);
-        interpreter_stack.push_val(TypeAnnotatedValue::Record(TypedRecord {
-            value: existing_fields,
-            typ: current_record.typ,
-        }));
-
+        interpreter_stack.push_val(ValueAndType {
+            value: Value::Record(fields),
+            typ: AnalysedType::Record(record_type),
+        });
         Ok(())
     }
 
@@ -560,16 +555,16 @@ mod internal {
     ) -> Result<(), String> {
         match analysed_type {
             AnalysedType::List(inner_type) => {
-                let type_annotated_values =
+                let items =
                     interpreter_stack.try_pop_n_val(list_size)?;
 
 
-                interpreter_stack.push_list(type_annotated_values, inner_type.inner.deref());
+                interpreter_stack.push_list(items.into_iter().map(|vnt| vnt.value).collect(), inner_type.inner.deref());
 
                 Ok(())
             }
 
-            _ =>  Err(format!("Internal Error: Failed to create tuple due to mismatch in types. Expected: list, Actual: {:?}", analysed_type)),
+            _ => Err(format!("Internal Error: Failed to create tuple due to mismatch in types. Expected: list, Actual: {:?}", analysed_type)),
         }
     }
 
@@ -579,13 +574,10 @@ mod internal {
         interpreter_stack: &mut InterpreterStack,
     ) -> Result<(), String> {
         match analysed_type {
-            AnalysedType::Tuple(inner_type) => {
-                let type_annotated_values =
+            AnalysedType::Tuple(_inner_type) => {
+                let items =
                     interpreter_stack.try_pop_n_val(list_size)?;
-
-
-                interpreter_stack.push_tuple(type_annotated_values, &inner_type.items);
-
+                interpreter_stack.push_tuple(items);
                 Ok(())
             }
 
@@ -599,7 +591,7 @@ mod internal {
         let bool = interpreter_stack.try_pop_bool()?;
         let negated = !bool;
 
-        interpreter_stack.push_val(TypeAnnotatedValue::Bool(negated));
+        interpreter_stack.push_val(negated.into_value_and_type());
         Ok(())
     }
 
@@ -675,20 +667,18 @@ mod internal {
         let record = interpreter_stack.try_pop()?;
 
         match record {
-            RibInterpreterStackValue::Val(TypeAnnotatedValue::Record(record)) => {
-                let field = record
-                    .value
+            RibInterpreterStackValue::Val(ValueAndType {
+                value: Value::Record(field_values),
+                typ: AnalysedType::Record(typ),
+            }) => {
+                let field = field_values
                     .into_iter()
-                    .find(|field| field.name == field_name)
+                    .zip(typ.fields)
+                    .find(|(_value, field)| field.name == field_name)
                     .ok_or(format!("Field {} not found in the record", field_name))?;
 
-                let value = field.value.ok_or("Field value not found".to_string())?;
-
-                let inner_type_annotated_value = value
-                    .type_annotated_value
-                    .ok_or("Field value not found".to_string())?;
-
-                interpreter_stack.push_val(inner_type_annotated_value);
+                let value = field.0;
+                interpreter_stack.push_val(ValueAndType::new(value, field.1.typ));
                 Ok(())
             }
             result => Err(format!(
@@ -707,32 +697,34 @@ mod internal {
             .ok_or("Failed to get a record from the stack to select a field".to_string())?;
 
         match record {
-            RibInterpreterStackValue::Val(TypeAnnotatedValue::List(typed_list)) => {
-                let value = typed_list
-                    .values
+            RibInterpreterStackValue::Val(ValueAndType {
+                value: Value::List(items),
+                typ: AnalysedType::List(typ),
+            }) => {
+                let value = items
                     .get(index)
                     .ok_or(format!("Index {} not found in the list", index))?
                     .clone();
 
-                let inner_type_annotated_value = value
-                    .type_annotated_value
-                    .ok_or("Field value not found".to_string())?;
-
-                interpreter_stack.push_val(inner_type_annotated_value);
+                interpreter_stack.push_val(ValueAndType::new(value, (*typ.inner).clone()));
                 Ok(())
             }
-            RibInterpreterStackValue::Val(TypeAnnotatedValue::Tuple(typed_tuple)) => {
-                let value = typed_tuple
-                    .value
+            RibInterpreterStackValue::Val(ValueAndType {
+                value: Value::Tuple(items),
+                typ: AnalysedType::Tuple(typ),
+            }) => {
+                let value = items
                     .get(index)
                     .ok_or(format!("Index {} not found in the tuple", index))?
                     .clone();
 
-                let inner_type_annotated_value = value
-                    .type_annotated_value
-                    .ok_or("Field value not found".to_string())?;
+                let item_type = typ
+                    .items
+                    .get(index)
+                    .ok_or(format!("Index {} not found in the tuple type", index))?
+                    .clone();
 
-                interpreter_stack.push_val(inner_type_annotated_value);
+                interpreter_stack.push_val(ValueAndType::new(value, item_type));
                 Ok(())
             }
             result => Err(format!(
@@ -781,7 +773,7 @@ mod internal {
 
                 interpreter_stack.push_variant(
                     variant_name.clone(),
-                    arg_value,
+                    arg_value.map(|vnt| vnt.value),
                     variants.cases.clone(),
                 );
                 Ok(())
@@ -806,8 +798,7 @@ mod internal {
                     function: ParsedFunctionReference::Function { function },
                 };
 
-                interpreter_stack
-                    .push_val(TypeAnnotatedValue::Str(parsed_function_name.to_string()));
+                interpreter_stack.push_val(parsed_function_name.to_string().into_value_and_type());
             }
 
             FunctionReferenceType::RawResourceConstructor { resource } => {
@@ -816,8 +807,7 @@ mod internal {
                     function: ParsedFunctionReference::RawResourceConstructor { resource },
                 };
 
-                interpreter_stack
-                    .push_val(TypeAnnotatedValue::Str(parsed_function_name.to_string()));
+                interpreter_stack.push_val(parsed_function_name.to_string().into_value_and_type());
             }
             FunctionReferenceType::RawResourceDrop { resource } => {
                 let parsed_function_name = ParsedFunctionName {
@@ -825,8 +815,7 @@ mod internal {
                     function: ParsedFunctionReference::RawResourceDrop { resource },
                 };
 
-                interpreter_stack
-                    .push_val(TypeAnnotatedValue::Str(parsed_function_name.to_string()));
+                interpreter_stack.push_val(parsed_function_name.to_string().into_value_and_type());
             }
             FunctionReferenceType::RawResourceMethod { resource, method } => {
                 let parsed_function_name = ParsedFunctionName {
@@ -834,8 +823,7 @@ mod internal {
                     function: ParsedFunctionReference::RawResourceMethod { resource, method },
                 };
 
-                interpreter_stack
-                    .push_val(TypeAnnotatedValue::Str(parsed_function_name.to_string()));
+                interpreter_stack.push_val(parsed_function_name.to_string().into_value_and_type());
             }
             FunctionReferenceType::RawResourceStaticMethod { resource, method } => {
                 let parsed_function_name = ParsedFunctionName {
@@ -843,36 +831,34 @@ mod internal {
                     function: ParsedFunctionReference::RawResourceStaticMethod { resource, method },
                 };
 
-                interpreter_stack
-                    .push_val(TypeAnnotatedValue::Str(parsed_function_name.to_string()));
+                interpreter_stack.push_val(parsed_function_name.to_string().into_value_and_type());
             }
             FunctionReferenceType::IndexedResourceConstructor { resource, arg_size } => {
                 let last_n_elements = interpreter_stack
                     .pop_n(arg_size)
                     .ok_or("Failed to get values from the stack".to_string())?;
 
-                let type_annotated_value = last_n_elements
+                let parameter_values = last_n_elements
                     .iter()
                     .map(|interpreter_result| {
                         interpreter_result
                             .get_val()
                             .ok_or("Internal Error: Failed to construct resource".to_string())
                     })
-                    .collect::<Result<Vec<TypeAnnotatedValue>, String>>()?;
+                    .collect::<Result<Vec<ValueAndType>, String>>()?;
 
                 let parsed_function_name = ParsedFunctionName {
                     site,
                     function: ParsedFunctionReference::IndexedResourceConstructor {
                         resource,
-                        resource_params: type_annotated_value
+                        resource_params: parameter_values
                             .iter()
-                            .map(type_annotated_value_to_string)
+                            .map(print_value_and_type)
                             .collect::<Result<Vec<String>, String>>()?,
                     },
                 };
 
-                interpreter_stack
-                    .push_val(TypeAnnotatedValue::Str(parsed_function_name.to_string()));
+                interpreter_stack.push_val(parsed_function_name.to_string().into_value_and_type());
             }
             FunctionReferenceType::IndexedResourceMethod {
                 resource,
@@ -883,29 +869,28 @@ mod internal {
                     .pop_n(arg_size)
                     .ok_or("Failed to get values from the stack".to_string())?;
 
-                let type_anntoated_values = last_n_elements
+                let param_values = last_n_elements
                     .iter()
                     .map(|interpreter_result| {
                         interpreter_result.get_val().ok_or(
                             "Internal Error: Failed to call indexed resource method".to_string(),
                         )
                     })
-                    .collect::<Result<Vec<TypeAnnotatedValue>, String>>()?;
+                    .collect::<Result<Vec<ValueAndType>, String>>()?;
 
                 let parsed_function_name = ParsedFunctionName {
                     site,
                     function: ParsedFunctionReference::IndexedResourceMethod {
                         resource,
-                        resource_params: type_anntoated_values
+                        resource_params: param_values
                             .iter()
-                            .map(type_annotated_value_to_string)
+                            .map(print_value_and_type)
                             .collect::<Result<Vec<String>, String>>()?,
                         method,
                     },
                 };
 
-                interpreter_stack
-                    .push_val(TypeAnnotatedValue::Str(parsed_function_name.to_string()));
+                interpreter_stack.push_val(parsed_function_name.to_string().into_value_and_type());
             }
             FunctionReferenceType::IndexedResourceStaticMethod {
                 resource,
@@ -917,29 +902,28 @@ mod internal {
                         .to_string(),
                 )?;
 
-                let type_anntoated_values = last_n_elements
+                let param_values = last_n_elements
                     .iter()
                     .map(|interpreter_result| {
                         interpreter_result.get_val().ok_or(
                             "Internal error: Failed to call static resource method".to_string(),
                         )
                     })
-                    .collect::<Result<Vec<TypeAnnotatedValue>, String>>()?;
+                    .collect::<Result<Vec<ValueAndType>, String>>()?;
 
                 let parsed_function_name = ParsedFunctionName {
                     site,
                     function: ParsedFunctionReference::IndexedResourceStaticMethod {
                         resource,
-                        resource_params: type_anntoated_values
+                        resource_params: param_values
                             .iter()
-                            .map(type_annotated_value_to_string)
+                            .map(print_value_and_type)
                             .collect::<Result<Vec<String>, String>>()?,
                         method,
                     },
                 };
 
-                interpreter_stack
-                    .push_val(TypeAnnotatedValue::Str(parsed_function_name.to_string()));
+                interpreter_stack.push_val(parsed_function_name.to_string().into_value_and_type());
             }
             FunctionReferenceType::IndexedResourceDrop { resource, arg_size } => {
                 let last_n_elements = interpreter_stack.pop_n(arg_size).ok_or(
@@ -947,28 +931,27 @@ mod internal {
                         .to_string(),
                 )?;
 
-                let type_annotated_values = last_n_elements
+                let param_values = last_n_elements
                     .iter()
                     .map(|interpreter_result| {
                         interpreter_result.get_val().ok_or(
                             "Internal Error: Failed to call indexed resource drop".to_string(),
                         )
                     })
-                    .collect::<Result<Vec<TypeAnnotatedValue>, String>>()?;
+                    .collect::<Result<Vec<ValueAndType>, String>>()?;
 
                 let parsed_function_name = ParsedFunctionName {
                     site,
                     function: ParsedFunctionReference::IndexedResourceDrop {
                         resource,
-                        resource_params: type_annotated_values
+                        resource_params: param_values
                             .iter()
-                            .map(type_annotated_value_to_string)
+                            .map(print_value_and_type)
                             .collect::<Result<Vec<String>, String>>()?,
                     },
                 };
 
-                interpreter_stack
-                    .push_val(TypeAnnotatedValue::Str(parsed_function_name.to_string()));
+                interpreter_stack.push_val(parsed_function_name.to_string().into_value_and_type());
             }
         }
 
@@ -988,7 +971,7 @@ mod internal {
             .pop_n(arg_size)
             .ok_or("Internal Error: Failed to get arguments for the function call".to_string())?;
 
-        let type_annotated_values = last_n_elements
+        let parameter_values = last_n_elements
             .iter()
             .map(|interpreter_result| {
                 interpreter_result.get_val().ok_or(format!(
@@ -996,22 +979,27 @@ mod internal {
                     function_name
                 ))
             })
-            .collect::<Result<Vec<TypeAnnotatedValue>, String>>()?;
+            .collect::<Result<Vec<ValueAndType>, String>>()?;
 
         let result = interpreter_env
-            .invoke_worker_function_async(function_name, type_annotated_values)
+            .invoke_worker_function_async(function_name, parameter_values)
             .await?;
 
         let interpreter_result = match result {
-            TypeAnnotatedValue::Tuple(TypedTuple { value, .. }) if value.is_empty() => {
-                Ok(RibInterpreterStackValue::Unit)
-            }
-            TypeAnnotatedValue::Tuple(TypedTuple { value, .. }) if value.len() == 1 => {
-                let inner = value[0]
-                    .clone()
-                    .type_annotated_value
-                    .ok_or("Internal Error. Unexpected empty result")?;
-                Ok(RibInterpreterStackValue::Val(inner))
+            ValueAndType {
+                value: Value::Tuple(value),
+                ..
+            } if value.is_empty() => Ok(RibInterpreterStackValue::Unit),
+            ValueAndType {
+                value: Value::Tuple(value),
+                typ: AnalysedType::Tuple(typ),
+            } if value.len() == 1 => {
+                let inner_value = value[0].clone();
+                let inner_type = typ.items[0].clone();
+                Ok(RibInterpreterStackValue::Val(ValueAndType::new(
+                    inner_value,
+                    inner_type,
+                )))
             }
             _ => Err("Named multiple results are not supported yet".to_string()),
         };
@@ -1043,23 +1031,32 @@ mod internal {
             .ok_or("Failed to get a tag value from the stack to unwrap".to_string())?;
 
         let tag = match value {
-            TypeAnnotatedValue::Variant(variant) => variant.case_name,
-            TypeAnnotatedValue::Option(option) => match option.value {
+            ValueAndType {
+                value: Value::Variant { case_idx, .. },
+                typ: AnalysedType::Variant(typ),
+            } => typ.cases[case_idx as usize].name.clone(),
+            ValueAndType {
+                value: Value::Option(option),
+                ..
+            } => match option {
                 Some(_) => "some".to_string(),
                 None => "none".to_string(),
             },
-            TypeAnnotatedValue::Result(result) => match result.result_value {
-                Some(result_value) => match result_value {
-                    ResultValue::OkValue(_) => "ok".to_string(),
-                    ResultValue::ErrorValue(_) => "err".to_string(),
-                },
-                None => "err".to_string(),
+            ValueAndType {
+                value: Value::Result(result_value),
+                ..
+            } => match result_value {
+                Ok(_) => "ok".to_string(),
+                Err(_) => "err".to_string(),
             },
-            TypeAnnotatedValue::Enum(enum_) => enum_.value,
+            ValueAndType {
+                value: Value::Enum(idx),
+                typ: AnalysedType::Enum(typ),
+            } => typ.cases[idx as usize].clone(),
             _ => "untagged".to_string(),
         };
 
-        interpreter_stack.push_val(TypeAnnotatedValue::Str(tag));
+        interpreter_stack.push_val(tag.into_value_and_type());
         Ok(())
     }
 
@@ -1071,7 +1068,7 @@ mod internal {
 
         match analysed_type {
             AnalysedType::Option(analysed_type) => {
-                interpreter_stack.push_some(value, analysed_type.inner.deref());
+                interpreter_stack.push_some(value.value, analysed_type.inner.deref());
                 Ok(())
             }
             _ => Err(format!(
@@ -1105,7 +1102,7 @@ mod internal {
 
         match analysed_type {
             AnalysedType::Result(TypeResult { ok, err }) => {
-                interpreter_stack.push_ok(value, ok.as_deref(), err.as_deref());
+                interpreter_stack.push_ok(value.value, ok.as_deref(), err.as_deref());
                 Ok(())
             }
             _ => Err(format!(
@@ -1123,7 +1120,7 @@ mod internal {
 
         match analysed_type {
             AnalysedType::Result(TypeResult { ok, err }) => {
-                interpreter_stack.push_err(value, ok.as_deref(), err.as_deref());
+                interpreter_stack.push_err(value.value, ok.as_deref(), err.as_deref());
                 Ok(())
             }
             _ => Err(format!(
@@ -1146,7 +1143,7 @@ mod internal {
                 acc
             });
 
-        interpreter_stack.push_val(TypeAnnotatedValue::Str(str));
+        interpreter_stack.push_val(str.into_value_and_type());
 
         Ok(())
     }
@@ -1159,19 +1156,18 @@ mod interpreter_tests {
     use super::*;
     use crate::{InstructionId, VariableId};
     use golem_wasm_ast::analysis::analysed_type::{field, list, record, s32};
-    use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-    use golem_wasm_rpc::protobuf::{NameValuePair, TypedList, TypedRecord};
+    use golem_wasm_rpc::{IntoValue, IntoValueAndType, Value, ValueAndType};
 
     #[test]
     async fn test_interpreter_for_literal() {
         let mut interpreter = Interpreter::default();
 
         let instructions = RibByteCode {
-            instructions: vec![RibIR::PushLit(TypeAnnotatedValue::S32(1))],
+            instructions: vec![RibIR::PushLit(1i32.into_value_and_type())],
         };
 
         let result = interpreter.run(instructions).await.unwrap();
-        assert_eq!(result.get_val().unwrap(), TypeAnnotatedValue::S32(1));
+        assert_eq!(result.get_val().unwrap(), 1i32.into_value_and_type());
     }
 
     #[test]
@@ -1180,8 +1176,8 @@ mod interpreter_tests {
 
         let instructions = RibByteCode {
             instructions: vec![
-                RibIR::PushLit(TypeAnnotatedValue::S32(1)),
-                RibIR::PushLit(TypeAnnotatedValue::U32(1)),
+                RibIR::PushLit(1i32.into_value_and_type()),
+                RibIR::PushLit(1u32.into_value_and_type()),
                 RibIR::EqualTo,
             ],
         };
@@ -1196,8 +1192,8 @@ mod interpreter_tests {
 
         let instructions = RibByteCode {
             instructions: vec![
-                RibIR::PushLit(TypeAnnotatedValue::S32(1)),
-                RibIR::PushLit(TypeAnnotatedValue::U32(2)),
+                RibIR::PushLit(1i32.into_value_and_type()),
+                RibIR::PushLit(2u32.into_value_and_type()),
                 RibIR::GreaterThan,
             ],
         };
@@ -1212,8 +1208,8 @@ mod interpreter_tests {
 
         let instructions = RibByteCode {
             instructions: vec![
-                RibIR::PushLit(TypeAnnotatedValue::S32(2)),
-                RibIR::PushLit(TypeAnnotatedValue::U32(1)),
+                RibIR::PushLit(2i32.into_value_and_type()),
+                RibIR::PushLit(1u32.into_value_and_type()),
                 RibIR::LessThan,
             ],
         };
@@ -1228,8 +1224,8 @@ mod interpreter_tests {
 
         let instructions = RibByteCode {
             instructions: vec![
-                RibIR::PushLit(TypeAnnotatedValue::S32(2)),
-                RibIR::PushLit(TypeAnnotatedValue::U32(3)),
+                RibIR::PushLit(2i32.into_value_and_type()),
+                RibIR::PushLit(3u32.into_value_and_type()),
                 RibIR::GreaterThanOrEqualTo,
             ],
         };
@@ -1244,8 +1240,8 @@ mod interpreter_tests {
 
         let instructions = RibByteCode {
             instructions: vec![
-                RibIR::PushLit(TypeAnnotatedValue::S32(2)), // rhs
-                RibIR::PushLit(TypeAnnotatedValue::S32(1)), // lhs
+                RibIR::PushLit(2i32.into_value_and_type()), // rhs
+                RibIR::PushLit(1i32.into_value_and_type()), // lhs
                 RibIR::LessThanOrEqualTo,
             ],
         };
@@ -1260,14 +1256,14 @@ mod interpreter_tests {
 
         let instructions = RibByteCode {
             instructions: vec![
-                RibIR::PushLit(TypeAnnotatedValue::S32(1)),
+                RibIR::PushLit(1i32.into_value_and_type()),
                 RibIR::AssignVar(VariableId::local_with_no_id("x")),
                 RibIR::LoadVar(VariableId::local_with_no_id("x")),
             ],
         };
 
         let result = interpreter.run(instructions).await.unwrap();
-        assert_eq!(result.get_val().unwrap(), TypeAnnotatedValue::S32(1));
+        assert_eq!(result.get_val().unwrap(), 1i32.into_value_and_type());
     }
 
     #[test]
@@ -1277,7 +1273,7 @@ mod interpreter_tests {
         let instructions = RibByteCode {
             instructions: vec![
                 RibIR::Jump(InstructionId::init()),
-                RibIR::PushLit(TypeAnnotatedValue::S32(1)),
+                RibIR::PushLit(1i32.into_value_and_type()),
                 RibIR::Label(InstructionId::init()),
             ],
         };
@@ -1294,9 +1290,9 @@ mod interpreter_tests {
 
         let instructions = RibByteCode {
             instructions: vec![
-                RibIR::PushLit(TypeAnnotatedValue::Bool(false)),
+                RibIR::PushLit(false.into_value_and_type()),
                 RibIR::JumpIfFalse(id.clone()),
-                RibIR::PushLit(TypeAnnotatedValue::S32(1)),
+                RibIR::PushLit(1i32.into_value_and_type()),
                 RibIR::Label(id),
             ],
         };
@@ -1311,8 +1307,8 @@ mod interpreter_tests {
 
         let instructions = RibByteCode {
             instructions: vec![
-                RibIR::PushLit(TypeAnnotatedValue::S32(2)),
-                RibIR::PushLit(TypeAnnotatedValue::S32(1)),
+                RibIR::PushLit(2i32.into_value_and_type()),
+                RibIR::PushLit(1i32.into_value_and_type()),
                 RibIR::CreateAndPushRecord(record(vec![field("x", s32()), field("y", s32())])),
                 RibIR::UpdateRecord("x".to_string()),
                 RibIR::UpdateRecord("y".to_string()),
@@ -1320,32 +1316,11 @@ mod interpreter_tests {
         };
 
         let result = interpreter.run(instructions).await.unwrap();
-        let expected = TypeAnnotatedValue::Record(TypedRecord {
-            value: vec![
-                NameValuePair {
-                    name: "x".to_string(),
-                    value: Some(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
-                        type_annotated_value: Some(TypeAnnotatedValue::S32(1)),
-                    }),
-                },
-                NameValuePair {
-                    name: "y".to_string(),
-                    value: Some(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
-                        type_annotated_value: Some(TypeAnnotatedValue::S32(2)),
-                    }),
-                },
-            ],
-            typ: vec![
-                golem_wasm_ast::analysis::protobuf::NameTypePair {
-                    name: "x".to_string(),
-                    typ: Some(golem_wasm_ast::analysis::protobuf::Type::from(&s32())),
-                },
-                golem_wasm_ast::analysis::protobuf::NameTypePair {
-                    name: "y".to_string(),
-                    typ: Some(golem_wasm_ast::analysis::protobuf::Type::from(&s32())),
-                },
-            ],
-        });
+        let expected = ValueAndType::new(
+            Value::Record(vec![1i32.into_value(), 2i32.into_value()]),
+            record(vec![field("x", s32()), field("y", s32())]),
+        );
+
         assert_eq!(result.get_val().unwrap(), expected);
     }
 
@@ -1355,24 +1330,17 @@ mod interpreter_tests {
 
         let instructions = RibByteCode {
             instructions: vec![
-                RibIR::PushLit(TypeAnnotatedValue::S32(2)),
-                RibIR::PushLit(TypeAnnotatedValue::S32(1)),
+                RibIR::PushLit(2i32.into_value_and_type()),
+                RibIR::PushLit(1i32.into_value_and_type()),
                 RibIR::PushList(list(s32()), 2),
             ],
         };
 
         let result = interpreter.run(instructions).await.unwrap();
-        let expected = TypeAnnotatedValue::List(TypedList {
-            values: vec![
-                golem_wasm_rpc::protobuf::TypeAnnotatedValue {
-                    type_annotated_value: Some(TypeAnnotatedValue::S32(1)),
-                },
-                golem_wasm_rpc::protobuf::TypeAnnotatedValue {
-                    type_annotated_value: Some(TypeAnnotatedValue::S32(2)),
-                },
-            ],
-            typ: Some(golem_wasm_ast::analysis::protobuf::Type::from(&s32())),
-        });
+        let expected = ValueAndType::new(
+            Value::List(vec![1i32.into_value(), 2i32.into_value()]),
+            list(s32()),
+        );
         assert_eq!(result.get_val().unwrap(), expected);
     }
 
@@ -1382,8 +1350,8 @@ mod interpreter_tests {
 
         let instructions = RibByteCode {
             instructions: vec![
-                RibIR::PushLit(TypeAnnotatedValue::S32(1)),
-                RibIR::PushLit(TypeAnnotatedValue::S32(2)),
+                RibIR::PushLit(1i32.into_value_and_type()),
+                RibIR::PushLit(2i32.into_value_and_type()),
                 RibIR::CreateAndPushRecord(record(vec![field("x", s32())])),
                 RibIR::UpdateRecord("x".to_string()),
                 RibIR::SelectField("x".to_string()),
@@ -1391,7 +1359,7 @@ mod interpreter_tests {
         };
 
         let result = interpreter.run(instructions).await.unwrap();
-        assert_eq!(result.get_val().unwrap(), TypeAnnotatedValue::S32(2));
+        assert_eq!(result.get_val().unwrap(), 2i32.into_value_and_type());
     }
 
     #[test]
@@ -1400,23 +1368,22 @@ mod interpreter_tests {
 
         let instructions = RibByteCode {
             instructions: vec![
-                RibIR::PushLit(TypeAnnotatedValue::S32(1)),
-                RibIR::PushLit(TypeAnnotatedValue::S32(2)),
+                RibIR::PushLit(1i32.into_value_and_type()),
+                RibIR::PushLit(2i32.into_value_and_type()),
                 RibIR::PushList(list(s32()), 2),
                 RibIR::SelectIndex(0),
             ],
         };
 
         let result = interpreter.run(instructions).await.unwrap();
-        assert_eq!(result.get_val().unwrap(), TypeAnnotatedValue::S32(2));
+        assert_eq!(result.get_val().unwrap(), 2i32.into_value_and_type());
     }
 
     mod list_reduce_interpreter_tests {
-        use test_r::test;
-
         use crate::interpreter::rib_interpreter::Interpreter;
         use crate::{compiler, Expr};
-        use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+        use golem_wasm_rpc::IntoValueAndType;
+        use test_r::test;
 
         #[test]
         async fn test_list_reduce() {
@@ -1442,7 +1409,69 @@ mod interpreter_tests {
                 .get_val()
                 .unwrap();
 
-            assert_eq!(result, TypeAnnotatedValue::U8(3));
+            assert_eq!(result, 3u8.into_value_and_type());
+        }
+
+        #[test]
+        async fn test_list_reduce_from_record() {
+            let mut interpreter = Interpreter::default();
+
+            let rib_expr = r#"
+           let x = [{name: "foo", age: 1u64}, {name: "bar", age: 2u64}];
+
+           let names = for i in x {
+             yield i.name;
+           };
+
+          reduce z, a in names from "" {
+            let result = if z == "" then a else "${z}, ${a}";
+
+            yield result;
+          }
+
+          "#;
+
+            let expr = Expr::from_text(rib_expr).unwrap();
+
+            let compiled = compiler::compile(&expr, &vec![]).unwrap();
+
+            let result = interpreter
+                .run(compiled.byte_code)
+                .await
+                .unwrap()
+                .get_val()
+                .unwrap();
+
+            assert_eq!(result, "foo, bar".into_value_and_type());
+        }
+
+        #[test]
+        async fn test_list_reduce_text() {
+            let mut interpreter = Interpreter::default();
+
+            let rib_expr = r#"
+           let x = ["foo", "bar"];
+
+          reduce z, a in x from "" {
+            let result = if z == "" then a else "${z}, ${a}";
+
+            yield result;
+          }
+
+          "#;
+
+            let expr = Expr::from_text(rib_expr).unwrap();
+
+            let compiled = compiler::compile(&expr, &vec![]).unwrap();
+
+            let result = interpreter
+                .run(compiled.byte_code)
+                .await
+                .unwrap()
+                .get_val()
+                .unwrap();
+
+            assert_eq!(result, "foo, bar".into_value_and_type());
         }
 
         #[test]
@@ -1469,7 +1498,7 @@ mod interpreter_tests {
                 .get_val()
                 .unwrap();
 
-            assert_eq!(result, TypeAnnotatedValue::U8(0));
+            assert_eq!(result, 0u8.into_value_and_type());
         }
     }
 
@@ -1504,10 +1533,10 @@ mod interpreter_tests {
                 .unwrap();
 
             let expected = r#"["foo", "bar"]"#;
-            let expected_type_annotated_value =
-                golem_wasm_rpc::type_annotated_value_from_str(&list(str()), expected).unwrap();
+            let expected_value =
+                golem_wasm_rpc::parse_value_and_type(&list(str()), expected).unwrap();
 
-            assert_eq!(result, expected_type_annotated_value);
+            assert_eq!(result, expected_value);
         }
 
         #[test]
@@ -1515,7 +1544,7 @@ mod interpreter_tests {
             let mut interpreter = Interpreter::default();
 
             let rib_expr = r#"
-          let x: list<str> = [];
+          let x: list<string> = [];
 
           for i in x {
             yield i;
@@ -1536,7 +1565,7 @@ mod interpreter_tests {
 
             let expected = r#"[]"#;
             let expected_type_annotated_value =
-                golem_wasm_rpc::type_annotated_value_from_str(&list(str()), expected).unwrap();
+                golem_wasm_rpc::parse_value_and_type(&list(str()), expected).unwrap();
 
             assert_eq!(result, expected_type_annotated_value);
         }
@@ -1549,7 +1578,7 @@ mod interpreter_tests {
         use crate::interpreter::rib_interpreter::Interpreter;
         use crate::{compiler, Expr, FunctionTypeRegistry};
         use golem_wasm_ast::analysis::analysed_type::{field, record, str, tuple, u16, u64};
-        use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+        use golem_wasm_rpc::IntoValueAndType;
 
         #[test]
         async fn test_pattern_match_on_option_nested() {
@@ -1571,7 +1600,7 @@ mod interpreter_tests {
             let compiled = compiler::compile(&expr, &vec![]).unwrap();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
 
-            assert_eq!(result.get_val().unwrap(), TypeAnnotatedValue::U64(0));
+            assert_eq!(result.get_val().unwrap(), 0u64.into_value_and_type());
         }
 
         #[test]
@@ -1579,7 +1608,7 @@ mod interpreter_tests {
             let mut interpreter = Interpreter::default();
 
             let expr = r#"
-           let x: tuple<u64, str, str> = (1, "foo", "bar");
+           let x: tuple<u64, string, string> = (1, "foo", "bar");
 
            match x {
               (x, y, z) => "${x} ${y} ${z}"
@@ -1591,10 +1620,7 @@ mod interpreter_tests {
             let compiled = compiler::compile(&expr, &vec![]).unwrap();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
 
-            assert_eq!(
-                result.get_val().unwrap(),
-                TypeAnnotatedValue::Str("1 foo bar".to_string())
-            );
+            assert_eq!(result.get_val().unwrap(), "1 foo bar".into_value_and_type());
         }
 
         #[test]
@@ -1602,7 +1628,7 @@ mod interpreter_tests {
             let mut interpreter = Interpreter::default();
 
             let expr = r#"
-           let x: tuple<u64, option<str>, str> = (1, some("foo"), "bar");
+           let x: tuple<u64, option<string>, string> = (1, some("foo"), "bar");
 
            match x {
               (x, none, z) => "${x} ${z}",
@@ -1616,10 +1642,7 @@ mod interpreter_tests {
             let compiled = compiler::compile(&expr, &vec![]).unwrap();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
 
-            assert_eq!(
-                result.get_val().unwrap(),
-                TypeAnnotatedValue::Str("1 foo bar".to_string())
-            );
+            assert_eq!(result.get_val().unwrap(), "1 foo bar".into_value_and_type());
         }
 
         #[test]
@@ -1627,7 +1650,7 @@ mod interpreter_tests {
             let mut interpreter = Interpreter::default();
 
             let expr = r#"
-           let x: tuple<u64, option<str>, str> = (1, none, "bar");
+           let x: tuple<u64, option<string>, string> = (1, none, "bar");
 
            match x {
               (x, none, z) => "${x} ${z}",
@@ -1639,10 +1662,7 @@ mod interpreter_tests {
             let compiled = compiler::compile(&expr, &vec![]).unwrap();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
 
-            assert_eq!(
-                result.get_val().unwrap(),
-                TypeAnnotatedValue::Str("1 bar".to_string())
-            );
+            assert_eq!(result.get_val().unwrap(), "1 bar".into_value_and_type());
         }
 
         #[test]
@@ -1672,7 +1692,7 @@ mod interpreter_tests {
 
             assert_eq!(
                 result.get_val().unwrap(),
-                TypeAnnotatedValue::Str("foo 100 1 bar jak validate prod dev test".to_string())
+                "foo 100 1 bar jak validate prod dev test".into_value_and_type()
             );
         }
 
@@ -1702,7 +1722,7 @@ mod interpreter_tests {
 
             assert_eq!(
                 result.get_val().unwrap(),
-                TypeAnnotatedValue::Str("dev 1 bar jak baz".to_string())
+                "dev 1 bar jak baz".into_value_and_type()
             );
         }
 
@@ -1711,11 +1731,9 @@ mod interpreter_tests {
             let input_analysed_type = internal::get_analysed_type_record();
             let output_analysed_type = internal::get_analysed_type_result();
 
-            let result_value =
-                internal::get_type_annotated_value(&output_analysed_type, r#"ok(1)"#);
+            let result_value = internal::get_value_and_type(&output_analysed_type, r#"ok(1)"#);
 
-            let mut interpreter =
-                internal::static_test_interpreter(&output_analysed_type, &result_value);
+            let mut interpreter = internal::static_test_interpreter(&result_value);
 
             let analysed_exports = internal::get_component_metadata(
                 "my-worker-function",
@@ -1737,7 +1755,7 @@ mod interpreter_tests {
             let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
 
-            let expected = internal::get_type_annotated_value(
+            let expected = internal::get_value_and_type(
                 &record(vec![field("body", u64()), field("status", u16())]),
                 r#"{body: 1, status: 200}"#,
             );
@@ -1751,10 +1769,9 @@ mod interpreter_tests {
             let output_analysed_type = internal::get_analysed_type_result();
 
             let result_value =
-                internal::get_type_annotated_value(&output_analysed_type, r#"err("failed")"#);
+                internal::get_value_and_type(&output_analysed_type, r#"err("failed")"#);
 
-            let mut interpreter =
-                internal::static_test_interpreter(&output_analysed_type, &result_value);
+            let mut interpreter = internal::static_test_interpreter(&result_value);
 
             let analysed_exports = internal::get_component_metadata(
                 "my-worker-function",
@@ -1776,10 +1793,8 @@ mod interpreter_tests {
             let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
 
-            let expected = internal::get_type_annotated_value(
-                &tuple(vec![str(), str()]),
-                r#"("failed", "bar")"#,
-            );
+            let expected =
+                internal::get_value_and_type(&tuple(vec![str(), str()]), r#"("failed", "bar")"#);
 
             assert_eq!(result.get_val().unwrap(), expected);
         }
@@ -1794,7 +1809,7 @@ mod interpreter_tests {
         use golem_wasm_ast::analysis::analysed_type::{
             case, f32, field, list, record, str, u32, variant,
         };
-        use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+        use golem_wasm_rpc::IntoValueAndType;
 
         #[test]
         async fn test_interpreter_with_indexed_resource_drop() {
@@ -1812,10 +1827,7 @@ mod interpreter_tests {
             let mut rib_interpreter = Interpreter::default();
             let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
-            assert_eq!(
-                result.get_val().unwrap(),
-                TypeAnnotatedValue::Str("success".to_string())
-            );
+            assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
         }
 
         #[test]
@@ -1833,7 +1845,7 @@ mod interpreter_tests {
                 case("success", record(vec![field("order-id", str())])),
             ]);
 
-            let result_value = internal::get_type_annotated_value(
+            let result_value = internal::get_value_and_type(
                 &result_type,
                 r#"
           success({order-id: "foo"})
@@ -1844,7 +1856,7 @@ mod interpreter_tests {
                 internal::get_shopping_cart_metadata_with_cart_resource_with_parameters();
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
-            let mut rib_executor = internal::static_test_interpreter(&result_type, &result_value);
+            let mut rib_executor = internal::static_test_interpreter(&result_value);
             let result = rib_executor.run(compiled.byte_code).await.unwrap();
 
             assert_eq!(result.get_val().unwrap(), result_value);
@@ -1867,7 +1879,7 @@ mod interpreter_tests {
                 field("quantity", u32()),
             ]));
 
-            let result_value = internal::get_type_annotated_value(
+            let result_value = internal::get_value_and_type(
                 &result_type,
                 r#"
             [{product-id: "foo", name: "bar", price: 100.0, quantity: 1}, {product-id: "bar", name: "baz", price: 200.0, quantity: 2}]
@@ -1878,13 +1890,10 @@ mod interpreter_tests {
                 internal::get_shopping_cart_metadata_with_cart_resource_with_parameters();
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
-            let mut rib_executor = internal::static_test_interpreter(&result_type, &result_value);
+            let mut rib_executor = internal::static_test_interpreter(&result_value);
             let result = rib_executor.run(compiled.byte_code).await.unwrap();
 
-            assert_eq!(
-                result.get_val().unwrap(),
-                TypeAnnotatedValue::Str("foo".to_string())
-            );
+            assert_eq!(result.get_val().unwrap(), "foo".into_value_and_type());
         }
 
         #[test]
@@ -1909,7 +1918,7 @@ mod interpreter_tests {
 
             assert_eq!(
                 result.get_val().unwrap(),
-                TypeAnnotatedValue::Str("successfully updated".to_string())
+                "successfully updated".into_value_and_type()
             );
         }
 
@@ -1936,7 +1945,7 @@ mod interpreter_tests {
 
             assert_eq!(
                 result.get_val().unwrap(),
-                TypeAnnotatedValue::Str("successfully added".to_string())
+                "successfully added".into_value_and_type()
             );
         }
 
@@ -1962,7 +1971,7 @@ mod interpreter_tests {
 
             assert_eq!(
                 result.get_val().unwrap(),
-                TypeAnnotatedValue::Str("successfully added".to_string())
+                "successfully added".into_value_and_type()
             );
         }
 
@@ -1982,7 +1991,7 @@ mod interpreter_tests {
                 field("quantity", u32()),
             ]));
 
-            let result_value = internal::get_type_annotated_value(
+            let result_value = internal::get_value_and_type(
                 &result_type,
                 r#"
             [{product-id: "foo", name: "bar", price: 100.0, quantity: 1}, {product-id: "bar", name: "baz", price: 200.0, quantity: 2}]
@@ -1992,13 +2001,10 @@ mod interpreter_tests {
             let component_metadata = internal::get_shopping_cart_metadata_with_cart_raw_resource();
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
-            let mut rib_executor = internal::static_test_interpreter(&result_type, &result_value);
+            let mut rib_executor = internal::static_test_interpreter(&result_value);
             let result = rib_executor.run(compiled.byte_code).await.unwrap();
 
-            assert_eq!(
-                result.get_val().unwrap(),
-                TypeAnnotatedValue::Str("foo".to_string())
-            );
+            assert_eq!(result.get_val().unwrap(), "foo".into_value_and_type());
         }
 
         #[test]
@@ -2021,7 +2027,7 @@ mod interpreter_tests {
 
             assert_eq!(
                 result.get_val().unwrap(),
-                TypeAnnotatedValue::Str("successfully updated".to_string())
+                "successfully updated".into_value_and_type()
             );
         }
 
@@ -2039,7 +2045,7 @@ mod interpreter_tests {
                 case("success", record(vec![field("order-id", str())])),
             ]);
 
-            let result_value = internal::get_type_annotated_value(
+            let result_value = internal::get_value_and_type(
                 &result_type,
                 r#"
           success({order-id: "foo"})
@@ -2049,7 +2055,7 @@ mod interpreter_tests {
             let component_metadata = internal::get_shopping_cart_metadata_with_cart_raw_resource();
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
-            let mut rib_executor = internal::static_test_interpreter(&result_type, &result_value);
+            let mut rib_executor = internal::static_test_interpreter(&result_value);
             let result = rib_executor.run(compiled.byte_code).await.unwrap();
 
             assert_eq!(result.get_val().unwrap(), result_value);
@@ -2069,10 +2075,7 @@ mod interpreter_tests {
             let mut rib_interpreter = Interpreter::default();
             let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
-            assert_eq!(
-                result.get_val().unwrap(),
-                TypeAnnotatedValue::Str("success".to_string())
-            );
+            assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
         }
     }
 
@@ -2087,8 +2090,7 @@ mod interpreter_tests {
             AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
             AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysedType,
         };
-        use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-        use golem_wasm_rpc::protobuf::TypedTuple;
+        use golem_wasm_rpc::{Value, ValueAndType};
         use std::sync::Arc;
 
         pub(crate) fn get_analysed_type_variant() -> AnalysedType {
@@ -2306,46 +2308,33 @@ mod interpreter_tests {
             vec![instance]
         }
 
-        pub(crate) fn get_type_annotated_value(
+        pub(crate) fn get_value_and_type(
             analysed_type: &AnalysedType,
             wasm_wave_str: &str,
-        ) -> TypeAnnotatedValue {
-            golem_wasm_rpc::type_annotated_value_from_str(analysed_type, wasm_wave_str).unwrap()
+        ) -> ValueAndType {
+            golem_wasm_rpc::parse_value_and_type(analysed_type, wasm_wave_str).unwrap()
         }
 
-        pub(crate) fn static_test_interpreter(
-            result_type: &AnalysedType,
-            result_value: &TypeAnnotatedValue,
-        ) -> Interpreter {
+        pub(crate) fn static_test_interpreter(result_value: &ValueAndType) -> Interpreter {
             Interpreter {
                 input: RibInput::default(),
-                invoke: static_worker_invoke(result_type, result_value),
+                invoke: static_worker_invoke(result_value),
             }
         }
 
-        fn static_worker_invoke(
-            result_type: &AnalysedType,
-            value: &TypeAnnotatedValue,
-        ) -> RibFunctionInvoke {
-            let analysed_type = result_type.clone();
+        fn static_worker_invoke(value: &ValueAndType) -> RibFunctionInvoke {
             let value = value.clone();
 
             Arc::new(move |_, _| {
                 Box::pin({
-                    let analysed_type = analysed_type.clone();
                     let value = value.clone();
 
                     async move {
-                        let analysed_type = analysed_type.clone();
                         let value = value.clone();
-                        Ok(TypeAnnotatedValue::Tuple(TypedTuple {
-                            typ: vec![golem_wasm_ast::analysis::protobuf::Type::from(
-                                &analysed_type,
-                            )],
-                            value: vec![golem_wasm_rpc::protobuf::TypeAnnotatedValue {
-                                type_annotated_value: Some(value.clone()),
-                            }],
-                        }))
+                        Ok(ValueAndType::new(
+                            Value::Tuple(vec![value.value]),
+                            tuple(vec![value.typ]),
+                        ))
                     }
                 })
             })

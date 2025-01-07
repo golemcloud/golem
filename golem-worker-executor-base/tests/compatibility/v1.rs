@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -23,13 +23,13 @@ use test_r::test;
 
 use bincode::{Decode, Encode};
 use goldenfile::Mint;
-use golem_common::config::RetryConfig;
 use golem_common::model::oplog::{
     IndexedResourceKey, LogLevel, OplogEntry, OplogIndex, OplogPayload, PayloadId,
     TimestampedUpdateDescription, UpdateDescription, WorkerError, WorkerResourceId,
     WrappedFunctionType,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
+use golem_common::model::RetryConfig;
 use golem_common::model::{
     AccountId, ComponentId, FailedUpdateRecord, IdempotencyKey, OwnedWorkerId, PromiseId,
     ScheduledAction, ShardId, SuccessfulUpdateRecord, Timestamp, TimestampedWorkerInvocation,
@@ -44,7 +44,7 @@ use golem_wasm_ast::analysis::{
     TypeU32, TypeU64, TypeU8, TypeVariant,
 };
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::{TypeAnnotatedValueConstructors, Uri, Value, WitValue};
+use golem_wasm_rpc::{TypeAnnotatedValueConstructors, Value, WitValue};
 use golem_worker_executor_base::durable_host::http::serialized::{
     SerializableDnsErrorPayload, SerializableErrorCode, SerializableFieldSizePayload,
     SerializableResponse, SerializableResponseHeaders, SerializableTlsAlertReceivedPayload,
@@ -226,9 +226,7 @@ pub fn wasm_rpc_value() {
     let v21c = Value::Result(Ok(None));
     let v21d = Value::Result(Err(None));
     let v22 = Value::Handle {
-        uri: Uri {
-            value: "uri".to_string(),
-        },
+        uri: "uri".to_string(),
         resource_id: 123,
     };
 
@@ -1179,9 +1177,7 @@ pub fn wit_value() {
     let wv21c: WitValue = Value::Result(Ok(None)).into();
     let wv21d: WitValue = Value::Result(Err(None)).into();
     let wv22: WitValue = Value::Handle {
-        uri: Uri {
-            value: "uri".to_string(),
-        },
+        uri: "uri".to_string(),
         resource_id: 123,
     }
     .into();
@@ -1648,9 +1644,7 @@ pub fn proto_val() {
     let pv21c: golem_wasm_rpc::protobuf::Val = Value::Result(Ok(None)).into();
     let pv21d: golem_wasm_rpc::protobuf::Val = Value::Result(Err(None)).into();
     let pv22: golem_wasm_rpc::protobuf::Val = Value::Handle {
-        uri: Uri {
-            value: "uri".to_string(),
-        },
+        uri: "uri".to_string(),
         resource_id: 123,
     }
     .into();
@@ -1856,9 +1850,7 @@ pub fn type_annotated_value() {
     .unwrap();
     let tav22 = TypeAnnotatedValue::create(
         &Value::Handle {
-            uri: Uri {
-                value: "uri".to_string(),
-            },
+            uri: "uri".to_string(),
             resource_id: 123,
         },
         &AnalysedType::Handle(TypeHandle {

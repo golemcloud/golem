@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,8 +21,9 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 use uuid::Uuid;
 
-use golem_common::config::{ConfigExample, HasConfigExamples, RetryConfig};
+use golem_common::config::{ConfigExample, HasConfigExamples, RedisConfig};
 use golem_common::config::{DbConfig, DbSqliteConfig};
+use golem_common::model::RetryConfig;
 use golem_common::tracing::TracingConfig;
 use golem_service_base::service::routing_table::RoutingTableConfig;
 
@@ -33,6 +34,7 @@ use golem_service_base::service::routing_table::RoutingTableConfig;
 pub struct WorkerServiceBaseConfig {
     pub environment: String,
     pub tracing: TracingConfig,
+    pub gateway_session_storage: GatewaySessionStorageConfig,
     pub db: DbConfig,
     pub component_service: ComponentServiceConfig,
     pub port: u16,
@@ -41,6 +43,25 @@ pub struct WorkerServiceBaseConfig {
     pub routing_table: RoutingTableConfig,
     pub worker_executor_retries: RetryConfig,
     pub blob_storage: BlobStorageConfig,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "type", content = "config")]
+pub enum GatewaySessionStorageConfig {
+    Redis(RedisConfig),
+    Sqlite(DbSqliteConfig),
+}
+
+impl Default for GatewaySessionStorageConfig {
+    fn default() -> Self {
+        Self::default_redis()
+    }
+}
+
+impl GatewaySessionStorageConfig {
+    pub fn default_redis() -> Self {
+        Self::Redis(RedisConfig::default())
+    }
 }
 
 impl WorkerServiceBaseConfig {
@@ -57,6 +78,7 @@ impl Default for WorkerServiceBaseConfig {
                 database: "../data/golem_worker.sqlite".to_string(),
                 max_connections: 10,
             }),
+            gateway_session_storage: GatewaySessionStorageConfig::default_redis(),
             component_service: ComponentServiceConfig::default(),
             tracing: TracingConfig::local_dev("worker-service"),
             port: 9005,

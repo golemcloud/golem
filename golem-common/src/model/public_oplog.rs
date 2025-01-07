@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,45 +12,71 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::config::RetryConfig;
 use crate::model::lucene::{LeafQuery, Query};
 use crate::model::oplog::{LogLevel, OplogIndex, WorkerResourceId, WrappedFunctionType};
 use crate::model::plugin::PluginInstallation;
 use crate::model::regions::OplogRegion;
+use crate::model::RetryConfig;
 use crate::model::{
     AccountId, ComponentVersion, Empty, IdempotencyKey, PluginInstallationId, Timestamp, WorkerId,
 };
-use golem_api_grpc::proto::golem::worker::{oplog_entry, worker_invocation, wrapped_function_type};
+use golem_wasm_ast::analysis::analysed_type::{
+    case, f64, field, list, option, record, s64, str, tuple, u32, u64, u8, unit_case, variant,
+};
 use golem_wasm_ast::analysis::{AnalysedType, NameOptionTypePair};
-use golem_wasm_rpc::{Value, ValueAndType};
-use poem_openapi::types::{ParseFromParameter, ParseResult};
-use poem_openapi::{Object, Union};
+use golem_wasm_rpc::{IntoValue, Value, ValueAndType, WitValue};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::time::Duration;
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 pub struct SnapshotBasedUpdateParameters {
     pub payload: Vec<u8>,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Union)]
-#[oai(discriminator_name = "type", one_of = true)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
+#[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
 pub enum PublicUpdateDescription {
     Automatic(Empty),
     SnapshotBased(SnapshotBasedUpdateParameters),
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
+impl IntoValue for PublicUpdateDescription {
+    fn into_value(self) -> Value {
+        match self {
+            PublicUpdateDescription::Automatic(_) => Value::Variant {
+                case_idx: 0,
+                case_value: None,
+            },
+            PublicUpdateDescription::SnapshotBased(params) => Value::Variant {
+                case_idx: 1,
+                case_value: Some(Box::new(params.payload.into_value())),
+            },
+        }
+    }
+
+    fn get_type() -> AnalysedType {
+        variant(vec![
+            unit_case("auto-update"),
+            case("snapshot-based", list(u8())),
+        ])
+    }
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 pub struct WriteRemoteBatchedParameters {
     pub index: Option<OplogIndex>,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Union)]
-#[oai(discriminator_name = "type", one_of = true)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
+#[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
 pub enum PublicWrappedFunctionType {
     /// The side-effect reads from the worker's local state (for example local file system,
@@ -88,12 +114,53 @@ impl From<WrappedFunctionType> for PublicWrappedFunctionType {
     }
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
+impl IntoValue for PublicWrappedFunctionType {
+    fn into_value(self) -> Value {
+        match self {
+            PublicWrappedFunctionType::ReadLocal(_) => Value::Variant {
+                case_idx: 0,
+                case_value: None,
+            },
+            PublicWrappedFunctionType::WriteLocal(_) => Value::Variant {
+                case_idx: 1,
+                case_value: None,
+            },
+            PublicWrappedFunctionType::ReadRemote(_) => Value::Variant {
+                case_idx: 2,
+                case_value: None,
+            },
+            PublicWrappedFunctionType::WriteRemote(_) => Value::Variant {
+                case_idx: 3,
+                case_value: None,
+            },
+            PublicWrappedFunctionType::WriteRemoteBatched(params) => Value::Variant {
+                case_idx: 4,
+                case_value: Some(Box::new(params.index.into_value())),
+            },
+        }
+    }
+
+    fn get_type() -> AnalysedType {
+        variant(vec![
+            unit_case("read-local"),
+            unit_case("write-local"),
+            unit_case("read-remote"),
+            unit_case("write-remote"),
+            case("write-remote-batched", option(u64())),
+        ])
+    }
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
 pub struct DetailsParameter {
     pub details: String,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 pub struct PublicRetryConfig {
     pub max_attempts: u32,
     #[serde(with = "humantime_serde")]
@@ -116,32 +183,126 @@ impl From<RetryConfig> for PublicRetryConfig {
     }
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
+impl IntoValue for PublicRetryConfig {
+    fn into_value(self) -> Value {
+        Value::Record(vec![
+            self.max_attempts.into_value(),
+            self.min_delay.into_value(),
+            self.max_delay.into_value(),
+            self.multiplier.into_value(),
+            self.max_jitter_factor.into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("max-attempts", u32()),
+            field("min-delay", u64()),
+            field("max-delay", u64()),
+            field("multiplier", f64()),
+            field("max-jitter-factor", option(f64())),
+        ])
+    }
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 pub struct ExportedFunctionParameters {
     pub idempotency_key: IdempotencyKey,
     pub full_function_name: String,
     pub function_input: Option<Vec<ValueAndType>>,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
+impl IntoValue for ExportedFunctionParameters {
+    fn into_value(self) -> Value {
+        let wit_values: Option<Vec<WitValue>> = self
+            .function_input
+            .map(|inputs| inputs.into_iter().map(Into::into).collect());
+        Value::Record(vec![
+            self.idempotency_key.into_value(),
+            self.full_function_name.into_value(),
+            wit_values.into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("idempotency-key", IdempotencyKey::get_type()),
+            field("full-function-name", str()),
+            field("function-input", option(list(WitValue::get_type()))),
+        ])
+    }
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 pub struct ManualUpdateParameters {
     pub target_version: ComponentVersion,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Union)]
-#[oai(discriminator_name = "type", one_of = true)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
+#[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
 pub enum PublicWorkerInvocation {
     ExportedFunction(ExportedFunctionParameters),
     ManualUpdate(ManualUpdateParameters),
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq, PartialOrd, Ord, Deserialize, Object)]
+impl IntoValue for PublicWorkerInvocation {
+    fn into_value(self) -> Value {
+        match self {
+            PublicWorkerInvocation::ExportedFunction(params) => Value::Variant {
+                case_idx: 0,
+                case_value: Some(Box::new(params.into_value())),
+            },
+            PublicWorkerInvocation::ManualUpdate(params) => Value::Variant {
+                case_idx: 1,
+                case_value: Some(Box::new(params.target_version.into_value())),
+            },
+        }
+    }
+
+    fn get_type() -> AnalysedType {
+        variant(vec![
+            case("exported-function", ExportedFunctionParameters::get_type()),
+            case("manual-update", ComponentVersion::get_type()),
+        ])
+    }
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 pub struct PluginInstallationDescription {
     pub installation_id: PluginInstallationId,
     pub plugin_name: String,
     pub plugin_version: String,
     pub parameters: BTreeMap<String, String>,
+}
+
+impl IntoValue for PluginInstallationDescription {
+    fn into_value(self) -> Value {
+        Value::Record(vec![
+            self.installation_id.into_value(),
+            self.plugin_name.into_value(),
+            self.plugin_version.into_value(),
+            Value::List(
+                self.parameters
+                    .into_iter()
+                    .map(|(k, v)| Value::Tuple(vec![k.into_value(), v.into_value()]))
+                    .collect::<Vec<Value>>(),
+            ),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("installation_id", PluginInstallationId::get_type()),
+            field("name", str()),
+            field("version", str()),
+            field("parameters", list(tuple(vec![str(), str()]))),
+        ])
+    }
 }
 
 impl From<PluginInstallation> for PluginInstallationDescription {
@@ -155,40 +316,8 @@ impl From<PluginInstallation> for PluginInstallationDescription {
     }
 }
 
-impl From<PluginInstallationDescription>
-    for golem_api_grpc::proto::golem::worker::PluginInstallationDescription
-{
-    fn from(plugin_installation_description: PluginInstallationDescription) -> Self {
-        golem_api_grpc::proto::golem::worker::PluginInstallationDescription {
-            installation_id: Some(plugin_installation_description.installation_id.into()),
-            plugin_name: plugin_installation_description.plugin_name,
-            plugin_version: plugin_installation_description.plugin_version,
-            parameters: HashMap::from_iter(plugin_installation_description.parameters),
-        }
-    }
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::worker::PluginInstallationDescription>
-    for PluginInstallationDescription
-{
-    type Error = String;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::worker::PluginInstallationDescription,
-    ) -> Result<Self, Self::Error> {
-        Ok(PluginInstallationDescription {
-            installation_id: value
-                .installation_id
-                .ok_or("Missing installation_id".to_string())?
-                .try_into()?,
-            plugin_name: value.plugin_name,
-            plugin_version: value.plugin_version,
-            parameters: BTreeMap::from_iter(value.parameters),
-        })
-    }
-}
-
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 pub struct CreateParameters {
     pub timestamp: Timestamp,
     pub worker_id: WorkerId,
@@ -202,7 +331,51 @@ pub struct CreateParameters {
     pub initial_active_plugins: BTreeSet<PluginInstallationDescription>,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
+impl IntoValue for CreateParameters {
+    fn into_value(self) -> Value {
+        Value::Record(vec![
+            self.timestamp.into_value(),
+            self.worker_id.into_value(),
+            self.component_version.into_value(),
+            self.args.into_value(),
+            Value::List(
+                self.env
+                    .into_iter()
+                    .map(|(k, v)| Value::Tuple(vec![k.into_value(), v.into_value()]))
+                    .collect::<Vec<Value>>(),
+            ),
+            self.account_id.into_value(),
+            self.parent.into_value(),
+            self.component_size.into_value(),
+            self.initial_total_linear_memory_size.into_value(),
+            self.initial_active_plugins
+                .into_iter()
+                .collect::<Vec<_>>()
+                .into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("timestamp", Timestamp::get_type()),
+            field("worker_id", WorkerId::get_type()),
+            field("component_version", ComponentVersion::get_type()),
+            field("args", list(str())),
+            field("env", list(tuple(vec![str(), str()]))),
+            field("account_id", AccountId::get_type()),
+            field("parent", option(WorkerId::get_type())),
+            field("component_size", u64()),
+            field("initial_total_linear_memory_size", u64()),
+            field(
+                "initial_active_plugins",
+                list(PluginInstallationDescription::get_type()),
+            ),
+        ])
+    }
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 pub struct ImportedFunctionInvokedParameters {
     pub timestamp: Timestamp,
     pub function_name: String,
@@ -211,7 +384,35 @@ pub struct ImportedFunctionInvokedParameters {
     pub wrapped_function_type: PublicWrappedFunctionType,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
+impl IntoValue for ImportedFunctionInvokedParameters {
+    fn into_value(self) -> Value {
+        let request_wit_value: WitValue = self.request.into();
+        let response_wit_value: WitValue = self.response.into();
+        Value::Record(vec![
+            self.timestamp.into_value(),
+            self.function_name.into_value(),
+            request_wit_value.into_value(),
+            response_wit_value.into_value(),
+            self.wrapped_function_type.into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("timestamp", Timestamp::get_type()),
+            field("function_name", str()),
+            field("request", WitValue::get_type()),
+            field("response", WitValue::get_type()),
+            field(
+                "wrapped_function_type",
+                PublicWrappedFunctionType::get_type(),
+            ),
+        ])
+    }
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 pub struct ExportedFunctionInvokedParameters {
     pub timestamp: Timestamp,
     pub function_name: String,
@@ -219,56 +420,204 @@ pub struct ExportedFunctionInvokedParameters {
     pub idempotency_key: IdempotencyKey,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
+impl IntoValue for ExportedFunctionInvokedParameters {
+    fn into_value(self) -> Value {
+        Value::Record(vec![
+            self.timestamp.into_value(),
+            self.function_name.into_value(),
+            self.request
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<WitValue>>()
+                .into_value(),
+            self.idempotency_key.into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("timestamp", Timestamp::get_type()),
+            field("request", list(WitValue::get_type())),
+            field("idempotency-key", IdempotencyKey::get_type()),
+        ])
+    }
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 pub struct ExportedFunctionCompletedParameters {
     pub timestamp: Timestamp,
     pub response: ValueAndType,
     pub consumed_fuel: i64,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
+impl IntoValue for ExportedFunctionCompletedParameters {
+    fn into_value(self) -> Value {
+        let wit_value: WitValue = self.response.into();
+        Value::Record(vec![
+            self.timestamp.into_value(),
+            wit_value.into_value(),
+            self.consumed_fuel.into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("timestamp", Timestamp::get_type()),
+            field("response", WitValue::get_type()),
+            field("consumed-fuel", s64()),
+        ])
+    }
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 pub struct TimestampParameter {
     pub timestamp: Timestamp,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 pub struct ErrorParameters {
     pub timestamp: Timestamp,
     pub error: String,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
+impl IntoValue for ErrorParameters {
+    fn into_value(self) -> Value {
+        Value::Record(vec![self.timestamp.into_value(), self.error.into_value()])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("timestamp", Timestamp::get_type()),
+            field("error", str()),
+        ])
+    }
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 pub struct JumpParameters {
     pub timestamp: Timestamp,
     pub jump: OplogRegion,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
+impl IntoValue for JumpParameters {
+    fn into_value(self) -> Value {
+        Value::Record(vec![
+            self.timestamp.into_value(),
+            self.jump.start.into_value(),
+            self.jump.end.into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("timestamp", Timestamp::get_type()),
+            field("start", OplogIndex::get_type()),
+            field("end", OplogIndex::get_type()),
+        ])
+    }
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 pub struct ChangeRetryPolicyParameters {
     pub timestamp: Timestamp,
     pub new_policy: PublicRetryConfig,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
+impl IntoValue for ChangeRetryPolicyParameters {
+    fn into_value(self) -> Value {
+        Value::Record(vec![
+            self.timestamp.into_value(),
+            self.new_policy.into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("timestamp", Timestamp::get_type()),
+            field("retry-policy", PublicRetryConfig::get_type()),
+        ])
+    }
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 pub struct EndRegionParameters {
     pub timestamp: Timestamp,
     pub begin_index: OplogIndex,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
+impl IntoValue for EndRegionParameters {
+    fn into_value(self) -> Value {
+        Value::Record(vec![
+            self.timestamp.into_value(),
+            self.begin_index.into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("timestamp", Timestamp::get_type()),
+            field("begin-index", OplogIndex::get_type()),
+        ])
+    }
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 pub struct PendingWorkerInvocationParameters {
     pub timestamp: Timestamp,
     pub invocation: PublicWorkerInvocation,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
+impl IntoValue for PendingWorkerInvocationParameters {
+    fn into_value(self) -> Value {
+        Value::Record(vec![
+            self.timestamp.into_value(),
+            self.invocation.into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("timestamp", Timestamp::get_type()),
+            field("invocation", PublicWorkerInvocation::get_type()),
+        ])
+    }
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 pub struct PendingUpdateParameters {
     pub timestamp: Timestamp,
     pub target_version: ComponentVersion,
     pub description: PublicUpdateDescription,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
+impl IntoValue for PendingUpdateParameters {
+    fn into_value(self) -> Value {
+        Value::Record(vec![
+            self.timestamp.into_value(),
+            self.target_version.into_value(),
+            self.description.into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("timestamp", Timestamp::get_type()),
+            field("target-version", ComponentVersion::get_type()),
+            field("update-description", PublicUpdateDescription::get_type()),
+        ])
+    }
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 pub struct SuccessfulUpdateParameters {
     pub timestamp: Timestamp,
     pub target_version: ComponentVersion,
@@ -276,26 +625,100 @@ pub struct SuccessfulUpdateParameters {
     pub new_active_plugins: BTreeSet<PluginInstallationDescription>,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
+impl IntoValue for SuccessfulUpdateParameters {
+    fn into_value(self) -> Value {
+        Value::Record(vec![
+            self.timestamp.into_value(),
+            self.target_version.into_value(),
+            self.new_component_size.into_value(),
+            self.new_active_plugins
+                .into_iter()
+                .collect::<Vec<_>>()
+                .into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("timestamp", Timestamp::get_type()),
+            field("target-version", ComponentVersion::get_type()),
+            field("new-component-size", u64()),
+            field(
+                "new-active-plugins",
+                list(PluginInstallationDescription::get_type()),
+            ),
+        ])
+    }
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 pub struct FailedUpdateParameters {
     pub timestamp: Timestamp,
     pub target_version: ComponentVersion,
     pub details: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
+impl IntoValue for FailedUpdateParameters {
+    fn into_value(self) -> Value {
+        Value::Record(vec![
+            self.timestamp.into_value(),
+            self.target_version.into_value(),
+            self.details.into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("timestamp", Timestamp::get_type()),
+            field("target-version", ComponentVersion::get_type()),
+            field("details", option(str())),
+        ])
+    }
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 pub struct GrowMemoryParameters {
     pub timestamp: Timestamp,
     pub delta: u64,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
+impl IntoValue for GrowMemoryParameters {
+    fn into_value(self) -> Value {
+        Value::Record(vec![self.timestamp.into_value(), self.delta.into_value()])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("timestamp", Timestamp::get_type()),
+            field("delta", u64()),
+        ])
+    }
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 pub struct ResourceParameters {
     pub timestamp: Timestamp,
     pub id: WorkerResourceId,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
+impl IntoValue for ResourceParameters {
+    fn into_value(self) -> Value {
+        Value::Record(vec![self.timestamp.into_value(), self.id.into_value()])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("timestamp", Timestamp::get_type()),
+            field("id", WorkerResourceId::get_type()),
+        ])
+    }
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 pub struct DescribeResourceParameters {
     pub timestamp: Timestamp,
     pub id: WorkerResourceId,
@@ -303,7 +726,32 @@ pub struct DescribeResourceParameters {
     pub resource_params: Vec<ValueAndType>,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
+impl IntoValue for DescribeResourceParameters {
+    fn into_value(self) -> Value {
+        Value::Record(vec![
+            self.timestamp.into_value(),
+            self.id.into_value(),
+            self.resource_name.into_value(),
+            self.resource_params
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<WitValue>>()
+                .into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("timestamp", Timestamp::get_type()),
+            field("resource-id", WorkerResourceId::get_type()),
+            field("resource-name", str()),
+            field("resource-params", list(WitValue::get_type())),
+        ])
+    }
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 pub struct LogParameters {
     pub timestamp: Timestamp,
     pub level: LogLevel,
@@ -311,16 +759,64 @@ pub struct LogParameters {
     pub message: String,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
+impl IntoValue for LogParameters {
+    fn into_value(self) -> Value {
+        Value::Record(vec![
+            self.timestamp.into_value(),
+            self.level.into_value(),
+            self.context.into_value(),
+            self.message.into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("timestamp", Timestamp::get_type()),
+            field("level", LogLevel::get_type()),
+            field("context", str()),
+            field("message", str()),
+        ])
+    }
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 pub struct ActivatePluginParameters {
     pub timestamp: Timestamp,
     pub plugin: PluginInstallationDescription,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
+impl IntoValue for ActivatePluginParameters {
+    fn into_value(self) -> Value {
+        Value::Record(vec![self.timestamp.into_value(), self.plugin.into_value()])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("timestamp", Timestamp::get_type()),
+            field("plugin", PluginInstallationDescription::get_type()),
+        ])
+    }
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 pub struct DeactivatePluginParameters {
     pub timestamp: Timestamp,
     pub plugin: PluginInstallationDescription,
+}
+
+impl IntoValue for DeactivatePluginParameters {
+    fn into_value(self) -> Value {
+        Value::Record(vec![self.timestamp.into_value(), self.plugin.into_value()])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("timestamp", Timestamp::get_type()),
+            field("plugin", PluginInstallationDescription::get_type()),
+        ])
+    }
 }
 
 /// A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
@@ -331,8 +827,9 @@ pub struct DeactivatePluginParameters {
 /// The rest of the system will always use `OplogEntry` internally - the only point where the
 /// oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
 /// before exposing an oplog entry through a public API.
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Union)]
-#[oai(discriminator_name = "type", one_of = true)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
+#[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
 pub enum PublicOplogEntry {
     Create(CreateParameters),
@@ -798,870 +1295,178 @@ impl PublicOplogEntry {
     }
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEntry {
-    type Error = String;
-
-    fn try_from(value: golem_api_grpc::proto::golem::worker::OplogEntry) -> Result<Self, String> {
-        match value.entry.ok_or("Oplog entry is empty")? {
-            oplog_entry::Entry::Create(create) => Ok(PublicOplogEntry::Create(CreateParameters {
-                timestamp: create.timestamp.ok_or("Missing timestamp field")?.into(),
-                worker_id: create
-                    .worker_id
-                    .ok_or("Missing worker_id field")?
-                    .try_into()?,
-                component_version: create.component_version,
-                args: create.args,
-                env: create.env.into_iter().collect(),
-                account_id: create.account_id.ok_or("Missing account_id field")?.into(),
-                parent: match create.parent {
-                    Some(parent) => Some(parent.try_into()?),
-                    None => None,
-                },
-                component_size: create.component_size,
-                initial_total_linear_memory_size: create.initial_total_linear_memory_size,
-                initial_active_plugins: BTreeSet::from_iter(
-                    create
-                        .initial_active_plugins
-                        .into_iter()
-                        .map(|pr| pr.try_into())
-                        .collect::<Result<Vec<_>, _>>()?,
-                ),
-            })),
-            oplog_entry::Entry::ImportedFunctionInvoked(imported_function_invoked) => Ok(
-                PublicOplogEntry::ImportedFunctionInvoked(ImportedFunctionInvokedParameters {
-                    timestamp: imported_function_invoked
-                        .timestamp
-                        .ok_or("Missing timestamp field")?
-                        .into(),
-                    function_name: imported_function_invoked.function_name,
-                    request: imported_function_invoked
-                        .request
-                        .ok_or("Missing request field")?
-                        .try_into()?,
-                    response: imported_function_invoked
-                        .response
-                        .ok_or("Missing response field")?
-                        .try_into()?,
-                    wrapped_function_type: imported_function_invoked
-                        .wrapped_function_type
-                        .ok_or("Missing wrapped_function_type field")?
-                        .try_into()?,
-                }),
-            ),
-            oplog_entry::Entry::ExportedFunctionInvoked(exported_function_invoked) => Ok(
-                PublicOplogEntry::ExportedFunctionInvoked(ExportedFunctionInvokedParameters {
-                    timestamp: exported_function_invoked
-                        .timestamp
-                        .ok_or("Missing timestamp field")?
-                        .into(),
-                    function_name: exported_function_invoked.function_name,
-                    request: exported_function_invoked
-                        .request
-                        .into_iter()
-                        .map(TryInto::try_into)
-                        .collect::<Result<Vec<ValueAndType>, String>>()?,
-                    idempotency_key: exported_function_invoked
-                        .idempotency_key
-                        .ok_or("Missing idempotency_key field")?
-                        .into(),
-                }),
-            ),
-            oplog_entry::Entry::ExportedFunctionCompleted(exported_function_completed) => Ok(
-                PublicOplogEntry::ExportedFunctionCompleted(ExportedFunctionCompletedParameters {
-                    timestamp: exported_function_completed
-                        .timestamp
-                        .ok_or("Missing timestamp field")?
-                        .into(),
-                    response: exported_function_completed
-                        .response
-                        .ok_or("Missing response field")?
-                        .try_into()?,
-                    consumed_fuel: exported_function_completed.consumed_fuel,
-                }),
-            ),
-            oplog_entry::Entry::Suspend(suspend) => {
-                Ok(PublicOplogEntry::Suspend(TimestampParameter {
-                    timestamp: suspend.timestamp.ok_or("Missing timestamp field")?.into(),
-                }))
-            }
-            oplog_entry::Entry::Error(error) => Ok(PublicOplogEntry::Error(ErrorParameters {
-                timestamp: error.timestamp.ok_or("Missing timestamp field")?.into(),
-                error: error.error,
-            })),
-            oplog_entry::Entry::NoOp(no_op) => Ok(PublicOplogEntry::NoOp(TimestampParameter {
-                timestamp: no_op.timestamp.ok_or("Missing timestamp field")?.into(),
-            })),
-            oplog_entry::Entry::Jump(jump) => Ok(PublicOplogEntry::Jump(JumpParameters {
-                timestamp: jump.timestamp.ok_or("Missing timestamp field")?.into(),
-                jump: OplogRegion {
-                    start: OplogIndex::from_u64(jump.start),
-                    end: OplogIndex::from_u64(jump.end),
-                },
-            })),
-            oplog_entry::Entry::Interrupted(interrupted) => {
-                Ok(PublicOplogEntry::Interrupted(TimestampParameter {
-                    timestamp: interrupted
-                        .timestamp
-                        .ok_or("Missing timestamp field")?
-                        .into(),
-                }))
-            }
-            oplog_entry::Entry::Exited(exited) => {
-                Ok(PublicOplogEntry::Exited(TimestampParameter {
-                    timestamp: exited.timestamp.ok_or("Missing timestamp field")?.into(),
-                }))
-            }
-            oplog_entry::Entry::ChangeRetryPolicy(change_retry_policy) => Ok(
-                PublicOplogEntry::ChangeRetryPolicy(ChangeRetryPolicyParameters {
-                    timestamp: change_retry_policy
-                        .timestamp
-                        .ok_or("Missing timestamp field")?
-                        .into(),
-                    new_policy: change_retry_policy
-                        .retry_policy
-                        .ok_or("Missing retry_policy field")?
-                        .try_into()?,
-                }),
-            ),
-            oplog_entry::Entry::BeginAtomicRegion(begin_atomic_region) => {
-                Ok(PublicOplogEntry::BeginAtomicRegion(TimestampParameter {
-                    timestamp: begin_atomic_region
-                        .timestamp
-                        .ok_or("Missing timestamp field")?
-                        .into(),
-                }))
-            }
-            oplog_entry::Entry::EndAtomicRegion(end_atomic_region) => {
-                Ok(PublicOplogEntry::EndAtomicRegion(EndRegionParameters {
-                    timestamp: end_atomic_region
-                        .timestamp
-                        .ok_or("Missing timestamp field")?
-                        .into(),
-                    begin_index: OplogIndex::from_u64(end_atomic_region.begin_index),
-                }))
-            }
-            oplog_entry::Entry::BeginRemoteWrite(begin_remote_write) => {
-                Ok(PublicOplogEntry::BeginRemoteWrite(TimestampParameter {
-                    timestamp: begin_remote_write
-                        .timestamp
-                        .ok_or("Missing timestamp field")?
-                        .into(),
-                }))
-            }
-            oplog_entry::Entry::EndRemoteWrite(end_remote_write) => {
-                Ok(PublicOplogEntry::EndRemoteWrite(EndRegionParameters {
-                    timestamp: end_remote_write
-                        .timestamp
-                        .ok_or("Missing timestamp field")?
-                        .into(),
-                    begin_index: OplogIndex::from_u64(end_remote_write.begin_index),
-                }))
-            }
-            oplog_entry::Entry::PendingWorkerInvocation(pending_worker_invocation) => Ok(
-                PublicOplogEntry::PendingWorkerInvocation(PendingWorkerInvocationParameters {
-                    timestamp: pending_worker_invocation
-                        .timestamp
-                        .ok_or("Missing timestamp field")?
-                        .into(),
-                    invocation: pending_worker_invocation
-                        .invocation
-                        .ok_or("Missing invocation field")?
-                        .try_into()?,
-                }),
-            ),
-            oplog_entry::Entry::PendingUpdate(pending_update) => {
-                Ok(PublicOplogEntry::PendingUpdate(PendingUpdateParameters {
-                    timestamp: pending_update
-                        .timestamp
-                        .ok_or("Missing timestamp field")?
-                        .into(),
-                    target_version: pending_update.target_version,
-                    description: pending_update
-                        .update_description
-                        .ok_or("Missing update_description field")?
-                        .try_into()?,
-                }))
-            }
-            oplog_entry::Entry::SuccessfulUpdate(successful_update) => Ok(
-                PublicOplogEntry::SuccessfulUpdate(SuccessfulUpdateParameters {
-                    timestamp: successful_update
-                        .timestamp
-                        .ok_or("Missing timestamp field")?
-                        .into(),
-                    target_version: successful_update.target_version,
-                    new_component_size: successful_update.new_component_size,
-                    new_active_plugins: BTreeSet::from_iter(
-                        successful_update
-                            .new_active_plugins
-                            .into_iter()
-                            .map(|pr| pr.try_into())
-                            .collect::<Result<Vec<_>, _>>()?,
-                    ),
-                }),
-            ),
-            oplog_entry::Entry::FailedUpdate(failed_update) => {
-                Ok(PublicOplogEntry::FailedUpdate(FailedUpdateParameters {
-                    timestamp: failed_update
-                        .timestamp
-                        .ok_or("Missing timestamp field")?
-                        .into(),
-                    target_version: failed_update.target_version,
-                    details: failed_update.details,
-                }))
-            }
-            oplog_entry::Entry::GrowMemory(grow_memory) => {
-                Ok(PublicOplogEntry::GrowMemory(GrowMemoryParameters {
-                    timestamp: grow_memory
-                        .timestamp
-                        .ok_or("Missing timestamp field")?
-                        .into(),
-                    delta: grow_memory.delta,
-                }))
-            }
-            oplog_entry::Entry::CreateResource(create_resource) => {
-                Ok(PublicOplogEntry::CreateResource(ResourceParameters {
-                    timestamp: create_resource
-                        .timestamp
-                        .ok_or("Missing timestamp field")?
-                        .into(),
-                    id: WorkerResourceId(create_resource.resource_id),
-                }))
-            }
-            oplog_entry::Entry::DropResource(drop_resource) => {
-                Ok(PublicOplogEntry::DropResource(ResourceParameters {
-                    timestamp: drop_resource
-                        .timestamp
-                        .ok_or("Missing timestamp field")?
-                        .into(),
-                    id: WorkerResourceId(drop_resource.resource_id),
-                }))
-            }
-            oplog_entry::Entry::DescribeResource(describe_resource) => Ok(
-                PublicOplogEntry::DescribeResource(DescribeResourceParameters {
-                    timestamp: describe_resource
-                        .timestamp
-                        .ok_or("Missing timestamp field")?
-                        .into(),
-                    id: WorkerResourceId(describe_resource.resource_id),
-                    resource_name: describe_resource.resource_name,
-                    resource_params: describe_resource
-                        .resource_params
-                        .into_iter()
-                        .map(TryInto::try_into)
-                        .collect::<Result<Vec<ValueAndType>, String>>()?,
-                }),
-            ),
-            oplog_entry::Entry::Log(log) => Ok(PublicOplogEntry::Log(LogParameters {
-                level: log.level().into(),
-                timestamp: log.timestamp.ok_or("Missing timestamp field")?.into(),
-                context: log.context,
-                message: log.message,
-            })),
-            oplog_entry::Entry::Restart(restart) => {
-                Ok(PublicOplogEntry::Restart(TimestampParameter {
-                    timestamp: restart.timestamp.ok_or("Missing timestamp field")?.into(),
-                }))
-            }
-            oplog_entry::Entry::ActivatePlugin(activate) => {
-                Ok(PublicOplogEntry::ActivatePlugin(ActivatePluginParameters {
-                    timestamp: activate.timestamp.ok_or("Missing timestamp field")?.into(),
-                    plugin: activate.plugin.ok_or("Missing plugin field")?.try_into()?,
-                }))
-            }
-            oplog_entry::Entry::DeactivatePlugin(deactivate) => Ok(
-                PublicOplogEntry::DeactivatePlugin(DeactivatePluginParameters {
-                    timestamp: deactivate
-                        .timestamp
-                        .ok_or("Missing timestamp field")?
-                        .into(),
-                    plugin: deactivate
-                        .plugin
-                        .ok_or("Missing plugin field")?
-                        .try_into()?,
-                }),
-            ),
-        }
-    }
-}
-
-impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEntry {
-    type Error = String;
-
-    fn try_from(value: PublicOplogEntry) -> Result<Self, String> {
-        Ok(match value {
-            PublicOplogEntry::Create(create) => golem_api_grpc::proto::golem::worker::OplogEntry {
-                entry: Some(oplog_entry::Entry::Create(
-                    golem_api_grpc::proto::golem::worker::CreateParameters {
-                        timestamp: Some(create.timestamp.into()),
-                        worker_id: Some(create.worker_id.into()),
-                        component_version: create.component_version,
-                        args: create.args,
-                        env: create.env.into_iter().collect(),
-                        account_id: Some(create.account_id.into()),
-                        parent: create.parent.map(Into::into),
-                        component_size: create.component_size,
-                        initial_total_linear_memory_size: create.initial_total_linear_memory_size,
-                        initial_active_plugins: create
-                            .initial_active_plugins
-                            .into_iter()
-                            .map(Into::into)
-                            .collect(),
-                    },
-                )),
+impl IntoValue for PublicOplogEntry {
+    fn into_value(self) -> Value {
+        match self {
+            PublicOplogEntry::Create(params) => Value::Variant {
+                case_idx: 0,
+                case_value: Some(Box::new(params.into_value())),
             },
-            PublicOplogEntry::ImportedFunctionInvoked(imported_function_invoked) => {
-                golem_api_grpc::proto::golem::worker::OplogEntry {
-                    entry: Some(oplog_entry::Entry::ImportedFunctionInvoked(
-                        golem_api_grpc::proto::golem::worker::ImportedFunctionInvokedParameters {
-                            timestamp: Some(imported_function_invoked.timestamp.into()),
-                            function_name: imported_function_invoked.function_name,
-                            request: Some(imported_function_invoked.request.try_into().map_err(
-                                |errors: Vec<String>| {
-                                    format!("Failed to convert request: {}", errors.join(", "))
-                                },
-                            )?),
-                            response: Some(imported_function_invoked.response.try_into().map_err(
-                                |errors: Vec<String>| {
-                                    format!("Failed to convert response: {}", errors.join(", "))
-                                },
-                            )?),
-                            wrapped_function_type: Some(
-                                imported_function_invoked.wrapped_function_type.into(),
-                            ),
-                        },
-                    )),
-                }
-            }
-            PublicOplogEntry::ExportedFunctionInvoked(exported_function_invoked) => {
-                golem_api_grpc::proto::golem::worker::OplogEntry {
-                    entry: Some(oplog_entry::Entry::ExportedFunctionInvoked(
-                        golem_api_grpc::proto::golem::worker::ExportedFunctionInvokedParameters {
-                            timestamp: Some(exported_function_invoked.timestamp.into()),
-                            function_name: exported_function_invoked.function_name,
-                            request: exported_function_invoked
-                                .request
-                                .into_iter()
-                                .map(|value| {
-                                    value.try_into().map_err(|errors: Vec<String>| {
-                                        format!("Failed to convert request: {}", errors.join(", "))
-                                    })
-                                })
-                                .collect::<Result<Vec<_>, _>>()?,
-                            idempotency_key: Some(exported_function_invoked.idempotency_key.into()),
-                        },
-                    )),
-                }
-            }
-            PublicOplogEntry::ExportedFunctionCompleted(exported_function_completed) => {
-                golem_api_grpc::proto::golem::worker::OplogEntry {
-                    entry: Some(oplog_entry::Entry::ExportedFunctionCompleted(
-                        golem_api_grpc::proto::golem::worker::ExportedFunctionCompletedParameters {
-                            timestamp: Some(exported_function_completed.timestamp.into()),
-                            response: Some(
-                                exported_function_completed.response.try_into().map_err(
-                                    |errors: Vec<String>| {
-                                        format!("Failed to convert response: {}", errors.join(", "))
-                                    },
-                                )?,
-                            ),
-                            consumed_fuel: exported_function_completed.consumed_fuel,
-                        },
-                    )),
-                }
-            }
-            PublicOplogEntry::Suspend(suspend) => {
-                golem_api_grpc::proto::golem::worker::OplogEntry {
-                    entry: Some(oplog_entry::Entry::Suspend(
-                        golem_api_grpc::proto::golem::worker::TimestampParameter {
-                            timestamp: Some(suspend.timestamp.into()),
-                        },
-                    )),
-                }
-            }
-            PublicOplogEntry::Error(error) => golem_api_grpc::proto::golem::worker::OplogEntry {
-                entry: Some(oplog_entry::Entry::Error(
-                    golem_api_grpc::proto::golem::worker::ErrorParameters {
-                        timestamp: Some(error.timestamp.into()),
-                        error: error.error,
-                    },
-                )),
+            PublicOplogEntry::ImportedFunctionInvoked(params) => Value::Variant {
+                case_idx: 1,
+                case_value: Some(Box::new(params.into_value())),
             },
-            PublicOplogEntry::NoOp(no_op) => golem_api_grpc::proto::golem::worker::OplogEntry {
-                entry: Some(oplog_entry::Entry::NoOp(
-                    golem_api_grpc::proto::golem::worker::TimestampParameter {
-                        timestamp: Some(no_op.timestamp.into()),
-                    },
-                )),
+            PublicOplogEntry::ExportedFunctionInvoked(params) => Value::Variant {
+                case_idx: 2,
+                case_value: Some(Box::new(params.into_value())),
             },
-            PublicOplogEntry::Jump(jump) => golem_api_grpc::proto::golem::worker::OplogEntry {
-                entry: Some(oplog_entry::Entry::Jump(
-                    golem_api_grpc::proto::golem::worker::JumpParameters {
-                        timestamp: Some(jump.timestamp.into()),
-                        start: jump.jump.start.into(),
-                        end: jump.jump.end.into(),
-                    },
-                )),
+            PublicOplogEntry::ExportedFunctionCompleted(params) => Value::Variant {
+                case_idx: 3,
+                case_value: Some(Box::new(params.into_value())),
             },
-            PublicOplogEntry::Interrupted(interrupted) => {
-                golem_api_grpc::proto::golem::worker::OplogEntry {
-                    entry: Some(oplog_entry::Entry::Interrupted(
-                        golem_api_grpc::proto::golem::worker::TimestampParameter {
-                            timestamp: Some(interrupted.timestamp.into()),
-                        },
-                    )),
-                }
-            }
-            PublicOplogEntry::Exited(exited) => golem_api_grpc::proto::golem::worker::OplogEntry {
-                entry: Some(oplog_entry::Entry::Exited(
-                    golem_api_grpc::proto::golem::worker::TimestampParameter {
-                        timestamp: Some(exited.timestamp.into()),
-                    },
-                )),
+            PublicOplogEntry::Suspend(params) => Value::Variant {
+                case_idx: 4,
+                case_value: Some(Box::new(params.timestamp.into_value())),
             },
-            PublicOplogEntry::ChangeRetryPolicy(change_retry_policy) => {
-                golem_api_grpc::proto::golem::worker::OplogEntry {
-                    entry: Some(oplog_entry::Entry::ChangeRetryPolicy(
-                        golem_api_grpc::proto::golem::worker::ChangeRetryPolicyParameters {
-                            timestamp: Some(change_retry_policy.timestamp.into()),
-                            retry_policy: Some(change_retry_policy.new_policy.into()),
-                        },
-                    )),
-                }
-            }
-            PublicOplogEntry::BeginAtomicRegion(begin_atomic_region) => {
-                golem_api_grpc::proto::golem::worker::OplogEntry {
-                    entry: Some(oplog_entry::Entry::BeginAtomicRegion(
-                        golem_api_grpc::proto::golem::worker::TimestampParameter {
-                            timestamp: Some(begin_atomic_region.timestamp.into()),
-                        },
-                    )),
-                }
-            }
-            PublicOplogEntry::EndAtomicRegion(end_atomic_region) => {
-                golem_api_grpc::proto::golem::worker::OplogEntry {
-                    entry: Some(oplog_entry::Entry::EndAtomicRegion(
-                        golem_api_grpc::proto::golem::worker::EndAtomicRegionParameters {
-                            timestamp: Some(end_atomic_region.timestamp.into()),
-                            begin_index: end_atomic_region.begin_index.into(),
-                        },
-                    )),
-                }
-            }
-            PublicOplogEntry::BeginRemoteWrite(begin_remote_write) => {
-                golem_api_grpc::proto::golem::worker::OplogEntry {
-                    entry: Some(oplog_entry::Entry::BeginRemoteWrite(
-                        golem_api_grpc::proto::golem::worker::TimestampParameter {
-                            timestamp: Some(begin_remote_write.timestamp.into()),
-                        },
-                    )),
-                }
-            }
-            PublicOplogEntry::EndRemoteWrite(end_remote_write) => {
-                golem_api_grpc::proto::golem::worker::OplogEntry {
-                    entry: Some(oplog_entry::Entry::EndRemoteWrite(
-                        golem_api_grpc::proto::golem::worker::EndRemoteWriteParameters {
-                            timestamp: Some(end_remote_write.timestamp.into()),
-                            begin_index: end_remote_write.begin_index.into(),
-                        },
-                    )),
-                }
-            }
-            PublicOplogEntry::PendingWorkerInvocation(pending_worker_invocation) => {
-                golem_api_grpc::proto::golem::worker::OplogEntry {
-                    entry: Some(oplog_entry::Entry::PendingWorkerInvocation(
-                        golem_api_grpc::proto::golem::worker::PendingWorkerInvocationParameters {
-                            timestamp: Some(pending_worker_invocation.timestamp.into()),
-                            invocation: Some(pending_worker_invocation.invocation.try_into()?),
-                        },
-                    )),
-                }
-            }
-            PublicOplogEntry::PendingUpdate(pending_update) => {
-                golem_api_grpc::proto::golem::worker::OplogEntry {
-                    entry: Some(oplog_entry::Entry::PendingUpdate(
-                        golem_api_grpc::proto::golem::worker::PendingUpdateParameters {
-                            timestamp: Some(pending_update.timestamp.into()),
-                            target_version: pending_update.target_version,
-                            update_description: Some(pending_update.description.into()),
-                        },
-                    )),
-                }
-            }
-            PublicOplogEntry::SuccessfulUpdate(successful_update) => {
-                golem_api_grpc::proto::golem::worker::OplogEntry {
-                    entry: Some(oplog_entry::Entry::SuccessfulUpdate(
-                        golem_api_grpc::proto::golem::worker::SuccessfulUpdateParameters {
-                            timestamp: Some(successful_update.timestamp.into()),
-                            target_version: successful_update.target_version,
-                            new_component_size: successful_update.new_component_size,
-                            new_active_plugins: successful_update
-                                .new_active_plugins
-                                .into_iter()
-                                .map(Into::into)
-                                .collect(),
-                        },
-                    )),
-                }
-            }
-            PublicOplogEntry::FailedUpdate(failed_update) => {
-                golem_api_grpc::proto::golem::worker::OplogEntry {
-                    entry: Some(oplog_entry::Entry::FailedUpdate(
-                        golem_api_grpc::proto::golem::worker::FailedUpdateParameters {
-                            timestamp: Some(failed_update.timestamp.into()),
-                            target_version: failed_update.target_version,
-                            details: failed_update.details,
-                        },
-                    )),
-                }
-            }
-            PublicOplogEntry::GrowMemory(grow_memory) => {
-                golem_api_grpc::proto::golem::worker::OplogEntry {
-                    entry: Some(oplog_entry::Entry::GrowMemory(
-                        golem_api_grpc::proto::golem::worker::GrowMemoryParameters {
-                            timestamp: Some(grow_memory.timestamp.into()),
-                            delta: grow_memory.delta,
-                        },
-                    )),
-                }
-            }
-            PublicOplogEntry::CreateResource(create_resource) => {
-                golem_api_grpc::proto::golem::worker::OplogEntry {
-                    entry: Some(oplog_entry::Entry::CreateResource(
-                        golem_api_grpc::proto::golem::worker::CreateResourceParameters {
-                            timestamp: Some(create_resource.timestamp.into()),
-                            resource_id: create_resource.id.0,
-                        },
-                    )),
-                }
-            }
-            PublicOplogEntry::DropResource(drop_resource) => {
-                golem_api_grpc::proto::golem::worker::OplogEntry {
-                    entry: Some(oplog_entry::Entry::DropResource(
-                        golem_api_grpc::proto::golem::worker::DropResourceParameters {
-                            timestamp: Some(drop_resource.timestamp.into()),
-                            resource_id: drop_resource.id.0,
-                        },
-                    )),
-                }
-            }
-            PublicOplogEntry::DescribeResource(describe_resource) => {
-                golem_api_grpc::proto::golem::worker::OplogEntry {
-                    entry: Some(oplog_entry::Entry::DescribeResource(
-                        golem_api_grpc::proto::golem::worker::DescribeResourceParameters {
-                            timestamp: Some(describe_resource.timestamp.into()),
-                            resource_id: describe_resource.id.0,
-                            resource_name: describe_resource.resource_name,
-                            resource_params: describe_resource
-                                .resource_params
-                                .into_iter()
-                                .map(|value| {
-                                    value.try_into().map_err(|errors: Vec<String>| {
-                                        format!("Failed to convert request: {}", errors.join(", "))
-                                    })
-                                })
-                                .collect::<Result<Vec<_>, _>>()?,
-                        },
-                    )),
-                }
-            }
-            PublicOplogEntry::Log(log) => golem_api_grpc::proto::golem::worker::OplogEntry {
-                entry: Some(oplog_entry::Entry::Log(
-                    golem_api_grpc::proto::golem::worker::LogParameters {
-                        timestamp: Some(log.timestamp.into()),
-                        level: Into::<golem_api_grpc::proto::golem::worker::OplogLogLevel>::into(
-                            log.level,
-                        ) as i32,
-                        context: log.context,
-                        message: log.message,
-                    },
-                )),
+            PublicOplogEntry::Error(params) => Value::Variant {
+                case_idx: 5,
+                case_value: Some(Box::new(params.into_value())),
             },
-            PublicOplogEntry::Restart(restart) => {
-                golem_api_grpc::proto::golem::worker::OplogEntry {
-                    entry: Some(oplog_entry::Entry::Restart(
-                        golem_api_grpc::proto::golem::worker::TimestampParameter {
-                            timestamp: Some(restart.timestamp.into()),
-                        },
-                    )),
-                }
-            }
-            PublicOplogEntry::ActivatePlugin(activate) => {
-                golem_api_grpc::proto::golem::worker::OplogEntry {
-                    entry: Some(oplog_entry::Entry::ActivatePlugin(
-                        golem_api_grpc::proto::golem::worker::ActivatePluginParameters {
-                            timestamp: Some(activate.timestamp.into()),
-                            plugin: Some(activate.plugin.into()),
-                        },
-                    )),
-                }
-            }
-            PublicOplogEntry::DeactivatePlugin(deactivate) => {
-                golem_api_grpc::proto::golem::worker::OplogEntry {
-                    entry: Some(oplog_entry::Entry::DeactivatePlugin(
-                        golem_api_grpc::proto::golem::worker::DeactivatePluginParameters {
-                            timestamp: Some(deactivate.timestamp.into()),
-                            plugin: Some(deactivate.plugin.into()),
-                        },
-                    )),
-                }
-            }
-        })
+            PublicOplogEntry::NoOp(params) => Value::Variant {
+                case_idx: 6,
+                case_value: Some(Box::new(params.timestamp.into_value())),
+            },
+            PublicOplogEntry::Jump(params) => Value::Variant {
+                case_idx: 7,
+                case_value: Some(Box::new(params.into_value())),
+            },
+            PublicOplogEntry::Interrupted(params) => Value::Variant {
+                case_idx: 8,
+                case_value: Some(Box::new(params.timestamp.into_value())),
+            },
+            PublicOplogEntry::Exited(params) => Value::Variant {
+                case_idx: 9,
+                case_value: Some(Box::new(params.timestamp.into_value())),
+            },
+            PublicOplogEntry::ChangeRetryPolicy(params) => Value::Variant {
+                case_idx: 10,
+                case_value: Some(Box::new(params.into_value())),
+            },
+            PublicOplogEntry::BeginAtomicRegion(params) => Value::Variant {
+                case_idx: 11,
+                case_value: Some(Box::new(params.timestamp.into_value())),
+            },
+            PublicOplogEntry::EndAtomicRegion(params) => Value::Variant {
+                case_idx: 12,
+                case_value: Some(Box::new(params.into_value())),
+            },
+            PublicOplogEntry::BeginRemoteWrite(params) => Value::Variant {
+                case_idx: 13,
+                case_value: Some(Box::new(params.timestamp.into_value())),
+            },
+            PublicOplogEntry::EndRemoteWrite(params) => Value::Variant {
+                case_idx: 14,
+                case_value: Some(Box::new(params.into_value())),
+            },
+            PublicOplogEntry::PendingWorkerInvocation(params) => Value::Variant {
+                case_idx: 15,
+                case_value: Some(Box::new(params.into_value())),
+            },
+            PublicOplogEntry::PendingUpdate(params) => Value::Variant {
+                case_idx: 16,
+                case_value: Some(Box::new(params.into_value())),
+            },
+            PublicOplogEntry::SuccessfulUpdate(params) => Value::Variant {
+                case_idx: 17,
+                case_value: Some(Box::new(params.into_value())),
+            },
+            PublicOplogEntry::FailedUpdate(params) => Value::Variant {
+                case_idx: 18,
+                case_value: Some(Box::new(params.into_value())),
+            },
+            PublicOplogEntry::GrowMemory(params) => Value::Variant {
+                case_idx: 19,
+                case_value: Some(Box::new(params.into_value())),
+            },
+            PublicOplogEntry::CreateResource(params) => Value::Variant {
+                case_idx: 20,
+                case_value: Some(Box::new(params.into_value())),
+            },
+            PublicOplogEntry::DropResource(params) => Value::Variant {
+                case_idx: 21,
+                case_value: Some(Box::new(params.into_value())),
+            },
+            PublicOplogEntry::DescribeResource(params) => Value::Variant {
+                case_idx: 22,
+                case_value: Some(Box::new(params.into_value())),
+            },
+            PublicOplogEntry::Log(params) => Value::Variant {
+                case_idx: 23,
+                case_value: Some(Box::new(params.into_value())),
+            },
+            PublicOplogEntry::Restart(params) => Value::Variant {
+                case_idx: 24,
+                case_value: Some(Box::new(params.timestamp.into_value())),
+            },
+            PublicOplogEntry::ActivatePlugin(params) => Value::Variant {
+                case_idx: 25,
+                case_value: Some(Box::new(params.into_value())),
+            },
+            PublicOplogEntry::DeactivatePlugin(params) => Value::Variant {
+                case_idx: 26,
+                case_value: Some(Box::new(params.into_value())),
+            },
+        }
     }
-}
 
-impl TryFrom<golem_api_grpc::proto::golem::worker::WrappedFunctionType>
-    for PublicWrappedFunctionType
-{
-    type Error = String;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::worker::WrappedFunctionType,
-    ) -> Result<Self, Self::Error> {
-        match value.r#type() {
-            wrapped_function_type::Type::ReadLocal => {
-                Ok(PublicWrappedFunctionType::ReadLocal(Empty {}))
-            }
-            wrapped_function_type::Type::WriteLocal => {
-                Ok(PublicWrappedFunctionType::WriteLocal(Empty {}))
-            }
-            wrapped_function_type::Type::ReadRemote => {
-                Ok(PublicWrappedFunctionType::ReadRemote(Empty {}))
-            }
-            wrapped_function_type::Type::WriteRemote => {
-                Ok(PublicWrappedFunctionType::WriteRemote(Empty {}))
-            }
-            wrapped_function_type::Type::WriteRemoteBatched => Ok(
-                PublicWrappedFunctionType::WriteRemoteBatched(WriteRemoteBatchedParameters {
-                    index: value.oplog_index.map(OplogIndex::from_u64),
-                }),
+    fn get_type() -> AnalysedType {
+        variant(vec![
+            case("create", CreateParameters::get_type()),
+            case(
+                "imported-function-invoked",
+                ImportedFunctionInvokedParameters::get_type(),
             ),
-        }
-    }
-}
-
-impl From<PublicWrappedFunctionType> for golem_api_grpc::proto::golem::worker::WrappedFunctionType {
-    fn from(value: PublicWrappedFunctionType) -> Self {
-        match value {
-            PublicWrappedFunctionType::ReadLocal(_) => {
-                golem_api_grpc::proto::golem::worker::WrappedFunctionType {
-                    r#type: wrapped_function_type::Type::ReadLocal as i32,
-                    oplog_index: None,
-                }
-            }
-            PublicWrappedFunctionType::WriteLocal(_) => {
-                golem_api_grpc::proto::golem::worker::WrappedFunctionType {
-                    r#type: wrapped_function_type::Type::WriteLocal as i32,
-                    oplog_index: None,
-                }
-            }
-            PublicWrappedFunctionType::ReadRemote(_) => {
-                golem_api_grpc::proto::golem::worker::WrappedFunctionType {
-                    r#type: wrapped_function_type::Type::ReadRemote as i32,
-                    oplog_index: None,
-                }
-            }
-            PublicWrappedFunctionType::WriteRemote(_) => {
-                golem_api_grpc::proto::golem::worker::WrappedFunctionType {
-                    r#type: wrapped_function_type::Type::WriteRemote as i32,
-                    oplog_index: None,
-                }
-            }
-            PublicWrappedFunctionType::WriteRemoteBatched(parameters) => {
-                golem_api_grpc::proto::golem::worker::WrappedFunctionType {
-                    r#type: wrapped_function_type::Type::WriteRemoteBatched as i32,
-                    oplog_index: parameters.index.map(|index| index.into()),
-                }
-            }
-        }
-    }
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::worker::RetryPolicy> for PublicRetryConfig {
-    type Error = String;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::worker::RetryPolicy,
-    ) -> Result<Self, Self::Error> {
-        Ok(PublicRetryConfig {
-            max_attempts: value.max_attempts,
-            min_delay: Duration::from_millis(value.min_delay),
-            max_delay: Duration::from_millis(value.max_delay),
-            multiplier: value.multiplier,
-            max_jitter_factor: value.max_jitter_factor,
-        })
-    }
-}
-
-impl From<PublicRetryConfig> for golem_api_grpc::proto::golem::worker::RetryPolicy {
-    fn from(value: PublicRetryConfig) -> Self {
-        golem_api_grpc::proto::golem::worker::RetryPolicy {
-            max_attempts: value.max_attempts,
-            min_delay: value.min_delay.as_millis() as u64,
-            max_delay: value.max_delay.as_millis() as u64,
-            multiplier: value.multiplier,
-            max_jitter_factor: value.max_jitter_factor,
-        }
-    }
-}
-
-impl From<golem_api_grpc::proto::golem::worker::OplogLogLevel> for LogLevel {
-    fn from(value: golem_api_grpc::proto::golem::worker::OplogLogLevel) -> Self {
-        match value {
-            golem_api_grpc::proto::golem::worker::OplogLogLevel::OplogTrace => LogLevel::Trace,
-            golem_api_grpc::proto::golem::worker::OplogLogLevel::OplogDebug => LogLevel::Debug,
-            golem_api_grpc::proto::golem::worker::OplogLogLevel::OplogInfo => LogLevel::Info,
-            golem_api_grpc::proto::golem::worker::OplogLogLevel::OplogWarn => LogLevel::Warn,
-            golem_api_grpc::proto::golem::worker::OplogLogLevel::OplogError => LogLevel::Error,
-            golem_api_grpc::proto::golem::worker::OplogLogLevel::OplogCritical => {
-                LogLevel::Critical
-            }
-            golem_api_grpc::proto::golem::worker::OplogLogLevel::OplogStderr => LogLevel::Stderr,
-            golem_api_grpc::proto::golem::worker::OplogLogLevel::OplogStdout => LogLevel::Stdout,
-        }
-    }
-}
-
-impl From<LogLevel> for golem_api_grpc::proto::golem::worker::OplogLogLevel {
-    fn from(value: LogLevel) -> Self {
-        match value {
-            LogLevel::Trace => golem_api_grpc::proto::golem::worker::OplogLogLevel::OplogTrace,
-            LogLevel::Debug => golem_api_grpc::proto::golem::worker::OplogLogLevel::OplogDebug,
-            LogLevel::Info => golem_api_grpc::proto::golem::worker::OplogLogLevel::OplogInfo,
-            LogLevel::Warn => golem_api_grpc::proto::golem::worker::OplogLogLevel::OplogWarn,
-            LogLevel::Error => golem_api_grpc::proto::golem::worker::OplogLogLevel::OplogError,
-            LogLevel::Critical => {
-                golem_api_grpc::proto::golem::worker::OplogLogLevel::OplogCritical
-            }
-            LogLevel::Stderr => golem_api_grpc::proto::golem::worker::OplogLogLevel::OplogStderr,
-            LogLevel::Stdout => golem_api_grpc::proto::golem::worker::OplogLogLevel::OplogStdout,
-        }
-    }
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerInvocation> for PublicWorkerInvocation {
-    type Error = String;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::worker::WorkerInvocation,
-    ) -> Result<Self, Self::Error> {
-        match value.invocation.ok_or("Missing invocation field")? {
-            worker_invocation::Invocation::ExportedFunction(exported_function) => Ok(
-                PublicWorkerInvocation::ExportedFunction(ExportedFunctionParameters {
-                    idempotency_key: exported_function
-                        .idempotency_key
-                        .ok_or("Missing idempotency_key field")?
-                        .into(),
-                    full_function_name: exported_function.function_name,
-                    function_input: if exported_function.valid_input {
-                        Some(
-                            exported_function
-                                .input
-                                .into_iter()
-                                .map(TryInto::try_into)
-                                .collect::<Result<Vec<ValueAndType>, String>>()?,
-                        )
-                    } else {
-                        None
-                    },
-                }),
+            case(
+                "exported-function-invoked",
+                ExportedFunctionInvokedParameters::get_type(),
             ),
-            worker_invocation::Invocation::ManualUpdate(manual_update) => Ok(
-                PublicWorkerInvocation::ManualUpdate(ManualUpdateParameters {
-                    target_version: manual_update,
-                }),
+            case(
+                "exported-function-completed",
+                ExportedFunctionCompletedParameters::get_type(),
             ),
-        }
+            case("suspend", Timestamp::get_type()),
+            case("error", ErrorParameters::get_type()),
+            case("noop", Timestamp::get_type()),
+            case("jump", JumpParameters::get_type()),
+            case("interrupted", Timestamp::get_type()),
+            case("exited", Timestamp::get_type()),
+            case(
+                "change-retry-policy",
+                ChangeRetryPolicyParameters::get_type(),
+            ),
+            case("begin-atomic-region", Timestamp::get_type()),
+            case("end-atomic-region", EndRegionParameters::get_type()),
+            case("begin-remote-write", Timestamp::get_type()),
+            case("end-remote-write", EndRegionParameters::get_type()),
+            case(
+                "pending-worker-invocation",
+                PendingWorkerInvocationParameters::get_type(),
+            ),
+            case("pending-update", PendingUpdateParameters::get_type()),
+            case("successful-update", SuccessfulUpdateParameters::get_type()),
+            case("failed-update", FailedUpdateParameters::get_type()),
+            case("grow-memory", GrowMemoryParameters::get_type()),
+            case("create-resource", ResourceParameters::get_type()),
+            case("drop-resource", ResourceParameters::get_type()),
+            case("describe-resource", DescribeResourceParameters::get_type()),
+            case("log", LogParameters::get_type()),
+            case("restart", Timestamp::get_type()),
+            case("activate-plugin", ActivatePluginParameters::get_type()),
+            case("deactivate-plugin", DeactivatePluginParameters::get_type()),
+        ])
     }
 }
 
-impl TryFrom<PublicWorkerInvocation> for golem_api_grpc::proto::golem::worker::WorkerInvocation {
-    type Error = String;
-
-    fn try_from(value: PublicWorkerInvocation) -> Result<Self, Self::Error> {
-        Ok(match value {
-            PublicWorkerInvocation::ExportedFunction(exported_function) => {
-                golem_api_grpc::proto::golem::worker::WorkerInvocation {
-                    invocation: Some(worker_invocation::Invocation::ExportedFunction(
-                        golem_api_grpc::proto::golem::worker::ExportedFunctionInvocationParameters {
-                            idempotency_key: Some(exported_function.idempotency_key.into()),
-                            function_name: exported_function.full_function_name,
-                            valid_input: exported_function.function_input.is_some(),
-                            input: exported_function
-                                .function_input
-                                .unwrap_or_default()
-                                .into_iter()
-                                .map(|input| input.try_into().map_err(
-                                    |errors: Vec<String>| {
-                                        format!("Failed to convert request: {}", errors.join(", "))
-                                    },
-                                )).collect::<Result<Vec<_>, _>>()?,
-                        },
-                    )),
-                }
-            }
-            PublicWorkerInvocation::ManualUpdate(manual_update) => {
-                golem_api_grpc::proto::golem::worker::WorkerInvocation {
-                    invocation: Some(worker_invocation::Invocation::ManualUpdate(
-                        manual_update.target_version,
-                    )),
-                }
-            }
-        })
-    }
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::worker::UpdateDescription> for PublicUpdateDescription {
-    type Error = String;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::worker::UpdateDescription,
-    ) -> Result<Self, Self::Error> {
-        match value.description.ok_or("Missing description field")? {
-            golem_api_grpc::proto::golem::worker::update_description::Description::AutoUpdate(_) => {
-                Ok(PublicUpdateDescription::Automatic(Empty {}))
-            }
-            golem_api_grpc::proto::golem::worker::update_description::Description::SnapshotBased(
-                snapshot_based,
-            ) => Ok(PublicUpdateDescription::SnapshotBased(SnapshotBasedUpdateParameters {
-                payload: snapshot_based.payload,
-            })),
-        }
-    }
-}
-
-impl From<PublicUpdateDescription> for golem_api_grpc::proto::golem::worker::UpdateDescription {
-    fn from(value: PublicUpdateDescription) -> Self {
-        match value {
-            PublicUpdateDescription::Automatic(_) => golem_api_grpc::proto::golem::worker::UpdateDescription {
-                description: Some(
-                    golem_api_grpc::proto::golem::worker::update_description::Description::AutoUpdate(
-                        golem_api_grpc::proto::golem::common::Empty {},
-                    ),
-                ),
-            },
-            PublicUpdateDescription::SnapshotBased(snapshot_based) => {
-                golem_api_grpc::proto::golem::worker::UpdateDescription {
-                    description: Some(
-                        golem_api_grpc::proto::golem::worker::update_description::Description::SnapshotBased(
-                            golem_api_grpc::proto::golem::worker::SnapshotBasedUpdateParameters {
-                                payload: snapshot_based.payload
-                            }
-                        ),
-                    ),
-                }
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 pub struct OplogCursor {
     pub next_oplog_index: u64,
     pub current_component_version: u64,
 }
 
-impl ParseFromParameter for OplogCursor {
-    fn parse_from_parameter(value: &str) -> ParseResult<Self> {
+#[cfg(feature = "poem")]
+impl poem_openapi::types::ParseFromParameter for OplogCursor {
+    fn parse_from_parameter(value: &str) -> poem_openapi::types::ParseResult<Self> {
         let parts: Vec<&str> = value.split('-').collect();
         if parts.len() != 2 {
             return Err("Invalid oplog cursor".into());
@@ -1689,27 +1494,956 @@ impl Display for OplogCursor {
     }
 }
 
-impl From<golem_api_grpc::proto::golem::worker::OplogCursor> for OplogCursor {
-    fn from(value: golem_api_grpc::proto::golem::worker::OplogCursor) -> Self {
-        Self {
-            next_oplog_index: value.next_oplog_index,
-            current_component_version: value.current_component_version,
+#[cfg(feature = "protobuf")]
+mod protobuf {
+    use crate::model::oplog::{LogLevel, OplogIndex, WorkerResourceId};
+    use crate::model::public_oplog::{
+        ActivatePluginParameters, ChangeRetryPolicyParameters, CreateParameters,
+        DeactivatePluginParameters, DescribeResourceParameters, EndRegionParameters,
+        ErrorParameters, ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters,
+        ExportedFunctionParameters, FailedUpdateParameters, GrowMemoryParameters,
+        ImportedFunctionInvokedParameters, JumpParameters, LogParameters, ManualUpdateParameters,
+        OplogCursor, PendingUpdateParameters, PendingWorkerInvocationParameters,
+        PluginInstallationDescription, PublicOplogEntry, PublicRetryConfig,
+        PublicUpdateDescription, PublicWorkerInvocation, PublicWrappedFunctionType,
+        ResourceParameters, SnapshotBasedUpdateParameters, SuccessfulUpdateParameters,
+        TimestampParameter, WriteRemoteBatchedParameters,
+    };
+    use crate::model::regions::OplogRegion;
+    use crate::model::Empty;
+    use golem_api_grpc::proto::golem::worker::{
+        oplog_entry, worker_invocation, wrapped_function_type,
+    };
+    use golem_wasm_rpc::ValueAndType;
+    use std::collections::{BTreeMap, BTreeSet, HashMap};
+    use std::time::Duration;
+
+    impl From<golem_api_grpc::proto::golem::worker::OplogCursor> for OplogCursor {
+        fn from(value: golem_api_grpc::proto::golem::worker::OplogCursor) -> Self {
+            Self {
+                next_oplog_index: value.next_oplog_index,
+                current_component_version: value.current_component_version,
+            }
         }
     }
-}
 
-impl From<OplogCursor> for golem_api_grpc::proto::golem::worker::OplogCursor {
-    fn from(value: OplogCursor) -> Self {
-        Self {
-            next_oplog_index: value.next_oplog_index,
-            current_component_version: value.current_component_version,
+    impl From<OplogCursor> for golem_api_grpc::proto::golem::worker::OplogCursor {
+        fn from(value: OplogCursor) -> Self {
+            Self {
+                next_oplog_index: value.next_oplog_index,
+                current_component_version: value.current_component_version,
+            }
+        }
+    }
+
+    impl From<PluginInstallationDescription>
+        for golem_api_grpc::proto::golem::worker::PluginInstallationDescription
+    {
+        fn from(plugin_installation_description: PluginInstallationDescription) -> Self {
+            golem_api_grpc::proto::golem::worker::PluginInstallationDescription {
+                installation_id: Some(plugin_installation_description.installation_id.into()),
+                plugin_name: plugin_installation_description.plugin_name,
+                plugin_version: plugin_installation_description.plugin_version,
+                parameters: HashMap::from_iter(plugin_installation_description.parameters),
+            }
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::worker::PluginInstallationDescription>
+        for PluginInstallationDescription
+    {
+        type Error = String;
+
+        fn try_from(
+            value: golem_api_grpc::proto::golem::worker::PluginInstallationDescription,
+        ) -> Result<Self, Self::Error> {
+            Ok(PluginInstallationDescription {
+                installation_id: value
+                    .installation_id
+                    .ok_or("Missing installation_id".to_string())?
+                    .try_into()?,
+                plugin_name: value.plugin_name,
+                plugin_version: value.plugin_version,
+                parameters: BTreeMap::from_iter(value.parameters),
+            })
+        }
+    }
+    impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEntry {
+        type Error = String;
+
+        fn try_from(
+            value: golem_api_grpc::proto::golem::worker::OplogEntry,
+        ) -> Result<Self, String> {
+            match value.entry.ok_or("Oplog entry is empty")? {
+                oplog_entry::Entry::Create(create) => {
+                    Ok(PublicOplogEntry::Create(CreateParameters {
+                        timestamp: create.timestamp.ok_or("Missing timestamp field")?.into(),
+                        worker_id: create
+                            .worker_id
+                            .ok_or("Missing worker_id field")?
+                            .try_into()?,
+                        component_version: create.component_version,
+                        args: create.args,
+                        env: create.env.into_iter().collect(),
+                        account_id: create.account_id.ok_or("Missing account_id field")?.into(),
+                        parent: match create.parent {
+                            Some(parent) => Some(parent.try_into()?),
+                            None => None,
+                        },
+                        component_size: create.component_size,
+                        initial_total_linear_memory_size: create.initial_total_linear_memory_size,
+                        initial_active_plugins: BTreeSet::from_iter(
+                            create
+                                .initial_active_plugins
+                                .into_iter()
+                                .map(|pr| pr.try_into())
+                                .collect::<Result<Vec<_>, _>>()?,
+                        ),
+                    }))
+                }
+                oplog_entry::Entry::ImportedFunctionInvoked(imported_function_invoked) => Ok(
+                    PublicOplogEntry::ImportedFunctionInvoked(ImportedFunctionInvokedParameters {
+                        timestamp: imported_function_invoked
+                            .timestamp
+                            .ok_or("Missing timestamp field")?
+                            .into(),
+                        function_name: imported_function_invoked.function_name,
+                        request: imported_function_invoked
+                            .request
+                            .ok_or("Missing request field")?
+                            .try_into()?,
+                        response: imported_function_invoked
+                            .response
+                            .ok_or("Missing response field")?
+                            .try_into()?,
+                        wrapped_function_type: imported_function_invoked
+                            .wrapped_function_type
+                            .ok_or("Missing wrapped_function_type field")?
+                            .try_into()?,
+                    }),
+                ),
+                oplog_entry::Entry::ExportedFunctionInvoked(exported_function_invoked) => Ok(
+                    PublicOplogEntry::ExportedFunctionInvoked(ExportedFunctionInvokedParameters {
+                        timestamp: exported_function_invoked
+                            .timestamp
+                            .ok_or("Missing timestamp field")?
+                            .into(),
+                        function_name: exported_function_invoked.function_name,
+                        request: exported_function_invoked
+                            .request
+                            .into_iter()
+                            .map(TryInto::try_into)
+                            .collect::<Result<Vec<ValueAndType>, String>>()?,
+                        idempotency_key: exported_function_invoked
+                            .idempotency_key
+                            .ok_or("Missing idempotency_key field")?
+                            .into(),
+                    }),
+                ),
+                oplog_entry::Entry::ExportedFunctionCompleted(exported_function_completed) => {
+                    Ok(PublicOplogEntry::ExportedFunctionCompleted(
+                        ExportedFunctionCompletedParameters {
+                            timestamp: exported_function_completed
+                                .timestamp
+                                .ok_or("Missing timestamp field")?
+                                .into(),
+                            response: exported_function_completed
+                                .response
+                                .ok_or("Missing response field")?
+                                .try_into()?,
+                            consumed_fuel: exported_function_completed.consumed_fuel,
+                        },
+                    ))
+                }
+                oplog_entry::Entry::Suspend(suspend) => {
+                    Ok(PublicOplogEntry::Suspend(TimestampParameter {
+                        timestamp: suspend.timestamp.ok_or("Missing timestamp field")?.into(),
+                    }))
+                }
+                oplog_entry::Entry::Error(error) => Ok(PublicOplogEntry::Error(ErrorParameters {
+                    timestamp: error.timestamp.ok_or("Missing timestamp field")?.into(),
+                    error: error.error,
+                })),
+                oplog_entry::Entry::NoOp(no_op) => Ok(PublicOplogEntry::NoOp(TimestampParameter {
+                    timestamp: no_op.timestamp.ok_or("Missing timestamp field")?.into(),
+                })),
+                oplog_entry::Entry::Jump(jump) => Ok(PublicOplogEntry::Jump(JumpParameters {
+                    timestamp: jump.timestamp.ok_or("Missing timestamp field")?.into(),
+                    jump: OplogRegion {
+                        start: OplogIndex::from_u64(jump.start),
+                        end: OplogIndex::from_u64(jump.end),
+                    },
+                })),
+                oplog_entry::Entry::Interrupted(interrupted) => {
+                    Ok(PublicOplogEntry::Interrupted(TimestampParameter {
+                        timestamp: interrupted
+                            .timestamp
+                            .ok_or("Missing timestamp field")?
+                            .into(),
+                    }))
+                }
+                oplog_entry::Entry::Exited(exited) => {
+                    Ok(PublicOplogEntry::Exited(TimestampParameter {
+                        timestamp: exited.timestamp.ok_or("Missing timestamp field")?.into(),
+                    }))
+                }
+                oplog_entry::Entry::ChangeRetryPolicy(change_retry_policy) => Ok(
+                    PublicOplogEntry::ChangeRetryPolicy(ChangeRetryPolicyParameters {
+                        timestamp: change_retry_policy
+                            .timestamp
+                            .ok_or("Missing timestamp field")?
+                            .into(),
+                        new_policy: change_retry_policy
+                            .retry_policy
+                            .ok_or("Missing retry_policy field")?
+                            .try_into()?,
+                    }),
+                ),
+                oplog_entry::Entry::BeginAtomicRegion(begin_atomic_region) => {
+                    Ok(PublicOplogEntry::BeginAtomicRegion(TimestampParameter {
+                        timestamp: begin_atomic_region
+                            .timestamp
+                            .ok_or("Missing timestamp field")?
+                            .into(),
+                    }))
+                }
+                oplog_entry::Entry::EndAtomicRegion(end_atomic_region) => {
+                    Ok(PublicOplogEntry::EndAtomicRegion(EndRegionParameters {
+                        timestamp: end_atomic_region
+                            .timestamp
+                            .ok_or("Missing timestamp field")?
+                            .into(),
+                        begin_index: OplogIndex::from_u64(end_atomic_region.begin_index),
+                    }))
+                }
+                oplog_entry::Entry::BeginRemoteWrite(begin_remote_write) => {
+                    Ok(PublicOplogEntry::BeginRemoteWrite(TimestampParameter {
+                        timestamp: begin_remote_write
+                            .timestamp
+                            .ok_or("Missing timestamp field")?
+                            .into(),
+                    }))
+                }
+                oplog_entry::Entry::EndRemoteWrite(end_remote_write) => {
+                    Ok(PublicOplogEntry::EndRemoteWrite(EndRegionParameters {
+                        timestamp: end_remote_write
+                            .timestamp
+                            .ok_or("Missing timestamp field")?
+                            .into(),
+                        begin_index: OplogIndex::from_u64(end_remote_write.begin_index),
+                    }))
+                }
+                oplog_entry::Entry::PendingWorkerInvocation(pending_worker_invocation) => Ok(
+                    PublicOplogEntry::PendingWorkerInvocation(PendingWorkerInvocationParameters {
+                        timestamp: pending_worker_invocation
+                            .timestamp
+                            .ok_or("Missing timestamp field")?
+                            .into(),
+                        invocation: pending_worker_invocation
+                            .invocation
+                            .ok_or("Missing invocation field")?
+                            .try_into()?,
+                    }),
+                ),
+                oplog_entry::Entry::PendingUpdate(pending_update) => {
+                    Ok(PublicOplogEntry::PendingUpdate(PendingUpdateParameters {
+                        timestamp: pending_update
+                            .timestamp
+                            .ok_or("Missing timestamp field")?
+                            .into(),
+                        target_version: pending_update.target_version,
+                        description: pending_update
+                            .update_description
+                            .ok_or("Missing update_description field")?
+                            .try_into()?,
+                    }))
+                }
+                oplog_entry::Entry::SuccessfulUpdate(successful_update) => Ok(
+                    PublicOplogEntry::SuccessfulUpdate(SuccessfulUpdateParameters {
+                        timestamp: successful_update
+                            .timestamp
+                            .ok_or("Missing timestamp field")?
+                            .into(),
+                        target_version: successful_update.target_version,
+                        new_component_size: successful_update.new_component_size,
+                        new_active_plugins: BTreeSet::from_iter(
+                            successful_update
+                                .new_active_plugins
+                                .into_iter()
+                                .map(|pr| pr.try_into())
+                                .collect::<Result<Vec<_>, _>>()?,
+                        ),
+                    }),
+                ),
+                oplog_entry::Entry::FailedUpdate(failed_update) => {
+                    Ok(PublicOplogEntry::FailedUpdate(FailedUpdateParameters {
+                        timestamp: failed_update
+                            .timestamp
+                            .ok_or("Missing timestamp field")?
+                            .into(),
+                        target_version: failed_update.target_version,
+                        details: failed_update.details,
+                    }))
+                }
+                oplog_entry::Entry::GrowMemory(grow_memory) => {
+                    Ok(PublicOplogEntry::GrowMemory(GrowMemoryParameters {
+                        timestamp: grow_memory
+                            .timestamp
+                            .ok_or("Missing timestamp field")?
+                            .into(),
+                        delta: grow_memory.delta,
+                    }))
+                }
+                oplog_entry::Entry::CreateResource(create_resource) => {
+                    Ok(PublicOplogEntry::CreateResource(ResourceParameters {
+                        timestamp: create_resource
+                            .timestamp
+                            .ok_or("Missing timestamp field")?
+                            .into(),
+                        id: WorkerResourceId(create_resource.resource_id),
+                    }))
+                }
+                oplog_entry::Entry::DropResource(drop_resource) => {
+                    Ok(PublicOplogEntry::DropResource(ResourceParameters {
+                        timestamp: drop_resource
+                            .timestamp
+                            .ok_or("Missing timestamp field")?
+                            .into(),
+                        id: WorkerResourceId(drop_resource.resource_id),
+                    }))
+                }
+                oplog_entry::Entry::DescribeResource(describe_resource) => Ok(
+                    PublicOplogEntry::DescribeResource(DescribeResourceParameters {
+                        timestamp: describe_resource
+                            .timestamp
+                            .ok_or("Missing timestamp field")?
+                            .into(),
+                        id: WorkerResourceId(describe_resource.resource_id),
+                        resource_name: describe_resource.resource_name,
+                        resource_params: describe_resource
+                            .resource_params
+                            .into_iter()
+                            .map(TryInto::try_into)
+                            .collect::<Result<Vec<ValueAndType>, String>>()?,
+                    }),
+                ),
+                oplog_entry::Entry::Log(log) => Ok(PublicOplogEntry::Log(LogParameters {
+                    level: log.level().into(),
+                    timestamp: log.timestamp.ok_or("Missing timestamp field")?.into(),
+                    context: log.context,
+                    message: log.message,
+                })),
+                oplog_entry::Entry::Restart(restart) => {
+                    Ok(PublicOplogEntry::Restart(TimestampParameter {
+                        timestamp: restart.timestamp.ok_or("Missing timestamp field")?.into(),
+                    }))
+                }
+                oplog_entry::Entry::ActivatePlugin(activate) => {
+                    Ok(PublicOplogEntry::ActivatePlugin(ActivatePluginParameters {
+                        timestamp: activate.timestamp.ok_or("Missing timestamp field")?.into(),
+                        plugin: activate.plugin.ok_or("Missing plugin field")?.try_into()?,
+                    }))
+                }
+                oplog_entry::Entry::DeactivatePlugin(deactivate) => Ok(
+                    PublicOplogEntry::DeactivatePlugin(DeactivatePluginParameters {
+                        timestamp: deactivate
+                            .timestamp
+                            .ok_or("Missing timestamp field")?
+                            .into(),
+                        plugin: deactivate
+                            .plugin
+                            .ok_or("Missing plugin field")?
+                            .try_into()?,
+                    }),
+                ),
+            }
+        }
+    }
+
+    impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEntry {
+        type Error = String;
+
+        fn try_from(value: PublicOplogEntry) -> Result<Self, String> {
+            Ok(match value {
+                PublicOplogEntry::Create(create) => golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::Create(
+                        golem_api_grpc::proto::golem::worker::CreateParameters {
+                            timestamp: Some(create.timestamp.into()),
+                            worker_id: Some(create.worker_id.into()),
+                            component_version: create.component_version,
+                            args: create.args,
+                            env: create.env.into_iter().collect(),
+                            account_id: Some(create.account_id.into()),
+                            parent: create.parent.map(Into::into),
+                            component_size: create.component_size,
+                            initial_total_linear_memory_size: create.initial_total_linear_memory_size,
+                            initial_active_plugins: create
+                                .initial_active_plugins
+                                .into_iter()
+                                .map(Into::into)
+                                .collect(),
+                        },
+                    )),
+                },
+                PublicOplogEntry::ImportedFunctionInvoked(imported_function_invoked) => {
+                    golem_api_grpc::proto::golem::worker::OplogEntry {
+                        entry: Some(oplog_entry::Entry::ImportedFunctionInvoked(
+                            golem_api_grpc::proto::golem::worker::ImportedFunctionInvokedParameters {
+                                timestamp: Some(imported_function_invoked.timestamp.into()),
+                                function_name: imported_function_invoked.function_name,
+                                request: Some(imported_function_invoked.request.try_into().map_err(
+                                    |errors: Vec<String>| {
+                                        format!("Failed to convert request: {}", errors.join(", "))
+                                    },
+                                )?),
+                                response: Some(imported_function_invoked.response.try_into().map_err(
+                                    |errors: Vec<String>| {
+                                        format!("Failed to convert response: {}", errors.join(", "))
+                                    },
+                                )?),
+                                wrapped_function_type: Some(
+                                    imported_function_invoked.wrapped_function_type.into(),
+                                ),
+                            },
+                        )),
+                    }
+                }
+                PublicOplogEntry::ExportedFunctionInvoked(exported_function_invoked) => {
+                    golem_api_grpc::proto::golem::worker::OplogEntry {
+                        entry: Some(oplog_entry::Entry::ExportedFunctionInvoked(
+                            golem_api_grpc::proto::golem::worker::ExportedFunctionInvokedParameters {
+                                timestamp: Some(exported_function_invoked.timestamp.into()),
+                                function_name: exported_function_invoked.function_name,
+                                request: exported_function_invoked
+                                    .request
+                                    .into_iter()
+                                    .map(|value| {
+                                        value.try_into().map_err(|errors: Vec<String>| {
+                                            format!("Failed to convert request: {}", errors.join(", "))
+                                        })
+                                    })
+                                    .collect::<Result<Vec<_>, _>>()?,
+                                idempotency_key: Some(exported_function_invoked.idempotency_key.into()),
+                            },
+                        )),
+                    }
+                }
+                PublicOplogEntry::ExportedFunctionCompleted(exported_function_completed) => {
+                    golem_api_grpc::proto::golem::worker::OplogEntry {
+                        entry: Some(oplog_entry::Entry::ExportedFunctionCompleted(
+                            golem_api_grpc::proto::golem::worker::ExportedFunctionCompletedParameters {
+                                timestamp: Some(exported_function_completed.timestamp.into()),
+                                response: Some(
+                                    exported_function_completed.response.try_into().map_err(
+                                        |errors: Vec<String>| {
+                                            format!("Failed to convert response: {}", errors.join(", "))
+                                        },
+                                    )?,
+                                ),
+                                consumed_fuel: exported_function_completed.consumed_fuel,
+                            },
+                        )),
+                    }
+                }
+                PublicOplogEntry::Suspend(suspend) => {
+                    golem_api_grpc::proto::golem::worker::OplogEntry {
+                        entry: Some(oplog_entry::Entry::Suspend(
+                            golem_api_grpc::proto::golem::worker::TimestampParameter {
+                                timestamp: Some(suspend.timestamp.into()),
+                            },
+                        )),
+                    }
+                }
+                PublicOplogEntry::Error(error) => golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::Error(
+                        golem_api_grpc::proto::golem::worker::ErrorParameters {
+                            timestamp: Some(error.timestamp.into()),
+                            error: error.error,
+                        },
+                    )),
+                },
+                PublicOplogEntry::NoOp(no_op) => golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::NoOp(
+                        golem_api_grpc::proto::golem::worker::TimestampParameter {
+                            timestamp: Some(no_op.timestamp.into()),
+                        },
+                    )),
+                },
+                PublicOplogEntry::Jump(jump) => golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::Jump(
+                        golem_api_grpc::proto::golem::worker::JumpParameters {
+                            timestamp: Some(jump.timestamp.into()),
+                            start: jump.jump.start.into(),
+                            end: jump.jump.end.into(),
+                        },
+                    )),
+                },
+                PublicOplogEntry::Interrupted(interrupted) => {
+                    golem_api_grpc::proto::golem::worker::OplogEntry {
+                        entry: Some(oplog_entry::Entry::Interrupted(
+                            golem_api_grpc::proto::golem::worker::TimestampParameter {
+                                timestamp: Some(interrupted.timestamp.into()),
+                            },
+                        )),
+                    }
+                }
+                PublicOplogEntry::Exited(exited) => golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::Exited(
+                        golem_api_grpc::proto::golem::worker::TimestampParameter {
+                            timestamp: Some(exited.timestamp.into()),
+                        },
+                    )),
+                },
+                PublicOplogEntry::ChangeRetryPolicy(change_retry_policy) => {
+                    golem_api_grpc::proto::golem::worker::OplogEntry {
+                        entry: Some(oplog_entry::Entry::ChangeRetryPolicy(
+                            golem_api_grpc::proto::golem::worker::ChangeRetryPolicyParameters {
+                                timestamp: Some(change_retry_policy.timestamp.into()),
+                                retry_policy: Some(change_retry_policy.new_policy.into()),
+                            },
+                        )),
+                    }
+                }
+                PublicOplogEntry::BeginAtomicRegion(begin_atomic_region) => {
+                    golem_api_grpc::proto::golem::worker::OplogEntry {
+                        entry: Some(oplog_entry::Entry::BeginAtomicRegion(
+                            golem_api_grpc::proto::golem::worker::TimestampParameter {
+                                timestamp: Some(begin_atomic_region.timestamp.into()),
+                            },
+                        )),
+                    }
+                }
+                PublicOplogEntry::EndAtomicRegion(end_atomic_region) => {
+                    golem_api_grpc::proto::golem::worker::OplogEntry {
+                        entry: Some(oplog_entry::Entry::EndAtomicRegion(
+                            golem_api_grpc::proto::golem::worker::EndAtomicRegionParameters {
+                                timestamp: Some(end_atomic_region.timestamp.into()),
+                                begin_index: end_atomic_region.begin_index.into(),
+                            },
+                        )),
+                    }
+                }
+                PublicOplogEntry::BeginRemoteWrite(begin_remote_write) => {
+                    golem_api_grpc::proto::golem::worker::OplogEntry {
+                        entry: Some(oplog_entry::Entry::BeginRemoteWrite(
+                            golem_api_grpc::proto::golem::worker::TimestampParameter {
+                                timestamp: Some(begin_remote_write.timestamp.into()),
+                            },
+                        )),
+                    }
+                }
+                PublicOplogEntry::EndRemoteWrite(end_remote_write) => {
+                    golem_api_grpc::proto::golem::worker::OplogEntry {
+                        entry: Some(oplog_entry::Entry::EndRemoteWrite(
+                            golem_api_grpc::proto::golem::worker::EndRemoteWriteParameters {
+                                timestamp: Some(end_remote_write.timestamp.into()),
+                                begin_index: end_remote_write.begin_index.into(),
+                            },
+                        )),
+                    }
+                }
+                PublicOplogEntry::PendingWorkerInvocation(pending_worker_invocation) => {
+                    golem_api_grpc::proto::golem::worker::OplogEntry {
+                        entry: Some(oplog_entry::Entry::PendingWorkerInvocation(
+                            golem_api_grpc::proto::golem::worker::PendingWorkerInvocationParameters {
+                                timestamp: Some(pending_worker_invocation.timestamp.into()),
+                                invocation: Some(pending_worker_invocation.invocation.try_into()?),
+                            },
+                        )),
+                    }
+                }
+                PublicOplogEntry::PendingUpdate(pending_update) => {
+                    golem_api_grpc::proto::golem::worker::OplogEntry {
+                        entry: Some(oplog_entry::Entry::PendingUpdate(
+                            golem_api_grpc::proto::golem::worker::PendingUpdateParameters {
+                                timestamp: Some(pending_update.timestamp.into()),
+                                target_version: pending_update.target_version,
+                                update_description: Some(pending_update.description.into()),
+                            },
+                        )),
+                    }
+                }
+                PublicOplogEntry::SuccessfulUpdate(successful_update) => {
+                    golem_api_grpc::proto::golem::worker::OplogEntry {
+                        entry: Some(oplog_entry::Entry::SuccessfulUpdate(
+                            golem_api_grpc::proto::golem::worker::SuccessfulUpdateParameters {
+                                timestamp: Some(successful_update.timestamp.into()),
+                                target_version: successful_update.target_version,
+                                new_component_size: successful_update.new_component_size,
+                                new_active_plugins: successful_update
+                                    .new_active_plugins
+                                    .into_iter()
+                                    .map(Into::into)
+                                    .collect(),
+                            },
+                        )),
+                    }
+                }
+                PublicOplogEntry::FailedUpdate(failed_update) => {
+                    golem_api_grpc::proto::golem::worker::OplogEntry {
+                        entry: Some(oplog_entry::Entry::FailedUpdate(
+                            golem_api_grpc::proto::golem::worker::FailedUpdateParameters {
+                                timestamp: Some(failed_update.timestamp.into()),
+                                target_version: failed_update.target_version,
+                                details: failed_update.details,
+                            },
+                        )),
+                    }
+                }
+                PublicOplogEntry::GrowMemory(grow_memory) => {
+                    golem_api_grpc::proto::golem::worker::OplogEntry {
+                        entry: Some(oplog_entry::Entry::GrowMemory(
+                            golem_api_grpc::proto::golem::worker::GrowMemoryParameters {
+                                timestamp: Some(grow_memory.timestamp.into()),
+                                delta: grow_memory.delta,
+                            },
+                        )),
+                    }
+                }
+                PublicOplogEntry::CreateResource(create_resource) => {
+                    golem_api_grpc::proto::golem::worker::OplogEntry {
+                        entry: Some(oplog_entry::Entry::CreateResource(
+                            golem_api_grpc::proto::golem::worker::CreateResourceParameters {
+                                timestamp: Some(create_resource.timestamp.into()),
+                                resource_id: create_resource.id.0,
+                            },
+                        )),
+                    }
+                }
+                PublicOplogEntry::DropResource(drop_resource) => {
+                    golem_api_grpc::proto::golem::worker::OplogEntry {
+                        entry: Some(oplog_entry::Entry::DropResource(
+                            golem_api_grpc::proto::golem::worker::DropResourceParameters {
+                                timestamp: Some(drop_resource.timestamp.into()),
+                                resource_id: drop_resource.id.0,
+                            },
+                        )),
+                    }
+                }
+                PublicOplogEntry::DescribeResource(describe_resource) => {
+                    golem_api_grpc::proto::golem::worker::OplogEntry {
+                        entry: Some(oplog_entry::Entry::DescribeResource(
+                            golem_api_grpc::proto::golem::worker::DescribeResourceParameters {
+                                timestamp: Some(describe_resource.timestamp.into()),
+                                resource_id: describe_resource.id.0,
+                                resource_name: describe_resource.resource_name,
+                                resource_params: describe_resource
+                                    .resource_params
+                                    .into_iter()
+                                    .map(|value| {
+                                        value.try_into().map_err(|errors: Vec<String>| {
+                                            format!("Failed to convert request: {}", errors.join(", "))
+                                        })
+                                    })
+                                    .collect::<Result<Vec<_>, _>>()?,
+                            },
+                        )),
+                    }
+                }
+                PublicOplogEntry::Log(log) => golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::Log(
+                        golem_api_grpc::proto::golem::worker::LogParameters {
+                            timestamp: Some(log.timestamp.into()),
+                            level: Into::<golem_api_grpc::proto::golem::worker::OplogLogLevel>::into(
+                                log.level,
+                            ) as i32,
+                            context: log.context,
+                            message: log.message,
+                        },
+                    )),
+                },
+                PublicOplogEntry::Restart(restart) => {
+                    golem_api_grpc::proto::golem::worker::OplogEntry {
+                        entry: Some(oplog_entry::Entry::Restart(
+                            golem_api_grpc::proto::golem::worker::TimestampParameter {
+                                timestamp: Some(restart.timestamp.into()),
+                            },
+                        )),
+                    }
+                }
+                PublicOplogEntry::ActivatePlugin(activate) => {
+                    golem_api_grpc::proto::golem::worker::OplogEntry {
+                        entry: Some(oplog_entry::Entry::ActivatePlugin(
+                            golem_api_grpc::proto::golem::worker::ActivatePluginParameters {
+                                timestamp: Some(activate.timestamp.into()),
+                                plugin: Some(activate.plugin.into()),
+                            },
+                        )),
+                    }
+                }
+                PublicOplogEntry::DeactivatePlugin(deactivate) => {
+                    golem_api_grpc::proto::golem::worker::OplogEntry {
+                        entry: Some(oplog_entry::Entry::DeactivatePlugin(
+                            golem_api_grpc::proto::golem::worker::DeactivatePluginParameters {
+                                timestamp: Some(deactivate.timestamp.into()),
+                                plugin: Some(deactivate.plugin.into()),
+                            },
+                        )),
+                    }
+                }
+            })
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::worker::WrappedFunctionType>
+        for PublicWrappedFunctionType
+    {
+        type Error = String;
+
+        fn try_from(
+            value: golem_api_grpc::proto::golem::worker::WrappedFunctionType,
+        ) -> Result<Self, Self::Error> {
+            match value.r#type() {
+                wrapped_function_type::Type::ReadLocal => {
+                    Ok(PublicWrappedFunctionType::ReadLocal(Empty {}))
+                }
+                wrapped_function_type::Type::WriteLocal => {
+                    Ok(PublicWrappedFunctionType::WriteLocal(Empty {}))
+                }
+                wrapped_function_type::Type::ReadRemote => {
+                    Ok(PublicWrappedFunctionType::ReadRemote(Empty {}))
+                }
+                wrapped_function_type::Type::WriteRemote => {
+                    Ok(PublicWrappedFunctionType::WriteRemote(Empty {}))
+                }
+                wrapped_function_type::Type::WriteRemoteBatched => Ok(
+                    PublicWrappedFunctionType::WriteRemoteBatched(WriteRemoteBatchedParameters {
+                        index: value.oplog_index.map(OplogIndex::from_u64),
+                    }),
+                ),
+            }
+        }
+    }
+
+    impl From<PublicWrappedFunctionType> for golem_api_grpc::proto::golem::worker::WrappedFunctionType {
+        fn from(value: PublicWrappedFunctionType) -> Self {
+            match value {
+                PublicWrappedFunctionType::ReadLocal(_) => {
+                    golem_api_grpc::proto::golem::worker::WrappedFunctionType {
+                        r#type: wrapped_function_type::Type::ReadLocal as i32,
+                        oplog_index: None,
+                    }
+                }
+                PublicWrappedFunctionType::WriteLocal(_) => {
+                    golem_api_grpc::proto::golem::worker::WrappedFunctionType {
+                        r#type: wrapped_function_type::Type::WriteLocal as i32,
+                        oplog_index: None,
+                    }
+                }
+                PublicWrappedFunctionType::ReadRemote(_) => {
+                    golem_api_grpc::proto::golem::worker::WrappedFunctionType {
+                        r#type: wrapped_function_type::Type::ReadRemote as i32,
+                        oplog_index: None,
+                    }
+                }
+                PublicWrappedFunctionType::WriteRemote(_) => {
+                    golem_api_grpc::proto::golem::worker::WrappedFunctionType {
+                        r#type: wrapped_function_type::Type::WriteRemote as i32,
+                        oplog_index: None,
+                    }
+                }
+                PublicWrappedFunctionType::WriteRemoteBatched(parameters) => {
+                    golem_api_grpc::proto::golem::worker::WrappedFunctionType {
+                        r#type: wrapped_function_type::Type::WriteRemoteBatched as i32,
+                        oplog_index: parameters.index.map(|index| index.into()),
+                    }
+                }
+            }
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::worker::RetryPolicy> for PublicRetryConfig {
+        type Error = String;
+
+        fn try_from(
+            value: golem_api_grpc::proto::golem::worker::RetryPolicy,
+        ) -> Result<Self, Self::Error> {
+            Ok(PublicRetryConfig {
+                max_attempts: value.max_attempts,
+                min_delay: Duration::from_millis(value.min_delay),
+                max_delay: Duration::from_millis(value.max_delay),
+                multiplier: value.multiplier,
+                max_jitter_factor: value.max_jitter_factor,
+            })
+        }
+    }
+
+    impl From<PublicRetryConfig> for golem_api_grpc::proto::golem::worker::RetryPolicy {
+        fn from(value: PublicRetryConfig) -> Self {
+            golem_api_grpc::proto::golem::worker::RetryPolicy {
+                max_attempts: value.max_attempts,
+                min_delay: value.min_delay.as_millis() as u64,
+                max_delay: value.max_delay.as_millis() as u64,
+                multiplier: value.multiplier,
+                max_jitter_factor: value.max_jitter_factor,
+            }
+        }
+    }
+
+    impl From<golem_api_grpc::proto::golem::worker::OplogLogLevel> for LogLevel {
+        fn from(value: golem_api_grpc::proto::golem::worker::OplogLogLevel) -> Self {
+            match value {
+                golem_api_grpc::proto::golem::worker::OplogLogLevel::OplogTrace => LogLevel::Trace,
+                golem_api_grpc::proto::golem::worker::OplogLogLevel::OplogDebug => LogLevel::Debug,
+                golem_api_grpc::proto::golem::worker::OplogLogLevel::OplogInfo => LogLevel::Info,
+                golem_api_grpc::proto::golem::worker::OplogLogLevel::OplogWarn => LogLevel::Warn,
+                golem_api_grpc::proto::golem::worker::OplogLogLevel::OplogError => LogLevel::Error,
+                golem_api_grpc::proto::golem::worker::OplogLogLevel::OplogCritical => {
+                    LogLevel::Critical
+                }
+                golem_api_grpc::proto::golem::worker::OplogLogLevel::OplogStderr => {
+                    LogLevel::Stderr
+                }
+                golem_api_grpc::proto::golem::worker::OplogLogLevel::OplogStdout => {
+                    LogLevel::Stdout
+                }
+            }
+        }
+    }
+
+    impl From<LogLevel> for golem_api_grpc::proto::golem::worker::OplogLogLevel {
+        fn from(value: LogLevel) -> Self {
+            match value {
+                LogLevel::Trace => golem_api_grpc::proto::golem::worker::OplogLogLevel::OplogTrace,
+                LogLevel::Debug => golem_api_grpc::proto::golem::worker::OplogLogLevel::OplogDebug,
+                LogLevel::Info => golem_api_grpc::proto::golem::worker::OplogLogLevel::OplogInfo,
+                LogLevel::Warn => golem_api_grpc::proto::golem::worker::OplogLogLevel::OplogWarn,
+                LogLevel::Error => golem_api_grpc::proto::golem::worker::OplogLogLevel::OplogError,
+                LogLevel::Critical => {
+                    golem_api_grpc::proto::golem::worker::OplogLogLevel::OplogCritical
+                }
+                LogLevel::Stderr => {
+                    golem_api_grpc::proto::golem::worker::OplogLogLevel::OplogStderr
+                }
+                LogLevel::Stdout => {
+                    golem_api_grpc::proto::golem::worker::OplogLogLevel::OplogStdout
+                }
+            }
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerInvocation> for PublicWorkerInvocation {
+        type Error = String;
+
+        fn try_from(
+            value: golem_api_grpc::proto::golem::worker::WorkerInvocation,
+        ) -> Result<Self, Self::Error> {
+            match value.invocation.ok_or("Missing invocation field")? {
+                worker_invocation::Invocation::ExportedFunction(exported_function) => Ok(
+                    PublicWorkerInvocation::ExportedFunction(ExportedFunctionParameters {
+                        idempotency_key: exported_function
+                            .idempotency_key
+                            .ok_or("Missing idempotency_key field")?
+                            .into(),
+                        full_function_name: exported_function.function_name,
+                        function_input: if exported_function.valid_input {
+                            Some(
+                                exported_function
+                                    .input
+                                    .into_iter()
+                                    .map(TryInto::try_into)
+                                    .collect::<Result<Vec<ValueAndType>, String>>()?,
+                            )
+                        } else {
+                            None
+                        },
+                    }),
+                ),
+                worker_invocation::Invocation::ManualUpdate(manual_update) => Ok(
+                    PublicWorkerInvocation::ManualUpdate(ManualUpdateParameters {
+                        target_version: manual_update,
+                    }),
+                ),
+            }
+        }
+    }
+
+    impl TryFrom<PublicWorkerInvocation> for golem_api_grpc::proto::golem::worker::WorkerInvocation {
+        type Error = String;
+
+        fn try_from(value: PublicWorkerInvocation) -> Result<Self, Self::Error> {
+            Ok(match value {
+                PublicWorkerInvocation::ExportedFunction(exported_function) => {
+                    golem_api_grpc::proto::golem::worker::WorkerInvocation {
+                        invocation: Some(worker_invocation::Invocation::ExportedFunction(
+                            golem_api_grpc::proto::golem::worker::ExportedFunctionInvocationParameters {
+                                idempotency_key: Some(exported_function.idempotency_key.into()),
+                                function_name: exported_function.full_function_name,
+                                valid_input: exported_function.function_input.is_some(),
+                                input: exported_function
+                                    .function_input
+                                    .unwrap_or_default()
+                                    .into_iter()
+                                    .map(|input| input.try_into().map_err(
+                                        |errors: Vec<String>| {
+                                            format!("Failed to convert request: {}", errors.join(", "))
+                                        },
+                                    )).collect::<Result<Vec<_>, _>>()?,
+                            },
+                        )),
+                    }
+                }
+                PublicWorkerInvocation::ManualUpdate(manual_update) => {
+                    golem_api_grpc::proto::golem::worker::WorkerInvocation {
+                        invocation: Some(worker_invocation::Invocation::ManualUpdate(
+                            manual_update.target_version,
+                        )),
+                    }
+                }
+            })
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::worker::UpdateDescription> for PublicUpdateDescription {
+        type Error = String;
+
+        fn try_from(
+            value: golem_api_grpc::proto::golem::worker::UpdateDescription,
+        ) -> Result<Self, Self::Error> {
+            match value.description.ok_or("Missing description field")? {
+                golem_api_grpc::proto::golem::worker::update_description::Description::AutoUpdate(_) => {
+                    Ok(PublicUpdateDescription::Automatic(Empty {}))
+                }
+                golem_api_grpc::proto::golem::worker::update_description::Description::SnapshotBased(
+                    snapshot_based,
+                ) => Ok(PublicUpdateDescription::SnapshotBased(SnapshotBasedUpdateParameters {
+                    payload: snapshot_based.payload,
+                })),
+            }
+        }
+    }
+
+    impl From<PublicUpdateDescription> for golem_api_grpc::proto::golem::worker::UpdateDescription {
+        fn from(value: PublicUpdateDescription) -> Self {
+            match value {
+                PublicUpdateDescription::Automatic(_) => golem_api_grpc::proto::golem::worker::UpdateDescription {
+                    description: Some(
+                        golem_api_grpc::proto::golem::worker::update_description::Description::AutoUpdate(
+                            golem_api_grpc::proto::golem::common::Empty {},
+                        ),
+                    ),
+                },
+                PublicUpdateDescription::SnapshotBased(snapshot_based) => {
+                    golem_api_grpc::proto::golem::worker::UpdateDescription {
+                        description: Some(
+                            golem_api_grpc::proto::golem::worker::update_description::Description::SnapshotBased(
+                                golem_api_grpc::proto::golem::worker::SnapshotBasedUpdateParameters {
+                                    payload: snapshot_based.payload
+                                }
+                            ),
+                        ),
+                    }
+                }
+            }
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
+    use test_r::test;
+
+    use crate::model::public_oplog::{
         ChangeRetryPolicyParameters, CreateParameters, DescribeResourceParameters,
         EndRegionParameters, ErrorParameters, ExportedFunctionCompletedParameters,
         ExportedFunctionInvokedParameters, ExportedFunctionParameters, FailedUpdateParameters,
@@ -1719,23 +2453,25 @@ mod tests {
         PublicWrappedFunctionType, ResourceParameters, SnapshotBasedUpdateParameters,
         SuccessfulUpdateParameters, TimestampParameter,
     };
-    use crate::model::oplog::{LogLevel, OplogIndex, WorkerResourceId};
-    use crate::model::regions::OplogRegion;
     use crate::model::{
         AccountId, ComponentId, Empty, IdempotencyKey, PluginInstallationId, Timestamp, WorkerId,
     };
+    use std::collections::{BTreeMap, BTreeSet};
+    use uuid::Uuid;
+
+    use crate::model::oplog::{LogLevel, OplogIndex, WorkerResourceId};
+    use crate::model::regions::OplogRegion;
     use golem_wasm_ast::analysis::analysed_type::{field, list, r#enum, record, s16, str, u64};
     use golem_wasm_rpc::{Value, ValueAndType};
+    #[cfg(feature = "poem")]
     use poem_openapi::types::ToJSON;
-    use std::collections::{BTreeMap, BTreeSet};
-    use test_r::test;
-    use uuid::Uuid;
 
     fn rounded_ts(ts: Timestamp) -> Timestamp {
         Timestamp::from(ts.to_millis())
     }
 
     #[test]
+    #[cfg(feature = "poem")]
     fn create_serialization_poem_serde_equivalence() {
         let entry = PublicOplogEntry::Create(CreateParameters {
             timestamp: rounded_ts(Timestamp::now_utc()),
@@ -1776,6 +2512,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "poem")]
     fn imported_function_invoked_serialization_poem_serde_equivalence() {
         let entry = PublicOplogEntry::ImportedFunctionInvoked(ImportedFunctionInvokedParameters {
             timestamp: rounded_ts(Timestamp::now_utc()),
@@ -1796,6 +2533,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "poem")]
     fn exported_function_invoked_serialization_poem_serde_equivalence() {
         let entry = PublicOplogEntry::ExportedFunctionInvoked(ExportedFunctionInvokedParameters {
             timestamp: rounded_ts(Timestamp::now_utc()),
@@ -1818,6 +2556,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "poem")]
     fn exported_function_completed_serialization_poem_serde_equivalence() {
         let entry =
             PublicOplogEntry::ExportedFunctionCompleted(ExportedFunctionCompletedParameters {
@@ -1834,6 +2573,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "poem")]
     fn suspend_serialization_poem_serde_equivalence() {
         let entry = PublicOplogEntry::Suspend(TimestampParameter {
             timestamp: rounded_ts(Timestamp::now_utc()),
@@ -1844,6 +2584,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "poem")]
     fn error_serialization_poem_serde_equivalence() {
         let entry = PublicOplogEntry::Error(ErrorParameters {
             timestamp: rounded_ts(Timestamp::now_utc()),
@@ -1855,6 +2596,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "poem")]
     fn no_op_serialization_poem_serde_equivalence() {
         let entry = PublicOplogEntry::NoOp(TimestampParameter {
             timestamp: rounded_ts(Timestamp::now_utc()),
@@ -1865,6 +2607,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "poem")]
     fn jump_serialization_poem_serde_equivalence() {
         let entry = PublicOplogEntry::Jump(JumpParameters {
             timestamp: rounded_ts(Timestamp::now_utc()),
@@ -1879,6 +2622,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "poem")]
     fn interrupted_serialization_poem_serde_equivalence() {
         let entry = PublicOplogEntry::Interrupted(TimestampParameter {
             timestamp: rounded_ts(Timestamp::now_utc()),
@@ -1889,6 +2633,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "poem")]
     fn exited_serialization_poem_serde_equivalence() {
         let entry = PublicOplogEntry::Exited(TimestampParameter {
             timestamp: rounded_ts(Timestamp::now_utc()),
@@ -1899,6 +2644,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "poem")]
     fn change_retry_policy_serialization_poem_serde_equivalence() {
         let entry = PublicOplogEntry::ChangeRetryPolicy(ChangeRetryPolicyParameters {
             timestamp: rounded_ts(Timestamp::now_utc()),
@@ -1916,6 +2662,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "poem")]
     fn begin_atomic_region_serialization_poem_serde_equivalence() {
         let entry = PublicOplogEntry::BeginAtomicRegion(TimestampParameter {
             timestamp: rounded_ts(Timestamp::now_utc()),
@@ -1926,6 +2673,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "poem")]
     fn end_atomic_region_serialization_poem_serde_equivalence() {
         let entry = PublicOplogEntry::EndAtomicRegion(EndRegionParameters {
             timestamp: rounded_ts(Timestamp::now_utc()),
@@ -1937,6 +2685,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "poem")]
     fn begin_remote_write_serialization_poem_serde_equivalence() {
         let entry = PublicOplogEntry::BeginRemoteWrite(TimestampParameter {
             timestamp: rounded_ts(Timestamp::now_utc()),
@@ -1947,6 +2696,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "poem")]
     fn end_remote_write_serialization_poem_serde_equivalence() {
         let entry = PublicOplogEntry::EndRemoteWrite(EndRegionParameters {
             timestamp: rounded_ts(Timestamp::now_utc()),
@@ -1958,6 +2708,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "poem")]
     fn pending_worker_invocation_serialization_poem_serde_equivalence() {
         let entry = PublicOplogEntry::PendingWorkerInvocation(PendingWorkerInvocationParameters {
             timestamp: rounded_ts(Timestamp::now_utc()),
@@ -1982,6 +2733,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "poem")]
     fn pending_update_serialization_poem_serde_equivalence_1() {
         let entry = PublicOplogEntry::PendingUpdate(PendingUpdateParameters {
             timestamp: rounded_ts(Timestamp::now_utc()),
@@ -1996,6 +2748,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "poem")]
     fn pending_update_serialization_poem_serde_equivalence_2() {
         let entry = PublicOplogEntry::PendingUpdate(PendingUpdateParameters {
             timestamp: rounded_ts(Timestamp::now_utc()),
@@ -2008,6 +2761,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "poem")]
     fn successful_update_serialization_poem_serde_equivalence() {
         let entry = PublicOplogEntry::SuccessfulUpdate(SuccessfulUpdateParameters {
             timestamp: rounded_ts(Timestamp::now_utc()),
@@ -2028,6 +2782,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "poem")]
     fn failed_update_serialization_poem_serde_equivalence_1() {
         let entry = PublicOplogEntry::FailedUpdate(FailedUpdateParameters {
             timestamp: rounded_ts(Timestamp::now_utc()),
@@ -2040,6 +2795,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "poem")]
     fn failed_update_serialization_poem_serde_equivalence_2() {
         let entry = PublicOplogEntry::FailedUpdate(FailedUpdateParameters {
             timestamp: rounded_ts(Timestamp::now_utc()),
@@ -2052,6 +2808,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "poem")]
     fn grow_memory_serialization_poem_serde_equivalence() {
         let entry = PublicOplogEntry::GrowMemory(GrowMemoryParameters {
             timestamp: rounded_ts(Timestamp::now_utc()),
@@ -2063,6 +2820,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "poem")]
     fn create_resource_serialization_poem_serde_equivalence() {
         let entry = PublicOplogEntry::CreateResource(ResourceParameters {
             timestamp: rounded_ts(Timestamp::now_utc()),
@@ -2075,6 +2833,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "poem")]
     fn drop_resource_serialization_poem_serde_equivalence() {
         let entry = PublicOplogEntry::DropResource(ResourceParameters {
             timestamp: rounded_ts(Timestamp::now_utc()),
@@ -2087,6 +2846,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "poem")]
     fn describe_resource_serialization_poem_serde_equivalence() {
         let entry = PublicOplogEntry::DescribeResource(DescribeResourceParameters {
             timestamp: rounded_ts(Timestamp::now_utc()),
@@ -2110,6 +2870,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "poem")]
     fn log_serialization_poem_serde_equivalence() {
         let entry = PublicOplogEntry::Log(LogParameters {
             timestamp: rounded_ts(Timestamp::now_utc()),
@@ -2123,6 +2884,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "poem")]
     fn restart_serialization_poem_serde_equivalence() {
         let entry = PublicOplogEntry::Restart(TimestampParameter {
             timestamp: rounded_ts(Timestamp::now_utc()),

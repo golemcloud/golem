@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -94,10 +94,13 @@ impl ShardManagerEnvVars for GolemEnvVars {
         let mut builder = EnvVarBuilder::golem_service(verbosity)
             .with("GOLEM_SHARD_MANAGER_PORT", grpc_port.to_string())
             .with("GOLEM__HTTP_PORT", http_port.to_string())
-            .with("GOLEM__REDIS__HOST", redis.private_host())
-            .with_str("GOLEM__REDIS__KEY_PREFIX", redis.prefix())
-            .with("GOLEM__REDIS__PORT", redis.private_port().to_string())
-            .with("REDIS__HOST", redis.private_host());
+            .with("GOLEM__PERSISTENCE__TYPE", "Redis".to_string())
+            .with("GOLEM__PERSISTENCE__CONFIG__HOST", redis.private_host())
+            .with(
+                "GOLEM__PERSISTENCE__CONFIG__PORT",
+                redis.private_port().to_string(),
+            )
+            .with_str("GOLEM__PERSISTENCE__CONFIG__KEY_PREFIX", redis.prefix());
 
         if let Some(number_of_shards) = number_of_shards_override {
             builder = builder.with("GOLEM__NUMBER_OF_SHARDS", number_of_shards.to_string());

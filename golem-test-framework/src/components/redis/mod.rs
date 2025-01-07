@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -75,7 +75,7 @@ pub trait Redis {
 
     fn flush_db(&self, db: u16) {
         let mut connection = self.get_connection(db);
-        redis::cmd("FLUSHDB").execute(&mut connection)
+        redis::cmd("FLUSHDB").exec(&mut connection).unwrap()
     }
 }
 

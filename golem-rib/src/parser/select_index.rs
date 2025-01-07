@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use bigdecimal::ToPrimitive;
 use combine::parser::char::{char as char_, spaces};
 use combine::{attempt, choice, many1, optional, ParseError, Parser};
 
@@ -48,6 +49,7 @@ where
 }
 
 mod internal {
+    use bigdecimal::BigDecimal;
     use combine::parser::char::char as char_;
 
     use crate::parser::number::number;
@@ -90,10 +92,10 @@ mod internal {
     {
         number().map(|s: Expr| match s {
             Expr::Number(number, _, _) => {
-                if number.value < 0.0 {
+                if number.value < BigDecimal::from(0) {
                     panic!("Cannot use a negative number to index",)
                 } else {
-                    number.value as usize
+                    number.value.to_usize().unwrap()
                 }
             }
             _ => panic!("Cannot use a float number to index",),

@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,7 +24,7 @@ use crate::Tracing;
 use assert2::assert;
 use golem_cli::model::component::ComponentView;
 use golem_cli::model::Format;
-use golem_client::model::{ApiDeployment, HttpApiDefinitionWithTypeInfo};
+use golem_client::model::{ApiDeployment, HttpApiDefinitionResponseData};
 use golem_common::model::TargetWorkerId;
 use golem_common::uri::oss::urn::{ComponentUrn, WorkerUrn};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
@@ -285,6 +285,7 @@ fn text_component_list(
 ) -> Result<(), anyhow::Error> {
     let component_name = format!("{name: <9} text component list");
     let env_service = deps.component_directory().join("environment-service.wasm");
+    let expected_size = std::fs::metadata(&env_service)?.len();
     let cfg = &cli.config;
     let component: ComponentView = cli.run(&[
         "component",
@@ -306,11 +307,12 @@ fn text_component_list(
         +----------------------------------------------------+-------------------------------+---------+-------+---------------+
         | URN                                                | Name                          | Version | Size  | Exports count |
         +----------------------------------------------------+-------------------------------+---------+-------+---------------+
-        | {} | {} |       0 | 71228 |             2 |
+        | {} | {} |       0 | {} |             2 |
         +----------------------------------------------------+-------------------------------+---------+-------+---------------+
         ",
         component.component_urn,
         component_name,
+        expected_size
     );
 
     assert_eq!(strip_ansi_escapes::strip_str(list_res), expected);
@@ -569,7 +571,8 @@ fn text_api_definition_add(
     let component_name = format!("text_api_definition_add{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();
-    let def = native_api_definition_request(&component_name, &component_id);
+    let path = "/{user-id}/get-cart-contents";
+    let def = native_api_definition_request(&component_name, &component_id, None, path);
     let path = make_json_file(&def.id, &def)?;
 
     let res = cli.with_format(Format::Text).run_string(&[
@@ -596,10 +599,12 @@ fn text_api_definition_update(
     let component_name = format!("text_api_definition_update{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();
-    let def = native_api_definition_request(&component_name, &component_id);
+    let path = "/{user-id}/get-cart-contents";
+
+    let def = native_api_definition_request(&component_name, &component_id, None, path);
     let path = make_json_file(&def.id, &def)?;
 
-    let _: HttpApiDefinitionWithTypeInfo =
+    let _: HttpApiDefinitionResponseData =
         cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
     let res = cli.with_format(Format::Text).run_string(&[
         "api-definition",
@@ -625,11 +630,12 @@ fn text_api_definition_list(
     let component_name = format!("text_api_definition_list{name:_>9}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();
-    let def = native_api_definition_request(&component_name, &component_id);
+    let path = "/{user-id}/get-cart-contents";
+    let def = native_api_definition_request(&component_name, &component_id, None, path);
     let path = make_json_file(&def.id, &def)?;
     let cfg = &cli.config;
 
-    let _: HttpApiDefinitionWithTypeInfo =
+    let _: HttpApiDefinitionResponseData =
         cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
 
     let res = cli.with_format(Format::Text).run_string(&[
@@ -657,10 +663,11 @@ fn text_api_definition_get(
     let component_name = format!("text_api_definition_get{name:_>9}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();
-    let def = native_api_definition_request(&component_name, &component_id);
+    let path = "/{user-id}/get-cart-contents";
+    let def = native_api_definition_request(&component_name, &component_id, None, path);
     let path = make_json_file(&def.id, &def)?;
 
-    let _: HttpApiDefinitionWithTypeInfo =
+    let _: HttpApiDefinitionResponseData =
         cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
 
     let cfg = &cli.config;
@@ -689,11 +696,16 @@ fn text_api_definition_get(
 fn text_api_deployment_deploy(
     (deps, name, cli): (&EnvBasedTestDependencies, String, CliLive),
 ) -> Result<(), anyhow::Error> {
+    let path = "/{user-id}/get-cart-contents";
+
     let definition = crate::api_deployment::make_definition(
         deps,
         &cli,
         &format!("text_api_deployment_deploy{name}"),
+        None,
+        path,
     )?;
+
     let host = format!("text-deploy-host{name}");
     let cfg = &cli.config;
 
@@ -724,11 +736,16 @@ fn text_api_deployment_deploy(
 fn text_api_deployment_get(
     (deps, name, cli): (&EnvBasedTestDependencies, String, CliLive),
 ) -> Result<(), anyhow::Error> {
+    let path = "/{user-id}/get-cart-contents";
+
     let definition = crate::api_deployment::make_definition(
         deps,
         &cli,
         &format!("text_api_deployment_get{name}"),
+        None,
+        path,
     )?;
+
     let host = format!("text-get-host{name}");
     let cfg = &cli.config;
 
@@ -765,10 +782,14 @@ fn text_api_deployment_get(
 fn text_api_deployment_list(
     (deps, name, cli): (&EnvBasedTestDependencies, String, CliLive),
 ) -> Result<(), anyhow::Error> {
+    let path = "/{user-id}/get-cart-contents";
+
     let definition = crate::api_deployment::make_definition(
         deps,
         &cli,
         &format!("text_api_deployment_list{name:_>9}"),
+        None,
+        path,
     )?;
     let host = format!("text-list-host{name:->9}");
     let cfg = &cli.config;

@@ -5,9 +5,11 @@ package golem.component;
 import "golem/component/export.proto";
 import "golem/component/producers.proto";
 import "golem/component/linear_memory.proto";
+import "golem/component/dynamic_linked_instance.proto";
 
 message ComponentMetadata {
   repeated Export exports = 1;
   repeated Producers producers = 2;
   repeated LinearMemory memories = 3;
+  map<string, golem.component.DynamicLinkedInstance> dynamic_linking = 4;
 }

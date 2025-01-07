@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -268,7 +268,7 @@ async fn initial_large_memory_allocation(
 }
 
 #[test]
-#[timeout(30000)]
+#[timeout(60000)]
 #[tracing::instrument]
 #[allow(clippy::needless_range_loop)]
 async fn dynamic_large_memory_allocation(

@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::golem::GetWorkersEntry;
 use crate::durable_host::DurableWorkerCtx;
 use crate::metrics::wasm::record_host_function_call;
 use crate::model::public_oplog::{
@@ -20,22 +19,22 @@ use crate::model::public_oplog::{
 };
 use crate::preview2::golem;
 use crate::preview2::golem::api0_2_0::host::GetWorkers;
-use crate::preview2::golem::api1_1_0_rc1::host::{
+use crate::preview2::golem::api1_1_0::host::{
     ComponentId, ComponentVersion, FilterComparator, Host, HostGetWorkers, OplogIndex,
     PersistenceLevel, PromiseId, RetryPolicy, StringFilterComparator, UpdateMode, Uuid,
     WorkerAllFilter, WorkerAnyFilter, WorkerCreatedAtFilter, WorkerEnvFilter, WorkerId,
     WorkerMetadata, WorkerNameFilter, WorkerPropertyFilter, WorkerStatus, WorkerStatusFilter,
     WorkerVersionFilter,
 };
-use crate::preview2::golem::api1_1_0_rc1::oplog::{
+use crate::preview2::golem::api1_1_0::oplog::{
     Host as OplogHost, HostGetOplog, HostSearchOplog, OplogEntry, SearchOplog,
 };
 use crate::services::{HasOplogService, HasPlugins};
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use async_trait::async_trait;
-use golem_common::config::RetryConfig;
 use golem_common::model::OwnedWorkerId;
+use golem_common::model::RetryConfig;
 use std::time::Duration;
 use wasmtime::component::Resource;
 use wasmtime_wasi::WasiView;
@@ -66,8 +65,8 @@ impl<Ctx: WorkerCtx> HostGetWorkers for DurableWorkerCtx<Ctx> {
             .map(|x| x.map(|x| x.into_iter().map(|x| x.into()).collect()))
     }
 
-    fn drop(&mut self, rep: Resource<GetWorkers>) -> anyhow::Result<()> {
-        golem::api0_2_0::host::HostGetWorkers::drop(self, rep)
+    async fn drop(&mut self, rep: Resource<GetWorkers>) -> anyhow::Result<()> {
+        golem::api0_2_0::host::HostGetWorkers::drop(self, rep).await
     }
 }
 
@@ -188,10 +187,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
     async fn new(
         &mut self,
-        worker_id: crate::preview2::golem::api1_1_0_rc1::oplog::WorkerId,
-        start: crate::preview2::golem::api1_1_0_rc1::oplog::OplogIndex,
+        worker_id: crate::preview2::golem::api1_1_0::oplog::WorkerId,
+        start: crate::preview2::golem::api1_1_0::oplog::OplogIndex,
     ) -> anyhow::Result<Resource<GetOplogEntry>> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("golem::api::get-oplog", "new");
 
         let account_id = self.owned_worker_id.account_id();
@@ -211,7 +209,6 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
         &mut self,
         self_: Resource<GetOplogEntry>,
     ) -> anyhow::Result<Option<Vec<OplogEntry>>> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("golem::api::get-oplog", "get-next");
 
         let component_service = self.state.component_service.clone();
@@ -249,7 +246,7 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
         }
     }
 
-    fn drop(&mut self, rep: Resource<GetOplogEntry>) -> anyhow::Result<()> {
+    async fn drop(&mut self, rep: Resource<GetOplogEntry>) -> anyhow::Result<()> {
         record_host_function_call("golem::api::get-oplog", "drop");
         self.as_wasi_view().table().delete(rep)?;
         Ok(())
@@ -293,10 +290,9 @@ impl crate::durable_host::golem::v11::GetOplogEntry {
 impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
     async fn new(
         &mut self,
-        worker_id: golem::api1_1_0_rc1::oplog::WorkerId,
+        worker_id: golem::api1_1_0::oplog::WorkerId,
         text: String,
     ) -> anyhow::Result<Resource<SearchOplog>> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("golem::api::search-oplog", "new");
 
         let account_id = self.owned_worker_id.account_id();
@@ -316,8 +312,7 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
     async fn get_next(
         &mut self,
         self_: Resource<SearchOplog>,
-    ) -> anyhow::Result<Option<Vec<(golem::api1_1_0_rc1::oplog::OplogIndex, OplogEntry)>>> {
-        let _permit = self.begin_async_host_function().await?;
+    ) -> anyhow::Result<Option<Vec<(golem::api1_1_0::oplog::OplogIndex, OplogEntry)>>> {
         record_host_function_call("golem::api::search-oplog", "get-next");
 
         let component_service = self.state.component_service.clone();
@@ -349,7 +344,7 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
                     .entries
                     .into_iter()
                     .map(|(idx, entry)| {
-                        let idx: golem::api1_1_0_rc1::oplog::OplogIndex = idx.into();
+                        let idx: golem::api1_1_0::oplog::OplogIndex = idx.into();
                         let entry: OplogEntry = entry.into();
                         (idx, entry)
                     })
@@ -360,7 +355,7 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
         }
     }
 
-    fn drop(&mut self, rep: Resource<SearchOplog>) -> anyhow::Result<()> {
+    async fn drop(&mut self, rep: Resource<SearchOplog>) -> anyhow::Result<()> {
         record_host_function_call("golem::api::search-oplog", "drop");
         self.as_wasi_view().table().delete(rep)?;
         Ok(())
@@ -405,172 +400,6 @@ impl SearchOplogEntry {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> HostGetWorkers for &mut DurableWorkerCtx<Ctx> {
-    async fn new(
-        &mut self,
-        component_id: ComponentId,
-        filter: Option<WorkerAnyFilter>,
-        precise: bool,
-    ) -> anyhow::Result<Resource<GetWorkersEntry>> {
-        HostGetWorkers::new(*self, component_id, filter, precise).await
-    }
-
-    async fn get_next(
-        &mut self,
-        self_: Resource<GetWorkersEntry>,
-    ) -> anyhow::Result<Option<Vec<WorkerMetadata>>> {
-        HostGetWorkers::get_next(*self, self_).await
-    }
-
-    fn drop(&mut self, rep: Resource<GetWorkersEntry>) -> anyhow::Result<()> {
-        HostGetWorkers::drop(*self, rep)
-    }
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {
-    async fn create_promise(&mut self) -> anyhow::Result<PromiseId> {
-        (*self).create_promise().await
-    }
-
-    async fn await_promise(&mut self, promise_id: PromiseId) -> anyhow::Result<Vec<u8>> {
-        (*self).await_promise(promise_id).await
-    }
-
-    async fn complete_promise(
-        &mut self,
-        promise_id: PromiseId,
-        data: Vec<u8>,
-    ) -> anyhow::Result<bool> {
-        (*self).complete_promise(promise_id, data).await
-    }
-
-    async fn delete_promise(&mut self, promise_id: PromiseId) -> anyhow::Result<()> {
-        (*self).delete_promise(promise_id).await
-    }
-
-    async fn get_oplog_index(&mut self) -> anyhow::Result<OplogIndex> {
-        (*self).get_oplog_index().await
-    }
-
-    async fn set_oplog_index(&mut self, oplog_idx: OplogIndex) -> anyhow::Result<()> {
-        (*self).set_oplog_index(oplog_idx).await
-    }
-
-    async fn oplog_commit(&mut self, replicas: u8) -> anyhow::Result<()> {
-        (*self).oplog_commit(replicas).await
-    }
-
-    async fn mark_begin_operation(&mut self) -> anyhow::Result<OplogIndex> {
-        (*self).mark_begin_operation().await
-    }
-
-    async fn mark_end_operation(&mut self, begin: OplogIndex) -> anyhow::Result<()> {
-        (*self).mark_end_operation(begin).await
-    }
-
-    async fn get_retry_policy(&mut self) -> anyhow::Result<RetryPolicy> {
-        (*self).get_retry_policy().await
-    }
-
-    async fn set_retry_policy(&mut self, new_retry_policy: RetryPolicy) -> anyhow::Result<()> {
-        (*self).set_retry_policy(new_retry_policy).await
-    }
-
-    async fn get_oplog_persistence_level(&mut self) -> anyhow::Result<PersistenceLevel> {
-        (*self).get_oplog_persistence_level().await
-    }
-
-    async fn set_oplog_persistence_level(
-        &mut self,
-        new_persistence_level: PersistenceLevel,
-    ) -> anyhow::Result<()> {
-        (*self)
-            .set_oplog_persistence_level(new_persistence_level)
-            .await
-    }
-
-    async fn get_idempotence_mode(&mut self) -> anyhow::Result<bool> {
-        (*self).get_idempotence_mode().await
-    }
-
-    async fn set_idempotence_mode(&mut self, idempotent: bool) -> anyhow::Result<()> {
-        (*self).set_idempotence_mode(idempotent).await
-    }
-
-    async fn generate_idempotency_key(&mut self) -> anyhow::Result<Uuid> {
-        (*self).generate_idempotency_key().await
-    }
-
-    async fn update_worker(
-        &mut self,
-        worker_id: WorkerId,
-        target_version: ComponentVersion,
-        mode: UpdateMode,
-    ) -> anyhow::Result<()> {
-        (*self).update_worker(worker_id, target_version, mode).await
-    }
-
-    async fn get_self_metadata(&mut self) -> anyhow::Result<WorkerMetadata> {
-        (*self).get_self_metadata().await
-    }
-
-    async fn get_worker_metadata(
-        &mut self,
-        worker_id: WorkerId,
-    ) -> anyhow::Result<Option<WorkerMetadata>> {
-        (*self).get_worker_metadata(worker_id).await
-    }
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> HostGetOplog for &mut DurableWorkerCtx<Ctx> {
-    async fn new(
-        &mut self,
-        worker_id: golem::api1_1_0_rc1::oplog::WorkerId,
-        start: golem::api1_1_0_rc1::oplog::OplogIndex,
-    ) -> anyhow::Result<Resource<GetOplogEntry>> {
-        HostGetOplog::new(*self, worker_id, start).await
-    }
-
-    async fn get_next(
-        &mut self,
-        self_: Resource<GetOplogEntry>,
-    ) -> anyhow::Result<Option<Vec<OplogEntry>>> {
-        HostGetOplog::get_next(*self, self_).await
-    }
-
-    fn drop(&mut self, rep: Resource<GetOplogEntry>) -> anyhow::Result<()> {
-        HostGetOplog::drop(*self, rep)
-    }
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> HostSearchOplog for &mut DurableWorkerCtx<Ctx> {
-    async fn new(
-        &mut self,
-        worker_id: golem::api1_1_0_rc1::oplog::WorkerId,
-        text: String,
-    ) -> anyhow::Result<Resource<SearchOplog>> {
-        HostSearchOplog::new(*self, worker_id, text).await
-    }
-
-    async fn get_next(
-        &mut self,
-        self_: Resource<SearchOplog>,
-    ) -> anyhow::Result<Option<Vec<(golem::api1_1_0_rc1::oplog::OplogIndex, OplogEntry)>>> {
-        HostSearchOplog::get_next(*self, self_).await
-    }
-
-    fn drop(&mut self, rep: Resource<SearchOplog>) -> anyhow::Result<()> {
-        HostSearchOplog::drop(*self, rep)
-    }
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> OplogHost for &mut DurableWorkerCtx<Ctx> {}
 
 impl From<Uuid> for golem::api0_2_0::host::Uuid {
     fn from(value: Uuid) -> Self {
@@ -877,17 +706,17 @@ impl From<WorkerAnyFilter> for golem::api0_2_0::host::WorkerAnyFilter {
     }
 }
 
-impl From<golem_common::model::WorkerId> for golem::api1_1_0_rc1::host::WorkerId {
+impl From<golem_common::model::WorkerId> for golem::api1_1_0::host::WorkerId {
     fn from(worker_id: golem_common::model::WorkerId) -> Self {
-        golem::api1_1_0_rc1::host::WorkerId {
+        golem::api1_1_0::host::WorkerId {
             component_id: worker_id.component_id.into(),
             worker_name: worker_id.worker_name,
         }
     }
 }
 
-impl From<golem::api1_1_0_rc1::host::WorkerId> for golem_common::model::WorkerId {
-    fn from(host: golem::api1_1_0_rc1::host::WorkerId) -> Self {
+impl From<golem::api1_1_0::host::WorkerId> for golem_common::model::WorkerId {
+    fn from(host: golem::api1_1_0::host::WorkerId) -> Self {
         Self {
             component_id: host.component_id.into(),
             worker_name: host.worker_name,
@@ -895,8 +724,8 @@ impl From<golem::api1_1_0_rc1::host::WorkerId> for golem_common::model::WorkerId
     }
 }
 
-impl From<golem::api1_1_0_rc1::host::ComponentId> for golem_common::model::ComponentId {
-    fn from(host: golem::api1_1_0_rc1::host::ComponentId) -> Self {
+impl From<golem::api1_1_0::host::ComponentId> for golem_common::model::ComponentId {
+    fn from(host: golem::api1_1_0::host::ComponentId) -> Self {
         let high_bits = host.uuid.high_bits;
         let low_bits = host.uuid.low_bits;
 
@@ -904,12 +733,12 @@ impl From<golem::api1_1_0_rc1::host::ComponentId> for golem_common::model::Compo
     }
 }
 
-impl From<golem_common::model::ComponentId> for golem::api1_1_0_rc1::host::ComponentId {
+impl From<golem_common::model::ComponentId> for golem::api1_1_0::host::ComponentId {
     fn from(component_id: golem_common::model::ComponentId) -> Self {
         let (high_bits, low_bits) = component_id.0.as_u64_pair();
 
-        golem::api1_1_0_rc1::host::ComponentId {
-            uuid: golem::api1_1_0_rc1::host::Uuid {
+        golem::api1_1_0::host::ComponentId {
+            uuid: golem::api1_1_0::host::Uuid {
                 high_bits,
                 low_bits,
             },
@@ -917,17 +746,17 @@ impl From<golem_common::model::ComponentId> for golem::api1_1_0_rc1::host::Compo
     }
 }
 
-impl From<golem_common::model::PromiseId> for golem::api1_1_0_rc1::host::PromiseId {
+impl From<golem_common::model::PromiseId> for golem::api1_1_0::host::PromiseId {
     fn from(promise_id: golem_common::model::PromiseId) -> Self {
-        golem::api1_1_0_rc1::host::PromiseId {
+        golem::api1_1_0::host::PromiseId {
             worker_id: promise_id.worker_id.into(),
             oplog_idx: promise_id.oplog_idx.into(),
         }
     }
 }
 
-impl From<golem::api1_1_0_rc1::host::PromiseId> for golem_common::model::PromiseId {
-    fn from(host: golem::api1_1_0_rc1::host::PromiseId) -> Self {
+impl From<golem::api1_1_0::host::PromiseId> for golem_common::model::PromiseId {
+    fn from(host: golem::api1_1_0::host::PromiseId) -> Self {
         Self {
             worker_id: host.worker_id.into(),
             oplog_idx: golem_common::model::oplog::OplogIndex::from_u64(host.oplog_idx),
@@ -935,7 +764,7 @@ impl From<golem::api1_1_0_rc1::host::PromiseId> for golem_common::model::Promise
     }
 }
 
-impl From<&RetryConfig> for crate::preview2::golem::api1_1_0_rc1::host::RetryPolicy {
+impl From<&RetryConfig> for crate::preview2::golem::api1_1_0::host::RetryPolicy {
     fn from(value: &RetryConfig) -> Self {
         Self {
             max_attempts: value.max_attempts,

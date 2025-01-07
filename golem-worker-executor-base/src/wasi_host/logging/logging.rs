@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,12 +14,12 @@
 
 use async_trait::async_trait;
 use tracing::debug;
-use wasmtime_wasi::WasiView;
+use wasmtime_wasi::{WasiImpl, WasiView};
 
 use crate::preview2::wasi::logging::logging::{Host, Level};
 
 #[async_trait]
-impl<T: WasiView> Host for T {
+impl<T: WasiView> Host for WasiImpl<T> {
     async fn log(&mut self, level: Level, context: String, message: String) -> anyhow::Result<()> {
         debug!(
             "logging::logging::log called: {:?} [{}] {}",

@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,7 +24,6 @@ use crate::workerctx::WorkerCtx;
 #[async_trait]
 impl<Ctx: WorkerCtx> HostError for DurableWorkerCtx<Ctx> {
     async fn trace(&mut self, self_: Resource<Error>) -> anyhow::Result<String> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("keyvalue::wasi_cloud_error", "trace");
         let trace = self
             .as_wasi_view()
@@ -35,7 +34,7 @@ impl<Ctx: WorkerCtx> HostError for DurableWorkerCtx<Ctx> {
         Ok(trace)
     }
 
-    fn drop(&mut self, rep: Resource<Error>) -> anyhow::Result<()> {
+    async fn drop(&mut self, rep: Resource<Error>) -> anyhow::Result<()> {
         record_host_function_call("keyvalue::wasi_cloud_error", "drop_error");
         self.as_wasi_view().table().delete::<ErrorEntry>(rep)?;
         Ok(())
@@ -44,20 +43,6 @@ impl<Ctx: WorkerCtx> HostError for DurableWorkerCtx<Ctx> {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> HostError for &mut DurableWorkerCtx<Ctx> {
-    async fn trace(&mut self, self_: Resource<Error>) -> anyhow::Result<String> {
-        (*self).trace(self_).await
-    }
-
-    fn drop(&mut self, rep: Resource<Error>) -> anyhow::Result<()> {
-        (*self).drop(rep)
-    }
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {}
 
 pub struct ErrorEntry {
     trace: String,

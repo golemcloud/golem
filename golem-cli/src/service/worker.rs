@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -26,20 +26,20 @@ use crate::model::{
 };
 use crate::service::component::ComponentService;
 use async_trait::async_trait;
-use golem_client::model::{AnalysedType, InvokeParameters, InvokeResult, ScanCursor, WorkerFilter};
-use golem_common::model::{StringFilterComparator, TargetWorkerId, WorkerNameFilter};
+use golem_client::model::{AnalysedType, InvokeParameters, InvokeResult, ScanCursor};
+use golem_common::model::TargetWorkerId;
 use golem_common::uri::oss::uri::{ComponentUri, WorkerUri};
 use golem_common::uri::oss::url::{ComponentUrl, WorkerUrl};
 use golem_common::uri::oss::urn::{ComponentUrn, WorkerUrn};
 use golem_wasm_ast::analysis::{AnalysedExport, AnalysedFunction, AnalysedInstance};
 use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
+use golem_wasm_rpc::parse_type_annotated_value;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::type_annotated_value_from_str;
 use itertools::Itertools;
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::task::JoinHandle;
-use tracing::{error, info};
+use tracing::{error, info, Instrument};
 use uuid::Uuid;
 
 #[async_trait]
@@ -216,37 +216,17 @@ async fn resolve_worker_component_version<ProjectContext: Send + Sync>(
     components: &(dyn ComponentService<ProjectContext = ProjectContext> + Send + Sync),
     worker_urn: WorkerUrn,
 ) -> Result<Option<Component>, GolemError> {
-    let TargetWorkerId {
-        component_id,
-        worker_name,
-    } = worker_urn.id;
+    if worker_urn.id.worker_name.is_some() {
+        let component_urn = ComponentUrn {
+            id: worker_urn.id.component_id.clone(),
+        };
 
-    if let Some(worker_name) = worker_name {
-        let component_urn = ComponentUrn { id: component_id };
-
-        let worker_meta = client
-            .find_metadata(
-                component_urn.clone(),
-                Some(WorkerFilter::Name(WorkerNameFilter {
-                    comparator: StringFilterComparator::Equal,
-                    value: worker_name,
-                })),
-                None,
-                Some(2),
-                Some(true),
-            )
-            .await?;
-
-        if worker_meta.workers.len() > 1 {
-            Err(GolemError(
-                "Multiple workers with the same name".to_string(),
-            ))
-        } else if let Some(worker) = worker_meta.workers.first() {
-            Ok(Some(
-                components
-                    .get_metadata(&component_urn, worker.component_version)
-                    .await?,
-            ))
+        let worker_metadata = client.get_metadata_opt(worker_urn).await?;
+        if let Some(worker_metadata) = worker_metadata {
+            let component_metadata = components
+                .get_metadata(&component_urn, worker_metadata.component_version)
+                .await?;
+            Ok(Some(component_metadata))
         } else {
             Ok(None)
         }
@@ -257,7 +237,7 @@ async fn resolve_worker_component_version<ProjectContext: Send + Sync>(
 
 fn parse_parameter(wave: &str, typ: &AnalysedType) -> Result<TypeAnnotatedValue, GolemError> {
     // Avoid converting from typ to AnalysedType
-    match type_annotated_value_from_str(typ, wave) {
+    match parse_type_annotated_value(typ, wave) {
         Ok(value) => Ok(value),
         Err(err) => Err(GolemError(format!(
             "Failed to parse wave parameter {wave}: {err:?}"
@@ -404,6 +384,7 @@ async fn to_invoke_result_view<ProjectContext: Send + Sync>(
     InvokeResultView::try_parse_or_json(res, &component, function)
 }
 
+#[allow(clippy::large_enum_variant)]
 enum AsyncComponentRequest {
     Empty,
     Resolved(Component),
@@ -498,14 +479,17 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
             let worker_client = self.client.clone();
             let component_service = self.components.clone();
             let worker_urn = worker_urn.clone();
-            AsyncComponentRequest::Async(tokio::spawn(async move {
-                resolve_worker_component_version(
-                    worker_client.as_ref(),
-                    component_service.as_ref(),
-                    worker_urn,
-                )
-                .await
-            }))
+            AsyncComponentRequest::Async(tokio::spawn(
+                async move {
+                    resolve_worker_component_version(
+                        worker_client.as_ref(),
+                        component_service.as_ref(),
+                        worker_urn,
+                    )
+                    .await
+                }
+                .in_current_span(),
+            ))
         } else {
             AsyncComponentRequest::Empty
         };

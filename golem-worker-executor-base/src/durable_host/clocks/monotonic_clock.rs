@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -55,12 +55,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let result = Host::resolution(&mut self.as_wasi_view()).await;
             durability.persist(self, (), result).await
         } else {
-            durability.replay(self)
+            durability.replay(self).await
         }
     }
 
     async fn subscribe_instant(&mut self, when: Instant) -> anyhow::Result<Resource<Pollable>> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("clocks::monotonic_clock", "subscribe_instant");
         Host::subscribe_instant(&mut self.as_wasi_view(), when).await
     }
@@ -86,24 +85,5 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         self.state.oplog.commit(CommitLevel::DurableOnly).await;
         let when = now.saturating_add(when);
         Host::subscribe_instant(&mut self.as_wasi_view(), when).await
-    }
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {
-    async fn now(&mut self) -> anyhow::Result<Instant> {
-        (*self).now().await
-    }
-
-    async fn resolution(&mut self) -> anyhow::Result<Instant> {
-        (*self).resolution().await
-    }
-
-    async fn subscribe_instant(&mut self, when: Instant) -> anyhow::Result<Resource<Pollable>> {
-        (*self).subscribe_instant(when).await
-    }
-
-    async fn subscribe_duration(&mut self, when: Duration) -> anyhow::Result<Resource<Pollable>> {
-        (*self).subscribe_duration(when).await
     }
 }

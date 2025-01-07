@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,9 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::protobuf::TypedRecord;
+use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm_rpc::{Value, ValueAndType};
 use http::HeaderMap;
 use poem::web::headers::ContentType;
 use rib::GetLiteralValue;
@@ -27,24 +26,22 @@ pub struct ResolvedResponseHeaders {
 }
 
 impl ResolvedResponseHeaders {
-    pub fn from_typed_value(
-        header_map: &TypeAnnotatedValue,
-    ) -> Result<ResolvedResponseHeaders, String> {
+    pub fn from_typed_value(header_map: ValueAndType) -> Result<ResolvedResponseHeaders, String> {
         match header_map {
-            TypeAnnotatedValue::Record(TypedRecord { value, .. }) => {
+            ValueAndType {
+                value: Value::Record(field_values),
+                typ: AnalysedType::Record(record),
+            } => {
                 let mut resolved_headers: HashMap<String, String> = HashMap::new();
 
-                for name_value_pair in value {
-                    let value_str = name_value_pair
-                        .value
-                        .as_ref()
-                        .and_then(|v| v.type_annotated_value.clone())
-                        .ok_or("Unable to resolve header value".to_string())?
+                for (value, field_def) in field_values.into_iter().zip(record.fields) {
+                    let value = ValueAndType::new(value, field_def.typ);
+                    let value_str = value
                         .get_literal()
                         .map(|primitive| primitive.to_string())
                         .unwrap_or_else(|| "Unable to resolve header".to_string());
 
-                    resolved_headers.insert(name_value_pair.name.clone(), value_str);
+                    resolved_headers.insert(field_def.name, value_str);
                 }
 
                 let headers = (&resolved_headers)
@@ -56,8 +53,7 @@ impl ResolvedResponseHeaders {
             }
 
             _ => Err(format!(
-                "Header expression is not a record. It is resolved to {}",
-                header_map.to_json_value()
+                "Header expression is not a record. It is resolved to {header_map}",
             )),
         }
     }

@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use async_trait::async_trait;
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use tracing::Instrument;
@@ -47,12 +48,16 @@ use golem_api_grpc::proto::golem::component::{Component, PluginInstallation};
 use golem_common::grpc::{proto_component_id_string, proto_plugin_installation_id_string};
 use golem_common::model::component::DefaultComponentOwner;
 use golem_common::model::component_constraint::FunctionConstraintCollection;
-use golem_common::model::plugin::{PluginInstallationCreation, PluginInstallationUpdate};
+use golem_common::model::component_metadata::DynamicLinkedInstance;
+use golem_common::model::plugin::{
+    DefaultPluginOwner, DefaultPluginScope, PluginInstallationCreation, PluginInstallationUpdate,
+};
 use golem_common::model::{ComponentId, ComponentType};
 use golem_common::recorded_grpc_api_request;
 use golem_component_service_base::api::common::ComponentTraceErrorKind;
 use golem_component_service_base::model::ComponentConstraints;
 use golem_component_service_base::service::component;
+use golem_component_service_base::service::plugin::{PluginError, PluginService};
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status, Streaming};
 
@@ -75,6 +80,8 @@ fn internal_error(error: &str) -> ComponentError {
 pub struct ComponentGrpcApi {
     pub component_service:
         Arc<dyn component::ComponentService<DefaultComponentOwner> + Sync + Send>,
+    pub plugin_service:
+        Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope> + Sync + Send>,
 }
 
 impl ComponentGrpcApi {
@@ -82,8 +89,7 @@ impl ComponentGrpcApi {
         source: &Option<golem_api_grpc::proto::golem::component::ComponentId>,
     ) -> Result<ComponentId, ComponentError> {
         match source {
-            Some(id) => id
-                .clone()
+            Some(id) => (*id)
                 .try_into()
                 .map_err(|err| bad_request_error(&format!("Invalid component id: {err}"))),
             None => Err(bad_request_error("Missing component id")),
@@ -181,6 +187,16 @@ impl ComponentGrpcApi {
             .map(|f| f.clone().try_into())
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e: String| bad_request_error(&format!("Failed reading files: {e}")))?;
+        let dynamic_linking: HashMap<String, DynamicLinkedInstance> = HashMap::from_iter(
+            request
+                .dynamic_linking
+                .iter()
+                .map(|(k, v)| v.clone().try_into().map(|v| (k.clone(), v)))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e: String| {
+                    bad_request_error(&format!("Invalid dynamic linking information: {e}"))
+                })?,
+        );
         let result = self
             .component_service
             .create_internal(
@@ -190,6 +206,7 @@ impl ComponentGrpcApi {
                 data,
                 files,
                 vec![],
+                dynamic_linking,
                 &DefaultComponentOwner,
             )
             .await?;
@@ -223,9 +240,27 @@ impl ComponentGrpcApi {
             None
         };
 
+        let dynamic_linking: HashMap<String, DynamicLinkedInstance> = HashMap::from_iter(
+            request
+                .dynamic_linking
+                .into_iter()
+                .map(|(k, v)| v.try_into().map(|v| (k, v)))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e: String| {
+                    bad_request_error(&format!("Invalid dynamic linking information: {e}"))
+                })?,
+        );
+
         let result = self
             .component_service
-            .update_internal(&id, data, component_type, files, &DefaultComponentOwner)
+            .update_internal(
+                &id,
+                data,
+                component_type,
+                files,
+                dynamic_linking,
+                &DefaultComponentOwner,
+            )
             .await?;
         Ok(result.into())
     }
@@ -283,14 +318,37 @@ impl ComponentGrpcApi {
             parameters: request.parameters.clone(),
         };
 
-        let response = self
-            .component_service
-            .create_plugin_installation_for_component(
-                &DefaultComponentOwner,
-                &component_id,
-                plugin_installation_creation,
+        let plugin_definition = self
+            .plugin_service
+            .get(
+                &DefaultPluginOwner,
+                &plugin_installation_creation.name,
+                &plugin_installation_creation.version,
             )
             .await?;
+
+        let response = if let Some(plugin_definition) = plugin_definition {
+            if plugin_definition.scope.valid_in_component(&component_id) {
+                self.component_service
+                    .create_plugin_installation_for_component(
+                        &DefaultComponentOwner,
+                        &component_id,
+                        plugin_installation_creation.clone(),
+                    )
+                    .await
+            } else {
+                Err(PluginError::InvalidScope {
+                    plugin_name: plugin_installation_creation.name,
+                    plugin_version: plugin_installation_creation.version,
+                    details: format!("not available for component {}", component_id),
+                })
+            }
+        } else {
+            Err(PluginError::PluginNotFound {
+                plugin_name: plugin_installation_creation.name,
+                plugin_version: plugin_installation_creation.version,
+            })
+        }?;
 
         Ok(response.into())
     }
@@ -303,7 +361,6 @@ impl ComponentGrpcApi {
 
         let installation_id = request
             .installation_id
-            .clone()
             .and_then(|id| id.try_into().ok())
             .ok_or_else(|| bad_request_error("Missing installation id"))?;
 
@@ -332,7 +389,6 @@ impl ComponentGrpcApi {
 
         let installation_id = request
             .installation_id
-            .clone()
             .and_then(|id| id.try_into().ok())
             .ok_or_else(|| bad_request_error("Missing installation id"))?;
 
@@ -547,8 +603,7 @@ impl ComponentService for ComponentGrpcApi {
 
         let record = recorded_grpc_api_request!(
             "update_component",
-            component_id =
-                proto_component_id_string(&header.as_ref().and_then(|r| r.component_id.clone()))
+            component_id = proto_component_id_string(&header.as_ref().and_then(|r| r.component_id))
         );
 
         let result = match header {

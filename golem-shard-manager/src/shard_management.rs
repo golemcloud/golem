@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,12 +19,12 @@ use async_rwlock::RwLock;
 use itertools::Itertools;
 use tokio::sync::{Mutex, Notify};
 use tokio::task::JoinHandle;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, warn, Instrument};
 
 use crate::error::ShardManagerError;
 use crate::healthcheck::{get_unhealthy_pods, HealthCheck};
 use crate::model::{Pod, RoutingTable};
-use crate::persistence::PersistenceService;
+use crate::persistence::RoutingTablePersistence;
 use crate::rebalancing::Rebalance;
 use crate::worker_executor::{assign_shards, revoke_shards, WorkerExecutorService};
 
@@ -41,7 +41,7 @@ impl ShardManagement {
     /// Initializes the shard management with an initial routing table and optionally
     /// a pending rebalance, both read from the persistence service.
     pub async fn new(
-        persistence_service: Arc<dyn PersistenceService + Send + Sync>,
+        persistence_service: Arc<dyn RoutingTablePersistence + Send + Sync>,
         worker_executors: Arc<dyn WorkerExecutorService + Send + Sync>,
         health_check: Arc<dyn HealthCheck + Send + Sync>,
         threshold: f64,
@@ -79,6 +79,7 @@ impl ShardManagement {
                     worker_executors,
                     threshold,
                 )
+                .in_current_span()
                 .await
             })))
         };
@@ -116,7 +117,7 @@ impl ShardManagement {
         routing_table: Arc<RwLock<RoutingTable>>,
         change: Arc<Notify>,
         updates: Arc<Mutex<ShardManagementChanges>>,
-        persistence_service: Arc<dyn PersistenceService + Send + Sync>,
+        persistence_service: Arc<dyn RoutingTablePersistence + Send + Sync>,
         worker_executors: Arc<dyn WorkerExecutorService + Send + Sync>,
         threshold: f64,
     ) {

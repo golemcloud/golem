@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -1809,8 +1809,7 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
     ) -> Result<Self, Self::Error> {
         let created_at = match &value.created_at {
             Some(t) => {
-                let t =
-                    SystemTime::try_from(t.clone()).map_err(|_| "Failed to convert timestamp")?;
+                let t = SystemTime::try_from(*t).map_err(|_| "Failed to convert timestamp")?;
                 Some(t.into())
             }
             None => None,
@@ -1837,7 +1836,6 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
         Ok(Self {
             versioned_component_id: value
                 .versioned_component_id
-                .clone()
                 .ok_or("Missing versioned_component_id")?
                 .try_into()?,
             component_name: ComponentName(value.component_name.clone()),

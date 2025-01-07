@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -473,6 +473,7 @@ mod internal {
 
 #[cfg(test)]
 mod function_parameters_inference_tests {
+    use bigdecimal::BigDecimal;
     use test_r::test;
 
     use crate::call_type::CallType;
@@ -518,7 +519,7 @@ mod function_parameters_inference_tests {
         expr.infer_call_arguments_type(&function_type_registry)
             .unwrap();
 
-        let let_binding = Expr::let_binding("x", Expr::untyped_number(1f64));
+        let let_binding = Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1)));
 
         let call_expr = Expr::Call(
             CallType::Function(DynamicParsedFunctionName {

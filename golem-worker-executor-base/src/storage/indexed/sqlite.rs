@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -115,7 +115,7 @@ impl IndexedStorage for SqliteIndexedStorage {
     ) -> Result<(ScanCursor, Vec<String>), String> {
         let key = pattern.replace("*", "%").replace("?", "_");
         let query =
-            sqlx::query_as("SELECT key FROM index_storage WHERE namespace = ? AND key LIKE ? ORDER BY key LIMIT ? OFFSET ?;")
+            sqlx::query_as("SELECT DISTINCT key FROM index_storage WHERE namespace = ? AND key LIKE ? ORDER BY key LIMIT ? OFFSET ?;")
                 .bind(Self::namespace(namespace))
                 .bind(&key)
                 .bind(sqlx::types::Json(count))

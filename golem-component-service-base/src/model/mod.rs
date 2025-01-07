@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,11 +14,15 @@
 
 mod component;
 
+use bincode::{Decode, Encode};
 pub use component::*;
+use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::{ComponentFilePathWithPermissionsList, ComponentType};
 use golem_service_base::poem::TempFileUpload;
-use poem_openapi::types::multipart::Upload;
-use poem_openapi::Multipart;
+use poem_openapi::types::multipart::{JsonField, Upload};
+use poem_openapi::{Multipart, Object};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Multipart)]
 #[oai(rename_all = "camelCase")]
@@ -27,4 +31,13 @@ pub struct UpdatePayload {
     pub component: Upload,
     pub files_permissions: Option<ComponentFilePathWithPermissionsList>,
     pub files: Option<TempFileUpload>,
+    pub dynamic_linking: Option<JsonField<DynamicLinking>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, Object)]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+#[derive(Default)]
+pub struct DynamicLinking {
+    pub dynamic_linking: HashMap<String, DynamicLinkedInstance>,
 }

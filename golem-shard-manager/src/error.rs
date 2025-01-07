@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -30,7 +30,7 @@ pub enum ShardManagerError {
     #[error("Timeout")]
     Timeout,
     #[error("gRPC: error status: {0}")]
-    GrpcError(tonic::Status),
+    GrpcError(#[from] tonic::Status),
     #[error("No result")]
     NoResult,
     #[error("Worker execution error: {0}")]
@@ -38,7 +38,9 @@ pub enum ShardManagerError {
     #[error("Persistence serialization error {0}")]
     SerializationError(String),
     #[error("Redis error {0}")]
-    RedisError(fred::error::RedisError),
+    RedisError(#[from] fred::error::RedisError),
+    #[error("IO error {0}")]
+    IoError(#[from] std::io::Error),
 }
 
 impl IsRetriableError for ShardManagerError {
@@ -52,6 +54,7 @@ impl IsRetriableError for ShardManagerError {
             ShardManagerError::WorkerExecutionError(_) => true, // TODO: can we define which ones are retryable?
             ShardManagerError::SerializationError(_) => false,
             ShardManagerError::RedisError(_) => false,
+            ShardManagerError::IoError(_) => false,
         }
     }
 
@@ -94,6 +97,9 @@ impl From<ShardManagerError> for golem::shardmanager::v1::ShardManagerError {
                 error(shard_manager_error::Error::Unknown, details)
             }
             ShardManagerError::RedisError(err) => {
+                error(shard_manager_error::Error::Unknown, err.to_string())
+            }
+            ShardManagerError::IoError(err) => {
                 error(shard_manager_error::Error::Unknown, err.to_string())
             }
         }

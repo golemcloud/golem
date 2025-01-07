@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -34,6 +34,7 @@ pub struct FileUseToken {
 }
 
 /// Interface for loading files and making them available to workers.
+///
 /// This will hardlink to a temporary directory to avoid copying files between workers. Beware
 /// that hardlinking is only possible within the same filesystem.
 pub struct FileLoader {

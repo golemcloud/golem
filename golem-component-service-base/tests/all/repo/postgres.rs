@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@
 use crate::Tracing;
 use golem_common::config::DbPostgresConfig;
 use golem_service_base::db;
+use golem_service_base::migration::{Migrations, MigrationsDir};
 use sqlx::Pool;
 use std::sync::Arc;
 use test_r::{inherit_test_dep, sequential};
@@ -138,7 +139,8 @@ impl PostgresDb {
 
         db::postgres_migrate(
             &db_config,
-            "../golem-component-service/db/migration/postgres",
+            MigrationsDir::new("../golem-component-service/db/migration".into())
+                .postgres_migrations(),
         )
         .await
         .unwrap();

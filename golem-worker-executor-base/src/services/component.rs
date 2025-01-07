@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::error::GolemError;
-use crate::grpc::{authorised_grpc_request, is_grpc_retriable, GrpcError, UriBackConversion};
+use crate::grpc::{authorised_grpc_request, is_grpc_retriable, GrpcError};
 use crate::metrics::component::record_compilation_time;
 use crate::services::compiled_component;
 use crate::services::compiled_component::CompiledComponentService;
@@ -34,10 +35,10 @@ use golem_api_grpc::proto::golem::component::v1::{
 };
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::client::{GrpcClient, GrpcClientConfig};
-use golem_common::config::RetryConfig;
 use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
-use golem_common::model::component_metadata::LinearMemory;
+use golem_common::model::component_metadata::{DynamicLinkedInstance, LinearMemory};
 use golem_common::model::plugin::PluginInstallation;
+use golem_common::model::RetryConfig;
 use golem_common::model::{
     AccountId, ComponentId, ComponentType, ComponentVersion, InitialComponentFile,
 };
@@ -65,6 +66,9 @@ pub struct ComponentMetadata {
     pub component_type: ComponentType,
     pub files: Vec<InitialComponentFile>,
     pub plugin_installations: Vec<PluginInstallation>,
+
+    #[serde(default)]
+    pub dynamic_linking: HashMap<String, DynamicLinkedInstance>,
 }
 
 /// Service for downloading a specific Golem component from the Golem Component API
@@ -167,7 +171,7 @@ impl ComponentServiceGrpc {
                         .send_compressed(CompressionEncoding::Gzip)
                         .accept_compressed(CompressionEncoding::Gzip)
                 },
-                endpoint.as_http_02(),
+                endpoint,
                 GrpcClientConfig {
                     retries_on_unavailable: retry_config.clone(),
                     ..Default::default() // TODO
@@ -476,9 +480,7 @@ async fn get_metadata_via_grpc(
                     memories: component
                         .metadata
                         .as_ref()
-                        .map(|metadata| {
-                            metadata.memories.iter().map(|m| m.clone().into()).collect()
-                        })
+                        .map(|metadata| metadata.memories.iter().map(|m| (*m).into()).collect())
                         .unwrap_or_default(),
                     exports: component
                         .metadata
@@ -510,6 +512,7 @@ async fn get_metadata_via_grpc(
                                 "Failed to get the plugin installations".to_string(),
                             )
                         })?,
+                    dynamic_linking: HashMap::new(), // TODO
                 };
 
                 record_external_call_response_size_bytes("components", "get_metadata", len);

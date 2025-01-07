@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -27,8 +27,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             self,
             "golem environment",
             "get_environment",
-            WrappedFunctionType::ReadLocal
-        ).await?;
+            WrappedFunctionType::ReadLocal,
+        )
+        .await?;
 
         if durability.is_live() {
             let result = Host::get_environment(&mut self.as_wasi_view()).await;
@@ -43,8 +44,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             self,
             "golem environment",
             "get_arguments",
-            WrappedFunctionType::ReadLocal
-        ).await?;
+            WrappedFunctionType::ReadLocal,
+        )
+        .await?;
 
         if durability.is_live() {
             let result = Host::get_arguments(&mut self.as_wasi_view()).await;
@@ -59,8 +61,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             self,
             "golem environment",
             "get_arguments", // TODO: fix in 2.0 - for backward compatibility with Golem 1.0
-            WrappedFunctionType::ReadLocal
-        ).await?;
+            WrappedFunctionType::ReadLocal,
+        )
+        .await?;
 
         if durability.is_live() {
             let result = Host::initial_cwd(&mut self.as_wasi_view()).await;
@@ -68,20 +71,5 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         } else {
             durability.replay(self).await
         }
-    }
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {
-    async fn get_environment(&mut self) -> anyhow::Result<Vec<(String, String)>> {
-        (*self).get_environment().await
-    }
-
-    async fn get_arguments(&mut self) -> anyhow::Result<Vec<String>> {
-        (*self).get_arguments().await
-    }
-
-    async fn initial_cwd(&mut self) -> anyhow::Result<Option<String>> {
-        (*self).initial_cwd().await
     }
 }

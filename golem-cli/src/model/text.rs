@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,6 +22,18 @@ pub mod fmt {
 
     pub trait TextFormat {
         fn print(&self);
+    }
+
+    pub trait TableWrapper: Sized {
+        type Table: TextFormat;
+        fn from_vec(vec: &[Self]) -> Self::Table;
+    }
+
+    impl<T: TableWrapper> TextFormat for Vec<T> {
+        fn print(&self) {
+            let table = T::from_vec(self);
+            table.print();
+        }
     }
 
     pub trait MessageWithFields {
@@ -254,10 +266,59 @@ pub mod fmt {
     }
 }
 
+pub mod api_security {
+    use crate::model::text::fmt::*;
+    use crate::model::ApiSecurityScheme;
+    use cli_table::Table;
+    use golem_client::model::SecuritySchemeData;
+    use indoc::printdoc;
+
+    impl TextFormat for ApiSecurityScheme {
+        fn print(&self) {
+            printdoc!(
+                    "
+                    API Security Scheme: ID: {}, scopes: {}, client ID: {}, client secret: {}, redirect URL: {}
+                    ",
+                    format_message_highlight(&self.scheme_identifier),
+                    &self.scopes.join(", "),
+                    format_message_highlight(&self.client_id),
+                    format_message_highlight(&self.client_secret),
+                    format_message_highlight(&self.redirect_url),
+                );
+        }
+    }
+
+    #[derive(Table)]
+    struct ApiSecuritySchemeTableView {
+        #[table(title = "ID")]
+        pub id: String,
+        #[table(title = "Provider")]
+        pub provider: String,
+        #[table(title = "Client ID")]
+        pub client_id: String,
+        #[table(title = "Client Secret")]
+        pub client_secret: String,
+        #[table(title = "Redirect URL")]
+        pub redirect_url: String,
+    }
+
+    impl From<&SecuritySchemeData> for ApiSecuritySchemeTableView {
+        fn from(value: &SecuritySchemeData) -> Self {
+            Self {
+                id: value.scheme_identifier.clone(),
+                provider: value.provider_type.to_string(),
+                client_id: value.client_id.clone(),
+                client_secret: value.client_secret.clone(),
+                redirect_url: value.redirect_url.clone(),
+            }
+        }
+    }
+}
+
 pub mod api_definition {
     use crate::model::text::fmt::*;
     use cli_table::{format::Justify, Table};
-    use golem_client::model::{HttpApiDefinitionWithTypeInfo, RouteWithTypeInfo};
+    use golem_client::model::{HttpApiDefinitionResponseData, RouteResponseData};
     use golem_common::model::ComponentId;
     use golem_common::uri::oss::urn::ComponentUrn;
     use serde::{Deserialize, Serialize};
@@ -274,8 +335,8 @@ pub mod api_definition {
         pub worker_name: String,
     }
 
-    impl From<&RouteWithTypeInfo> for RouteTableView {
-        fn from(value: &RouteWithTypeInfo) -> Self {
+    impl From<&RouteResponseData> for RouteTableView {
+        fn from(value: &RouteResponseData) -> Self {
             Self {
                 method: value.method.to_string(),
                 path: value.path.to_string(),
@@ -301,7 +362,7 @@ pub mod api_definition {
         }
     }
 
-    fn api_definition_fields(def: &HttpApiDefinitionWithTypeInfo) -> Vec<(String, String)> {
+    fn api_definition_fields(def: &HttpApiDefinitionResponseData) -> Vec<(String, String)> {
         let mut fields = FieldsBuilder::new();
 
         fields
@@ -320,7 +381,7 @@ pub mod api_definition {
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
-    pub struct ApiDefinitionGetView(pub HttpApiDefinitionWithTypeInfo);
+    pub struct ApiDefinitionGetView(pub HttpApiDefinitionResponseData);
 
     impl MessageWithFields for ApiDefinitionGetView {
         fn message(&self) -> String {
@@ -337,7 +398,7 @@ pub mod api_definition {
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
-    pub struct ApiDefinitionAddView(pub HttpApiDefinitionWithTypeInfo);
+    pub struct ApiDefinitionAddView(pub HttpApiDefinitionResponseData);
 
     impl MessageWithFields for ApiDefinitionAddView {
         fn message(&self) -> String {
@@ -354,7 +415,7 @@ pub mod api_definition {
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
-    pub struct ApiDefinitionUpdateView(pub HttpApiDefinitionWithTypeInfo);
+    pub struct ApiDefinitionUpdateView(pub HttpApiDefinitionResponseData);
 
     impl MessageWithFields for ApiDefinitionUpdateView {
         fn message(&self) -> String {
@@ -371,7 +432,7 @@ pub mod api_definition {
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
-    pub struct ApiDefinitionImportView(pub HttpApiDefinitionWithTypeInfo);
+    pub struct ApiDefinitionImportView(pub HttpApiDefinitionResponseData);
 
     impl MessageWithFields for ApiDefinitionImportView {
         fn message(&self) -> String {
@@ -397,8 +458,8 @@ pub mod api_definition {
         pub route_count: usize,
     }
 
-    impl From<&HttpApiDefinitionWithTypeInfo> for HttpApiDefinitionTableView {
-        fn from(value: &HttpApiDefinitionWithTypeInfo) -> Self {
+    impl From<&HttpApiDefinitionResponseData> for HttpApiDefinitionTableView {
+        fn from(value: &HttpApiDefinitionResponseData) -> Self {
             Self {
                 id: value.id.to_string(),
                 version: value.version.to_string(),
@@ -407,7 +468,7 @@ pub mod api_definition {
         }
     }
 
-    impl TextFormat for Vec<HttpApiDefinitionWithTypeInfo> {
+    impl TextFormat for Vec<HttpApiDefinitionResponseData> {
         fn print(&self) {
             print_table::<_, HttpApiDefinitionTableView>(self);
         }
@@ -715,7 +776,7 @@ pub mod worker {
     };
     use golem_common::uri::oss::urn::{ComponentUrn, WorkerUrn};
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-    use golem_wasm_rpc::{type_annotated_value_to_string, ValueAndType};
+    use golem_wasm_rpc::{print_type_annotated_value, ValueAndType};
     use indoc::{formatdoc, indoc, printdoc};
     use itertools::Itertools;
     use serde::{Deserialize, Serialize};
@@ -1274,14 +1335,14 @@ pub mod worker {
 
     fn print_value(value: &ValueAndType) -> String {
         let tav: TypeAnnotatedValue = value.try_into().expect("Failed to convert value to string");
-        type_annotated_value_to_string(&tav).expect("Failed to convert value to string")
+        print_type_annotated_value(&tav).expect("Failed to convert value to string")
     }
 }
 
 pub mod plugin {
     use crate::model::text::fmt::{
         format_id, format_main_id, format_message_highlight, FieldsBuilder, MessageWithFields,
-        TextFormat,
+        TableWrapper, TextFormat,
     };
     use cli_table::{print_stdout, Table, WithTitle};
     use golem_client::model::{
@@ -1331,10 +1392,21 @@ pub mod plugin {
         }
     }
 
-    impl TextFormat for Vec<PluginDefinitionDefaultPluginOwnerDefaultPluginScope> {
+    pub struct PluginDefinitionTable(Vec<PluginDefinitionDefaultPluginOwnerDefaultPluginScope>);
+
+    impl TableWrapper for PluginDefinitionDefaultPluginOwnerDefaultPluginScope {
+        type Table = PluginDefinitionTable;
+
+        fn from_vec(vec: &[Self]) -> Self::Table {
+            PluginDefinitionTable(vec.to_vec())
+        }
+    }
+
+    impl TextFormat for PluginDefinitionTable {
         fn print(&self) {
             print_stdout(
-                self.iter()
+                self.0
+                    .iter()
                     .map(PluginDefinitionTableView::from)
                     .collect::<Vec<_>>()
                     .with_title(),

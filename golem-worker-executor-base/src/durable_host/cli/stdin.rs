@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -23,11 +23,5 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     fn get_stdin(&mut self) -> anyhow::Result<Resource<InputStream>> {
         record_host_function_call("cli::stdin", "get_stdin");
         self.as_wasi_view().get_stdin()
-    }
-}
-
-impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {
-    fn get_stdin(&mut self) -> anyhow::Result<Resource<InputStream>> {
-        (*self).get_stdin()
     }
 }

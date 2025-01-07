@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,7 +22,6 @@ use golem_common::model::{LogLevel, WorkerEvent};
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn log(&mut self, level: Level, context: String, message: String) -> anyhow::Result<()> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("logging::handler", "log");
 
         let log_level = match level {
@@ -36,12 +35,5 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let event = WorkerEvent::log(log_level, &context, &message);
         self.emit_log_event(event).await;
         Ok(())
-    }
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {
-    async fn log(&mut self, level: Level, context: String, message: String) -> anyhow::Result<()> {
-        (*self).log(level, context, message).await
     }
 }

@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,8 +14,7 @@
 
 use crate::empty_worker_metadata;
 use crate::gateway_binding::WorkerDetail;
-use crate::getter::{get_response_headers_or_default, get_status_code, GetterExt};
-use crate::path::Path;
+use crate::getter::{get_response_headers_or_default, get_status_code};
 use crate::service::component::{ComponentService, ComponentServiceError};
 use crate::service::worker::{WorkerService, WorkerServiceError};
 use async_trait::async_trait;
@@ -26,9 +25,8 @@ use golem_common::model::{ComponentFilePath, HasAccountId, TargetWorkerId};
 use golem_service_base::auth::EmptyAuthCtx;
 use golem_service_base::model::validate_worker_name;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
-use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::protobuf::typed_result::ResultValue;
+use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm_rpc::{Value, ValueAndType};
 use http::StatusCode;
 use poem::web::headers::ContentType;
 use rib::RibResult;
@@ -188,20 +186,22 @@ impl FileServerBindingDetails {
         // 3. A result of either of the above, with the same rules applied.
         match result {
             RibResult::Val(value) => match value {
-                TypeAnnotatedValue::Result(inner) => {
-                    let value = inner
-                        .result_value
-                        .ok_or("Expected a result value".to_string())?;
-                    match value {
-                        ResultValue::OkValue(ok) => Self::from_rib_happy(
-                            ok.type_annotated_value.ok_or("ok unset".to_string())?,
-                        ),
-                        ResultValue::ErrorValue(err) => {
-                            let value = err.type_annotated_value.ok_or("err unset".to_string())?;
-                            Err(format!("Error result: {}", value.to_json_value()))
-                        }
+                ValueAndType {
+                    value: Value::Result(value),
+                    typ: AnalysedType::Result(typ),
+                } => match value {
+                    Ok(ok) => {
+                        let ok = ValueAndType::new(
+                            *ok.ok_or("ok unset".to_string())?,
+                            (*typ.ok.ok_or("Missing 'ok' type")?).clone(),
+                        );
+                        Self::from_rib_happy(ok)
                     }
-                }
+                    Err(err) => {
+                        let value = err.ok_or("err unset".to_string())?;
+                        Err(format!("Error result: {value:?}"))
+                    }
+                },
                 other => Self::from_rib_happy(other),
             },
             RibResult::Unit => Err("Expected a value".to_string()),
@@ -209,25 +209,33 @@ impl FileServerBindingDetails {
     }
 
     /// Like the above, just without the result case.
-    fn from_rib_happy(value: TypeAnnotatedValue) -> Result<FileServerBindingDetails, String> {
-        match value {
-            TypeAnnotatedValue::Str(raw_path) => Self::make_from(raw_path, None, None),
-            record @ TypeAnnotatedValue::Record(_) => {
-                let path = record
-                    .get_optional(&Path::from_key("file-path"))
+    fn from_rib_happy(value: ValueAndType) -> Result<FileServerBindingDetails, String> {
+        match &value {
+            ValueAndType {
+                value: Value::String(raw_path),
+                ..
+            } => Self::make_from(raw_path.clone(), None, None),
+            ValueAndType {
+                value: Value::Record(field_values),
+                typ: AnalysedType::Record(record),
+            } => {
+                let path_position = record
+                    .fields
+                    .iter()
+                    .position(|pair| &pair.name == "file-path")
                     .ok_or("Record must contain 'file-path' field")?;
 
-                let path = if let TypeAnnotatedValue::Str(path) = path {
+                let path = if let Value::String(path) = &field_values[path_position] {
                     path
                 } else {
                     return Err("file-path must be a string".to_string());
                 };
 
-                let status = get_status_code(&record)?;
-                let headers = get_response_headers_or_default(&record)?;
+                let status = get_status_code(field_values, record)?;
+                let headers = get_response_headers_or_default(&value)?;
                 let content_type = headers.get_content_type();
 
-                Self::make_from(path, content_type, status)
+                Self::make_from(path.to_string(), content_type, status)
             }
             _ => Err("Response value expected".to_string()),
         }

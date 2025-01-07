@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -43,8 +43,7 @@ impl PluginGrpcApi {
     ) -> Result<Vec<PluginDefinition>, ComponentError> {
         let plugins = match &request.scope {
             Some(scope) => {
-                let scope = scope
-                    .clone()
+                let scope = (*scope)
                     .try_into()
                     .map_err(|err| bad_request_error(&format!("Invalid plugin scope: {err}")))?;
 

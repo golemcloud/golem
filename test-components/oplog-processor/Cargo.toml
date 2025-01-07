@@ -1,0 +1,26 @@
+[package]
+name = "oplog-processor"
+version = "0.0.1"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[profile.release]
+lto = true
+opt-level = 's'
+
+[dependencies]
+wit-bindgen-rt = { version = "0.26.0", features = ["bitflags"] }
+
+uuid = { version = "1.10", features = ["v4"] }
+
+[package.metadata.component.target]
+path = "wit"
+
+[package.metadata.component.target.dependencies]
+"golem:api" = { path = "wit/deps/golem-1.1" }
+"golem:rpc" = { path = "wit/deps/wasm-rpc" }
+"wasi:io" = { path = "wit/deps/io" }
+"wasi:clocks" = { path = "wit/deps/clocks" }

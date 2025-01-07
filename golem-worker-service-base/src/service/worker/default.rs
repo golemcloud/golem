@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -31,9 +31,9 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ResumeWorkerRequest, SearchOplogResponse, UpdateWorkerRequest,
 };
 use golem_common::client::MultiTargetGrpcClient;
-use golem_common::config::RetryConfig;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
+use golem_common::model::RetryConfig;
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentFileSystemNode, ComponentId, ComponentVersion,
     FilterComparator, IdempotencyKey, PluginInstallationId, PromiseId, ScanCursor, TargetWorkerId,

@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod application_manifest;
+pub mod app_ext;
+pub mod app_ext_raw;
 pub mod component;
 pub mod deploy;
 pub mod invoke_result_view;
@@ -28,8 +29,7 @@ use clap::builder::{StringValueParser, TypedValueParser};
 use clap::error::{ContextKind, ContextValue, ErrorKind};
 use clap::{Arg, ArgMatches, Error, FromArgMatches, ValueEnum};
 use clap_verbosity_flag::Verbosity;
-use derive_more::{Display, FromStr};
-use golem_client::model::{ApiDefinitionInfo, ApiSite, ScanCursor};
+use golem_client::model::{ApiDefinitionInfo, ApiSite, Provider, ScanCursor};
 use golem_common::model::plugin::{ComponentPluginScope, DefaultPluginScope};
 use golem_common::model::trim_date::TrimDateTime;
 use golem_common::model::{ComponentId, Empty};
@@ -150,6 +150,12 @@ impl From<reqwest::Error> for GolemError {
 impl From<reqwest::header::InvalidHeaderValue> for GolemError {
     fn from(value: reqwest::header::InvalidHeaderValue) -> Self {
         GolemError(format!("Invalid request header: {value}"))
+    }
+}
+
+impl From<anyhow::Error> for GolemError {
+    fn from(value: anyhow::Error) -> Self {
+        GolemError(format!("{value:#}"))
     }
 }
 
@@ -332,7 +338,7 @@ impl From<&ComponentUriArg> for ComponentUriOrNameArgs {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Debug, Display, FromStr)]
+#[derive(Clone, PartialEq, Eq, Debug, derive_more::Display, derive_more::FromStr)]
 pub struct ComponentName(pub String); // TODO: Validate
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -341,15 +347,64 @@ pub struct ComponentUriArg {
     pub explicit_name: bool,
 }
 
-#[derive(Clone, PartialEq, Eq, Debug, Display, FromStr)]
+#[derive(Clone, PartialEq, Eq, Debug, derive_more::Display, derive_more::FromStr)]
 pub struct WorkerName(pub String); // TODO: Validate
 
-#[derive(Clone, PartialEq, Eq, Debug, Display, FromStr, Serialize, Deserialize)]
+#[derive(
+    Clone, PartialEq, Eq, Debug, derive_more::Display, derive_more::FromStr, Serialize, Deserialize,
+)]
 pub struct IdempotencyKey(pub String); // TODO: Validate
 
 impl IdempotencyKey {
     pub fn fresh() -> Self {
         IdempotencyKey(Uuid::new_v4().to_string())
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum IdentityProviderType {
+    Google,
+    Facebook,
+    Gitlab,
+    Microsoft,
+}
+
+impl Display for IdentityProviderType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::Google => "google",
+            Self::Facebook => "facebook",
+            Self::Gitlab => "gitlab",
+            Self::Microsoft => "microsoft",
+        };
+        Display::fmt(&s, f)
+    }
+}
+
+impl FromStr for IdentityProviderType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "google" => Ok(IdentityProviderType::Google),
+            "facebook" => Ok(IdentityProviderType::Facebook),
+            "gitlab" => Ok(IdentityProviderType::Gitlab),
+            "microsoft" => Ok(IdentityProviderType::Microsoft),
+            _ => Err(format!(
+                "Unknown identity provider type: {s}. Expected one of \"google\", \"facebook\", \"gitlab\", \"microsoft\""
+            )),
+        }
+    }
+}
+
+impl From<IdentityProviderType> for Provider {
+    fn from(value: IdentityProviderType) -> Self {
+        match value {
+            IdentityProviderType::Google => Provider::Google,
+            IdentityProviderType::Facebook => Provider::Facebook,
+            IdentityProviderType::Gitlab => Provider::Gitlab,
+            IdentityProviderType::Microsoft => Provider::Microsoft,
+        }
     }
 }
 
@@ -383,7 +438,7 @@ impl FromStr for ApiDefinitionIdWithVersion {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Debug, Display, FromStr)]
+#[derive(Clone, PartialEq, Eq, Debug, derive_more::Display, derive_more::FromStr)]
 pub struct ApiDefinitionId(pub String); // TODO: Validate
 
 #[derive(ValueEnum, Clone, Debug)]
@@ -402,7 +457,7 @@ impl Display for ApiDefinitionFileFormat {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Debug, Display, FromStr)]
+#[derive(Clone, PartialEq, Eq, Debug, derive_more::Display, derive_more::FromStr)]
 pub struct ApiDefinitionVersion(pub String); // TODO: Validate
 
 #[derive(Clone)]
@@ -478,7 +533,7 @@ impl FromStr for PathBufOrStdin {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Debug, Display)]
+#[derive(Clone, PartialEq, Eq, Debug, derive_more::Display)]
 pub enum WorkerUpdateMode {
     Automatic,
     Manual,
@@ -694,6 +749,31 @@ impl From<golem_client::model::ApiDeployment> for ApiDeployment {
             project_id: None,
             site: value.site,
             created_at: value.created_at,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ApiSecurityScheme {
+    #[serde(rename = "schemeIdentifier")]
+    pub scheme_identifier: String,
+    #[serde(rename = "clientId")]
+    pub client_id: String,
+    #[serde(rename = "clientSecret")]
+    pub client_secret: String,
+    #[serde(rename = "redirectUrl")]
+    pub redirect_url: String,
+    pub scopes: Vec<String>,
+}
+
+impl From<golem_client::model::SecuritySchemeData> for ApiSecurityScheme {
+    fn from(value: golem_client::model::SecuritySchemeData) -> Self {
+        ApiSecurityScheme {
+            scheme_identifier: value.scheme_identifier,
+            client_id: value.client_id,
+            client_secret: value.client_secret,
+            redirect_url: value.redirect_url,
+            scopes: value.scopes,
         }
     }
 }

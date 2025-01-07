@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -81,13 +81,12 @@ impl WorkerService for ForwardingWorkerService {
         &self,
         request: LaunchNewWorkerRequest,
     ) -> crate::Result<LaunchNewWorkerResponse> {
-        let component_id = request
+        let component_id = (*request
             .component_id
             .as_ref()
-            .ok_or(anyhow!("Requires component ID"))?
-            .clone()
-            .try_into()
-            .map_err(|err: String| anyhow!(err))?;
+            .ok_or(anyhow!("Requires component ID"))?)
+        .try_into()
+        .map_err(|err: String| anyhow!(err))?;
         let worker_id = WorkerId {
             component_id: request.component_id,
             name: request.name,
@@ -618,7 +617,7 @@ impl WorkerService for ForwardingWorkerService {
                         .into(),
                     ),
                     from_oplog_index: request.from_oplog_index,
-                    cursor: request.cursor.clone(),
+                    cursor: request.cursor,
                     count: request.count,
                 })
                 .await;

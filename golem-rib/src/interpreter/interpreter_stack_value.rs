@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,10 +15,9 @@
 use crate::interpreter::literal::{GetLiteralValue, LiteralValue};
 use crate::CoercedNumericValue;
 use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::protobuf::typed_result::ResultValue;
-use poem_openapi::types::ToJSON;
+use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 use std::fmt;
+use std::ops::Deref;
 
 // A result of a function can be unit, which is not representable using type_annotated_value
 // A result can be a type_annotated_value
@@ -26,9 +25,9 @@ use std::fmt;
 // A result can also be stored as an iterator, that its easy to stream through any iterables, given a sink is following it.
 pub enum RibInterpreterStackValue {
     Unit,
-    Val(TypeAnnotatedValue),
-    Iterator(Box<dyn Iterator<Item = TypeAnnotatedValue> + Send>),
-    Sink(Vec<TypeAnnotatedValue>, AnalysedType),
+    Val(ValueAndType),
+    Iterator(Box<dyn Iterator<Item = ValueAndType> + Send>),
+    Sink(Vec<ValueAndType>, AnalysedType),
 }
 
 impl RibInterpreterStackValue {
@@ -55,11 +54,7 @@ impl RibInterpreterStackValue {
                 ) {
                     Ok(op(left_lit, right_lit))
                 } else {
-                    Err(format!(
-                        "Unable to complete the math operation on {}, {}",
-                        left.to_json_string(),
-                        right.to_json_string()
-                    ))
+                    Err(internal::unable_to_complete_math_operation(&left, &right))
                 }
             }
             _ => Err("Failed to obtain values to complete the math operation".to_string()),
@@ -75,9 +70,7 @@ impl RibInterpreterStackValue {
         F: Fn(LiteralValue, LiteralValue) -> bool,
     {
         if self.is_unit() && right.is_unit() {
-            Ok(RibInterpreterStackValue::Val(TypeAnnotatedValue::Bool(
-                true,
-            )))
+            Ok(RibInterpreterStackValue::Val(true.into_value_and_type()))
         } else {
             match (self.get_val(), right.get_val()) {
                 (Some(left), Some(right)) => {
@@ -91,14 +84,17 @@ impl RibInterpreterStackValue {
 
     pub fn get_bool(&self) -> Option<bool> {
         match self {
-            RibInterpreterStackValue::Val(TypeAnnotatedValue::Bool(bool)) => Some(*bool),
+            RibInterpreterStackValue::Val(ValueAndType {
+                value: Value::Bool(bool),
+                ..
+            }) => Some(*bool),
             RibInterpreterStackValue::Val(_) => None,
             RibInterpreterStackValue::Unit => None,
             RibInterpreterStackValue::Iterator(_) => None,
             RibInterpreterStackValue::Sink(_, _) => None,
         }
     }
-    pub fn get_val(&self) -> Option<TypeAnnotatedValue> {
+    pub fn get_val(&self) -> Option<ValueAndType> {
         match self {
             RibInterpreterStackValue::Val(val) => Some(val.clone()),
             RibInterpreterStackValue::Unit => None,
@@ -120,32 +116,59 @@ impl RibInterpreterStackValue {
         matches!(self, RibInterpreterStackValue::Unit)
     }
 
-    pub fn val(val: TypeAnnotatedValue) -> Self {
+    pub fn val(val: ValueAndType) -> Self {
         RibInterpreterStackValue::Val(val)
     }
 
-    pub fn unwrap(&self) -> Option<TypeAnnotatedValue> {
+    pub fn unwrap(&self) -> Option<ValueAndType> {
         match self {
-            RibInterpreterStackValue::Val(val) => match val {
-                TypeAnnotatedValue::Option(option) => option
-                    .value
-                    .as_deref()
-                    .and_then(|x| x.type_annotated_value.clone()),
-                TypeAnnotatedValue::Result(result) => {
-                    let result = match &result.result_value {
-                        Some(ResultValue::OkValue(ok)) => Some(ok.clone()),
-                        Some(ResultValue::ErrorValue(err)) => Some(err.clone()),
-                        None => None,
-                    };
-
-                    // GRPC wrapper
-                    result.and_then(|x| x.type_annotated_value)
+            RibInterpreterStackValue::Val(val) => match (val.value.clone(), val.typ.clone()) {
+                (Value::Option(Some(option)), AnalysedType::Option(option_type)) => {
+                    let inner_value = option.deref().clone();
+                    let inner_type = option_type.inner.deref().clone();
+                    Some(ValueAndType {
+                        value: inner_value,
+                        typ: inner_type,
+                    })
                 }
 
-                TypeAnnotatedValue::Variant(variant) => variant
-                    .case_value
-                    .as_deref()
-                    .and_then(|x| x.type_annotated_value.clone()),
+                (Value::Result(Ok(Some(ok))), AnalysedType::Result(result_type)) => {
+                    let ok_value = ok.deref().clone();
+                    let ok_type = result_type.ok.as_ref()?.deref().clone();
+                    Some(ValueAndType {
+                        value: ok_value,
+                        typ: ok_type,
+                    })
+                }
+
+                (Value::Result(Err(Some(err))), AnalysedType::Result(result_type)) => {
+                    let err_value = err.deref().clone();
+                    let err_type = result_type.err.as_ref()?.deref().clone();
+                    Some(ValueAndType {
+                        value: err_value,
+                        typ: err_type,
+                    })
+                }
+
+                (
+                    Value::Variant {
+                        case_value: Some(case_value),
+                        case_idx,
+                    },
+                    AnalysedType::Variant(variant_type),
+                ) => {
+                    let case_type = variant_type
+                        .cases
+                        .get(case_idx as usize)?
+                        .typ
+                        .as_ref()?
+                        .clone();
+                    Some(ValueAndType {
+                        value: case_value.deref().clone(),
+                        typ: case_type,
+                    })
+                }
+
                 _ => None,
             },
             RibInterpreterStackValue::Unit => None,
@@ -168,88 +191,147 @@ impl fmt::Debug for RibInterpreterStackValue {
 
 mod internal {
     use crate::interpreter::literal::{GetLiteralValue, LiteralValue};
-    use golem_wasm_ast::analysis::AnalysedType;
-    use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-    use golem_wasm_rpc::protobuf::{TypedEnum, TypedFlags, TypedVariant};
+    use golem_wasm_ast::analysis::{AnalysedType, TypeVariant};
+    use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
+
+    #[cfg(not(feature = "json_in_errors"))]
+    pub fn unable_to_complete_math_operation(left: &ValueAndType, right: &ValueAndType) -> String {
+        format!(
+            "Unable to complete math operation for {:?}, {:?}",
+            left, right
+        )
+    }
+
+    #[cfg(feature = "json_in_errors")]
+    pub fn unable_to_complete_math_operation(left: &ValueAndType, right: &ValueAndType) -> String {
+        format!(
+            "Unable to complete math operation for {}, {}",
+            serde_json::to_string(left).unwrap_or_default(),
+            serde_json::to_string(right).unwrap_or_default()
+        )
+    }
 
     pub(crate) fn compare_typed_value<F>(
-        left: &TypeAnnotatedValue,
-        right: &TypeAnnotatedValue,
+        left: &ValueAndType,
+        right: &ValueAndType,
         compare: F,
-    ) -> Result<TypeAnnotatedValue, String>
+    ) -> Result<ValueAndType, String>
     where
         F: Fn(LiteralValue, LiteralValue) -> bool,
     {
         if let (Some(left_lit), Some(right_lit)) = (left.get_literal(), right.get_literal()) {
-            Ok(TypeAnnotatedValue::Bool(compare(left_lit, right_lit)))
-        } else if let (TypeAnnotatedValue::Variant(left), TypeAnnotatedValue::Variant(right)) =
-            (left, right)
+            Ok(compare(left_lit, right_lit).into_value_and_type())
+        } else if let (
+            ValueAndType {
+                value:
+                    Value::Variant {
+                        case_idx: left_case_idx,
+                        case_value: left_case_value,
+                    },
+                typ: AnalysedType::Variant(left_typ),
+            },
+            ValueAndType {
+                value:
+                    Value::Variant {
+                        case_idx: right_cast_idx,
+                        case_value: right_case_value,
+                    },
+                typ: AnalysedType::Variant(right_typ),
+            },
+        ) = (left, right)
         {
-            compare_variants(left.as_ref(), right.as_ref(), compare)
-        } else if let (TypeAnnotatedValue::Enum(left), TypeAnnotatedValue::Enum(right)) =
-            (left, right)
+            compare_variants(
+                *left_case_idx,
+                left_case_value,
+                left_typ,
+                *right_cast_idx,
+                right_case_value,
+                right_typ,
+                compare,
+            )
+        } else if let (
+            ValueAndType {
+                value: Value::Enum(left_idx),
+                ..
+            },
+            ValueAndType {
+                value: Value::Enum(right_idx),
+                ..
+            },
+        ) = (left, right)
         {
-            compare_enums(left, right)
-        } else if let (TypeAnnotatedValue::Flags(left), TypeAnnotatedValue::Flags(right)) =
-            (left, right)
+            compare_enums(*left_idx, *right_idx)
+        } else if let (
+            ValueAndType {
+                value: Value::Flags(left_bitmap),
+                ..
+            },
+            ValueAndType {
+                value: Value::Flags(right_bitmap),
+                ..
+            },
+        ) = (left, right)
         {
-            compare_flags(left, right)
+            compare_flags(left_bitmap, right_bitmap)
         } else {
             Err(unsupported_type_error(left, right))
         }
     }
 
-    fn compare_flags(left: &TypedFlags, right: &TypedFlags) -> Result<TypeAnnotatedValue, String> {
-        if left.values == right.values {
-            Ok(TypeAnnotatedValue::Bool(true))
-        } else {
-            Ok(TypeAnnotatedValue::Bool(false))
-        }
+    fn compare_flags(left: &[bool], right: &[bool]) -> Result<ValueAndType, String> {
+        Ok((left == right).into_value_and_type())
     }
 
     fn compare_variants<F>(
-        left: &TypedVariant,
-        right: &TypedVariant,
+        left_case_idx: u32,
+        left_case_value: &Option<Box<Value>>,
+        left_type: &TypeVariant,
+        right_case_idx: u32,
+        right_case_value: &Option<Box<Value>>,
+        right_type: &TypeVariant,
         compare: F,
-    ) -> Result<TypeAnnotatedValue, String>
+    ) -> Result<ValueAndType, String>
     where
         F: Fn(LiteralValue, LiteralValue) -> bool,
     {
-        if left.case_name == right.case_name {
-            match (
-                left.case_value.clone().and_then(|x| x.type_annotated_value),
-                right
-                    .case_value
-                    .clone()
-                    .and_then(|x| x.type_annotated_value),
-            ) {
+        if left_case_idx == right_case_idx {
+            match (left_case_value, right_case_value) {
                 (Some(left_val), Some(right_val)) => {
-                    compare_typed_value(&left_val, &right_val, compare)
+                    let left_typ = left_type
+                        .cases
+                        .get(left_case_idx as usize)
+                        .ok_or("Left case index is out of bounds for the type variant".to_string())?
+                        .typ
+                        .clone();
+                    let right_typ = right_type
+                        .cases
+                        .get(right_case_idx as usize)
+                        .ok_or(
+                            "Right case index is out of bounds for the type variant".to_string(),
+                        )?
+                        .typ
+                        .clone();
+                    match (left_typ, right_typ) {
+                        (Some(left_typ), Some(right_typ)) => compare_typed_value(
+                            &ValueAndType::new(*left_val.clone(), left_typ),
+                            &ValueAndType::new(*right_val.clone(), right_typ),
+                            compare,
+                        ),
+                        _ => Ok(true.into_value_and_type()),
+                    }
                 }
-                _ => Ok(TypeAnnotatedValue::Bool(true)),
+                _ => Ok(true.into_value_and_type()),
             }
         } else {
-            Ok(TypeAnnotatedValue::Bool(false))
+            Ok(false.into_value_and_type())
         }
     }
 
-    fn compare_enums(left: &TypedEnum, right: &TypedEnum) -> Result<TypeAnnotatedValue, String> {
-        if left.value == right.value {
-            Ok(TypeAnnotatedValue::Bool(true))
-        } else {
-            Ok(TypeAnnotatedValue::Bool(false))
-        }
+    fn compare_enums(left_idx: u32, right_idx: u32) -> Result<ValueAndType, String> {
+        Ok((left_idx == right_idx).into_value_and_type())
     }
 
-    fn unsupported_type_error(left: &TypeAnnotatedValue, right: &TypeAnnotatedValue) -> String {
-        let left = AnalysedType::try_from(left);
-        let right = AnalysedType::try_from(right);
-
-        match (left, right) {
-            (Ok(left), Ok(right)) => {
-                format!("Unsupported op {:?}, {:?}", left, right)
-            }
-            _ => "Unsupported types. Un-identified types".to_string(),
-        }
+    fn unsupported_type_error(left: &ValueAndType, right: &ValueAndType) -> String {
+        format!("Unsupported op {:?}, {:?}", left.typ, right.typ)
     }
 }

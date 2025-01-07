@@ -14,8 +14,8 @@ harness = false
 golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
 golem-common = { path = "../golem-common", version = "0.0.0" }
 golem-service-base = { path = "../golem-service-base", version = "0.0.0" }
-golem-wasm-ast = { workspace = true }
-golem-wasm-rpc = { workspace = true }
+golem-wasm-ast = { path = "../wasm-ast", version = "0.0.0" }
+golem-wasm-rpc = { path = "../wasm-rpc", version = "0.0.0", default-features = false, features = ["host"] }
 
 anyhow = { workspace = true }
 async-dropper = { version = "0.3.1", features = ["simple", "tokio"] }
@@ -23,9 +23,9 @@ async-dropper-simple = { version = "0.2.6", features = ["no-default-bound"] }
 async-scoped = "0.9.0"
 async-trait = { workspace = true }
 bytes = { workspace = true }
+chrono = { workspace = true }
 clap = { workspace = true }
 cli-table = { workspace = true }
-chrono = { workspace = true }
 colored = "2.1.0"
 console-subscriber = { workspace = true }
 itertools = { workspace = true }
@@ -33,6 +33,7 @@ k8s-openapi = { workspace = true }
 kill_tree = { version = "0.2.4", features = ["tokio"] }
 kube = { workspace = true }
 kube-derive = { workspace = true }
+log = { workspace = true }
 once_cell = { workspace = true }
 postgres = { workspace = true }
 redis = { workspace = true }
@@ -49,7 +50,6 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
-log = { version = "0.4.22", features = [] }
 
 [dev-dependencies]
 test-r = { workspace = true }

@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::storage::blob::BlobStorage;
 use golem_wasm_rpc::wasmtime::ResourceStore;
-use golem_wasm_rpc::{Uri, Value};
+use golem_wasm_rpc::{HostWasmRpc, RpcError, Uri, Value, WitValue};
 use golem_worker_executor_base::services::file_loader::FileLoader;
 use prometheus::Registry;
 
@@ -18,8 +18,8 @@ use std::sync::{Arc, RwLock, Weak};
 
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId,
-    PluginInstallationId, ScanCursor, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
-    WorkerStatusRecord,
+    PluginInstallationId, ScanCursor, TargetWorkerId, WorkerFilter, WorkerId, WorkerMetadata,
+    WorkerStatus, WorkerStatusRecord,
 };
 use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
 use golem_worker_executor_base::error::GolemError;
@@ -51,14 +51,14 @@ use golem_worker_executor_base::services::worker_event::WorkerEventService;
 use golem_worker_executor_base::services::{plugins, All, HasAll, HasConfig, HasOplogService};
 use golem_worker_executor_base::wasi_host::create_linker;
 use golem_worker_executor_base::workerctx::{
-    ExternalOperations, FileSystemReading, FuelManagement, IndexedResourceStore, InvocationHooks,
-    InvocationManagement, StatusManagement, UpdateManagement, WorkerCtx,
+    DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement, IndexedResourceStore,
+    InvocationHooks, InvocationManagement, StatusManagement, UpdateManagement, WorkerCtx,
 };
 use golem_worker_executor_base::Bootstrap;
 
 use tokio::runtime::Handle;
 
-use tokio::task::JoinHandle;
+use tokio::task::JoinSet;
 
 use golem::api0_2_0;
 use golem_common::config::RedisConfig;
@@ -79,9 +79,12 @@ use golem_test_framework::components::shard_manager::ShardManager;
 use golem_test_framework::components::worker_executor_cluster::WorkerExecutorCluster;
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::to_worker_metadata;
+use golem_wasm_rpc::golem::rpc::types::{FutureInvokeResult, WasmRpc};
+use golem_wasm_rpc::golem::rpc::types::{HostFutureInvokeResult, Pollable};
 use golem_worker_executor_base::preview2::golem;
-use golem_worker_executor_base::preview2::golem::api1_1_0_rc1;
+use golem_worker_executor_base::preview2::golem::api1_1_0;
 use golem_worker_executor_base::services::events::Events;
+use golem_worker_executor_base::services::oplog::plugin::OplogProcessorPlugin;
 use golem_worker_executor_base::services::plugins::{Plugins, PluginsObservations};
 use golem_worker_executor_base::services::rpc::{
     DirectWorkerInvocationRpc, RemoteInvocationRpc, Rpc,
@@ -92,12 +95,14 @@ use golem_worker_executor_base::services::worker_enumeration::{
 use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
 use golem_worker_executor_base::worker::{RetryDecision, Worker};
 use tonic::transport::Channel;
-use tracing::{debug, error, info};
-use wasmtime::component::{Instance, Linker, ResourceAny};
+use tracing::{debug, info};
+use wasmtime::component::{Component, Instance, Linker, Resource, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
+use wasmtime_wasi::WasiView;
+use wasmtime_wasi_http::WasiHttpView;
 
 pub struct TestWorkerExecutor {
-    handle: Option<JoinHandle<Result<(), String>>>,
+    _join_set: Option<JoinSet<anyhow::Result<()>>>,
     deps: WorkerExecutorPerTestDependencies,
 }
 
@@ -186,7 +191,7 @@ impl TestWorkerExecutor {
 impl Clone for TestWorkerExecutor {
     fn clone(&self) -> Self {
         Self {
-            handle: None,
+            _join_set: None,
             deps: self.deps.clone(),
         }
     }
@@ -200,6 +205,10 @@ impl TestDependencies for TestWorkerExecutor {
 
     fn redis(&self) -> Arc<dyn Redis + Send + Sync + 'static> {
         self.deps.redis()
+    }
+
+    fn blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync + 'static> {
+        self.deps.blob_storage()
     }
 
     fn redis_monitor(&self) -> Arc<dyn RedisMonitor + Send + Sync + 'static> {
@@ -243,20 +252,8 @@ impl TestDependencies for TestWorkerExecutor {
         self.deps.worker_executor_cluster()
     }
 
-    fn blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync + 'static> {
-        self.deps.blob_storage()
-    }
-
     fn initial_component_files_service(&self) -> Arc<InitialComponentFilesService> {
         self.deps.initial_component_files_service()
-    }
-}
-
-impl Drop for TestWorkerExecutor {
-    fn drop(&mut self) {
-        if let Some(handle) = &self.handle {
-            handle.abort()
-        }
     }
 }
 
@@ -341,16 +338,9 @@ pub async fn start_limited(
 
     let grpc_port = config.port;
 
-    let server_handle = tokio::spawn(async move {
-        let r = run(config, prometheus, handle)
-            .await
-            .map_err(|e| format!("{e}"));
-        match &r {
-            Ok(_) => info!("Server finished successfully"),
-            Err(e) => error!("Server finished with error: {e}"),
-        }
-        r
-    });
+    let mut join_set = JoinSet::new();
+
+    run(config, prometheus, handle, &mut join_set).await?;
 
     let start = std::time::Instant::now();
     loop {
@@ -362,7 +352,7 @@ pub async fn start_limited(
                 context.grpc_port(),
             );
             break Ok(TestWorkerExecutor {
-                handle: Some(server_handle),
+                _join_set: Some(join_set),
                 deps,
             });
         } else if start.elapsed().as_secs() > 10 {
@@ -375,11 +365,15 @@ async fn run(
     golem_config: GolemConfig,
     prometheus_registry: Registry,
     runtime: Handle,
-) -> Result<(), Box<dyn std::error::Error>> {
+    join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+) -> Result<(), anyhow::Error> {
     info!("Golem Worker Executor starting up...");
-    Ok(ServerBootstrap {}
-        .run(golem_config, prometheus_registry, runtime)
-        .await?)
+
+    ServerBootstrap {}
+        .run(golem_config, prometheus_registry, runtime, join_set)
+        .await?;
+
+    Ok(())
 }
 
 struct TestWorkerCtx {
@@ -591,7 +585,7 @@ impl ResourceStore for TestWorkerCtx {
     }
 
     async fn get(&mut self, resource_id: u64) -> Option<ResourceAny> {
-        self.durable_ctx.get(resource_id).await
+        ResourceStore::get(&mut self.durable_ctx, resource_id).await
     }
 
     async fn borrow(&self, resource_id: u64) -> Option<ResourceAny> {
@@ -693,6 +687,14 @@ impl WorkerCtx for TestWorkerCtx {
         Ok(Self { durable_ctx })
     }
 
+    fn as_wasi_view(&mut self) -> impl WasiView {
+        self.durable_ctx.as_wasi_view()
+    }
+
+    fn as_wasi_http_view(&mut self) -> impl WasiHttpView {
+        self.durable_ctx.as_wasi_http_view()
+    }
+
     fn get_public_state(&self) -> &Self::PublicState {
         &self.durable_ctx.public_state
     }
@@ -703,6 +705,10 @@ impl WorkerCtx for TestWorkerCtx {
 
     fn worker_id(&self) -> &WorkerId {
         self.durable_ctx.worker_id()
+    }
+
+    fn owned_worker_id(&self) -> &OwnedWorkerId {
+        self.durable_ctx.owned_worker_id()
     }
 
     fn component_metadata(&self) -> &ComponentMetadata {
@@ -719,6 +725,15 @@ impl WorkerCtx for TestWorkerCtx {
 
     fn worker_proxy(&self) -> Arc<dyn WorkerProxy + Send + Sync> {
         self.durable_ctx.worker_proxy()
+    }
+
+    async fn generate_unique_local_worker_id(
+        &mut self,
+        remote_worker_id: TargetWorkerId,
+    ) -> Result<WorkerId, GolemError> {
+        self.durable_ctx
+            .generate_unique_local_worker_id(remote_worker_id)
+            .await
     }
 }
 
@@ -748,9 +763,9 @@ impl ResourceLimiterAsync for TestWorkerCtx {
 
     async fn table_growing(
         &mut self,
-        current: u32,
-        desired: u32,
-        _maximum: Option<u32>,
+        current: usize,
+        desired: usize,
+        _maximum: Option<usize>,
     ) -> anyhow::Result<bool> {
         debug!(
             "Table growing for {}: current: {}, desired: {}",
@@ -773,6 +788,85 @@ impl FileSystemReading for TestWorkerCtx {
 
     async fn read_file(&self, path: &ComponentFilePath) -> Result<ReadFileResult, GolemError> {
         self.durable_ctx.read_file(path).await
+    }
+}
+
+#[async_trait]
+impl HostWasmRpc for TestWorkerCtx {
+    async fn new(&mut self, location: Uri) -> anyhow::Result<Resource<WasmRpc>> {
+        self.durable_ctx.new(location).await
+    }
+
+    async fn invoke_and_await(
+        &mut self,
+        self_: Resource<WasmRpc>,
+        function_name: String,
+        function_params: Vec<WitValue>,
+    ) -> anyhow::Result<Result<WitValue, RpcError>> {
+        self.durable_ctx
+            .invoke_and_await(self_, function_name, function_params)
+            .await
+    }
+
+    async fn invoke(
+        &mut self,
+        self_: Resource<WasmRpc>,
+        function_name: String,
+        function_params: Vec<WitValue>,
+    ) -> anyhow::Result<Result<(), RpcError>> {
+        self.durable_ctx
+            .invoke(self_, function_name, function_params)
+            .await
+    }
+
+    async fn async_invoke_and_await(
+        &mut self,
+        self_: Resource<WasmRpc>,
+        function_name: String,
+        function_params: Vec<WitValue>,
+    ) -> anyhow::Result<Resource<FutureInvokeResult>> {
+        self.durable_ctx
+            .async_invoke_and_await(self_, function_name, function_params)
+            .await
+    }
+
+    async fn drop(&mut self, rep: Resource<WasmRpc>) -> anyhow::Result<()> {
+        HostWasmRpc::drop(&mut self.durable_ctx, rep).await
+    }
+}
+
+#[async_trait]
+impl HostFutureInvokeResult for TestWorkerCtx {
+    async fn subscribe(
+        &mut self,
+        self_: Resource<FutureInvokeResult>,
+    ) -> anyhow::Result<Resource<Pollable>> {
+        HostFutureInvokeResult::subscribe(&mut self.durable_ctx, self_).await
+    }
+
+    async fn get(
+        &mut self,
+        self_: Resource<FutureInvokeResult>,
+    ) -> anyhow::Result<Option<Result<WitValue, RpcError>>> {
+        HostFutureInvokeResult::get(&mut self.durable_ctx, self_).await
+    }
+
+    async fn drop(&mut self, rep: Resource<FutureInvokeResult>) -> anyhow::Result<()> {
+        HostFutureInvokeResult::drop(&mut self.durable_ctx, rep).await
+    }
+}
+
+#[async_trait]
+impl DynamicLinking<TestWorkerCtx> for TestWorkerCtx {
+    fn link(
+        &mut self,
+        engine: &Engine,
+        linker: &mut Linker<TestWorkerCtx>,
+        component: &Component,
+        component_metadata: &ComponentMetadata,
+    ) -> anyhow::Result<()> {
+        self.durable_ctx
+            .link(engine, linker, component, component_metadata)
     }
 }
 
@@ -817,13 +911,14 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         shard_service: Arc<dyn ShardService + Send + Sync>,
         key_value_service: Arc<dyn KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
-        worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
+        worker_activator: Arc<dyn WorkerActivator<TestWorkerCtx> + Send + Sync>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn Plugins<DefaultPluginOwner, DefaultPluginScope> + Send + Sync>,
+        oplog_processor_plugin: Arc<dyn OplogProcessorPlugin + Send + Sync>,
     ) -> anyhow::Result<All<TestWorkerCtx>> {
         let rpc = Arc::new(DirectWorkerInvocationRpc::new(
             Arc::new(RemoteInvocationRpc::new(
@@ -850,6 +945,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             events.clone(),
             file_loader.clone(),
             plugins.clone(),
+            oplog_processor_plugin.clone(),
             (),
         ));
         Ok(All::new(
@@ -875,6 +971,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             events,
             file_loader,
             plugins,
+            oplog_processor_plugin,
             (),
         ))
     }
@@ -882,7 +979,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
     fn create_wasmtime_linker(&self, engine: &Engine) -> anyhow::Result<Linker<TestWorkerCtx>> {
         let mut linker = create_linker(engine, get_durable_ctx)?;
         api0_2_0::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-        api1_1_0_rc1::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+        api1_1_0::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         golem_wasm_rpc::golem::rpc::types::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         Ok(linker)
     }

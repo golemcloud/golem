@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,26 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use async_trait::async_trait;
-use bytes::Bytes;
-use golem_common::redis::RedisPool;
+use std::path::{Path, PathBuf};
 
 use crate::error::ShardManagerError;
 use crate::model::{RoutingTable, ShardManagerState};
+use async_trait::async_trait;
+use bytes::Bytes;
+use golem_common::redis::RedisPool;
+use golem_common::serialization::{deserialize, serialize};
 
 #[async_trait]
-pub trait PersistenceService {
+pub trait RoutingTablePersistence {
     async fn write(&self, routing_table: &RoutingTable) -> Result<(), ShardManagerError>;
     async fn read(&self) -> Result<RoutingTable, ShardManagerError>;
 }
 
-pub struct PersistenceServiceDefault {
+pub struct RoutingTableRedisPersistence {
     pool: RedisPool,
     number_of_shards: usize,
 }
 
 #[async_trait]
-impl PersistenceService for PersistenceServiceDefault {
+impl RoutingTablePersistence for RoutingTableRedisPersistence {
     async fn write(&self, routing_table: &RoutingTable) -> Result<(), ShardManagerError> {
         let shard_manager_state = ShardManagerState::new(routing_table);
         let key = "shard:shard_manager_state";
@@ -70,11 +72,48 @@ impl PersistenceService for PersistenceServiceDefault {
     }
 }
 
-impl PersistenceServiceDefault {
-    pub fn new(pool: &RedisPool, number_of_shards: &usize) -> Self {
+impl RoutingTableRedisPersistence {
+    pub fn new(pool: &RedisPool, number_of_shards: usize) -> Self {
         Self {
             pool: pool.clone(),
-            number_of_shards: *number_of_shards,
+            number_of_shards,
+        }
+    }
+}
+
+pub struct RoutingTableFileSystemPersistence {
+    path: PathBuf,
+    number_of_shards: usize,
+}
+
+impl RoutingTableFileSystemPersistence {
+    pub async fn new(path: &Path, number_of_shards: usize) -> std::io::Result<Self> {
+        tokio::fs::create_dir_all(path.parent().unwrap()).await?;
+        Ok(Self {
+            path: path.to_path_buf(),
+            number_of_shards,
+        })
+    }
+}
+
+#[async_trait]
+impl RoutingTablePersistence for RoutingTableFileSystemPersistence {
+    async fn write(&self, routing_table: &RoutingTable) -> Result<(), ShardManagerError> {
+        let shard_manager_state = ShardManagerState::new(routing_table);
+        let encoded =
+            serialize(&shard_manager_state).map_err(ShardManagerError::SerializationError)?;
+        tokio::fs::write(&self.path, encoded).await?;
+        Ok(())
+    }
+
+    async fn read(&self) -> Result<RoutingTable, ShardManagerError> {
+        if tokio::fs::try_exists(&self.path).await? {
+            let bytes = tokio::fs::read(&self.path).await?;
+            let shard_manager_state: ShardManagerState =
+                deserialize(&bytes).map_err(ShardManagerError::SerializationError)?;
+            Ok(shard_manager_state.get_routing_table())
+        } else {
+            Ok(RoutingTable::new(self.number_of_shards))
         }
     }
 }

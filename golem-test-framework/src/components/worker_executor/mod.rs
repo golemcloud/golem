@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -146,6 +146,18 @@ impl WorkerExecutorEnvVars for GolemEnvVars {
             )
             .with_str(
                 "GOLEM__COMPONENT_SERVICE__CONFIG__ACCESS_TOKEN",
+                "2A354594-7A63-4091-A46B-CC58D379F677",
+            )
+            .with_str(
+                "GOLEM__PLUGIN_SERVICE__CONFIG__HOST",
+                &component_service.private_host(),
+            )
+            .with(
+                "GOLEM__PLUGIN_SERVICE__CONFIG__PORT",
+                component_service.private_grpc_port().to_string(),
+            )
+            .with_str(
+                "GOLEM__PLUGIN_SERVICE__CONFIG__ACCESS_TOKEN",
                 "2A354594-7A63-4091-A46B-CC58D379F677",
             )
             .with_str("GOLEM__COMPILED_COMPONENT_SERVICE__TYPE", "Enabled")

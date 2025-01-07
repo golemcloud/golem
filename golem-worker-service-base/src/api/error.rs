@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -105,9 +105,14 @@ impl From<WorkerServiceError> for WorkerApiBaseError {
             | ServiceError::WorkerNotFound(_) => WorkerApiBaseError::NotFound(Json(ErrorBody {
                 error: error.to_safe_string(),
             })),
-            ServiceError::Golem(golem_error) => {
-                WorkerApiBaseError::InternalError(Json(GolemErrorBody { golem_error }))
-            }
+            ServiceError::Golem(golem_error) => match golem_error {
+                GolemError::WorkerNotFound(error) => {
+                    WorkerApiBaseError::NotFound(Json(ErrorBody {
+                        error: error.to_safe_string(),
+                    }))
+                }
+                _ => WorkerApiBaseError::InternalError(Json(GolemErrorBody { golem_error })),
+            },
             ServiceError::Component(error) => error.into(),
             ServiceError::InternalCallError(_) => internal(error.to_safe_string()),
             ServiceError::FileNotFound(_) => WorkerApiBaseError::NotFound(Json(ErrorBody {

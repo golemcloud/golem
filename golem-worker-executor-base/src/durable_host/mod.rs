@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,11 +18,11 @@
 use crate::durable_host::http::serialized::SerializableHttpRequest;
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
 use crate::durable_host::replay_state::ReplayState;
-use crate::durable_host::sync_helper::{SyncHelper, SyncHelperPermit};
+use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::wasm_rpc::UrnExtensions;
 use crate::error::GolemError;
 use crate::function_result_interpreter::interpret_function_results;
-use crate::invocation::{invoke_worker, InvokeResult};
+use crate::invocation::{find_first_available_function, invoke_worker, InvokeResult};
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
 use crate::model::{
     CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, ListDirectoryResult,
@@ -58,7 +58,6 @@ pub use durability::*;
 use futures::future::try_join_all;
 use futures_util::TryFutureExt;
 use futures_util::TryStreamExt;
-use golem_common::config::RetryConfig;
 use golem_common::model::component::ComponentOwner;
 use golem_common::model::oplog::{
     IndexedResourceKey, LogLevel, OplogEntry, OplogIndex, UpdateDescription, WorkerError,
@@ -74,6 +73,7 @@ use golem_common::model::{
     ScheduledAction, SuccessfulUpdateRecord, Timestamp, WorkerEvent, WorkerFilter, WorkerId,
     WorkerMetadata, WorkerResourceDescription, WorkerStatus, WorkerStatusRecord,
 };
+use golem_common::model::{RetryConfig, TargetWorkerId};
 use golem_common::retries::get_delay;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::wasmtime::ResourceStore;
@@ -93,13 +93,14 @@ use wasmtime::component::{Instance, Resource, ResourceAny};
 use wasmtime::{AsContext, AsContextMut};
 use wasmtime_wasi::bindings::filesystem::preopens::Descriptor;
 use wasmtime_wasi::{
-    FsResult, I32Exit, ResourceTable, ResourceTableError, Stderr, Stdout, WasiCtx, WasiView,
+    FsResult, I32Exit, ResourceTable, ResourceTableError, Stderr, Stdout, WasiCtx, WasiImpl,
+    WasiView,
 };
 use wasmtime_wasi_http::body::HyperOutgoingBody;
 use wasmtime_wasi_http::types::{
     default_send_request, HostFutureIncomingResponse, OutgoingRequestConfig,
 };
-use wasmtime_wasi_http::{HttpResult, WasiHttpCtx, WasiHttpView};
+use wasmtime_wasi_http::{HttpResult, WasiHttpCtx, WasiHttpImpl, WasiHttpView};
 
 pub mod blobstore;
 mod cli;
@@ -116,8 +117,8 @@ mod sockets;
 pub mod wasm_rpc;
 
 mod durability;
+mod dynamic_linking;
 mod replay_state;
-mod sync_helper;
 
 /// Partial implementation of the WorkerCtx interfaces for adding durable execution to workers.
 pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
@@ -288,6 +289,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &self.owned_worker_id.worker_id
     }
 
+    pub fn owned_worker_id(&self) -> &OwnedWorkerId {
+        &self.owned_worker_id
+    }
+
     pub fn component_metadata(&self) -> &ComponentMetadata {
         &self.state.component_metadata
     }
@@ -299,21 +304,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .map(|exit| exit.0)
     }
 
-    pub fn as_wasi_view(&mut self) -> DurableWorkerCtxWasiView<Ctx> {
-        DurableWorkerCtxWasiView(self)
+    pub fn as_wasi_view(&mut self) -> WasiImpl<DurableWorkerCtxWasiView<Ctx>> {
+        WasiImpl(DurableWorkerCtxWasiView(self))
     }
 
-    pub fn as_wasi_http_view(&mut self) -> DurableWorkerCtxWasiHttpView<Ctx> {
-        DurableWorkerCtxWasiHttpView(self)
-    }
-
-    pub(crate) async fn begin_async_host_function(&self) -> Result<SyncHelperPermit, GolemError> {
-        self.state.sync_helper.sync().await
-    }
-
-    pub async fn flush(&self) -> Result<(), GolemError> {
-        let _ = self.state.sync_helper.sync().await?;
-        Ok(())
+    pub fn as_wasi_http_view(&mut self) -> WasiHttpImpl<DurableWorkerCtxWasiHttpView<Ctx>> {
+        WasiHttpImpl(DurableWorkerCtxWasiHttpView(self))
     }
 
     pub async fn update_worker_status(&self, f: impl FnOnce(&mut WorkerStatusRecord)) {
@@ -476,6 +472,32 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             }
         }
     }
+
+    pub async fn generate_unique_local_worker_id(
+        &mut self,
+        remote_worker_id: TargetWorkerId,
+    ) -> Result<WorkerId, GolemError> {
+        match remote_worker_id.clone().try_into_worker_id() {
+            Some(worker_id) => Ok(worker_id),
+            None => {
+                let worker_id = Durability::<Ctx, (), WorkerId, SerializableError>::wrap(
+                    self,
+                    WrappedFunctionType::ReadLocal,
+                    "golem::rpc::wasm-rpc::generate_unique_local_worker_id",
+                    (),
+                    |ctx| {
+                        Box::pin(async move {
+                            ctx.rpc()
+                                .generate_unique_local_worker_id(remote_worker_id)
+                                .await
+                        })
+                    },
+                )
+                .await?;
+                Ok(worker_id)
+            }
+        }
+    }
 }
 
 impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
@@ -509,64 +531,81 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                             .await
                         {
                             Ok(Some(data)) => {
-                                let idempotency_key = IdempotencyKey::fresh();
-                                store
-                                    .as_context_mut()
-                                    .data_mut()
-                                    .durable_ctx_mut()
-                                    .set_current_idempotency_key(idempotency_key.clone())
+                                let failed = if let Some(load_snapshot) =
+                                    find_first_available_function(
+                                        store,
+                                        instance,
+                                        vec![
+                                            "golem:api/load-snapshot@1.1.0.{load}".to_string(),
+                                            "golem:api/load-snapshot@0.2.0.{load}".to_string(),
+                                        ],
+                                    ) {
+                                    let idempotency_key = IdempotencyKey::fresh();
+                                    store
+                                        .as_context_mut()
+                                        .data_mut()
+                                        .durable_ctx_mut()
+                                        .set_current_idempotency_key(idempotency_key.clone())
+                                        .await;
+
+                                    store
+                                        .as_context_mut()
+                                        .data_mut()
+                                        .begin_call_snapshotting_function();
+                                    let load_result = invoke_worker(
+                                        load_snapshot,
+                                        vec![Value::List(
+                                            data.iter().map(|b| Value::U8(*b)).collect(),
+                                        )],
+                                        store,
+                                        instance,
+                                    )
                                     .await;
+                                    store
+                                        .as_context_mut()
+                                        .data_mut()
+                                        .end_call_snapshotting_function();
 
-                                store
-                                    .as_context_mut()
-                                    .data_mut()
-                                    .begin_call_snapshotting_function();
-                                let load_result = invoke_worker(
-                                    "golem:api/load-snapshot@0.2.0.{load}".to_string(),
-                                    vec![Value::List(data.iter().map(|b| Value::U8(*b)).collect())],
-                                    store,
-                                    instance,
-                                )
-                                .await;
-                                store
-                                    .as_context_mut()
-                                    .data_mut()
-                                    .end_call_snapshotting_function();
-
-                                let failed = match load_result {
-                                    Err(error) => Some(format!(
-                                        "Manual update failed to load snapshot: {error}"
-                                    )),
-                                    Ok(InvokeResult::Failed { error, .. }) => {
-                                        let stderr = store
-                                            .as_context()
-                                            .data()
-                                            .get_public_state()
-                                            .event_service()
-                                            .get_last_invocation_errors();
-                                        let error = error.to_string(&stderr);
-                                        Some(format!(
+                                    match load_result {
+                                        Err(error) => Some(format!(
                                             "Manual update failed to load snapshot: {error}"
-                                        ))
-                                    }
-                                    Ok(InvokeResult::Succeeded { output, .. }) => {
-                                        if output.len() == 1 {
-                                            match &output[0] {
-                                                Value::Result(Err(Some(boxed_error_value))) => {
-                                                    match &**boxed_error_value {
-                                                        Value::String(error) =>
-                                                            Some(format!("Manual update failed to load snapshot: {error}")),
-                                                        _ =>
-                                                            Some("Unexpected result value from the snapshot load function".to_string())
-                                                    }
-                                                }
-                                                _ => None
-                                            }
-                                        } else {
-                                            Some("Unexpected result value from the snapshot load function".to_string())
+                                        )),
+                                        Ok(InvokeResult::Failed { error, .. }) => {
+                                            let stderr = store
+                                                .as_context()
+                                                .data()
+                                                .get_public_state()
+                                                .event_service()
+                                                .get_last_invocation_errors();
+                                            let error = error.to_string(&stderr);
+                                            Some(format!(
+                                                "Manual update failed to load snapshot: {error}"
+                                            ))
                                         }
+                                        Ok(InvokeResult::Succeeded { output, .. }) => {
+                                            if output.len() == 1 {
+                                                match &output[0] {
+                                                        Value::Result(Err(Some(boxed_error_value))) => {
+                                                            match &**boxed_error_value {
+                                                                Value::String(error) =>
+                                                                    Some(format!("Manual update failed to load snapshot: {error}")),
+                                                                _ =>
+                                                                    Some("Unexpected result value from the snapshot load function".to_string())
+                                                            }
+                                                        }
+                                                        _ => None
+                                                    }
+                                            } else {
+                                                Some("Unexpected result value from the snapshot load function".to_string())
+                                            }
+                                        }
+                                        _ => None,
                                     }
-                                    _ => None,
+                                } else {
+                                    Some(
+                                        "Failed to find exported load-snapshot function"
+                                            .to_string(),
+                                    )
                                 };
 
                                 if let Some(error) = failed {
@@ -705,8 +744,6 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
     }
 
     async fn set_suspended(&self) -> Result<(), GolemError> {
-        self.flush().await?; // Synchronize with SyncHelper
-
         let mut execution_status = self.execution_status.write().unwrap();
         let current_execution_status = execution_status.clone();
         match current_execution_status {
@@ -1421,6 +1458,10 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
     async fn on_shard_assignment_changed<T: HasAll<Ctx> + Send + Sync + 'static>(
         this: &T,
     ) -> Result<(), anyhow::Error> {
+        this.oplog_processor_plugin()
+            .on_shard_assignment_changed()
+            .await?;
+
         info!("Recovering workers");
 
         let workers = this.worker_service().get_running_workers_in_shards().await;
@@ -1774,7 +1815,6 @@ pub struct PrivateDurableWorkerState<Owner: PluginOwner, Scope: PluginScope> {
     component_metadata: ComponentMetadata,
 
     total_linear_memory_size: u64,
-    sync_helper: SyncHelper,
 }
 
 impl<Owner: PluginOwner, Scope: PluginScope> PrivateDurableWorkerState<Owner, Scope> {
@@ -1835,7 +1875,6 @@ impl<Owner: PluginOwner, Scope: PluginScope> PrivateDurableWorkerState<Owner, Sc
             indexed_resources: HashMap::new(),
             component_metadata,
             total_linear_memory_size,
-            sync_helper: SyncHelper::new(oplog.clone(), replay_state.clone()),
             replay_state,
         }
     }
@@ -1914,35 +1953,6 @@ impl<Owner: PluginOwner, Scope: PluginScope> PrivateDurableWorkerState<Owner, Sc
         } else {
             let begin_index = self.oplog.current_oplog_index().await;
             Ok(begin_index)
-        }
-    }
-
-    pub fn end_function_sync(
-        &mut self,
-        wrapped_function_type: &WrappedFunctionType,
-        begin_index: OplogIndex,
-    ) -> Result<(), GolemError> {
-        if self.persistence_level != PersistenceLevel::PersistNothing
-            && ((*wrapped_function_type == WrappedFunctionType::WriteRemote
-                && !self.assume_idempotence)
-                || matches!(
-                    *wrapped_function_type,
-                    WrappedFunctionType::WriteRemoteBatched(None)
-                ))
-        {
-            if self.is_live() {
-                self.sync_helper
-                    .write_oplog_entry(OplogEntry::end_remote_write(begin_index));
-                Ok(())
-            } else {
-                self.sync_helper.skip_oplog_entry(
-                    Box::new(|entry| matches!(entry, OplogEntry::EndRemoteWrite { .. })),
-                    "EndRemoteWrite",
-                );
-                Ok(())
-            }
-        } else {
-            Ok(())
         }
     }
 

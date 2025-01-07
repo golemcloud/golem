@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -37,13 +37,13 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         let names = {
             if durability.is_live() {
-                let result = Ok(current_dirs
+                let result: Result<Vec<String>, anyhow::Error> = Ok(current_dirs
                     .iter()
                     .map(|(_, name)| name.clone())
                     .collect::<Vec<_>>());
                 durability.persist(self, (), result).await
             } else {
-                durability.replay(self)
+                durability.replay(self).await
             }
         }?;
 
@@ -61,12 +61,5 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 "Not all previously available pre-opened directories were found"
             ))
         }
-    }
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {
-    async fn get_directories(&mut self) -> anyhow::Result<Vec<(Resource<Descriptor>, String)>> {
-        (*self).get_directories().await
     }
 }

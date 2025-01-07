@@ -13,9 +13,9 @@ include = ["src/**/*", "Cargo.toml", "build.rs", "openapi/**/*"]
 harness = false
 
 [dependencies]
-golem-common = { path = "../golem-common", version = "0.0.0" }
-golem-wasm-ast = { workspace = true }
-golem-wasm-rpc = { workspace = true }
+golem-common = { path = "../golem-common", version = "0.0.0", default-features = false }
+golem-wasm-ast = { path = "../wasm-ast", version = "0.0.0", default-features = false, features = ["analysis"] }
+golem-wasm-rpc = { path = "../wasm-rpc", version = "0.0.0", default-features = false }
 
 async-trait = { workspace = true }
 bytes = { workspace = true }
@@ -34,4 +34,4 @@ test-r = { workspace = true }
 
 [build-dependencies]
 golem-openapi-client-generator = "0.0.12"
-relative-path = "1.9.2"
+relative-path = "1.9.3"

@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,6 +24,7 @@ use std::collections::VecDeque;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::time::Duration;
+use tracing::Instrument;
 
 pub struct EphemeralOplog {
     owned_worker_id: OwnedWorkerId,
@@ -127,10 +128,13 @@ impl Oplog for EphemeralOplog {
             }
             CommitLevel::Always => {
                 let clone = self.state.clone();
-                tokio::spawn(async move {
-                    let mut state = clone.lock().await;
-                    state.commit().await
-                });
+                tokio::spawn(
+                    async move {
+                        let mut state = clone.lock().await;
+                        state.commit().await
+                    }
+                    .in_current_span(),
+                );
             }
             CommitLevel::DurableOnly => {}
         }

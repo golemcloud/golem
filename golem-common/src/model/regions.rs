@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,11 +20,11 @@ use std::ops::RangeInclusive;
 
 use crate::model::oplog::OplogIndex;
 use bincode::{Decode, Encode};
-use poem_openapi::Object;
 use range_set_blaze::RangeSetBlaze;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Eq, PartialEq, Encode, Decode, Serialize, Deserialize, Object)]
+#[derive(Clone, Debug, Eq, PartialEq, Encode, Decode, Serialize, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 pub struct OplogRegion {
     pub start: OplogIndex,
     pub end: OplogIndex,

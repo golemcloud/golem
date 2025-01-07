@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::config::RetryConfig;
+use crate::model::RetryConfig;
 use crate::retries::RetryState;
 use dashmap::DashMap;
+use http::Uri;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -26,7 +27,7 @@ use tracing::{debug, debug_span, warn, Instrument};
 
 #[derive(Clone)]
 pub struct GrpcClient<T: Clone> {
-    endpoint: http_02::Uri,
+    endpoint: Uri,
     config: GrpcClientConfig,
     client: Arc<Mutex<Option<GrpcClientConnection<T>>>>,
     client_factory: Arc<dyn Fn(Channel) -> T + Send + Sync + 'static>,
@@ -37,7 +38,7 @@ impl<T: Clone> GrpcClient<T> {
     pub fn new(
         target_name: impl AsRef<str>,
         client_factory: impl Fn(Channel) -> T + Send + Sync + 'static,
-        endpoint: http_02::Uri,
+        endpoint: Uri,
         config: GrpcClientConfig,
     ) -> Self {
         Self {
@@ -114,7 +115,7 @@ impl<T: Clone> GrpcClient<T> {
 #[derive(Clone)]
 pub struct MultiTargetGrpcClient<T: Clone> {
     config: GrpcClientConfig,
-    clients: Arc<DashMap<http_02::Uri, GrpcClientConnection<T>>>,
+    clients: Arc<DashMap<Uri, GrpcClientConnection<T>>>,
     client_factory: Arc<dyn Fn(Channel) -> T + Send + Sync>,
     target_name: String,
 }
@@ -136,7 +137,7 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
     pub async fn call<F, R>(
         &self,
         description: impl AsRef<str>,
-        endpoint: http_02::Uri,
+        endpoint: Uri,
         f: F,
     ) -> Result<R, Status>
     where
@@ -182,10 +183,7 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
         }
     }
 
-    fn get(
-        &self,
-        endpoint: http_02::Uri,
-    ) -> Result<GrpcClientConnection<T>, tonic::transport::Error> {
+    fn get(&self, endpoint: Uri) -> Result<GrpcClientConnection<T>, tonic::transport::Error> {
         let connect_timeout = self.config.connect_timeout;
         let entry = self
             .clients

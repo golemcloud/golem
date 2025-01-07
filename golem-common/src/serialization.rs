@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,7 +14,6 @@
 
 use bincode::{Decode, Encode};
 use bytes::{BufMut, Bytes, BytesMut};
-use tracing::error;
 
 /// serde_json - no longer supported
 pub const SERIALIZATION_VERSION_V1: u8 = 1u8;
@@ -53,7 +52,8 @@ pub fn deserialize_with_version<T: Decode>(data: &[u8], version: u8) -> Result<T
     match try_deserialize_with_version(data, version)? {
         Some(value) => Ok(value),
         None => {
-            error!(
+            #[cfg(feature = "observability")]
+            tracing::error!(
                 version,
                 data = format!("{:?}", data),
                 "invalid serialization version"

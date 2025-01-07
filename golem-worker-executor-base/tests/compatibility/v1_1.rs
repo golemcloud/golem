@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,10 +17,10 @@ use test_r::test;
 
 use crate::compatibility::v1::backward_compatible;
 use goldenfile::Mint;
-use golem_common::config::RetryConfig;
 use golem_common::model::oplog::{
     IndexedResourceKey, OplogEntry, OplogIndex, OplogPayload, WorkerResourceId, WrappedFunctionType,
 };
+use golem_common::model::RetryConfig;
 use golem_common::model::{
     AccountId, ComponentId, IdempotencyKey, PluginInstallationId, Timestamp,
     TimestampedWorkerInvocation, WorkerId, WorkerInvocation, WorkerResourceDescription,

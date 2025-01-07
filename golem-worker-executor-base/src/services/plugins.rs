@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::error::GolemError;
-use crate::grpc::{authorised_grpc_request, UriBackConversion};
+use crate::grpc::authorised_grpc_request;
 use crate::services::golem_config::PluginServiceConfig;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
@@ -24,11 +24,11 @@ use golem_api_grpc::proto::golem::component::v1::{
 };
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::client::{GrpcClient, GrpcClientConfig};
-use golem_common::config::RetryConfig;
 use golem_common::model::plugin::{
     DefaultPluginOwner, DefaultPluginScope, PluginDefinition, PluginInstallation, PluginOwner,
     PluginScope,
 };
+use golem_common::model::RetryConfig;
 use golem_common::model::{AccountId, ComponentId, ComponentVersion, PluginInstallationId};
 use http::Uri;
 use std::sync::Arc;
@@ -284,7 +284,7 @@ impl DefaultGrpcPlugins {
                         .send_compressed(CompressionEncoding::Gzip)
                         .accept_compressed(CompressionEncoding::Gzip)
                 },
-                endpoint.as_http_02(),
+                endpoint.clone(),
                 GrpcClientConfig {
                     retries_on_unavailable: retry_config.clone(),
                     ..Default::default() // TODO
@@ -297,7 +297,7 @@ impl DefaultGrpcPlugins {
                         .send_compressed(CompressionEncoding::Gzip)
                         .accept_compressed(CompressionEncoding::Gzip)
                 },
-                endpoint.as_http_02(),
+                endpoint,
                 GrpcClientConfig {
                     retries_on_unavailable: retry_config.clone(),
                     ..Default::default()

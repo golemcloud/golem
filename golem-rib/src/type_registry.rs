@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,7 +14,6 @@
 
 use crate::call_type::CallType;
 use crate::DynamicParsedFunctionName;
-use golem_api_grpc::proto::golem::rib::registry_key::KeyType;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_ast::analysis::{AnalysedExport, TypeVariant};
 use std::collections::{HashMap, HashSet};
@@ -29,7 +28,7 @@ use std::fmt::{Display, Formatter};
 // has parameters, then the RegistryValue is considered a function type itself with parameter types,
 // and a return type that the member variant represents. If the variant has no parameters,
 // then the RegistryValue is simply an AnalysedType representing the variant type itself.
-// RegistryKey is more alligned to the component metdata, and possess all the complexities that the component metadata
+// RegistryKey is more aligned to the component metadata, and possess all the complexities that the component metadata
 // may have.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FunctionTypeRegistry {
@@ -220,8 +219,9 @@ impl RegistryKey {
     }
 
     // A parsed function name (the one that gets invoked with a worker) can correspond
-    // to multiple registry keys. This is mainly because a function may have a constructor component
-    // along with the method name. Otherwise it's only 1 key that correspond to the Fqn.
+    // to multiple registry keys. For example: this is mainly because a function can have a constructor component
+    // along with the method name (2 registry keys correspond to this 1 function).
+    // Otherwise it's only 1 key that correspond to the Fqn always.
     pub fn registry_keys_of_function(
         function_name: &DynamicParsedFunctionName,
     ) -> Vec<RegistryKey> {
@@ -235,7 +235,8 @@ impl RegistryKey {
     }
 
     // To obtain the registry key that correspond to the FQN of the function
-    // Not that it doesn't provide the registry key corresponding to the constructor of a resource
+    // Note that, it will not provide the registry key corresponding to the constructor of a resource
+    // if the function was part of a resource
     pub fn fqn_registry_key(function: &DynamicParsedFunctionName) -> RegistryKey {
         let resource_method_name_in_metadata = function.function_name_with_prefix_identifiers();
 
@@ -282,54 +283,6 @@ impl RegistryKey {
                     interface_name: interface_name.to_string(),
                     function_name: function_name.function_name_with_prefix_identifiers(),
                 },
-            },
-        }
-    }
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::rib::RegistryKey> for RegistryKey {
-    type Error = String;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::rib::RegistryKey,
-    ) -> Result<Self, Self::Error> {
-        let key_type = value.key_type.ok_or("key type missing")?;
-
-        let registry_key = match key_type {
-            KeyType::FunctionName(string) => RegistryKey::FunctionName(string.name),
-            KeyType::FunctionNameWithInterface(function_with_interface) => {
-                let interface_name = function_with_interface.interface_name.clone();
-                let function_name = function_with_interface.function_name;
-
-                RegistryKey::FunctionNameWithInterface {
-                    interface_name,
-                    function_name,
-                }
-            }
-        };
-
-        Ok(registry_key)
-    }
-}
-
-impl From<RegistryKey> for golem_api_grpc::proto::golem::rib::RegistryKey {
-    fn from(value: RegistryKey) -> Self {
-        match value {
-            RegistryKey::FunctionName(str) => golem_api_grpc::proto::golem::rib::RegistryKey {
-                key_type: Some(KeyType::FunctionName(
-                    golem_api_grpc::proto::golem::rib::FunctionName { name: str },
-                )),
-            },
-            RegistryKey::FunctionNameWithInterface {
-                function_name,
-                interface_name,
-            } => golem_api_grpc::proto::golem::rib::RegistryKey {
-                key_type: Some(KeyType::FunctionNameWithInterface(
-                    golem_api_grpc::proto::golem::rib::FunctionNameWithInterface {
-                        interface_name,
-                        function_name,
-                    },
-                )),
             },
         }
     }
@@ -455,6 +408,61 @@ mod internal {
             AnalysedType::S8(_) => {}
             AnalysedType::Bool(_) => {}
             AnalysedType::Handle(_) => {}
+        }
+    }
+}
+
+#[cfg(feature = "protobuf")]
+mod protobuf {
+
+    use crate::RegistryKey;
+    use golem_api_grpc::proto::golem::rib::registry_key::KeyType;
+
+    impl TryFrom<golem_api_grpc::proto::golem::rib::RegistryKey> for RegistryKey {
+        type Error = String;
+
+        fn try_from(
+            value: golem_api_grpc::proto::golem::rib::RegistryKey,
+        ) -> Result<Self, Self::Error> {
+            let key_type = value.key_type.ok_or("key type missing")?;
+
+            let registry_key = match key_type {
+                KeyType::FunctionName(string) => RegistryKey::FunctionName(string.name),
+                KeyType::FunctionNameWithInterface(function_with_interface) => {
+                    let interface_name = function_with_interface.interface_name.clone();
+                    let function_name = function_with_interface.function_name;
+
+                    RegistryKey::FunctionNameWithInterface {
+                        interface_name,
+                        function_name,
+                    }
+                }
+            };
+
+            Ok(registry_key)
+        }
+    }
+
+    impl From<RegistryKey> for golem_api_grpc::proto::golem::rib::RegistryKey {
+        fn from(value: RegistryKey) -> Self {
+            match value {
+                RegistryKey::FunctionName(str) => golem_api_grpc::proto::golem::rib::RegistryKey {
+                    key_type: Some(KeyType::FunctionName(
+                        golem_api_grpc::proto::golem::rib::FunctionName { name: str },
+                    )),
+                },
+                RegistryKey::FunctionNameWithInterface {
+                    function_name,
+                    interface_name,
+                } => golem_api_grpc::proto::golem::rib::RegistryKey {
+                    key_type: Some(KeyType::FunctionNameWithInterface(
+                        golem_api_grpc::proto::golem::rib::FunctionNameWithInterface {
+                            interface_name,
+                            function_name,
+                        },
+                    )),
+                },
+            }
         }
     }
 }

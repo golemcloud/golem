@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,14 +13,8 @@
 // limitations under the License.
 
 use crate::model::plugin::{DefaultPluginOwner, PluginOwner};
-use crate::model::{AccountId, HasAccountId};
-use crate::repo::RowMeta;
-use poem_openapi::types::{ParseFromJSON, ToJSON};
-use poem_openapi::Object;
+use crate::model::{AccountId, HasAccountId, PoemTypeRequirements};
 use serde::{Deserialize, Serialize};
-use sqlx::postgres::PgRow;
-use sqlx::sqlite::SqliteRow;
-use sqlx::{Postgres, Sqlite};
 use std::fmt::{Debug, Display};
 use std::str::FromStr;
 
@@ -33,17 +27,16 @@ pub trait ComponentOwner:
     + PartialEq
     + Serialize
     + for<'de> Deserialize<'de>
-    + poem_openapi::types::Type
-    + ParseFromJSON
-    + ToJSON
+    + PoemTypeRequirements
     + Send
     + Sync
     + 'static
 {
-    type Row: RowMeta<Sqlite>
-        + RowMeta<Postgres>
-        + for<'r> sqlx::FromRow<'r, SqliteRow>
-        + for<'r> sqlx::FromRow<'r, PgRow>
+    #[cfg(feature = "sql")]
+    type Row: crate::repo::RowMeta<sqlx::Sqlite>
+        + crate::repo::RowMeta<sqlx::Postgres>
+        + for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
+        + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
         + From<Self>
         + TryInto<Self, Error = String>
         + Into<<Self::PluginOwner as PluginOwner>::Row>
@@ -57,9 +50,10 @@ pub trait ComponentOwner:
     type PluginOwner: PluginOwner + From<Self>;
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
 pub struct DefaultComponentOwner;
 
 impl Display for DefaultComponentOwner {
@@ -93,6 +87,7 @@ impl From<DefaultComponentOwner> for DefaultPluginOwner {
 }
 
 impl ComponentOwner for DefaultComponentOwner {
+    #[cfg(feature = "sql")]
     type Row = crate::repo::component::DefaultComponentOwnerRow;
     type PluginOwner = DefaultPluginOwner;
 }

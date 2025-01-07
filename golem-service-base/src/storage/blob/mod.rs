@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -380,6 +380,8 @@ pub trait ReplayableStream: Send + Sync {
     async fn make_stream(
         &self,
     ) -> Result<Pin<Box<dyn Stream<Item = Self::Item> + Send + Sync>>, String>;
+
+    async fn length(&self) -> Result<u64, String>;
 }
 
 #[async_trait]
@@ -391,5 +393,9 @@ impl ReplayableStream for Bytes {
     ) -> Result<Pin<Box<dyn Stream<Item = Self::Item> + Send + Sync>>, String> {
         let data = self.clone();
         Ok(Box::pin(futures::stream::once(async move { Ok(data) })))
+    }
+
+    async fn length(&self) -> Result<u64, String> {
+        Ok(self.len() as u64)
     }
 }

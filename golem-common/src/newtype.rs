@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,7 +16,16 @@
 macro_rules! newtype_uuid {
     ($name:ident, $proto_type:path) => {
         #[derive(
-            Clone, Debug, PartialOrd, Ord, FromStr, Eq, Hash, PartialEq, Serialize, Deserialize,
+            Clone,
+            Debug,
+            PartialOrd,
+            Ord,
+            derive_more::FromStr,
+            Eq,
+            Hash,
+            PartialEq,
+            Serialize,
+            Deserialize,
         )]
         #[serde(transparent)]
         pub struct $name(pub Uuid);
@@ -59,6 +68,7 @@ macro_rules! newtype_uuid {
             }
         }
 
+        #[cfg(feature = "protobuf")]
         impl TryFrom<$proto_type> for $name {
             type Error = String;
 
@@ -72,6 +82,7 @@ macro_rules! newtype_uuid {
             }
         }
 
+        #[cfg(feature = "protobuf")]
         impl From<$name> for $proto_type {
             fn from(value: $name) -> Self {
                 $proto_type {
@@ -80,17 +91,20 @@ macro_rules! newtype_uuid {
             }
         }
 
+        #[cfg(feature = "poem")]
         impl poem_openapi::types::Type for $name {
             const IS_REQUIRED: bool = true;
             type RawValueType = Self;
             type RawElementValueType = Self;
 
-            fn name() -> Cow<'static, str> {
-                Cow::from(format!("string({})", stringify!($name)))
+            fn name() -> std::borrow::Cow<'static, str> {
+                std::borrow::Cow::from(format!("string({})", stringify!($name)))
             }
 
-            fn schema_ref() -> MetaSchemaRef {
-                MetaSchemaRef::Inline(Box::new(MetaSchema::new_with_format("string", "uuid")))
+            fn schema_ref() -> poem_openapi::registry::MetaSchemaRef {
+                poem_openapi::registry::MetaSchemaRef::Inline(Box::new(
+                    poem_openapi::registry::MetaSchema::new_with_format("string", "uuid"),
+                ))
             }
 
             fn as_raw_value(&self) -> Option<&Self::RawValueType> {
@@ -104,16 +118,20 @@ macro_rules! newtype_uuid {
             }
         }
 
-        impl ParseFromParameter for $name {
-            fn parse_from_parameter(value: &str) -> ParseResult<Self> {
+        #[cfg(feature = "poem")]
+        impl poem_openapi::types::ParseFromParameter for $name {
+            fn parse_from_parameter(value: &str) -> poem_openapi::types::ParseResult<Self> {
                 Ok(Self(value.try_into()?))
             }
         }
 
-        impl ParseFromJSON for $name {
-            fn parse_from_json(value: Option<Value>) -> ParseResult<Self> {
+        #[cfg(feature = "poem")]
+        impl poem_openapi::types::ParseFromJSON for $name {
+            fn parse_from_json(
+                value: Option<serde_json::Value>,
+            ) -> poem_openapi::types::ParseResult<Self> {
                 match value {
-                    Some(Value::String(s)) => Ok(Self(Uuid::from_str(&s)?)),
+                    Some(serde_json::Value::String(s)) => Ok(Self(Uuid::from_str(&s)?)),
                     _ => Err(poem_openapi::types::ParseError::<$name>::custom(format!(
                         "Unexpected representation of {}",
                         stringify!($name)
@@ -122,9 +140,10 @@ macro_rules! newtype_uuid {
             }
         }
 
-        impl ToJSON for $name {
-            fn to_json(&self) -> Option<Value> {
-                Some(Value::String(self.0.to_string()))
+        #[cfg(feature = "poem")]
+        impl poem_openapi::types::ToJSON for $name {
+            fn to_json(&self) -> Option<serde_json::Value> {
+                Some(serde_json::Value::String(self.0.to_string()))
             }
         }
 
@@ -136,11 +155,29 @@ macro_rules! newtype_uuid {
 
         impl golem_wasm_rpc::IntoValue for $name {
             fn into_value(self) -> golem_wasm_rpc::Value {
-                golem_wasm_rpc::Value::String(self.0.to_string())
+                let (hi, lo) = self.0.as_u64_pair();
+                golem_wasm_rpc::Value::Record(vec![golem_wasm_rpc::Value::Record(vec![
+                    golem_wasm_rpc::Value::U64(hi),
+                    golem_wasm_rpc::Value::U64(lo),
+                ])])
             }
 
             fn get_type() -> golem_wasm_ast::analysis::AnalysedType {
-                golem_wasm_ast::analysis::analysed_type::str()
+                golem_wasm_ast::analysis::analysed_type::record(vec![
+                    golem_wasm_ast::analysis::analysed_type::field(
+                        "uuid",
+                        golem_wasm_ast::analysis::analysed_type::record(vec![
+                            golem_wasm_ast::analysis::analysed_type::field(
+                                "high-bits",
+                                golem_wasm_ast::analysis::analysed_type::u64(),
+                            ),
+                            golem_wasm_ast::analysis::analysed_type::field(
+                                "low-bits",
+                                golem_wasm_ast::analysis::analysed_type::u64(),
+                            ),
+                        ]),
+                    ),
+                ])
             }
         }
     };

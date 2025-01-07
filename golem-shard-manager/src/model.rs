@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@ use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::{fmt, vec};
 
 use bincode::{Decode, Encode};
+use http::Uri;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use tonic::transport::Endpoint;
@@ -56,8 +57,8 @@ impl Pod {
         Endpoint::from(self.uri())
     }
 
-    pub fn uri(&self) -> http_02::Uri {
-        http_02::Uri::builder()
+    pub fn uri(&self) -> Uri {
+        Uri::builder()
             .scheme("http")
             .authority(format!("{}:{}", self.ip, self.port).as_str())
             .path_and_query("")

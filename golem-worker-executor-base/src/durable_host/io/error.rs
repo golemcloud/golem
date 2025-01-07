@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -34,17 +34,3 @@ impl<Ctx: WorkerCtx> HostError for DurableWorkerCtx<Ctx> {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> HostError for &mut DurableWorkerCtx<Ctx> {
-    fn to_debug_string(&mut self, self_: Resource<Error>) -> anyhow::Result<String> {
-        (*self).to_debug_string(self_)
-    }
-
-    fn drop(&mut self, rep: Resource<Error>) -> anyhow::Result<()> {
-        (*self).drop(rep)
-    }
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {}

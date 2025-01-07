@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -23,8 +23,7 @@ use crate::model::{
 };
 
 pub fn proto_component_id_string(component_id: &Option<component::ComponentId>) -> Option<String> {
-    component_id
-        .clone()
+    (*component_id)
         .and_then(|v| TryInto::<ComponentId>::try_into(v).ok())
         .map(|v| v.to_string())
 }
@@ -67,8 +66,7 @@ pub fn proto_promise_id_string(promise_id: &Option<worker::PromiseId>) -> Option
 pub fn proto_plugin_installation_id_string(
     component_id: &Option<common::PluginInstallationId>,
 ) -> Option<String> {
-    component_id
-        .clone()
+    (*component_id)
         .and_then(|v| TryInto::<PluginInstallationId>::try_into(v).ok())
         .map(|v| v.to_string())
 }

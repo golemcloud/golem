@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,7 +20,7 @@ use assert2::{check, let_assert};
 use chrono::Datelike;
 use golem_test_framework::dsl::{events_to_lines, TestDslUnsafe};
 use golem_wasm_rpc::Value;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -131,8 +131,12 @@ async fn swift_example_1(
         .await
         .unwrap();
 
-    tokio::time::sleep(Duration::from_secs(5)).await;
-    let lines = events_to_lines(&mut rx).await;
+    let mut lines = Vec::new();
+    let start = Instant::now();
+
+    while lines.len() < 2 && start.elapsed() < Duration::from_secs(5) {
+        lines.extend(events_to_lines(&mut rx).await);
+    }
 
     drop(executor);
 

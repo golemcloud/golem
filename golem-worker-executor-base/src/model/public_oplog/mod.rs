@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -62,7 +62,7 @@ use golem_wasm_ast::analysis::analysed_type::{
 use golem_wasm_ast::analysis::{AnalysedType, NameOptionTypePair, TypeVariant};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::{
-    type_annotated_value_from_str, IntoValue, IntoValueAndType, Value, ValueAndType, WitValue,
+    parse_type_annotated_value, IntoValue, IntoValueAndType, Value, ValueAndType, WitValue,
 };
 use rib::{ParsedFunctionName, ParsedFunctionReference};
 use std::collections::{BTreeSet, HashMap};
@@ -660,7 +660,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> PublicOplogEntryOps<Owner, Scope>
                     .zip(constructor_def.parameters)
                 {
                     let type_annotated_value: TypeAnnotatedValue =
-                        type_annotated_value_from_str(&param.typ, value_str)?;
+                        parse_type_annotated_value(&param.typ, value_str)?;
                     let value = type_annotated_value.try_into()?;
                     let value_and_type = ValueAndType::new(value, param.typ.clone());
                     resource_params.push(value_and_type);

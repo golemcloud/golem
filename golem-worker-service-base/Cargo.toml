@@ -23,27 +23,29 @@ golem-common = { path = "../golem-common" }
 golem-api-grpc = { path = "../golem-api-grpc" }
 golem-service-base = { path = "../golem-service-base" }
 golem-rib = { path = "../golem-rib" }
-golem-wasm-ast = { workspace = true }
-golem-wasm-rpc = { workspace = true }
+golem-wasm-ast = { path = "../wasm-ast", version = "0.0.0" }
+golem-wasm-rpc = { path = "../wasm-rpc", version = "0.0.0", default-features = false, features = ["host"] }
 
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 bincode = { workspace = true }
+bigdecimal = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 conditional-trait-gen = { workspace = true }
 derive_more = { workspace = true }
+fred = { workspace = true }
 figment = { workspace = true }
 futures = { workspace = true }
 futures-util = { workspace = true }
 http = { workspace = true }
-http_02 = { workspace = true }
 humantime-serde = { workspace = true }
 hyper = { workspace = true }
 lazy_static = { workspace = true }
 mime_guess = "2.0.5"
 nom = { workspace = true }
 openapiv3 = { workspace = true }
+openidconnect = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry-prometheus = { workspace = true }
 opentelemetry_sdk = { workspace = true }
@@ -53,7 +55,8 @@ prometheus = { workspace = true }
 prost = { workspace = true }
 prost-types = { workspace = true }
 regex = { workspace = true }
-rustc-hash = "1.1.0"
+rustc-hash = "2.1.0"
+rsa = "0.9.7"
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
@@ -82,8 +85,8 @@ uuid = { workspace = true }
 wasm-wave = { workspace = true }
 
 [dev-dependencies]
-criterion = { version = "0.3", features = ["html_reports"] }
-fastrand = "2.0.2"
+criterion = { version = "0.5", features = ["html_reports"] }
+fastrand = "2.3.0"
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 test-r = { workspace = true }

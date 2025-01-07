@@ -1,4 +1,5 @@
 ## Generated from default config
+grpc_port = 9002
 http_port = 8081
 number_of_shards = 1024
 rebalance_threshold = 0.1
@@ -11,7 +12,10 @@ type = "Grpc"
 
 [health_check.mode.config]
 
-[redis]
+[persistence]
+type = "Redis"
+
+[persistence.config]
 database = 0
 host = "localhost"
 key_prefix = ""
@@ -19,7 +23,7 @@ pool_size = 8
 port = 6380
 tracing = false
 
-[redis.retries]
+[persistence.config.retries]
 max_attempts = 5
 max_delay = "2s"
 max_jitter_factor = 0.15
@@ -70,6 +74,7 @@ multiplier = 2.0
 
 
 ## Generated from example config: with k8s healthcheck
+# grpc_port = 9002
 # http_port = 8081
 # number_of_shards = 1024
 # rebalance_threshold = 0.1
@@ -83,7 +88,10 @@ multiplier = 2.0
 # [health_check.mode.config]
 # namespace = "namespace"
 # 
-# [redis]
+# [persistence]
+# type = "Redis"
+# 
+# [persistence.config]
 # database = 0
 # host = "localhost"
 # key_prefix = ""
@@ -91,7 +99,7 @@ multiplier = 2.0
 # port = 6380
 # tracing = false
 # 
-# [redis.retries]
+# [persistence.config.retries]
 # max_attempts = 5
 # max_delay = "2s"
 # max_jitter_factor = 0.15

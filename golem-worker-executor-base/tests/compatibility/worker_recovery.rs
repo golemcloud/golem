@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -40,9 +40,13 @@ async fn recover_shopping_cart_example(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let worker_id =
-        restore_from_recovery_golden_file(&executor, "shopping_cart_example", &["shopping-cart"])
-            .await;
+    let worker_id = restore_from_recovery_golden_file(
+        &executor,
+        &context,
+        "shopping_cart_example",
+        &["shopping-cart"],
+    )
+    .await;
 
     executor.interrupt(&worker_id).await;
     executor.resume(&worker_id).await;
@@ -63,6 +67,7 @@ async fn recover_shopping_cart_resource_example(
 
     let worker_id = restore_from_recovery_golden_file(
         &executor,
+        &context,
         "shopping_cart_resource_example",
         &["shopping-cart-resource"],
     )
@@ -87,6 +92,7 @@ async fn recover_environment_example(
 
     let worker_id = restore_from_recovery_golden_file(
         &executor,
+        &context,
         "environment_example",
         &["environment-service"],
     )
@@ -110,7 +116,8 @@ async fn recover_read_stdin(
     let executor = start(deps, &context).await.unwrap();
 
     let worker_id =
-        restore_from_recovery_golden_file(&executor, "read_stdin_fails", &["read-stdin"]).await;
+        restore_from_recovery_golden_file(&executor, &context, "read_stdin_fails", &["read-stdin"])
+            .await;
 
     executor.interrupt(&worker_id).await;
     let _ = golem_test_framework::dsl::TestDsl::resume(&executor, &worker_id).await; // this fails but we don't mind
@@ -130,7 +137,7 @@ async fn recover_jump(
     let executor = start(deps, &context).await.unwrap();
 
     let worker_id =
-        restore_from_recovery_golden_file(&executor, "jump", &["runtime-service"]).await;
+        restore_from_recovery_golden_file(&executor, &context, "jump", &["runtime-service"]).await;
 
     executor.interrupt(&worker_id).await;
     executor.resume(&worker_id).await;
@@ -149,7 +156,8 @@ async fn recover_js_example_1(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let worker_id = restore_from_recovery_golden_file(&executor, "js_example_1", &["js-1"]).await;
+    let worker_id =
+        restore_from_recovery_golden_file(&executor, &context, "js_example_1", &["js-1"]).await;
 
     executor.interrupt(&worker_id).await;
     executor.resume(&worker_id).await;
@@ -170,6 +178,7 @@ async fn recover_auto_update_on_running(
 
     let worker_id = restore_from_recovery_golden_file(
         &executor,
+        &context,
         "auto_update_on_running",
         &["update-test-v1", "update-test-v2"],
     )
@@ -194,12 +203,14 @@ async fn recover_counter_resource_test_2(
 
     let caller_worker_id = restore_from_recovery_golden_file(
         &executor,
+        &context,
         "counter_resource_test_2_caller",
         &["caller_composed"],
     )
     .await;
     let counter_worker_id = restore_from_recovery_golden_file(
         &executor,
+        &context,
         "counter_resource_test_2_counter",
         &["counters"],
     )
@@ -215,6 +226,7 @@ async fn recover_counter_resource_test_2(
 
 async fn restore_from_recovery_golden_file(
     executor: &TestWorkerExecutor,
+    context: &TestContext,
     name: &str,
     component_names: &[&str],
 ) -> WorkerId {
@@ -245,7 +257,7 @@ async fn restore_from_recovery_golden_file(
 
     let oplog_key = &format!(
         "{}worker:oplog:{}",
-        executor.redis().prefix(),
+        context.redis_prefix(),
         worker_id.to_redis_key()
     );
 
@@ -277,6 +289,7 @@ async fn restore_from_recovery_golden_file(
 /// files should be verified (if they can be recovered) in separate test cases.
 pub async fn save_recovery_golden_file(
     executor: &TestWorkerExecutor,
+    context: &TestContext,
     name: &str,
     worker_id: &WorkerId,
 ) {
@@ -288,7 +301,7 @@ pub async fn save_recovery_golden_file(
         let entries: Vec<BTreeMap<String, BTreeMap<String, Vec<u8>>>> = redis
             .xrange_all(format!(
                 "{}worker:oplog:{}",
-                executor.redis().prefix(),
+                context.redis_prefix(),
                 worker_id.to_redis_key()
             ))
             .await

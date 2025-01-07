@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,9 +21,9 @@ pub trait WorkerServiceRibCompiler {
     fn compile(rib: &Expr, export_metadata: &[AnalysedExport]) -> Result<CompilerOutput, String>;
 }
 
-pub struct DefaultRibCompiler;
+pub struct DefaultWorkerServiceRibCompiler;
 
-impl WorkerServiceRibCompiler for DefaultRibCompiler {
+impl WorkerServiceRibCompiler for DefaultWorkerServiceRibCompiler {
     fn compile(rib: &Expr, export_metadata: &[AnalysedExport]) -> Result<CompilerOutput, String> {
         rib::compile_with_limited_globals(
             rib,

@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -35,6 +35,17 @@ pub enum PluginError {
     ComponentNotFound { component_id: ComponentId },
     #[error("Failed to get available scopes: {error}")]
     FailedToGetAvailableScopes { error: String },
+    #[error("Plugin not found: {plugin_name}@{plugin_version}")]
+    PluginNotFound {
+        plugin_name: String,
+        plugin_version: String,
+    },
+    #[error("Plugin {plugin_name}@{plugin_version} {details}")]
+    InvalidScope {
+        plugin_name: String,
+        plugin_version: String,
+        details: String,
+    },
 }
 
 impl PluginError {
@@ -54,6 +65,8 @@ impl SafeDisplay for PluginError {
             Self::InternalComponentError(inner) => inner.to_safe_string(),
             Self::ComponentNotFound { .. } => self.to_string(),
             Self::FailedToGetAvailableScopes { .. } => self.to_string(),
+            Self::PluginNotFound { .. } => self.to_string(),
+            Self::InvalidScope { .. } => self.to_string(),
         }
     }
 }
@@ -79,6 +92,16 @@ impl From<PluginError> for golem_api_grpc::proto::golem::component::v1::Componen
             },
             PluginError::FailedToGetAvailableScopes { .. } => Self {
                 error: Some(component_error::Error::InternalError(ErrorBody {
+                    error: value.to_safe_string(),
+                })),
+            },
+            PluginError::PluginNotFound { .. } => Self {
+                error: Some(component_error::Error::NotFound(ErrorBody {
+                    error: value.to_safe_string(),
+                })),
+            },
+            PluginError::InvalidScope { .. } => Self {
+                error: Some(component_error::Error::Unauthorized(ErrorBody {
                     error: value.to_safe_string(),
                 })),
             },

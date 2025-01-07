@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,15 +21,15 @@ mod comprehensive_test {
         AnalysedType, NameTypePair, TypeBool, TypeF32, TypeF64, TypeRecord, TypeS16, TypeS32,
         TypeStr, TypeU64, TypeU8,
     };
-    use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+    use golem_wasm_rpc::ValueAndType;
 
     #[test]
     async fn test_interpreter_complex_rib() {
         let expr = r#"
 
-              let str1: str = request.body.name;
-              let str2: str = request.headers.name;
-              let str3: str = request.path.name;
+              let str1: string = request.body.name;
+              let str2: string = request.headers.name;
+              let str3: string = request.path.name;
 
               let unused = function-unit-response(str1);
 
@@ -491,11 +491,10 @@ mod comprehensive_test {
         let mut rib_executor = mock_interpreter::interpreter();
         let result = rib_executor.run(compiled_expr).await.unwrap();
 
-        let actual_as_text =
-            test_utils::convert_type_annotated_value_to_str(&result.get_val().unwrap());
+        let actual_as_text = test_utils::convert_value_and_type_to_str(&result.get_val().unwrap());
 
         let expected_as_text =
-            test_utils::convert_type_annotated_value_to_str(&expected_type_annotated_value());
+            test_utils::convert_value_and_type_to_str(&expected_type_annotated_value());
 
         assert_eq!(
             result.get_val().unwrap(),
@@ -506,7 +505,7 @@ mod comprehensive_test {
         );
     }
 
-    fn expected_type_annotated_value() -> TypeAnnotatedValue {
+    fn expected_type_annotated_value() -> ValueAndType {
         let wasm_wave_str = r#"
           {
             a: "foo",
@@ -563,7 +562,7 @@ mod comprehensive_test {
           }
         "#;
 
-        test_utils::get_type_annotated_value(&expected_analysed_type(), wasm_wave_str)
+        test_utils::get_value_and_type(&expected_analysed_type(), wasm_wave_str)
     }
 
     fn expected_analysed_type() -> AnalysedType {
@@ -1738,276 +1737,243 @@ mod comprehensive_test {
 
     mod mock_data {
         use crate::interpreter::tests::comprehensive_test::{data_types, test_utils};
-        use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+        use golem_wasm_rpc::ValueAndType;
 
-        pub(crate) fn ok_of_str() -> TypeAnnotatedValue {
-            test_utils::get_type_annotated_value(&data_types::result_of_str_type(), "ok(\"foo\")")
+        pub(crate) fn ok_of_str() -> ValueAndType {
+            test_utils::get_value_and_type(&data_types::result_of_str_type(), "ok(\"foo\")")
         }
 
-        pub(crate) fn err_of_str() -> TypeAnnotatedValue {
-            test_utils::get_type_annotated_value(&data_types::result_of_str_type(), "err(\"foo\")")
+        pub(crate) fn err_of_str() -> ValueAndType {
+            test_utils::get_value_and_type(&data_types::result_of_str_type(), "err(\"foo\")")
         }
 
-        pub(crate) fn ok_of_number() -> TypeAnnotatedValue {
-            test_utils::get_type_annotated_value(&data_types::result_of_number_type(), "ok(42)")
+        pub(crate) fn ok_of_number() -> ValueAndType {
+            test_utils::get_value_and_type(&data_types::result_of_number_type(), "ok(42)")
         }
 
-        pub(crate) fn err_of_number() -> TypeAnnotatedValue {
-            test_utils::get_type_annotated_value(&data_types::result_of_number_type(), "err(42)")
+        pub(crate) fn err_of_number() -> ValueAndType {
+            test_utils::get_value_and_type(&data_types::result_of_number_type(), "err(42)")
         }
 
-        pub(crate) fn ok_of_option() -> TypeAnnotatedValue {
-            test_utils::get_type_annotated_value(
+        pub(crate) fn ok_of_option() -> ValueAndType {
+            test_utils::get_value_and_type(
                 &data_types::result_of_option_type(),
                 "ok(some(\"foo\"))",
             )
         }
 
-        pub(crate) fn err_of_option() -> TypeAnnotatedValue {
-            test_utils::get_type_annotated_value(
+        pub(crate) fn err_of_option() -> ValueAndType {
+            test_utils::get_value_and_type(
                 &data_types::result_of_option_type(),
                 "err(some(\"foo\"))",
             )
         }
 
-        pub(crate) fn ok_of_variant() -> TypeAnnotatedValue {
-            test_utils::get_type_annotated_value(
+        pub(crate) fn ok_of_variant() -> ValueAndType {
+            test_utils::get_value_and_type(
                 &data_types::result_of_variant_type(),
                 "ok(case-str(\"foo\"))",
             )
         }
 
-        pub(crate) fn err_of_variant() -> TypeAnnotatedValue {
-            test_utils::get_type_annotated_value(
+        pub(crate) fn err_of_variant() -> ValueAndType {
+            test_utils::get_value_and_type(
                 &data_types::result_of_variant_type(),
                 "err(case-str(\"foo\"))",
             )
         }
 
-        pub(crate) fn ok_of_enum() -> TypeAnnotatedValue {
-            test_utils::get_type_annotated_value(&data_types::result_of_enum_type(), "ok(enum-a)")
+        pub(crate) fn ok_of_enum() -> ValueAndType {
+            test_utils::get_value_and_type(&data_types::result_of_enum_type(), "ok(enum-a)")
         }
 
-        pub(crate) fn err_of_enum() -> TypeAnnotatedValue {
-            test_utils::get_type_annotated_value(&data_types::result_of_enum_type(), "err(enum-a)")
+        pub(crate) fn err_of_enum() -> ValueAndType {
+            test_utils::get_value_and_type(&data_types::result_of_enum_type(), "err(enum-a)")
         }
 
-        pub(crate) fn ok_of_tuple() -> TypeAnnotatedValue {
-            let tuple_str = test_utils::convert_type_annotated_value_to_str(&tuple());
+        pub(crate) fn ok_of_tuple() -> ValueAndType {
+            let tuple_str = test_utils::convert_value_and_type_to_str(&tuple());
             let wave_str = format!("ok({})", tuple_str);
-            test_utils::get_type_annotated_value(
-                &data_types::result_of_tuple_type(),
-                wave_str.as_str(),
-            )
+            test_utils::get_value_and_type(&data_types::result_of_tuple_type(), wave_str.as_str())
         }
 
-        pub(crate) fn err_of_tuple() -> TypeAnnotatedValue {
-            let tuple_str = test_utils::convert_type_annotated_value_to_str(&tuple());
+        pub(crate) fn err_of_tuple() -> ValueAndType {
+            let tuple_str = test_utils::convert_value_and_type_to_str(&tuple());
             let wave_str = format!("err({})", tuple_str);
-            test_utils::get_type_annotated_value(
-                &data_types::result_of_tuple_type(),
-                wave_str.as_str(),
-            )
+            test_utils::get_value_and_type(&data_types::result_of_tuple_type(), wave_str.as_str())
         }
 
-        pub(crate) fn ok_of_flag() -> TypeAnnotatedValue {
-            test_utils::get_type_annotated_value(
-                &data_types::result_of_flag_type(),
-                "ok({featurex})",
-            )
+        pub(crate) fn ok_of_flag() -> ValueAndType {
+            test_utils::get_value_and_type(&data_types::result_of_flag_type(), "ok({featurex})")
         }
 
-        pub(crate) fn err_of_flag() -> TypeAnnotatedValue {
-            test_utils::get_type_annotated_value(
-                &data_types::result_of_flag_type(),
-                "err({featurex})",
-            )
+        pub(crate) fn err_of_flag() -> ValueAndType {
+            test_utils::get_value_and_type(&data_types::result_of_flag_type(), "err({featurex})")
         }
 
-        pub(crate) fn ok_of_record() -> TypeAnnotatedValue {
-            let record_str = test_utils::convert_type_annotated_value_to_str(&record());
+        pub(crate) fn ok_of_record() -> ValueAndType {
+            let record_str = test_utils::convert_value_and_type_to_str(&record());
             let wave_str = format!("ok({})", &record_str);
-            test_utils::get_type_annotated_value(
-                &data_types::result_of_record_type(),
-                wave_str.as_str(),
-            )
+            test_utils::get_value_and_type(&data_types::result_of_record_type(), wave_str.as_str())
         }
 
-        pub(crate) fn err_of_record() -> TypeAnnotatedValue {
-            let record_str = test_utils::convert_type_annotated_value_to_str(&record());
+        pub(crate) fn err_of_record() -> ValueAndType {
+            let record_str = test_utils::convert_value_and_type_to_str(&record());
             let wave_str = format!("err({})", &record_str);
-            test_utils::get_type_annotated_value(
-                &data_types::result_of_record_type(),
-                wave_str.as_str(),
-            )
+            test_utils::get_value_and_type(&data_types::result_of_record_type(), wave_str.as_str())
         }
 
-        pub(crate) fn ok_of_list() -> TypeAnnotatedValue {
-            test_utils::get_type_annotated_value(
-                &data_types::result_of_list_type(),
-                "ok([\"foo\"])",
-            )
+        pub(crate) fn ok_of_list() -> ValueAndType {
+            test_utils::get_value_and_type(&data_types::result_of_list_type(), "ok([\"foo\"])")
         }
 
-        pub(crate) fn err_of_list() -> TypeAnnotatedValue {
-            test_utils::get_type_annotated_value(
-                &data_types::result_of_list_type(),
-                "err([\"foo\"])",
-            )
+        pub(crate) fn err_of_list() -> ValueAndType {
+            test_utils::get_value_and_type(&data_types::result_of_list_type(), "err([\"foo\"])")
         }
 
-        pub(crate) fn list_of_number() -> TypeAnnotatedValue {
-            test_utils::get_type_annotated_value(&data_types::list_of_number_type_type(), "[42]")
+        pub(crate) fn list_of_number() -> ValueAndType {
+            test_utils::get_value_and_type(&data_types::list_of_number_type_type(), "[42]")
         }
 
-        pub(crate) fn list_of_str() -> TypeAnnotatedValue {
-            test_utils::get_type_annotated_value(&data_types::list_of_str_type(), "[\"foo\"]")
+        pub(crate) fn list_of_str() -> ValueAndType {
+            test_utils::get_value_and_type(&data_types::list_of_str_type(), "[\"foo\"]")
         }
 
-        pub(crate) fn list_of_option() -> TypeAnnotatedValue {
-            test_utils::get_type_annotated_value(
-                &data_types::list_of_option_type(),
-                "[some(\"foo\")]",
-            )
+        pub(crate) fn list_of_option() -> ValueAndType {
+            test_utils::get_value_and_type(&data_types::list_of_option_type(), "[some(\"foo\")]")
         }
 
-        pub(crate) fn list_of_list() -> TypeAnnotatedValue {
-            test_utils::get_type_annotated_value(&data_types::list_of_list_type(), "[[\"foo\"]]")
+        pub(crate) fn list_of_list() -> ValueAndType {
+            test_utils::get_value_and_type(&data_types::list_of_list_type(), "[[\"foo\"]]")
         }
 
-        pub(crate) fn list_of_variant() -> TypeAnnotatedValue {
-            test_utils::get_type_annotated_value(
+        pub(crate) fn list_of_variant() -> ValueAndType {
+            test_utils::get_value_and_type(
                 &data_types::list_of_variant_type(),
                 "[case-str(\"foo\")]",
             )
         }
 
-        pub(crate) fn list_of_enum() -> TypeAnnotatedValue {
-            test_utils::get_type_annotated_value(&data_types::list_of_enum_type(), "[enum-a]")
+        pub(crate) fn list_of_enum() -> ValueAndType {
+            test_utils::get_value_and_type(&data_types::list_of_enum_type(), "[enum-a]")
         }
 
-        pub(crate) fn list_of_tuple() -> TypeAnnotatedValue {
-            let tuple_str = test_utils::convert_type_annotated_value_to_str(&tuple());
+        pub(crate) fn list_of_tuple() -> ValueAndType {
+            let tuple_str = test_utils::convert_value_and_type_to_str(&tuple());
             let wave_str = format!("[{}, {}]", &tuple_str, &tuple_str);
-            test_utils::get_type_annotated_value(&data_types::list_of_tuple(), wave_str.as_str())
+            test_utils::get_value_and_type(&data_types::list_of_tuple(), wave_str.as_str())
         }
 
-        pub(crate) fn list_of_record() -> TypeAnnotatedValue {
-            let record_str = test_utils::convert_type_annotated_value_to_str(&record());
+        pub(crate) fn list_of_record() -> ValueAndType {
+            let record_str = test_utils::convert_value_and_type_to_str(&record());
             let wave_str = format!("[{}]", &record_str);
-            test_utils::get_type_annotated_value(
-                &data_types::list_of_record_type(),
-                wave_str.as_str(),
-            )
+            test_utils::get_value_and_type(&data_types::list_of_record_type(), wave_str.as_str())
         }
 
-        pub(crate) fn some_of_number() -> TypeAnnotatedValue {
-            test_utils::get_type_annotated_value(&data_types::option_of_number_type(), "some(42)")
+        pub(crate) fn some_of_number() -> ValueAndType {
+            test_utils::get_value_and_type(&data_types::option_of_number_type(), "some(42)")
         }
 
-        pub(crate) fn none_of_number() -> TypeAnnotatedValue {
-            test_utils::get_type_annotated_value(&data_types::option_of_number_type(), "none")
+        pub(crate) fn none_of_number() -> ValueAndType {
+            test_utils::get_value_and_type(&data_types::option_of_number_type(), "none")
         }
 
-        pub(crate) fn some_of_str() -> TypeAnnotatedValue {
-            test_utils::get_type_annotated_value(&data_types::option_of_str_type(), "some(\"foo\")")
+        pub(crate) fn some_of_str() -> ValueAndType {
+            test_utils::get_value_and_type(&data_types::option_of_str_type(), "some(\"foo\")")
         }
 
-        pub(crate) fn none_of_str() -> TypeAnnotatedValue {
-            test_utils::get_type_annotated_value(&data_types::option_of_str_type(), "none")
+        pub(crate) fn none_of_str() -> ValueAndType {
+            test_utils::get_value_and_type(&data_types::option_of_str_type(), "none")
         }
 
-        pub(crate) fn some_of_some() -> TypeAnnotatedValue {
-            test_utils::get_type_annotated_value(
+        pub(crate) fn some_of_some() -> ValueAndType {
+            test_utils::get_value_and_type(
                 &data_types::option_of_option_type(),
                 "some(some(\"foo\"))",
             )
         }
 
-        pub(crate) fn none_of_some() -> TypeAnnotatedValue {
-            test_utils::get_type_annotated_value(&data_types::option_of_option_type(), "none")
+        pub(crate) fn none_of_some() -> ValueAndType {
+            test_utils::get_value_and_type(&data_types::option_of_option_type(), "none")
         }
 
-        pub(crate) fn some_of_variant() -> TypeAnnotatedValue {
-            test_utils::get_type_annotated_value(
+        pub(crate) fn some_of_variant() -> ValueAndType {
+            test_utils::get_value_and_type(
                 &data_types::option_of_variant_type(),
                 "some(case-str(\"foo\"))",
             )
         }
 
-        pub(crate) fn none_of_variant() -> TypeAnnotatedValue {
-            test_utils::get_type_annotated_value(&data_types::option_of_variant_type(), "none")
+        pub(crate) fn none_of_variant() -> ValueAndType {
+            test_utils::get_value_and_type(&data_types::option_of_variant_type(), "none")
         }
 
-        pub(crate) fn some_of_enum() -> TypeAnnotatedValue {
-            test_utils::get_type_annotated_value(&data_types::option_of_enum_type(), "some(enum-a)")
+        pub(crate) fn some_of_enum() -> ValueAndType {
+            test_utils::get_value_and_type(&data_types::option_of_enum_type(), "some(enum-a)")
         }
 
-        pub(crate) fn none_of_enum() -> TypeAnnotatedValue {
-            test_utils::get_type_annotated_value(&data_types::option_of_enum_type(), "none")
+        pub(crate) fn none_of_enum() -> ValueAndType {
+            test_utils::get_value_and_type(&data_types::option_of_enum_type(), "none")
         }
 
-        pub(crate) fn some_of_tuple() -> TypeAnnotatedValue {
-            let tuple_str = test_utils::convert_type_annotated_value_to_str(&tuple());
+        pub(crate) fn some_of_tuple() -> ValueAndType {
+            let tuple_str = test_utils::convert_value_and_type_to_str(&tuple());
             let wave_str = format!("some({})", tuple_str);
-            test_utils::get_type_annotated_value(&data_types::option_of_tuple(), wave_str.as_str())
+            test_utils::get_value_and_type(&data_types::option_of_tuple(), wave_str.as_str())
         }
 
-        pub(crate) fn none_of_tuple() -> TypeAnnotatedValue {
-            test_utils::get_type_annotated_value(&data_types::option_of_tuple(), "none")
+        pub(crate) fn none_of_tuple() -> ValueAndType {
+            test_utils::get_value_and_type(&data_types::option_of_tuple(), "none")
         }
 
-        pub(crate) fn some_of_record() -> TypeAnnotatedValue {
-            let record_str = test_utils::convert_type_annotated_value_to_str(&record());
+        pub(crate) fn some_of_record() -> ValueAndType {
+            let record_str = test_utils::convert_value_and_type_to_str(&record());
             let wave_str = format!("some({})", &record_str);
-            test_utils::get_type_annotated_value(
-                &data_types::option_of_record_type(),
-                wave_str.as_str(),
-            )
+            test_utils::get_value_and_type(&data_types::option_of_record_type(), wave_str.as_str())
         }
 
-        pub(crate) fn none_of_record() -> TypeAnnotatedValue {
-            test_utils::get_type_annotated_value(&data_types::option_of_record_type(), "none")
+        pub(crate) fn none_of_record() -> ValueAndType {
+            test_utils::get_value_and_type(&data_types::option_of_record_type(), "none")
         }
 
-        pub(crate) fn some_of_list() -> TypeAnnotatedValue {
-            test_utils::get_type_annotated_value(&data_types::option_of_list(), "some([\"foo\"])")
+        pub(crate) fn some_of_list() -> ValueAndType {
+            test_utils::get_value_and_type(&data_types::option_of_list(), "some([\"foo\"])")
         }
 
-        pub(crate) fn none_of_list() -> TypeAnnotatedValue {
-            test_utils::get_type_annotated_value(&data_types::option_of_list(), "none")
+        pub(crate) fn none_of_list() -> ValueAndType {
+            test_utils::get_value_and_type(&data_types::option_of_list(), "none")
         }
 
-        pub(crate) fn tuple() -> TypeAnnotatedValue {
-            test_utils::get_type_annotated_value(
+        pub(crate) fn tuple() -> ValueAndType {
+            test_utils::get_value_and_type(
                 &data_types::tuple_type(),
                 r#"
           ("foo", 42, 42, 42, 42, true, 'a', some(42), ok(42), [true], case-hello(42.0), {field-one: true, field-two: "foo"})"#,
             )
         }
 
-        pub(crate) fn enum_data() -> TypeAnnotatedValue {
-            test_utils::get_type_annotated_value(&data_types::enum_type(), "enum-a")
+        pub(crate) fn enum_data() -> ValueAndType {
+            test_utils::get_value_and_type(&data_types::enum_type(), "enum-a")
         }
 
-        pub(crate) fn str_data() -> TypeAnnotatedValue {
-            test_utils::get_type_annotated_value(&data_types::str_type(), "\"foo\"")
+        pub(crate) fn str_data() -> ValueAndType {
+            test_utils::get_value_and_type(&data_types::str_type(), "\"foo\"")
         }
 
-        pub(crate) fn number_data() -> TypeAnnotatedValue {
-            test_utils::get_type_annotated_value(&data_types::number_type(), "42")
+        pub(crate) fn number_data() -> ValueAndType {
+            test_utils::get_value_and_type(&data_types::number_type(), "42")
         }
 
-        pub(crate) fn flag() -> TypeAnnotatedValue {
-            test_utils::get_type_annotated_value(&data_types::flag_type(), "{featurex}")
+        pub(crate) fn flag() -> ValueAndType {
+            test_utils::get_value_and_type(&data_types::flag_type(), "{featurex}")
         }
 
-        pub(crate) fn variant() -> TypeAnnotatedValue {
-            test_utils::get_type_annotated_value(&data_types::variant_type(), "case-str(\"foo\")")
+        pub(crate) fn variant() -> ValueAndType {
+            test_utils::get_value_and_type(&data_types::variant_type(), "case-str(\"foo\")")
         }
 
-        pub(crate) fn record() -> TypeAnnotatedValue {
-            test_utils::get_type_annotated_value(
+        pub(crate) fn record() -> ValueAndType {
+            test_utils::get_value_and_type(
                 &data_types::record_type(),
                 r#"
           {
@@ -2079,15 +2045,14 @@ mod comprehensive_test {
         use crate::interpreter::rib_interpreter::Interpreter;
         use crate::interpreter::tests::comprehensive_test::{mock_data, test_utils};
         use crate::{RibFunctionInvoke, RibInput};
+        use golem_wasm_ast::analysis::analysed_type::tuple;
         use golem_wasm_ast::analysis::{AnalysedType, TypeStr};
-        use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-        use golem_wasm_rpc::protobuf::TypedTuple;
-        #[cfg(test)]
+        use golem_wasm_rpc::{Value, ValueAndType};
         use std::collections::HashMap;
         use std::sync::Arc;
 
         pub(crate) fn interpreter() -> Interpreter {
-            let functions_and_results: Vec<(&str, Option<TypeAnnotatedValue>)> = vec![
+            let functions_and_results: Vec<(&str, Option<ValueAndType>)> = vec![
                 ("function-unit-response", None),
                 ("function-no-arg", Some(mock_data::str_data())),
                 ("function-no-arg-unit", None),
@@ -2233,7 +2198,7 @@ mod comprehensive_test {
                 ("function-all-inputs", Some(mock_data::str_data())),
             ];
 
-            let functions_and_result: HashMap<FunctionName, Option<TypeAnnotatedValue>> =
+            let functions_and_result: HashMap<FunctionName, Option<ValueAndType>> =
                 functions_and_results
                     .into_iter()
                     .map(|(name, result)| (FunctionName(name.to_string()), result))
@@ -2254,12 +2219,12 @@ mod comprehensive_test {
                 ),
             ]);
 
-            let record_input_value = test_utils::get_type_annotated_value(
+            let record_input_value = test_utils::get_value_and_type(
                 &record_input_type,
                 r#" { headers : { name : "foo" }, body : { name : "bar" }, path : { name : "baz" } }"#,
             );
 
-            let mut interpreter_env_input: HashMap<String, TypeAnnotatedValue> = HashMap::new();
+            let mut interpreter_env_input: HashMap<String, ValueAndType> = HashMap::new();
             interpreter_env_input.insert("request".to_string(), record_input_value);
 
             dynamic_test_interpreter(functions_and_result, interpreter_env_input)
@@ -2269,8 +2234,8 @@ mod comprehensive_test {
         struct FunctionName(pub(crate) String);
 
         fn dynamic_test_interpreter(
-            functions_and_result: HashMap<FunctionName, Option<TypeAnnotatedValue>>,
-            interpreter_env_input: HashMap<String, TypeAnnotatedValue>,
+            functions_and_result: HashMap<FunctionName, Option<ValueAndType>>,
+            interpreter_env_input: HashMap<String, ValueAndType>,
         ) -> Interpreter {
             Interpreter::new(
                 &RibInput::new(interpreter_env_input),
@@ -2279,34 +2244,23 @@ mod comprehensive_test {
         }
 
         fn dynamic_worker_invoke(
-            functions_and_result: HashMap<FunctionName, Option<TypeAnnotatedValue>>,
+            functions_and_result: HashMap<FunctionName, Option<ValueAndType>>,
         ) -> RibFunctionInvoke {
             let value = functions_and_result.clone();
 
             Arc::new(move |a, _| {
                 Box::pin({
                     let value = value.get(&FunctionName(a)).cloned().flatten();
-                    let analysed_type = value.clone().map(|x| AnalysedType::try_from(&x).unwrap());
 
                     async move {
-                        let analysed_type = analysed_type.clone();
-                        let value = value.clone();
-
                         if let Some(value) = value {
-                            Ok(TypeAnnotatedValue::Tuple(TypedTuple {
-                                typ: vec![golem_wasm_ast::analysis::protobuf::Type::from(
-                                    &analysed_type.unwrap(),
-                                )],
-                                value: vec![golem_wasm_rpc::protobuf::TypeAnnotatedValue {
-                                    type_annotated_value: Some(value),
-                                }],
-                            }))
+                            Ok(ValueAndType::new(
+                                Value::Tuple(vec![value.value]),
+                                tuple(vec![value.typ]),
+                            ))
                         } else {
                             // Representing Unit
-                            Ok(TypeAnnotatedValue::Tuple(TypedTuple {
-                                typ: vec![],
-                                value: vec![],
-                            }))
+                            Ok(ValueAndType::new(Value::Tuple(vec![]), tuple(vec![])))
                         }
                     }
                 })
@@ -2315,9 +2269,8 @@ mod comprehensive_test {
     }
 
     mod test_utils {
-        #[cfg(test)]
         use golem_wasm_ast::analysis::*;
-        use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+        use golem_wasm_rpc::ValueAndType;
 
         pub(crate) fn analysed_type_record(fields: Vec<(&str, AnalysedType)>) -> AnalysedType {
             AnalysedType::Record(TypeRecord {
@@ -2331,12 +2284,11 @@ mod comprehensive_test {
             })
         }
 
-        pub(crate) fn get_type_annotated_value(
+        pub(crate) fn get_value_and_type(
             analysed_type: &AnalysedType,
             wasm_wave_str: &str,
-        ) -> TypeAnnotatedValue {
-            let result =
-                golem_wasm_rpc::type_annotated_value_from_str(analysed_type, wasm_wave_str);
+        ) -> ValueAndType {
+            let result = golem_wasm_rpc::parse_value_and_type(analysed_type, wasm_wave_str);
 
             match result {
                 Ok(value) => value,
@@ -2347,10 +2299,8 @@ mod comprehensive_test {
             }
         }
 
-        pub(crate) fn convert_type_annotated_value_to_str(
-            type_annotated_value: &TypeAnnotatedValue,
-        ) -> String {
-            golem_wasm_rpc::type_annotated_value_to_string(type_annotated_value).unwrap()
+        pub(crate) fn convert_value_and_type_to_str(value: &ValueAndType) -> String {
+            golem_wasm_rpc::print_value_and_type(value).unwrap()
         }
 
         pub(crate) fn get_function_component_metadata(

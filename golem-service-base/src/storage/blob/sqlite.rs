@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -89,6 +89,7 @@ impl SqliteBlobStorage {
     }
 
     fn name_string(path: &Path) -> String {
+        tracing::info!("Path: {:?}", path);
         path.file_name()
             .expect("Path must have a file name")
             .to_string_lossy()

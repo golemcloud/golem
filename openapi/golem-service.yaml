@@ -1490,7 +1490,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/HttpApiDefinitionWithTypeInfo'
+                $ref: '#/components/schemas/HttpApiDefinitionResponseData'
         '400':
           description: ''
           content:
@@ -1552,7 +1552,7 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/HttpApiDefinitionWithTypeInfo'
+                  $ref: '#/components/schemas/HttpApiDefinitionResponseData'
         '400':
           description: ''
           content:
@@ -1612,7 +1612,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/HttpApiDefinitionWithTypeInfo'
+                $ref: '#/components/schemas/HttpApiDefinitionResponseData'
         '400':
           description: ''
           content:
@@ -1679,7 +1679,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/HttpApiDefinitionWithTypeInfo'
+                $ref: '#/components/schemas/HttpApiDefinitionResponseData'
         '400':
           description: ''
           content:
@@ -1754,7 +1754,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/HttpApiDefinitionWithTypeInfo'
+                $ref: '#/components/schemas/HttpApiDefinitionResponseData'
         '400':
           description: ''
           content:
@@ -2093,6 +2093,120 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+  /v1/api/security/{security_scheme_identifier}:
+    get:
+      tags:
+      - ApiSecurity
+      summary: Get a security scheme
+      description: Get a security scheme by name
+      operationId: get
+      parameters:
+      - in: path
+        name: security_scheme_identifier
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/SecuritySchemeData'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: string
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+  /v1/api/security:
+    post:
+      tags:
+      - ApiSecurity
+      summary: Create a security scheme
+      operationId: create
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/SecuritySchemeData'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/SecuritySchemeData'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: string
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
   /healthcheck:
     get:
       tags:
@@ -2203,6 +2317,8 @@ paths:
                 files:
                   type: string
                   format: binary
+                dynamicLinking:
+                  $ref: '#/components/schemas/DynamicLinking'
               required:
               - name
               - component
@@ -2358,6 +2474,8 @@ paths:
                 files:
                   type: string
                   format: binary
+                dynamicLinking:
+                  $ref: '#/components/schemas/DynamicLinking'
               required:
               - component
         required: true
@@ -2970,7 +3088,7 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/PluginDefinition<DefaultPluginOwner, DefaultPluginScope>'
+                  $ref: '#/components/schemas/PluginDefinition_DefaultPluginOwner_DefaultPluginScope'
         '400':
           description: ''
           content:
@@ -3016,7 +3134,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/PluginDefinitionWithoutOwner<DefaultPluginScope>'
+              $ref: '#/components/schemas/PluginDefinitionWithoutOwner_DefaultPluginScope'
         required: true
       responses:
         '200':
@@ -3084,7 +3202,7 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/PluginDefinition<DefaultPluginOwner, DefaultPluginScope>'
+                  $ref: '#/components/schemas/PluginDefinition_DefaultPluginOwner_DefaultPluginScope'
         '400':
           description: ''
           content:
@@ -3150,7 +3268,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/PluginDefinition<DefaultPluginOwner, DefaultPluginScope>'
+                $ref: '#/components/schemas/PluginDefinition_DefaultPluginOwner_DefaultPluginScope'
         '400':
           description: ''
           content:
@@ -3662,26 +3780,6 @@ components:
       enum:
       - read-only
       - read-write
-    Cors:
-      type: object
-      properties:
-        allowOrigin:
-          type: string
-        allowMethods:
-          type: string
-        allowHeaders:
-          type: string
-        exposeHeaders:
-          type: string
-        allowCredentials:
-          type: boolean
-        maxAge:
-          type: integer
-          format: uint64
-      required:
-      - allowOrigin
-      - allowMethods
-      - allowHeaders
     CreateParameters:
       type: object
       properties:
@@ -3923,8 +4021,6 @@ components:
           type: string
         response:
           type: string
-        middleware:
-          $ref: '#/components/schemas/MiddlewareData'
         allowOrigin:
           type: string
         allowMethods:
@@ -3938,13 +4034,7 @@ components:
           format: uint64
         allowCredentials:
           type: boolean
-    GatewayBindingType:
-      type: string
-      enum:
-      - default
-      - file-server
-      - cors-preflight
-    GatewayBindingWithTypeInfo:
+    GatewayBindingResponseData:
       type: object
       properties:
         componentId:
@@ -3964,7 +4054,15 @@ components:
         idempotencyKeyInput:
           $ref: '#/components/schemas/RibInputTypeInfo'
         corsPreflight:
-          $ref: '#/components/schemas/Cors'
+          $ref: '#/components/schemas/HttpCors'
+        responseMappingOutput:
+          $ref: '#/components/schemas/RibOutputTypeInfo'
+    GatewayBindingType:
+      type: string
+      enum:
+      - default
+      - file-server
+      - cors-preflight
     GetFilesResponse:
       type: object
       properties:
@@ -4562,10 +4660,14 @@ components:
           type: string
         version:
           type: string
+        security:
+          type: array
+          items:
+            type: string
         routes:
           type: array
           items:
-            $ref: '#/components/schemas/RouteData'
+            $ref: '#/components/schemas/RouteRequestData'
         draft:
           type: boolean
       required:
@@ -4573,7 +4675,7 @@ components:
       - version
       - routes
       - draft
-    HttpApiDefinitionWithTypeInfo:
+    HttpApiDefinitionResponseData:
       type: object
       properties:
         id:
@@ -4583,7 +4685,7 @@ components:
         routes:
           type: array
           items:
-            $ref: '#/components/schemas/RouteWithTypeInfo'
+            $ref: '#/components/schemas/RouteResponseData'
         draft:
           type: boolean
         createdAt:
@@ -4594,6 +4696,26 @@ components:
       - version
       - routes
       - draft
+    HttpCors:
+      type: object
+      properties:
+        allowOrigin:
+          type: string
+        allowMethods:
+          type: string
+        allowHeaders:
+          type: string
+        exposeHeaders:
+          type: string
+        allowCredentials:
+          type: boolean
+        maxAge:
+          type: integer
+          format: uint64
+      required:
+      - allowOrigin
+      - allowMethods
+      - allowHeaders
     ImportedFunctionInvokedParameters:
       type: object
       properties:
@@ -4715,11 +4837,6 @@ components:
       - Options
       - Trace
       - Head
-    MiddlewareData:
-      type: object
-      properties:
-        cors:
-          $ref: '#/components/schemas/Cors'
     NameOptionTypePair:
       type: object
       properties:
@@ -4831,6 +4948,13 @@ components:
       required:
       - workerId
       - oplogIdx
+    Provider:
+      type: string
+      enum:
+      - Google
+      - Facebook
+      - Microsoft
+      - Gitlab
     PublicOplogEntry:
       description: |-
         A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
@@ -5303,7 +5427,14 @@ components:
             $ref: '#/components/schemas/AnalysedType'
       required:
       - types
-    RouteData:
+    RibOutputTypeInfo:
+      type: object
+      properties:
+        analysed_type:
+          $ref: '#/components/schemas/AnalysedType'
+      required:
+      - analysed_type
+    RouteRequestData:
       type: object
       properties:
         method:
@@ -5312,34 +5443,25 @@ components:
           type: string
         binding:
           $ref: '#/components/schemas/GatewayBindingData'
+        cors:
+          $ref: '#/components/schemas/HttpCors'
+        security:
+          type: string
       required:
       - method
       - path
       - binding
-    RouteValidationError:
+    RouteResponseData:
       type: object
       properties:
         method:
           $ref: '#/components/schemas/MethodPattern'
         path:
           type: string
-        component:
-          $ref: '#/components/schemas/VersionedComponentId'
-        detail:
-          type: string
-      required:
-      - method
-      - path
-      - detail
-    RouteWithTypeInfo:
-      type: object
-      properties:
-        method:
-          $ref: '#/components/schemas/MethodPattern'
-        path:
+        security:
           type: string
         binding:
-          $ref: '#/components/schemas/GatewayBindingWithTypeInfo'
+          $ref: '#/components/schemas/GatewayBindingResponseData'
       required:
       - method
       - path
@@ -5356,6 +5478,30 @@ components:
       required:
       - cursor
       - layer
+    SecuritySchemeData:
+      type: object
+      properties:
+        providerType:
+          $ref: '#/components/schemas/Provider'
+        schemeIdentifier:
+          type: string
+        clientId:
+          type: string
+        clientSecret:
+          type: string
+        redirectUrl:
+          type: string
+        scopes:
+          type: array
+          items:
+            type: string
+      required:
+      - providerType
+      - schemeIdentifier
+      - clientId
+      - clientSecret
+      - redirectUrl
+      - scopes
     ShardId:
       type: object
       properties:
@@ -5601,7 +5747,7 @@ components:
         errors:
           type: array
           items:
-            $ref: '#/components/schemas/RouteValidationError'
+            type: string
       required:
       - errors
     ValueAndType:
@@ -6163,10 +6309,15 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/LinearMemory'
+        dynamicLinking:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/DynamicLinkedInstance'
       required:
       - exports
       - producers
       - memories
+      - dynamicLinking
     ComponentPluginScope:
       type: object
       properties:
@@ -6230,6 +6381,45 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/Empty'
+    DynamicLinkedInstance:
+      discriminator:
+        propertyName: type
+        mapping:
+          WasmRpc: '#/components/schemas/DynamicLinkedInstance_DynamicLinkedWasmRpc'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/DynamicLinkedInstance_DynamicLinkedWasmRpc'
+    DynamicLinkedInstance_DynamicLinkedWasmRpc:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: WasmRpc
+            type: string
+            enum:
+            - WasmRpc
+        required:
+        - type
+      - $ref: '#/components/schemas/DynamicLinkedWasmRpc'
+    DynamicLinkedWasmRpc:
+      type: object
+      properties:
+        targetInterfaceName:
+          description: Maps resource names within the dynamic linked interface to target interfaces
+          type: object
+          additionalProperties:
+            type: string
+      required:
+      - targetInterfaceName
+    DynamicLinking:
+      type: object
+      properties:
+        dynamicLinking:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/DynamicLinkedInstance'
+      required:
+      - dynamicLinking
     InitialComponentFile:
       type: object
       properties:
@@ -6272,7 +6462,35 @@ components:
       required:
       - componentId
       - componentVersion
-    PluginDefinition<DefaultPluginOwner, DefaultPluginScope>:
+    PluginDefinitionWithoutOwner_DefaultPluginScope:
+      type: object
+      properties:
+        name:
+          type: string
+        version:
+          type: string
+        description:
+          type: string
+        icon:
+          type: array
+          items:
+            type: integer
+            format: uint8
+        homepage:
+          type: string
+        specs:
+          $ref: '#/components/schemas/PluginTypeSpecificDefinition'
+        scope:
+          $ref: '#/components/schemas/DefaultPluginScope'
+      required:
+      - name
+      - version
+      - description
+      - icon
+      - homepage
+      - specs
+      - scope
+    PluginDefinition_DefaultPluginOwner_DefaultPluginScope:
       type: object
       properties:
         name:
@@ -6303,34 +6521,6 @@ components:
       - specs
       - scope
       - owner
-    PluginDefinitionWithoutOwner<DefaultPluginScope>:
-      type: object
-      properties:
-        name:
-          type: string
-        version:
-          type: string
-        description:
-          type: string
-        icon:
-          type: array
-          items:
-            type: integer
-            format: uint8
-        homepage:
-          type: string
-        specs:
-          $ref: '#/components/schemas/PluginTypeSpecificDefinition'
-        scope:
-          $ref: '#/components/schemas/DefaultPluginScope'
-      required:
-      - name
-      - version
-      - description
-      - icon
-      - homepage
-      - specs
-      - scope
     PluginInstallation:
       type: object
       properties:
@@ -6454,6 +6644,7 @@ components:
 tags:
 - name: ApiDefinition
 - name: ApiDeployment
+- name: ApiSecurity
 - name: Component
 - name: HealthCheck
 - name: Plugin

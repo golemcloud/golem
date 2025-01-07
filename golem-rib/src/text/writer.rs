@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -140,7 +140,7 @@ impl<W: Write> Writer<W> {
                 self.write_display(")")
             }
             Expr::Number(number, type_name, _) => {
-                self.write_display(number.value)?;
+                self.write_display(number.value.to_string())?;
                 if let Some(type_name) = type_name {
                     self.write_display(type_name)?;
                 }

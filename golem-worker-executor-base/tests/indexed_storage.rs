@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -365,6 +365,10 @@ macro_rules! test_indexed_storage {
 
                 let _ = is
                     .append("svc", "api", "entity", ns.clone(), &key1, 1, value1)
+                    .await
+                    .unwrap();
+                let _ = is
+                    .append("svc", "api", "entity", ns.clone(), &key1, 2, value2)
                     .await
                     .unwrap();
                 let _ = is

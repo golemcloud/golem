@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@ pub use identifier_inference::*;
 pub use inference_fix_point::*;
 pub use inferred_expr::*;
 pub use rib_input_type::*;
+pub use rib_output_type::*;
 pub(crate) use type_binding::*;
 pub use type_pull_up::*;
 pub use type_push_down::*;
@@ -48,6 +49,7 @@ mod global_input_inference;
 mod inference_fix_point;
 mod inferred_expr;
 pub(crate) mod kind;
+mod rib_output_type;
 mod type_binding;
 mod variable_binding_list_comprehension;
 mod variable_binding_list_reduce;
@@ -56,6 +58,7 @@ mod variable_binding_list_reduce;
 mod type_inference_tests {
 
     mod let_binding_tests {
+        use bigdecimal::BigDecimal;
         use test_r::test;
 
         use crate::call_type::CallType;
@@ -80,7 +83,9 @@ mod type_inference_tests {
                 VariableId::local("x", 0),
                 None,
                 Box::new(Expr::Number(
-                    Number { value: 1f64 },
+                    Number {
+                        value: BigDecimal::from(1),
+                    },
                     None,
                     InferredType::U64,
                 )), // The number in let expression is identified to be a U64
@@ -126,7 +131,9 @@ mod type_inference_tests {
                 VariableId::local("x", 0),
                 None,
                 Box::new(Expr::Number(
-                    Number { value: 1f64 },
+                    Number {
+                        value: BigDecimal::from(1),
+                    },
                     None,
                     InferredType::U64,
                 )),
@@ -137,7 +144,9 @@ mod type_inference_tests {
                 VariableId::local("y", 0),
                 None,
                 Box::new(Expr::Number(
-                    Number { value: 2f64 },
+                    Number {
+                        value: BigDecimal::from(2),
+                    },
                     None,
                     InferredType::U32,
                 )),
@@ -181,6 +190,7 @@ mod type_inference_tests {
         }
     }
     mod literal_tests {
+        use bigdecimal::BigDecimal;
         use test_r::test;
 
         use crate::parser::type_name::TypeName;
@@ -205,7 +215,9 @@ mod type_inference_tests {
                         VariableId::local("x", 0),
                         Some(TypeName::U64),
                         Box::new(Expr::Number(
-                            Number { value: 1f64 },
+                            Number {
+                                value: BigDecimal::from(1),
+                            },
                             None,
                             InferredType::U64,
                         )),
@@ -248,6 +260,7 @@ mod type_inference_tests {
         }
     }
     mod comparison_tests {
+        use bigdecimal::BigDecimal;
         use test_r::test;
 
         use crate::parser::type_name::TypeName;
@@ -276,7 +289,9 @@ mod type_inference_tests {
                         VariableId::local("x", 0),
                         Some(TypeName::U64),
                         Box::new(Expr::Number(
-                            Number { value: 1f64 },
+                            Number {
+                                value: BigDecimal::from(1),
+                            },
                             None,
                             InferredType::U64,
                         )),
@@ -286,7 +301,9 @@ mod type_inference_tests {
                         VariableId::local("y", 0),
                         Some(TypeName::U64),
                         Box::new(Expr::Number(
-                            Number { value: 2f64 },
+                            Number {
+                                value: BigDecimal::from(2),
+                            },
                             None,
                             InferredType::U64,
                         )),
@@ -384,7 +401,7 @@ mod type_inference_tests {
             );
 
             let expr = r#"
-              let user: str = request.body.user-id;
+              let user: string = request.body.user-id;
               let query1 = foo;
               let query2 = bar;
               let query3 = foo-bar;
@@ -580,6 +597,7 @@ mod type_inference_tests {
         }
     }
     mod cond_tests {
+        use bigdecimal::BigDecimal;
         use test_r::test;
 
         use crate::parser::type_name::TypeName;
@@ -606,7 +624,9 @@ mod type_inference_tests {
                         VariableId::local("x", 0),
                         Some(TypeName::U64),
                         Box::new(Expr::Number(
-                            Number { value: 1f64 },
+                            Number {
+                                value: BigDecimal::from(1),
+                            },
                             None,
                             InferredType::U64,
                         )),
@@ -616,7 +636,9 @@ mod type_inference_tests {
                         VariableId::local("y", 0),
                         Some(TypeName::U64),
                         Box::new(Expr::Number(
-                            Number { value: 2f64 },
+                            Number {
+                                value: BigDecimal::from(2),
+                            },
                             None,
                             InferredType::U64,
                         )),
@@ -664,6 +686,7 @@ mod type_inference_tests {
         }
     }
     mod identifier_tests {
+        use bigdecimal::BigDecimal;
         use test_r::test;
 
         use crate::parser::type_name::TypeName;
@@ -728,7 +751,9 @@ mod type_inference_tests {
                         VariableId::local("x", 0),
                         Some(TypeName::U64),
                         Box::new(Expr::Number(
-                            Number { value: 1f64 },
+                            Number {
+                                value: BigDecimal::from(1),
+                            },
                             None,
                             InferredType::U64,
                         )),
@@ -761,6 +786,7 @@ mod type_inference_tests {
         }
     }
     mod list_tests {
+        use bigdecimal::BigDecimal;
         use test_r::test;
 
         use crate::parser::type_name::TypeName;
@@ -786,9 +812,27 @@ mod type_inference_tests {
                         Some(TypeName::List(Box::new(TypeName::U64))),
                         Box::new(Expr::Sequence(
                             vec![
-                                Expr::Number(Number { value: 1f64 }, None, InferredType::U64),
-                                Expr::Number(Number { value: 2f64 }, None, InferredType::U64),
-                                Expr::Number(Number { value: 3f64 }, None, InferredType::U64),
+                                Expr::Number(
+                                    Number {
+                                        value: BigDecimal::from(1),
+                                    },
+                                    None,
+                                    InferredType::U64,
+                                ),
+                                Expr::Number(
+                                    Number {
+                                        value: BigDecimal::from(2),
+                                    },
+                                    None,
+                                    InferredType::U64,
+                                ),
+                                Expr::Number(
+                                    Number {
+                                        value: BigDecimal::from(3),
+                                    },
+                                    None,
+                                    InferredType::U64,
+                                ),
                             ],
                             InferredType::List(Box::new(InferredType::U64)),
                         )),
@@ -806,6 +850,7 @@ mod type_inference_tests {
         }
     }
     mod select_index_tests {
+        use bigdecimal::BigDecimal;
         use test_r::test;
 
         use crate::parser::type_name::TypeName;
@@ -831,9 +876,27 @@ mod type_inference_tests {
                         Some(TypeName::List(Box::new(TypeName::U64))),
                         Box::new(Expr::Sequence(
                             vec![
-                                Expr::Number(Number { value: 1f64 }, None, InferredType::U64),
-                                Expr::Number(Number { value: 2f64 }, None, InferredType::U64),
-                                Expr::Number(Number { value: 3f64 }, None, InferredType::U64),
+                                Expr::Number(
+                                    Number {
+                                        value: BigDecimal::from(1),
+                                    },
+                                    None,
+                                    InferredType::U64,
+                                ),
+                                Expr::Number(
+                                    Number {
+                                        value: BigDecimal::from(2),
+                                    },
+                                    None,
+                                    InferredType::U64,
+                                ),
+                                Expr::Number(
+                                    Number {
+                                        value: BigDecimal::from(3),
+                                    },
+                                    None,
+                                    InferredType::U64,
+                                ),
                             ],
                             InferredType::List(Box::new(InferredType::U64)),
                         )),
@@ -855,6 +918,7 @@ mod type_inference_tests {
         }
     }
     mod select_field_tests {
+        use bigdecimal::BigDecimal;
         use test_r::test;
 
         use crate::parser::type_name::TypeName;
@@ -880,7 +944,9 @@ mod type_inference_tests {
                         VariableId::local("n", 0),
                         Some(TypeName::U64),
                         Box::new(Expr::Number(
-                            Number { value: 1f64 },
+                            Number {
+                                value: BigDecimal::from(1),
+                            },
                             None,
                             InferredType::U64,
                         )),
@@ -917,6 +983,7 @@ mod type_inference_tests {
         }
     }
     mod tuple_tests {
+        use bigdecimal::BigDecimal;
         use test_r::test;
 
         use crate::parser::type_name::TypeName;
@@ -926,7 +993,7 @@ mod type_inference_tests {
         #[test]
         fn test_tuple_type_inference() {
             let rib_expr = r#"
-          let x: tuple<u64, str> = (1, "2");
+          let x: tuple<u64, string> = (1, "2");
           x
 
           "#;
@@ -942,7 +1009,13 @@ mod type_inference_tests {
                         Some(TypeName::Tuple(vec![TypeName::U64, TypeName::Str])),
                         Box::new(Expr::Tuple(
                             vec![
-                                Expr::Number(Number { value: 1f64 }, None, InferredType::U64),
+                                Expr::Number(
+                                    Number {
+                                        value: BigDecimal::from(1),
+                                    },
+                                    None,
+                                    InferredType::U64,
+                                ),
                                 Expr::literal("2"),
                             ],
                             InferredType::Tuple(vec![InferredType::U64, InferredType::Str]),
@@ -961,6 +1034,7 @@ mod type_inference_tests {
         }
     }
     mod variable_conflict_tests {
+        use bigdecimal::BigDecimal;
         use test_r::test;
 
         use crate::parser::type_name::TypeName;
@@ -990,7 +1064,9 @@ mod type_inference_tests {
                         VariableId::local("y", 0),
                         Some(TypeName::U64),
                         Box::new(Expr::Number(
-                            Number { value: 1f64 },
+                            Number {
+                                value: BigDecimal::from(1),
+                            },
                             None,
                             InferredType::U64,
                         )),
@@ -1027,7 +1103,9 @@ mod type_inference_tests {
                             MatchArm::new(
                                 ArmPattern::constructor("none", vec![]),
                                 Expr::Number(
-                                    Number { value: 0f64 },
+                                    Number {
+                                        value: BigDecimal::from(0),
+                                    },
                                     Some(TypeName::U64),
                                     InferredType::U64,
                                 ),
@@ -1043,6 +1121,7 @@ mod type_inference_tests {
         }
     }
     mod pattern_match_tests {
+        use bigdecimal::BigDecimal;
         use test_r::test;
 
         use crate::call_type::CallType;
@@ -1073,7 +1152,9 @@ mod type_inference_tests {
                 VariableId::local("x", 0),
                 None,
                 Box::new(Expr::Number(
-                    Number { value: 1f64 },
+                    Number {
+                        value: BigDecimal::from(1),
+                    },
                     None,
                     InferredType::U64,
                 )),
@@ -1084,7 +1165,9 @@ mod type_inference_tests {
                 VariableId::local("y", 0),
                 None,
                 Box::new(Expr::Number(
-                    Number { value: 2f64 },
+                    Number {
+                        value: BigDecimal::from(2),
+                    },
                     None,
                     InferredType::U32,
                 )),
@@ -1099,7 +1182,9 @@ mod type_inference_tests {
                 vec![
                     MatchArm::new(
                         ArmPattern::Literal(Box::new(Expr::Number(
-                            Number { value: 1f64 },
+                            Number {
+                                value: BigDecimal::from(1),
+                            },
                             None,
                             InferredType::U64,
                         ))),
@@ -1119,7 +1204,9 @@ mod type_inference_tests {
                     ),
                     MatchArm::new(
                         ArmPattern::Literal(Box::new(Expr::Number(
-                            Number { value: 2f64 },
+                            Number {
+                                value: BigDecimal::from(2),
+                            },
                             None,
                             InferredType::U64, // because predicate is u64
                         ))),
@@ -1189,7 +1276,9 @@ mod type_inference_tests {
                         VariableId::local("x", 0),
                         Some(TypeName::U64),
                         Box::new(Expr::Number(
-                            Number { value: 1f64 },
+                            Number {
+                                value: BigDecimal::from(1),
+                            },
                             None,
                             InferredType::U64,
                         )),
@@ -1199,7 +1288,9 @@ mod type_inference_tests {
                         VariableId::local("y", 0),
                         Some(TypeName::U64),
                         Box::new(Expr::Number(
-                            Number { value: 2f64 },
+                            Number {
+                                value: BigDecimal::from(2),
+                            },
                             None,
                             InferredType::U64,
                         )),
@@ -1449,9 +1540,27 @@ mod type_inference_tests {
                         Some(TypeName::List(Box::new(TypeName::U64))),
                         Box::new(Expr::Sequence(
                             vec![
-                                Expr::Number(Number { value: 1f64 }, None, InferredType::U64),
-                                Expr::Number(Number { value: 2f64 }, None, InferredType::U64),
-                                Expr::Number(Number { value: 3f64 }, None, InferredType::U64),
+                                Expr::Number(
+                                    Number {
+                                        value: BigDecimal::from(1),
+                                    },
+                                    None,
+                                    InferredType::U64,
+                                ),
+                                Expr::Number(
+                                    Number {
+                                        value: BigDecimal::from(2),
+                                    },
+                                    None,
+                                    InferredType::U64,
+                                ),
+                                Expr::Number(
+                                    Number {
+                                        value: BigDecimal::from(3),
+                                    },
+                                    None,
+                                    InferredType::U64,
+                                ),
                             ],
                             InferredType::List(Box::new(InferredType::U64)),
                         )),
@@ -1530,7 +1639,9 @@ mod type_inference_tests {
                             MatchArm::new(
                                 ArmPattern::constructor("none", vec![]),
                                 Expr::Number(
-                                    Number { value: 0f64 },
+                                    Number {
+                                        value: BigDecimal::from(0),
+                                    },
                                     Some(TypeName::U64),
                                     InferredType::U64,
                                 ),
@@ -1546,6 +1657,7 @@ mod type_inference_tests {
         }
     }
     mod option_tests {
+        use bigdecimal::BigDecimal;
         use test_r::test;
 
         use crate::parser::type_name::TypeName;
@@ -1571,7 +1683,9 @@ mod type_inference_tests {
                         Some(TypeName::Option(Box::new(TypeName::U64))),
                         Box::new(Expr::Option(
                             Some(Box::new(Expr::Number(
-                                Number { value: 1f64 },
+                                Number {
+                                    value: BigDecimal::from(1),
+                                },
                                 None,
                                 InferredType::U64,
                             ))),
@@ -1610,7 +1724,9 @@ mod type_inference_tests {
                         Some(TypeName::Option(Box::new(TypeName::U64))),
                         Box::new(Expr::Option(
                             Some(Box::new(Expr::Number(
-                                Number { value: 1f64 },
+                                Number {
+                                    value: BigDecimal::from(1),
+                                },
                                 None,
                                 InferredType::U64,
                             ))),
@@ -1646,13 +1762,13 @@ mod type_inference_tests {
         }
     }
     mod record_tests {
+        use bigdecimal::BigDecimal;
         use test_r::test;
 
         use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
         use crate::{Expr, FunctionTypeRegistry, InferredType, Number, VariableId};
         use golem_wasm_ast::analysis::analysed_type::{list, option, str};
-        use golem_wasm_ast::analysis::AnalysedType;
 
         #[test]
         fn test_record_type_inference() {
@@ -1673,7 +1789,9 @@ mod type_inference_tests {
                         VariableId::local("number", 0),
                         Some(TypeName::U64),
                         Box::new(Expr::Number(
-                            Number { value: 1f64 },
+                            Number {
+                                value: BigDecimal::from(1),
+                            },
                             None,
                             InferredType::U64,
                         )),
@@ -1728,12 +1846,16 @@ mod type_inference_tests {
                         Box::new(Expr::Cond(
                             Box::new(Expr::boolean(true)),
                             Box::new(Expr::Number(
-                                Number { value: 1f64 },
+                                Number {
+                                    value: BigDecimal::from(1),
+                                },
                                 Some(TypeName::U64),
                                 InferredType::U64,
                             )),
                             Box::new(Expr::Number(
-                                Number { value: 20f64 },
+                                Number {
+                                    value: BigDecimal::from(20),
+                                },
                                 Some(TypeName::U64),
                                 InferredType::U64,
                             )),
@@ -1802,14 +1924,14 @@ mod type_inference_tests {
                 ),
             ]);
 
-            let worker_response = internal::create_none(Some(&str()));
+            let worker_response = internal::create_none(&str());
 
             let request_type = internal::get_analysed_type_record(vec![(
                 "body".to_string(),
                 request_body_type.clone(),
             )]);
 
-            let return_type = option(AnalysedType::try_from(&worker_response).unwrap());
+            let return_type = option(worker_response.typ);
 
             let component_metadata =
                 internal::get_analysed_exports("foo", vec![request_type.clone()], return_type);
@@ -1835,6 +1957,7 @@ mod type_inference_tests {
 
     mod list_aggregation_tests {
         use crate::{Expr, FunctionTypeRegistry, InferredExpr, InferredType, TypeName, VariableId};
+        use bigdecimal::BigDecimal;
         use test_r::test;
 
         #[test]
@@ -1859,9 +1982,9 @@ mod type_inference_tests {
                         Some(TypeName::List(Box::new(TypeName::U64))),
                         Box::new(Expr::Sequence(
                             vec![
-                                Expr::number(1f64, InferredType::U64),
-                                Expr::number(2f64, InferredType::U64),
-                                Expr::number(3f64, InferredType::U64),
+                                Expr::number(BigDecimal::from(1), InferredType::U64),
+                                Expr::number(BigDecimal::from(2), InferredType::U64),
+                                Expr::number(BigDecimal::from(3), InferredType::U64),
                             ],
                             InferredType::List(Box::new(InferredType::U64)),
                         )),
@@ -1874,7 +1997,11 @@ mod type_inference_tests {
                             VariableId::local("ages", 0),
                             InferredType::List(Box::new(InferredType::U64)),
                         ),
-                        Expr::number_with_type_name(0f64, TypeName::U64, InferredType::U64),
+                        Expr::number_with_type_name(
+                            BigDecimal::from(0),
+                            TypeName::U64,
+                            InferredType::U64,
+                        ),
                         Expr::ExprBlock(
                             vec![
                                 Expr::Let(
@@ -1903,7 +2030,7 @@ mod type_inference_tests {
                 InferredType::U64,
             );
 
-            assert_eq!(Expr::from(inferred_expr), expected);
+            assert_eq!(inferred_expr.get_expr(), &expected);
         }
     }
 
@@ -1957,7 +2084,7 @@ mod type_inference_tests {
                 InferredType::List(Box::new(InferredType::Str)),
             );
 
-            assert_eq!(Expr::from(inferred_expr), expected);
+            assert_eq!(inferred_expr.get_expr(), &expected);
         }
     }
 
@@ -2076,14 +2203,13 @@ mod type_inference_tests {
             ArmPattern, Expr, FunctionTypeRegistry, InferredType, MatchArm, MatchIdentifier,
             ParsedFunctionSite, VariableId,
         };
-        use golem_wasm_ast::analysis::analysed_type::u64;
+        use golem_wasm_ast::analysis::analysed_type::{option, u64};
         use golem_wasm_ast::analysis::TypeVariant;
         use golem_wasm_ast::analysis::{
             AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
             AnalysedType, NameOptionTypePair, NameTypePair, TypeEnum, TypeRecord, TypeU32,
         };
-        use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-        use golem_wasm_rpc::protobuf::TypedOption;
+        use golem_wasm_rpc::{Value, ValueAndType};
 
         pub(crate) fn get_function_type_registry() -> FunctionTypeRegistry {
             let metadata = vec![
@@ -2143,11 +2269,8 @@ mod type_inference_tests {
             AnalysedType::Record(record)
         }
 
-        pub(crate) fn create_none(typ: Option<&AnalysedType>) -> TypeAnnotatedValue {
-            TypeAnnotatedValue::Option(Box::new(TypedOption {
-                value: None,
-                typ: typ.map(|t| t.into()),
-            }))
+        pub(crate) fn create_none(typ: &AnalysedType) -> ValueAndType {
+            ValueAndType::new(Value::Option(None), option(typ.clone()))
         }
 
         pub(crate) fn get_analysed_exports(

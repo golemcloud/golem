@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -23,7 +23,7 @@ use async_trait::async_trait;
 use golem_common::model::component::ComponentOwner;
 use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope};
 use golem_worker_executor_base::durable_host::DurableWorkerCtx;
-use golem_worker_executor_base::preview2::golem::{api0_2_0, api1_1_0_rc1};
+use golem_worker_executor_base::preview2::golem::{api0_2_0, api1_1_0};
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
 use golem_worker_executor_base::services::component::ComponentService;
@@ -31,6 +31,7 @@ use golem_worker_executor_base::services::events::Events;
 use golem_worker_executor_base::services::file_loader::FileLoader;
 use golem_worker_executor_base::services::golem_config::GolemConfig;
 use golem_worker_executor_base::services::key_value::KeyValueService;
+use golem_worker_executor_base::services::oplog::plugin::OplogProcessorPlugin;
 use golem_worker_executor_base::services::oplog::OplogService;
 use golem_worker_executor_base::services::plugins::{Plugins, PluginsObservations};
 use golem_worker_executor_base::services::promise::PromiseService;
@@ -47,9 +48,10 @@ use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
 use golem_worker_executor_base::services::{plugins, All};
 use golem_worker_executor_base::wasi_host::create_linker;
 use golem_worker_executor_base::workerctx::WorkerCtx;
-use golem_worker_executor_base::Bootstrap;
+use golem_worker_executor_base::{Bootstrap, RunDetails};
 use prometheus::Registry;
 use tokio::runtime::Handle;
+use tokio::task::JoinSet;
 use tracing::info;
 use wasmtime::component::Linker;
 use wasmtime::Engine;
@@ -57,7 +59,7 @@ use wasmtime::Engine;
 #[cfg(test)]
 test_r::enable!();
 
-struct ServerBootstrap {}
+struct ServerBootstrap;
 
 #[async_trait]
 impl Bootstrap<Context> for ServerBootstrap {
@@ -97,13 +99,14 @@ impl Bootstrap<Context> for ServerBootstrap {
         shard_service: Arc<dyn ShardService + Send + Sync>,
         key_value_service: Arc<dyn KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
-        worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
+        worker_activator: Arc<dyn WorkerActivator<Context> + Send + Sync>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn Plugins<DefaultPluginOwner, DefaultPluginScope> + Send + Sync>,
+        oplog_processor_plugin: Arc<dyn OplogProcessorPlugin + Send + Sync>,
     ) -> anyhow::Result<All<Context>> {
         let additional_deps = AdditionalDeps {};
 
@@ -132,6 +135,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             events.clone(),
             file_loader.clone(),
             plugins.clone(),
+            oplog_processor_plugin.clone(),
             additional_deps.clone(),
         ));
 
@@ -158,6 +162,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             events.clone(),
             file_loader.clone(),
             plugins.clone(),
+            oplog_processor_plugin,
             additional_deps,
         ))
     }
@@ -165,7 +170,7 @@ impl Bootstrap<Context> for ServerBootstrap {
     fn create_wasmtime_linker(&self, engine: &Engine) -> anyhow::Result<Linker<Context>> {
         let mut linker = create_linker(engine, get_durable_ctx)?;
         api0_2_0::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-        api1_1_0_rc1::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+        api1_1_0::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         golem_wasm_rpc::golem::rpc::types::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         Ok(linker)
     }
@@ -179,9 +184,10 @@ pub async fn run(
     golem_config: GolemConfig,
     prometheus_registry: Registry,
     runtime: Handle,
-) -> Result<(), Box<dyn std::error::Error>> {
+    join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+) -> Result<RunDetails, anyhow::Error> {
     info!("Golem Worker Executor starting up...");
-    Ok(ServerBootstrap {}
-        .run(golem_config, prometheus_registry, runtime)
-        .await?)
+    ServerBootstrap
+        .run(golem_config, prometheus_registry, runtime, join_set)
+        .await
 }

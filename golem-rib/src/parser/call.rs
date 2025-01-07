@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::expr::Expr;
+use crate::function_name::{ParsedFunctionSite, SemVer};
+use crate::parser::errors::RibParseError;
+use crate::parser::rib_expr::rib_expr;
 use crate::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
 use combine::error::Commit;
 use combine::parser::char::{alpha_num, string};
@@ -19,11 +23,6 @@ use combine::parser::char::{char, spaces};
 use combine::parser::repeat::take_until;
 use combine::sep_by;
 use combine::{any, attempt, between, choice, many1, optional, parser, token, ParseError, Parser};
-
-use crate::expr::Expr;
-use crate::function_name::{ParsedFunctionSite, SemVer};
-use crate::parser::errors::RibParseError;
-use crate::parser::rib_expr::rib_expr;
 
 // A call can be a function or constructing an anonymous variant at the type of writing Rib which user expects to work at runtime
 pub fn call<Input>() -> impl Parser<Input, Output = Expr>
@@ -72,15 +71,24 @@ where
                     if nesting > 0 {
                         current_param.push(next_char);
                     }
-                } else if next_char == '(' {
+                } else if next_char == '(' || next_char == '{' || next_char == '[' {
                     nesting += 1;
                     current_param.push(next_char);
+                } else if next_char == '}' || next_char == ']' {
+                    nesting -= 1;
+                    current_param.push(next_char);
                 } else if next_char == ',' && nesting == 1 {
-                    let expr =
-                        Expr::from_text(current_param.trim()).expect("Failed to parse expression");
-
-                    result.push(expr);
-                    current_param.clear();
+                    let expr = Expr::from_text(current_param.trim());
+                    match expr {
+                        Ok(expr) => {
+                            result.push(expr);
+                            current_param.clear();
+                        }
+                        Err(err) => {
+                            // TODO: THIS SHOULD FAIL THE PARSER ONLY
+                            panic!("Failed to parse resource parameter {current_param}: {err}");
+                        }
+                    }
                 } else {
                     current_param.push(next_char);
                 }
@@ -92,9 +100,16 @@ where
             }
 
             if !current_param.is_empty() {
-                let expr =
-                    Expr::from_text(current_param.trim()).expect("Failed to parse expression");
-                result.push(expr);
+                let expr = Expr::from_text(current_param.trim());
+                match expr {
+                    Ok(expr) => {
+                        result.push(expr);
+                    }
+                    Err(err) => {
+                        // TODO: THIS SHOULD FAIL THE PARSER ONLY
+                        panic!("Failed to parse resource parameter {current_param}: {err}");
+                    }
+                }
             }
 
             Ok((result, result_committed.unwrap()))
@@ -215,6 +230,7 @@ where
 }
 #[cfg(test)]
 mod function_call_tests {
+    use bigdecimal::BigDecimal;
     use test_r::test;
 
     use crate::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
@@ -760,7 +776,7 @@ mod function_call_tests {
                         resource: "resource1".to_string(),
                         resource_params: vec![
                             Expr::literal("hello"),
-                            Expr::untyped_number(1f64),
+                            Expr::untyped_number(BigDecimal::from(1)),
                             Expr::boolean(true),
                         ],
                     },
@@ -792,7 +808,7 @@ mod function_call_tests {
                             Expr::literal("hello"),
                             Expr::record(vec![(
                                 "field-a".to_string(),
-                                Expr::option(Some(Expr::untyped_number(1f64))),
+                                Expr::option(Some(Expr::untyped_number(BigDecimal::from(1)))),
                             )]),
                         ],
                     },
@@ -968,7 +984,7 @@ mod function_call_tests {
                         resource: "resource1".to_string(),
                         resource_params: vec![
                             Expr::literal("hello"),
-                            Expr::untyped_number(1f64),
+                            Expr::untyped_number(BigDecimal::from(1)),
                             Expr::boolean(true),
                         ],
                     },
@@ -1000,7 +1016,7 @@ mod function_call_tests {
                             Expr::literal("hello"),
                             Expr::record(vec![(
                                 "field-a".to_string(),
-                                Expr::option(Some(Expr::untyped_number(1f64))),
+                                Expr::option(Some(Expr::untyped_number(BigDecimal::from(1)))),
                             )]),
                         ],
                     },

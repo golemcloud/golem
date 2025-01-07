@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,8 +18,4 @@ pub fn print_completion(mut command: Command, shell: clap_complete::Shell) {
     let cmd_name = command.get_name().to_string();
     tracing::info!("Golem CLI - generating completion file for {cmd_name} - {shell:?}...");
     clap_complete::generate(shell, &mut command, cmd_name, &mut std::io::stdout());
-}
-
-pub trait PrintCompletion {
-    fn print_completion(shell: clap_complete::Shell);
 }

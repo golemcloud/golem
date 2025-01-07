@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::config::RetryConfig;
 use crate::model::regions::OplogRegion;
+use crate::model::RetryConfig;
 use crate::model::{
     AccountId, ComponentVersion, IdempotencyKey, PluginInstallationId, Timestamp, WorkerId,
     WorkerInvocation,
@@ -24,10 +24,9 @@ use bincode::enc::write::Writer;
 use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
-use golem_wasm_ast::analysis::analysed_type::u64;
+use golem_wasm_ast::analysis::analysed_type::{r#enum, u64};
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::{IntoValue, Value};
-use poem_openapi::{Enum, NewType};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
@@ -49,8 +48,8 @@ use uuid::Uuid;
     Encode,
     Decode,
     Default,
-    NewType,
 )]
+#[cfg_attr(feature = "poem", derive(poem_openapi::NewType))]
 pub struct OplogIndex(u64);
 
 impl OplogIndex {
@@ -200,20 +199,9 @@ impl<'de> BorrowDecode<'de> for PayloadId {
 }
 
 #[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialOrd,
-    Ord,
-    PartialEq,
-    Eq,
-    Hash,
-    Encode,
-    Decode,
-    Serialize,
-    Deserialize,
-    NewType,
+    Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash, Encode, Decode, Serialize, Deserialize,
 )]
+#[cfg_attr(feature = "poem", derive(poem_openapi::NewType))]
 pub struct WorkerResourceId(pub u64);
 
 impl WorkerResourceId {
@@ -230,32 +218,25 @@ impl Display for WorkerResourceId {
     }
 }
 
+impl IntoValue for WorkerResourceId {
+    fn into_value(self) -> Value {
+        Value::U64(self.0)
+    }
+
+    fn get_type() -> AnalysedType {
+        u64()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
 pub struct IndexedResourceKey {
     pub resource_name: String,
     pub resource_params: Vec<String>,
 }
 
-impl From<IndexedResourceKey> for golem_api_grpc::proto::golem::worker::IndexedResourceMetadata {
-    fn from(value: IndexedResourceKey) -> Self {
-        golem_api_grpc::proto::golem::worker::IndexedResourceMetadata {
-            resource_name: value.resource_name,
-            resource_params: value.resource_params,
-        }
-    }
-}
-
-impl From<golem_api_grpc::proto::golem::worker::IndexedResourceMetadata> for IndexedResourceKey {
-    fn from(value: golem_api_grpc::proto::golem::worker::IndexedResourceMetadata) -> Self {
-        IndexedResourceKey {
-            resource_name: value.resource_name,
-            resource_params: value.resource_params,
-        }
-    }
-}
-
 /// Worker log levels including the special stdout and stderr channels
-#[derive(Copy, Clone, Debug, PartialEq, Encode, Decode, Serialize, Deserialize, Enum)]
+#[derive(Copy, Clone, Debug, PartialEq, Encode, Decode, Serialize, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Enum))]
 #[repr(u8)]
 pub enum LogLevel {
     Stdout,
@@ -266,6 +247,27 @@ pub enum LogLevel {
     Warn,
     Error,
     Critical,
+}
+
+impl IntoValue for LogLevel {
+    fn into_value(self) -> Value {
+        match self {
+            LogLevel::Stdout => Value::Enum(0),
+            LogLevel::Stderr => Value::Enum(1),
+            LogLevel::Trace => Value::Enum(2),
+            LogLevel::Debug => Value::Enum(3),
+            LogLevel::Info => Value::Enum(4),
+            LogLevel::Warn => Value::Enum(5),
+            LogLevel::Error => Value::Enum(6),
+            LogLevel::Critical => Value::Enum(7),
+        }
+    }
+
+    fn get_type() -> AnalysedType {
+        r#enum(&[
+            "stdout", "stderr", "trace", "debug", "info", "warn", "error", "critical",
+        ])
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Encode, Decode)]
@@ -818,6 +820,29 @@ impl WorkerError {
             WorkerError::InvalidRequest(message) => format!("{message}{error_logs}"),
             WorkerError::StackOverflow => format!("Stack overflow{error_logs}"),
             WorkerError::OutOfMemory => format!("Out of memory{error_logs}"),
+        }
+    }
+}
+
+#[cfg(feature = "protobuf")]
+mod protobuf {
+    use crate::model::oplog::IndexedResourceKey;
+
+    impl From<IndexedResourceKey> for golem_api_grpc::proto::golem::worker::IndexedResourceMetadata {
+        fn from(value: IndexedResourceKey) -> Self {
+            golem_api_grpc::proto::golem::worker::IndexedResourceMetadata {
+                resource_name: value.resource_name,
+                resource_params: value.resource_params,
+            }
+        }
+    }
+
+    impl From<golem_api_grpc::proto::golem::worker::IndexedResourceMetadata> for IndexedResourceKey {
+        fn from(value: golem_api_grpc::proto::golem::worker::IndexedResourceMetadata) -> Self {
+            IndexedResourceKey {
+                resource_name: value.resource_name,
+                resource_params: value.resource_params,
+            }
         }
     }
 }

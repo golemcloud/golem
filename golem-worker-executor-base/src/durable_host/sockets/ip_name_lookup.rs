@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -64,7 +64,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         network: Resource<Network>,
         name: String,
     ) -> Result<Resource<ResolveAddressStream>, SocketError> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("sockets::ip_name_lookup", "resolve_addresses");
 
         let addresses: Result<Vec<IpAddress>, SocketError> =
@@ -81,38 +80,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         let stream = ResolveAddressStream::Done(Ok(addresses?.into_iter()));
         Ok(self.table().push(stream)?)
-    }
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> HostResolveAddressStream for &mut DurableWorkerCtx<Ctx> {
-    fn resolve_next_address(
-        &mut self,
-        self_: Resource<ResolveAddressStream>,
-    ) -> Result<Option<IpAddress>, SocketError> {
-        (*self).resolve_next_address(self_)
-    }
-
-    fn subscribe(
-        &mut self,
-        self_: Resource<ResolveAddressStream>,
-    ) -> anyhow::Result<Resource<Pollable>> {
-        (*self).subscribe(self_)
-    }
-
-    fn drop(&mut self, rep: Resource<ResolveAddressStream>) -> anyhow::Result<()> {
-        (*self).drop(rep)
-    }
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {
-    async fn resolve_addresses(
-        &mut self,
-        network: Resource<Network>,
-        name: String,
-    ) -> Result<Resource<ResolveAddressStream>, SocketError> {
-        (*self).resolve_addresses(network, name).await
     }
 }
 

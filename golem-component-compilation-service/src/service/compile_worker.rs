@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,16 +14,15 @@
 
 use crate::config::CompileWorkerConfig;
 use crate::model::*;
-use crate::UriBackConversion;
 use futures_util::TryStreamExt;
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
 use golem_api_grpc::proto::golem::component::v1::download_component_response;
 use golem_api_grpc::proto::golem::component::v1::ComponentError;
 use golem_api_grpc::proto::golem::component::v1::DownloadComponentRequest;
 use golem_common::client::{GrpcClient, GrpcClientConfig};
-use golem_common::config::RetryConfig;
 use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
 use golem_common::model::ComponentId;
+use golem_common::model::RetryConfig;
 use golem_common::retries::with_retries;
 use golem_worker_executor_base::grpc::authorised_grpc_request;
 use golem_worker_executor_base::grpc::is_grpc_retriable;
@@ -36,6 +35,7 @@ use std::time::Instant;
 use tokio::sync::mpsc;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
+use tracing::Instrument;
 use uuid::Uuid;
 use wasmtime::component::Component;
 use wasmtime::Engine;
@@ -79,7 +79,7 @@ impl CompileWorker {
                         .send_compressed(CompressionEncoding::Gzip)
                         .accept_compressed(CompressionEncoding::Gzip)
                 },
-                uri.as_http_02(),
+                uri,
                 GrpcClientConfig {
                     retries_on_unavailable: config.retries.clone(),
                     ..Default::default() // TODO
@@ -87,29 +87,32 @@ impl CompileWorker {
             ),
         };
 
-        tokio::spawn(async move {
-            while let Some(request) = recv.recv().await {
-                crate::metrics::decrement_queue_length();
-                let result = worker.compile_component(&request.component).await;
-                match result {
-                    Err(_) => {}
-                    Ok(component) => {
-                        tracing::info!("Compiled component {}", request.component);
-                        let send_result = sender
-                            .send(CompiledComponent {
-                                component_and_version: request.component,
-                                component,
-                            })
-                            .await;
+        tokio::spawn(
+            async move {
+                while let Some(request) = recv.recv().await {
+                    crate::metrics::decrement_queue_length();
+                    let result = worker.compile_component(&request.component).await;
+                    match result {
+                        Err(_) => {}
+                        Ok(component) => {
+                            tracing::info!("Compiled component {}", request.component);
+                            let send_result = sender
+                                .send(CompiledComponent {
+                                    component_and_version: request.component,
+                                    component,
+                                })
+                                .await;
 
-                        if send_result.is_err() {
-                            tracing::error!("Failed to send compiled component");
-                            break;
+                            if send_result.is_err() {
+                                tracing::error!("Failed to send compiled component");
+                                break;
+                            }
                         }
-                    }
-                };
+                    };
+                }
             }
-        });
+            .in_current_span(),
+        );
     }
 
     async fn compile_component(

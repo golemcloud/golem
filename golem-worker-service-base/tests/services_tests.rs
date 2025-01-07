@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_service_base::migration::{Migrations, MigrationsDir};
+use std::collections::HashMap;
 use test_r::test;
 
 use async_trait::async_trait;
-use golem_common::config::{DbPostgresConfig, DbSqliteConfig};
-use golem_common::model::ComponentId;
+use golem_common::config::{DbPostgresConfig, DbSqliteConfig, RedisConfig};
+use golem_common::model::{ComponentId, RetryConfig};
 use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
 use golem_service_base::db;
 use golem_service_base::model::Component;
@@ -36,18 +38,42 @@ use golem_worker_service_base::service::gateway::api_definition::{
 use golem_worker_service_base::service::gateway::api_deployment::{
     ApiDeploymentError, ApiDeploymentService, ApiDeploymentServiceDefault,
 };
-use golem_worker_service_base::service::gateway::http_api_definition_validator::{
-    HttpApiDefinitionValidator, RouteValidationError,
-};
+use golem_worker_service_base::service::gateway::http_api_definition_validator::HttpApiDefinitionValidator;
 
 use chrono::Utc;
 use golem_common::model::component_constraint::FunctionConstraintCollection;
+use golem_common::redis::RedisPool;
+use golem_service_base::storage::sqlite::SqlitePool;
 use golem_wasm_ast::analysis::analysed_type::str;
 use golem_worker_service_base::api;
 use golem_worker_service_base::gateway_api_deployment::{
     ApiDeploymentRequest, ApiSite, ApiSiteString,
 };
+use golem_worker_service_base::gateway_execution::gateway_session::{
+    DataKey, DataValue, GatewaySession, GatewaySessionError, RedisGatewaySession,
+    RedisGatewaySessionExpiration, SessionId, SqliteGatewaySession, SqliteGatewaySessionExpiration,
+};
+use golem_worker_service_base::gateway_security::{
+    AuthorizationUrl, DefaultIdentityProvider, GolemIdentityProviderMetadata, IdentityProvider,
+    IdentityProviderError, OpenIdClient, Provider, SecurityScheme, SecuritySchemeIdentifier,
+};
+use golem_worker_service_base::repo::security_scheme::{DbSecuritySchemeRepo, SecuritySchemeRepo};
+use golem_worker_service_base::service::gateway::security_scheme::{
+    DefaultSecuritySchemeService, SecuritySchemeService,
+};
+use openidconnect::core::{
+    CoreClaimName, CoreClaimType, CoreClientAuthMethod, CoreGrantType, CoreIdTokenClaims,
+    CoreIdTokenVerifier, CoreJweContentEncryptionAlgorithm, CoreJweKeyManagementAlgorithm,
+    CoreJwsSigningAlgorithm, CoreProviderMetadata, CoreResponseMode, CoreResponseType,
+    CoreSubjectIdentifierType, CoreTokenResponse,
+};
+use openidconnect::{
+    AuthUrl, AuthenticationContextClass, AuthorizationCode, ClientId, ClientSecret, CsrfToken,
+    IssuerUrl, JsonWebKeySetUrl, Nonce, RedirectUrl, RegistrationUrl, ResponseTypes, Scope,
+    TokenUrl, UserInfoUrl,
+};
 use std::sync::Arc;
+use std::time::Duration;
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, ImageExt};
 use testcontainers_modules::postgres::Postgres;
@@ -78,6 +104,34 @@ async fn start_docker_postgres() -> (DbPostgresConfig, ContainerAsync<Postgres>)
     (config, container)
 }
 
+async fn start_docker_redis() -> (
+    RedisConfig,
+    ContainerAsync<testcontainers_modules::redis::Redis>,
+) {
+    let container = testcontainers_modules::redis::Redis::default()
+        .with_tag("6.2.6")
+        .start()
+        .await
+        .expect("Failed to start redis container");
+
+    let redis_config = RedisConfig {
+        host: "localhost".to_string(),
+        port: container
+            .get_host_port_ipv4(6379)
+            .await
+            .expect("Failed to get port"),
+        database: 0,
+        tracing: false,
+        pool_size: 10,
+        retries: RetryConfig::default(),
+        key_prefix: "".to_string(),
+        username: None,
+        password: None,
+    };
+
+    (redis_config, container)
+}
+
 struct SqliteDb {
     db_path: String,
 }
@@ -100,9 +154,12 @@ impl Drop for SqliteDb {
 pub async fn test_with_postgres_db() {
     let (db_config, _container) = start_docker_postgres().await;
 
-    db::postgres_migrate(&db_config, "../golem-worker-service/db/migration/postgres")
-        .await
-        .unwrap();
+    db::postgres_migrate(
+        &db_config,
+        MigrationsDir::new("../golem-worker-service/db/migration".into()).postgres_migrations(),
+    )
+    .await
+    .unwrap();
 
     let db_pool = db::create_postgres_pool(&db_config).await.unwrap();
 
@@ -113,7 +170,171 @@ pub async fn test_with_postgres_db() {
         api_deployment::DbApiDeploymentRepo::new(db_pool.clone().into()),
     );
 
-    test_services(api_definition_repo, api_deployment_repo).await;
+    let security_scheme_repo: Arc<dyn SecuritySchemeRepo + Sync + Send> =
+        Arc::new(DbSecuritySchemeRepo::new(db_pool.clone().into()));
+
+    test_services(
+        api_definition_repo,
+        api_deployment_repo,
+        security_scheme_repo,
+    )
+    .await;
+}
+
+#[test]
+pub async fn test_gateway_session_with_sqlite() {
+    let db = SqliteDb::default();
+    let db_config = DbSqliteConfig {
+        database: db.db_path.clone(),
+        max_connections: 10,
+    };
+
+    let db_pool = db::create_sqlite_pool(&db_config).await.unwrap();
+
+    let data_value = DataValue(serde_json::Value::String(
+        Nonce::new_random().secret().to_string(),
+    ));
+
+    let value = insert_and_get_session_with_sqlite(
+        SessionId("test1".to_string()),
+        DataKey::nonce(),
+        data_value.clone(),
+        db_pool.clone(),
+    )
+    .await
+    .expect("Expecting a value for longer expiry");
+
+    assert_eq!(value, data_value.clone());
+}
+
+#[test]
+pub async fn test_gateway_session_with_sqlite_expired() {
+    let db = SqliteDb::default();
+    let db_config = DbSqliteConfig {
+        database: db.db_path.clone(),
+        max_connections: 10,
+    };
+
+    let db_pool = db::create_sqlite_pool(&db_config).await.unwrap();
+
+    let data_value = DataValue(serde_json::Value::String(
+        Nonce::new_random().secret().to_string(),
+    ));
+
+    let expiration =
+        SqliteGatewaySessionExpiration::new(Duration::from_secs(1), Duration::from_secs(1));
+
+    let pool = SqlitePool::new(db_pool)
+        .await
+        .expect("Failed to create sqlite pool");
+
+    let sqlite_session = SqliteGatewaySession::new(pool.clone(), expiration.clone())
+        .await
+        .expect("Failed to create sqlite session");
+
+    let session_store = Arc::new(sqlite_session);
+
+    let data_key = DataKey::nonce();
+    let session_id = SessionId("test1".to_string());
+
+    session_store
+        .insert(session_id.clone(), data_key.clone(), data_value)
+        .await
+        .expect("Insert to session failed");
+
+    SqliteGatewaySession::cleanup_expired(pool, SqliteGatewaySession::current_time() + 10)
+        .await
+        .expect("Failed to cleanup expired sessions");
+
+    let result = session_store.get(&session_id, &data_key).await;
+
+    assert!(matches!(
+        result,
+        Err(GatewaySessionError::MissingValue { .. })
+    ));
+}
+
+#[test]
+pub async fn test_gateway_session_redis() {
+    let (redis_config, _container) = start_docker_redis().await;
+
+    let redis = RedisPool::configured(&redis_config).await.unwrap();
+
+    let data_value = DataValue(serde_json::Value::String(
+        Nonce::new_random().secret().to_string(),
+    ));
+
+    // Longer Expiry in Redis returns value
+    let value = insert_and_get_with_redis(
+        SessionId("test1".to_string()),
+        DataKey::nonce(),
+        data_value.clone(),
+        60 * 60,
+        &redis,
+    )
+    .await
+    .expect("Expecting a value for longer expiry");
+
+    assert_eq!(value, data_value.clone());
+
+    // Instant expiry in Redis returns missing value, and we should get missing value
+    let result = insert_and_get_with_redis(
+        SessionId("test2".to_string()),
+        DataKey::nonce(),
+        data_value.clone(),
+        0,
+        &redis,
+    )
+    .await;
+
+    assert!(matches!(
+        result,
+        Err(GatewaySessionError::MissingValue { .. })
+    ));
+}
+
+async fn insert_and_get_with_redis(
+    session_id: SessionId,
+    data_key: DataKey,
+    data_value: DataValue,
+    redis_expiry_in_seconds: u64,
+    redis: &RedisPool,
+) -> Result<DataValue, GatewaySessionError> {
+    let session_store = Arc::new(RedisGatewaySession::new(
+        redis.clone(),
+        RedisGatewaySessionExpiration::new(Duration::from_secs(redis_expiry_in_seconds)),
+    ));
+
+    session_store
+        .insert(session_id.clone(), data_key.clone(), data_value)
+        .await
+        .unwrap();
+
+    session_store.get(&session_id, &data_key).await
+}
+
+async fn insert_and_get_session_with_sqlite(
+    session_id: SessionId,
+    data_key: DataKey,
+    data_value: DataValue,
+    db_pool: sqlx::SqlitePool,
+) -> Result<DataValue, GatewaySessionError> {
+    let sqlite_session = SqliteGatewaySession::new(
+        SqlitePool::new(db_pool)
+            .await
+            .map_err(|err| GatewaySessionError::InternalError(err.to_string()))?,
+        SqliteGatewaySessionExpiration::default(),
+    )
+    .await
+    .map_err(|err| GatewaySessionError::InternalError(err.to_string()))?;
+
+    let session_store = Arc::new(sqlite_session);
+
+    session_store
+        .insert(session_id.clone(), data_key.clone(), data_value)
+        .await?;
+
+    session_store.get(&session_id, &data_key).await
 }
 
 #[test]
@@ -124,9 +345,12 @@ pub async fn test_with_sqlite_db() {
         max_connections: 10,
     };
 
-    db::sqlite_migrate(&db_config, "../golem-worker-service/db/migration/sqlite")
-        .await
-        .unwrap();
+    db::sqlite_migrate(
+        &db_config,
+        MigrationsDir::new("../golem-worker-service/db/migration".into()).sqlite_migrations(),
+    )
+    .await
+    .unwrap();
 
     let db_pool = db::create_sqlite_pool(&db_config).await.unwrap();
 
@@ -137,7 +361,15 @@ pub async fn test_with_sqlite_db() {
         api_deployment::DbApiDeploymentRepo::new(db_pool.clone().into()),
     );
 
-    test_services(api_definition_repo, api_deployment_repo).await;
+    let security_scheme_repo: Arc<dyn SecuritySchemeRepo + Sync + Send> =
+        Arc::new(DbSecuritySchemeRepo::new(db_pool.clone().into()));
+
+    test_services(
+        api_definition_repo,
+        api_deployment_repo,
+        security_scheme_repo,
+    )
+    .await;
 }
 
 struct TestComponentService;
@@ -160,6 +392,7 @@ impl TestComponentService {
                 exports: Self::get_metadata(),
                 producers: vec![],
                 memories: vec![],
+                dynamic_linking: HashMap::new(),
             },
             created_at: Some(Utc::now()),
             component_type: None,
@@ -222,20 +455,28 @@ impl<AuthCtx> ComponentService<AuthCtx> for TestComponentService {
 async fn test_services(
     api_definition_repo: Arc<dyn api_definition::ApiDefinitionRepo + Sync + Send>,
     api_deployment_repo: Arc<dyn api_deployment::ApiDeploymentRepo + Sync + Send>,
+    security_scheme_repo: Arc<dyn SecuritySchemeRepo + Sync + Send>,
 ) {
     let component_service: Arc<dyn ComponentService<EmptyAuthCtx> + Sync + Send> =
         Arc::new(TestComponentService {});
 
     let api_definition_validator_service = Arc::new(HttpApiDefinitionValidator {});
 
+    let identity_provider_resolver = Arc::new(TestIdentityProvider);
+
+    let security_scheme_service: Arc<dyn SecuritySchemeService<DefaultNamespace> + Send + Sync> =
+        Arc::new(DefaultSecuritySchemeService::new(
+            security_scheme_repo,
+            identity_provider_resolver,
+        ));
+
     let definition_service: Arc<
-        dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace, RouteValidationError>
-            + Sync
-            + Send,
+        dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace> + Sync + Send,
     > = Arc::new(ApiDefinitionServiceDefault::new(
         component_service.clone(),
         api_definition_repo.clone(),
         api_deployment_repo.clone(),
+        security_scheme_service.clone(),
         api_definition_validator_service.clone(),
     ));
 
@@ -247,6 +488,7 @@ async fn test_services(
         component_service.clone(),
     ));
 
+    test_security_crud(security_scheme_service.clone()).await;
     test_definition_crud(definition_service.clone()).await;
     test_delete_non_existing(definition_service.clone()).await;
     test_deployment(definition_service.clone(), deployment_service.clone()).await;
@@ -254,11 +496,7 @@ async fn test_services(
 }
 
 async fn test_deployment(
-    definition_service: Arc<
-        dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace, RouteValidationError>
-            + Sync
-            + Send,
-    >,
+    definition_service: Arc<dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace> + Sync + Send>,
     deployment_service: Arc<dyn ApiDeploymentService<EmptyAuthCtx, DefaultNamespace> + Sync + Send>,
 ) {
     let def1 = get_api_definition(
@@ -490,11 +728,7 @@ async fn test_deployment(
 }
 
 async fn test_deployment_conflict(
-    definition_service: Arc<
-        dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace, RouteValidationError>
-            + Sync
-            + Send,
-    >,
+    definition_service: Arc<dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace> + Sync + Send>,
     deployment_service: Arc<dyn ApiDeploymentService<EmptyAuthCtx, DefaultNamespace> + Sync + Send>,
 ) {
     let def1 = get_api_definition(
@@ -576,19 +810,35 @@ async fn test_deployment_conflict(
     assert!(delete_result.is_err());
     assert_eq!(
         delete_result.unwrap_err().to_string(),
-        ApiDefinitionError::<RouteValidationError>::ApiDefinitionDeployed(
-            "test-conflict.com".to_string()
-        )
-        .to_string()
+        ApiDefinitionError::ApiDefinitionDeployed("test-conflict.com".to_string()).to_string()
     );
 }
 
+async fn test_security_crud(
+    security_scheme_service: Arc<dyn SecuritySchemeService<DefaultNamespace> + Sync + Send>,
+) {
+    let security_identifier = SecuritySchemeIdentifier::new("test".to_string());
+
+    let security_scheme = get_security(&security_identifier);
+
+    let insert = security_scheme_service
+        .create(&DefaultNamespace(), &security_scheme)
+        .await
+        .expect("Failed to create security scheme");
+
+    let get = security_scheme_service
+        .get(&security_identifier, &DefaultNamespace())
+        .await
+        .expect("Failed to get security scheme");
+
+    assert_eq!(insert.security_scheme, security_scheme);
+    assert_eq!(get.security_scheme, security_scheme);
+    assert_eq!(insert.provider_metadata, get_test_provider_metadata());
+    assert_eq!(insert.provider_metadata, get.provider_metadata)
+}
+
 async fn test_definition_crud(
-    definition_service: Arc<
-        dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace, RouteValidationError>
-            + Sync
-            + Send,
-    >,
+    definition_service: Arc<dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace> + Sync + Send>,
 ) {
     let def1v1 = get_api_definition(
             &Uuid::new_v4().to_string(),
@@ -669,8 +919,7 @@ async fn test_definition_crud(
     assert!(update_result.is_err());
     assert_eq!(
         update_result.unwrap_err().to_string(),
-        ApiDefinitionError::<RouteValidationError>::ApiDefinitionNotDraft(def1v1_upd.id)
-            .to_string()
+        ApiDefinitionError::ApiDefinitionNotDraft(def1v1_upd.id).to_string()
     );
 
     let update_result = definition_service
@@ -736,11 +985,7 @@ async fn test_definition_crud(
 }
 
 async fn test_delete_non_existing(
-    definition_service: Arc<
-        dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace, RouteValidationError>
-            + Sync
-            + Send,
-    >,
+    definition_service: Arc<dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace> + Sync + Send>,
 ) {
     let delete_result = definition_service
         .delete(
@@ -775,6 +1020,21 @@ fn get_api_deployment(
             subdomain: subdomain.map(|s| s.to_string()),
         },
     }
+}
+
+fn get_security(security_schema_identifier: &SecuritySchemeIdentifier) -> SecurityScheme {
+    SecurityScheme::new(
+        Provider::Google,
+        security_schema_identifier.clone(),
+        ClientId::new("client_id_foo".to_string()),
+        ClientSecret::new("client_secret_foo".to_string()),
+        RedirectUrl::new("http://localhost:8080/auth/callback".to_string()).unwrap(),
+        vec![
+            Scope::new("openid".to_string()),
+            Scope::new("user".to_string()),
+            Scope::new("email".to_string()),
+        ],
+    )
 }
 
 fn get_api_definition(
@@ -821,4 +1081,258 @@ fn contains_definitions(
     }
 
     true
+}
+
+// This should be unused
+pub struct TestSessionStore;
+
+#[async_trait]
+impl GatewaySession for TestSessionStore {
+    async fn insert(
+        &self,
+        _session_id: SessionId,
+        _data_key: DataKey,
+        _data_value: DataValue,
+    ) -> Result<(), GatewaySessionError> {
+        Ok(())
+    }
+
+    async fn get(
+        &self,
+        _session_id: &SessionId,
+        _data_key: &DataKey,
+    ) -> Result<DataValue, GatewaySessionError> {
+        Err(GatewaySessionError::InternalError(
+            "Backend unimplemented".to_string(),
+        ))
+    }
+}
+
+#[derive(Clone)]
+pub struct TestIdentityProvider;
+
+#[async_trait]
+impl IdentityProvider for TestIdentityProvider {
+    async fn get_provider_metadata(
+        &self,
+        _provider: &Provider,
+    ) -> Result<GolemIdentityProviderMetadata, IdentityProviderError> {
+        Ok(get_test_provider_metadata())
+    }
+
+    async fn exchange_code_for_tokens(
+        &self,
+        _client: &OpenIdClient,
+        _code: &AuthorizationCode,
+    ) -> Result<CoreTokenResponse, IdentityProviderError> {
+        Err(IdentityProviderError::ClientInitError(
+            "Not implemented".to_string(),
+        ))
+    }
+
+    fn get_id_token_verifier<'a>(&self, client: &'a OpenIdClient) -> CoreIdTokenVerifier<'a> {
+        let provider = DefaultIdentityProvider;
+        provider.get_id_token_verifier(client)
+    }
+
+    fn get_claims(
+        &self,
+        _id_token_verifier: &CoreIdTokenVerifier,
+        _core_token_response: CoreTokenResponse,
+        _nonce: &Nonce,
+    ) -> Result<CoreIdTokenClaims, IdentityProviderError> {
+        Err(IdentityProviderError::ClientInitError(
+            "Not implemented".to_string(),
+        ))
+    }
+
+    fn get_authorization_url(
+        &self,
+        client: &OpenIdClient,
+        scopes: Vec<Scope>,
+        _state: Option<CsrfToken>,
+        _nonce: Option<Nonce>,
+    ) -> AuthorizationUrl {
+        let identity_provider = DefaultIdentityProvider;
+        identity_provider.get_authorization_url(
+            client,
+            scopes,
+            Some(CsrfToken::new("token".to_string())),
+            Some(Nonce::new("nonce".to_string())),
+        )
+    }
+
+    async fn get_client(
+        &self,
+        security_scheme: &SecurityScheme,
+    ) -> Result<OpenIdClient, IdentityProviderError> {
+        let identity_provider = DefaultIdentityProvider;
+        identity_provider.get_client(security_scheme).await
+    }
+}
+
+fn get_test_provider_metadata() -> GolemIdentityProviderMetadata {
+    let all_signing_algs = vec![
+        CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256,
+        CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha384,
+        CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha512,
+        CoreJwsSigningAlgorithm::EcdsaP256Sha256,
+        CoreJwsSigningAlgorithm::EcdsaP384Sha384,
+        CoreJwsSigningAlgorithm::EcdsaP521Sha512,
+        CoreJwsSigningAlgorithm::HmacSha256,
+        CoreJwsSigningAlgorithm::HmacSha384,
+        CoreJwsSigningAlgorithm::HmacSha512,
+        CoreJwsSigningAlgorithm::RsaSsaPssSha256,
+        CoreJwsSigningAlgorithm::RsaSsaPssSha384,
+        CoreJwsSigningAlgorithm::RsaSsaPssSha512,
+        CoreJwsSigningAlgorithm::None,
+    ];
+    let all_encryption_algs = vec![
+        CoreJweKeyManagementAlgorithm::RsaPkcs1V15,
+        CoreJweKeyManagementAlgorithm::RsaOaep,
+        CoreJweKeyManagementAlgorithm::RsaOaepSha256,
+        CoreJweKeyManagementAlgorithm::AesKeyWrap128,
+        CoreJweKeyManagementAlgorithm::AesKeyWrap192,
+        CoreJweKeyManagementAlgorithm::AesKeyWrap256,
+        CoreJweKeyManagementAlgorithm::EcdhEs,
+        CoreJweKeyManagementAlgorithm::EcdhEsAesKeyWrap128,
+        CoreJweKeyManagementAlgorithm::EcdhEsAesKeyWrap192,
+        CoreJweKeyManagementAlgorithm::EcdhEsAesKeyWrap256,
+    ];
+    let new_provider_metadata = CoreProviderMetadata::new(
+        IssuerUrl::new("https://accounts.google.com".to_string()).unwrap(),
+        AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string()).unwrap(),
+        JsonWebKeySetUrl::new("https://www.googleapis.com/oauth2/v3/certs".to_string()).unwrap(),
+        vec![ResponseTypes::new(vec![CoreResponseType::Code])],
+        vec![
+            CoreSubjectIdentifierType::Public,
+            CoreSubjectIdentifierType::Pairwise,
+        ],
+        all_signing_algs.clone(),
+        Default::default(),
+    )
+    .set_request_object_signing_alg_values_supported(Some(all_signing_algs.clone()))
+    .set_token_endpoint_auth_signing_alg_values_supported(Some(vec![
+        CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256,
+        CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha384,
+        CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha512,
+        CoreJwsSigningAlgorithm::EcdsaP256Sha256,
+        CoreJwsSigningAlgorithm::EcdsaP384Sha384,
+        CoreJwsSigningAlgorithm::EcdsaP521Sha512,
+        CoreJwsSigningAlgorithm::HmacSha256,
+        CoreJwsSigningAlgorithm::HmacSha384,
+        CoreJwsSigningAlgorithm::HmacSha512,
+        CoreJwsSigningAlgorithm::RsaSsaPssSha256,
+        CoreJwsSigningAlgorithm::RsaSsaPssSha384,
+        CoreJwsSigningAlgorithm::RsaSsaPssSha512,
+    ]))
+    .set_scopes_supported(Some(vec![
+        Scope::new("email".to_string()),
+        Scope::new("phone".to_string()),
+        Scope::new("profile".to_string()),
+        Scope::new("openid".to_string()),
+        Scope::new("address".to_string()),
+        Scope::new("offline_access".to_string()),
+        Scope::new("openid".to_string()),
+    ]))
+    .set_userinfo_signing_alg_values_supported(Some(all_signing_algs))
+    .set_id_token_encryption_enc_values_supported(Some(vec![
+        CoreJweContentEncryptionAlgorithm::Aes128CbcHmacSha256,
+        CoreJweContentEncryptionAlgorithm::Aes192CbcHmacSha384,
+        CoreJweContentEncryptionAlgorithm::Aes256CbcHmacSha512,
+        CoreJweContentEncryptionAlgorithm::Aes128Gcm,
+        CoreJweContentEncryptionAlgorithm::Aes192Gcm,
+        CoreJweContentEncryptionAlgorithm::Aes256Gcm,
+    ]))
+    .set_grant_types_supported(Some(vec![
+        CoreGrantType::AuthorizationCode,
+        CoreGrantType::Implicit,
+        CoreGrantType::JwtBearer,
+        CoreGrantType::RefreshToken,
+    ]))
+    .set_response_modes_supported(Some(vec![
+        CoreResponseMode::Query,
+        CoreResponseMode::Fragment,
+        CoreResponseMode::FormPost,
+    ]))
+    .set_require_request_uri_registration(Some(true))
+    .set_registration_endpoint(Some(
+        RegistrationUrl::new(
+            "https://accounts.google.com/openidconnect-rs/\
+                 rp-response_type-code/registration"
+                .to_string(),
+        )
+        .unwrap(),
+    ))
+    .set_claims_parameter_supported(Some(true))
+    .set_request_object_encryption_enc_values_supported(Some(vec![
+        CoreJweContentEncryptionAlgorithm::Aes128CbcHmacSha256,
+        CoreJweContentEncryptionAlgorithm::Aes192CbcHmacSha384,
+        CoreJweContentEncryptionAlgorithm::Aes256CbcHmacSha512,
+        CoreJweContentEncryptionAlgorithm::Aes128Gcm,
+        CoreJweContentEncryptionAlgorithm::Aes192Gcm,
+        CoreJweContentEncryptionAlgorithm::Aes256Gcm,
+    ]))
+    .set_userinfo_endpoint(Some(
+        UserInfoUrl::new("https://openidconnect.googleapis.com/v1/userinfo".to_string()).unwrap(),
+    ))
+    .set_token_endpoint_auth_methods_supported(Some(vec![
+        CoreClientAuthMethod::ClientSecretPost,
+        CoreClientAuthMethod::ClientSecretBasic,
+        CoreClientAuthMethod::ClientSecretJwt,
+        CoreClientAuthMethod::PrivateKeyJwt,
+    ]))
+    .set_claims_supported(Some(
+        vec![
+            "name",
+            "given_name",
+            "middle_name",
+            "picture",
+            "email_verified",
+            "birthdate",
+            "sub",
+            "address",
+            "zoneinfo",
+            "email",
+            "gender",
+            "preferred_username",
+            "family_name",
+            "website",
+            "profile",
+            "phone_number_verified",
+            "nickname",
+            "updated_at",
+            "phone_number",
+            "locale",
+        ]
+        .iter()
+        .map(|claim| CoreClaimName::new((*claim).to_string()))
+        .collect(),
+    ))
+    .set_request_object_encryption_alg_values_supported(Some(all_encryption_algs.clone()))
+    .set_claim_types_supported(Some(vec![
+        CoreClaimType::Normal,
+        CoreClaimType::Aggregated,
+        CoreClaimType::Distributed,
+    ]))
+    .set_request_uri_parameter_supported(Some(true))
+    .set_request_parameter_supported(Some(true))
+    .set_token_endpoint(Some(
+        TokenUrl::new("https://oauth2.googleapis.com/token".to_string()).unwrap(),
+    ))
+    .set_id_token_encryption_alg_values_supported(Some(all_encryption_algs.clone()))
+    .set_userinfo_encryption_alg_values_supported(Some(all_encryption_algs))
+    .set_userinfo_encryption_enc_values_supported(Some(vec![
+        CoreJweContentEncryptionAlgorithm::Aes128CbcHmacSha256,
+        CoreJweContentEncryptionAlgorithm::Aes192CbcHmacSha384,
+        CoreJweContentEncryptionAlgorithm::Aes256CbcHmacSha512,
+        CoreJweContentEncryptionAlgorithm::Aes128Gcm,
+        CoreJweContentEncryptionAlgorithm::Aes192Gcm,
+        CoreJweContentEncryptionAlgorithm::Aes256Gcm,
+    ]))
+    .set_acr_values_supported(Some(vec![AuthenticationContextClass::new(
+        "PASSWORD".to_string(),
+    )]));
+
+    new_provider_metadata
 }

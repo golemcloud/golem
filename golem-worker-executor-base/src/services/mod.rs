@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -123,8 +123,8 @@ pub trait HasOplog {
     fn oplog(&self) -> Arc<dyn oplog::Oplog + Send + Sync>;
 }
 
-pub trait HasWorkerActivator {
-    fn worker_activator(&self) -> Arc<dyn WorkerActivator + Send + Sync>;
+pub trait HasWorkerActivator<Ctx: WorkerCtx> {
+    fn worker_activator(&self) -> Arc<dyn WorkerActivator<Ctx> + Send + Sync>;
 }
 
 pub trait HasWorkerProxy {
@@ -143,6 +143,10 @@ pub trait HasPlugins<Owner: PluginOwner, Scope: PluginScope> {
     fn plugins(&self) -> Arc<dyn Plugins<Owner, Scope> + Send + Sync>;
 }
 
+pub trait HasOplogProcessorPlugin {
+    fn oplog_processor_plugin(&self) -> Arc<dyn oplog::plugin::OplogProcessorPlugin + Send + Sync>;
+}
+
 /// HasAll is a shortcut for requiring all available service dependencies
 pub trait HasAll<Ctx: WorkerCtx>:
     HasActiveWorkers<Ctx>
@@ -158,13 +162,14 @@ pub trait HasAll<Ctx: WorkerCtx>:
     + HasOplogService
     + HasRpc
     + HasSchedulerService
-    + HasWorkerActivator
+    + HasWorkerActivator<Ctx>
     + HasWorkerProxy
     + HasEvents
     + HasShardManagerService
     + HasShardService
     + HasFileLoader
     + HasPlugins<<Ctx::ComponentOwner as ComponentOwner>::PluginOwner, Ctx::PluginScope>
+    + HasOplogProcessorPlugin
     + HasExtraDeps<Ctx>
     + Clone
 {
@@ -185,13 +190,14 @@ impl<
             + HasOplogService
             + HasRpc
             + HasSchedulerService
-            + HasWorkerActivator
+            + HasWorkerActivator<Ctx>
             + HasWorkerProxy
             + HasEvents
             + HasShardManagerService
             + HasShardService
             + HasFileLoader
             + HasPlugins<<Ctx::ComponentOwner as ComponentOwner>::PluginOwner, Ctx::PluginScope>
+            + HasOplogProcessorPlugin
             + HasExtraDeps<Ctx>
             + Clone,
     > HasAll<Ctx> for T
@@ -219,7 +225,7 @@ pub struct All<Ctx: WorkerCtx> {
     oplog_service: Arc<dyn oplog::OplogService + Send + Sync>,
     rpc: Arc<dyn rpc::Rpc + Send + Sync>,
     scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
-    worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
+    worker_activator: Arc<dyn WorkerActivator<Ctx> + Send + Sync>,
     worker_proxy: Arc<dyn worker_proxy::WorkerProxy + Send + Sync>,
     events: Arc<Events>,
     file_loader: Arc<FileLoader>,
@@ -228,6 +234,7 @@ pub struct All<Ctx: WorkerCtx> {
             + Send
             + Sync,
     >,
+    oplog_processor_plugin: Arc<dyn oplog::plugin::OplogProcessorPlugin + Send + Sync>,
     extra_deps: Ctx::ExtraDeps,
 }
 
@@ -256,6 +263,7 @@ impl<Ctx: WorkerCtx> Clone for All<Ctx> {
             events: self.events.clone(),
             file_loader: self.file_loader.clone(),
             plugins: self.plugins.clone(),
+            oplog_processor_plugin: self.oplog_processor_plugin.clone(),
             extra_deps: self.extra_deps.clone(),
         }
     }
@@ -285,7 +293,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         oplog_service: Arc<dyn oplog::OplogService + Send + Sync>,
         rpc: Arc<dyn rpc::Rpc + Send + Sync>,
         scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
-        worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
+        worker_activator: Arc<dyn WorkerActivator<Ctx> + Send + Sync>,
         worker_proxy: Arc<dyn worker_proxy::WorkerProxy + Send + Sync>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
@@ -294,6 +302,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
                 + Send
                 + Sync,
         >,
+        oplog_processor_plugin: Arc<dyn oplog::plugin::OplogProcessorPlugin + Send + Sync>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
         Self {
@@ -319,6 +328,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             events,
             file_loader,
             plugins,
+            oplog_processor_plugin,
             extra_deps,
         }
     }
@@ -347,6 +357,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             this.events(),
             this.file_loader(),
             this.plugins(),
+            this.oplog_processor_plugin(),
             this.extra_deps(),
         )
     }
@@ -468,8 +479,8 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasSchedulerService for T {
     }
 }
 
-impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasWorkerActivator for T {
-    fn worker_activator(&self) -> Arc<dyn WorkerActivator + Send + Sync> {
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasWorkerActivator<Ctx> for T {
+    fn worker_activator(&self) -> Arc<dyn WorkerActivator<Ctx> + Send + Sync> {
         self.all().worker_activator.clone()
     }
 }
@@ -503,6 +514,12 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>>
             + Sync,
     > {
         self.all().plugins.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasOplogProcessorPlugin for T {
+    fn oplog_processor_plugin(&self) -> Arc<dyn oplog::plugin::OplogProcessorPlugin + Send + Sync> {
+        self.all().oplog_processor_plugin.clone()
     }
 }
 

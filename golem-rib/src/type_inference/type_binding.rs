@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -87,6 +87,7 @@ mod internal {
 
 #[cfg(test)]
 mod type_binding_tests {
+    use bigdecimal::BigDecimal;
     use test_r::test;
 
     use super::*;
@@ -107,7 +108,9 @@ mod type_binding_tests {
             VariableId::global("x".to_string()),
             Some(TypeName::U64),
             Box::new(Expr::Number(
-                Number { value: 1f64 },
+                Number {
+                    value: BigDecimal::from(1),
+                },
                 None,
                 InferredType::U64,
             )),
@@ -131,7 +134,9 @@ mod type_binding_tests {
             VariableId::global("x".to_string()),
             Some(TypeName::U64),
             Box::new(Expr::Number(
-                Number { value: 1f64 },
+                Number {
+                    value: BigDecimal::from(1),
+                },
                 Some(TypeName::U64),
                 InferredType::U64,
             )),
@@ -163,7 +168,9 @@ mod type_binding_tests {
                         VariableId::global("y".to_string()),
                         Some(TypeName::U64),
                         Box::new(Expr::Number(
-                            Number { value: 1f64 },
+                            Number {
+                                value: BigDecimal::from(1),
+                            },
                             None,
                             InferredType::U64,
                         )),
@@ -202,7 +209,9 @@ mod type_binding_tests {
                     InferredType::Unknown,
                 ))),
                 arm_resolution_expr: Box::new(Expr::Number(
-                    Number { value: 2f64 },
+                    Number {
+                        value: BigDecimal::from(2),
+                    },
                     Some(TypeName::U64),
                     InferredType::U64,
                 )),
@@ -232,12 +241,16 @@ mod type_binding_tests {
                 InferredType::Unknown,
             )),
             Box::new(Expr::Number(
-                Number { value: 1f64 },
+                Number {
+                    value: BigDecimal::from(1),
+                },
                 Some(TypeName::U64),
                 InferredType::U64,
             )),
             Box::new(Expr::Number(
-                Number { value: 2f64 },
+                Number {
+                    value: BigDecimal::from(2),
+                },
                 Some(TypeName::U64),
                 InferredType::U64,
             )),

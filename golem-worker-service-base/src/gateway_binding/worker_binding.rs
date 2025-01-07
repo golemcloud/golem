@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,11 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
 use crate::gateway_binding::WorkerBindingCompiled;
-use crate::gateway_middleware::{Cors, Middleware, Middlewares};
 use golem_service_base::model::VersionedComponentId;
 use rib::Expr;
 
@@ -26,25 +24,10 @@ pub struct WorkerBinding {
     pub worker_name: Option<Expr>,
     pub idempotency_key: Option<Expr>,
     pub response_mapping: ResponseMapping,
-    pub middleware: Option<Middlewares>,
-}
-
-impl WorkerBinding {
-    pub fn add_middleware(&mut self, middleware: Middleware) {
-        if let Some(middlewares) = &mut self.middleware {
-            middlewares.add(middleware);
-        } else {
-            self.middleware = Some(Middlewares(vec![middleware]));
-        }
-    }
-
-    pub fn get_cors_middleware(&self) -> Option<Cors> {
-        self.middleware.as_ref().and_then(|m| m.get_cors())
-    }
 }
 
 // ResponseMapping will consist of actual logic such as invoking worker functions
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResponseMapping(pub Expr);
 
 impl From<WorkerBindingCompiled> for WorkerBinding {
@@ -62,7 +45,6 @@ impl From<WorkerBindingCompiled> for WorkerBinding {
             response_mapping: ResponseMapping(
                 worker_binding.response_compiled.response_mapping_expr,
             ),
-            middleware: value.middlewares,
         }
     }
 }

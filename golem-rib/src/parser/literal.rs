@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -116,6 +116,7 @@ mod internal {
 
 #[cfg(test)]
 mod literal_parse_tests {
+    use bigdecimal::BigDecimal;
     use test_r::test;
 
     use crate::parser::rib_expr::rib_expr;
@@ -162,7 +163,7 @@ mod literal_parse_tests {
                     Expr::identifier("foo"),
                     Expr::concat(vec![Expr::literal("bar-"), Expr::identifier("worker_id")])
                 ),
-                Expr::untyped_number(1f64),
+                Expr::untyped_number(BigDecimal::from(1)),
                 Expr::literal("baz"),
             )
         );

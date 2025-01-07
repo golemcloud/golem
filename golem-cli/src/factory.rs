@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@ use crate::clients::plugin::PluginClient;
 use crate::clients::worker::WorkerClient;
 use crate::service::api_definition::{ApiDefinitionService, ApiDefinitionServiceLive};
 use crate::service::api_deployment::{ApiDeploymentService, ApiDeploymentServiceLive};
+use crate::service::api_security::{ApiSecuritySchemeService, ApiSecuritySchemeServiceLive};
 use crate::service::component::{ComponentService, ComponentServiceLive};
 use crate::service::deploy::{DeployService, DeployServiceLive};
 use crate::service::project::ProjectResolver;
@@ -91,6 +92,23 @@ pub trait ServiceFactory {
     ) -> Arc<dyn ApiDeploymentService<ProjectContext = Self::ProjectContext> + Send + Sync> {
         Arc::new(ApiDeploymentServiceLive {
             client: self.api_deployment_client(),
+        })
+    }
+
+    fn api_security_scheme_client(
+        &self,
+    ) -> Box<
+        dyn crate::clients::api_security::ApiSecurityClient<ProjectContext = Self::ProjectContext>
+            + Send
+            + Sync,
+    >;
+
+    fn api_security_scheme_service(
+        &self,
+    ) -> Arc<dyn ApiSecuritySchemeService<ProjectContext = Self::ProjectContext> + Send + Sync>
+    {
+        Arc::new(ApiSecuritySchemeServiceLive {
+            client: self.api_security_scheme_client(),
         })
     }
 

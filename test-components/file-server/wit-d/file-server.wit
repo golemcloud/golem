@@ -1,0 +1,5 @@
+package golem:d;
+
+world file-write-read-delete {
+  export run: func() -> bool;
+}

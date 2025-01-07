@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,57 +12,49 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::service::compile_service::ComponentCompilationServiceImpl;
+use config::ServerConfig;
+use golem_api_grpc::proto::golem::componentcompilation::v1::component_compilation_service_server::ComponentCompilationServiceServer;
+use golem_service_base::config::BlobStorageConfig;
+use golem_service_base::storage::blob::s3::S3BlobStorage;
+use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
+use golem_service_base::storage::blob::BlobStorage;
+use golem_service_base::storage::sqlite::SqlitePool;
+use golem_worker_executor_base::services::compiled_component;
+use grpc::CompileGrpcService;
+use prometheus::Registry;
+use service::CompilationService;
 use std::{
     net::{Ipv4Addr, SocketAddr},
     sync::Arc,
 };
-
-use config::ServerConfig;
-use golem_api_grpc::proto::golem::componentcompilation::v1::component_compilation_service_server::ComponentCompilationServiceServer;
-use golem_common::tracing::init_tracing_with_default_env_filter;
-use golem_service_base::config::BlobStorageConfig;
-use golem_service_base::storage::blob::s3::S3BlobStorage;
-use golem_service_base::storage::blob::BlobStorage;
-use golem_worker_executor_base::{http_server::HttpServerImpl, services::compiled_component};
-use grpc::CompileGrpcService;
-use prometheus::Registry;
-use service::CompilationService;
+use tokio::{net::TcpListener, task::JoinSet};
+use tokio_stream::wrappers::TcpListenerStream;
 use tonic::codec::CompressionEncoding;
-use tracing::info;
+use tracing::{info, Instrument};
+use wasmtime::component::__internal::anyhow;
 use wasmtime::component::__internal::anyhow::anyhow;
-
-use crate::config::make_config_loader;
-use crate::service::compile_service::ComponentCompilationServiceImpl;
-use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
-use golem_service_base::storage::sqlite::SqlitePool;
 use wasmtime::WasmBacktraceDetails;
 
-mod config;
+pub mod config;
 mod grpc;
-mod metrics;
+pub mod metrics;
 mod model;
 mod service;
 
 #[cfg(test)]
 test_r::enable!();
 
-pub fn server_main() -> Result<(), Box<dyn std::error::Error>> {
-    match make_config_loader().load_or_dump_config() {
-        Some(config) => {
-            init_tracing_with_default_env_filter(&config.tracing);
-            let prometheus = metrics::register_all();
-
-            tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()
-                .unwrap()
-                .block_on(run(config, prometheus))
-        }
-        None => Ok(()),
-    }
+pub struct RunDetails {
+    pub http_port: u16,
+    pub grpc_port: u16,
 }
 
-async fn run(config: ServerConfig, prometheus: Registry) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run(
+    config: ServerConfig,
+    prometheus: Registry,
+    join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+) -> anyhow::Result<RunDetails> {
     let blob_storage: Arc<dyn BlobStorage + Send + Sync> = match &config.blob_storage {
         BlobStorageConfig::S3(config) => {
             info!("Using S3 for blob storage");
@@ -100,15 +92,18 @@ async fn run(config: ServerConfig, prometheus: Registry) -> Result<(), Box<dyn s
     };
     let compiled_component =
         compiled_component::configured(&config.compiled_component_service, blob_storage.clone());
+
     let engine = wasmtime::Engine::new(&create_wasmtime_config()).expect("Failed to create engine");
 
     // Start metrics and healthcheck server.
     let address = config.http_addr().expect("Invalid HTTP address");
-    let http_server = HttpServerImpl::new(
+    let http_port = golem_service_base::observability::start_health_and_metrics_server(
         address,
         prometheus,
         "Component Compilation Service is running",
-    );
+        join_set,
+    )
+    .await?;
 
     let compilation_service = ComponentCompilationServiceImpl::new(
         config.compile_worker,
@@ -122,34 +117,47 @@ async fn run(config: ServerConfig, prometheus: Registry) -> Result<(), Box<dyn s
     let ipv4_address: Ipv4Addr = config.grpc_host.parse().expect("Invalid IP address");
     let address = SocketAddr::new(ipv4_address.into(), config.grpc_port);
 
-    start_grpc_server(address, compilation_service).await?;
+    let grpc_port = start_grpc_server(address, compilation_service, join_set).await?;
 
     info!("Server started on port {}", config.grpc_port);
 
-    drop(http_server); // explicitly keeping it alive until the end
-
-    Ok(())
+    Ok(RunDetails {
+        http_port,
+        grpc_port,
+    })
 }
 
 async fn start_grpc_server(
     addr: SocketAddr,
     service: Arc<dyn CompilationService + Send + Sync>,
-) -> Result<(), tonic::transport::Error> {
+    join_set: &mut JoinSet<anyhow::Result<()>>,
+) -> anyhow::Result<u16> {
     let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
+
+    let listener = TcpListener::bind(addr).await?;
+    let grpc_port = listener.local_addr()?.port();
 
     health_reporter
         .set_serving::<ComponentCompilationServiceServer<CompileGrpcService>>()
         .await;
 
-    tonic::transport::Server::builder()
-        .add_service(health_service)
-        .add_service(
-            ComponentCompilationServiceServer::new(CompileGrpcService::new(service))
-                .send_compressed(CompressionEncoding::Gzip)
-                .accept_compressed(CompressionEncoding::Gzip),
-        )
-        .serve(addr)
-        .await
+    join_set.spawn(
+        async move {
+            tonic::transport::Server::builder()
+                .add_service(health_service)
+                .add_service(
+                    ComponentCompilationServiceServer::new(CompileGrpcService::new(service))
+                        .send_compressed(CompressionEncoding::Gzip)
+                        .accept_compressed(CompressionEncoding::Gzip),
+                )
+                .serve_with_incoming(TcpListenerStream::new(listener))
+                .await
+                .map_err(|e| anyhow!(e).context("gRPC server failed"))
+        }
+        .in_current_span(),
+    );
+
+    Ok(grpc_port)
 }
 
 fn create_wasmtime_config() -> wasmtime::Config {
@@ -163,14 +171,4 @@ fn create_wasmtime_config() -> wasmtime::Config {
     config.wasm_backtrace_details(WasmBacktraceDetails::Enable);
 
     config
-}
-
-pub trait UriBackConversion {
-    fn as_http_02(&self) -> http_02::Uri;
-}
-
-impl UriBackConversion for http::Uri {
-    fn as_http_02(&self) -> http_02::Uri {
-        self.to_string().parse().unwrap()
-    }
 }

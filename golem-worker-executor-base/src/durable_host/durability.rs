@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::sync_helper::SyncHelperPermit;
 use crate::durable_host::DurableWorkerCtx;
 use crate::error::GolemError;
 use crate::metrics::wasm::record_host_function_call;
@@ -35,7 +34,6 @@ pub struct Durability2<Ctx, SOk, SErr> {
     package: &'static str,
     function: &'static str,
     function_type: WrappedFunctionType,
-    _permit: SyncHelperPermit,
     begin_index: OplogIndex,
     is_live: bool,
     persistence_level: PersistenceLevel,
@@ -50,9 +48,7 @@ impl<Ctx: WorkerCtx, SOk, SErr> Durability2<Ctx, SOk, SErr> {
         package: &'static str,
         function: &'static str,
         function_type: WrappedFunctionType,
-    ) -> Result<Self, GolemError>
-    {
-        let permit = ctx.begin_async_host_function().await?;
+    ) -> Result<Self, GolemError> {
         record_host_function_call(package, function);
 
         let begin_index = ctx.state.begin_function(&function_type).await?;
@@ -61,7 +57,6 @@ impl<Ctx: WorkerCtx, SOk, SErr> Durability2<Ctx, SOk, SErr> {
             package,
             function,
             function_type,
-            _permit: permit,
             begin_index,
             is_live: ctx.state.is_live(),
             persistence_level: ctx.state.persistence_level.clone(),

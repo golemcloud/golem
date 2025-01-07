@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,8 +13,6 @@
 // limitations under the License.
 
 use crate::{FunctionTypeRegistry, InferredExpr, RegistryKey, RegistryValue};
-use golem_api_grpc::proto::golem::rib::WorkerFunctionType as WorkerFunctionTypeProto;
-use golem_api_grpc::proto::golem::rib::WorkerFunctionsInRib as WorkerFunctionsInRibProto;
 use golem_wasm_ast::analysis::AnalysedType;
 
 // An easier data type that focus just on the side effecting function calls in Rib script.
@@ -67,33 +65,6 @@ impl WorkerFunctionsInRib {
     }
 }
 
-impl TryFrom<WorkerFunctionsInRibProto> for WorkerFunctionsInRib {
-    type Error = String;
-
-    fn try_from(value: WorkerFunctionsInRibProto) -> Result<Self, Self::Error> {
-        let function_calls_proto = value.function_calls;
-        let function_calls = function_calls_proto
-            .iter()
-            .map(|worker_function_type_proto| {
-                WorkerFunctionType::try_from(worker_function_type_proto.clone())
-            })
-            .collect::<Result<_, _>>()?;
-        Ok(Self { function_calls })
-    }
-}
-
-impl From<WorkerFunctionsInRib> for WorkerFunctionsInRibProto {
-    fn from(value: WorkerFunctionsInRib) -> Self {
-        WorkerFunctionsInRibProto {
-            function_calls: value
-                .function_calls
-                .iter()
-                .map(|x| WorkerFunctionTypeProto::from(x.clone()))
-                .collect(),
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkerFunctionType {
     pub function_key: RegistryKey,
@@ -101,49 +72,84 @@ pub struct WorkerFunctionType {
     pub return_types: Vec<AnalysedType>,
 }
 
-impl TryFrom<WorkerFunctionTypeProto> for WorkerFunctionType {
-    type Error = String;
+#[cfg(feature = "protobuf")]
+mod protobuf {
+    use crate::{RegistryKey, WorkerFunctionType, WorkerFunctionsInRib};
+    use golem_api_grpc::proto::golem::rib::WorkerFunctionType as WorkerFunctionTypeProto;
+    use golem_api_grpc::proto::golem::rib::WorkerFunctionsInRib as WorkerFunctionsInRibProto;
+    use golem_wasm_ast::analysis::AnalysedType;
 
-    fn try_from(value: WorkerFunctionTypeProto) -> Result<Self, Self::Error> {
-        let return_types = value
-            .return_types
-            .iter()
-            .map(AnalysedType::try_from)
-            .collect::<Result<_, _>>()?;
+    impl TryFrom<WorkerFunctionsInRibProto> for WorkerFunctionsInRib {
+        type Error = String;
 
-        let parameter_types = value
-            .parameter_types
-            .iter()
-            .map(AnalysedType::try_from)
-            .collect::<Result<_, _>>()?;
-
-        let registry_key_proto = value.function_key.ok_or("Function key missing")?;
-        let function_key = RegistryKey::try_from(registry_key_proto)?;
-
-        Ok(Self {
-            function_key,
-            return_types,
-            parameter_types,
-        })
-    }
-}
-
-impl From<WorkerFunctionType> for WorkerFunctionTypeProto {
-    fn from(value: WorkerFunctionType) -> Self {
-        let registry_key = value.function_key.into();
-
-        WorkerFunctionTypeProto {
-            function_key: Some(registry_key),
-            parameter_types: value
-                .parameter_types
+        fn try_from(value: WorkerFunctionsInRibProto) -> Result<Self, Self::Error> {
+            let function_calls_proto = value.function_calls;
+            let function_calls = function_calls_proto
                 .iter()
-                .map(|analysed_type| analysed_type.into())
-                .collect(),
-            return_types: value
+                .map(|worker_function_type_proto| {
+                    WorkerFunctionType::try_from(worker_function_type_proto.clone())
+                })
+                .collect::<Result<_, _>>()?;
+            Ok(Self { function_calls })
+        }
+    }
+
+    impl From<WorkerFunctionsInRib> for WorkerFunctionsInRibProto {
+        fn from(value: WorkerFunctionsInRib) -> Self {
+            WorkerFunctionsInRibProto {
+                function_calls: value
+                    .function_calls
+                    .iter()
+                    .map(|x| WorkerFunctionTypeProto::from(x.clone()))
+                    .collect(),
+            }
+        }
+    }
+
+    impl TryFrom<WorkerFunctionTypeProto> for WorkerFunctionType {
+        type Error = String;
+
+        fn try_from(value: WorkerFunctionTypeProto) -> Result<Self, Self::Error> {
+            let return_types = value
                 .return_types
                 .iter()
-                .map(|analysed_type| analysed_type.into())
-                .collect(),
+                .map(AnalysedType::try_from)
+                .collect::<Result<_, _>>()?;
+
+            let parameter_types = value
+                .parameter_types
+                .iter()
+                .map(AnalysedType::try_from)
+                .collect::<Result<_, _>>()?;
+
+            let registry_key_proto = value.function_key.ok_or("Function key missing")?;
+            let function_key = RegistryKey::try_from(registry_key_proto)?;
+
+            Ok(Self {
+                function_key,
+                return_types,
+                parameter_types,
+            })
+        }
+    }
+
+    impl From<WorkerFunctionType> for WorkerFunctionTypeProto {
+        fn from(value: WorkerFunctionType) -> Self {
+            let registry_key = value.function_key.into();
+
+            WorkerFunctionTypeProto {
+                function_key: Some(registry_key),
+                parameter_types: value
+                    .parameter_types
+                    .iter()
+                    .map(|analysed_type| analysed_type.into())
+                    .collect(),
+                return_types: value
+                    .return_types
+                    .iter()
+                    .map(|analysed_type| analysed_type.into())
+                    .collect(),
+            }
         }
     }
 }

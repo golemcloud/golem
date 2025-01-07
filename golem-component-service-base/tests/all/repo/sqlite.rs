@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,7 +14,10 @@
 
 use crate::Tracing;
 use golem_common::config::DbSqliteConfig;
-use golem_service_base::db;
+use golem_service_base::{
+    db,
+    migration::{Migrations, MigrationsDir},
+};
 use sqlx::Pool;
 use std::sync::Arc;
 use test_r::{inherit_test_dep, sequential};
@@ -139,9 +142,13 @@ impl SqliteDb {
             max_connections: 10,
         };
 
-        db::sqlite_migrate(&db_config, "../golem-component-service/db/migration/sqlite")
-            .await
-            .unwrap();
+        db::sqlite_migrate(
+            &db_config,
+            MigrationsDir::new("../golem-component-service/db/migration".into())
+                .sqlite_migrations(),
+        )
+        .await
+        .unwrap();
 
         let pool = Arc::new(db::create_sqlite_pool(&db_config).await.unwrap());
 

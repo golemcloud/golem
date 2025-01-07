@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -27,7 +27,7 @@ use tracing::{debug, error, info, warn, Instrument};
 use golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_common::client::MultiTargetGrpcClient;
-use golem_common::config::RetryConfig;
+use golem_common::model::RetryConfig;
 use golem_common::model::{Pod, ShardId, TargetWorkerId, WorkerId};
 use golem_common::retriable_error::IsRetriableError;
 use golem_common::retries::get_delay;
@@ -118,7 +118,7 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for WorkerId {
                 Some(
                     context
                         .worker_executor_clients()
-                        .call(description, pod.uri_02(), f)
+                        .call(description, pod.uri(), f)
                         .await
                         .map_err(|err| {
                             CallWorkerExecutorErrorWithContext::failed_to_connect_to_pod(
@@ -214,7 +214,7 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for RandomExecutor {
                 Some(
                     context
                         .worker_executor_clients()
-                        .call(description, pod.uri_02(), f)
+                        .call(description, pod.uri(), f)
                         .await
                         .map_err(|status| {
                             CallWorkerExecutorErrorWithContext::failed_to_connect_to_pod(
@@ -275,7 +275,7 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for AllExecutors {
                     let description = description.clone();
                     async move {
                         worker_executor_clients
-                            .call(description, pod.uri_02(), f)
+                            .call(description, pod.uri(), f)
                             .await
                             .map_err(|err| (err, pod))
                     }
@@ -529,8 +529,8 @@ impl<'a> RetryState<'a> {
             Some(delay) => {
                 info!(
                     invalidated,
-                    error = format!("{error:?}"),
-                    pod = format!("{:?}", pod.as_ref().map(|p| p.uri_02())),
+                    ?error,
+                    ?pod,
                     delay_ms = delay.as_millis(),
                     "Call on executor - retry"
                 );
@@ -575,7 +575,7 @@ impl<'a> RetryState<'a> {
 }
 
 fn format_pod(pod: &Option<Pod>) -> String {
-    format!("{:?}", pod.as_ref().map(|p| p.uri_02()))
+    format!("{:?}", pod.as_ref().map(|p| p.uri()))
 }
 
 struct RetrySpan {

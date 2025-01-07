@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -25,12 +25,5 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     fn instance_network(&mut self) -> anyhow::Result<Resource<Network>> {
         record_host_function_call("sockets::instance_network", "instance_network");
         Host::instance_network(&mut self.as_wasi_view())
-    }
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {
-    fn instance_network(&mut self) -> anyhow::Result<Resource<Network>> {
-        (*self).instance_network()
     }
 }

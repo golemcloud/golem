@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -598,6 +598,7 @@ mod desugar_tests {
     }
     mod expectations {
         use crate::{Expr, InferredType, Number, TypeName, VariableId};
+        use bigdecimal::BigDecimal;
         pub(crate) fn expected_condition_with_identifiers() -> Expr {
             Expr::Cond(
                 Box::new(Expr::EqualTo(
@@ -645,7 +646,9 @@ mod desugar_tests {
                         InferredType::Bool,
                     )),
                     Box::new(Expr::Number(
-                        Number { value: 1f64 },
+                        Number {
+                            value: BigDecimal::from(1),
+                        },
                         Some(TypeName::U64),
                         InferredType::U64,
                     )),

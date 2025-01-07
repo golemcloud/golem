@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -25,7 +25,6 @@ use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 
 use crate::error::GolemError;
-use crate::grpc::UriBackConversion;
 use crate::services::golem_config::{ShardManagerServiceConfig, ShardManagerServiceGrpcConfig};
 
 /// Service providing access to the shard manager service
@@ -42,6 +41,7 @@ pub fn configured(
             Arc::new(ShardManagerServiceGrpc::new(config.clone()))
         }
         ShardManagerServiceConfig::SingleShard => Arc::new(ShardManagerServiceSingleShard::new()),
+        ShardManagerServiceConfig::Disabled => Arc::new(ShardManagerServiceDisabled {}),
     }
 }
 
@@ -59,7 +59,7 @@ impl ShardManagerServiceGrpc {
                     .send_compressed(CompressionEncoding::Gzip)
                     .accept_compressed(CompressionEncoding::Gzip)
             },
-            config.uri().as_http_02(),
+            config.uri(),
             GrpcClientConfig {
                 retries_on_unavailable: config.retries.clone(),
                 ..Default::default()
@@ -148,5 +148,14 @@ impl ShardManagerService for ShardManagerServiceSingleShard {
             1,
             HashSet::from_iter(vec![ShardId::new(0)]),
         ))
+    }
+}
+
+pub struct ShardManagerServiceDisabled {}
+
+#[async_trait]
+impl ShardManagerService for ShardManagerServiceDisabled {
+    async fn register(&self, _host: String, _port: u16) -> Result<ShardAssignment, GolemError> {
+        Ok(ShardAssignment::new(0, HashSet::new()))
     }
 }

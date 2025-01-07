@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -54,16 +54,5 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         } else {
             durability.replay(self).await
         }
-    }
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {
-    async fn now(&mut self) -> anyhow::Result<Datetime> {
-        (*self).now().await
-    }
-
-    async fn resolution(&mut self) -> anyhow::Result<Datetime> {
-        (*self).resolution().await
     }
 }

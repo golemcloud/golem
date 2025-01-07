@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,14 +14,14 @@
 
 use crate::clients::component::ComponentClient;
 use crate::clients::file_download::FileDownloadClient;
-use crate::model::application_manifest::InitialComponentFile;
+use crate::model::app_ext::InitialComponentFile;
 use crate::model::component::{Component, ComponentView};
 use crate::model::text::component::{ComponentAddView, ComponentGetView, ComponentUpdateView};
 use crate::model::{ComponentName, Format, GolemError, GolemResult, PathBufOrStdin};
 use async_trait::async_trait;
 use async_zip::base::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
-use golem_client::model::ComponentType;
+use golem_client::model::{ComponentType, DynamicLinking};
 use golem_common::model::{
     ComponentFilePath, ComponentFilePathWithPermissions, ComponentFilePathWithPermissionsList,
 };
@@ -53,6 +53,7 @@ pub trait ComponentService {
         non_interactive: bool,
         format: Format,
         files: Vec<InitialComponentFile>,
+        dynamic_linking: Option<DynamicLinking>,
     ) -> Result<Component, GolemError>;
 
     async fn update(
@@ -64,6 +65,7 @@ pub trait ComponentService {
         non_interactive: bool,
         format: Format,
         files: Vec<InitialComponentFile>,
+        dynamic_linking: Option<DynamicLinking>,
     ) -> Result<GolemResult, GolemError>;
 
     async fn list(
@@ -289,6 +291,7 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
         non_interactive: bool,
         format: Format,
         files: Vec<InitialComponentFile>,
+        dynamic_linking: Option<DynamicLinking>,
     ) -> Result<Component, GolemError> {
         let files_archive = if !files.is_empty() {
             Some(self.build_files_archive(files).await?)
@@ -308,6 +311,7 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
                 component_type,
                 files_archive_path,
                 files_archive_properties,
+                dynamic_linking.clone(),
             )
             .await;
 
@@ -334,7 +338,7 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
                         });
                         let urn = self.resolve_uri(component_uri, &project).await?;
                         self.client.update(urn, component_file, Some(component_type), files_archive_path,
-                                           files_archive_properties).await
+                                           files_archive_properties, dynamic_linking).await
 
                     }
                     Ok(false) => Err(GolemError(message)),
@@ -360,6 +364,7 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
         non_interactive: bool,
         format: Format,
         files: Vec<InitialComponentFile>,
+        dynamic_linking: Option<DynamicLinking>,
     ) -> Result<GolemResult, GolemError> {
         let result = self.resolve_uri(component_uri.clone(), &project).await;
 
@@ -395,7 +400,7 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
                                 ComponentUri::URL(ComponentUrl { name }) => ComponentName(name.clone()),
                                 _ => unreachable!(),
                             };
-                            self.client.add(component_name, component_file, &project, component_type.unwrap_or(ComponentType::Durable), files_archive_path, files_archive_properties).await.map(|component| {
+                            self.client.add(component_name, component_file, &project, component_type.unwrap_or(ComponentType::Durable), files_archive_path, files_archive_properties, dynamic_linking).await.map(|component| {
                                 GolemResult::Ok(Box::new(ComponentAddView(component.into())))
                             })
 
@@ -413,6 +418,7 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
                     component_type,
                     files_archive_path,
                     files_archive_properties,
+                    dynamic_linking,
                 )
                 .await
                 .map(|component| GolemResult::Ok(Box::new(ComponentUpdateView(component.into())))),

@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 use std::cmp::Ordering;
 use std::fmt::Display;
 use std::ops::{Add, Div, Mul, Sub};
@@ -22,22 +22,43 @@ pub trait GetLiteralValue {
     fn get_literal(&self) -> Option<LiteralValue>;
 }
 
-impl GetLiteralValue for TypeAnnotatedValue {
+impl GetLiteralValue for ValueAndType {
     fn get_literal(&self) -> Option<LiteralValue> {
         match self {
-            TypeAnnotatedValue::Str(value) => Some(LiteralValue::String(value.clone())),
-            TypeAnnotatedValue::Char(code_point) => char::from_u32(*code_point as u32)
+            ValueAndType {
+                value: Value::String(value),
+                ..
+            } => Some(LiteralValue::String(value.clone())),
+            ValueAndType {
+                value: Value::Char(code_point),
+                ..
+            } => char::from_u32(*code_point as u32)
                 .map(|c| c.to_string())
                 .map(LiteralValue::String),
-            TypeAnnotatedValue::Bool(value) => Some(LiteralValue::Bool(*value)),
-            TypeAnnotatedValue::Enum(value) => {
+            ValueAndType {
+                value: Value::Bool(value),
+                ..
+            } => Some(LiteralValue::Bool(*value)),
+            ValueAndType {
+                value: Value::Enum(idx),
+                typ: AnalysedType::Enum(typ),
+            } => {
                 // An enum can be turned into a simple literal and can be part of string concatenations
-                Some(LiteralValue::String(value.value.clone()))
+                Some(LiteralValue::String(typ.cases[*idx as usize].clone()))
             }
-            TypeAnnotatedValue::Variant(value) => {
+            ValueAndType {
+                value:
+                    Value::Variant {
+                        case_idx,
+                        case_value,
+                    },
+                typ: AnalysedType::Variant(typ),
+            } => {
                 // A no arg variant can be turned into a simple literal and can be part of string concatenations
-                if value.case_value.is_none() {
-                    Some(LiteralValue::String(value.case_name.clone()))
+                if case_value.is_none() {
+                    Some(LiteralValue::String(
+                        typ.cases[*case_idx as usize].name.clone(),
+                    ))
                 } else {
                     None
                 }
@@ -103,47 +124,47 @@ pub enum CoercedNumericValue {
 }
 
 impl CoercedNumericValue {
-    pub fn cast_to(&self, analysed_type: &AnalysedType) -> Option<TypeAnnotatedValue> {
+    pub fn cast_to(&self, analysed_type: &AnalysedType) -> Option<ValueAndType> {
         match (self, analysed_type) {
-            (CoercedNumericValue::PosInt(val), AnalysedType::U64(_)) => {
-                Some(TypeAnnotatedValue::U64(*val))
-            }
-            (CoercedNumericValue::PosInt(val), AnalysedType::U32(_)) if *val <= u32::MAX as u64 => {
-                Some(TypeAnnotatedValue::U32(*val as u32))
+            (CoercedNumericValue::PosInt(val), AnalysedType::U8(_)) if *val <= u8::MAX as u64 => {
+                Some((*val as u8).into_value_and_type())
             }
             (CoercedNumericValue::PosInt(val), AnalysedType::U16(_)) if *val <= u16::MAX as u64 => {
-                Some(TypeAnnotatedValue::U16(*val as u32))
+                Some((*val as u16).into_value_and_type())
             }
-            (CoercedNumericValue::PosInt(val), AnalysedType::U8(_)) if *val <= u8::MAX as u64 => {
-                Some(TypeAnnotatedValue::U8(*val as u32))
+            (CoercedNumericValue::PosInt(val), AnalysedType::U32(_)) if *val <= u32::MAX as u64 => {
+                Some((*val as u32).into_value_and_type())
+            }
+            (CoercedNumericValue::PosInt(val), AnalysedType::U64(_)) => {
+                Some((*val).into_value_and_type())
             }
 
-            (CoercedNumericValue::NegInt(val), AnalysedType::S64(_)) => {
-                Some(TypeAnnotatedValue::S64(*val))
-            }
-            (CoercedNumericValue::NegInt(val), AnalysedType::S32(_))
-                if *val >= i32::MIN as i64 && *val <= i32::MAX as i64 =>
+            (CoercedNumericValue::NegInt(val), AnalysedType::S8(_))
+                if *val >= i8::MIN as i64 && *val <= i8::MAX as i64 =>
             {
-                Some(TypeAnnotatedValue::S32(*val as i32))
+                Some((*val as i8).into_value_and_type())
             }
             (CoercedNumericValue::NegInt(val), AnalysedType::S16(_))
                 if *val >= i16::MIN as i64 && *val <= i16::MAX as i64 =>
             {
-                Some(TypeAnnotatedValue::S16(*val as i32))
+                Some((*val as i16).into_value_and_type())
             }
-            (CoercedNumericValue::NegInt(val), AnalysedType::S8(_))
-                if *val >= i8::MIN as i64 && *val <= i8::MAX as i64 =>
+            (CoercedNumericValue::NegInt(val), AnalysedType::S32(_))
+                if *val >= i32::MIN as i64 && *val <= i32::MAX as i64 =>
             {
-                Some(TypeAnnotatedValue::S8(*val as i32))
+                Some((*val as i32).into_value_and_type())
+            }
+            (CoercedNumericValue::NegInt(val), AnalysedType::S64(_)) => {
+                Some((*val).into_value_and_type())
             }
 
             (CoercedNumericValue::Float(val), AnalysedType::F64(_)) => {
-                Some(TypeAnnotatedValue::F64(*val))
+                Some((*val).into_value_and_type())
             }
             (CoercedNumericValue::Float(val), AnalysedType::F32(_))
                 if *val >= f32::MIN as f64 && *val <= f32::MAX as f64 =>
             {
-                Some(TypeAnnotatedValue::F32(*val as f32))
+                Some((*val as f32).into_value_and_type())
             }
 
             _ => None,
@@ -299,21 +320,22 @@ impl Display for LiteralValue {
 
 mod internal {
     use crate::interpreter::literal::CoercedNumericValue;
-    use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+    use golem_wasm_rpc::{Value, ValueAndType};
 
     pub(crate) fn get_numeric_value(
-        type_annotated_value: &TypeAnnotatedValue,
+        type_annotated_value: &ValueAndType,
     ) -> Option<CoercedNumericValue> {
-        match type_annotated_value {
-            TypeAnnotatedValue::S16(value) => Some(CoercedNumericValue::NegInt(*value as i64)),
-            TypeAnnotatedValue::S32(value) => Some(CoercedNumericValue::NegInt(*value as i64)),
-            TypeAnnotatedValue::S64(value) => Some(CoercedNumericValue::NegInt(*value)),
-            TypeAnnotatedValue::U16(value) => Some(CoercedNumericValue::PosInt(*value as u64)),
-            TypeAnnotatedValue::U32(value) => Some(CoercedNumericValue::PosInt(*value as u64)),
-            TypeAnnotatedValue::U64(value) => Some(CoercedNumericValue::PosInt(*value)),
-            TypeAnnotatedValue::F32(value) => Some(CoercedNumericValue::Float(*value as f64)),
-            TypeAnnotatedValue::F64(value) => Some(CoercedNumericValue::Float(*value)),
-            TypeAnnotatedValue::U8(value) => Some(CoercedNumericValue::PosInt(*value as u64)),
+        match &type_annotated_value.value {
+            Value::S8(value) => Some(CoercedNumericValue::NegInt(*value as i64)),
+            Value::S16(value) => Some(CoercedNumericValue::NegInt(*value as i64)),
+            Value::S32(value) => Some(CoercedNumericValue::NegInt(*value as i64)),
+            Value::S64(value) => Some(CoercedNumericValue::NegInt(*value)),
+            Value::U8(value) => Some(CoercedNumericValue::PosInt(*value as u64)),
+            Value::U16(value) => Some(CoercedNumericValue::PosInt(*value as u64)),
+            Value::U32(value) => Some(CoercedNumericValue::PosInt(*value as u64)),
+            Value::U64(value) => Some(CoercedNumericValue::PosInt(*value)),
+            Value::F32(value) => Some(CoercedNumericValue::Float(*value as f64)),
+            Value::F64(value) => Some(CoercedNumericValue::Float(*value)),
             _ => None,
         }
     }

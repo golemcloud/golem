@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -30,8 +30,8 @@ use golem_common::model::oplog::{
     OplogEntry, OplogIndex, OplogPayload, UpdateDescription, WrappedFunctionType,
 };
 use golem_common::model::{
-    AccountId, ComponentId, ComponentType, ComponentVersion, IdempotencyKey, OwnedWorkerId,
-    ScanCursor, Timestamp, WorkerId,
+    AccountId, ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId, ScanCursor, Timestamp,
+    WorkerId, WorkerMetadata,
 };
 use golem_common::serialization::{serialize, try_deserialize};
 pub use multilayer::{MultiLayerOplog, MultiLayerOplogService, OplogArchiveService};
@@ -39,11 +39,13 @@ pub use primary::PrimaryOplogService;
 use tracing::Instrument;
 
 use crate::error::GolemError;
+use crate::model::ExecutionStatus;
 
 mod blob;
 mod compressed;
 mod ephemeral;
 mod multilayer;
+pub mod plugin;
 mod primary;
 
 #[cfg(test)]
@@ -69,13 +71,15 @@ pub trait OplogService: Debug {
         &self,
         owned_worker_id: &OwnedWorkerId,
         initial_entry: OplogEntry,
-        component_type: ComponentType,
+        initial_worker_metadata: WorkerMetadata,
+        execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
     ) -> Arc<dyn Oplog + Send + Sync + 'static>;
     async fn open(
         &self,
         owned_worker_id: &OwnedWorkerId,
         last_oplog_index: OplogIndex,
-        component_type: ComponentType,
+        initial_worker_metadata: WorkerMetadata,
+        execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
     ) -> Arc<dyn Oplog + Send + Sync + 'static>;
 
     async fn get_last_index(&self, owned_worker_id: &OwnedWorkerId) -> OplogIndex;

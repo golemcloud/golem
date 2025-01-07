@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::gateway_binding::{GatewayRequestDetails, WorkerDetail};
+use crate::gateway_binding::{HttpRequestDetails, WorkerDetail};
+use golem_common::SafeDisplay;
 use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use rib::{RibInput, RibInputTypeInfo};
@@ -40,7 +41,13 @@ impl Display for RibInputTypeMismatch {
     }
 }
 
-impl RibInputValueResolver for GatewayRequestDetails {
+impl SafeDisplay for RibInputTypeMismatch {
+    fn to_safe_string(&self) -> String {
+        self.0.clone()
+    }
+}
+
+impl RibInputValueResolver for HttpRequestDetails {
     fn resolve_rib_input_value(
         &self,
         required_types: &RibInputTypeInfo,
@@ -54,6 +61,11 @@ impl RibInputValueResolver for GatewayRequestDetails {
                 warn!("received: {:?}", rib_input_with_request_content);
                 let input = TypeAnnotatedValue::parse_with_type(rib_input_with_request_content, request_type)
                         .map_err(|err| RibInputTypeMismatch(format!("Input request details don't match the requirements for rib expression to execute: {}. Requirements. {:?}", err.join(", "), request_type)))?;
+                let input = input.try_into().map_err(|err| {
+                    RibInputTypeMismatch(format!(
+                        "Internal error converting between value representations: {err}"
+                    ))
+                })?;
 
                 let mut rib_input_map = HashMap::new();
                 rib_input_map.insert("request".to_string(), input);
@@ -79,6 +91,11 @@ impl RibInputValueResolver for WorkerDetail {
                 let request_value =
                     TypeAnnotatedValue::parse_with_type(rib_input_with_request_content, worker_details_type)
                         .map_err(|err| RibInputTypeMismatch(format!("Worker details don't match the requirements for rib expression to execute: {}. Requirements. {:?}", err.join(", "), worker_details_type)))?;
+                let request_value = request_value.try_into().map_err(|err| {
+                    RibInputTypeMismatch(format!(
+                        "Internal error converting between value representations: {err}"
+                    ))
+                })?;
 
                 let mut rib_input_map = HashMap::new();
                 rib_input_map.insert("worker".to_string(), request_value);

@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,6 +14,7 @@
 
 use crate::error::GolemError;
 use crate::metrics::oplog::record_oplog_call;
+use crate::model::ExecutionStatus;
 use crate::services::oplog::{CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService};
 use crate::storage::indexed::{IndexedStorage, IndexedStorageLabelledApi, IndexedStorageNamespace};
 use async_mutex::Mutex;
@@ -21,7 +22,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload, PayloadId};
 use golem_common::model::{
-    AccountId, ComponentId, ComponentType, OwnedWorkerId, ScanCursor, WorkerId,
+    AccountId, ComponentId, OwnedWorkerId, ScanCursor, WorkerId, WorkerMetadata,
 };
 use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
 use std::collections::{BTreeMap, VecDeque};
@@ -156,7 +157,8 @@ impl OplogService for PrimaryOplogService {
         &self,
         owned_worker_id: &OwnedWorkerId,
         initial_entry: OplogEntry,
-        component_type: ComponentType,
+        initial_worker_metadata: WorkerMetadata,
+        execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
     ) -> Arc<dyn Oplog + Send + Sync> {
         record_oplog_call("create");
 
@@ -184,15 +186,21 @@ impl OplogService for PrimaryOplogService {
                 )
             });
 
-        self.open(owned_worker_id, OplogIndex::INITIAL, component_type)
-            .await
+        self.open(
+            owned_worker_id,
+            OplogIndex::INITIAL,
+            initial_worker_metadata,
+            execution_status,
+        )
+        .await
     }
 
     async fn open(
         &self,
         owned_worker_id: &OwnedWorkerId,
         last_oplog_index: OplogIndex,
-        _component_type: ComponentType,
+        _initial_worker_metadata: WorkerMetadata,
+        _execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
     ) -> Arc<dyn Oplog + Send + Sync> {
         record_oplog_call("open");
 

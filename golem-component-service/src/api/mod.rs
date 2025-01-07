@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,19 +24,17 @@ use poem::Route;
 use poem_openapi::payload::Json;
 use poem_openapi::{ApiResponse, OpenApiService};
 use prometheus::Registry;
-use std::ops::Deref;
-use std::sync::Arc;
 
 pub mod component;
 pub mod healthcheck;
 pub mod plugin;
 
-pub fn combined_routes(prometheus_registry: Arc<Registry>, services: &Services) -> Route {
+pub fn combined_routes(prometheus_registry: Registry, services: &Services) -> Route {
     let api_service = make_open_api_service(services);
 
     let ui = api_service.swagger_ui();
     let spec = api_service.spec_endpoint_yaml();
-    let metrics = PrometheusExporter::new(prometheus_registry.deref().clone());
+    let metrics = PrometheusExporter::new(prometheus_registry.clone());
 
     Route::new()
         .nest("/", api_service)
@@ -45,7 +43,7 @@ pub fn combined_routes(prometheus_registry: Arc<Registry>, services: &Services) 
         .nest("/metrics", metrics)
 }
 
-type ApiServices = (
+pub type ApiServices = (
     component::ComponentApi,
     healthcheck::HealthcheckApi,
     plugin::PluginApi,
@@ -56,6 +54,7 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<ApiServices,
         (
             component::ComponentApi {
                 component_service: services.component_service.clone(),
+                plugin_service: services.plugin_service.clone(),
             },
             healthcheck::HealthcheckApi,
             plugin::PluginApi {
@@ -200,6 +199,12 @@ impl From<PluginError> for ComponentError {
                     error: value.to_safe_string(),
                 }))
             }
+            PluginError::PluginNotFound { .. } => ComponentError::NotFound(Json(ErrorBody {
+                error: value.to_safe_string(),
+            })),
+            PluginError::InvalidScope { .. } => ComponentError::Unauthorized(Json(ErrorBody {
+                error: value.to_safe_string(),
+            })),
         }
     }
 }

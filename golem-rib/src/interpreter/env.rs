@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
 
 use crate::interpreter::interpreter_stack_value::RibInterpreterStackValue;
 use crate::{RibInput, VariableId};
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::ValueAndType;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::future::Future;
@@ -37,8 +37,8 @@ impl Debug for InterpreterEnv {
 pub type RibFunctionInvoke = Arc<
     dyn Fn(
             String,
-            Vec<TypeAnnotatedValue>,
-        ) -> Pin<Box<dyn Future<Output = Result<TypeAnnotatedValue, String>> + Send>>
+            Vec<ValueAndType>,
+        ) -> Pin<Box<dyn Future<Output = Result<ValueAndType, String>> + Send>>
         + Send
         + Sync,
 >;
@@ -56,8 +56,8 @@ impl InterpreterEnv {
     pub fn invoke_worker_function_async(
         &self,
         function_name: String,
-        args: Vec<TypeAnnotatedValue>,
-    ) -> Pin<Box<dyn Future<Output = Result<TypeAnnotatedValue, String>> + Send>> {
+        args: Vec<ValueAndType>,
+    ) -> Pin<Box<dyn Future<Output = Result<ValueAndType, String>> + Send>> {
         (self.call_worker_function_async)(function_name, args)
     }
 
@@ -114,18 +114,13 @@ impl EnvironmentKey {
 
 mod internal {
     use crate::interpreter::env::RibFunctionInvoke;
-    use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-    use golem_wasm_rpc::protobuf::TypedTuple;
+    use golem_wasm_ast::analysis::analysed_type::tuple;
+    use golem_wasm_rpc::{Value, ValueAndType};
     use std::sync::Arc;
 
     pub(crate) fn default_worker_invoke_async() -> RibFunctionInvoke {
         Arc::new(|_, _| {
-            Box::pin(async {
-                Ok(TypeAnnotatedValue::Tuple(TypedTuple {
-                    typ: vec![],
-                    value: vec![],
-                }))
-            })
+            Box::pin(async { Ok(ValueAndType::new(Value::Tuple(vec![]), tuple(vec![]))) })
         })
     }
 }

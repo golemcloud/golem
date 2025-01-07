@@ -13,12 +13,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .extern_path(".wasm.rpc", "::golem_wasm_rpc::protobuf")
         .extern_path(".wasm.ast", "::golem_wasm_ast::analysis::protobuf")
         .include_file("mod.rs")
-        .compile(
+        .compile_protos(
             &[
                 "proto/golem/rib/function_name.proto",
                 "proto/golem/rib/type_name.proto",
                 "proto/golem/rib/expr.proto",
                 "proto/golem/rib/rib_input.proto",
+                "proto/golem/rib/rib_output.proto",
                 "proto/golem/rib/ir.proto",
                 "proto/golem/rib/rib_byte_code.proto",
                 "proto/golem/rib/worker_functions_in_rib.proto",

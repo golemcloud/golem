@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -205,6 +205,26 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
             .into())
     }
 
+    async fn get_metadata_opt(
+        &self,
+        worker_urn: WorkerUrn,
+    ) -> Result<Option<WorkerMetadata>, GolemError> {
+        info!("Getting worker {worker_urn} metadata");
+
+        match self
+            .client
+            .get_worker_metadata(
+                &worker_urn.id.component_id.0,
+                &worker_name_required(&worker_urn)?,
+            )
+            .await
+        {
+            Ok(metadata) => Ok(Some(metadata.into())),
+            Err(Error::Item(WorkerError::Error404(_))) => Ok(None),
+            Err(err) => Err(err.into()),
+        }
+    }
+
     async fn find_metadata(
         &self,
         component_urn: ComponentUrn,
@@ -289,6 +309,7 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
             .push("connect");
 
         let mut request = url
+            .to_string()
             .into_client_request()
             .map_err(|e| GolemError(format!("Can't create request: {e}")))?;
         let headers = request.headers_mut();

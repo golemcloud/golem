@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,7 +20,8 @@ use std::sync::Arc;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
 use golem_common::model::{ComponentId, IdempotencyKey};
-
+use golem_common::SafeDisplay;
+use golem_wasm_rpc::ValueAndType;
 use rib::{RibByteCode, RibFunctionInvoke, RibInput, RibResult};
 
 use crate::gateway_execution::{GatewayResolvedWorkerRequest, GatewayWorkerRequestExecutor};
@@ -48,6 +49,12 @@ pub struct EvaluationError(pub String);
 impl Display for EvaluationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
+    }
+}
+
+impl SafeDisplay for EvaluationError {
+    fn to_safe_string(&self) -> String {
+        self.0.clone()
     }
 }
 
@@ -91,7 +98,7 @@ impl<Namespace: Clone + Send + Sync + 'static> WorkerServiceRibInterpreter<Names
             let idempotency_key = idempotency_key.clone();
             let worker_name = worker_name.map(|s| s.to_string()).clone();
 
-            move |function_name: String, parameters: Vec<TypeAnnotatedValue>| {
+            move |function_name: String, parameters: Vec<ValueAndType>| {
                 let component_id = component_id.clone();
                 let worker_name = worker_name.clone();
                 let idempotency_key = idempotency_key.clone();
@@ -99,22 +106,31 @@ impl<Namespace: Clone + Send + Sync + 'static> WorkerServiceRibInterpreter<Names
                 let namespace = namespace.clone();
 
                 async move {
+                    // input ValueAndType => TypeAnnotatedValue
+                    let function_params: Vec<TypeAnnotatedValue> = parameters
+                        .into_iter()
+                        .map(TypeAnnotatedValue::try_from)
+                        .collect::<Result<Vec<_>, _>>()
+                        .map_err(|errs: Vec<String>| errs.join(", "))?;
+
                     let worker_request = GatewayResolvedWorkerRequest {
                         component_id,
                         worker_name,
                         function_name,
-                        function_params: parameters,
+                        function_params,
                         idempotency_key,
                         namespace,
                     };
 
-                    executor
+                    let tav = executor
                         .execute(worker_request)
                         .await
                         .map(|v| v.result)
-                        .map_err(|e| e.to_string())
+                        .map_err(|e| e.to_string())?;
+
+                    tav.try_into()
                 }
-                .boxed() // This ensures the future is boxed with the correct type
+                .boxed()
             }
         });
         let result = rib::interpret(expr, rib_input, worker_invoke_function)

@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,9 +14,11 @@
 
 use crate::headers::ResolvedResponseHeaders;
 use crate::path::{Path, PathComponent};
+use golem_wasm_ast::analysis::{AnalysedType, TypeRecord};
 use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::{TypedList, TypedRecord, TypedTuple};
+use golem_wasm_rpc::{Value, ValueAndType};
 use http::StatusCode;
 use rib::GetLiteralValue;
 use rib::LiteralValue;
@@ -35,6 +37,8 @@ pub enum GetError {
     NotRecord { key_name: String, found: String },
     #[error("Not an array: index: {index}, original_value: {found}")]
     NotArray { index: usize, found: String },
+    #[error("Internal error: {0}")]
+    Internal(String),
 }
 
 // To deal with fields in a TypeAnnotatedValue (that's returned from golem-rib)
@@ -90,6 +94,17 @@ impl Getter<TypeAnnotatedValue> for TypeAnnotatedValue {
     }
 }
 
+impl Getter<ValueAndType> for ValueAndType {
+    fn get(&self, key: &Path) -> Result<ValueAndType, GetError> {
+        let tav: TypeAnnotatedValue = self
+            .clone()
+            .try_into()
+            .map_err(|errs: Vec<String>| GetError::Internal(errs.join(", ")))?;
+        let result = tav.get(key)?;
+        result.try_into().map_err(GetError::Internal)
+    }
+}
+
 fn get_array(value: &TypeAnnotatedValue) -> Option<Vec<TypeAnnotatedValue>> {
     match value {
         TypeAnnotatedValue::List(TypedList { values, .. }) => {
@@ -124,32 +139,64 @@ impl<T: Getter<T>> GetterExt<T> for T {
 }
 
 pub fn get_response_headers(
-    typed_value: &TypeAnnotatedValue,
+    field_values: &[Value],
+    record: &TypeRecord,
 ) -> Result<Option<ResolvedResponseHeaders>, String> {
-    match typed_value.get_optional(&Path::from_key("headers")) {
+    match record
+        .fields
+        .iter()
+        .position(|pair| &pair.name == "headers")
+    {
         None => Ok(None),
-        Some(header) => Ok(Some(ResolvedResponseHeaders::from_typed_value(&header)?)),
+        Some(field_position) => Ok(Some(ResolvedResponseHeaders::from_typed_value(
+            ValueAndType::new(
+                field_values[field_position].clone(),
+                record.fields[field_position].typ.clone(),
+            ),
+        )?)),
     }
 }
 
 pub fn get_response_headers_or_default(
-    typed_value: &TypeAnnotatedValue,
+    value: &ValueAndType,
 ) -> Result<ResolvedResponseHeaders, String> {
-    get_response_headers(typed_value).map(|headers| headers.unwrap_or_default())
-}
-
-pub fn get_status_code(typed_value: &TypeAnnotatedValue) -> Result<Option<StatusCode>, String> {
-    match typed_value.get_optional(&Path::from_key("status")) {
-        None => Ok(None),
-        Some(typed_value) => Ok(Some(get_status_code_inner(&typed_value)?)),
+    match value {
+        ValueAndType {
+            value: Value::Record(field_values),
+            typ: AnalysedType::Record(record),
+        } => get_response_headers(field_values, record).map(|headers| headers.unwrap_or_default()),
+        _ => Ok(ResolvedResponseHeaders::default()),
     }
 }
 
-pub fn get_status_code_or_ok(typed_value: &TypeAnnotatedValue) -> Result<StatusCode, String> {
-    get_status_code(typed_value).map(|status| status.unwrap_or(StatusCode::OK))
+pub fn get_status_code(
+    field_values: &[Value],
+    record: &TypeRecord,
+) -> Result<Option<StatusCode>, String> {
+    match record
+        .fields
+        .iter()
+        .position(|field| &field.name == "status")
+    {
+        None => Ok(None),
+        Some(field_position) => Ok(Some(get_status_code_inner(ValueAndType::new(
+            field_values[field_position].clone(),
+            record.fields[field_position].typ.clone(),
+        ))?)),
+    }
 }
 
-fn get_status_code_inner(status_code: &TypeAnnotatedValue) -> Result<StatusCode, String> {
+pub fn get_status_code_or_ok(value: &ValueAndType) -> Result<StatusCode, String> {
+    match value {
+        ValueAndType {
+            value: Value::Record(field_values),
+            typ: AnalysedType::Record(record),
+        } => get_status_code(field_values, record).map(|status| status.unwrap_or(StatusCode::OK)),
+        _ => Ok(StatusCode::OK),
+    }
+}
+
+fn get_status_code_inner(status_code: ValueAndType) -> Result<StatusCode, String> {
     let status_res: Result<u16, String> =
         match status_code.get_literal() {
             Some(LiteralValue::String(status_str)) => status_str.parse().map_err(|e| {
@@ -166,7 +213,7 @@ fn get_status_code_inner(status_code: &TypeAnnotatedValue) -> Result<StatusCode,
             }),
             _ => Err(format!(
                 "Status Code Expression is evaluated to a complex value. It is resolved to {:?}",
-                status_code.to_json_value()
+                status_code.value
             ))
         };
 
@@ -174,7 +221,7 @@ fn get_status_code_inner(status_code: &TypeAnnotatedValue) -> Result<StatusCode,
 
     StatusCode::from_u16(status_u16).map_err(|e|
         format!(
-        "Invalid Status Code. A valid status code cannot be formed from the evaluated status code expression {}. Error: {}",
-        status_u16, e
-    ))
+            "Invalid Status Code. A valid status code cannot be formed from the evaluated status code expression {}. Error: {}",
+            status_u16, e
+        ))
 }

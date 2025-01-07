@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use bincode::{Decode, Encode};
-use golem_api_grpc::proto::golem::rib::VariableId as ProtoVariableId;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 
@@ -144,66 +143,72 @@ impl Display for VariableId {
     }
 }
 #[derive(Hash, Eq, Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
-pub struct Id(u32);
+pub struct Id(pub(crate) u32);
 
-impl TryFrom<ProtoVariableId> for VariableId {
-    type Error = String;
+#[cfg(feature = "protobuf")]
+mod protobuf {
+    use crate::{Id, VariableId};
+    use golem_api_grpc::proto::golem::rib::VariableId as ProtoVariableId;
 
-    fn try_from(value: ProtoVariableId) -> Result<Self, Self::Error> {
-        let variable_id = value.variable_id.ok_or("Missing variable_id".to_string())?;
+    impl TryFrom<ProtoVariableId> for VariableId {
+        type Error = String;
 
-        match variable_id {
-            golem_api_grpc::proto::golem::rib::variable_id::VariableId::Global(global) => {
-                Ok(VariableId::Global(global.name))
+        fn try_from(value: ProtoVariableId) -> Result<Self, Self::Error> {
+            let variable_id = value.variable_id.ok_or("Missing variable_id".to_string())?;
+
+            match variable_id {
+                golem_api_grpc::proto::golem::rib::variable_id::VariableId::Global(global) => {
+                    Ok(VariableId::Global(global.name))
+                }
+                golem_api_grpc::proto::golem::rib::variable_id::VariableId::Local(local) => Ok(
+                    VariableId::Local(local.name, local.id.map(|x| Id(x as u32))),
+                ),
             }
-            golem_api_grpc::proto::golem::rib::variable_id::VariableId::Local(local) => Ok(
-                VariableId::Local(local.name, local.id.map(|x| Id(x as u32))),
-            ),
         }
     }
-}
 
-impl From<VariableId> for ProtoVariableId {
-    fn from(value: VariableId) -> Self {
-        match value {
-            VariableId::Global(name) => ProtoVariableId {
-                variable_id: Some(
-                    golem_api_grpc::proto::golem::rib::variable_id::VariableId::Global(
-                        golem_api_grpc::proto::golem::rib::Global { name },
+    impl From<VariableId> for ProtoVariableId {
+        fn from(value: VariableId) -> Self {
+            match value {
+                VariableId::Global(name) => ProtoVariableId {
+                    variable_id: Some(
+                        golem_api_grpc::proto::golem::rib::variable_id::VariableId::Global(
+                            golem_api_grpc::proto::golem::rib::Global { name },
+                        ),
                     ),
-                ),
-            },
-            VariableId::MatchIdentifier(m) => ProtoVariableId {
-                variable_id: Some(
-                    golem_api_grpc::proto::golem::rib::variable_id::VariableId::Global(
-                        golem_api_grpc::proto::golem::rib::Global { name: m.name },
+                },
+                VariableId::MatchIdentifier(m) => ProtoVariableId {
+                    variable_id: Some(
+                        golem_api_grpc::proto::golem::rib::variable_id::VariableId::Global(
+                            golem_api_grpc::proto::golem::rib::Global { name: m.name },
+                        ),
                     ),
-                ),
-            },
-            VariableId::Local(name, id) => ProtoVariableId {
-                variable_id: Some(
-                    golem_api_grpc::proto::golem::rib::variable_id::VariableId::Local(
-                        golem_api_grpc::proto::golem::rib::Local {
-                            name,
-                            id: id.map(|x| x.0 as u64),
-                        },
+                },
+                VariableId::Local(name, id) => ProtoVariableId {
+                    variable_id: Some(
+                        golem_api_grpc::proto::golem::rib::variable_id::VariableId::Local(
+                            golem_api_grpc::proto::golem::rib::Local {
+                                name,
+                                id: id.map(|x| x.0 as u64),
+                            },
+                        ),
                     ),
-                ),
-            },
-            VariableId::ListComprehension(l) => ProtoVariableId {
-                variable_id: Some(
-                    golem_api_grpc::proto::golem::rib::variable_id::VariableId::Global(
-                        golem_api_grpc::proto::golem::rib::Global { name: l.name },
+                },
+                VariableId::ListComprehension(l) => ProtoVariableId {
+                    variable_id: Some(
+                        golem_api_grpc::proto::golem::rib::variable_id::VariableId::Global(
+                            golem_api_grpc::proto::golem::rib::Global { name: l.name },
+                        ),
                     ),
-                ),
-            },
-            VariableId::ListReduce(r) => ProtoVariableId {
-                variable_id: Some(
-                    golem_api_grpc::proto::golem::rib::variable_id::VariableId::Global(
-                        golem_api_grpc::proto::golem::rib::Global { name: r.name },
+                },
+                VariableId::ListReduce(r) => ProtoVariableId {
+                    variable_id: Some(
+                        golem_api_grpc::proto::golem::rib::variable_id::VariableId::Global(
+                            golem_api_grpc::proto::golem::rib::Global { name: r.name },
+                        ),
                     ),
-                ),
-            },
+                },
+            }
         }
     }
 }

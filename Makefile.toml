@@ -107,25 +107,9 @@ args = ["build", "--release", "--target", "x86_64-unknown-linux-gnu"]
 [tasks.build-release-override-linux-arm64]
 description = "Build the project in release mode with target platform override to linux/arm64"
 condition = { env = { "PLATFORM_OVERRIDE" = "linux/arm64" } }
-command = "cargo"
-args = [
-    "build",
-    "-p",
-    "golem-shard-manager", # NOTE: Not all projects are cross-compilable because of an openssl dependency
-    "-p",
-    "golem-worker-executor",
-    "-p",
-    "golem-component-service",
-    "-p",
-    "golem-worker-service",
-    "-p",
-    "golem-component-compilation-service",
-    "--release",
-    "--target",
-    "aarch64-unknown-linux-gnu",
-    "--config",
-    "target.aarch64-unknown-linux-gnu.linker = 'aarch64-linux-gnu-gcc'",
-]
+install_crate = "cross"
+command = "cross"
+args = ["build", "--release", "--target", "aarch64-unknown-linux-gnu"]
 
 ## ** CHECK **
 
@@ -186,7 +170,8 @@ dependencies = [
 [tasks.unit-tests]
 description = "Runs unit tests only"
 script = '''
-cargo test --lib --all-features -- --nocapture --report-time $JUNIT_OPTS
+cargo test --workspace --lib --all-features --exclude wasm-rpc-stubgen-tests-integration -- --nocapture --report-time $JUNIT_OPTS
+cargo test -p golem-wasm-ast --tests --all-features -- --nocapture --report-time $JUNIT_OPTS
 '''
 
 [tasks.worker-executor-tests]
@@ -229,8 +214,9 @@ cargo test --package golem-worker-executor-base --test integration :tag:group3 -
 description = "Runs worker executor tests only (group 4/8)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script = '''
-cargo test --package golem-worker-executor-base --test integration :tag:group4 -- --nocapture --report-time $JUNIT_OPTS
+cargo test --package golem-worker-executor-base --test integration :tag:group4 -- --nocapture --report-time $JUNIT_OPTS --test-threads=1
 '''
+# NOTE: temporarily set test-threads=1 to debug flakyness
 
 [tasks.worker-executor-tests-group5]
 description = "Runs worker executor tests only (group 5/8)"
@@ -270,15 +256,19 @@ cargo test --package integration-tests --test integration -- --nocapture --repor
 cargo test --package golem-component-service-base --test tests -- --nocapture --report-time $JUNIT_OPTS
 cargo test --package golem-worker-service-base --test services_tests -- --nocapture --report-time $JUNIT_OPTS
 cargo test --package golem-worker-service-base --test api_gateway_end_to_end_tests -- --nocapture --report-time $JUNIT_OPTS
+cargo test --package golem-service-base --test integration -- --nocapture --report-time $JUNIT_OPTS
+cargo test --package wasm-rpc-stubgen-tests-integration --tests -- --nocapture --test-threads=1 --report-time
 '''
+# $JUNIT_OPTS temporarily removed from wasm-rpc-stubgen-tests-integration to help debugging on CI
 
 [tasks.sharding-tests]
 description = "Runs sharding integration tests only"
 dependencies = ["build-bins"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 script = '''
-cargo test --package integration-tests --test sharding -- --report-time $JUNIT_OPTS
+cargo test --package integration-tests --test sharding -- --report-time
 '''
+# $JUNIT_OPTS temporarily removed to help debugging on CI
 
 [tasks.sharding-tests-debug]
 dependencies = ["build-bins"]
@@ -386,6 +376,9 @@ args = ["-v", "./target/golem-service.yaml", "./openapi/golem-service.yaml"]
 description = "Publishes packages to crates.io"
 dependencies = [
     "build-release",
+    "publish-golem-wasm-ast",
+    "publish-golem-wasm-rpc",
+    "publish-golem-wasm-rpc-stubgen",
     "publish-golem-api-grpc",
     "publish-golem-rib",
     "publish-golem-common",
@@ -421,6 +414,42 @@ foreach ($file in $cargoFiles)
     Set-Content $file.PSPath
 }
 '''
+
+[tasks.publish-golem-wasm-ast]
+description = "Publishes golem-wasm-ast package to crates.io"
+command = "cargo"
+args = [
+    "publish",
+    "-p",
+    "golem-wasm-ast",
+    "--all-features",
+    "--allow-dirty",
+    "--no-verify",
+]
+
+[tasks.publish-golem-wasm-rpc]
+description = "Publishes golem-wasm-rpc package to crates.io"
+command = "cargo"
+args = [
+    "publish",
+    "-p",
+    "golem-wasm-rpc",
+    "--all-features",
+    "--allow-dirty",
+    "--no-verify",
+]
+
+[tasks.publish-golem-wasm-rpc-stubgen]
+description = "Publishes golem-wasm-rpc-stubgen package to crates.io"
+command = "cargo"
+args = [
+    "publish",
+    "-p",
+    "golem-wasm-rpc-stubgen",
+    "--all-features",
+    "--allow-dirty",
+    "--no-verify",
+]
 
 [tasks.publish-golem-client]
 description = "Publishes golem-client package to crates.io"

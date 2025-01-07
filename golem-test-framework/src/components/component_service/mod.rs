@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -40,6 +40,7 @@ use crate::components::rdb::Rdb;
 use crate::components::{wait_for_startup_grpc, EnvVarBuilder, GolemEnvVars};
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
 use golem_api_grpc::proto::golem::component::v1::plugin_service_client::PluginServiceClient;
+use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope, PluginDefinition};
 use golem_common::model::{ComponentId, ComponentType, InitialComponentFile, PluginInstallationId};
 
@@ -172,7 +173,7 @@ pub trait ComponentService {
         name: &str,
         component_type: ComponentType,
     ) -> Result<ComponentId, AddComponentError> {
-        self.add_component_with_files(local_path, name, component_type, &[])
+        self.add_component_with_files(local_path, name, component_type, &[], &HashMap::new())
             .await
     }
 
@@ -182,6 +183,7 @@ pub trait ComponentService {
         name: &str,
         component_type: ComponentType,
         files: &[InitialComponentFile],
+        dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
     ) -> Result<ComponentId, AddComponentError> {
         let mut client = self.client().await;
         let mut file = File::open(local_path).await.map_err(|_| {
@@ -199,6 +201,11 @@ pub trait ComponentService {
                 component_name: name.to_string(),
                 component_type: Some(component_type as i32),
                 files,
+                dynamic_linking: HashMap::from_iter(
+                    dynamic_linking
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone().into())),
+                ),
             })),
         }];
 
@@ -265,8 +272,14 @@ pub trait ComponentService {
         local_path: &Path,
         component_type: ComponentType,
     ) -> u64 {
-        self.update_component_with_files(component_id, local_path, component_type, &None)
-            .await
+        self.update_component_with_files(
+            component_id,
+            local_path,
+            component_type,
+            &None,
+            &HashMap::new(),
+        )
+        .await
     }
 
     async fn update_component_with_files(
@@ -275,6 +288,7 @@ pub trait ComponentService {
         local_path: &Path,
         component_type: ComponentType,
         files: &Option<Vec<InitialComponentFile>>,
+        dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
     ) -> u64 {
         let mut client = self.client().await;
         let mut file = File::open(local_path)
@@ -299,6 +313,11 @@ pub trait ComponentService {
                     component_type: Some(component_type as i32),
                     update_files,
                     files,
+                    dynamic_linking: HashMap::from_iter(
+                        dynamic_linking
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone().into())),
+                    ),
                 },
             )),
         }];

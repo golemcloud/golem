@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -237,6 +237,12 @@ async fn get_oplog_with_api_changing_updates(
         .unwrap();
 
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
+
+    // there might be a pending invocation entry before the update entry. Filter it out to make the test more robust
+    let oplog = oplog
+        .into_iter()
+        .filter(|entry| !matches!(entry, PublicOplogEntry::PendingWorkerInvocation(_)))
+        .collect::<Vec<_>>();
 
     check!(result[0] == Value::U64(11));
     assert_eq!(oplog.len(), 13);

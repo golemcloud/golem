@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
 // limitations under the License.
 
 pub mod api_definition;
-pub mod api_definition_transformer;
 pub mod api_definition_validator;
 pub mod api_deployment;
 pub mod http_api_definition_validator;
+pub mod security_scheme;

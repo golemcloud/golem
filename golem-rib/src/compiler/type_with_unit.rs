@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -54,7 +54,7 @@ impl TryFrom<&InferredType> for AnalysedType {
 
     fn try_from(value: &InferredType) -> Result<Self, Self::Error> {
         let with_unit = AnalysedTypeWithUnit::try_from(value)?;
-        with_unit.try_into()
+        AnalysedType::try_from(with_unit)
     }
 }
 

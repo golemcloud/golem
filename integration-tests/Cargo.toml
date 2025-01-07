@@ -13,6 +13,7 @@ autotests = false
 golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
 golem-common = { path = "../golem-common", version = "0.0.0" }
 golem-test-framework = { path = "../golem-test-framework", version = "0.0.0" }
+golem-wasm-rpc = { path = "../wasm-rpc", version = "0.0.0", default-features = false, features = ["host"] }
 
 anyhow = { workspace = true }
 assert2 = { workspace = true }
@@ -20,8 +21,7 @@ async-trait = { workspace = true }
 axum = { workspace = true }
 clap = { workspace = true }
 console-subscriber = { workspace = true }
-golem-wasm-rpc = { workspace = true }
-plotters = "0.3.6"
+plotters = "0.3.7"
 poem = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
@@ -30,7 +30,6 @@ serde_json = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-warp = { workspace = true }
 
 [dev-dependencies]
 test-r = { workspace = true }

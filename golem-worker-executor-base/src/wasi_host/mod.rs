@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -36,8 +36,19 @@ where
 {
     let mut linker = Linker::new(engine);
 
+    let mut exit_link_options = wasmtime_wasi::bindings::cli::exit::LinkOptions::default();
+    exit_link_options.cli_exit_with_code(true);
+
+    let mut network_link_options =
+        wasmtime_wasi::bindings::sockets::network::LinkOptions::default();
+    network_link_options.network_error_code(true);
+
     wasmtime_wasi::bindings::cli::environment::add_to_linker_get_host(&mut linker, get)?;
-    wasmtime_wasi::bindings::cli::exit::add_to_linker_get_host(&mut linker, get)?;
+    wasmtime_wasi::bindings::cli::exit::add_to_linker_get_host(
+        &mut linker,
+        &exit_link_options,
+        get,
+    )?;
     wasmtime_wasi::bindings::cli::stderr::add_to_linker_get_host(&mut linker, get)?;
     wasmtime_wasi::bindings::cli::stdin::add_to_linker_get_host(&mut linker, get)?;
     wasmtime_wasi::bindings::cli::stdout::add_to_linker_get_host(&mut linker, get)?;
@@ -58,7 +69,11 @@ where
     wasmtime_wasi::bindings::random::insecure_seed::add_to_linker_get_host(&mut linker, get)?;
     wasmtime_wasi::bindings::sockets::instance_network::add_to_linker_get_host(&mut linker, get)?;
     wasmtime_wasi::bindings::sockets::ip_name_lookup::add_to_linker_get_host(&mut linker, get)?;
-    wasmtime_wasi::bindings::sockets::network::add_to_linker_get_host(&mut linker, get)?;
+    wasmtime_wasi::bindings::sockets::network::add_to_linker_get_host(
+        &mut linker,
+        &network_link_options,
+        get,
+    )?;
     wasmtime_wasi::bindings::sockets::tcp::add_to_linker_get_host(&mut linker, get)?;
     wasmtime_wasi::bindings::sockets::tcp_create_socket::add_to_linker_get_host(&mut linker, get)?;
     wasmtime_wasi::bindings::sockets::udp::add_to_linker_get_host(&mut linker, get)?;

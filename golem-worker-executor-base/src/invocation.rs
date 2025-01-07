@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -94,22 +94,53 @@ pub async fn invoke_worker<Ctx: WorkerCtx>(
     }
 }
 
+/// Returns the first function from the given list that is available on the instance
+///
+/// This can be used to find an exported function when multiple versions of an interface
+/// is supported, such as for the load-snapshot/save-snapshot interfaces.
+///
+/// This function should not be used on the hot path.
+pub fn find_first_available_function<Ctx: WorkerCtx>(
+    store: &mut impl AsContextMut<Data = Ctx>,
+    instance: &wasmtime::component::Instance,
+    names: Vec<String>,
+) -> Option<String> {
+    let mut store = store.as_context_mut();
+    for name in names {
+        let parsed = ParsedFunctionName::parse(&name).ok()?;
+        if find_function(&mut store, instance, &parsed)
+            .ok()
+            .flatten()
+            .is_some()
+        {
+            return Some(name);
+        }
+    }
+    None
+}
+
 fn find_function<'a, Ctx: WorkerCtx>(
-    store: &mut StoreContextMut<'a, Ctx>,
+    mut store: &mut StoreContextMut<'a, Ctx>,
     instance: &'a wasmtime::component::Instance,
     parsed_function_name: &ParsedFunctionName,
 ) -> Result<Option<Func>, GolemError> {
     match &parsed_function_name.site().interface_name() {
         Some(interface_name) => {
-            let mut exports = instance.exports(store);
-            let mut exported_instance =
-                exports
-                    .instance(interface_name)
-                    .ok_or(GolemError::invalid_request(format!(
-                        "could not load exports for interface {}",
-                        interface_name
-                    )))?;
-            match exported_instance.func(&parsed_function_name.function().function_name()) {
+            let exported_instance_idx = instance
+                .get_export(&mut store, None, interface_name)
+                .ok_or(GolemError::invalid_request(format!(
+                    "could not load exports for interface {}",
+                    interface_name
+                )))?;
+            let func = instance
+                .get_export(
+                    &mut store,
+                    Some(&exported_instance_idx),
+                    &parsed_function_name.function().function_name(),
+                )
+                .and_then(|idx| instance.get_func(&mut store, idx));
+
+            match func {
                 Some(func) => Ok(Some(func)),
                 None => {
                     if matches!(
@@ -125,8 +156,13 @@ fn find_function<'a, Ctx: WorkerCtx>(
                                 &parsed_function_name.function().function_name(),
                                 interface_name
                             ))),
-                            Some(parsed_static) => exported_instance
-                                .func(&parsed_static.function().function_name())
+                            Some(parsed_static) => instance
+                                .get_export(
+                                    &mut store,
+                                    Some(&exported_instance_idx),
+                                    &parsed_static.function().function_name(),
+                                )
+                                .and_then(|idx| instance.get_func(&mut store, idx))
                                 .ok_or(GolemError::invalid_request(format!(
                                     "could not load function {} or {} for interface {}",
                                     &parsed_function_name.function().function_name(),
@@ -140,7 +176,7 @@ fn find_function<'a, Ctx: WorkerCtx>(
             }
         }
         None => instance
-            .get_func(store, &parsed_function_name.function().function_name())
+            .get_func(store, parsed_function_name.function().function_name())
             .ok_or(GolemError::invalid_request(format!(
                 "could not load function {}",
                 &parsed_function_name.function().function_name()
@@ -260,7 +296,7 @@ async fn get_or_create_indexed_resource<'a, Ctx: WorkerCtx>(
             Ok(InvokeResult::from_success(
                 0,
                 vec![Value::Handle {
-                    uri: store.data().self_uri(),
+                    uri: store.data().self_uri().value,
                     resource_id: resource_id.0,
                 }],
             ))
@@ -277,6 +313,11 @@ async fn get_or_create_indexed_resource<'a, Ctx: WorkerCtx>(
                 .ok_or(GolemError::invalid_request(
                     "Could not extract resource constructor parameters from function name",
                 ))?;
+
+            let constructor_params: Vec<Value> = constructor_params
+                .into_iter()
+                .map(|vnt| vnt.value)
+                .collect();
 
             debug!("Creating new indexed resource with parameters {constructor_params:?}");
 
@@ -382,13 +423,13 @@ async fn drop_resource<Ctx: WorkerCtx>(
 
     let resource_id = match function_input.first() {
         Some(Value::Handle { uri, resource_id }) => {
-            if uri == &self_uri {
+            if uri == &self_uri.value {
                 Ok(*resource_id)
             } else {
                 Err(GolemError::ValueMismatch {
                     details: format!(
                         "trying to drop handle for on wrong worker ({} vs {}) {}",
-                        uri.value, self_uri.value, raw_function_name
+                        uri, self_uri.value, raw_function_name
                     ),
                 })
             }

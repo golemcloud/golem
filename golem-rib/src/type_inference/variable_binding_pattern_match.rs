@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -259,6 +259,7 @@ mod pattern_match_bindings {
 
     mod expectations {
         use crate::{ArmPattern, Expr, InferredType, MatchArm, MatchIdentifier, VariableId};
+        use bigdecimal::BigDecimal;
 
         pub(crate) fn expected_match(index: usize) -> Expr {
             Expr::PatternMatch(
@@ -291,7 +292,7 @@ mod pattern_match_bindings {
                     },
                     MatchArm {
                         arm_pattern: ArmPattern::constructor("none", vec![]),
-                        arm_resolution_expr: Box::new(Expr::untyped_number(0f64)),
+                        arm_resolution_expr: Box::new(Expr::untyped_number(BigDecimal::from(0))),
                     },
                 ],
                 InferredType::Unknown,
@@ -299,7 +300,7 @@ mod pattern_match_bindings {
         }
 
         pub(crate) fn expected_match_with_let_binding(index: usize) -> Expr {
-            let let_binding = Expr::let_binding("x", Expr::untyped_number(1f64));
+            let let_binding = Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1)));
             let identifier_expr =
                 Expr::Identifier(VariableId::Global("x".to_string()), InferredType::Unknown);
             let block = Expr::ExprBlock(vec![let_binding, identifier_expr], InferredType::Unknown);
@@ -322,7 +323,7 @@ mod pattern_match_bindings {
                     },
                     MatchArm {
                         arm_pattern: ArmPattern::constructor("none", vec![]),
-                        arm_resolution_expr: Box::new(Expr::untyped_number(0f64)),
+                        arm_resolution_expr: Box::new(Expr::untyped_number(BigDecimal::from(0))),
                     },
                 ],
                 InferredType::Unknown,
@@ -388,7 +389,9 @@ mod pattern_match_bindings {
                                 },
                                 MatchArm {
                                     arm_pattern: ArmPattern::constructor("none", vec![]),
-                                    arm_resolution_expr: Box::new(Expr::untyped_number(0f64)),
+                                    arm_resolution_expr: Box::new(Expr::untyped_number(
+                                        BigDecimal::from(0),
+                                    )),
                                 },
                             ],
                             InferredType::Unknown,
@@ -405,7 +408,7 @@ mod pattern_match_bindings {
                                 InferredType::Unknown,
                             ))],
                         ),
-                        arm_resolution_expr: Box::new(Expr::untyped_number(0f64)),
+                        arm_resolution_expr: Box::new(Expr::untyped_number(BigDecimal::from(0))),
                     },
                 ],
                 InferredType::Unknown,

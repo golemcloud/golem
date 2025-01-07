@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -416,7 +416,7 @@ impl EnvBasedTestDependencies {
         let redis = Self::make_redis(config.clone()).await;
         {
             let mut connection = redis.get_connection(0);
-            redis::cmd("FLUSHALL").execute(&mut connection);
+            redis::cmd("FLUSHALL").exec(&mut connection).unwrap();
         }
 
         let rdb_and_component_service_join = {

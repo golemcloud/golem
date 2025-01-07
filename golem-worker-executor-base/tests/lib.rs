@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -56,10 +56,13 @@ pub mod keyvalue;
 pub mod measure_test_component_mem;
 pub mod observability;
 pub mod rust_rpc;
+pub mod rust_rpc_stubless;
 pub mod scalability;
 pub mod transactions;
 pub mod ts_rpc1;
+pub mod ts_rpc1_stubless;
 pub mod ts_rpc2;
+pub mod ts_rpc2_stubless;
 pub mod wasi;
 
 test_r::enable!();
@@ -76,14 +79,17 @@ tag_suite!(wasi, group3);
 tag_suite!(scalability, group4);
 tag_suite!(hot_update, group4);
 tag_suite!(rust_rpc, group4);
+tag_suite!(rust_rpc_stubless, group4);
 
 tag_suite!(guest_languages2, group5);
 
 tag_suite!(ts_rpc1, group6);
+tag_suite!(ts_rpc1_stubless, group6);
 
 tag_suite!(guest_languages3, group7);
 
 tag_suite!(ts_rpc2, group8);
+tag_suite!(ts_rpc2_stubless, group8);
 
 #[derive(Clone)]
 pub struct WorkerExecutorPerTestDependencies {

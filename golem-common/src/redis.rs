@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -191,6 +191,20 @@ impl<'a> RedisLabelledApi<'a> {
             start,
             "EXISTS",
             self.pool.exists(self.prefixed_key(key)).await,
+        )
+    }
+
+    pub async fn expire<R, K>(&self, key: K, seconds: i64) -> RedisResult<R>
+    where
+        R: FromRedis,
+        K: Into<RedisKey> + Send + AsRef<str>,
+    {
+        self.ensure_connected().await?;
+        let start = Instant::now();
+        self.record(
+            start,
+            "EXPIRE",
+            self.pool.expire(self.prefixed_key(key), seconds).await,
         )
     }
 

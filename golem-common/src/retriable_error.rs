@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use tonic::{Code, Status};
-
 pub trait IsRetriableError {
     /// Returns true if the error is retriable.
     fn is_retriable(&self) -> bool;
@@ -26,8 +24,11 @@ pub trait IsRetriableError {
     fn as_loggable(&self) -> Option<String>;
 }
 
-impl IsRetriableError for Status {
+#[cfg(feature = "protobuf")]
+impl IsRetriableError for tonic::Status {
     fn is_retriable(&self) -> bool {
+        use tonic::Code;
+
         match self.code() {
             Code::Ok
             | Code::Cancelled

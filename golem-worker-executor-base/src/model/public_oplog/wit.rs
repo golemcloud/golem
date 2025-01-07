@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::model::public_oplog::{PublicOplogEntry, PublicUpdateDescription};
-use crate::preview2::golem::api1_1_0_rc1::oplog;
+use crate::preview2::golem::api1_1_0::oplog;
 use crate::preview2::wasi::clocks::wall_clock::Datetime;
 use golem_common::model::public_oplog::{
     ActivatePluginParameters, ChangeRetryPolicyParameters, CreateParameters,

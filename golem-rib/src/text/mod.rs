@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -72,6 +72,7 @@ mod interpolation_tests {
 
 #[cfg(test)]
 mod record_tests {
+    use bigdecimal::BigDecimal;
     use test_r::test;
 
     use crate::expr::*;
@@ -114,8 +115,14 @@ mod record_tests {
     #[test]
     fn test_round_trip_read_write_record_of_number() {
         let input_expr = Expr::record(vec![
-            ("field".to_string(), Expr::untyped_number(1f64)),
-            ("field".to_string(), Expr::untyped_number(2f64)),
+            (
+                "field".to_string(),
+                Expr::untyped_number(BigDecimal::from(1)),
+            ),
+            (
+                "field".to_string(),
+                Expr::untyped_number(BigDecimal::from(2)),
+            ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "{field: 1, field: 2}".to_string();
@@ -293,11 +300,17 @@ mod record_tests {
         let input_expr = Expr::record(vec![
             (
                 "a".to_string(),
-                Expr::greater_than(Expr::untyped_number(1f64), Expr::untyped_number(2f64)),
+                Expr::greater_than(
+                    Expr::untyped_number(BigDecimal::from(1)),
+                    Expr::untyped_number(BigDecimal::from(2)),
+                ),
             ),
             (
                 "b".to_string(),
-                Expr::less_than(Expr::untyped_number(1f64), Expr::untyped_number(2f64)),
+                Expr::less_than(
+                    Expr::untyped_number(BigDecimal::from(1)),
+                    Expr::untyped_number(BigDecimal::from(2)),
+                ),
             ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
@@ -445,6 +458,7 @@ mod record_tests {
 
 #[cfg(test)]
 mod sequence_tests {
+    use bigdecimal::BigDecimal;
     use test_r::test;
 
     use crate::expr::Expr;
@@ -599,8 +613,14 @@ mod sequence_tests {
     #[test]
     fn test_round_trip_read_write_sequence_of_math_op() {
         let input_expr = Expr::sequence(vec![
-            Expr::greater_than(Expr::untyped_number(1f64), Expr::untyped_number(2f64)),
-            Expr::less_than(Expr::untyped_number(1f64), Expr::untyped_number(2f64)),
+            Expr::greater_than(
+                Expr::untyped_number(BigDecimal::from(1)),
+                Expr::untyped_number(BigDecimal::from(2)),
+            ),
+            Expr::less_than(
+                Expr::untyped_number(BigDecimal::from(1)),
+                Expr::untyped_number(BigDecimal::from(2)),
+            ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "[1 > 2, 1 < 2]".to_string();
@@ -716,6 +736,7 @@ mod sequence_tests {
 
 #[cfg(test)]
 mod tuple_tests {
+    use bigdecimal::BigDecimal;
     use test_r::test;
 
     use crate::expr::Expr;
@@ -855,8 +876,14 @@ mod tuple_tests {
     #[test]
     fn test_round_trip_read_write_tuple_of_math_op() {
         let input_expr = Expr::tuple(vec![
-            Expr::greater_than(Expr::untyped_number(1f64), Expr::untyped_number(2f64)),
-            Expr::less_than(Expr::untyped_number(1f64), Expr::untyped_number(2f64)),
+            Expr::greater_than(
+                Expr::untyped_number(BigDecimal::from(1)),
+                Expr::untyped_number(BigDecimal::from(2)),
+            ),
+            Expr::less_than(
+                Expr::untyped_number(BigDecimal::from(1)),
+                Expr::untyped_number(BigDecimal::from(2)),
+            ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "(1 > 2, 1 < 2)".to_string();
@@ -879,6 +906,8 @@ mod tuple_tests {
 
 #[cfg(test)]
 mod simple_values_test {
+    use bigdecimal::BigDecimal;
+    use std::str::FromStr;
     use test_r::test;
 
     use crate::expr::Expr;
@@ -904,7 +933,7 @@ mod simple_values_test {
 
     #[test]
     fn test_round_trip_read_write_number_float() {
-        let input_expr = Expr::untyped_number(1.1);
+        let input_expr = Expr::untyped_number(BigDecimal::from_str("1.1").unwrap());
         let expr_str = to_string(&input_expr).unwrap();
         let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!(input_expr, output_expr);
@@ -912,7 +941,7 @@ mod simple_values_test {
 
     #[test]
     fn test_round_trip_read_write_number_u64() {
-        let input_expr = Expr::untyped_number(1f64);
+        let input_expr = Expr::untyped_number(BigDecimal::from(1));
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "1".to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
@@ -921,7 +950,7 @@ mod simple_values_test {
 
     #[test]
     fn test_round_trip_read_write_number_i64() {
-        let input_expr = Expr::untyped_number(-1f64);
+        let input_expr = Expr::untyped_number(BigDecimal::from(-1));
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "-1".to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
@@ -958,6 +987,7 @@ mod simple_values_test {
 
 #[cfg(test)]
 mod let_tests {
+    use bigdecimal::BigDecimal;
     use test_r::test;
 
     use crate::expr::Expr;
@@ -994,7 +1024,7 @@ mod let_tests {
             ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
-        let expected_str = "let x: str = \"hello\";\nlet y: str = \"bar\"".to_string();
+        let expected_str = "let x: string = \"hello\";\nlet y: string = \"bar\"".to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
@@ -1005,13 +1035,13 @@ mod let_tests {
             Expr::Let(
                 VariableId::global("x".to_string()),
                 Some(TypeName::U8),
-                Box::new(Expr::untyped_number(1f64)),
+                Box::new(Expr::untyped_number(BigDecimal::from(1))),
                 InferredType::Unknown,
             ),
             Expr::Let(
                 VariableId::global("y".to_string()),
                 Some(TypeName::U8),
-                Box::new(Expr::untyped_number(2f64)),
+                Box::new(Expr::untyped_number(BigDecimal::from(2))),
                 InferredType::Unknown,
             ),
         ]);
@@ -1027,13 +1057,13 @@ mod let_tests {
             Expr::Let(
                 VariableId::global("x".to_string()),
                 Some(TypeName::U16),
-                Box::new(Expr::untyped_number(1f64)),
+                Box::new(Expr::untyped_number(BigDecimal::from(1))),
                 InferredType::Unknown,
             ),
             Expr::Let(
                 VariableId::global("y".to_string()),
                 Some(TypeName::U16),
-                Box::new(Expr::untyped_number(2f64)),
+                Box::new(Expr::untyped_number(BigDecimal::from(2))),
                 InferredType::Unknown,
             ),
         ]);
@@ -1049,13 +1079,13 @@ mod let_tests {
             Expr::Let(
                 VariableId::global("x".to_string()),
                 Some(TypeName::U32),
-                Box::new(Expr::untyped_number(1f64)),
+                Box::new(Expr::untyped_number(BigDecimal::from(1))),
                 InferredType::Unknown,
             ),
             Expr::Let(
                 VariableId::global("y".to_string()),
                 Some(TypeName::U32),
-                Box::new(Expr::untyped_number(2f64)),
+                Box::new(Expr::untyped_number(BigDecimal::from(2))),
                 InferredType::Unknown,
             ),
         ]);
@@ -1089,7 +1119,8 @@ mod let_tests {
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str =
-            "let x: option<str> = some(\"foo\");\nlet y: option<str> = some(\"bar\")".to_string();
+            "let x: option<string> = some(\"foo\");\nlet y: option<string> = some(\"bar\")"
+                .to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
@@ -1118,7 +1149,7 @@ mod let_tests {
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str =
-            "let x: list<str> = [\"foo\"];\nlet y: list<str> = [\"bar\"]".to_string();
+            "let x: list<string> = [\"foo\"];\nlet y: list<string> = [\"bar\"]".to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
@@ -1147,7 +1178,7 @@ mod let_tests {
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str =
-            "let x: tuple<str> = (\"foo\");\nlet y: tuple<str> = (\"bar\")".to_string();
+            "let x: tuple<string> = (\"foo\");\nlet y: tuple<string> = (\"bar\")".to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
@@ -1238,6 +1269,8 @@ mod flag_tests {
 
 #[cfg(test)]
 mod match_tests {
+    use bigdecimal::BigDecimal;
+    use std::str::FromStr;
     use test_r::test;
 
     use crate::expr::ArmPattern;
@@ -1411,20 +1444,26 @@ mod match_tests {
                         "ok",
                         vec![ArmPattern::literal(Expr::identifier("foo"))],
                     ),
-                    Expr::greater_than(Expr::untyped_number(1.0), Expr::untyped_number(2.0)),
+                    Expr::greater_than(
+                        Expr::untyped_number(BigDecimal::from_str("1.1").unwrap()),
+                        Expr::untyped_number(BigDecimal::from(2)),
+                    ),
                 ),
                 MatchArm::new(
                     ArmPattern::constructor(
                         "err",
                         vec![ArmPattern::literal(Expr::identifier("msg"))],
                     ),
-                    Expr::less_than(Expr::untyped_number(1.0), Expr::untyped_number(2.0)),
+                    Expr::less_than(
+                        Expr::untyped_number(BigDecimal::from(1)),
+                        Expr::untyped_number(BigDecimal::from(2)),
+                    ),
                 ),
             ],
         );
 
         let expr_str = to_string(&input_expr).unwrap();
-        let expected_str = "match request {  ok(foo) => 1 > 2, err(msg) => 1 < 2 } ".to_string();
+        let expected_str = "match request {  ok(foo) => 1.1 > 2, err(msg) => 1 < 2 } ".to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
@@ -1663,6 +1702,7 @@ mod match_tests {
 
 #[cfg(test)]
 mod if_cond_tests {
+    use bigdecimal::BigDecimal;
     use test_r::test;
 
     use crate::expr::Expr;
@@ -1776,7 +1816,7 @@ mod if_cond_tests {
         let input_expr = Expr::cond(
             Expr::equal_to(
                 Expr::select_field(Expr::identifier("worker"), "response"),
-                Expr::untyped_number(1f64),
+                Expr::untyped_number(BigDecimal::from(1)),
             ),
             Expr::flags(vec!["flag1".to_string(), "flag2".to_string()]),
             Expr::literal("failed"),

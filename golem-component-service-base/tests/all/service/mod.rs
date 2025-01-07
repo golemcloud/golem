@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -45,7 +45,7 @@ use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use golem_service_base::storage::blob::BlobStorage;
 use golem_wasm_ast::analysis::analysed_type::{str, u64};
 use rib::RegistryKey;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -148,6 +148,7 @@ async fn test_services(
             get_component_data("shopping-cart"),
             None,
             vec![],
+            HashMap::new(),
             &DefaultComponentOwner,
         )
         .await
@@ -161,6 +162,7 @@ async fn test_services(
             get_component_data("rust-echo"),
             None,
             vec![],
+            HashMap::new(),
             &DefaultComponentOwner,
         )
         .await
@@ -246,6 +248,7 @@ async fn test_services(
             get_component_data("shopping-cart"),
             None,
             None,
+            HashMap::new(),
             &DefaultComponentOwner,
         )
         .await
@@ -433,6 +436,7 @@ async fn test_initial_component_file_upload(
                 }],
             }),
             vec![],
+            HashMap::new(),
             &DefaultComponentOwner,
         )
         .await
@@ -486,6 +490,7 @@ async fn test_initial_component_file_data_sharing(
                 files: vec![],
             }),
             vec![],
+            HashMap::new(),
             &DefaultComponentOwner,
         )
         .await
@@ -506,6 +511,7 @@ async fn test_initial_component_file_data_sharing(
                     permissions: ComponentFilePermissions::ReadWrite,
                 }],
             }),
+            HashMap::new(),
             &DefaultComponentOwner,
         )
         .await
@@ -544,6 +550,7 @@ async fn test_component_constraint_incompatible_updates(
             get_component_data("shopping-cart"),
             None,
             vec![],
+            HashMap::new(),
             &DefaultComponentOwner,
         )
         .await
@@ -576,6 +583,7 @@ async fn test_component_constraint_incompatible_updates(
             get_component_data("shopping-cart"),
             None,
             None,
+            HashMap::new(),
             &DefaultComponentOwner,
         )
         .await

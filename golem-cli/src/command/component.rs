@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::command::ComponentRefSplit;
-use crate::model::application_manifest::load_app;
+use crate::model::app_ext::GolemComponentExtensions;
 use crate::model::text::component::ComponentAddView;
 use crate::model::{
     ComponentName, Format, GolemError, GolemResult, PathBufOrStdin, WorkerUpdateMode,
@@ -23,10 +23,16 @@ use crate::service::component::ComponentService;
 use crate::service::deploy::DeployService;
 use crate::service::project::ProjectResolver;
 use clap::Subcommand;
-use golem_client::model::ComponentType;
+use golem_client::model::{
+    ComponentType, DynamicLinkedInstance, DynamicLinkedWasmRpc, DynamicLinking,
+};
 use golem_common::model::PluginInstallationId;
-use golem_wasm_rpc_stubgen::commands::declarative::ApplicationResolveMode;
-use std::collections::HashMap;
+use golem_wasm_rpc_stubgen::commands::app::{ApplicationContext, ApplicationSourceMode, Config};
+use golem_wasm_rpc_stubgen::log::Output;
+use golem_wasm_rpc_stubgen::model::app;
+use itertools::Itertools;
+use std::collections::{HashMap, HashSet};
+use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -69,8 +75,17 @@ pub enum ComponentSubCommand<ProjectRef: clap::Args, ComponentRef: clap::Args> {
         /// Conflicts with `component_file` flag.
         /// Conflicts with `ephemeral` flag.
         /// Conflicts with `durable` flag.
-        #[arg(long, short, conflicts_with_all = vec!["component_file", "component-type-flag"], verbatim_doc_comment)]
+        #[arg(
+            long,
+            short,
+            conflicts_with_all = vec!["component_file", "component-type-flag"],
+            verbatim_doc_comment
+        )]
         app: Vec<PathBuf>,
+
+        /// Select build profile, only effective when application manifest is used
+        #[arg(long, short)]
+        build_profile: Option<String>,
 
         /// Do not ask for confirmation for performing an update in case the component already exists
         #[arg(short = 'y', long)]
@@ -85,7 +100,8 @@ pub enum ComponentSubCommand<ProjectRef: clap::Args, ComponentRef: clap::Args> {
         /// The WASM file to be used as a new version of the Golem component
         ///
         /// Conflics with `app` flag.
-        #[arg(value_name = "component-file", value_hint = clap::ValueHint::FilePath, verbatim_doc_comment)]
+        #[arg(value_name = "component-file", value_hint = clap::ValueHint::FilePath, verbatim_doc_comment
+        )]
         component_file: Option<PathBufOrStdin>, // TODO: validate exists
 
         /// The component to update
@@ -107,6 +123,10 @@ pub enum ComponentSubCommand<ProjectRef: clap::Args, ComponentRef: clap::Args> {
         /// Conflicts with `durable` flag.
         #[arg(long, short)]
         app: Vec<PathBuf>,
+
+        /// Select build profile, only effective when application manifest is used
+        #[arg(long, short)]
+        build_profile: Option<String>,
 
         /// Try to automatically update all existing workers to the new version
         #[arg(long, default_value_t = false)]
@@ -276,6 +296,7 @@ impl<
                 component_file: Some(component_file),
                 component_type,
                 app: _,
+                build_profile: _,
                 non_interactive,
             } => {
                 let project_id = projects.resolve_id_or_default(project_ref).await?;
@@ -288,6 +309,7 @@ impl<
                         non_interactive,
                         format,
                         vec![],
+                        None,
                     )
                     .await?;
                 Ok(GolemResult::Ok(Box::new(ComponentAddView(
@@ -300,40 +322,28 @@ impl<
                 component_file: None,
                 component_type: _,
                 app,
+                build_profile,
                 non_interactive,
             } => {
                 let project_id = projects.resolve_id_or_default(project_ref).await?;
 
-                let app_resolve_mode = if app.is_empty() {
-                    ApplicationResolveMode::Automatic
-                } else {
-                    ApplicationResolveMode::Explicit(app)
-                };
+                let mut ctx = ApplicationComponentContext::new(
+                    app,
+                    build_profile.map(|profile| profile.into()),
+                    &component_name.0,
+                )?;
 
-                let app = load_app(&app_resolve_mode)?;
-
-                let component =
-                    if let Some(component) = app.wasm_components_by_name.get(&component_name.0) {
-                        component
-                    } else {
-                        return Err(GolemError(format!(
-                            "Component {} not found in the app manifest",
-                            component_name
-                        )));
-                    };
-
-                let component_file =
-                    PathBufOrStdin::Path(app.component_output_wasm(&component_name.0));
-
+                let dynamic_linking = ctx.dynamic_linking()?;
                 let component = service
                     .add(
                         component_name,
-                        component_file,
-                        component.component_type,
+                        PathBufOrStdin::Path(ctx.linked_wasm),
+                        ctx.extensions.component_type,
                         Some(project_id),
                         non_interactive,
                         format,
-                        component.files.clone(),
+                        ctx.extensions.files,
+                        dynamic_linking,
                     )
                     .await?;
                 Ok(GolemResult::Ok(Box::new(ComponentAddView(
@@ -345,6 +355,7 @@ impl<
                 component_file: Some(component_file),
                 component_type,
                 app: _,
+                build_profile: _,
                 try_update_workers,
                 update_mode,
                 non_interactive,
@@ -360,6 +371,7 @@ impl<
                         non_interactive,
                         format,
                         vec![],
+                        None,
                     )
                     .await?;
 
@@ -377,6 +389,7 @@ impl<
                 component_file: None,
                 component_type: _,
                 app,
+                build_profile,
                 try_update_workers,
                 update_mode,
             } => {
@@ -388,36 +401,23 @@ impl<
 
                 let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
 
-                let app_resolve_mode = if app.is_empty() {
-                    ApplicationResolveMode::Automatic
-                } else {
-                    ApplicationResolveMode::Explicit(app)
-                };
+                let mut ctx = ApplicationComponentContext::new(
+                    app,
+                    build_profile.map(|profile| profile.into()),
+                    &component_name,
+                )?;
 
-                let app = load_app(&app_resolve_mode)?;
-
-                let component =
-                    if let Some(component) = app.wasm_components_by_name.get(&component_name) {
-                        component
-                    } else {
-                        return Err(GolemError(format!(
-                            "Component {} not found in the app manifest",
-                            component_name
-                        )));
-                    };
-
-                let component_file =
-                    PathBufOrStdin::Path(app.component_output_wasm(&component_name));
-
+                let dynamic_linking = ctx.dynamic_linking()?;
                 let mut result = service
                     .update(
                         component_name_or_uri.clone(),
-                        component_file,
-                        Some(component.component_type),
+                        PathBufOrStdin::Path(ctx.linked_wasm),
+                        Some(ctx.extensions.component_type),
                         project_id.clone(),
                         non_interactive,
                         format,
-                        component.files.clone(),
+                        ctx.extensions.files,
+                        dynamic_linking,
                     )
                     .await?;
 
@@ -506,6 +506,109 @@ impl<
                     .uninstall_plugin(component_name_or_uri, project_id, &installation_id)
                     .await
             }
+        }
+    }
+}
+
+fn app_ctx(
+    sources: Vec<PathBuf>,
+    build_profile: Option<app::ProfileName>,
+) -> Result<ApplicationContext<GolemComponentExtensions>, GolemError> {
+    Ok(ApplicationContext::new(Config {
+        app_resolve_mode: {
+            if sources.is_empty() {
+                ApplicationSourceMode::Automatic
+            } else {
+                ApplicationSourceMode::Explicit(sources)
+            }
+        },
+        skip_up_to_date_checks: false,
+        profile: build_profile,
+        offline: false,
+        extensions: PhantomData::<GolemComponentExtensions>,
+        log_output: Output::None,
+        steps_filter: HashSet::new(),
+    })?)
+}
+
+struct ApplicationComponentContext {
+    #[allow(dead_code)]
+    build_profile: Option<app::ProfileName>,
+    #[allow(dead_code)]
+    app_ctx: ApplicationContext<GolemComponentExtensions>,
+    #[allow(dead_code)]
+    name: app::ComponentName,
+    linked_wasm: PathBuf,
+    extensions: GolemComponentExtensions,
+}
+
+impl ApplicationComponentContext {
+    fn new(
+        sources: Vec<PathBuf>,
+        build_profile: Option<app::ProfileName>,
+        component_name: &str,
+    ) -> Result<Self, GolemError> {
+        let app_ctx = app_ctx(sources, build_profile.clone())?;
+        let name = app::ComponentName::from(component_name.to_string());
+
+        if !app_ctx.application.component_names().contains(&name) {
+            return Err(GolemError(format!(
+                "Component {} not found in application manifest",
+                name
+            )));
+        }
+
+        let linked_wasm = app_ctx
+            .application
+            .component_linked_wasm(&name, build_profile.as_ref());
+
+        let component_properties = app_ctx
+            .application
+            .component_properties(&name, build_profile.as_ref());
+        let extensions = component_properties.extensions.as_ref().unwrap().clone();
+
+        Ok(ApplicationComponentContext {
+            build_profile,
+            app_ctx,
+            name,
+            linked_wasm,
+            extensions,
+        })
+    }
+
+    fn dynamic_linking(&mut self) -> Result<Option<DynamicLinking>, GolemError> {
+        let mut mapping = Vec::new();
+
+        let wasm_rpc_deps = self
+            .app_ctx
+            .application
+            .component_wasm_rpc_dependencies(&self.name)
+            .clone();
+
+        for wasm_rpc_dep in wasm_rpc_deps {
+            let ifaces = self
+                .app_ctx
+                .component_stub_interfaces(&wasm_rpc_dep.name)
+                .map_err(|err| GolemError(err.to_string()))?;
+
+            mapping.push(ifaces);
+        }
+
+        if mapping.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(DynamicLinking {
+                dynamic_linking: HashMap::from_iter(mapping.into_iter().map(|stub_interfaces| {
+                    (
+                        stub_interfaces.stub_interface_name,
+                        DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
+                            target_interface_name: HashMap::from_iter(
+                                stub_interfaces.exported_interfaces_per_stub_resource,
+                            ),
+                        }),
+                    )
+                })),
+            }))
         }
     }
 }

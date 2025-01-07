@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,14 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use golem_common::config::{
-    ConfigExample, ConfigLoader, HasConfigExamples, RedisConfig, RetryConfig,
-};
+use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples, RedisConfig};
+use golem_common::model::RetryConfig;
 use golem_common::tracing::TracingConfig;
 
 use crate::model::Empty;
@@ -28,10 +27,11 @@ use crate::shard_manager_config::HealthCheckMode::K8s;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ShardManagerConfig {
     pub tracing: TracingConfig,
-    pub redis: RedisConfig,
+    pub persistence: PersistenceConfig,
     pub worker_executors: WorkerExecutorServiceConfig,
     pub health_check: HealthCheckConfig,
     pub http_port: u16,
+    pub grpc_port: u16,
     pub number_of_shards: usize,
     pub rebalance_threshold: f64,
 }
@@ -40,10 +40,11 @@ impl Default for ShardManagerConfig {
     fn default() -> Self {
         Self {
             tracing: TracingConfig::local_dev("shard-manager"),
-            redis: RedisConfig::default(),
+            persistence: PersistenceConfig::default(),
             worker_executors: WorkerExecutorServiceConfig::default(),
             health_check: HealthCheckConfig::default(),
             http_port: 8081,
+            grpc_port: 9002,
             number_of_shards: 1024,
             rebalance_threshold: 0.1,
         }
@@ -122,6 +123,24 @@ impl Default for HealthCheckMode {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HealthCheckK8sConfig {
     pub namespace: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "type", content = "config")]
+pub enum PersistenceConfig {
+    Redis(RedisConfig),
+    FileSystem(FileSystemPersistenceConfig),
+}
+
+impl Default for PersistenceConfig {
+    fn default() -> Self {
+        Self::Redis(RedisConfig::default())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FileSystemPersistenceConfig {
+    pub path: PathBuf,
 }
 
 pub fn make_config_loader() -> ConfigLoader<ShardManagerConfig> {

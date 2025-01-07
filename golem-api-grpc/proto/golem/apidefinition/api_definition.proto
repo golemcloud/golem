@@ -5,6 +5,7 @@ package golem.apidefinition;
 import "golem/component/component_id.proto";
 import "golem/rib/expr.proto";
 import "golem/rib/rib_input.proto";
+import "golem/rib/rib_output.proto";
 import "golem/rib/rib_byte_code.proto";
 import "golem/rib/worker_functions_in_rib.proto";
 import "golem/component/versioned_component_id.proto";
@@ -32,6 +33,11 @@ message HttpApiDefinition {
 }
 
 // Used in api definition repo and needs to be backward compatible
+message SecuritySchemeReference {
+  string security_scheme_identifier = 1;
+}
+
+// Used in api definition repo and needs to be backward compatible
 message CompiledHttpApiDefinition {
   repeated CompiledHttpRoute routes = 1;
 }
@@ -46,6 +52,7 @@ message HttpRoute {
   HttpMethod method = 1;
   string path = 2;
   GatewayBinding binding = 3;
+  Middleware middleware = 4;
 }
 
 // Used in api definition repo and needs to be backward compatible
@@ -53,6 +60,7 @@ message CompiledHttpRoute {
    HttpMethod method = 1;
    string path = 2;
    CompiledGatewayBinding binding = 3;
+   Middleware middleware = 4;
 }
 
 // Used in api definition repo and needs to be backward compatible
@@ -79,7 +87,6 @@ message GatewayBinding {
   // type discriminator to keep backward compatibility
   optional GatewayBindingType binding_type = 5;
   optional StaticBinding static_binding = 6;
-  optional Middleware middleware = 7;
 }
 
 // Used in api definition repo and needs to be backward compatible
@@ -99,8 +106,11 @@ message CompiledGatewayBinding {
     // type discriminator to keep backward compatibility
     optional GatewayBindingType binding_type = 12;
     optional StaticBinding static_binding = 13;
-    // middleware
-    optional Middleware middleware = 14;
+    optional golem.rib.RibOutputType response_rib_output = 14;
+}
+
+message SecuritySchemaReference {
+    string security_scheme_identifier = 1;
 }
 
 // Used in api definition repo and needs to be backward compatible
@@ -108,18 +118,25 @@ enum GatewayBindingType {
   DEFAULT = 0;
   FILE_SERVER = 1;
   CORS_PREFLIGHT = 2;
+  AUTH_CALL_BACK = 3;
 }
 
 // Used in api definition repo and needs to be backward compatible
 message Middleware {
   optional CorsPreflight cors = 1;
+  optional SecurityWithProviderMetadata http_authentication = 2;
 }
 
 // Used in api definition repo and needs to be backward compatible
 message StaticBinding {
   oneof static_binding {
     CorsPreflight http_cors_preflight = 1;
+    AuthCallBack auth_callback = 2;
   }
+}
+
+message AuthCallBack {
+  SecurityWithProviderMetadata security_with_provider_metadata = 1;
 }
 
 // Used in api definition repo and needs to be backward compatible
@@ -130,4 +147,36 @@ message CorsPreflight {
   optional string expose_headers = 4;
   optional uint64 max_age = 5;
   optional bool allow_credentials = 6;
+}
+
+message SecurityWithProviderMetadata {
+  SecurityScheme security_scheme = 1;
+  IdentityProviderMetadata identity_provider_metadata = 2;
+}
+
+message SecurityScheme {
+  Provider provider = 1;
+  string scheme_identifier = 2;
+  string client_id = 3;
+  string client_secret = 4;
+  string redirect_url = 5;
+  repeated string scopes = 6;
+}
+
+message Provider {
+  oneof provider {
+    Google google = 1;
+    Facebook facebook = 2;
+    Microsoft microsoft = 3;
+    Gitlab gitlab = 4;
+  }
+}
+
+message Google{}
+message Facebook{}
+message Microsoft{}
+message Gitlab{}
+
+message IdentityProviderMetadata {
+  string metadata = 1;
 }

@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,6 +24,11 @@ use std::time::{Duration, SystemTime};
 use crate::common::{start, TestContext};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::{assert, check};
+use axum::response::Response;
+use axum::routing::{get, post};
+use axum::{BoxError, Router};
+use bytes::Bytes;
+use futures_util::stream;
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
     ComponentFileSystemNodeDetails, ComponentType, IdempotencyKey, InitialComponentFile,
@@ -33,12 +38,11 @@ use golem_test_framework::dsl::{
     drain_connection, stderr_events, stdout_events, worker_error_message, TestDslUnsafe,
 };
 use golem_wasm_rpc::Value;
-use http_02::{Response, StatusCode};
+use http::{HeaderMap, StatusCode};
 use tokio::spawn;
 use tokio::time::Instant;
-use tonic::transport::Body;
+use tokio_stream::StreamExt;
 use tracing::info;
-use warp::Filter;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -61,9 +65,15 @@ async fn write_stdout(
 
     let _result = executor.invoke_and_await(&worker_id, "run", vec![]).await;
 
-    tokio::time::sleep(Duration::from_secs(2)).await;
     let mut events = vec![];
-    rx.recv_many(&mut events, 100).await;
+    let start_time = Instant::now();
+    while events.len() < 2 && start_time.elapsed() < Duration::from_secs(5) {
+        if let Some(event) = rx.recv().await {
+            events.push(event);
+        } else {
+            break;
+        }
+    }
 
     drop(executor);
 
@@ -87,9 +97,15 @@ async fn write_stderr(
 
     let _result = executor.invoke_and_await(&worker_id, "run", vec![]).await;
 
-    tokio::time::sleep(Duration::from_secs(2)).await;
     let mut events = vec![];
-    rx.recv_many(&mut events, 100).await;
+    let start_time = Instant::now();
+    while events.len() < 2 && start_time.elapsed() < Duration::from_secs(5) {
+        if let Some(event) = rx.recv().await {
+            events.push(event);
+        } else {
+            break;
+        }
+    }
 
     drop(executor);
 
@@ -524,8 +540,9 @@ async fn directories_replay(
 
     // NOTE: if the directory listing would not be stable, replay would fail with divergence error
 
-    tokio::time::sleep(Duration::from_secs(5)).await;
-    let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
+    let metadata = executor
+        .wait_for_status(&worker_id, WorkerStatus::Idle, Duration::from_secs(5))
+        .await;
 
     check!(metadata.last_known_status.status == WorkerStatus::Idle);
 
@@ -624,28 +641,23 @@ async fn http_client(
 
     let host_http_port = context.host_http_port();
     let http_server = spawn(async move {
-        let route = warp::path::end()
-            .and(warp::post())
-            .and(warp::header::<String>("X-Test"))
-            .and(warp::body::bytes())
-            .map(|header: String, body: bytes::Bytes| {
-                Response::builder()
-                    .status(StatusCode::OK)
-                    .body(Body::from(format!(
-                        "response is {} {}",
-                        header,
-                        String::from_utf8(body.to_vec()).unwrap()
-                    )))
-                    .unwrap()
-            });
+        let route = Router::new().route(
+            "/",
+            post(move |headers: HeaderMap, body: Bytes| async move {
+                let header = headers.get("X-Test").unwrap().to_str().unwrap();
+                let body = String::from_utf8(body.to_vec()).unwrap();
+                format!("response is {header} {body}")
+            }),
+        );
 
-        warp::serve(route)
-            .run(
-                format!("0.0.0.0:{}", host_http_port)
-                    .parse::<SocketAddr>()
-                    .unwrap(),
-            )
-            .await;
+        let listener = tokio::net::TcpListener::bind(
+            format!("0.0.0.0:{}", host_http_port)
+                .parse::<SocketAddr>()
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        axum::serve(listener, route).await.unwrap();
     });
 
     let component_id = executor.store_component("http-client").await;
@@ -687,32 +699,33 @@ async fn http_client_using_reqwest(
     let captured_body_clone = captured_body.clone();
     let host_http_port = context.host_http_port();
     let http_server = spawn(async move {
-        let route = warp::path("post-example")
-            .and(warp::post())
-            .and(warp::header::optional::<String>("X-Test"))
-            .and(warp::body::bytes())
-            .map(move |header: Option<String>, body: bytes::Bytes| {
-                let body_str = String::from_utf8(body.to_vec()).unwrap();
+        let route = Router::new().route(
+            "/post-example",
+            post(move |headers: HeaderMap, body: Bytes| async move {
+                let header = headers
+                    .get("X-Test")
+                    .map(|h| h.to_str().unwrap().to_string())
+                    .unwrap_or("no X-Test header".to_string());
+                let body = String::from_utf8(body.to_vec()).unwrap();
                 {
                     let mut capture = captured_body_clone.lock().unwrap();
-                    *capture = Some(body_str.clone());
+                    *capture = Some(body.clone());
                 }
-                Response::builder()
-                    .status(StatusCode::OK)
-                    .body(Body::from(format!(
-                        "{{ \"percentage\" : 0.25, \"message\": \"response message {}\" }}",
-                        header.unwrap_or("no X-Test header".to_string()),
-                    )))
-                    .unwrap()
-            });
+                format!(
+                    "{{ \"percentage\" : 0.25, \"message\": \"response message {}\" }}",
+                    header
+                )
+            }),
+        );
 
-        warp::serve(route)
-            .run(
-                format!("0.0.0.0:{}", host_http_port)
-                    .parse::<SocketAddr>()
-                    .unwrap(),
-            )
-            .await;
+        let listener = tokio::net::TcpListener::bind(
+            format!("0.0.0.0:{}", host_http_port)
+                .parse::<SocketAddr>()
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        axum::serve(listener, route).await.unwrap();
     });
 
     let component_id = executor.store_component("http-client-2").await;
@@ -812,35 +825,28 @@ async fn http_client_response_persisted_between_invocations(
 
     let http_server = spawn(async move {
         let call_count = Arc::new(AtomicU8::new(0));
-        let route = warp::path::end()
-            .and(warp::post())
-            .and(warp::header::<String>("X-Test"))
-            .and(warp::body::bytes())
-            .map(move |header: String, body: bytes::Bytes| {
+
+        let route = Router::new().route(
+            "/",
+            post(move |headers: HeaderMap, body: Bytes| async move {
+                let header = headers.get("X-Test").unwrap().to_str().unwrap();
+                let body = String::from_utf8(body.to_vec()).unwrap();
                 let old_count = call_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 match old_count {
-                    0 => Response::builder()
-                        .status(StatusCode::OK)
-                        .body(Body::from(format!(
-                            "response is {} {}",
-                            header,
-                            String::from_utf8(body.to_vec()).unwrap()
-                        )))
-                        .unwrap(),
-                    _ => Response::builder()
-                        .status(StatusCode::NOT_FOUND)
-                        .body(Body::empty())
-                        .unwrap(),
+                    0 => (StatusCode::OK, format!("response is {header} {body}")),
+                    _ => (StatusCode::NOT_FOUND, "".to_string()),
                 }
-            });
+            }),
+        );
 
-        warp::serve(route)
-            .run(
-                format!("0.0.0.0:{}", host_http_port)
-                    .parse::<SocketAddr>()
-                    .unwrap(),
-            )
-            .await;
+        let listener = tokio::net::TcpListener::bind(
+            format!("0.0.0.0:{}", host_http_port)
+                .parse::<SocketAddr>()
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        axum::serve(listener, route).await.unwrap();
     });
 
     let component_id = executor.store_component("http-client").await;
@@ -891,33 +897,34 @@ async fn http_client_interrupting_response_stream(
     let (signal_tx, mut signal_rx) = tokio::sync::mpsc::unbounded_channel();
 
     let http_server = spawn(async move {
-        let route = warp::path("big-byte-array").and(warp::get()).map(move || {
-            let (sender, body) = Body::channel();
-            let signal_tx = signal_tx.clone();
-            let _handle = spawn(async move {
-                let mut sender = sender;
-                let buf = vec![0; 1024];
-                for i in 0..100 {
-                    sender.send_data(buf.clone().into()).await.unwrap();
-                    tokio::time::sleep(Duration::from_millis(20)).await;
-                    if i == 50 {
-                        signal_tx.send(()).unwrap();
-                    }
-                }
-            });
-            Response::builder()
-                .status(StatusCode::OK)
-                .body(body)
-                .unwrap()
-        });
+        let route = Router::new().route(
+            "/big-byte-array",
+            get(move || async move {
+                let stream = stream::iter(0..100)
+                    .throttle(Duration::from_millis(20))
+                    .map(move |i| {
+                        if i == 50 {
+                            signal_tx.send(()).unwrap();
+                        }
+                        Ok::<Bytes, BoxError>(Bytes::from(vec![0; 1024]))
+                    });
 
-        warp::serve(route)
-            .run(
-                format!("0.0.0.0:{}", host_http_port)
-                    .parse::<SocketAddr>()
-                    .unwrap(),
-            )
-            .await;
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header("Content-Type", "application/octet-stream")
+                    .body(axum::body::Body::from_stream(stream))
+                    .unwrap()
+            }),
+        );
+
+        let listener = tokio::net::TcpListener::bind(
+            format!("0.0.0.0:{}", host_http_port)
+                .parse::<SocketAddr>()
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        axum::serve(listener, route).await.unwrap();
     });
 
     let component_id = executor.store_component("http-client-2").await;
@@ -953,7 +960,9 @@ async fn http_client_interrupting_response_stream(
 
     executor.resume(&worker_id).await;
 
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    executor
+        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(5))
+        .await;
     executor.log_output(&worker_id).await;
 
     let result = executor

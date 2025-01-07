@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use golem_common::model::Empty;
+use http::Uri;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -66,8 +67,8 @@ pub struct ComponentCompilationEnabledConfig {
 }
 
 impl ComponentCompilationEnabledConfig {
-    pub fn uri(&self) -> http_02::Uri {
-        http_02::Uri::builder()
+    pub fn uri(&self) -> Uri {
+        Uri::builder()
             .scheme("http")
             .authority(format!("{}:{}", self.host, self.port).as_str())
             .path_and_query("/")

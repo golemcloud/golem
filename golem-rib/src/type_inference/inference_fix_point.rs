@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -195,6 +195,7 @@ mod internal {
 
 #[cfg(test)]
 mod tests {
+    use bigdecimal::BigDecimal;
     use test_r::test;
 
     use crate::parser::type_name::TypeName;
@@ -395,7 +396,9 @@ mod tests {
                     VariableId::local("x", 0),
                     Some(TypeName::U64),
                     Box::new(Expr::Number(
-                        Number { value: 1f64 },
+                        Number {
+                            value: BigDecimal::from(1),
+                        },
                         None,
                         InferredType::U64,
                     )),

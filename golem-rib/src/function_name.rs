@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,29 +16,11 @@ use crate::Expr;
 use bincode::{BorrowDecode, Decode, Encode};
 use combine::stream::easy;
 use combine::EasyParser;
-use golem_api_grpc::proto::golem::rib::dynamic_parsed_function_reference::FunctionReference as ProtoDynamicFunctionReference;
-use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::type_annotated_value_from_str;
-use golem_wasm_rpc::Value;
+use golem_wasm_rpc::{parse_value_and_type, ValueAndType};
 use semver::{BuildMetadata, Prerelease};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::fmt::Display;
-
-#[derive(Debug, PartialEq, Eq, Clone, Encode, Decode)]
-pub enum ParsedFunctionSite {
-    Global,
-    Interface {
-        name: String,
-    },
-    PackagedInterface {
-        namespace: String,
-        package: String,
-        interface: String,
-        version: Option<SemVer>,
-    },
-}
 
 #[derive(PartialEq, Eq, Clone)]
 pub struct SemVer(pub semver::Version);
@@ -112,34 +94,26 @@ impl<'de> BorrowDecode<'de> for SemVer {
     }
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::rib::SemVersion> for SemVer {
-    type Error = String;
-
-    fn try_from(value: golem_api_grpc::proto::golem::rib::SemVersion) -> Result<Self, Self::Error> {
-        Ok(SemVer(semver::Version {
-            major: value.major,
-            minor: value.minor,
-            patch: value.patch,
-            pre: Prerelease::new(&value.pre).map_err(|_| "Invalid prerelease".to_string())?,
-            build: BuildMetadata::new(&value.build)
-                .map_err(|_| "Invalid build metadata".to_string())?,
-        }))
-    }
-}
-
-impl From<SemVer> for golem_api_grpc::proto::golem::rib::SemVersion {
-    fn from(value: SemVer) -> Self {
-        golem_api_grpc::proto::golem::rib::SemVersion {
-            major: value.0.major,
-            minor: value.0.minor,
-            patch: value.0.patch,
-            pre: value.0.pre.to_string(),
-            build: value.0.build.to_string(),
-        }
-    }
+#[derive(Debug, PartialEq, Eq, Clone, Encode, Decode)]
+pub enum ParsedFunctionSite {
+    Global,
+    Interface {
+        name: String,
+    },
+    PackagedInterface {
+        namespace: String,
+        package: String,
+        interface: String,
+        version: Option<SemVer>,
+    },
 }
 
 impl ParsedFunctionSite {
+    pub fn parse(name: impl AsRef<str>) -> Result<Self, String> {
+        ParsedFunctionName::parse(format!("{}.{{x}}", name.as_ref()))
+            .map(|ParsedFunctionName { site, .. }| site)
+    }
+
     pub fn interface_name(&self) -> Option<String> {
         match self {
             Self::Global => None,
@@ -160,115 +134,7 @@ impl ParsedFunctionSite {
     }
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::rib::ParsedFunctionSite> for ParsedFunctionSite {
-    type Error = String;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::rib::ParsedFunctionSite,
-    ) -> Result<Self, Self::Error> {
-        let site = value.site.ok_or("Missing site".to_string())?;
-        match site {
-            golem_api_grpc::proto::golem::rib::parsed_function_site::Site::Global(_) => {
-                Ok(Self::Global)
-            }
-            golem_api_grpc::proto::golem::rib::parsed_function_site::Site::Interface(
-                golem_api_grpc::proto::golem::rib::InterfaceFunctionSite { name },
-            ) => Ok(Self::Interface { name }),
-            golem_api_grpc::proto::golem::rib::parsed_function_site::Site::PackageInterface(
-                golem_api_grpc::proto::golem::rib::PackageInterfaceFunctionSite {
-                    namespace,
-                    package,
-                    interface,
-                    version,
-                },
-            ) => {
-                let version = match version {
-                    Some(version) => Some(version.try_into()?),
-                    None => None,
-                };
-
-                Ok(Self::PackagedInterface {
-                    namespace,
-                    package,
-                    interface,
-                    version,
-                })
-            }
-        }
-    }
-}
-
-impl From<ParsedFunctionSite> for golem_api_grpc::proto::golem::rib::ParsedFunctionSite {
-    fn from(value: ParsedFunctionSite) -> Self {
-        let site = match value {
-            ParsedFunctionSite::Global => {
-                golem_api_grpc::proto::golem::rib::parsed_function_site::Site::Global(
-                    golem_api_grpc::proto::golem::rib::GlobalFunctionSite {},
-                )
-            }
-            ParsedFunctionSite::Interface { name } => {
-                golem_api_grpc::proto::golem::rib::parsed_function_site::Site::Interface(
-                    golem_api_grpc::proto::golem::rib::InterfaceFunctionSite { name },
-                )
-            }
-            ParsedFunctionSite::PackagedInterface {
-                namespace,
-                package,
-                interface,
-                version,
-            } => golem_api_grpc::proto::golem::rib::parsed_function_site::Site::PackageInterface(
-                golem_api_grpc::proto::golem::rib::PackageInterfaceFunctionSite {
-                    namespace,
-                    package,
-                    interface,
-                    version: version.map(|v| v.into()),
-                },
-            ),
-        };
-        golem_api_grpc::proto::golem::rib::ParsedFunctionSite { site: Some(site) }
-    }
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, Encode, Decode)]
-pub enum ParsedFunctionReference {
-    Function {
-        function: String,
-    },
-    RawResourceConstructor {
-        resource: String,
-    },
-    RawResourceDrop {
-        resource: String,
-    },
-    RawResourceMethod {
-        resource: String,
-        method: String,
-    },
-    RawResourceStaticMethod {
-        resource: String,
-        method: String,
-    },
-    IndexedResourceConstructor {
-        resource: String,
-        resource_params: Vec<String>,
-    },
-    IndexedResourceMethod {
-        resource: String,
-        resource_params: Vec<String>,
-        method: String,
-    },
-    IndexedResourceStaticMethod {
-        resource: String,
-        resource_params: Vec<String>,
-        method: String,
-    },
-    IndexedResourceDrop {
-        resource: String,
-        resource_params: Vec<String>,
-    },
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, Encode, Decode)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum DynamicParsedFunctionReference {
     Function {
         function: String,
@@ -415,6 +281,45 @@ impl DynamicParsedFunctionReference {
             _ => None,
         }
     }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Encode, Decode)]
+pub enum ParsedFunctionReference {
+    Function {
+        function: String,
+    },
+    RawResourceConstructor {
+        resource: String,
+    },
+    RawResourceDrop {
+        resource: String,
+    },
+    RawResourceMethod {
+        resource: String,
+        method: String,
+    },
+    RawResourceStaticMethod {
+        resource: String,
+        method: String,
+    },
+    IndexedResourceConstructor {
+        resource: String,
+        resource_params: Vec<String>,
+    },
+    IndexedResourceMethod {
+        resource: String,
+        resource_params: Vec<String>,
+        method: String,
+    },
+    IndexedResourceStaticMethod {
+        resource: String,
+        resource_params: Vec<String>,
+        method: String,
+    },
+    IndexedResourceDrop {
+        resource: String,
+        resource_params: Vec<String>,
+    },
 }
 
 impl Display for ParsedFunctionReference {
@@ -566,7 +471,10 @@ impl ParsedFunctionReference {
         }
     }
 
-    pub fn resource_params(&self, types: &[AnalysedType]) -> Result<Option<Vec<Value>>, String> {
+    pub fn resource_params(
+        &self,
+        types: &[golem_wasm_ast::analysis::AnalysedType],
+    ) -> Result<Option<Vec<ValueAndType>>, String> {
         if let Some(raw_params) = self.raw_resource_params() {
             if raw_params.len() != types.len() {
                 Err(format!(
@@ -577,10 +485,8 @@ impl ParsedFunctionReference {
             } else {
                 let mut result = Vec::new();
                 for (raw_param, param_type) in raw_params.iter().zip(types.iter()) {
-                    let type_annotated_value: TypeAnnotatedValue =
-                        type_annotated_value_from_str(param_type, raw_param)?;
-                    let value = type_annotated_value.try_into()?;
-                    result.push(value);
+                    let value_and_type: ValueAndType = parse_value_and_type(param_type, raw_param)?;
+                    result.push(value_and_type);
                 }
                 Ok(Some(result))
             }
@@ -588,311 +494,6 @@ impl ParsedFunctionReference {
             Ok(None)
         }
     }
-}
-
-impl From<DynamicParsedFunctionReference>
-    for golem_api_grpc::proto::golem::rib::DynamicParsedFunctionReference
-{
-    fn from(value: DynamicParsedFunctionReference) -> Self {
-        let function = match value {
-            DynamicParsedFunctionReference::Function { function } => ProtoDynamicFunctionReference::Function(
-                golem_api_grpc::proto::golem::rib::FunctionFunctionReference { function },
-            ),
-            DynamicParsedFunctionReference::RawResourceConstructor { resource } => ProtoDynamicFunctionReference::RawResourceConstructor(
-                golem_api_grpc::proto::golem::rib::RawResourceConstructorFunctionReference { resource },
-            ),
-            DynamicParsedFunctionReference::RawResourceMethod { resource, method } => ProtoDynamicFunctionReference::RawResourceMethod(
-                golem_api_grpc::proto::golem::rib::RawResourceMethodFunctionReference { resource, method },
-            ),
-            DynamicParsedFunctionReference::RawResourceStaticMethod { resource, method } => ProtoDynamicFunctionReference::RawResourceStaticMethod(
-                golem_api_grpc::proto::golem::rib::RawResourceStaticMethodFunctionReference { resource, method },
-            ),
-            DynamicParsedFunctionReference::RawResourceDrop { resource } => ProtoDynamicFunctionReference::RawResourceDrop(
-                golem_api_grpc::proto::golem::rib::RawResourceDropFunctionReference { resource },
-            ),
-            DynamicParsedFunctionReference::IndexedResourceConstructor { resource, resource_params } => ProtoDynamicFunctionReference::IndexedResourceConstructor(
-                golem_api_grpc::proto::golem::rib::DynamicIndexedResourceConstructorFunctionReference {
-                    resource,
-                    resource_params: resource_params.into_iter().map(|x| x.into()).collect(),
-                },
-            ),
-            DynamicParsedFunctionReference::IndexedResourceMethod { resource, resource_params, method } => ProtoDynamicFunctionReference::IndexedResourceMethod(
-                golem_api_grpc::proto::golem::rib::DynamicIndexedResourceMethodFunctionReference {
-                    resource,
-                    resource_params: resource_params.into_iter().map(|x| x.into()).collect(),
-                    method,
-                },
-            ),
-            DynamicParsedFunctionReference::IndexedResourceStaticMethod { resource, resource_params, method } => ProtoDynamicFunctionReference::IndexedResourceStaticMethod(
-                golem_api_grpc::proto::golem::rib::DynamicIndexedResourceStaticMethodFunctionReference {
-                    resource,
-                    resource_params: resource_params.into_iter().map(|x| x.into()).collect(),
-                    method,
-                },
-            ),
-            DynamicParsedFunctionReference::IndexedResourceDrop { resource, resource_params } => ProtoDynamicFunctionReference::IndexedResourceDrop(
-                golem_api_grpc::proto::golem::rib::DynamicIndexedResourceDropFunctionReference {
-                    resource,
-                    resource_params: resource_params.into_iter().map(|x| x.into()).collect(),
-                },
-            ),
-        };
-
-        golem_api_grpc::proto::golem::rib::DynamicParsedFunctionReference {
-            function_reference: Some(function),
-        }
-    }
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::rib::DynamicParsedFunctionReference>
-    for DynamicParsedFunctionReference
-{
-    type Error = String;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::rib::DynamicParsedFunctionReference,
-    ) -> Result<Self, Self::Error> {
-        let function = value
-            .function_reference
-            .ok_or("Missing function reference".to_string())?;
-
-        match function {
-            ProtoDynamicFunctionReference::Function(golem_api_grpc::proto::golem::rib::FunctionFunctionReference {
-                                                        function
-                                                    }) => {
-                Ok(Self::Function { function })
-            },
-            ProtoDynamicFunctionReference::RawResourceConstructor(golem_api_grpc::proto::golem::rib::RawResourceConstructorFunctionReference {
-                                                                    resource
-                                                                }) => {
-                Ok(Self::RawResourceConstructor { resource })
-            },
-            ProtoDynamicFunctionReference::RawResourceMethod(golem_api_grpc::proto::golem::rib::RawResourceMethodFunctionReference {
-                                                               resource,
-                                                               method
-                                                           }) => {
-                Ok(Self::RawResourceMethod { resource, method })
-            },
-            ProtoDynamicFunctionReference::RawResourceStaticMethod(golem_api_grpc::proto::golem::rib::RawResourceStaticMethodFunctionReference {
-                                                                     resource,
-                                                                     method
-                                                                 }) => {
-                Ok(Self::RawResourceStaticMethod { resource, method })
-            },
-            ProtoDynamicFunctionReference::RawResourceDrop(golem_api_grpc::proto::golem::rib::RawResourceDropFunctionReference {
-                                                              resource
-                                                          }) => {
-                Ok(Self::RawResourceDrop { resource })
-            },
-            ProtoDynamicFunctionReference::IndexedResourceConstructor(golem_api_grpc::proto::golem::rib::DynamicIndexedResourceConstructorFunctionReference {
-                                                                         resource,
-                                                                         resource_params
-                                                                     }) => {
-
-                let resource_params: Vec<Expr> =
-                    resource_params.into_iter().map(Expr::try_from).collect::<Result<Vec<Expr>, String>>()?;
-
-                Ok(Self::IndexedResourceConstructor { resource, resource_params })
-            },
-            ProtoDynamicFunctionReference::IndexedResourceMethod(golem_api_grpc::proto::golem::rib::DynamicIndexedResourceMethodFunctionReference {
-                                                                    resource,
-                                                                    resource_params,
-                                                                    method
-                                                                }) => {
-                let resource_params: Vec<Expr> =
-                    resource_params.into_iter().map(Expr::try_from).collect::<Result<Vec<Expr>, String>>()?;
-
-                Ok(Self::IndexedResourceMethod { resource, resource_params, method })
-            },
-            ProtoDynamicFunctionReference::IndexedResourceStaticMethod(golem_api_grpc::proto::golem::rib::DynamicIndexedResourceStaticMethodFunctionReference {
-                                                                          resource,
-                                                                          resource_params,
-                                                                          method
-                                                                      }) => {
-                let resource_params: Vec<Expr> =
-                    resource_params.into_iter().map(Expr::try_from).collect::<Result<Vec<Expr>, String>>()?;
-
-                Ok(Self::IndexedResourceStaticMethod { resource, resource_params, method })
-            },
-            ProtoDynamicFunctionReference::IndexedResourceDrop(golem_api_grpc::proto::golem::rib::DynamicIndexedResourceDropFunctionReference {
-                                                                  resource,
-                                                                  resource_params
-                                                              }) => {
-                let resource_params: Vec<Expr> =
-                    resource_params.into_iter().map(Expr::try_from).collect::<Result<Vec<Expr>, String>>()?;
-
-                Ok(Self::IndexedResourceDrop { resource, resource_params })
-            },
-        }
-    }
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::rib::ParsedFunctionReference>
-    for ParsedFunctionReference
-{
-    type Error = String;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::rib::ParsedFunctionReference,
-    ) -> Result<Self, Self::Error> {
-        let function = value
-            .function_reference
-            .ok_or("Missing function".to_string())?;
-        match function {
-            golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::Function(golem_api_grpc::proto::golem::rib::FunctionFunctionReference {
-                                                                                                          function
-                                                                                                      }) => {
-                Ok(Self::Function { function })
-            }
-            golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::RawResourceConstructor(golem_api_grpc::proto::golem::rib::RawResourceConstructorFunctionReference {
-                                                                                                                        resource
-                                                                                                                    }) => {
-                Ok(Self::RawResourceConstructor { resource })
-            }
-            golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::RawResourceMethod(golem_api_grpc::proto::golem::rib::RawResourceMethodFunctionReference {
-                                                                                                                   resource,
-                                                                                                                   method
-                                                                                                               }) => {
-                Ok(Self::RawResourceMethod { resource, method })
-            }
-            golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::RawResourceStaticMethod(golem_api_grpc::proto::golem::rib::RawResourceStaticMethodFunctionReference {
-                                                                                                                         resource,
-                                                                                                                         method
-                                                                                                                     }) => {
-                Ok(Self::RawResourceStaticMethod { resource, method })
-            }
-            golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::RawResourceDrop(golem_api_grpc::proto::golem::rib::RawResourceDropFunctionReference {
-                                                                                                                 resource
-                                                                                                             }) => {
-                Ok(Self::RawResourceDrop { resource })
-            }
-            golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::IndexedResourceConstructor(golem_api_grpc::proto::golem::rib::IndexedResourceConstructorFunctionReference {
-                                                                                                                            resource,
-                                                                                                                            resource_params
-                                                                                                                        }) => {
-                Ok(Self::IndexedResourceConstructor {
-                    resource,
-                    resource_params,
-                })
-            }
-            golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::IndexedResourceMethod(golem_api_grpc::proto::golem::rib::IndexedResourceMethodFunctionReference {
-                                                                                                                       resource,
-                                                                                                                       resource_params,
-                                                                                                                       method
-                                                                                                                   }) => {
-                Ok(Self::IndexedResourceMethod {
-                    resource,
-                    resource_params,
-                    method,
-                })
-            }
-            golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::IndexedResourceStaticMethod(golem_api_grpc::proto::golem::rib::IndexedResourceStaticMethodFunctionReference {
-                                                                                                                             resource,
-                                                                                                                             resource_params,
-                                                                                                                             method
-                                                                                                                         }) => {
-                Ok(Self::IndexedResourceStaticMethod {
-                    resource,
-                    resource_params,
-                    method,
-                })
-            }
-            golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::IndexedResourceDrop(golem_api_grpc::proto::golem::rib::IndexedResourceDropFunctionReference {
-                                                                                                                     resource,
-                                                                                                                     resource_params
-                                                                                                                 }) => {
-                Ok(Self::IndexedResourceDrop {
-                    resource,
-                    resource_params,
-                })
-            }
-        }
-    }
-}
-
-impl From<ParsedFunctionReference> for golem_api_grpc::proto::golem::rib::ParsedFunctionReference {
-    fn from(value: ParsedFunctionReference) -> Self {
-        let function = match value {
-            ParsedFunctionReference::Function { function } => golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::Function(
-                golem_api_grpc::proto::golem::rib::FunctionFunctionReference { function },
-            ),
-            ParsedFunctionReference::RawResourceConstructor { resource } => {
-                golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::RawResourceConstructor(
-                    golem_api_grpc::proto::golem::rib::RawResourceConstructorFunctionReference {
-                        resource,
-                    },
-                )
-            }
-            ParsedFunctionReference::RawResourceMethod { resource, method } => {
-                golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::RawResourceMethod(
-                    golem_api_grpc::proto::golem::rib::RawResourceMethodFunctionReference {
-                        resource,
-                        method,
-                    },
-                )
-            }
-            ParsedFunctionReference::RawResourceStaticMethod { resource, method } => {
-                golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::RawResourceStaticMethod(
-                    golem_api_grpc::proto::golem::rib::RawResourceStaticMethodFunctionReference {
-                        resource,
-                        method,
-                    },
-                )
-            }
-            ParsedFunctionReference::RawResourceDrop { resource } => golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::RawResourceDrop(
-                golem_api_grpc::proto::golem::rib::RawResourceDropFunctionReference { resource },
-            ),
-            ParsedFunctionReference::IndexedResourceConstructor {
-                resource,
-                resource_params,
-            } => golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::IndexedResourceConstructor(
-                golem_api_grpc::proto::golem::rib::IndexedResourceConstructorFunctionReference {
-                    resource,
-                    resource_params,
-                },
-            ),
-            ParsedFunctionReference::IndexedResourceMethod {
-                resource,
-                resource_params,
-                method,
-            } => golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::IndexedResourceMethod(
-                golem_api_grpc::proto::golem::rib::IndexedResourceMethodFunctionReference {
-                    resource,
-                    resource_params,
-                    method,
-                },
-            ),
-            ParsedFunctionReference::IndexedResourceStaticMethod {
-                resource,
-                resource_params,
-                method,
-            } => golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::IndexedResourceStaticMethod(
-                golem_api_grpc::proto::golem::rib::IndexedResourceStaticMethodFunctionReference {
-                    resource,
-                    resource_params,
-                    method,
-                },
-            ),
-            ParsedFunctionReference::IndexedResourceDrop {
-                resource,
-                resource_params,
-            } => golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::IndexedResourceDrop(
-                golem_api_grpc::proto::golem::rib::IndexedResourceDropFunctionReference {
-                    resource,
-                    resource_params,
-                },
-            ),
-        };
-        golem_api_grpc::proto::golem::rib::ParsedFunctionReference {
-            function_reference: Some(function),
-        }
-    }
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, Encode, Decode)]
-pub struct ParsedFunctionName {
-    pub site: ParsedFunctionSite,
-    pub function: ParsedFunctionReference,
 }
 
 // DynamicParsedFunctionName is different from ParsedFunctionName.
@@ -903,7 +504,7 @@ pub struct ParsedFunctionName {
 // `Examples`:
 // `DynamicParsedFunctionName` : ns:name/interface.{resource1(identifier1, { field-a: some(identifier2) }).new}
 // `ParsedFunctionName` : ns:name/interface.{resource1("foo", { field-a: some("bar") }).new}
-#[derive(Debug, PartialEq, Eq, Clone, Encode, Decode)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct DynamicParsedFunctionName {
     pub site: ParsedFunctionSite,
     pub function: DynamicParsedFunctionReference,
@@ -967,6 +568,12 @@ impl Display for DynamicParsedFunctionName {
         let function_name = self.to_parsed_function_name().to_string();
         write!(f, "{}", function_name)
     }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Encode, Decode)]
+pub struct ParsedFunctionName {
+    pub site: ParsedFunctionSite,
+    pub function: ParsedFunctionReference,
 }
 
 impl Serialize for ParsedFunctionName {
@@ -1050,60 +657,492 @@ impl ParsedFunctionName {
             function,
         })
     }
-}
 
-impl TryFrom<golem_api_grpc::proto::golem::rib::DynamicParsedFunctionName>
-    for DynamicParsedFunctionName
-{
-    type Error = String;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::rib::DynamicParsedFunctionName,
-    ) -> Result<Self, Self::Error> {
-        let site = ParsedFunctionSite::try_from(value.site.ok_or("Missing site".to_string())?)?;
-        let function = DynamicParsedFunctionReference::try_from(
-            value.function.ok_or("Missing function".to_string())?,
-        )?;
-        Ok(Self { site, function })
+    pub fn is_constructor(&self) -> Option<&str> {
+        match &self.function {
+            ParsedFunctionReference::RawResourceConstructor { resource, .. }
+            | ParsedFunctionReference::IndexedResourceConstructor { resource, .. } => {
+                Some(resource)
+            }
+            _ => None,
+        }
     }
-}
 
-impl From<DynamicParsedFunctionName>
-    for golem_api_grpc::proto::golem::rib::DynamicParsedFunctionName
-{
-    fn from(value: DynamicParsedFunctionName) -> Self {
-        golem_api_grpc::proto::golem::rib::DynamicParsedFunctionName {
-            site: Some(value.site.into()),
-            function: Some(value.function.into()),
+    pub fn is_method(&self) -> Option<&str> {
+        match &self.function {
+            ParsedFunctionReference::RawResourceMethod { resource, .. }
+            | ParsedFunctionReference::IndexedResourceMethod { resource, .. }
+            | ParsedFunctionReference::RawResourceStaticMethod { resource, .. }
+            | ParsedFunctionReference::IndexedResourceStaticMethod { resource, .. } => {
+                Some(resource)
+            }
+            _ => None,
         }
     }
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::rib::ParsedFunctionName> for ParsedFunctionName {
-    type Error = String;
+#[cfg(feature = "protobuf")]
+mod protobuf {
+    use crate::{
+        DynamicParsedFunctionName, DynamicParsedFunctionReference, Expr, ParsedFunctionName,
+        ParsedFunctionReference, ParsedFunctionSite, SemVer,
+    };
+    use golem_api_grpc::proto::golem::rib::dynamic_parsed_function_reference::FunctionReference as ProtoDynamicFunctionReference;
+    use semver::{BuildMetadata, Prerelease};
 
-    fn try_from(
-        value: golem_api_grpc::proto::golem::rib::ParsedFunctionName,
-    ) -> Result<Self, Self::Error> {
-        let site = ParsedFunctionSite::try_from(value.site.ok_or("Missing site".to_string())?)?;
-        let function = ParsedFunctionReference::try_from(
-            value.function.ok_or("Missing function".to_string())?,
-        )?;
-        Ok(Self { site, function })
+    impl TryFrom<golem_api_grpc::proto::golem::rib::SemVersion> for SemVer {
+        type Error = String;
+
+        fn try_from(
+            value: golem_api_grpc::proto::golem::rib::SemVersion,
+        ) -> Result<Self, Self::Error> {
+            Ok(SemVer(semver::Version {
+                major: value.major,
+                minor: value.minor,
+                patch: value.patch,
+                pre: Prerelease::new(&value.pre).map_err(|_| "Invalid prerelease".to_string())?,
+                build: BuildMetadata::new(&value.build)
+                    .map_err(|_| "Invalid build metadata".to_string())?,
+            }))
+        }
     }
-}
 
-impl From<ParsedFunctionName> for golem_api_grpc::proto::golem::rib::ParsedFunctionName {
-    fn from(value: ParsedFunctionName) -> Self {
-        golem_api_grpc::proto::golem::rib::ParsedFunctionName {
-            site: Some(value.site.into()),
-            function: Some(value.function.into()),
+    impl From<SemVer> for golem_api_grpc::proto::golem::rib::SemVersion {
+        fn from(value: SemVer) -> Self {
+            golem_api_grpc::proto::golem::rib::SemVersion {
+                major: value.0.major,
+                minor: value.0.minor,
+                patch: value.0.patch,
+                pre: value.0.pre.to_string(),
+                build: value.0.build.to_string(),
+            }
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::rib::ParsedFunctionSite> for ParsedFunctionSite {
+        type Error = String;
+
+        fn try_from(
+            value: golem_api_grpc::proto::golem::rib::ParsedFunctionSite,
+        ) -> Result<Self, Self::Error> {
+            let site = value.site.ok_or("Missing site".to_string())?;
+            match site {
+                golem_api_grpc::proto::golem::rib::parsed_function_site::Site::Global(_) => {
+                    Ok(Self::Global)
+                }
+                golem_api_grpc::proto::golem::rib::parsed_function_site::Site::Interface(
+                    golem_api_grpc::proto::golem::rib::InterfaceFunctionSite { name },
+                ) => Ok(Self::Interface { name }),
+                golem_api_grpc::proto::golem::rib::parsed_function_site::Site::PackageInterface(
+                    golem_api_grpc::proto::golem::rib::PackageInterfaceFunctionSite {
+                        namespace,
+                        package,
+                        interface,
+                        version,
+                    },
+                ) => {
+                    let version = match version {
+                        Some(version) => Some(version.try_into()?),
+                        None => None,
+                    };
+
+                    Ok(Self::PackagedInterface {
+                        namespace,
+                        package,
+                        interface,
+                        version,
+                    })
+                }
+            }
+        }
+    }
+
+    impl From<ParsedFunctionSite> for golem_api_grpc::proto::golem::rib::ParsedFunctionSite {
+        fn from(value: ParsedFunctionSite) -> Self {
+            let site = match value {
+                ParsedFunctionSite::Global => {
+                    golem_api_grpc::proto::golem::rib::parsed_function_site::Site::Global(
+                        golem_api_grpc::proto::golem::rib::GlobalFunctionSite {},
+                    )
+                }
+                ParsedFunctionSite::Interface { name } => {
+                    golem_api_grpc::proto::golem::rib::parsed_function_site::Site::Interface(
+                        golem_api_grpc::proto::golem::rib::InterfaceFunctionSite { name },
+                    )
+                }
+                ParsedFunctionSite::PackagedInterface {
+                    namespace,
+                    package,
+                    interface,
+                    version,
+                } => {
+                    golem_api_grpc::proto::golem::rib::parsed_function_site::Site::PackageInterface(
+                        golem_api_grpc::proto::golem::rib::PackageInterfaceFunctionSite {
+                            namespace,
+                            package,
+                            interface,
+                            version: version.map(|v| v.into()),
+                        },
+                    )
+                }
+            };
+            golem_api_grpc::proto::golem::rib::ParsedFunctionSite { site: Some(site) }
+        }
+    }
+
+    impl From<DynamicParsedFunctionReference>
+        for golem_api_grpc::proto::golem::rib::DynamicParsedFunctionReference
+    {
+        fn from(value: DynamicParsedFunctionReference) -> Self {
+            let function = match value {
+                DynamicParsedFunctionReference::Function { function } => ProtoDynamicFunctionReference::Function(
+                    golem_api_grpc::proto::golem::rib::FunctionFunctionReference { function },
+                ),
+                DynamicParsedFunctionReference::RawResourceConstructor { resource } => ProtoDynamicFunctionReference::RawResourceConstructor(
+                    golem_api_grpc::proto::golem::rib::RawResourceConstructorFunctionReference { resource },
+                ),
+                DynamicParsedFunctionReference::RawResourceMethod { resource, method } => ProtoDynamicFunctionReference::RawResourceMethod(
+                    golem_api_grpc::proto::golem::rib::RawResourceMethodFunctionReference { resource, method },
+                ),
+                DynamicParsedFunctionReference::RawResourceStaticMethod { resource, method } => ProtoDynamicFunctionReference::RawResourceStaticMethod(
+                    golem_api_grpc::proto::golem::rib::RawResourceStaticMethodFunctionReference { resource, method },
+                ),
+                DynamicParsedFunctionReference::RawResourceDrop { resource } => ProtoDynamicFunctionReference::RawResourceDrop(
+                    golem_api_grpc::proto::golem::rib::RawResourceDropFunctionReference { resource },
+                ),
+                DynamicParsedFunctionReference::IndexedResourceConstructor { resource, resource_params } => ProtoDynamicFunctionReference::IndexedResourceConstructor(
+                    golem_api_grpc::proto::golem::rib::DynamicIndexedResourceConstructorFunctionReference {
+                        resource,
+                        resource_params: resource_params.into_iter().map(|x| x.into()).collect(),
+                    },
+                ),
+                DynamicParsedFunctionReference::IndexedResourceMethod { resource, resource_params, method } => ProtoDynamicFunctionReference::IndexedResourceMethod(
+                    golem_api_grpc::proto::golem::rib::DynamicIndexedResourceMethodFunctionReference {
+                        resource,
+                        resource_params: resource_params.into_iter().map(|x| x.into()).collect(),
+                        method,
+                    },
+                ),
+                DynamicParsedFunctionReference::IndexedResourceStaticMethod { resource, resource_params, method } => ProtoDynamicFunctionReference::IndexedResourceStaticMethod(
+                    golem_api_grpc::proto::golem::rib::DynamicIndexedResourceStaticMethodFunctionReference {
+                        resource,
+                        resource_params: resource_params.into_iter().map(|x| x.into()).collect(),
+                        method,
+                    },
+                ),
+                DynamicParsedFunctionReference::IndexedResourceDrop { resource, resource_params } => ProtoDynamicFunctionReference::IndexedResourceDrop(
+                    golem_api_grpc::proto::golem::rib::DynamicIndexedResourceDropFunctionReference {
+                        resource,
+                        resource_params: resource_params.into_iter().map(|x| x.into()).collect(),
+                    },
+                ),
+            };
+
+            golem_api_grpc::proto::golem::rib::DynamicParsedFunctionReference {
+                function_reference: Some(function),
+            }
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::rib::DynamicParsedFunctionReference>
+        for DynamicParsedFunctionReference
+    {
+        type Error = String;
+
+        fn try_from(
+            value: golem_api_grpc::proto::golem::rib::DynamicParsedFunctionReference,
+        ) -> Result<Self, Self::Error> {
+            let function = value
+                .function_reference
+                .ok_or("Missing function reference".to_string())?;
+
+            match function {
+                ProtoDynamicFunctionReference::Function(golem_api_grpc::proto::golem::rib::FunctionFunctionReference {
+                                                            function
+                                                        }) => {
+                    Ok(Self::Function { function })
+                }
+                ProtoDynamicFunctionReference::RawResourceConstructor(golem_api_grpc::proto::golem::rib::RawResourceConstructorFunctionReference {
+                                                                          resource
+                                                                      }) => {
+                    Ok(Self::RawResourceConstructor { resource })
+                }
+                ProtoDynamicFunctionReference::RawResourceMethod(golem_api_grpc::proto::golem::rib::RawResourceMethodFunctionReference {
+                                                                     resource,
+                                                                     method
+                                                                 }) => {
+                    Ok(Self::RawResourceMethod { resource, method })
+                }
+                ProtoDynamicFunctionReference::RawResourceStaticMethod(golem_api_grpc::proto::golem::rib::RawResourceStaticMethodFunctionReference {
+                                                                           resource,
+                                                                           method
+                                                                       }) => {
+                    Ok(Self::RawResourceStaticMethod { resource, method })
+                }
+                ProtoDynamicFunctionReference::RawResourceDrop(golem_api_grpc::proto::golem::rib::RawResourceDropFunctionReference {
+                                                                   resource
+                                                               }) => {
+                    Ok(Self::RawResourceDrop { resource })
+                }
+                ProtoDynamicFunctionReference::IndexedResourceConstructor(golem_api_grpc::proto::golem::rib::DynamicIndexedResourceConstructorFunctionReference {
+                                                                              resource,
+                                                                              resource_params
+                                                                          }) => {
+                    let resource_params: Vec<Expr> =
+                        resource_params.into_iter().map(Expr::try_from).collect::<Result<Vec<Expr>, String>>()?;
+
+                    Ok(Self::IndexedResourceConstructor { resource, resource_params })
+                }
+                ProtoDynamicFunctionReference::IndexedResourceMethod(golem_api_grpc::proto::golem::rib::DynamicIndexedResourceMethodFunctionReference {
+                                                                         resource,
+                                                                         resource_params,
+                                                                         method
+                                                                     }) => {
+                    let resource_params: Vec<Expr> =
+                        resource_params.into_iter().map(Expr::try_from).collect::<Result<Vec<Expr>, String>>()?;
+
+                    Ok(Self::IndexedResourceMethod { resource, resource_params, method })
+                }
+                ProtoDynamicFunctionReference::IndexedResourceStaticMethod(golem_api_grpc::proto::golem::rib::DynamicIndexedResourceStaticMethodFunctionReference {
+                                                                               resource,
+                                                                               resource_params,
+                                                                               method
+                                                                           }) => {
+                    let resource_params: Vec<Expr> =
+                        resource_params.into_iter().map(Expr::try_from).collect::<Result<Vec<Expr>, String>>()?;
+
+                    Ok(Self::IndexedResourceStaticMethod { resource, resource_params, method })
+                }
+                ProtoDynamicFunctionReference::IndexedResourceDrop(golem_api_grpc::proto::golem::rib::DynamicIndexedResourceDropFunctionReference {
+                                                                       resource,
+                                                                       resource_params
+                                                                   }) => {
+                    let resource_params: Vec<Expr> =
+                        resource_params.into_iter().map(Expr::try_from).collect::<Result<Vec<Expr>, String>>()?;
+
+                    Ok(Self::IndexedResourceDrop { resource, resource_params })
+                }
+            }
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::rib::ParsedFunctionReference>
+        for ParsedFunctionReference
+    {
+        type Error = String;
+
+        fn try_from(
+            value: golem_api_grpc::proto::golem::rib::ParsedFunctionReference,
+        ) -> Result<Self, Self::Error> {
+            let function = value
+                .function_reference
+                .ok_or("Missing function".to_string())?;
+            match function {
+                golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::Function(golem_api_grpc::proto::golem::rib::FunctionFunctionReference {
+                                                                                                              function
+                                                                                                          }) => {
+                    Ok(Self::Function { function })
+                }
+                golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::RawResourceConstructor(golem_api_grpc::proto::golem::rib::RawResourceConstructorFunctionReference {
+                                                                                                                            resource
+                                                                                                                        }) => {
+                    Ok(Self::RawResourceConstructor { resource })
+                }
+                golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::RawResourceMethod(golem_api_grpc::proto::golem::rib::RawResourceMethodFunctionReference {
+                                                                                                                       resource,
+                                                                                                                       method
+                                                                                                                   }) => {
+                    Ok(Self::RawResourceMethod { resource, method })
+                }
+                golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::RawResourceStaticMethod(golem_api_grpc::proto::golem::rib::RawResourceStaticMethodFunctionReference {
+                                                                                                                             resource,
+                                                                                                                             method
+                                                                                                                         }) => {
+                    Ok(Self::RawResourceStaticMethod { resource, method })
+                }
+                golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::RawResourceDrop(golem_api_grpc::proto::golem::rib::RawResourceDropFunctionReference {
+                                                                                                                     resource
+                                                                                                                 }) => {
+                    Ok(Self::RawResourceDrop { resource })
+                }
+                golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::IndexedResourceConstructor(golem_api_grpc::proto::golem::rib::IndexedResourceConstructorFunctionReference {
+                                                                                                                                resource,
+                                                                                                                                resource_params
+                                                                                                                            }) => {
+                    Ok(Self::IndexedResourceConstructor {
+                        resource,
+                        resource_params,
+                    })
+                }
+                golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::IndexedResourceMethod(golem_api_grpc::proto::golem::rib::IndexedResourceMethodFunctionReference {
+                                                                                                                           resource,
+                                                                                                                           resource_params,
+                                                                                                                           method
+                                                                                                                       }) => {
+                    Ok(Self::IndexedResourceMethod {
+                        resource,
+                        resource_params,
+                        method,
+                    })
+                }
+                golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::IndexedResourceStaticMethod(golem_api_grpc::proto::golem::rib::IndexedResourceStaticMethodFunctionReference {
+                                                                                                                                 resource,
+                                                                                                                                 resource_params,
+                                                                                                                                 method
+                                                                                                                             }) => {
+                    Ok(Self::IndexedResourceStaticMethod {
+                        resource,
+                        resource_params,
+                        method,
+                    })
+                }
+                golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::IndexedResourceDrop(golem_api_grpc::proto::golem::rib::IndexedResourceDropFunctionReference {
+                                                                                                                         resource,
+                                                                                                                         resource_params
+                                                                                                                     }) => {
+                    Ok(Self::IndexedResourceDrop {
+                        resource,
+                        resource_params,
+                    })
+                }
+            }
+        }
+    }
+
+    impl From<ParsedFunctionReference> for golem_api_grpc::proto::golem::rib::ParsedFunctionReference {
+        fn from(value: ParsedFunctionReference) -> Self {
+            let function = match value {
+                ParsedFunctionReference::Function { function } => golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::Function(
+                    golem_api_grpc::proto::golem::rib::FunctionFunctionReference { function },
+                ),
+                ParsedFunctionReference::RawResourceConstructor { resource } => {
+                    golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::RawResourceConstructor(
+                        golem_api_grpc::proto::golem::rib::RawResourceConstructorFunctionReference {
+                            resource,
+                        },
+                    )
+                }
+                ParsedFunctionReference::RawResourceMethod { resource, method } => {
+                    golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::RawResourceMethod(
+                        golem_api_grpc::proto::golem::rib::RawResourceMethodFunctionReference {
+                            resource,
+                            method,
+                        },
+                    )
+                }
+                ParsedFunctionReference::RawResourceStaticMethod { resource, method } => {
+                    golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::RawResourceStaticMethod(
+                        golem_api_grpc::proto::golem::rib::RawResourceStaticMethodFunctionReference {
+                            resource,
+                            method,
+                        },
+                    )
+                }
+                ParsedFunctionReference::RawResourceDrop { resource } => golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::RawResourceDrop(
+                    golem_api_grpc::proto::golem::rib::RawResourceDropFunctionReference { resource },
+                ),
+                ParsedFunctionReference::IndexedResourceConstructor {
+                    resource,
+                    resource_params,
+                } => golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::IndexedResourceConstructor(
+                    golem_api_grpc::proto::golem::rib::IndexedResourceConstructorFunctionReference {
+                        resource,
+                        resource_params,
+                    },
+                ),
+                ParsedFunctionReference::IndexedResourceMethod {
+                    resource,
+                    resource_params,
+                    method,
+                } => golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::IndexedResourceMethod(
+                    golem_api_grpc::proto::golem::rib::IndexedResourceMethodFunctionReference {
+                        resource,
+                        resource_params,
+                        method,
+                    },
+                ),
+                ParsedFunctionReference::IndexedResourceStaticMethod {
+                    resource,
+                    resource_params,
+                    method,
+                } => golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::IndexedResourceStaticMethod(
+                    golem_api_grpc::proto::golem::rib::IndexedResourceStaticMethodFunctionReference {
+                        resource,
+                        resource_params,
+                        method,
+                    },
+                ),
+                ParsedFunctionReference::IndexedResourceDrop {
+                    resource,
+                    resource_params,
+                } => golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::IndexedResourceDrop(
+                    golem_api_grpc::proto::golem::rib::IndexedResourceDropFunctionReference {
+                        resource,
+                        resource_params,
+                    },
+                ),
+            };
+            golem_api_grpc::proto::golem::rib::ParsedFunctionReference {
+                function_reference: Some(function),
+            }
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::rib::DynamicParsedFunctionName>
+        for DynamicParsedFunctionName
+    {
+        type Error = String;
+
+        fn try_from(
+            value: golem_api_grpc::proto::golem::rib::DynamicParsedFunctionName,
+        ) -> Result<Self, Self::Error> {
+            let site = ParsedFunctionSite::try_from(value.site.ok_or("Missing site".to_string())?)?;
+            let function = DynamicParsedFunctionReference::try_from(
+                value.function.ok_or("Missing function".to_string())?,
+            )?;
+            Ok(Self { site, function })
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::rib::ParsedFunctionName> for ParsedFunctionName {
+        type Error = String;
+
+        fn try_from(
+            value: golem_api_grpc::proto::golem::rib::ParsedFunctionName,
+        ) -> Result<Self, Self::Error> {
+            let site = ParsedFunctionSite::try_from(value.site.ok_or("Missing site".to_string())?)?;
+            let function = ParsedFunctionReference::try_from(
+                value.function.ok_or("Missing function".to_string())?,
+            )?;
+            Ok(Self { site, function })
+        }
+    }
+
+    impl From<ParsedFunctionName> for golem_api_grpc::proto::golem::rib::ParsedFunctionName {
+        fn from(value: ParsedFunctionName) -> Self {
+            golem_api_grpc::proto::golem::rib::ParsedFunctionName {
+                site: Some(value.site.into()),
+                function: Some(value.function.into()),
+            }
+        }
+    }
+
+    impl From<DynamicParsedFunctionName>
+        for golem_api_grpc::proto::golem::rib::DynamicParsedFunctionName
+    {
+        fn from(value: DynamicParsedFunctionName) -> Self {
+            golem_api_grpc::proto::golem::rib::DynamicParsedFunctionName {
+                site: Some(value.site.into()),
+                function: Some(value.function.into()),
+            }
         }
     }
 }
 
 #[cfg(test)]
 mod function_name_tests {
+    use golem_wasm_ast::analysis::analysed_type::{field, record, u64};
+    use golem_wasm_rpc::Value;
     use test_r::test;
 
     use super::{ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, SemVer};
@@ -1698,5 +1737,38 @@ mod function_name_tests {
             "ns:name/interface.{resource1(\"hello\", { field-a: some(1) }).drop}",
         );
         round_trip_function_name_parse("ns:name/interface.{[drop]resource1}");
+    }
+
+    #[test]
+    fn test_parsed_function_name_complex_resource_args() {
+        round_trip_function_name_parse(
+            r#"golem:api/oplog-processor@1.1.0-rc1.{processor({ account-id: { value: "-1" } }, { high-bits: 11637111831105389641, low-bits: 11277240687824975272 }, []).process}"#,
+        )
+    }
+
+    #[test]
+    fn test_parsed_function_name_complex_resource_args_large_nums() {
+        let parsed = ParsedFunctionName::parse(r#"golem:api/oplog-processor@1.1.0-rc1.{processor({ high-bits: 18389549593665948372, low-bits: 12287617583649128209 }).process}"#).expect("Input Parsing failed");
+        let args = parsed
+            .function
+            .resource_params(&[record(vec![
+                field("high-bits", u64()),
+                field("low-bits", u64()),
+            ])])
+            .expect("Resource params parsing failed")
+            .expect("Resource params not found");
+        let nums = if let Value::Record(nums) = &args[0].value {
+            nums.clone()
+        } else {
+            panic!("Expected record")
+        };
+
+        assert_eq!(
+            nums,
+            vec![
+                Value::U64(18389549593665948372u64),
+                Value::U64(12287617583649128209u64),
+            ]
+        )
     }
 }

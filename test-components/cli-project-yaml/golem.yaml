@@ -1,62 +1,53 @@
-apiVersion: core.oam.dev/v1beta1
-kind: Application
-metadata:
-  name: App
-spec:
-  components:
-    - name: component_add_from_project_file_CLI_short
-      type: wasm
-      properties:
-        inputWasm: ../environment-service.wasm
-        outputWasm: ../environment-service.wasm
-        wit: ./wit
-        componentType: durable
-        files:
-        - sourcePath: ./foo.txt
-          targetPath: /foo.txt
-          permissions: read-only
-        - sourcePath: ./bar
-          targetPath: /bar
-          permissions: read-write
-    - name: component_add_from_project_file_CLI_long
-      type: wasm
-      properties:
-        inputWasm: ../environment-service.wasm
-        outputWasm: ../environment-service.wasm
-        wit: ./wit
-        componentType: durable
-        files:
-        - sourcePath: ./foo.txt
-          targetPath: /foo.txt
-          permissions: read-only
-        - sourcePath: ./bar
-          targetPath: /bar
-          permissions: read-write
-    - name: component_update_from_project_file_CLI_short
-      type: wasm
-      properties:
-        inputWasm: ../environment-service.wasm
-        outputWasm: ../environment-service.wasm
-        wit: ./wit
-        componentType: durable
-        files:
-        - sourcePath: ./foo.txt
-          targetPath: /foo.txt
-          permissions: read-only
-        - sourcePath: ./bar
-          targetPath: /bar
-          permissions: read-write
-    - name: component_update_from_project_file_CLI_long
-      type: wasm
-      properties:
-        inputWasm: ../environment-service.wasm
-        outputWasm: ../environment-service.wasm
-        wit: ./wit
-        componentType: durable
-        files:
-        - sourcePath: ./foo.txt
-          targetPath: /foo.txt
-          permissions: read-only
-        - sourcePath: ./bar
-          targetPath: /bar
-          permissions: read-write
+components:
+  component_add_from_project_file_CLI_short:
+    sourceWit: wit-a
+    generatedWit: wit-generated-a
+    componentWasm: ../environment-service.wasm
+    linkedWasm: ../environment-service.wasm
+    componentType: durable
+    files:
+    - sourcePath: ./foo.txt
+      targetPath: /foo.txt
+      permissions: read-only
+    - sourcePath: ./bar
+      targetPath: /bar
+      permissions: read-write
+  component_add_from_project_file_CLI_long:
+    sourceWit: wit-b
+    generatedWit: wit-generated-b
+    componentWasm: ../environment-service.wasm
+    linkedWasm: ../environment-service.wasm
+    componentType: durable
+    files:
+    - sourcePath: ./foo.txt
+      targetPath: /foo.txt
+      permissions: read-only
+    - sourcePath: ./bar
+      targetPath: /bar
+      permissions: read-write
+  component_update_from_project_file_CLI_short:
+    sourceWit: wit-c
+    generatedWit: wit-generated-c
+    componentWasm: ../environment-service.wasm
+    linkedWasm: ../environment-service.wasm
+    componentType: durable
+    files:
+    - sourcePath: ./foo.txt
+      targetPath: /foo.txt
+      permissions: read-only
+    - sourcePath: ./bar
+      targetPath: /bar
+      permissions: read-write
+  component_update_from_project_file_CLI_long:
+    sourceWit: wit-d
+    generatedWit: wit-generated-d
+    componentWasm: ../environment-service.wasm
+    linkedWasm: ../environment-service.wasm
+    componentType: durable
+    files:
+    - sourcePath: ./foo.txt
+      targetPath: /foo.txt
+      permissions: read-only
+    - sourcePath: ./bar
+      targetPath: /bar
+      permissions: read-write

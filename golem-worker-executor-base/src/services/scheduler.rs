@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use std::collections::HashSet;
-use std::ops::Add;
+use std::ops::{Add, Deref};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -23,17 +23,20 @@ use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tracing::{error, info, span, warn, Instrument, Level};
 
+use crate::error::GolemError;
 use crate::metrics::oplog::record_scheduled_archive;
 use crate::metrics::promises::record_scheduled_promise_completed;
-use crate::services::oplog::{MultiLayerOplog, OplogService};
+use crate::services::oplog::{MultiLayerOplog, Oplog, OplogService};
 use crate::services::promise::PromiseService;
 use crate::services::shard::ShardService;
 use crate::services::worker::WorkerService;
 use crate::services::worker_activator::WorkerActivator;
+use crate::services::HasOplog;
 use crate::storage::keyvalue::{
     KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
 };
-use golem_common::model::{ComponentType, ScheduleId, ScheduledAction};
+use crate::workerctx::WorkerCtx;
+use golem_common::model::{OwnedWorkerId, ScheduleId, ScheduledAction};
 
 #[async_trait]
 pub trait SchedulerService {
@@ -42,13 +45,41 @@ pub trait SchedulerService {
     async fn cancel(&self, id: ScheduleId);
 }
 
+/// A lighter trait than `WorkerActivator` that only provides the required functionality
+/// for `SchedulerServiceDefault`, making it easier to test (by being independent of `WorkerCtx`).
+#[async_trait]
+pub trait SchedulerWorkerAccess {
+    async fn activate_worker(&self, owned_worker_id: &OwnedWorkerId);
+    async fn open_oplog(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+    ) -> Result<Arc<dyn Oplog + Send + Sync>, GolemError>;
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx> + Send + Sync> {
+    async fn activate_worker(&self, owned_worker_id: &OwnedWorkerId) {
+        self.deref().activate_worker(owned_worker_id).await;
+    }
+
+    async fn open_oplog(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+    ) -> Result<Arc<dyn Oplog + Send + Sync>, GolemError> {
+        let worker = self
+            .get_or_create_suspended(owned_worker_id, None, None, None, None)
+            .await?;
+        Ok(worker.oplog())
+    }
+}
+
 #[derive(Clone)]
 pub struct SchedulerServiceDefault {
     key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
     background_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
     shard_service: Arc<dyn ShardService + Send + Sync>,
     promise_service: Arc<dyn PromiseService + Send + Sync>,
-    worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
+    worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync>,
     oplog_service: Arc<dyn OplogService + Send + Sync>,
     worker_service: Arc<dyn WorkerService + Send + Sync>,
 }
@@ -58,7 +89,7 @@ impl SchedulerServiceDefault {
         key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
         shard_service: Arc<dyn ShardService + Send + Sync>,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
-        worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
+        worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
         process_interval: Duration,
@@ -70,24 +101,27 @@ impl SchedulerServiceDefault {
             promise_service,
             oplog_service,
             worker_service,
-            worker_activator,
+            worker_access,
         };
         let svc = Arc::new(svc);
         let background_handle = {
             let svc = svc.clone();
-            tokio::spawn(async move {
-                loop {
-                    tokio::time::sleep(process_interval).await;
-                    if svc.shard_service.is_ready() {
-                        let r = svc.process(Utc::now()).await;
-                        if let Err(err) = r {
-                            error!(err, "Error in scheduler background task");
+            tokio::spawn(
+                async move {
+                    loop {
+                        tokio::time::sleep(process_interval).await;
+                        if svc.shard_service.is_ready() {
+                            let r = svc.process(Utc::now()).await;
+                            if let Err(err) = r {
+                                error!(err, "Error in scheduler background task");
+                            }
+                        } else {
+                            warn!("Skipping schedule, shard service is not ready")
                         }
-                    } else {
-                        warn!("Skipping schedule, shard service is not ready")
                     }
                 }
-            })
+                .in_current_span(),
+            )
         };
         *svc.background_handle.lock().unwrap() = Some(background_handle);
 
@@ -164,35 +198,39 @@ impl SchedulerServiceDefault {
                         let current_last_index =
                             self.oplog_service.get_last_index(&owned_worker_id).await;
                         if current_last_index == last_oplog_index {
-                            // We never schedule an archive operation for ephemeral workers, because they immediately write their oplog to the arcchive layer
-                            // So we can assume the component type is Durable here without calculating it from the latest component and worker metadata.
-                            let oplog = self
-                                .oplog_service
-                                .open(&owned_worker_id, last_oplog_index, ComponentType::Durable)
-                                .await;
-
-                            let start = Instant::now();
-                            if let Some(more) = MultiLayerOplog::try_archive(&oplog).await {
-                                record_scheduled_archive(start.elapsed(), more);
-                                if more {
-                                    self.schedule(
-                                        now.add(next_after),
-                                        ScheduledAction::ArchiveOplog {
-                                            owned_worker_id,
-                                            last_oplog_index,
-                                            next_after,
-                                        },
-                                    )
-                                    .await;
-                                } else {
-                                    info!(
+                            // Need to create the `Worker` instance to avoid race conditions
+                            match self.worker_access.open_oplog(&owned_worker_id).await {
+                                Ok(oplog) => {
+                                    let start = Instant::now();
+                                    if let Some(more) = MultiLayerOplog::try_archive(&oplog).await {
+                                        record_scheduled_archive(start.elapsed(), more);
+                                        if more {
+                                            self.schedule(
+                                                now.add(next_after),
+                                                ScheduledAction::ArchiveOplog {
+                                                    owned_worker_id,
+                                                    last_oplog_index,
+                                                    next_after,
+                                                },
+                                            )
+                                            .await;
+                                        } else {
+                                            info!(
+                                                worker_id = owned_worker_id.to_string(),
+                                                "Deleting cached status of fully archived worker"
+                                            );
+                                            // The oplog is fully archived, so we can also delete the cached worker status
+                                            self.worker_service
+                                                .remove_cached_status(&owned_worker_id)
+                                                .await;
+                                        }
+                                    }
+                                }
+                                Err(error) => {
+                                    error!(
                                         worker_id = owned_worker_id.to_string(),
-                                        "Deleting cached status of fully archived worker"
+                                        "Failed to activate worker for archiving: {error}"
                                     );
-                                    // The oplog is fully archived, so we can also delete the cached worker status
-                                    self.worker_service
-                                        .remove_cached_status(&owned_worker_id)
-                                        .await;
                                 }
                             }
                         }
@@ -209,7 +247,7 @@ impl SchedulerServiceDefault {
                 "scheduler",
                 worker_id = owned_worker_id.worker_id.to_string()
             );
-            self.worker_activator
+            self.worker_access
                 .activate_worker(&owned_worker_id)
                 .instrument(span)
                 .await;
@@ -292,30 +330,45 @@ impl SchedulerService for SchedulerServiceDefault {
 mod tests {
     use test_r::test;
 
+    use async_trait::async_trait;
+    use bincode::Encode;
     use std::collections::{HashMap, HashSet};
     use std::str::FromStr;
     use std::sync::Arc;
     use std::time::Duration;
 
-    use bincode::Encode;
-
     use chrono::DateTime;
 
     use uuid::Uuid;
 
-    use crate::services::oplog::{OplogService, PrimaryOplogService};
+    use crate::error::GolemError;
+    use crate::services::oplog::{Oplog, OplogService, PrimaryOplogService};
     use crate::services::promise::PromiseServiceMock;
-    use crate::services::scheduler::{SchedulerService, SchedulerServiceDefault};
+    use crate::services::scheduler::{
+        SchedulerService, SchedulerServiceDefault, SchedulerWorkerAccess,
+    };
     use crate::services::shard::{ShardService, ShardServiceDefault};
     use crate::services::worker::{DefaultWorkerService, WorkerService};
-    use crate::services::worker_activator::{WorkerActivator, WorkerActivatorMock};
     use crate::storage::indexed::memory::InMemoryIndexedStorage;
     use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
     use golem_common::model::oplog::OplogIndex;
     use golem_common::model::{
-        AccountId, ComponentId, PromiseId, ScheduledAction, ShardId, WorkerId,
+        AccountId, ComponentId, OwnedWorkerId, PromiseId, ScheduledAction, ShardId, WorkerId,
     };
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
+
+    struct SchedulerWorkerAccessMock;
+
+    #[async_trait]
+    impl SchedulerWorkerAccess for SchedulerWorkerAccessMock {
+        async fn activate_worker(&self, _owned_worker_id: &OwnedWorkerId) {}
+        async fn open_oplog(
+            &self,
+            _owned_worker_id: &OwnedWorkerId,
+        ) -> Result<Arc<dyn Oplog + Send + Sync>, GolemError> {
+            unimplemented!()
+        }
+    }
 
     fn serialized_bytes<T: Encode>(entry: &T) -> Vec<u8> {
         golem_common::serialization::serialize(entry)
@@ -333,8 +386,8 @@ mod tests {
         Arc::new(PromiseServiceMock::new())
     }
 
-    fn create_worker_activator_mock() -> Arc<dyn WorkerActivator + Send + Sync> {
-        Arc::new(WorkerActivatorMock::new())
+    fn create_worker_access_mock() -> Arc<dyn SchedulerWorkerAccess + Send + Sync> {
+        Arc::new(SchedulerWorkerAccessMock)
     }
 
     async fn create_oplog_service_mock() -> Arc<dyn OplogService + Send + Sync> {
@@ -391,7 +444,7 @@ mod tests {
 
         let shard_service = create_shard_service_mock();
         let promise_service = create_promise_service_mock();
-        let worker_activator = create_worker_activator_mock();
+        let worker_access = create_worker_access_mock();
         let oplog_service = create_oplog_service_mock().await;
         let worker_service =
             create_worker_service_mock(kvs.clone(), shard_service.clone(), oplog_service.clone());
@@ -400,7 +453,7 @@ mod tests {
             kvs.clone(),
             shard_service,
             promise_service,
-            worker_activator,
+            worker_access,
             oplog_service,
             worker_service,
             Duration::from_secs(1000), // not testing process() here
@@ -508,7 +561,7 @@ mod tests {
 
         let shard_service = create_shard_service_mock();
         let promise_service = create_promise_service_mock();
-        let worker_activator = create_worker_activator_mock();
+        let worker_access = create_worker_access_mock();
         let oplog_service = create_oplog_service_mock().await;
         let worker_service =
             create_worker_service_mock(kvs.clone(), shard_service.clone(), oplog_service.clone());
@@ -517,7 +570,7 @@ mod tests {
             kvs.clone(),
             shard_service,
             promise_service,
-            worker_activator,
+            worker_access,
             oplog_service,
             worker_service,
             Duration::from_secs(1000), // not testing process() here
@@ -610,7 +663,7 @@ mod tests {
 
         let shard_service = create_shard_service_mock();
         let promise_service = create_promise_service_mock();
-        let worker_activator = create_worker_activator_mock();
+        let worker_access = create_worker_access_mock();
         let oplog_service = create_oplog_service_mock().await;
         let worker_service =
             create_worker_service_mock(kvs.clone(), shard_service.clone(), oplog_service.clone());
@@ -619,7 +672,7 @@ mod tests {
             kvs.clone(),
             shard_service,
             promise_service.clone(),
-            worker_activator,
+            worker_access,
             oplog_service,
             worker_service,
             Duration::from_secs(1000), // explicitly calling process for testing
@@ -717,7 +770,7 @@ mod tests {
 
         let shard_service = create_shard_service_mock();
         let promise_service = create_promise_service_mock();
-        let worker_activator = create_worker_activator_mock();
+        let worker_access = create_worker_access_mock();
         let oplog_service = create_oplog_service_mock().await;
         let worker_service =
             create_worker_service_mock(kvs.clone(), shard_service.clone(), oplog_service.clone());
@@ -726,7 +779,7 @@ mod tests {
             kvs.clone(),
             shard_service,
             promise_service.clone(),
-            worker_activator,
+            worker_access,
             oplog_service,
             worker_service,
             Duration::from_secs(1000), // explicitly calling process for testing
@@ -822,7 +875,7 @@ mod tests {
 
         let shard_service = create_shard_service_mock();
         let promise_service = create_promise_service_mock();
-        let worker_activator = create_worker_activator_mock();
+        let worker_access = create_worker_access_mock();
         let oplog_service = create_oplog_service_mock().await;
         let worker_service =
             create_worker_service_mock(kvs.clone(), shard_service.clone(), oplog_service.clone());
@@ -831,7 +884,7 @@ mod tests {
             kvs.clone(),
             shard_service,
             promise_service.clone(),
-            worker_activator,
+            worker_access,
             oplog_service,
             worker_service,
             Duration::from_secs(1000), // explicitly calling process for testing
@@ -933,7 +986,7 @@ mod tests {
 
         let shard_service = create_shard_service_mock();
         let promise_service = create_promise_service_mock();
-        let worker_activator = create_worker_activator_mock();
+        let worker_access = create_worker_access_mock();
         let oplog_service = create_oplog_service_mock().await;
         let worker_service =
             create_worker_service_mock(kvs.clone(), shard_service.clone(), oplog_service.clone());
@@ -942,7 +995,7 @@ mod tests {
             kvs.clone(),
             shard_service,
             promise_service.clone(),
-            worker_activator,
+            worker_access,
             oplog_service,
             worker_service,
             Duration::from_secs(1000), // explicitly calling process for testing

@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -25,8 +25,9 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use golem_common::config::{
-    ConfigExample, ConfigLoader, DbSqliteConfig, HasConfigExamples, RedisConfig, RetryConfig,
+    ConfigExample, ConfigLoader, DbSqliteConfig, HasConfigExamples, RedisConfig,
 };
+use golem_common::model::RetryConfig;
 use golem_common::tracing::TracingConfig;
 
 /// The shared global Golem configuration
@@ -137,6 +138,7 @@ pub struct CompiledComponentServiceDisabledConfig {}
 pub enum ShardManagerServiceConfig {
     Grpc(ShardManagerServiceGrpcConfig),
     SingleShard,
+    Disabled,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

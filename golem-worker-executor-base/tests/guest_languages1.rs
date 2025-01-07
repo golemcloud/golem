@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,14 +18,16 @@ use assert2::{assert, check};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 
+use axum::response::IntoResponse;
+use axum::routing::post;
+use axum::Router;
+use bytes::Bytes;
 use chrono::Datelike;
 use golem_test_framework::dsl::{log_event_to_string, TestDslUnsafe};
 use golem_wasm_rpc::Value;
-use http_02::{Response, StatusCode};
+use http::HeaderMap;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
-use tonic::transport::Body;
-use warp::Filter;
+use std::time::{Duration, Instant};
 
 use crate::common::{start, TestContext};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
@@ -96,13 +98,19 @@ async fn tinygo_example(
         .await
         .unwrap();
 
-    tokio::time::sleep(Duration::from_secs(5)).await;
     let mut events = vec![];
-    rx.recv_many(&mut events, 100).await;
+    let start = Instant::now();
+    while events.len() < 5 && start.elapsed() < Duration::from_secs(5) {
+        if let Some(event) = rx.recv().await {
+            events.push(event);
+        } else {
+            break;
+        }
+    }
 
     drop(executor);
 
-    assert!(events.len() >= 4);
+    assert!(events.len() >= 5);
 
     let first_line = log_event_to_string(&events[1]);
     let second_line = log_event_to_string(&events[2]);
@@ -136,34 +144,41 @@ async fn tinygo_http_client(
     let captured_body: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let captured_body_clone = captured_body.clone();
     let http_host_port = context.host_http_port();
-    let http_server = tokio::spawn(async move {
-        let route = warp::path("post-example")
-            .and(warp::post())
-            .and(warp::header::optional::<String>("X-Test"))
-            .and(warp::body::bytes())
-            .map(move |header: Option<String>, body: bytes::Bytes| {
-                let body_str = String::from_utf8(body.to_vec()).unwrap();
-                {
-                    let mut capture = captured_body_clone.lock().unwrap();
-                    *capture = Some(body_str.clone());
-                    println!("captured body: {}", body_str);
-                }
-                Response::builder()
-                    .status(StatusCode::OK)
-                    .body(Body::from(format!(
-                        "{{ \"percentage\" : 0.25, \"message\": \"response message {}\" }}",
-                        header.unwrap_or("no X-Test header".to_string()),
-                    )))
-                    .unwrap()
-            });
 
-        warp::serve(route)
-            .run(
-                format!("0.0.0.0:{}", http_host_port)
-                    .parse::<SocketAddr>()
-                    .unwrap(),
-            )
-            .await;
+    async fn request_handler(
+        captured_body_clone: Arc<Mutex<Option<String>>>,
+        headers: HeaderMap,
+        body: Bytes,
+    ) -> impl IntoResponse {
+        let body_str = String::from_utf8(body.to_vec()).unwrap();
+        {
+            let mut capture = captured_body_clone.lock().unwrap();
+            *capture = Some(body_str.clone());
+            println!("captured body: {}", body_str);
+        }
+        let header = headers.get("X-Test");
+        format!(
+            "{{ \"percentage\" : 0.25, \"message\": \"response message {}\" }}",
+            header
+                .map(|h| h.to_str().unwrap().to_string())
+                .unwrap_or("no X-Test header".to_string()),
+        )
+    }
+
+    let http_server = tokio::spawn(async move {
+        let route = Router::new().route(
+            "/post-example",
+            post(|headers, body| request_handler(captured_body_clone, headers, body)),
+        );
+
+        let listener = tokio::net::TcpListener::bind(
+            format!("0.0.0.0:{}", http_host_port)
+                .parse::<SocketAddr>()
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        axum::serve(listener, route).await.unwrap();
     });
 
     let component_id = executor.store_component("tinygo-wasi-http").await;
@@ -266,9 +281,15 @@ async fn java_example_1(
         .await
         .unwrap();
 
-    tokio::time::sleep(Duration::from_secs(5)).await;
     let mut events = vec![];
-    rx.recv_many(&mut events, 100).await;
+    let start = Instant::now();
+    while events.len() < 2 && start.elapsed() < Duration::from_secs(5) {
+        if let Some(event) = rx.recv().await {
+            events.push(event);
+        } else {
+            break;
+        }
+    }
 
     drop(executor);
 
@@ -401,9 +422,15 @@ async fn c_example_1(
         .await
         .unwrap();
 
-    tokio::time::sleep(Duration::from_secs(5)).await;
     let mut events = vec![];
-    rx.recv_many(&mut events, 100).await;
+    let start = Instant::now();
+    while events.len() < 2 && start.elapsed() < Duration::from_secs(5) {
+        if let Some(event) = rx.recv().await {
+            events.push(event);
+        } else {
+            break;
+        }
+    }
 
     drop(executor);
 
@@ -437,9 +464,15 @@ async fn c_example_2(
         .await
         .unwrap();
 
-    tokio::time::sleep(Duration::from_secs(5)).await;
     let mut events = vec![];
-    rx.recv_many(&mut events, 100).await;
+    let start = Instant::now();
+    while events.len() < 2 && start.elapsed() < Duration::from_secs(5) {
+        if let Some(event) = rx.recv().await {
+            events.push(event);
+        } else {
+            break;
+        }
+    }
 
     drop(executor);
 

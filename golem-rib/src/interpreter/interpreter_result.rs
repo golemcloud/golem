@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,13 +14,13 @@
 
 use crate::interpreter::interpreter_stack_value::RibInterpreterStackValue;
 use crate::{GetLiteralValue, LiteralValue};
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::protobuf::NameValuePair;
+use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm_rpc::{Value, ValueAndType};
 
 #[derive(Debug)]
 pub enum RibResult {
     Unit,
-    Val(TypeAnnotatedValue),
+    Val(ValueAndType),
 }
 
 impl RibResult {
@@ -29,8 +29,8 @@ impl RibResult {
     ) -> Option<RibResult> {
         match stack_value {
             RibInterpreterStackValue::Unit => Some(RibResult::Unit),
-            RibInterpreterStackValue::Val(type_annotated_value) => {
-                Some(RibResult::Val(type_annotated_value.clone()))
+            RibInterpreterStackValue::Val(value_and_type) => {
+                Some(RibResult::Val(value_and_type.clone()))
             }
             RibInterpreterStackValue::Iterator(_) => None,
             RibInterpreterStackValue::Sink(_, _) => None,
@@ -39,12 +39,15 @@ impl RibResult {
 
     pub fn get_bool(&self) -> Option<bool> {
         match self {
-            RibResult::Val(TypeAnnotatedValue::Bool(bool)) => Some(*bool),
+            RibResult::Val(ValueAndType {
+                value: Value::Bool(bool),
+                ..
+            }) => Some(*bool),
             RibResult::Val(_) => None,
             RibResult::Unit => None,
         }
     }
-    pub fn get_val(&self) -> Option<TypeAnnotatedValue> {
+    pub fn get_val(&self) -> Option<ValueAndType> {
         match self {
             RibResult::Val(val) => Some(val.clone()),
             RibResult::Unit => None,
@@ -55,9 +58,18 @@ impl RibResult {
         self.get_val().and_then(|x| x.get_literal())
     }
 
-    pub fn get_record(&self) -> Option<Vec<NameValuePair>> {
+    pub fn get_record(&self) -> Option<Vec<(String, ValueAndType)>> {
         self.get_val().and_then(|x| match x {
-            TypeAnnotatedValue::Record(record) => Some(record.value),
+            ValueAndType {
+                value: Value::Record(field_values),
+                typ: AnalysedType::Record(typ),
+            } => Some(
+                field_values
+                    .into_iter()
+                    .zip(typ.fields)
+                    .map(|(value, typ)| (typ.name, ValueAndType::new(value, typ.typ)))
+                    .collect(),
+            ),
             _ => None,
         })
     }

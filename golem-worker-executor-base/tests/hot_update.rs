@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,18 +17,19 @@ use test_r::{inherit_test_dep, test};
 use crate::{common, LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
 use async_mutex::Mutex;
+use axum::routing::post;
+use axum::Router;
+use bytes::Bytes;
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::Value;
-use http_02::{Response, StatusCode};
+use http::StatusCode;
 use log::info;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::spawn;
 use tokio::task::JoinHandle;
-use tonic::transport::Body;
 use tracing::debug;
-use warp::Filter;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -71,42 +72,38 @@ impl TestHttpServer {
         let f1_blocker = Arc::new(Mutex::new(None::<F1Blocker>));
         let f1_blocker_clone = f1_blocker.clone();
         let handle = spawn(async move {
-            let route = warp::path("f1")
-                .and(warp::body::json())
-                .and(warp::post())
-                .then(move |body: u64| {
-                    let f1_blocker_clone = f1_blocker_clone.clone();
-                    async move {
-                        debug!("f1: {body}");
+            let route = Router::new().route(
+                "/f1",
+                post(move |body: Bytes| async move {
+                    let body: u64 = String::from_utf8(body.to_vec()).unwrap().parse().unwrap();
+                    debug!("f1: {}", body);
 
-                        let mut guard = f1_blocker_clone.lock().await;
-                        if let Some(blocker) = &*guard {
-                            if blocker.value == body {
-                                let F1Blocker {
-                                    reached, resume, ..
-                                } = guard.take().unwrap();
-                                debug!("Reached f1 blocking point");
-                                reached.send(()).unwrap();
-                                debug!("Awaiting resume at f1 blocking point");
-                                resume.await.unwrap();
-                                debug!("Resuming from f1 blocking point");
-                            }
+                    let mut guard = f1_blocker_clone.lock().await;
+                    if let Some(blocker) = &*guard {
+                        if blocker.value == body {
+                            let F1Blocker {
+                                reached, resume, ..
+                            } = guard.take().unwrap();
+                            debug!("Reached f1 blocking point");
+                            reached.send(()).unwrap();
+                            debug!("Awaiting resume at f1 blocking point");
+                            resume.await.unwrap();
+                            debug!("Resuming from f1 blocking point");
                         }
-
-                        Response::builder()
-                            .status(StatusCode::OK)
-                            .body(Body::empty())
-                            .unwrap()
                     }
-                });
 
-            warp::serve(route)
-                .run(
-                    format!("0.0.0.0:{}", host_http_port)
-                        .parse::<SocketAddr>()
-                        .unwrap(),
-                )
-                .await;
+                    StatusCode::OK
+                }),
+            );
+
+            let listener = tokio::net::TcpListener::bind(
+                format!("0.0.0.0:{}", host_http_port)
+                    .parse::<SocketAddr>()
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+            axum::serve(listener, route).await.unwrap();
         });
         Self { handle, f1_blocker }
     }
@@ -711,4 +708,70 @@ async fn manual_update_on_idle_with_failing_load(
     check!(metadata.last_known_status.pending_updates.is_empty());
     check!(metadata.last_known_status.failed_updates.len() == 1);
     check!(metadata.last_known_status.successful_updates.is_empty());
+}
+
+#[test]
+#[tracing::instrument]
+async fn manual_update_on_idle_using_v11(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = common::TestContext::new(last_unique_id);
+    let executor = common::start(deps, &context).await.unwrap();
+
+    let host_http_port = context.host_http_port();
+    let http_server = TestHttpServer::start(host_http_port);
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), context.host_http_port().to_string());
+
+    let component_id = executor.store_unique_component("update-test-v2-11").await;
+    let worker_id = executor
+        .start_worker_with(
+            &component_id,
+            "manual_update_on_idle_using_v11",
+            vec![],
+            env,
+        )
+        .await;
+    let _ = executor.log_output(&worker_id).await;
+
+    let target_version = executor
+        .update_component(&component_id, "update-test-v3-11")
+        .await;
+    info!("Updated component to version {target_version}");
+
+    let _ = executor
+        .invoke_and_await(&worker_id, "golem:component/api.{f1}", vec![Value::U64(0)])
+        .await
+        .unwrap();
+
+    let before_update = executor
+        .invoke_and_await(&worker_id, "golem:component/api.{f2}", vec![])
+        .await
+        .unwrap();
+
+    executor
+        .manual_update_worker(&worker_id, target_version)
+        .await;
+
+    let after_update = executor
+        .invoke_and_await(&worker_id, "golem:component/api.{get}", vec![])
+        .await
+        .unwrap();
+
+    let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
+
+    // Explanation: we can call 'get' on the updated component that does not exist in previous
+    // versions, and it returns the previous global state which has been transferred to it
+    // using the v2 component's 'save' function through the v3 component's load function.
+
+    drop(executor);
+    http_server.abort();
+
+    check!(before_update == after_update);
+    check!(metadata.last_known_status.component_version == target_version);
+    check!(metadata.last_known_status.pending_updates.is_empty());
+    check!(metadata.last_known_status.failed_updates.is_empty());
+    check!(metadata.last_known_status.successful_updates.len() == 1);
 }
