@@ -126,6 +126,7 @@ export function VersionFilter() {
       );
     } else {
       params.delete("workerVersion");
+      selectedVersionRef.current = ["-1"];
     }
     router.push(`/components/${compId}/workers?${params.toString()}`);
   };
