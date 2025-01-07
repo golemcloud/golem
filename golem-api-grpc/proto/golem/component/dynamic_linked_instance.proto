@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package golem.component;
+
+message DynamicLinkedInstance {
+  oneof dynamic_linked_instance {
+    DynamicLinkedWasmRpc wasm_rpc = 1;
+  }
+}
+
+message DynamicLinkedWasmRpc {
+  map<string, string> target_interface_name = 1;
+}

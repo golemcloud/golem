@@ -22,7 +22,7 @@ use async_trait::async_trait;
 use async_zip::base::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
 use colored::Colorize;
-use golem_client::model::ComponentType;
+use golem_client::model::{ComponentType, DynamicLinking};
 use golem_common::model::{
     ComponentFilePath, ComponentFilePathWithPermissions, ComponentFilePathWithPermissionsList,
 };
@@ -54,6 +54,7 @@ pub trait ComponentService {
         non_interactive: bool,
         format: Format,
         files: Vec<InitialComponentFile>,
+        dynamic_linking: Option<DynamicLinking>,
     ) -> Result<ComponentUpsertResult, GolemError>;
 
     async fn update(
@@ -65,6 +66,7 @@ pub trait ComponentService {
         non_interactive: bool,
         format: Format,
         files: Vec<InitialComponentFile>,
+        dynamic_linking: Option<DynamicLinking>,
     ) -> Result<ComponentUpsertResult, GolemError>;
 
     async fn list(
@@ -290,6 +292,7 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
         non_interactive: bool,
         format: Format,
         files: Vec<InitialComponentFile>,
+        dynamic_linking: Option<DynamicLinking>,
     ) -> Result<ComponentUpsertResult, GolemError> {
         let files_archive = if !files.is_empty() {
             Some(self.build_files_archive(files).await?)
@@ -309,6 +312,7 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
                 component_type,
                 files_archive_path,
                 files_archive_properties,
+                dynamic_linking.clone(),
             )
             .await;
 
@@ -338,7 +342,7 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
                             });
                             let urn = self.resolve_uri(component_uri, &project).await?;
                             self.client.update(urn, component_file, Some(component_type), files_archive_path,
-                                               files_archive_properties).await.map(ComponentUpsertResult::Updated)
+                                               files_archive_properties, dynamic_linking).await.map(ComponentUpsertResult::Updated)
                         }
                         Ok(false) => Ok(ComponentUpsertResult::Skipped),
                         Err(error) => Err(GolemError(format!("Error while asking for confirmation: {}; Use the --non-interactive (-y) flag to bypass it.", error))),
@@ -363,6 +367,7 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
         non_interactive: bool,
         format: Format,
         files: Vec<InitialComponentFile>,
+        dynamic_linking: Option<DynamicLinking>,
     ) -> Result<ComponentUpsertResult, GolemError> {
         let result = self.resolve_uri(component_uri.clone(), &project).await;
 
@@ -398,7 +403,7 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
                                 ComponentUri::URL(ComponentUrl { name }) => ComponentName(name.clone()),
                                 _ => unreachable!(),
                             };
-                            self.client.add(component_name, component_file, &project, component_type.unwrap_or(ComponentType::Durable), files_archive_path, files_archive_properties).await.map(ComponentUpsertResult::Added)
+                            self.client.add(component_name, component_file, &project, component_type.unwrap_or(ComponentType::Durable), files_archive_path, files_archive_properties, dynamic_linking).await.map(ComponentUpsertResult::Added)
                     }
                     Ok(false) => Ok(ComponentUpsertResult::Skipped),
                     Err(error) => Err(GolemError(format!("Error while asking for confirmation: {}; Use the --non-interactive (-y) flag to bypass it.", error))),
@@ -413,6 +418,7 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
                     component_type,
                     files_archive_path,
                     files_archive_properties,
+                    dynamic_linking,
                 )
                 .await
                 .map(ComponentUpsertResult::Updated),

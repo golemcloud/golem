@@ -25,7 +25,9 @@ use crate::service::deploy::DeployService;
 use crate::service::project::ProjectResolver;
 use clap::Subcommand;
 use futures_util::future::join_all;
-use golem_client::model::ComponentType;
+use golem_client::model::{
+    ComponentType, DynamicLinkedInstance, DynamicLinkedWasmRpc, DynamicLinking,
+};
 use golem_common::model::PluginInstallationId;
 use golem_common::uri::oss::uri::ComponentUri;
 use golem_common::uri::oss::url::ComponentUrl;
@@ -324,6 +326,7 @@ impl<
                         non_interactive,
                         format,
                         vec![],
+                        None,
                     )
                     .await?
                     .to_golem_result())
@@ -339,19 +342,20 @@ impl<
             } => {
                 let project_id = projects.resolve_id_or_default(project_ref).await?;
 
-                let ctx = ApplicationComponentContext::new(
+                let mut ctx = ApplicationComponentContext::new(
                     format,
                     app,
                     build_profile.map(|profile| profile.into()),
                     component_names.into_iter().map(|name| name.0).collect(),
                 )?;
 
-                let component_names = ctx.selected_component_names();
+                let component_names = ctx.selected_component_names().clone();
                 if component_names.is_empty() {
                     return errors::no_components_found();
                 }
 
-                for component_name in component_names {
+                for component_name in &component_names {
+                    let dynamic_linking = ctx.dynamic_linking(component_name)?;
                     let extensions = ctx.component_extensions(component_name);
                     component_service
                         .add(
@@ -362,6 +366,7 @@ impl<
                             non_interactive,
                             format,
                             extensions.files.clone(),
+                            dynamic_linking,
                         )
                         .await?
                         .to_golem_result()
@@ -401,6 +406,7 @@ impl<
                         non_interactive,
                         format,
                         vec![],
+                        None,
                     )
                     .await?
                     .to_golem_result()
@@ -436,14 +442,14 @@ impl<
 
                 let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
 
-                let ctx = ApplicationComponentContext::new(
+                let mut ctx = ApplicationComponentContext::new(
                     format,
                     app,
                     build_profile.map(|profile| profile.into()),
                     component_names_to_uris.keys().cloned().collect(),
                 )?;
 
-                let component_names = ctx.selected_component_names();
+                let component_names = ctx.selected_component_names().clone();
                 if component_names.is_empty() {
                     return errors::no_components_found();
                 }
@@ -470,7 +476,8 @@ impl<
                     component_names_to_uris
                 };
 
-                for component_name in component_names {
+                for component_name in &component_names {
+                    let dynamic_linking = ctx.dynamic_linking(component_name)?;
                     let extensions = ctx.component_extensions(component_name);
                     component_service
                         .update(
@@ -484,6 +491,7 @@ impl<
                             non_interactive,
                             format,
                             extensions.files.clone(),
+                            dynamic_linking,
                         )
                         .await?
                         .to_golem_result()
@@ -683,6 +691,45 @@ impl ApplicationComponentContext {
 
     fn selected_component_names(&self) -> &BTreeSet<app::ComponentName> {
         self.application_context.selected_component_names()
+    }
+
+    fn dynamic_linking(
+        &mut self,
+        component_name: &app::ComponentName,
+    ) -> Result<Option<DynamicLinking>, GolemError> {
+        let mut mapping = Vec::new();
+
+        let wasm_rpc_deps = self
+            .application_context
+            .application
+            .component_wasm_rpc_dependencies(component_name)
+            .clone();
+
+        for wasm_rpc_dep in wasm_rpc_deps {
+            let ifaces = self
+                .application_context
+                .component_stub_interfaces(&wasm_rpc_dep)
+                .map_err(|err| GolemError(err.to_string()))?;
+
+            mapping.push(ifaces);
+        }
+
+        if mapping.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(DynamicLinking {
+                dynamic_linking: HashMap::from_iter(mapping.into_iter().map(|stub_interfaces| {
+                    (
+                        stub_interfaces.stub_interface_name,
+                        DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
+                            target_interface_name: HashMap::from_iter(
+                                stub_interfaces.exported_interfaces_per_stub_resource,
+                            ),
+                        }),
+                    )
+                })),
+            }))
+        }
     }
 }
 

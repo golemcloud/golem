@@ -67,10 +67,17 @@ pub enum ComponentSelectMode {
     Explicit(Vec<ComponentName>),
 }
 
+#[derive(Debug)]
+pub struct ComponentStubInterfaces {
+    pub stub_interface_name: String,
+    pub exported_interfaces_per_stub_resource: BTreeMap<String, String>,
+}
+
 pub struct ApplicationContext<CPE: ComponentPropertiesExtensions> {
     pub config: Config<CPE>,
     pub application: Application<CPE>,
     pub wit: ResolvedWitApplication,
+    component_stub_defs: HashMap<ComponentName, StubDefinition>,
     common_wit_deps: OnceCell<anyhow::Result<WitDepsResolver>>,
     component_generated_base_wit_deps: HashMap<ComponentName, WitDepsResolver>,
     selected_component_names: BTreeSet<ComponentName>,
@@ -94,6 +101,7 @@ impl<CPE: ComponentPropertiesExtensions> ApplicationContext<CPE> {
                         config,
                         application,
                         wit,
+                        component_stub_defs: HashMap::new(),
                         common_wit_deps: OnceCell::new(),
                         component_generated_base_wit_deps: HashMap::new(),
                         selected_component_names,
@@ -123,6 +131,58 @@ impl<CPE: ComponentPropertiesExtensions> ApplicationContext<CPE> {
                 self.wit = wit;
             }),
         )
+    }
+
+    fn component_stub_def(
+        &mut self,
+        component_name: &ComponentName,
+    ) -> anyhow::Result<&StubDefinition> {
+        if !self.component_stub_defs.contains_key(component_name) {
+            self.component_stub_defs.insert(
+                component_name.clone(),
+                StubDefinition::new(StubConfig {
+                    source_wit_root: self
+                        .application
+                        .component_generated_base_wit(component_name),
+                    client_root: self.application.client_temp_build_dir(component_name),
+                    selected_world: None,
+                    stub_crate_version: WASM_RPC_VERSION.to_string(),
+                    // NOTE: these overrides are deliberately not part of cli flags or the app manifest, at least for now
+                    wasm_rpc_override: WasmRpcOverride {
+                        wasm_rpc_path_override: std::env::var("WASM_RPC_PATH_OVERRIDE").ok(),
+                        wasm_rpc_version_override: std::env::var("WASM_RPC_VERSION_OVERRIDE").ok(),
+                    },
+                    extract_source_exports_package: false,
+                    seal_cargo_workspace: true,
+                })
+                .context("Failed to gather information for the stub generator")?,
+            );
+        }
+        Ok(self.component_stub_defs.get(component_name).unwrap())
+    }
+
+    pub fn component_stub_interfaces(
+        &mut self,
+        component_name: &ComponentName,
+    ) -> anyhow::Result<ComponentStubInterfaces> {
+        let stub_def = self.component_stub_def(component_name)?;
+        let client_package_name = stub_def.client_parser_package_name();
+        let result = ComponentStubInterfaces {
+            stub_interface_name: client_package_name
+                .interface_id(&stub_def.client_interface_name()),
+            exported_interfaces_per_stub_resource: BTreeMap::from_iter(
+                stub_def
+                    .stub_imported_interfaces()
+                    .iter()
+                    .filter_map(|interface| {
+                        interface
+                            .owner_interface
+                            .clone()
+                            .map(|owner| (interface.name.clone(), owner))
+                    }),
+            ),
+        };
+        Ok(result)
     }
 
     fn common_wit_deps(&self) -> anyhow::Result<&WitDepsResolver> {
@@ -1322,32 +1382,18 @@ fn update_cargo_toml<CPE: ComponentPropertiesExtensions>(
 }
 
 async fn build_client<CPE: ComponentPropertiesExtensions>(
-    ctx: &ApplicationContext<CPE>,
+    ctx: &mut ApplicationContext<CPE>,
     component_name: &ComponentName,
 ) -> anyhow::Result<bool> {
-    let target_root = ctx.application.client_temp_build_dir(component_name);
+    let stub_def = ctx.component_stub_def(component_name)?;
+    let client_wit_root = stub_def.client_wit_root();
 
-    let client_def = StubDefinition::new(StubConfig {
-        source_wit_root: ctx.application.component_generated_base_wit(component_name),
-        client_root: target_root.clone(),
-        selected_world: None,
-        stub_crate_version: WASM_RPC_VERSION.to_string(),
-        // NOTE: these overrides are deliberately not part of cli flags or the app manifest, at least for now
-        wasm_rpc_override: WasmRpcOverride {
-            wasm_rpc_path_override: std::env::var("WASM_RPC_PATH_OVERRIDE").ok(),
-            wasm_rpc_version_override: std::env::var("WASM_RPC_VERSION_OVERRIDE").ok(),
-        },
-        extract_source_exports_package: false,
-        seal_cargo_workspace: true,
-    })
-    .context("Failed to gather information for the client generator")?;
-
-    let client_dep_package_ids = client_def.stub_dep_package_ids();
-    let client_sources: Vec<PathBuf> = client_def
+    let client_dep_package_ids = stub_def.stub_dep_package_ids();
+    let client_sources: Vec<PathBuf> = stub_def
         .packages_with_wit_sources()
         .flat_map(|(package_id, _, sources)| {
             (client_dep_package_ids.contains(&package_id)
-                || package_id == client_def.source_package_id)
+                || package_id == stub_def.source_package_id)
                 .then(|| sources.files.iter().cloned())
                 .unwrap_or_default()
         })
@@ -1386,7 +1432,7 @@ async fn build_client<CPE: ComponentPropertiesExtensions>(
 
         task_result_marker.result(
             async {
-                delete_path("client temp build dir", &target_root)?;
+                delete_path("client temp build dir", &client_wit_root)?;
                 delete_path("client wit", &client_wit)?;
                 delete_path("client wasm", &client_wasm)?;
 
@@ -1394,16 +1440,17 @@ async fn build_client<CPE: ComponentPropertiesExtensions>(
                     "Creating",
                     format!(
                         "client temp build dir {}",
-                        target_root.log_color_highlight()
+                        client_wit_root.log_color_highlight()
                     ),
                 );
-                fs::create_dir_all(&target_root)?;
+                fs::create_dir_all(&client_wit_root)?;
 
+                let offline = ctx.config.offline;
                 commands::generate::build(
-                    &client_def,
+                    ctx.component_stub_def(component_name)?,
                     &client_wasm,
                     &client_wit,
-                    ctx.config.offline,
+                    offline,
                 )
                 .await
             }
@@ -1411,7 +1458,7 @@ async fn build_client<CPE: ComponentPropertiesExtensions>(
         )?;
 
         if !env_var_flag("WASM_RPC_KEEP_CLIENT_DIR") {
-            delete_path("client temp build dir", &target_root)?;
+            delete_path("client temp build dir", &client_wit_root)?;
         }
 
         Ok(true)
