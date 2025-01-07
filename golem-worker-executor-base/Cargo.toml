@@ -23,6 +23,7 @@ golem-rib = { path = "../golem-rib", version = "0.0.0" }
 golem-service-base = { path = "../golem-service-base", version = "0.0.0" }
 golem-wasm-ast = { path = "../wasm-ast", version = "0.0.0" }
 golem-wasm-rpc = { path = "../wasm-rpc", version = "0.0.0", default-features = false, features = ["host"] }
+golem-worker-service-base = { path = "../golem-worker-service-base", version = "0.0.0" }
 
 anyhow = { workspace = true }
 async-fs = { workspace = true }
@@ -72,6 +73,8 @@ rustls = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sysinfo = "0.33.0"
+poem = { version = "1.3", features = ["test"] }
+poem-openapi = { version = "3.0.6", features = ["swagger-ui", "openapi-explorer"] }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }

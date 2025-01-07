@@ -57,20 +57,17 @@ pub trait ApiDefinitionClient {
         version: ApiDefinitionVersion,
         project: &Self::ProjectContext,
     ) -> Result<String, GolemError>;
-    /// Export OpenAPI specification for an API definition
-    async fn export(
+    async fn get_swagger_url(
         &self,
         id: ApiDefinitionId,
         version: ApiDefinitionVersion,
         project: &Self::ProjectContext,
-        format: &ApiDefinitionFileFormat,
     ) -> Result<String, GolemError>;
-    /// Launch SwaggerUI for API definition exploration
-    async fn ui(
+    async fn export_schema(
         &self,
         id: ApiDefinitionId,
         version: ApiDefinitionVersion,
         project: &Self::ProjectContext,
-        port: u16,
+        format: ApiDefinitionFileFormat,
     ) -> Result<String, GolemError>;
 }

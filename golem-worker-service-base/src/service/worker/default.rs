@@ -18,7 +18,6 @@ use super::{
 };
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::stream::TryStreamExt;
 use futures::{Stream, StreamExt};
 use golem_api_grpc::proto::golem::worker::LogEvent;
 use golem_api_grpc::proto::golem::worker::UpdateMode;
@@ -260,6 +259,7 @@ pub trait WorkerService {
         &self,
         worker_id: &TargetWorkerId,
         mount_path: String,
+        _metadata: WorkerRequestMetadata,
     ) -> WorkerResult<Pin<Box<dyn Stream<Item = WorkerResult<Bytes>> + Send + 'static>>>;
 }
 
@@ -388,7 +388,7 @@ impl WorkerService for WorkerServiceDefault {
                     CallWorkerExecutorError::FailedToConnectToPod(status)
                         if status.code() == Code::NotFound =>
                     {
-                        WorkerServiceError::WorkerNotFound(worker_id_err.to_string())
+                        WorkerServiceError::WorkerNotFound(worker_id_err.clone())
                     }
                     _ => WorkerServiceError::InternalCallError(error),
                 },
@@ -1042,88 +1042,61 @@ impl WorkerService for WorkerServiceDefault {
     ) -> WorkerResult<Pin<Box<dyn Stream<Item = WorkerResult<Bytes>> + Send + 'static>>> {
         let worker_id = worker_id.clone();
         let path_clone = path.clone();
+        let path_for_errors = path.clone();
         let stream = self
             .call_worker_executor(
                 worker_id.clone(),
-                "read_file",
+                "get_file_contents",
                 move |worker_executor_client| {
-                    info!("Connect worker");
-                    Box::pin(worker_executor_client.get_file_contents(
-                        workerexecutor::v1::GetFileContentsRequest {
-                            worker_id: Some(worker_id.clone().into()),
-                            account_id: metadata.account_id.clone().map(|id| id.into()),
-                            account_limits: metadata.limits.clone().map(|id| id.into()),
-                            file_path: path_clone.to_string(),
-                        },
-                    ))
+                    info!("Get file contents");
+                    let worker_id = worker_id.clone();
+                    Box::pin(
+                        worker_executor_client.get_file_contents(
+                            workerexecutor::v1::GetFileContentsRequest {
+                                worker_id: Some(worker_id.into()),
+                                file_path: path_clone.to_string(),
+                                account_id: metadata.account_id.clone().map(|id| id.into()),
+                                account_limits: metadata.limits.clone().map(|id| id.into()),
+                            },
+                        ),
+                    )
                 },
-                |response| Ok(WorkerStream::new(response.into_inner())),
+                move |response| {
+                    let path_for_errors = path_for_errors.clone();
+                    let stream = response.into_inner();
+                    Ok(Box::pin(stream.map(move |result| {
+                        let path_for_errors = path_for_errors.clone();
+                        match result {
+                            Ok(chunk) => match chunk.result {
+                                Some(workerexecutor::v1::get_file_contents_response::Result::Success(data)) => Ok(data),
+                                Some(workerexecutor::v1::get_file_contents_response::Result::Header(header)) => {
+                                    match header.result {
+                                        Some(workerexecutor::v1::get_file_contents_response_header::Result::NotFound(_)) => {
+                                            Err(ResponseMapResult::Other(WorkerServiceError::FileNotFound(path_for_errors.clone())))
+                                        }
+                                        Some(workerexecutor::v1::get_file_contents_response_header::Result::NotAFile(_)) => {
+                                            Err(ResponseMapResult::Other(WorkerServiceError::BadFileType(path_for_errors.clone())))
+                                        }
+                                        _ => Ok(Vec::new())
+                                    }
+                                }
+                                Some(workerexecutor::v1::get_file_contents_response::Result::Failure(err)) => {
+                                    Err(ResponseMapResult::Other(WorkerServiceError::Internal(format!("Worker execution error: {:?}", err))))
+                                }
+                                None => Err(ResponseMapResult::Other(WorkerServiceError::Internal("Empty response".to_string()))),
+                            },
+                            Err(err) => Err(ResponseMapResult::Other(WorkerServiceError::Internal(err.to_string()))),
+                        }
+                    })) as Pin<Box<dyn Stream<Item = Result<Vec<u8>, ResponseMapResult>> + Send + 'static>>)
+                },
                 WorkerServiceError::InternalCallError,
             )
             .await?;
 
-        let (header, stream) = stream.into_future().await;
-
-        let header = header.ok_or(WorkerServiceError::Internal("Empty stream".to_string()))?;
-
-        match header
-            .map_err(|_| WorkerServiceError::Internal("Stream error".to_string()))?
-            .result
-        {
-            Some(workerexecutor::v1::get_file_contents_response::Result::Success(_)) => Err(
-                WorkerServiceError::Internal("Protocal violation".to_string()),
-            ),
-            Some(workerexecutor::v1::get_file_contents_response::Result::Failure(err)) => {
-                let converted = GolemError::try_from(err).map_err(|err| {
-                    WorkerServiceError::Internal(format!("Failed converting errors {err}"))
-                })?;
-                Err(converted.into())
-            }
-            Some(workerexecutor::v1::get_file_contents_response::Result::Header(header)) => {
-                match header.result {
-                    Some(
-                        workerexecutor::v1::get_file_contents_response_header::Result::Success(_),
-                    ) => Ok(()),
-                    Some(
-                        workerexecutor::v1::get_file_contents_response_header::Result::NotAFile(_),
-                    ) => Err(WorkerServiceError::BadFileType(path)),
-                    Some(
-                        workerexecutor::v1::get_file_contents_response_header::Result::NotFound(_),
-                    ) => Err(WorkerServiceError::FileNotFound(path)),
-                    None => Err(WorkerServiceError::Internal("Empty response".to_string())),
-                }
-            }
-            None => Err(WorkerServiceError::Internal("Empty response".to_string())),
-        }?;
-
-        let stream = stream
-            .map_err(|_| WorkerServiceError::Internal("Stream error".to_string()))
-            .map(|item| {
-                item.and_then(|response| {
-                    response
-                        .result
-                        .ok_or(WorkerServiceError::Internal("Malformed chunk".to_string()))
-                })
-            })
-            .map_ok(|chunk| match chunk {
-                workerexecutor::v1::get_file_contents_response::Result::Success(bytes) => {
-                    Ok(Bytes::from(bytes))
-                }
-                workerexecutor::v1::get_file_contents_response::Result::Failure(err) => {
-                    let converted = GolemError::try_from(err)
-                        .map_err(|err| {
-                            WorkerServiceError::Internal(format!("Failed converting errors {err}"))
-                        })?
-                        .into();
-                    Err(converted)
-                }
-                workerexecutor::v1::get_file_contents_response::Result::Header(_) => Err(
-                    WorkerServiceError::Internal("Unexpected header".to_string()),
-                ),
-            })
-            .map(|item| item.and_then(|inner| inner));
-
-        Ok(Box::pin(stream))
+        Ok(Box::pin(stream.map(|r| r.map(Bytes::from).map_err(|e| match e {
+            ResponseMapResult::Other(err) => err,
+            _ => WorkerServiceError::Internal("Unexpected error type".to_string()),
+        }))))
     }
 
     async fn activate_plugin(
@@ -1138,30 +1111,26 @@ impl WorkerService for WorkerServiceDefault {
             worker_id.clone(),
             "activate_plugin",
             move |worker_executor_client| {
+                info!("Activate plugin");
                 let worker_id = worker_id.clone();
-                Box::pin(
-                    worker_executor_client.activate_plugin(ActivatePluginRequest {
-                        worker_id: Some(worker_id.into()),
-                        installation_id: Some(plugin_installation_id.clone().into()),
-                        account_id: metadata.account_id.clone().map(|id| id.into()),
-                    }),
-                )
+                Box::pin(worker_executor_client.activate_plugin(ActivatePluginRequest {
+                    worker_id: Some(worker_id.into()),
+                    installation_id: Some(plugin_installation_id.clone().into()),
+                    account_id: metadata.account_id.clone().map(|id| id.into()),
+                }))
             },
             |response| match response.into_inner() {
                 workerexecutor::v1::ActivatePluginResponse {
                     result: Some(workerexecutor::v1::activate_plugin_response::Result::Success(_)),
                 } => Ok(()),
                 workerexecutor::v1::ActivatePluginResponse {
-                    result:
-                    Some(workerexecutor::v1::activate_plugin_response::Result::Failure(err)),
+                    result: Some(workerexecutor::v1::activate_plugin_response::Result::Failure(err)),
                 } => Err(err.into()),
                 workerexecutor::v1::ActivatePluginResponse { .. } => Err("Empty response".into()),
             },
             WorkerServiceError::InternalCallError,
         )
-            .await?;
-
-        Ok(())
+        .await
     }
 
     async fn deactivate_plugin(
@@ -1176,64 +1145,73 @@ impl WorkerService for WorkerServiceDefault {
             worker_id.clone(),
             "deactivate_plugin",
             move |worker_executor_client| {
+                info!("Deactivate plugin");
                 let worker_id = worker_id.clone();
-                Box::pin(
-                    worker_executor_client.deactivate_plugin(DeactivatePluginRequest {
-                        worker_id: Some(worker_id.into()),
-                        installation_id: Some(plugin_installation_id.clone().into()),
-                        account_id: metadata.account_id.clone().map(|id| id.into()),
-                    }),
-                )
+                Box::pin(worker_executor_client.deactivate_plugin(DeactivatePluginRequest {
+                    worker_id: Some(worker_id.into()),
+                    installation_id: Some(plugin_installation_id.clone().into()),
+                    account_id: metadata.account_id.clone().map(|id| id.into()),
+                }))
             },
             |response| match response.into_inner() {
                 workerexecutor::v1::DeactivatePluginResponse {
                     result: Some(workerexecutor::v1::deactivate_plugin_response::Result::Success(_)),
                 } => Ok(()),
                 workerexecutor::v1::DeactivatePluginResponse {
-                    result:
-                    Some(workerexecutor::v1::deactivate_plugin_response::Result::Failure(err)),
+                    result: Some(workerexecutor::v1::deactivate_plugin_response::Result::Failure(err)),
                 } => Err(err.into()),
                 workerexecutor::v1::DeactivatePluginResponse { .. } => Err("Empty response".into()),
             },
             WorkerServiceError::InternalCallError,
         )
-            .await?;
-
-        Ok(())
+        .await
     }
 
     async fn get_swagger_ui_contents(
         &self,
         worker_id: &TargetWorkerId,
         mount_path: String,
+        _metadata: WorkerRequestMetadata,
     ) -> WorkerResult<Pin<Box<dyn Stream<Item = WorkerResult<Bytes>> + Send + 'static>>> {
-        let request = workerexecutor::v1::GetSwaggerUiContentsRequest {
-            worker_id: worker_id.to_string(),
-            mount_path,
-        };
-
-        let response = self
-            .worker_executor_clients
-            .call(
+        let worker_id = worker_id.clone();
+        let mount_path_clone = mount_path.clone();
+        let stream = self
+            .call_worker_executor(
+                worker_id.clone(),
                 "get_swagger_ui_contents",
-                worker_id.uri().parse().expect("Invalid URI"),
-                |client| Box::pin(client.get_swagger_ui_contents(request.clone())),
+                move |worker_executor_client| {
+                    info!("Get swagger UI contents");
+                    let worker_id = worker_id.clone();
+                    Box::pin(
+                        worker_executor_client.get_swagger_ui_contents(
+                            workerexecutor::v1::GetSwaggerUiContentsRequest {
+                                worker_id: worker_id.to_string(),
+                                mount_path: mount_path_clone.clone(),
+                            },
+                        ),
+                    )
+                },
+                |response| {
+                    let response = response.into_inner();
+                    match response.result {
+                        Some(workerexecutor::v1::get_swagger_ui_contents_response::Result::Success(data)) => {
+                            Ok(data)
+                        }
+                        Some(workerexecutor::v1::get_swagger_ui_contents_response::Result::Failure(err)) => {
+                            Err(ResponseMapResult::Other(WorkerServiceError::Internal(err)))
+                        }
+                        None => Err(ResponseMapResult::Other(WorkerServiceError::Internal("Empty response".to_string()))),
+                    }
+                },
+                WorkerServiceError::InternalCallError,
             )
-            .await
-            .map_err(|e| WorkerServiceError::Internal(e.to_string()))?;
+            .await?;
 
-        match response.into_inner().result {
-            Some(workerexecutor::v1::get_swagger_ui_contents_response::Result::Success(bytes)) => {
-                let stream = futures::stream::once(async move { Ok(Bytes::from(bytes)) });
-                Ok(Box::pin(stream))
-            }
-            Some(workerexecutor::v1::get_swagger_ui_contents_response::Result::Failure(err)) => {
-                Err(WorkerServiceError::Internal(err))
-            }
-            None => Err(WorkerServiceError::Internal(
-                "No result in GetSwaggerUiContentsResponse".to_string(),
-            )),
-        }
+        let stream = tokio_stream::iter(vec![Ok(stream)]);
+        Ok(Box::pin(stream.map(|r| r.map(Bytes::from).map_err(|e| match e {
+            ResponseMapResult::Other(err) => err,
+            _ => WorkerServiceError::Internal("Unexpected error type".to_string()),
+        }))))
     }
 }
 
@@ -1297,7 +1275,7 @@ impl WorkerServiceDefault {
         cursor: ScanCursor,
         count: u64,
         precise: bool,
-        metadata: WorkerRequestMetadata,
+        _metadata: WorkerRequestMetadata,
     ) -> WorkerResult<(Option<ScanCursor>, Vec<WorkerMetadata>)> {
         let component_id = component_id.clone();
         let result = self
@@ -1307,7 +1285,7 @@ impl WorkerServiceDefault {
                 move |worker_executor_client| {
                     let component_id: golem_api_grpc::proto::golem::component::ComponentId =
                         component_id.clone().into();
-                    let account_id = metadata.account_id.clone().map(|id| id.into());
+                    let account_id = _metadata.account_id.clone().map(|id| id.into());
                     Box::pin(worker_executor_client.get_workers_metadata(
                         workerexecutor::v1::GetWorkersMetadataRequest {
                             component_id: Some(component_id),

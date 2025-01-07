@@ -102,13 +102,17 @@ impl From<WorkerServiceError> for WorkerApiBaseError {
             ServiceError::VersionedComponentIdNotFound(_)
             | ServiceError::FileNotFound(_)
             | ServiceError::BadFileType(_)
-            | ServiceError::WorkerNotFound(_) => WorkerApiBaseError::NotFound(Json(ErrorBody {
+            | ServiceError::WorkerNotFound(_)
+            | ServiceError::ComponentNotFound(_)
+            | ServiceError::AccountIdNotFound(_) => WorkerApiBaseError::NotFound(Json(ErrorBody {
                 error: error.to_safe_string(),
             })),
             ServiceError::InvalidRequest(msg) => WorkerApiBaseError::BadRequest(Json(ErrorsBody {
                 errors: vec![msg],
             })),
             ServiceError::InternalCallError(err) => internal(err.to_string()),
+            ServiceError::Component(err) => err.into(),
+            ServiceError::Golem(err) => internal(err.to_string()),
         }
     }
 }

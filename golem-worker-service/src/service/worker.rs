@@ -15,4 +15,4 @@
 use std::sync::Arc;
 
 pub type WorkerService =
-    Arc<dyn golem_worker_service_base::service::worker::WorkerService + Sync + Send>;
+    Arc<dyn golem_worker_service_base::service::worker::default::WorkerService + Sync + Send>;

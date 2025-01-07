@@ -43,7 +43,7 @@ use golem_worker_service_base::service::gateway::api_definition::{
 };
 use golem_worker_service_base::service::gateway::api_definition_validator::ApiDefinitionValidatorService;
 use golem_worker_service_base::service::gateway::http_api_definition_validator::HttpApiDefinitionValidator;
-use golem_worker_service_base::service::worker::WorkerServiceDefault;
+use golem_worker_service_base::service::worker::default::WorkerServiceDefault;
 
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_common::client::{GrpcClientConfig, MultiTargetGrpcClient};
