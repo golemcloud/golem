@@ -1,6 +1,7 @@
 import { ExternalLink, Globe, Server, Upload, X } from "lucide-react";
 
 import { ApiDefinition } from "../../types/api";
+import { displayError } from "../../lib/error-utils";
 // import { ApiDefinition } from '../types/api';
 import toast from "react-hot-toast";
 import { useCreateDeployment } from "../../api/api-definitions";
@@ -48,7 +49,6 @@ export const DeployModal = ({
       resetForm();
       onClose();
     } catch (error) {
-      toast.error("Failed to deploy API");
       console.error(error);
     } finally {
       setIsSubmitting(false);

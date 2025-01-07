@@ -7,6 +7,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
+import { createQueryErrorConfig, displayError } from "../lib/error-utils";
 
 import { ApiDefinition } from "../types/api";
 import { GolemError } from "../types/error";
@@ -33,17 +34,17 @@ export const getApiDefinitions = async (apiDefinitionId?: string) => {
 
 export const getApiDefinition = async (id: string, version: string) => {
   const { data } = await apiClient.get<ApiDefinition>(
-    `/v1/api/definitions/${id}/${version}`,
+    `/v1/api/definitions/${id}/${version}`
   );
   return data;
 };
 
 export const createApiDefinition = async (
-  definition: Omit<ApiDefinition, "id" | "createdAt">,
+  definition: Omit<ApiDefinition, "id" | "createdAt">
 ) => {
   const { data } = await apiClient.post<ApiDefinition>(
     "/v1/api/definitions",
-    definition,
+    definition
   );
   return data;
 };
@@ -62,14 +63,14 @@ export const updateApiDefinition = async ({
     definition,
     {
       headers: { "Content-Type": "application/json" },
-    },
+    }
   );
   return data;
 };
 
 export const deleteApiDefinition = async (id: string, version: string) => {
   const { data } = await apiClient.delete<string>(
-    `/v1/api/definitions/${id}/${version}`,
+    `/v1/api/definitions/${id}/${version}`
   );
   return data;
 };
@@ -77,7 +78,7 @@ export const deleteApiDefinition = async (id: string, version: string) => {
 export const importOpenApiDefinition = async (openApiDoc: object) => {
   const { data } = await apiClient.put<ApiDefinition>(
     "/v1/api/definitions/import",
-    openApiDoc,
+    openApiDoc
   );
   return data;
 };
@@ -87,12 +88,13 @@ export const useApiDefinitions = (apiDefinitionId?: string) => {
   return useQuery({
     queryKey: apiDefinitionKeys.list({ apiDefinitionId }),
     queryFn: () => getApiDefinitions(apiDefinitionId),
+    ...createQueryErrorConfig("Failed to fetch Api Definitions"),
   });
 };
 
 export const useApiDefinition = (
   id: string,
-  version: string,
+  version: string
 ): {
   data: ApiDefinition | undefined;
   isLoading: boolean;
@@ -101,6 +103,7 @@ export const useApiDefinition = (
   return useQuery({
     queryKey: apiDefinitionKeys.detail(id, version),
     queryFn: () => getApiDefinition(id, version),
+    ...createQueryErrorConfig("Failed to load API definitions"),
   });
 };
 
@@ -112,6 +115,8 @@ export const useCreateApiDefinition = () => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: apiDefinitionKeys.lists() });
     },
+    onError: (error: Error | GolemError) =>
+      displayError(error, "Failed to create API definition"),
   });
 };
 
@@ -133,6 +138,8 @@ export const useUpdateApiDefinition = (): UseMutationResult<
         queryKey: apiDefinitionKeys.lists(),
       });
     },
+    onError: (error: Error | GolemError) =>
+      displayError(error, "Failed to update API definition"),
   });
 };
 
@@ -145,6 +152,8 @@ export const useDeleteApiDefinition = () => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: apiDefinitionKeys.lists() });
     },
+    onError: (error: Error | GolemError) =>
+      displayError(error, "Failed to delete API definition"),
   });
 };
 
@@ -156,6 +165,8 @@ export const useImportOpenApiDefinition = () => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: apiDefinitionKeys.lists() });
     },
+    onError: (error: Error | GolemError) =>
+      displayError(error, "Failed to import OpenAPI definition"),
   });
 };
 export interface ApiDeploymentInput {
@@ -192,17 +203,17 @@ export const deploymentKeys = {
 };
 
 const createDeployment = async (
-  deployment: ApiDeploymentInput,
+  deployment: ApiDeploymentInput
 ): Promise<ApiDeployment> => {
   const { data } = await apiClient.post<ApiDeployment>(
     "/v1/api/deployments/deploy",
-    deployment,
+    deployment
   );
   return data;
 };
 
 export const useCreateDeployment = (
-  options?: UseMutationOptions<ApiDeployment, GolemError, ApiDeploymentInput>,
+  options?: UseMutationOptions<ApiDeployment, GolemError, ApiDeploymentInput>
 ) => {
   const queryClient = useQueryClient();
 
@@ -215,13 +226,15 @@ export const useCreateDeployment = (
         queryKey: deploymentKeys.detail(data.site.host),
       });
     },
+    onError: (error: Error | GolemError) =>
+      displayError(error, "Failed to create deployment"),
     ...options,
   });
 };
 
 // Fetch deployments for a specific API definition
 const getDeployments = async (
-  apiDefinitionId: string,
+  apiDefinitionId: string
 ): Promise<ApiDeployment[]> => {
   const { data } = await apiClient.get<ApiDeployment[]>("/v1/api/deployments", {
     params: {
@@ -234,7 +247,7 @@ const getDeployments = async (
 // Fetch a single deployment by site
 const getDeployment = async (site: string): Promise<ApiDeployment> => {
   const { data } = await apiClient.get<ApiDeployment>(
-    `/v1/api/deployments/${site}`,
+    `/v1/api/deployments/${site}`
   );
   return data;
 };
@@ -242,12 +255,14 @@ const getDeployment = async (site: string): Promise<ApiDeployment> => {
 // Hook for fetching deployments
 export const useApiDeployments = (
   apiDefinitionId: string,
-  options?: UseQueryOptions<ApiDeployment[], GolemError>,
+  options?: UseQueryOptions<ApiDeployment[], GolemError>
 ): UseQueryResult<ApiDeployment[], GolemError> => {
   return useQuery({
     queryKey: deploymentKeys.list({ apiDefinitionId }),
     queryFn: () => getDeployments(apiDefinitionId),
     staleTime: 30000, // Consider data fresh for 30 seconds
+    onError: (error: Error | GolemError) =>
+      displayError(error, "Error fetching Api deployments"),
     ...options,
   });
 };
@@ -255,20 +270,23 @@ export const useApiDeployments = (
 // Hook for fetching a single deployment
 export const useApiDeployment = (
   site: string,
-  options?: UseQueryOptions<ApiDeployment, GolemError>,
+  options?: UseQueryOptions<ApiDeployment, GolemError>
 ): UseQueryResult<ApiDeployment, GolemError> => {
   return useQuery({
     queryKey: deploymentKeys.detail(site),
     queryFn: () => getDeployment(site),
     staleTime: 30000, // Consider data fresh for 30 seconds
     enabled: Boolean(site), // Only run query if site is provided
+    onError: (error: Error | GolemError) =>
+      displayError(error, "Error fetching Api deployment"),
     ...options,
+
   });
 };
 
 // Hook for fetching all deployments (with optional API definition filter)
 export const useAllDeployments = (
-  options?: UseQueryOptions<ApiDeployment[], GolemError>,
+  options?: UseQueryOptions<ApiDeployment[], GolemError>
 ): UseQueryResult<ApiDeployment[], GolemError> => {
   return useQuery({
     queryKey: deploymentKeys.lists(),
@@ -277,19 +295,21 @@ export const useAllDeployments = (
         .get<ApiDeployment[]>("/v1/api/deployments")
         .then((res) => res.data),
     staleTime: 30000,
+    onError: (error: Error | GolemError) =>
+      displayError(error, "Error fetching Api deployments"),
     ...options,
   });
 };
 
 const deleteDeployment = async (site: string): Promise<string> => {
   const { data } = await apiClient.delete<string>(
-    `/v1/api/deployments/${site}`,
+    `/v1/api/deployments/${site}`
   );
   return data;
 };
 
 export const useDeleteDeployment = (
-  options?: UseMutationOptions<string, GolemError, string>,
+  options?: UseMutationOptions<string, GolemError, string>
 ) => {
   const queryClient = useQueryClient();
 
@@ -300,15 +320,15 @@ export const useDeleteDeployment = (
       site: {
         host: string;
         subdomain?: string;
-      },
+      }
     ) => {
       // Invalidate the specific deployment
       queryClient.invalidateQueries({ queryKey: deploymentKeys.details() });
       queryClient.invalidateQueries({ queryKey: deploymentKeys.list(site) });
       queryClient.invalidateQueries({ queryKey: deploymentKeys.lists() });
     },
-    onError: (error: unknown) => {
-      console.error("Failed to delete deployment:", error);
+    onError: (error: Error | GolemError) => {
+      displayError(error, "Failed to delete deployment");
     },
     ...options,
   });

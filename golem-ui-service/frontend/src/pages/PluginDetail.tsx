@@ -19,6 +19,7 @@ import { useDeletePlugin, usePluginVersion } from "../api/plugins";
 import { useEffect, useState } from "react";
 
 import DeleteConfirmDialog from "../components/shared/DeleteConfirmDialog";
+import { displayError } from "../lib/error-utils";
 import toast from "react-hot-toast";
 
 const JsonDisplay = ({ data }: { data: string }) => {
@@ -32,6 +33,7 @@ const JsonDisplay = ({ data }: { data: string }) => {
     } catch (err) {
       setFormattedJson(data);
       console.error(err);
+      displayError(err,"Error parsing component")
     }
   }, [data]);
 
@@ -109,7 +111,6 @@ export const PluginDetailPage = () => {
       toast.success("Plugin deleted successfully");
       navigate("/plugins");
     } catch (error) {
-      toast.error("Failed to delete plugin");
       console.error(error);
     }
   };

@@ -1,5 +1,6 @@
 import { AlertCircle, Loader2, Plus, Server, Settings, X } from "lucide-react";
 
+import { displayError } from "../../lib/error-utils";
 import toast from "react-hot-toast";
 import { useComponents } from "../../api/components";
 import { useCreatePlugin } from "../../api/plugins";
@@ -90,7 +91,6 @@ export const CreatePluginModal = ({ isOpen, onClose }: CreatePluginModalProps) =
       resetForm();
       onClose();
     } catch (error) {
-      toast.error("Failed to create plugin");
       console.error(error);
     } finally {
       setIsSubmitting(false);

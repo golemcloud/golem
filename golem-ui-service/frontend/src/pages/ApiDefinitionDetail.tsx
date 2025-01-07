@@ -21,6 +21,7 @@ import { useEffect, useState } from "react";
 
 import DeployModal from "../components/api/DeployModal";
 import RouteModal from "../components/api/ApiRoutesModal";
+import { displayError } from "../lib/error-utils";
 import toast from "react-hot-toast";
 
 export interface Route {
@@ -122,7 +123,6 @@ export const ApiDefinitionView = () => {
       await deleteDeployment.mutateAsync(site);
       toast.success("Deployment deleted successfully");
     } catch (error) {
-      toast.error("Failed to delete deployment");
       console.log(error);
     }
   };

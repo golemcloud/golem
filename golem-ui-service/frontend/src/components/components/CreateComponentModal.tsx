@@ -12,6 +12,7 @@ import { useCreateComponent, useUpdateComponent } from "../../api/components";
 import { useEffect, useRef, useState } from "react";
 
 import { Component } from "../../types/api";
+import { displayError } from "../../lib/error-utils";
 import toast from "react-hot-toast";
 
 type ComponentType = "Durable" | "Ephemeral";
@@ -249,7 +250,6 @@ const CreateComponentModal = ({
       setIsSubmitting(false);
       onClose();
     } catch (error) {
-      toast.error(`Failed to ${isUpdateMode ? "update" : "create"} component`);
       setIsSubmitting(false);
       console.error(error);
     }

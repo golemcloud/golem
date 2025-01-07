@@ -68,10 +68,7 @@ export const CreateWorkerModal = ({
         onSuccess: () => {
           toast.success("Worker created successfully");
           onClose();
-        },
-        onError: () => {
-          toast.error("Failed to create worker");
-        },
+        }
       },
     );
   };

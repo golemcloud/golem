@@ -1,7 +1,9 @@
 import { InstalledPlugin, Plugin } from "../types/api";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
+import { GolemError } from "../types/error";
 import { apiClient } from "../lib/api-client";
+import { displayError } from "../lib/error-utils";
 
 // Query keys
 export const pluginKeys = {
@@ -69,7 +71,7 @@ export const getPluginVersions = async (name: string) => {
 
 export const getPluginVersion = async (name: string, version: string) => {
   const { data } = await apiClient.get<Plugin>(
-    `/v1/plugins/${name}/${version}`,
+    `/v1/plugins/${name}/${version}`
   );
   return data;
 };
@@ -81,7 +83,7 @@ export const createPlugin = async (payload: CreatePluginPayload) => {
 
 export const deletePlugin = async (name: string, version: string) => {
   const { data } = await apiClient.delete<void>(
-    `/v1/plugins/${name}/${version}`,
+    `/v1/plugins/${name}/${version}`
   );
   return data;
 };
@@ -89,21 +91,21 @@ export const deletePlugin = async (name: string, version: string) => {
 // Component Plugin Installation Functions
 export const getInstalledPlugins = async (
   componentId: string,
-  version: number,
+  version: number
 ) => {
   const { data } = await apiClient.get<InstalledPlugin[]>(
-    `/v1/components/${componentId}/versions/${version}/plugins/installs`,
+    `/v1/components/${componentId}/versions/${version}/plugins/installs`
   );
   return data;
 };
 
 export const installPlugin = async (
   componentId: string,
-  payload: InstallPluginPayload,
+  payload: InstallPluginPayload
 ) => {
   const { data } = await apiClient.post<InstalledPlugin>(
     `/v1/components/${componentId}/latest/plugins/installs`,
-    payload,
+    payload
   );
   return data;
 };
@@ -111,21 +113,21 @@ export const installPlugin = async (
 export const updatePluginInstallation = async (
   componentId: string,
   installationId: string,
-  payload: UpdatePluginInstallPayload,
+  payload: UpdatePluginInstallPayload
 ) => {
   const { data } = await apiClient.put<void>(
     `/v1/components/${componentId}/versions/latest/plugins/installs/${installationId}`,
-    payload,
+    payload
   );
   return data;
 };
 
 export const uninstallPlugin = async (
   componentId: string,
-  installationId: string,
+  installationId: string
 ) => {
   const { data } = await apiClient.delete<void>(
-    `/v1/components/${componentId}/latest/plugins/installs/${installationId}`,
+    `/v1/components/${componentId}/latest/plugins/installs/${installationId}`
   );
   return data;
 };
@@ -135,6 +137,8 @@ export const usePlugins = (scope?: string) => {
   return useQuery({
     queryKey: pluginKeys.list(scope),
     queryFn: () => getPlugins(scope),
+    onError: (error: Error | GolemError) =>
+      displayError(error, "Error fetching plugins"),
   });
 };
 
@@ -142,6 +146,9 @@ export const usePluginVersions = (name: string) => {
   return useQuery({
     queryKey: pluginKeys.detail(name),
     queryFn: () => getPluginVersions(name),
+    onError: (error: Error | GolemError) => {
+      displayError(error, "Error fetching plugin versions");
+    },
   });
 };
 
@@ -149,8 +156,11 @@ export const usePluginVersion = (name: string, version: string) => {
   return useQuery({
     queryKey: pluginKeys.version(name, version),
     queryFn: () => getPluginVersion(name, version),
+    onError: (error: Error | GolemError) => {
+      displayError(error, "Error fetching plugin version");
+    },
   });
-}
+};
 
 export const useCreatePlugin = () => {
   const queryClient = useQueryClient();
@@ -159,6 +169,9 @@ export const useCreatePlugin = () => {
     mutationFn: createPlugin,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: pluginKeys.lists() });
+    },
+    onError: (error: Error | GolemError) => {
+      displayError(error, "Error creating plugin");
     },
   });
 };
@@ -172,6 +185,9 @@ export const useDeletePlugin = () => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: pluginKeys.lists() });
     },
+    onError: (error: Error | GolemError) => {
+      displayError(error, "Error deleting plugin");
+    },
   });
 };
 
@@ -180,6 +196,9 @@ export const useInstalledPlugins = (componentId: string, version: number) => {
   return useQuery({
     queryKey: pluginKeys.installs(componentId, version),
     queryFn: () => getInstalledPlugins(componentId, version),
+    onError: (error: Error | GolemError) => {
+      displayError(error, "Error fetching installed plugins");
+    },
   });
 };
 
@@ -193,6 +212,9 @@ export const useInstallPlugin = (componentId: string) => {
       queryClient.invalidateQueries({
         queryKey: pluginKeys.installs(componentId, "latest"),
       });
+    },
+    onError: (error: Error | GolemError) => {
+      displayError(error, "Error installing plugin");
     },
   });
 };
@@ -213,6 +235,9 @@ export const useUpdatePluginInstallation = (componentId: string) => {
         queryKey: pluginKeys.installs(componentId, "latest"),
       });
     },
+    onError: (error: Error | GolemError) => {
+      displayError(error, "Error updating plugin installation");
+    },
   });
 };
 
@@ -226,6 +251,9 @@ export const useUninstallPlugin = (componentId: string) => {
       queryClient.invalidateQueries({
         queryKey: pluginKeys.installs(componentId, "latest"),
       });
+    },
+    onError: (error: Error | GolemError) => {
+      displayError(error, "Error uninstalling plugin");
     },
   });
 };

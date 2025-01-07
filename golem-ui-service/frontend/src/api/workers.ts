@@ -9,6 +9,7 @@ import { Worker, WorkerStatus } from "../types/api";
 
 import { GolemError } from "../types/error";
 import { apiClient } from "../lib/api-client";
+import { displayError } from "../lib/error-utils";
 
 // Query keys
 export const workerKeys = {
@@ -116,7 +117,7 @@ interface InvokeWorkerVariables {
 export const useInvokeWorker = (
   options?: UseMutationOptions<void, GolemError, InvokeWorkerVariables, unknown>
 ): UseMutationResult<void, GolemError, InvokeWorkerVariables, unknown> => {
-  console.log(options)
+  console.log(options);
   return useMutation<void, GolemError, InvokeWorkerVariables, unknown>({
     mutationFn: invokeWorker,
     ...options,
@@ -187,6 +188,8 @@ export const useWorkers = (
   return useQuery({
     queryKey: workerKeys.list(componentId, { filter, cursor, count }),
     queryFn: () => getWorkers(componentId, filter, cursor, count),
+    onError: (error: Error | GolemError) =>
+      displayError(error, "Error fetching Workers"),
   });
 };
 
@@ -201,6 +204,8 @@ export const useWorker = (
   return useQuery({
     queryKey: workerKeys.detail(componentId, workerName),
     queryFn: () => getWorker(componentId, workerName),
+    onError: (error: Error | GolemError) =>
+      displayError(error, "Error fetching Worker"),
   });
 };
 
@@ -213,6 +218,8 @@ export const useCreateWorker = (componentId: string) => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: workerKeys.lists() });
     },
+    onError: (error: Error | GolemError) =>
+      displayError(error, "Error creating Worker"),
   });
 };
 
@@ -230,6 +237,8 @@ export const useDeleteWorker = () => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: workerKeys.lists() });
     },
+    onError: (error: Error | GolemError) =>
+      displayError(error, "Error deleting Worker"),
   });
 };
 
@@ -244,17 +253,11 @@ export const useInterruptWorker = (
 ) => {
   const queryClient = useQueryClient();
 
-  return useMutation({
+  return useMutation<void, GolemError, InterruptWorkerParams, unknown>({
     mutationFn: interruptWorker,
     onSuccess: (
-      _,
-      {
-        componentId,
-        workerName,
-      }: {
-        componentId: string;
-        workerName: string;
-      }
+      _: void,
+      { componentId, workerName }: InterruptWorkerParams
     ) => {
       // Invalidate specific worker query
       queryClient.invalidateQueries({
@@ -301,6 +304,8 @@ export const useResumeWorker = (
         queryKey: workerKeys.lists(),
       });
     },
+    onError: (error: Error | GolemError) =>
+      displayError(error, "Error resuming Worker"),
     ...options,
   });
 };
@@ -315,6 +320,8 @@ export const useWorkerLogs = (
   return useQuery({
     queryKey: ["workerLogs", componentId, workerName, count, cursor, query],
     queryFn: () => getWorkerLogs(componentId, workerName, count, cursor, query),
+    onError: (error: Error | GolemError) =>
+      displayError(error, "Error fetching Worker logs"),
   });
 };
 
@@ -358,5 +365,7 @@ export const useWorkerFiles = (componentId: string, workerName: string) => {
   return useQuery({
     queryKey: workerKeys.files(componentId, workerName),
     queryFn: () => getWorkerFiles(componentId, workerName),
+    onError: (error: Error | GolemError) =>
+      displayError(error, "Error fetching Worker files"),
   });
 };

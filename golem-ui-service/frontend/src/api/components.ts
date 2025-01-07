@@ -1,7 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { Component } from "../types/api";
+import { GolemError } from "../types/error";
 import { apiClient } from "../lib/api-client";
+import { displayError } from "../lib/error-utils";
 
 // Query keys
 export const componentKeys = {
@@ -82,6 +84,7 @@ export const useComponents = (
   return useQuery({
     queryKey: componentKeys.list({ componentName }),
     queryFn: () => getComponents(componentName),
+    onError: (error: Error | GolemError) => displayError(error, "Error fetching components"),
   });
 };
 
@@ -89,6 +92,7 @@ export const useComponentVersions = (componentId: string) => {
   return useQuery({
     queryKey: componentKeys.versions(componentId),
     queryFn: () => getComponentVersions(componentId),
+    onError: (error: Error | GolemError) => displayError(error, "Error fetching component versions"),
   });
 };
 
@@ -100,6 +104,7 @@ export const useCreateComponent = () => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: componentKeys.lists() });
     },
+    onError: (error: Error | GolemError) => displayError(error, "Error creating component"),
   });
 };
 
@@ -113,6 +118,7 @@ export const useUpdateComponent = () => {
         queryKey: componentKeys.detail(componentId),
       });
     },
+    onError: (error: Error | GolemError) => displayError(error, "Error updating component"),
   });
 };
 export const useDeleteComponent = () => {
@@ -123,6 +129,7 @@ export const useDeleteComponent = () => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: componentKeys.lists() });
     },
+    onError: (error: Error | GolemError) => displayError(error, "Error deleting component"),
   });
 };
 
@@ -135,6 +142,7 @@ export const useComponent = (
   return useQuery({
     queryKey: componentKeys.detail(componentId),
     queryFn: () => getComponent(componentId),
+    onError: (error: Error | GolemError) => displayError(error, "Error fetching component"),
     enabled: !!componentId, // Only run if componentId is provided
   });
 };

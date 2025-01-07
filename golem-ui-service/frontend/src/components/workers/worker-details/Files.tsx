@@ -13,6 +13,7 @@ import { WorkerFile, downloadWorkerFile, useWorkerFiles } from '../../../api/wor
 
 import React from 'react';
 import { Worker, } from '../../../types/api';
+import { displayError } from '../../../lib/error-utils';
 import toast from 'react-hot-toast';
 import { useQueryClient } from '@tanstack/react-query';
 
@@ -100,8 +101,8 @@ const FilesTab: React.FC<FilesTabProps> = ({ worker }) => {
 
             toast.success('File download started');
         } catch (error) {
+            displayError(error, 'Failed to download file');
             console.error('Download failed:', error);
-            toast.error('Failed to download file');
         }
     };
 

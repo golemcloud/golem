@@ -139,7 +139,6 @@ export default function WorkerDetail() {
                 navigate(`/components/${componentId}`);
             }
         } catch (error) {
-            toast.error(`Failed to ${action} worker`);
             console.error(error);
         }
     };

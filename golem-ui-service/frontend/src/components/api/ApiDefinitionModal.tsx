@@ -1,5 +1,6 @@
 import { FileJson, Globe, Loader2, Plus, Upload, X } from "lucide-react";
 
+import { displayError } from "../../lib/error-utils";
 import toast from "react-hot-toast";
 import { useCreateApiDefinition } from "../../api/api-definitions";
 import { useState } from "react";
@@ -92,8 +93,6 @@ export const ApiDefinitionModal = ({
       resetForm();
       onClose();
     } catch (err) {
-      toast.error("Failed to create API definition");
-      console.log(err);
     } finally {
       setIsSubmitting(false);
     }
