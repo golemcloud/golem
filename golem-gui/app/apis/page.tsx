@@ -54,10 +54,7 @@ const ComponentsPage = () => {
         },
         {}
       ) || {}
-    ).sort(
-      (a, b) =>
-        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-    );
+    ).reverse()
   }, [apiDefinitions]).filter(checkForMatch);
  const itemsPerPage=15
   const totalPages = Math.ceil(finalApis.length / itemsPerPage);
