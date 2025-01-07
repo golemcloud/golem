@@ -164,7 +164,7 @@ pub mod rust {
     pub fn root_namespace(source_package_name: &wit_parser::PackageName) -> String {
         source_package_name.namespace.to_snake_case()
     }
-    
+
     pub fn client_root_name(source_package_name: &wit_parser::PackageName) -> String {
         format!("{}_client", source_package_name.name.to_snake_case())
     }
