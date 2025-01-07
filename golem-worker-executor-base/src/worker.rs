@@ -2024,6 +2024,7 @@ where
         .unwrap_or_default();
 
     let last_oplog_index = this.oplog_service().get_last_index(owned_worker_id).await;
+
     if last_known.oplog_idx == last_oplog_index {
         Ok(last_known)
     } else {

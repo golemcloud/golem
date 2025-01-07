@@ -118,7 +118,7 @@ async fn fork_worker_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         )
         .await;
 
-    // Invoking G1002 again in forked worker
+    //Invoking G1002 again in forked worker
     let _ = deps
         .invoke_and_await(
             &target_worker_id,

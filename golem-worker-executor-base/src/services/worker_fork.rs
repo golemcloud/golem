@@ -24,7 +24,9 @@ use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use golem_common::model::oplog::{OplogIndex, OplogIndexRange};
-use golem_common::model::{AccountId, OwnedWorkerId, Timestamp, WorkerId, WorkerMetadata};
+use golem_common::model::{
+    AccountId, OwnedWorkerId, Timestamp, WorkerId, WorkerMetadata, WorkerStatusRecord,
+};
 
 #[async_trait]
 pub trait WorkerFork {
@@ -133,7 +135,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerFork
             args: source_worker_metadata.args.clone(),
             created_at: Timestamp::now_utc(),
             parent: source_worker_metadata.parent.clone(),
-            last_known_status: source_worker_metadata.last_known_status.clone(),
+            last_known_status: WorkerStatusRecord::default(),
         };
 
         let source_oplog = source_worker_instance.oplog();
@@ -155,7 +157,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerFork
                 target_initial_oplog_entry,
                 target_worker_metadata,
                 Arc::new(RwLock::new(ExecutionStatus::Suspended {
-                    last_known_status: source_worker_metadata.last_known_status,
+                    last_known_status: WorkerStatusRecord::default(),
                     component_type: source_worker_instance.component_type(),
                     timestamp: Timestamp::now_utc(),
                 })),

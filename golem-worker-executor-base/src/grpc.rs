@@ -586,6 +586,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&worker_id)?;
 
         let metadata = self.worker_service().get(&owned_worker_id).await;
+
         self.validate_worker_status(&owned_worker_id, &metadata)
             .await?;
 
