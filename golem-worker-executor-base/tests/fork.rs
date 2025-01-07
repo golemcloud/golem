@@ -1,17 +1,16 @@
 use test_r::{inherit_test_dep, test};
 
-use crate::common::{start, TestContext, TestWorkerExecutor};
+use crate::common::{start, TestContext};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use axum::routing::get;
 use axum::Router;
 use golem_common::model::{WorkerId, WorkerStatus};
-use golem_test_framework::dsl::{TestDslUnsafe};
+use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::Value;
-use redis::Commands;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration};
+use std::time::Duration;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -45,8 +44,8 @@ async fn fork_interrupted_worker_to_completion(
                 .parse::<SocketAddr>()
                 .unwrap(),
         )
-            .await
-            .unwrap();
+        .await
+        .unwrap();
         axum::serve(listener, route).await.unwrap();
     });
 
@@ -78,18 +77,13 @@ async fn fork_interrupted_worker_to_completion(
         .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
         .await;
 
-    executor
-        .interrupt(&worker_id)
-        .await;
+    executor.interrupt(&worker_id).await;
 
-    let (metadata, _) =
-        executor.get_worker_metadata(&worker_id).await.unwrap();
+    let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
     let last_index = metadata.last_known_status.oplog_idx;
 
-    executor
-        .fork_worker(&worker_id, &target, last_index)
-        .await;
+    executor.fork_worker(&worker_id, &target, last_index).await;
 
     {
         let mut response = response.lock().unwrap();

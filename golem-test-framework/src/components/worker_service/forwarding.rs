@@ -22,7 +22,18 @@ use crate::components::worker_service::WorkerService;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::common::{Empty, ResourceLimits};
 use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
-use golem_api_grpc::proto::golem::worker::v1::{ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, ForkWorkerRequest, ForkWorkerResponse, GetFileContentsRequest, GetOplogRequest, GetOplogResponse, GetOplogSuccessResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse, InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitJsonRequest, InvokeAndAwaitJsonResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeJsonRequest, InvokeRequest, InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse, ListDirectoryRequest, ListDirectoryResponse, ListDirectorySuccessResponse, ResumeWorkerRequest, ResumeWorkerResponse, SearchOplogRequest, SearchOplogResponse, SearchOplogSuccessResponse, UpdateWorkerRequest, UpdateWorkerResponse, WorkerError};
+use golem_api_grpc::proto::golem::worker::v1::{
+    ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, ForkWorkerRequest,
+    ForkWorkerResponse, GetFileContentsRequest, GetOplogRequest, GetOplogResponse,
+    GetOplogSuccessResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse,
+    InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitJsonRequest,
+    InvokeAndAwaitJsonResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeJsonRequest,
+    InvokeRequest, InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
+    LaunchNewWorkerSuccessResponse, ListDirectoryRequest, ListDirectoryResponse,
+    ListDirectorySuccessResponse, ResumeWorkerRequest, ResumeWorkerResponse, SearchOplogRequest,
+    SearchOplogResponse, SearchOplogSuccessResponse, UpdateWorkerRequest, UpdateWorkerResponse,
+    WorkerError,
+};
 use golem_api_grpc::proto::golem::worker::{InvokeResult, LogEvent, WorkerId};
 use golem_api_grpc::proto::golem::workerexecutor::v1::CreateWorkerRequest;
 use golem_api_grpc::proto::golem::{worker, workerexecutor};
@@ -800,7 +811,10 @@ impl WorkerService for ForwardingWorkerService {
         Ok(Bytes::from(bytes))
     }
 
-    async fn fork_worker(&self, fork_worker_request: ForkWorkerRequest) -> crate::Result<ForkWorkerResponse> {
+    async fn fork_worker(
+        &self,
+        fork_worker_request: ForkWorkerRequest,
+    ) -> crate::Result<ForkWorkerResponse> {
         let mut retry_count = Self::RETRY_COUNT;
         let result = loop {
             let result = self
@@ -835,9 +849,7 @@ impl WorkerService for ForwardingWorkerService {
             )),
             Some(workerexecutor::v1::fork_worker_response::Result::Success(_)) => {
                 Ok(ForkWorkerResponse {
-                    result: Some(worker::v1::fork_worker_response::Result::Success(
-                        Empty {},
-                    )),
+                    result: Some(worker::v1::fork_worker_response::Result::Success(Empty {})),
                 })
             }
             Some(workerexecutor::v1::fork_worker_response::Result::Failure(error)) => {
