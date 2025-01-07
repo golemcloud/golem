@@ -181,6 +181,9 @@ pub struct Application<CPE: ComponentPropertiesExtensions> {
 }
 
 impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
+    const STATIC_WASM_RPC: &'static str = "static-wasm-rpc";
+    const WASM_RPC: &'static str = "wasm-rpc";
+
     pub fn from_raw_apps(apps: Vec<app_raw::ApplicationWithSource>) -> ValidatedResult<Self> {
         let mut validation = ValidationBuilder::new();
 
@@ -299,7 +302,9 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
                 validation.push_context("component", component_name.to_string());
 
                 for dependency in component_dependencies {
-                    if dependency.type_ == "static-wasm-rpc" || dependency.type_ == "wasm-rpc" {
+                    if dependency.type_ == Self::STATIC_WASM_RPC
+                        || dependency.type_ == Self::WASM_RPC
+                    {
                         match dependency.target {
                             Some(target) => {
                                 let target_component_name = ComponentName::from(target);
@@ -308,7 +313,7 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
                                     dependencies.insert(component_name.clone(), BTreeSet::new());
                                 }
 
-                                let dep_type = if dependency.type_ == "static-wasm-rpc" {
+                                let dep_type = if dependency.type_ == Self::STATIC_WASM_RPC {
                                     DependencyType::StaticWasmRpc
                                 } else {
                                     DependencyType::DynamicWasmRpc
