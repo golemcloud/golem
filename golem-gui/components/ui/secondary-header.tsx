@@ -218,8 +218,6 @@ export default function SecondaryHeader({
             </Typography>
           </Box>
         )}
-        </Box>
-
         {variant === "apis" && apiTab != "playground" && (
           <Box className="border border-border rounded-md cursor-pointer dark:hover:bg-[#333] hover:bg-slate-100 py-1 px-2">
             <ApiDropdown dropdowns={dropdowns} />
