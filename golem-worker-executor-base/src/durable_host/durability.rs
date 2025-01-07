@@ -81,24 +81,43 @@ impl<Ctx: WorkerCtx, SOk, SErr> Durability2<Ctx, SOk, SErr> {
         Err: From<SErr> + From<GolemError> + Send + Sync,
         SIn: Debug + Encode + Send + Sync,
         SErr: Debug + Encode + for<'a> From<&'a Err> + From<GolemError> + Send + Sync,
-        SOk: Debug + Encode + From<Ok> + Encode + Send + Sync,
+        SOk: Debug + Encode + From<Ok> + Send + Sync,
     {
         let serializable_result: Result<SOk, SErr> = result
             .as_ref()
             .map(|result| result.clone().into())
             .map_err(|err| err.into());
 
+        self.persist_serializable(ctx, input, serializable_result)
+            .await
+            .map_err(|err| {
+                let err: SErr = err.into();
+                let err: Err = err.into();
+                err
+            })?;
+        result
+    }
+
+    pub async fn persist_serializable<SIn>(
+        &self,
+        ctx: &mut DurableWorkerCtx<Ctx>,
+        input: SIn,
+        serializable_result: Result<SOk, SErr>,
+    ) -> Result<(), GolemError>
+    where
+        SIn: Debug + Encode + Send + Sync,
+        SOk: Debug + Encode + Send + Sync,
+        SErr: Debug + Encode + Send + Sync,
+    {
         let function_name = self.function_name();
-        ctx.write_to_oplog::<SIn, SOk, Err, SErr>(
+        ctx.write_to_oplog::<SIn, SOk, SErr>(
             &self.function_type,
             &function_name,
             self.begin_index,
             &input,
             &serializable_result,
         )
-        .await?;
-
-        result
+        .await
     }
 
     pub async fn replay<Ok, Err>(&self, ctx: &mut DurableWorkerCtx<Ctx>) -> Result<Ok, Err>
@@ -641,19 +660,18 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .map(|result| result.unwrap())
     }
 
-    async fn write_to_oplog<SerializedInput, SerializedSuccess, Err, SerializedErr>(
+    async fn write_to_oplog<SerializedInput, SerializedSuccess, SerializedErr>(
         &mut self,
         wrapped_function_type: &WrappedFunctionType,
         function_name: &str,
         begin_index: OplogIndex,
         serializable_input: &SerializedInput,
         serializable_result: &Result<SerializedSuccess, SerializedErr>,
-    ) -> Result<(), Err>
+    ) -> Result<(), GolemError>
     where
-        Err: Send,
         SerializedInput: Encode + Debug + Send + Sync,
         SerializedSuccess: Encode + Debug + Send + Sync,
-        SerializedErr: Encode + Debug + From<GolemError> + Into<Err> + Send + Sync,
+        SerializedErr: Encode + Debug + Send + Sync,
     {
         if self.state.persistence_level != PersistenceLevel::PersistNothing {
             self.state
@@ -674,8 +692,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 });
             self.state
                 .end_function(wrapped_function_type, begin_index)
-                .await
-                .map_err(|err| Into::<SerializedErr>::into(err).into())?;
+                .await?;
             if *wrapped_function_type == WrappedFunctionType::WriteRemote
                 || matches!(
                     *wrapped_function_type,
