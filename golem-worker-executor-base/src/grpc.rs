@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::error::*;
+use futures::stream::BoxStream;
 use futures_util::Stream;
 use futures_util::StreamExt;
 use gethostname::gethostname;
@@ -45,6 +46,7 @@ use golem_common::model::{
 use golem_common::{model as common_model, recorded_grpc_api_request};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::Val;
+use tonic::Streaming;
 use std::cmp::min;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
@@ -689,6 +691,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .await?;
 
         Ok(())
+    }
+
+    async fn invoke_worker_http_handler_internal(
+        &self,
+        _header: golem::workerexecutor::v1::InvokeWorkerHttpHandlerRequestHeader,
+        _remaining: Streaming<golem::workerexecutor::v1::InvokeWorkerHttpHandlerRequest>,
+    ) -> Result<(), GolemError> {
+        todo!("implement");
     }
 
     async fn revoke_shards_internal(
@@ -1757,6 +1767,64 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 &err,
             ),
         }
+    }
+
+    type InvokeWorkerHttpHandlerStream = BoxStream<'static, Result<golem::workerexecutor::v1::InvokeWorkerHttpHandlerResponse, Status>>;
+
+    async fn invoke_worker_http_handler(
+        &self,
+        request: Request<Streaming<golem::workerexecutor::v1::InvokeWorkerHttpHandlerRequest>>,
+    ) -> ResponseResult<Self::InvokeWorkerHttpHandlerStream> {
+        let mut request = request.into_inner();
+
+        let header = request.next().await;
+
+        if let Some(Ok(golem::workerexecutor::v1::InvokeWorkerHttpHandlerRequest { data: Some(golem::workerexecutor::v1::invoke_worker_http_handler_request::Data::Header(header)) })) = header {
+            let record = recorded_grpc_api_request!(
+                "invoke_worker_http_handler",
+                worker_id = proto_target_worker_id_string(&header.worker_id),
+                method = header.method,
+                path = header.path_with_query,
+            );
+            self.invoke_worker_http_handler_internal(
+                header,
+                request,
+            )
+            .instrument(record.span.clone())
+            .await?;
+        } else {
+            todo!("error");
+        };
+
+
+
+        todo!("");
+
+
+        // let record = recorded_grpc_api_request!(
+        //     "invoke_worker_http_handler",
+        //     worker_id = proto_target_worker_id_string(&request.worker_id),
+        //     path = request.path,
+        // );
+
+        // let result = self
+        //     .invoke_worker_http_handler(request)
+        //     .instrument(record.span.clone())
+        //     .await;
+        // match result {
+        //     Ok(response) => record.succeed(Ok(Response::new(response))),
+        //     Err(err) => record.fail(
+        //         Ok(Response::new(ListDirectoryResponse {
+        //             result: Some(
+        //                 golem::workerexecutor::v1::list_directory_response::Result::Failure(
+        //                     err.clone().into(),
+        //                 ),
+        //             ),
+        //         })),
+        //         &err,
+        //     ),
+        // }
+
     }
 
     type ConnectWorkerStream = ResponseStream;

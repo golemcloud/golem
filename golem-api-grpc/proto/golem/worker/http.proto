@@ -1,17 +1,17 @@
 syntax = "proto3";
 
-package golem.workerexecutor.v1;
+package golem.worker;
 
 enum StandardHttpMethod {
-  GET = 0;
-  HEAD = 1;
-  POST = 2;
-  PUT = 3;
-  DELETE = 4;
-  CONNECT = 5;
-  OPTIONS = 6;
-  TRACE = 7;
-  PATCH = 8;
+  METHOD_GET = 0;
+  METHOD_HEAD = 1;
+  METHOD_POST = 2;
+  METHOD_PUT = 3;
+  METHOD_DELETE = 4;
+  METHOD_CONNECT = 5;
+  METHOD_OPTIONS = 6;
+  METHOD_TRACE = 7;
+  METHOD_PATCH = 8;
 }
 
 message HttpMethod {

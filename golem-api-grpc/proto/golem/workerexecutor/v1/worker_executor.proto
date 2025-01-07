@@ -21,7 +21,7 @@ import public "golem/worker/worker_status.proto";
 import public "golem/worker/worker_filter.proto";
 import public "golem/worker/v1/worker_execution_error.proto";
 import public "golem/worker/filesystem.proto";
-import public "golem/workerexecutor/v1/http.proto";
+import public "golem/worker/http.proto";
 
 import public "wasm/rpc/val.proto";
 import public "wasm/rpc/type_annotated_value.proto";
@@ -172,11 +172,11 @@ message InvokeWorkerHttpHandlerRequestHeader {
   golem.common.AccountId account_id = 2;
   golem.common.ResourceLimits account_limits = 3;
   optional golem.worker.InvocationContext context = 4;
-  HttpMethod method = 5;
+  golem.worker.HttpMethod method = 5;
   string path_with_query = 6;
-  HttpScheme scheme = 7;
+  golem.worker.HttpScheme scheme = 7;
   string authority = 8;
-  HttpFields headers = 9;
+  golem.worker.HttpFields headers = 9;
 }
 
 message InvokeWorkerHttpHandlerRequestChunk {
@@ -184,7 +184,7 @@ message InvokeWorkerHttpHandlerRequestChunk {
 }
 
 message InvokeWorkerHttpHandlerRequestTrailer {
-  HttpFields trailers = 1;
+  golem.worker.HttpFields trailers = 1;
 }
 
 message InvokeWorkerHttpHandlerResponse {
@@ -202,7 +202,7 @@ message InvokeWorkerHttpHandlerResponseHeader {
 
 message InvokeWorkerHttpHandlerResponseHeaderSuccess {
   int32 status_code = 1;
-  HttpFields headers = 2;
+  golem.worker.HttpFields headers = 2;
 }
 
 message InvokeWorkerHttpHandlerResponseChunk {
@@ -210,7 +210,7 @@ message InvokeWorkerHttpHandlerResponseChunk {
 }
 
 message InvokeWorkerHttpHandlerResponseTrailer {
-  HttpFields headers = 1;
+  golem.worker.HttpFields headers = 1;
 }
 
 message ConnectWorkerRequest {
