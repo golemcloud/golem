@@ -7,7 +7,8 @@ use crate::log::{
 };
 use crate::model::app::{
     includes_from_yaml_file, AppBuildStep, Application, ComponentName,
-    ComponentPropertiesExtensions, DependencyType, ProfileName, DEFAULT_CONFIG_FILE_NAME,
+    ComponentPropertiesExtensions, DependencyType, DependentComponent, ProfileName,
+    DEFAULT_CONFIG_FILE_NAME,
 };
 use crate::model::app_raw;
 use crate::stub::{StubConfig, StubDefinition};
@@ -396,9 +397,7 @@ async fn gen_rpc<CPE: ComponentPropertiesExtensions>(
         }
 
         for dep in &ctx.application.all_wasm_rpc_dependencies() {
-            if dep.dep_type == DependencyType::StaticWasmRpc {
-                build_stub(ctx, &dep.name).await?;
-            }
+            build_stub(ctx, dep).await?;
         }
     }
 
@@ -1251,9 +1250,9 @@ fn update_cargo_toml<CPE: ComponentPropertiesExtensions>(
 
 async fn build_stub<CPE: ComponentPropertiesExtensions>(
     ctx: &mut ApplicationContext<CPE>,
-    component_name: &ComponentName,
+    component: &DependentComponent,
 ) -> anyhow::Result<bool> {
-    let stub_def = ctx.component_stub_def(component_name)?;
+    let stub_def = ctx.component_stub_def(&component.name)?;
     let target_root = stub_def.target_wit_root();
 
     let stub_dep_package_ids = stub_def.stub_dep_package_ids();
@@ -1266,12 +1265,12 @@ async fn build_stub<CPE: ComponentPropertiesExtensions>(
         })
         .collect();
 
-    let stub_wasm = ctx.application.stub_wasm(component_name);
-    let stub_wit = ctx.application.stub_wit(component_name);
+    let stub_wasm = ctx.application.stub_wasm(&component.name);
+    let stub_wit = ctx.application.stub_wit(&component.name);
     let task_result_marker = TaskResultMarker::new(
         &ctx.application.task_result_marker_dir(),
         ComponentGeneratorMarkerHash {
-            component_name,
+            component_name: &component.name,
             generator_kind: "stub",
         },
     )?;
@@ -1279,56 +1278,98 @@ async fn build_stub<CPE: ComponentPropertiesExtensions>(
     if is_up_to_date(
         ctx.config.skip_up_to_date_checks || !task_result_marker.is_up_to_date(),
         || stub_sources,
-        || [stub_wit.clone(), stub_wasm.clone()],
+        || {
+            if component.dep_type == DependencyType::StaticWasmRpc {
+                vec![stub_wit.clone(), stub_wasm.clone()]
+            } else {
+                vec![stub_wit.clone()]
+            }
+        },
     ) {
         log_skipping_up_to_date(format!(
-            "building wasm rpc stub for {}",
-            component_name.as_str().log_color_highlight()
+            "generating wasm rpc stub for {}",
+            component.name.as_str().log_color_highlight()
         ));
         Ok(false)
     } else {
-        log_action(
-            "Building",
-            format!(
-                "wasm rpc stub for {}",
-                component_name.as_str().log_color_highlight()
-            ),
-        );
-        let _indent = LogIndent::new();
+        match component.dep_type {
+            DependencyType::StaticWasmRpc => {
+                log_action(
+                    "Building",
+                    format!(
+                        "wasm rpc stub for {}",
+                        component.name.as_str().log_color_highlight()
+                    ),
+                );
+                let _indent = LogIndent::new();
 
-        delete_path("stub temp build dir", &target_root)?;
-        delete_path("stub wit", &stub_wit)?;
-        delete_path("stub wasm", &stub_wasm)?;
+                delete_path("stub temp build dir", &target_root)?;
+                delete_path("stub wit", &stub_wit)?;
+                delete_path("stub wasm", &stub_wasm)?;
 
-        log_action(
-            "Creating",
-            format!("stub temp build dir {}", target_root.log_color_highlight()),
-        );
-        fs::create_dir_all(&target_root)?;
+                log_action(
+                    "Creating",
+                    format!("stub temp build dir {}", target_root.log_color_highlight()),
+                );
+                fs::create_dir_all(&target_root)?;
 
-        let offline = ctx.config.offline;
-        let stub_def = ctx.component_stub_def(component_name)?;
-        let result = commands::generate::build(stub_def, &stub_wasm, &stub_wit, offline).await;
-        match result {
-            Ok(()) => {
-                task_result_marker.success()?;
+                let offline = ctx.config.offline;
+                let stub_def = ctx.component_stub_def(&component.name)?;
+                let result =
+                    commands::generate::build(stub_def, &stub_wasm, &stub_wit, offline).await;
+                match result {
+                    Ok(()) => {
+                        task_result_marker.success()?;
 
-                let skip_delete = std::env::var("WASM_RPC_KEEP_STUB_DIR")
-                    .ok()
-                    .map(|flag| {
-                        let flag = flag.to_lowercase();
-                        flag.starts_with("t") || flag == "1"
-                    })
-                    .unwrap_or_default();
+                        let skip_delete = std::env::var("WASM_RPC_KEEP_STUB_DIR")
+                            .ok()
+                            .map(|flag| {
+                                let flag = flag.to_lowercase();
+                                flag.starts_with("t") || flag == "1"
+                            })
+                            .unwrap_or_default();
 
-                if !skip_delete {
-                    delete_path("stub temp build dir", &target_root)?;
+                        if !skip_delete {
+                            delete_path("stub temp build dir", &target_root)?;
+                        }
+                        Ok(true)
+                    }
+                    Err(err) => {
+                        task_result_marker.failure()?;
+                        Err(err)
+                    }
                 }
-                Ok(true)
             }
-            Err(err) => {
-                task_result_marker.failure()?;
-                Err(err)
+            DependencyType::DynamicWasmRpc => {
+                log_action(
+                    "Generating",
+                    format!(
+                        "wasm rpc stub for {}",
+                        component.name.as_str().log_color_highlight()
+                    ),
+                );
+                let _indent = LogIndent::new();
+
+                delete_path("stub wit", &stub_wit)?;
+
+                log_action(
+                    "Creating",
+                    format!("stub temp build dir {}", target_root.log_color_highlight()),
+                );
+                fs::create_dir_all(&target_root)?;
+
+                let stub_def = ctx.component_stub_def(&component.name)?;
+                let result = commands::generate::generate_and_copy_stub_wit(stub_def, &stub_wit);
+                match result {
+                    Ok(_) => {
+                        task_result_marker.success()?;
+                        Ok(true)
+                    }
+                    Err(err) => {
+                        task_result_marker.failure()?;
+                        Err(err)
+                    }
+                }
             }
         }
     }

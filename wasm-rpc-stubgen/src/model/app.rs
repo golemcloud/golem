@@ -145,7 +145,7 @@ pub struct ComponentEffectivePropertySource<'a> {
     pub any_template_overrides: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum DependencyType {
     /// Dynamic (stubless) wasm-rpc
     DynamicWasmRpc,
