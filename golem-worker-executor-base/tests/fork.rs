@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use golem_common::model::oplog::OplogIndex;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -79,9 +80,10 @@ async fn fork_interrupted_worker_to_completion(
 
     executor.interrupt(&worker_id).await;
 
-    let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
 
-    let last_index = metadata.last_known_status.oplog_idx;
+    let last_index =
+        OplogIndex::from_u64(oplog.len() as u64);
 
     executor.fork_worker(&worker_id, &target, last_index).await;
 
