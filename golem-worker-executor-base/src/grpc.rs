@@ -75,6 +75,7 @@ use crate::services::{
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use tokio;
+use std::str::FromStr;
 
 pub enum GrpcError<E> {
     Transport(tonic::transport::Error),
@@ -2371,6 +2372,93 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ),
         }
     }
+
+    async fn get_swagger_ui_contents(
+        &self,
+        request: Request<golem::workerexecutor::v1::GetSwaggerUiContentsRequest>,
+    ) -> Result<Response<golem::workerexecutor::v1::GetSwaggerUiContentsResponse>, Status> {
+        use futures_util::TryStreamExt;
+        
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "get_swagger_ui_contents",
+            worker_id = "swagger_ui_contents",
+        );
+
+        let worker = match self.get_or_create(&request).instrument(record.span.clone()).await {
+            Ok(worker) => worker,
+            Err(err) => {
+                return record.fail(
+                    Ok(Response::new(
+                        golem::workerexecutor::v1::GetSwaggerUiContentsResponse {
+                            result: Some(
+                                golem::workerexecutor::v1::get_swagger_ui_contents_response::Result::Failure(
+                                    err.to_string(),
+                                ),
+                            ),
+                        },
+                    )),
+                    &err,
+                )
+            }
+        };
+
+        let path = ComponentFilePath::from_abs_str(&request.mount_path)
+            .map_err(|e| GolemError::invalid_request(format!("Invalid path: {}", e)))?;
+
+        match worker.read_file(path).await {
+            Ok(result) => match result {
+                ReadFileResult::Ok(stream) => {
+                    let mut contents = Vec::new();
+                    let mut stream = Box::pin(stream);
+                    
+                    while let Some(chunk) = stream.try_next().await.map_err(|e| Status::internal(e.to_string()))? {
+                        contents.extend_from_slice(&chunk);
+                    }
+
+                    record.succeed(Ok(Response::new(
+                        golem::workerexecutor::v1::GetSwaggerUiContentsResponse {
+                            result: Some(
+                                golem::workerexecutor::v1::get_swagger_ui_contents_response::Result::Success(
+                                    contents,
+                                ),
+                            ),
+                        },
+                    )))
+                }
+                ReadFileResult::NotFound => record.succeed(Ok(Response::new(
+                    golem::workerexecutor::v1::GetSwaggerUiContentsResponse {
+                        result: Some(
+                            golem::workerexecutor::v1::get_swagger_ui_contents_response::Result::Failure(
+                                "File not found".to_string(),
+                            ),
+                        ),
+                    },
+                ))),
+                ReadFileResult::NotAFile => record.succeed(Ok(Response::new(
+                    golem::workerexecutor::v1::GetSwaggerUiContentsResponse {
+                        result: Some(
+                            golem::workerexecutor::v1::get_swagger_ui_contents_response::Result::Failure(
+                                "Not a file".to_string(),
+                            ),
+                        ),
+                    },
+                ))),
+            },
+            Err(err) => record.fail(
+                Ok(Response::new(
+                    golem::workerexecutor::v1::GetSwaggerUiContentsResponse {
+                        result: Some(
+                            golem::workerexecutor::v1::get_swagger_ui_contents_response::Result::Failure(
+                                err.to_string(),
+                            ),
+                        ),
+                    },
+                )),
+                &err,
+            ),
+        }
+    }
 }
 
 trait CanStartWorker {
@@ -2615,5 +2703,35 @@ impl Stream for WorkerEventStream {
             Poll::Ready(None) => Poll::Ready(None),
             Poll::Pending => Poll::Pending,
         }
+    }
+}
+
+impl CanStartWorker for golem::workerexecutor::v1::GetSwaggerUiContentsRequest {
+    fn account_id(&self) -> Result<AccountId, GolemError> {
+        Ok(AccountId::generate())
+    }
+
+    fn account_limits(&self) -> Option<GrpcResourceLimits> {
+        None
+    }
+
+    fn worker_id(&self) -> Result<common_model::TargetWorkerId, GolemError> {
+        Ok(common_model::TargetWorkerId {
+            component_id: ComponentId::from_str(&self.worker_id)
+                .map_err(|e| GolemError::invalid_request(format!("Invalid component id: {}", e)))?,
+            worker_name: None,
+        })
+    }
+
+    fn args(&self) -> Option<Vec<String>> {
+        None
+    }
+
+    fn env(&self) -> Option<Vec<(String, String)>> {
+        None
+    }
+
+    fn parent(&self) -> Option<WorkerId> {
+        None
     }
 }

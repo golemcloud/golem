@@ -1,0 +1,41 @@
+openapi: 3.0.0
+info:
+  title: Test API
+  version: 1.0.0
+servers:
+- url: http://127.0.0.1:8080
+tags:
+- name: Test
+  description: Test API operations
+paths:
+  /healthcheck:
+    get:
+      tags:
+      - Test
+      summary: Get service health status
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/HealthcheckResponse'
+components:
+  schemas:
+    HealthcheckResponse:
+      type: object
+      required:
+      - status
+      - data
+      properties:
+        status:
+          type: string
+        data:
+          $ref: '#/components/schemas/VersionData'
+    VersionData:
+      type: object
+      required:
+      - version
+      properties:
+        version:
+          type: string

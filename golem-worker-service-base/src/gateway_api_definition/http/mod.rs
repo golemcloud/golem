@@ -12,12 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub use http_api_definition::*;
-pub use http_api_definition_request::*;
-pub use http_oas_api_definition::*;
-
 mod http_api_definition;
 mod http_api_definition_request;
 mod http_oas_api_definition;
+pub mod rib_converter;
+pub mod client_generator;
+pub mod openapi_export;
+pub mod swagger_ui;
 pub(crate) mod path_pattern_parser;
 pub(crate) mod place_holder_parser;
+
+pub use http_api_definition::*;
+pub use http_api_definition_request::*;
+pub use http_oas_api_definition::*;
+pub use client_generator::ClientGenerator;
+pub use openapi_export::{OpenApiExporter, OpenApiFormat};
+pub use rib_converter::RibConverter;

@@ -1,0 +1,122 @@
+{
+  "components": {
+    "schemas": {
+      "HealthcheckResponse": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/VersionData"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "data"
+        ],
+        "type": "object"
+      },
+      "VersionData": {
+        "properties": {
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "version"
+        ],
+        "type": "object"
+      },
+      "VersionInfo": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/VersionData"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "data"
+        ],
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "Health API",
+    "version": "1.0.0"
+  },
+  "openapi": "3.0.0",
+  "paths": {
+    "/api/v1/healthcheck": {
+      "get": {
+        "operationId": "healthcheck",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json; charset=utf-8": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthcheckResponse"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "HealthCheck"
+        ]
+      }
+    },
+    "/api/v1/version": {
+      "get": {
+        "operationId": "version",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json; charset=utf-8": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionInfo"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "HealthCheck"
+        ]
+      }
+    }
+  },
+  "servers": [
+    {
+      "url": "http://localhost:3000"
+    }
+  ],
+  "tags": [
+    {
+      "name": "ApiDefinition"
+    },
+    {
+      "name": "ApiDeployment"
+    },
+    {
+      "name": "ApiSecurity"
+    },
+    {
+      "name": "Component"
+    },
+    {
+      "name": "HealthCheck"
+    },
+    {
+      "name": "Plugin"
+    },
+    {
+      "name": "Worker"
+    }
+  ]
+}

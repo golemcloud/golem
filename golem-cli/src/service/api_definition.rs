@@ -60,6 +60,19 @@ pub trait ApiDefinitionService {
         version: ApiDefinitionVersion,
         project: &Self::ProjectContext,
     ) -> Result<GolemResult, GolemError>;
+    async fn swagger(
+        &self,
+        id: ApiDefinitionId,
+        version: ApiDefinitionVersion,
+        project: &Self::ProjectContext,
+    ) -> Result<GolemResult, GolemError>;
+    async fn export(
+        &self,
+        id: ApiDefinitionId,
+        version: ApiDefinitionVersion,
+        project: &Self::ProjectContext,
+        format: ApiDefinitionFileFormat,
+    ) -> Result<GolemResult, GolemError>;
 }
 
 pub struct ApiDefinitionServiceLive<ProjectContext> {
@@ -133,5 +146,30 @@ impl<ProjectContext: Send + Sync> ApiDefinitionService
     ) -> Result<GolemResult, GolemError> {
         let result = self.client.delete(id, version, project).await?;
         Ok(GolemResult::Str(result))
+    }
+
+    async fn swagger(
+        &self,
+        id: ApiDefinitionId,
+        version: ApiDefinitionVersion,
+        project: &Self::ProjectContext,
+    ) -> Result<GolemResult, GolemError> {
+        let url = self.client.get_swagger_url(id, version, project).await?;
+        // Open the URL in the default browser
+        if let Err(e) = webbrowser::open(&url) {
+            return Err(GolemError(format!("Failed to open browser: {}", e)));
+        }
+        Ok(GolemResult::Str(format!("Opened Swagger UI at {}", url)))
+    }
+
+    async fn export(
+        &self,
+        id: ApiDefinitionId,
+        version: ApiDefinitionVersion,
+        project: &Self::ProjectContext,
+        format: ApiDefinitionFileFormat,
+    ) -> Result<GolemResult, GolemError> {
+        let schema = self.client.export_schema(id, version, project, format).await?;
+        Ok(GolemResult::Str(schema))
     }
 }

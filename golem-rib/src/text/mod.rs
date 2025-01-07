@@ -15,9 +15,9 @@
 use crate::expr::Expr;
 use crate::ArmPattern;
 
-mod writer;
+pub mod writer;
 
-use crate::text::writer::WriterError;
+pub use crate::text::writer::WriterError;
 
 pub fn from_string(input: impl AsRef<str>) -> Result<Expr, String> {
     let trimmed = input.as_ref().trim();

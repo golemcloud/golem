@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use golem_common::golem_version;
-use service::worker::WorkerRequestMetadata;
+use service::worker::default::WorkerRequestMetadata;
 
 pub mod api;
 pub mod app_config;

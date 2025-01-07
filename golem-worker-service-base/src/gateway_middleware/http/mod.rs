@@ -18,6 +18,6 @@ pub use http_middleware::*;
 pub use middleware_error::*;
 
 mod authentication;
-mod cors;
-mod http_middleware;
+pub mod cors;
+pub mod http_middleware;
 mod middleware_error;

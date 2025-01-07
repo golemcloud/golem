@@ -14,35 +14,72 @@
 
 use poem_openapi::payload::Json;
 use poem_openapi::*;
+use poem::{Route, Endpoint, EndpointExt, IntoEndpoint};
 
 use crate::VERSION;
 use golem_service_base::api_tags::ApiTags;
+use super::routes::create_cors_middleware;
 
+#[derive(Clone)]
 pub struct HealthcheckApi;
 
 #[derive(
     Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, serde::Serialize, serde::Deserialize, Object,
 )]
-pub struct HealthcheckResponse {}
+pub struct HealthcheckResponse {
+    status: String,
+    data: VersionData,
+}
+
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, serde::Serialize, serde::Deserialize, Object,
+)]
+pub struct VersionData {
+    version: String,
+}
 
 #[derive(
     Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, serde::Serialize, serde::Deserialize, Object,
 )]
 pub struct VersionInfo {
-    pub version: String,
+    status: String,
+    data: VersionData,
 }
 
-#[OpenApi(prefix_path = "/", tag = ApiTags::HealthCheck)]
+#[OpenApi(prefix_path = "", tag = ApiTags::HealthCheck)]
 impl HealthcheckApi {
     #[oai(path = "/healthcheck", method = "get", operation_id = "healthcheck")]
     async fn healthcheck(&self) -> Json<HealthcheckResponse> {
-        Json(HealthcheckResponse {})
+        Json(HealthcheckResponse {
+            status: "success".to_string(),
+            data: VersionData {
+                version: VERSION.to_string(),
+            },
+        })
     }
 
     #[oai(path = "/version", method = "get", operation_id = "version")]
     async fn version(&self) -> Json<VersionInfo> {
         Json(VersionInfo {
-            version: VERSION.to_string(),
+            status: "success".to_string(),
+            data: VersionData {
+                version: VERSION.to_string(),
+            },
         })
     }
+}
+
+/// Create Health API routes with CORS configuration
+pub fn healthcheck_routes() -> impl Endpoint {
+    let api_service = OpenApiService::new(HealthcheckApi, "Health API", "1.0.0")
+        .server("http://localhost:3000")
+        .url_prefix("/api/v1");
+
+    Route::new()
+        .nest("", api_service.clone().with(create_cors_middleware()))
+        .nest("/doc", api_service.spec_endpoint().with(create_cors_middleware()))
+        .nest("/swagger-ui", api_service.swagger_ui().with(create_cors_middleware()))
+        .with(poem::middleware::AddData::new(()))
+        .with(create_cors_middleware())
+        .into_endpoint()
 }

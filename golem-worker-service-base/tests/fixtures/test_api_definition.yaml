@@ -1,0 +1,509 @@
+openapi: 3.1.0
+info:
+  title: Golem RIB API
+  version: 1.0.0
+  description: Runtime Interface Builder (RIB) API provides endpoints for managing and converting runtime interfaces, supporting complex type operations, batch processing, and tree-based data structures.
+
+servers:
+  - url: http://localhost:3000
+    description: Local development server
+
+paths:
+  /api/v1/rib/healthcheck:
+    get:
+      summary: Health check endpoint
+      description: Returns the health status of the service
+      operationId: healthcheck
+      tags:
+        - RIB API
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: ["success"]
+                  data:
+                    type: object
+                required:
+                  - status
+                  - data
+
+  /api/v1/rib/version:
+    get:
+      summary: Get version information
+      description: Returns the version information of the service
+      operationId: version
+      tags:
+        - RIB API
+      responses:
+        '200':
+          description: Version information
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: ["success"]
+                  data:
+                    type: object
+                    properties:
+                      version_str:
+                        type: string
+                        example: "1.0.0"
+                    required:
+                      - version_str
+                required:
+                  - status
+                  - data
+
+  /api/v1/rib/primitives:
+    get:
+      summary: Get primitive types
+      description: Returns example primitive types and their schema
+      operationId: getPrimitiveTypes
+      tags:
+        - RIB API
+      responses:
+        '200':
+          description: Primitive types schema and example
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: ["success"]
+                  data:
+                    type: object
+                    properties:
+                      schema:
+                        type: object
+                      example:
+                        type: object
+                        properties:
+                          bool_val:
+                            type: boolean
+                          u32_val:
+                            type: integer
+                            format: int32
+                          f64_val:
+                            type: number
+                            format: double
+                          string_val:
+                            type: string
+                    required:
+                      - schema
+                      - example
+                required:
+                  - status
+                  - data
+    post:
+      summary: Create primitive types
+      description: Creates primitive types from provided data
+      operationId: createPrimitiveTypes
+      tags:
+        - RIB API
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Created primitive types
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: ["success"]
+                  data:
+                    type: object
+                required:
+                  - status
+                  - data
+
+  /api/v1/rib/users/{id}/profile:
+    get:
+      summary: Get user profile
+      description: Returns the profile information for a specific user
+      operationId: getUserProfile
+      tags:
+        - RIB API
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int32
+      responses:
+        '200':
+          description: User profile information
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: ["success"]
+                  data:
+                    type: object
+                required:
+                  - status
+                  - data
+
+  /api/v1/rib/users/{id}/settings:
+    post:
+      summary: Update user settings
+      description: Updates the settings for a specific user
+      operationId: updateUserSettings
+      tags:
+        - RIB API
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int32
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                theme:
+                  type: string
+                notifications_enabled:
+                  type: boolean
+              required:
+                - theme
+                - notifications_enabled
+      responses:
+        '200':
+          description: Updated user settings
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: ["success"]
+                  data:
+                    type: object
+                required:
+                  - status
+                  - data
+
+  /api/v1/rib/content:
+    post:
+      summary: Create content
+      description: Creates new content
+      operationId: createContent
+      tags:
+        - RIB API
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                body:
+                  type: string
+              required:
+                - title
+                - body
+      responses:
+        '200':
+          description: Created content
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: ["success"]
+                  data:
+                    type: object
+                required:
+                  - status
+                  - data
+
+  /api/v1/rib/search:
+    post:
+      summary: Search content
+      description: Searches content based on provided criteria
+      operationId: searchContent
+      tags:
+        - RIB API
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                query:
+                  type: string
+                filters:
+                  type: object
+                  properties:
+                    type:
+                      type: string
+                    date_range:
+                      type: object
+                      properties:
+                        start:
+                          type: string
+                        end:
+                          type: string
+                      required:
+                        - start
+                        - end
+              required:
+                - query
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: ["success"]
+                  data:
+                    type: object
+                    properties:
+                      matches:
+                        type: array
+                        items:
+                          type: object
+                      total_count:
+                        type: integer
+                        format: int32
+                      execution_time_ms:
+                        type: integer
+                        format: int32
+                    required:
+                      - matches
+                      - total_count
+                      - execution_time_ms
+                required:
+                  - status
+                  - data
+
+  /api/v1/rib/batch/process:
+    post:
+      summary: Process batch items
+      description: Processes multiple items in a batch
+      operationId: processBatch
+      tags:
+        - RIB API
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      id:
+                        type: integer
+                        format: int32
+                      action:
+                        type: string
+                    required:
+                      - id
+                      - action
+              required:
+                - items
+      responses:
+        '200':
+          description: Batch processing results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: ["success"]
+                  data:
+                    type: object
+                    properties:
+                      processed:
+                        type: integer
+                        format: int32
+                      failed:
+                        type: integer
+                        format: int32
+                      results:
+                        type: array
+                        items:
+                          type: object
+                    required:
+                      - processed
+                      - failed
+                      - results
+                required:
+                  - status
+                  - data
+
+  /api/v1/rib/tree:
+    get:
+      summary: Get tree structure
+      description: Returns a tree-based data structure
+      operationId: getTree
+      tags:
+        - RIB API
+      responses:
+        '200':
+          description: Tree structure
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: ["success"]
+                  data:
+                    type: object
+                    properties:
+                      id:
+                        type: integer
+                        format: int32
+                      node:
+                        type: object
+                      metadata:
+                        type: object
+                        properties:
+                          created_at:
+                            type: integer
+                            format: int64
+                          modified_at:
+                            type: integer
+                            format: int64
+                          tags:
+                            type: array
+                            items:
+                              type: string
+                        required:
+                          - created_at
+                          - modified_at
+                          - tags
+                    required:
+                      - id
+                      - node
+                      - metadata
+                required:
+                  - status
+                  - data
+
+  /api/v1/rib/tree/modify:
+    post:
+      summary: Modify tree
+      description: Modifies the tree structure
+      operationId: modifyTree
+      tags:
+        - RIB API
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Tree modification result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: ["success"]
+                  data:
+                    type: object
+                    properties:
+                      success:
+                        type: boolean
+                      operation_type:
+                        type: string
+                      nodes_affected:
+                        type: integer
+                        format: int32
+                    required:
+                      - success
+                      - operation_type
+                      - nodes_affected
+                required:
+                  - status
+                  - data
+
+  /api/v1/rib/export:
+    get:
+      summary: Export OpenAPI specification
+      description: Returns the OpenAPI specification for the RIB API
+      operationId: exportApi
+      tags:
+        - RIB API
+      responses:
+        '200':
+          description: OpenAPI specification
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /api/v1/rib/api/definitions/{api_id}/version/{version}/export:
+    get:
+      summary: Export API definition
+      description: Exports the OpenAPI specification for a specific API version
+      operationId: exportApiDefinition
+      tags:
+        - RIB API
+      parameters:
+        - name: api_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: version
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OpenAPI specification
+          content:
+            application/json:
+              schema:
+                type: object 

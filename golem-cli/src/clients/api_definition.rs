@@ -57,4 +57,17 @@ pub trait ApiDefinitionClient {
         version: ApiDefinitionVersion,
         project: &Self::ProjectContext,
     ) -> Result<String, GolemError>;
+    async fn get_swagger_url(
+        &self,
+        id: ApiDefinitionId,
+        version: ApiDefinitionVersion,
+        project: &Self::ProjectContext,
+    ) -> Result<String, GolemError>;
+    async fn export_schema(
+        &self,
+        id: ApiDefinitionId,
+        version: ApiDefinitionVersion,
+        project: &Self::ProjectContext,
+        format: ApiDefinitionFileFormat,
+    ) -> Result<String, GolemError>;
 }

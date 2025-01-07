@@ -28,6 +28,8 @@ pub enum WorkerServiceError {
     Component(#[from] ComponentServiceError),
     #[error("Type checker error: {0}")]
     TypeChecker(String),
+    #[error("Invalid request: {0}")]
+    InvalidRequest(String),
     #[error("Component not found: {0}")]
     VersionedComponentIdNotFound(VersionedComponentId),
     #[error("Component not found: {0}")]
@@ -53,6 +55,7 @@ impl SafeDisplay for WorkerServiceError {
         match self {
             WorkerServiceError::Component(inner) => inner.to_safe_string(),
             WorkerServiceError::TypeChecker(_) => self.to_string(),
+            WorkerServiceError::InvalidRequest(_) => self.to_string(),
             WorkerServiceError::VersionedComponentIdNotFound(_) => self.to_string(),
             WorkerServiceError::ComponentNotFound(_) => self.to_string(),
             WorkerServiceError::AccountIdNotFound(_) => self.to_string(),
@@ -100,9 +103,11 @@ impl From<WorkerServiceError> for worker_error::Error {
                     })),
                 })
             }
-            WorkerServiceError::TypeChecker(error) => worker_error::Error::BadRequest(ErrorsBody {
-                errors: vec![error],
-            }),
+            WorkerServiceError::TypeChecker(error) | WorkerServiceError::InvalidRequest(error) => {
+                worker_error::Error::BadRequest(ErrorsBody {
+                    errors: vec![error],
+                })
+            }
             WorkerServiceError::Component(component) => component.into(),
             WorkerServiceError::Golem(worker_execution_error) => {
                 worker_error::Error::InternalError(worker_execution_error.into())

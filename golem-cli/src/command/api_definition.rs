@@ -120,6 +120,42 @@ pub enum ApiDefinitionSubcommand<ProjectRef: clap::Args> {
         #[arg(short = 'V', long)]
         version: ApiDefinitionVersion,
     },
+
+    /// Launch browser with Swagger UI for the API definition
+    #[command()]
+    Swagger {
+        /// The project reference
+        #[command(flatten)]
+        project_ref: ProjectRef,
+
+        /// Api definition id
+        #[arg(short, long)]
+        id: ApiDefinitionId,
+
+        /// Version of the api definition
+        #[arg(short = 'V', long)]
+        version: ApiDefinitionVersion,
+    },
+
+    /// Export OpenAPI schema for the API definition
+    #[command()]
+    Export {
+        /// The project reference
+        #[command(flatten)]
+        project_ref: ProjectRef,
+
+        /// Api definition id
+        #[arg(short, long)]
+        id: ApiDefinitionId,
+
+        /// Version of the api definition
+        #[arg(short = 'V', long)]
+        version: ApiDefinitionVersion,
+
+        /// Output format (json or yaml)
+        #[arg(short, long, default_value = "json")]
+        format: ApiDefinitionFileFormat,
+    },
 }
 
 impl<ProjectRef: clap::Args + Send + Sync + 'static> ApiDefinitionSubcommand<ProjectRef> {
@@ -181,6 +217,23 @@ impl<ProjectRef: clap::Args + Send + Sync + 'static> ApiDefinitionSubcommand<Pro
             } => {
                 let project_id = projects.resolve_id_or_default(project_ref).await?;
                 service.delete(id, version, &project_id).await
+            }
+            ApiDefinitionSubcommand::Swagger {
+                project_ref,
+                id,
+                version,
+            } => {
+                let project_id = projects.resolve_id_or_default(project_ref).await?;
+                service.swagger(id, version, &project_id).await
+            }
+            ApiDefinitionSubcommand::Export {
+                project_ref,
+                id,
+                version,
+                format,
+            } => {
+                let project_id = projects.resolve_id_or_default(project_ref).await?;
+                service.export(id, version, &project_id, format).await
             }
         }
     }

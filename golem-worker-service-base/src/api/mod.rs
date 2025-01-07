@@ -12,15 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Components and request data that can be reused for implementing server API endpoints
+mod common;
+mod custom_http_request_api;
+mod error;
+pub mod healthcheck;
+mod register_api_definition_api;
+pub mod routes;
+pub mod wit_types_api;
+
+pub mod rib_endpoints;
+
+// Re-exports
 pub use common::*;
 pub use custom_http_request_api::*;
 pub use error::*;
 pub use healthcheck::*;
 pub use register_api_definition_api::*;
-
-// Components and request data that can be reused for implementing server API endpoints
-mod common;
-mod custom_http_request_api;
-mod error;
-mod healthcheck;
-mod register_api_definition_api;
+pub use rib_endpoints::*;
+pub use wit_types_api::*;
+pub use routes::create_api_router;

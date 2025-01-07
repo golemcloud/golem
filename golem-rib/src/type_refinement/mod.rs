@@ -15,8 +15,8 @@
 pub use refined_type::*;
 pub use type_extraction::*;
 
-pub(crate) mod precise_types;
-mod refined_type;
+pub mod precise_types;
+pub mod refined_type;
 mod type_extraction;
 
 use crate::type_refinement::precise_types::*;
