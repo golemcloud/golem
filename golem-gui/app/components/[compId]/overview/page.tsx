@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import {
   Grid2 as Grid,
   Paper,
@@ -17,7 +17,7 @@ import {
   ErrorOutline,
   RocketLaunch,
 } from "@mui/icons-material";
-import { PieChart, Pie, Sector, Cell, ResponsiveContainer } from "recharts";
+import { PieChart, Pie,Cell, ResponsiveContainer } from "recharts";
 import CreateWorker from "@/components/create-worker";
 import CustomModal from "@/components/CustomModal";
 import useComponents from "@/lib/hooks/use-component";

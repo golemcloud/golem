@@ -41,6 +41,7 @@
     "react": "^18",
     "react-day-picker": "^8.10.1",
     "react-dom": "^18",
+    "react-dropzone": "^14.3.5",
     "react-hook-form": "^7.54.1",
     "react-icons": "^5.4.0",
     "react-toastify": "^11.0.2",
@@ -48,7 +49,7 @@
     "swr": "^2.2.5",
     "tailwind-merge": "^2.5.5",
     "tailwindcss-animate": "^1.0.7",
-    "uuid": "^11.0.3",
+    "uuid": "^11.0.4",
     "zod": "^3.24.1"
   },
   "devDependencies": {

@@ -6,7 +6,6 @@ import {
   Divider,
   Stack,
   List,
-  Modal,
 } from "@mui/material";
 import { useParams } from "next/navigation";
 import useSWR from "swr";
@@ -98,7 +97,6 @@ export default function Page() {
       return;
     }
   };
-  const handleOpen = () => setOpen(true);
   const handleClose = () => setOpen(false);
   return (
     <Box>

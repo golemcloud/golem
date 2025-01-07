@@ -1,16 +1,14 @@
 "use client";
 
-import React from "react";
+import React, { useCallback } from "react";
 import { useForm, Controller } from "react-hook-form";
 import {
   Box,
-  Button,
   Typography,
   RadioGroup,
   FormControlLabel,
   Radio,
   TextField,
-  Paper,
   IconButton,
 } from "@mui/material";
 import UploadFileIcon from "@mui/icons-material/UploadFile";
@@ -20,6 +18,7 @@ import CloudUploadIcon from "@mui/icons-material/CloudUpload";
 import { addNewcomponent } from "@/lib/hooks/use-component";
 import { getFormErrorMessage } from "../lib/utils";
 import { Button2 } from "@/components/ui/button";
+import { useDropzone } from "react-dropzone";
 
 type FormData = {
   name: string;
@@ -60,14 +59,9 @@ export default function ComponentForm({
     },
   });
 
-  // const wasmFile = watch("component");
   const files = watch("files");
   const [error, setError] = React.useState<string | null>(null);
 
-  const handleFilesUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const uploadedFiles = Array.from(e.target.files || []);
-    setValue("files", [...getValues("files"), ...uploadedFiles]);
-  };
 
   const handleFileDelete = (index: number) => {
     const updatedFiles = files?.filter((_, i) => i !== index);
@@ -101,6 +95,18 @@ export default function ComponentForm({
       setError("Something went wrong! Please try again.");
     }
   };
+  const onDrop = useCallback(
+    (acceptedFiles: File[]) => {
+      setValue("files", [...getValues().files, ...acceptedFiles]);
+    },
+    [getValues, setValue]
+  );
+  
+  const { getRootProps, getInputProps } = useDropzone({
+    onDrop,
+    multiple: true,
+    maxSize: 50 * 1024 * 1024, // 50MB size limit
+  });
 
   return (
     <form onSubmit={handleSubmit(onSubmit)}>
@@ -234,19 +240,12 @@ export default function ComponentForm({
         Files available to your workers at runtime.
       </Typography>
       <Box
+        {...getRootProps()}
         textAlign="center"
         className="cursor-pointer hover:border-[#888] border-dashed border-2 p-3 mb-3 rounded-md"
       >
-        <input
-          type="file"
-          multiple
-          hidden
-          id="file-upload"
-          onChange={handleFilesUpload}
-        />
-        <label htmlFor="file-upload">
-          <Typography variant="body2">Select or Drop files</Typography>
-        </label>
+        <input {...getInputProps()} />
+        <Typography variant="body2">Drag & Drop or Select files</Typography>
       </Box>
 
       {/* File List */}

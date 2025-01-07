@@ -3,9 +3,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Box,
   CircularProgress,
-  Container,
   Grid2 as Grid,
-  IconButton,
   InputAdornment,
   Link,
   Pagination,
@@ -14,7 +12,7 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
-import { Button2 as Button, Button2 } from "@/components/ui/button";
+import { Button2 } from "@/components/ui/button";
 import {
   Add as AddIcon,
   Delete as DeleteIcon,
@@ -32,7 +30,7 @@ import ErrorBoundary from "@/components/erro-boundary";
 import NotFoundCard from "@/components/not-found-card";
 import SearchIcon from "@mui/icons-material/Search";
 
-export const PluginsPage = () => {
+const PluginsPage = () => {
   const [open, setOpen] = useState(false);
   const { plugins, isLoading, error } = usePlugins();
   const { deletePlugin } = useDeletePlugin();

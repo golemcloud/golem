@@ -1,5 +1,5 @@
 import { Alert, Stack } from "@mui/material";
-import React, { useState, useEffect, ErrorInfo } from "react";
+import React, { useState, useEffect } from "react";
 
 interface Props {
   children?: React.ReactNode;
@@ -21,11 +21,6 @@ const ErrorBoundary: React.FC<Props> = ({ children, message }) => {
     }
   }, [message]);
 
-  const handleError = (error: Error, errorInfo: ErrorInfo) => {
-    console.error("ErrorBoundary caught an error: ", error, errorInfo);
-    setErrorMessage(error.message);
-    setHasError(true);
-  };
 
   console.log("entering this===>", errorMessage)
   if (hasError) {

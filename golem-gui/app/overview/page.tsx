@@ -151,7 +151,7 @@ const ProjectDashboard = () => {
               {!error && !isLoading && uniquesApis?.length > 0 && (
                 <Stack marginTop={2} sx={{ flex: 1, overflow: "hidden" }}>
                   {!isLoading &&
-                    uniquesApis.slice(0, 10).map((api) => (
+                    uniquesApis.slice(0, 8).map((api) => (
                       <React.Fragment key={api.id}>
                         <Divider sx={{ bgcolor: "#555" }} />
                         <Box

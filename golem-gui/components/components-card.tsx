@@ -19,7 +19,7 @@ interface ComponentInfoCardProps {
 
 export function ComponentWorkerInfo({compId}:{compId:string}){
   // TODO ADD loader and error handling
-  const {data: workers, error, isLoading} = useWorkerFind(compId, 15, true);
+  const {data: workers} = useWorkerFind(compId, 15, true);
   const stats = useMemo(()=>{
     return workers?.reduce<Record<string, number>>((obj:Record<string, number>, worker: Worker)=>{
       obj[worker.status] = (obj[worker.status] || 0) + 1
