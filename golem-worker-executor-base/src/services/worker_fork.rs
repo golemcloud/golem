@@ -1,3 +1,17 @@
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use std::marker::PhantomData;
 use std::sync::{Arc, RwLock};
 
@@ -6,13 +20,11 @@ use crate::metrics::workers::record_worker_call;
 use crate::model::ExecutionStatus;
 use crate::services::oplog::CommitLevel;
 use crate::services::{HasAll, HasOplog};
-use crate::worker::{Worker};
+use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use golem_common::model::oplog::{OplogIndex, OplogIndexRange};
-use golem_common::model::{
-    AccountId, OwnedWorkerId, Timestamp, WorkerId, WorkerMetadata,
-};
+use golem_common::model::{AccountId, OwnedWorkerId, Timestamp, WorkerId, WorkerMetadata};
 
 #[async_trait]
 pub trait WorkerFork {
@@ -67,8 +79,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx>> DefaultWorkerFork<Ctx, Svcs> {
 
         let owned_source_worker_id = OwnedWorkerId::new(account_id, source_worker_id);
 
-        self
-            .all
+        self.all
             .worker_service()
             .get(&owned_source_worker_id)
             .await
@@ -112,8 +123,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerFork
         )
         .await?;
 
-        let source_worker_metadata =
-            source_worker_instance.get_metadata().await?;
+        let source_worker_metadata = source_worker_instance.get_metadata().await?;
 
         // Not sure if we should copy the metadata or not, or stick on to just default
         let target_worker_metadata = WorkerMetadata {
@@ -123,7 +133,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerFork
             args: source_worker_metadata.args.clone(),
             created_at: Timestamp::now_utc(),
             parent: source_worker_metadata.parent.clone(),
-            last_known_status: source_worker_metadata.last_known_status.clone()
+            last_known_status: source_worker_metadata.last_known_status.clone(),
         };
 
         let source_oplog = source_worker_instance.oplog();
@@ -152,8 +162,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerFork
             )
             .await;
 
-        let oplog_range =
-            OplogIndexRange::new(OplogIndex::INITIAL.next(), oplog_index_cut_off);
+        let oplog_range = OplogIndexRange::new(OplogIndex::INITIAL.next(), oplog_index_cut_off);
 
         for oplog_index in oplog_range {
             let entry = source_oplog.read(oplog_index).await;

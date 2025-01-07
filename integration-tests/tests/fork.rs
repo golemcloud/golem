@@ -1,0 +1,325 @@
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use test_r::{inherit_test_dep, test, timeout};
+
+use golem_test_framework::dsl::TestDslUnsafe;
+use golem_wasm_rpc::Value;
+
+use crate::Tracing;
+use golem_common::model::oplog::OplogIndex;
+use golem_common::model::public_oplog::PublicOplogEntry;
+use golem_common::model::WorkerId;
+use golem_test_framework::config::EnvBasedTestDependencies;
+
+inherit_test_dep!(Tracing);
+inherit_test_dep!(EnvBasedTestDependencies);
+
+#[test]
+#[tracing::instrument]
+#[timeout(120000)]
+async fn fork_worker_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    let component_id = deps.store_component("shopping-cart").await;
+
+    let source_worker_id = WorkerId {
+        component_id: component_id.clone(),
+        worker_name: "foo".to_string(),
+    };
+
+    let _ = deps
+        .invoke_and_await(
+            &source_worker_id,
+            "golem:it/api.{initialize-cart}",
+            vec![Value::String("test-user-1".to_string())],
+        )
+        .await;
+
+    let _ = deps
+        .invoke_and_await(
+            &source_worker_id,
+            "golem:it/api.{add-item}",
+            vec![Value::Record(vec![
+                Value::String("G1000".to_string()),
+                Value::String("Golem T-Shirt M".to_string()),
+                Value::F32(100.0),
+                Value::U32(5),
+            ])],
+        )
+        .await;
+
+    let _ = deps
+        .invoke_and_await(
+            &source_worker_id,
+            "golem:it/api.{add-item}",
+            vec![Value::Record(vec![
+                Value::String("G1001".to_string()),
+                Value::String("Golem Cloud Subscription 1y".to_string()),
+                Value::F32(999999.0),
+                Value::U32(1),
+            ])],
+        )
+        .await;
+
+    let _ = deps
+        .invoke_and_await(
+            &source_worker_id,
+            "golem:it/api.{add-item}",
+            vec![Value::Record(vec![
+                Value::String("G1002".to_string()),
+                Value::String("Mud Golem".to_string()),
+                Value::F32(11.0),
+                Value::U32(10),
+            ])],
+        )
+        .await;
+
+    let _ = deps
+        .invoke_and_await(
+            &source_worker_id,
+            "golem:it/api.{update-item-quantity}",
+            vec![Value::String("G1002".to_string()), Value::U32(20)],
+        )
+        .await;
+
+    let _ = deps
+        .invoke_and_await(
+            &source_worker_id,
+            "golem:it/api.{get-cart-contents}",
+            vec![],
+        )
+        .await;
+
+    let _ = deps
+        .invoke_and_await(&source_worker_id, "golem:it/api.{checkout}", vec![])
+        .await;
+
+    let target_worker_id = WorkerId {
+        component_id: component_id.clone(),
+        worker_name: "forked-foo".to_string(),
+    };
+
+    // This is invocation complete oplog for G1001 (invoked and log (12 and 13) oplogs are considered to be still running which fails resume)
+    let _ = deps
+        .fork_worker(
+            &source_worker_id,
+            &target_worker_id,
+            OplogIndex::from_u64(14),
+        )
+        .await;
+
+    // Invoking G1002 again in forked worker
+    let _ = deps
+        .invoke_and_await(
+            &target_worker_id,
+            "golem:it/api.{add-item}",
+            vec![Value::Record(vec![
+                Value::String("G1002".to_string()),
+                Value::String("Mud Golem".to_string()),
+                Value::F32(11.0),
+                Value::U32(10),
+            ])],
+        )
+        .await;
+
+    let _ = deps
+        .invoke_and_await(
+            &target_worker_id,
+            "golem:it/api.{update-item-quantity}",
+            vec![Value::String("G1002".to_string()), Value::U32(20)],
+        )
+        .await;
+
+    let result1 = deps
+        .search_oplog(&target_worker_id, "G1002 AND NOT pending")
+        .await;
+    let result2 = deps.search_oplog(&target_worker_id, "G1001").await;
+
+    assert_eq!(result2.len(), 2); //  two invocations for G1001 which was in the original source oplog
+    assert_eq!(result1.len(), 4); //  two invocations for G1002 and two log messages preceded
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout(120000)]
+async fn fork_worker_2(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    let component_id = deps.store_component("shopping-cart").await;
+
+    let source_worker_id = WorkerId {
+        component_id: component_id.clone(),
+        worker_name: "bar".to_string(),
+    };
+
+    let _ = deps
+        .invoke_and_await(
+            &source_worker_id,
+            "golem:it/api.{initialize-cart}",
+            vec![Value::String("test-user-1".to_string())],
+        )
+        .await;
+
+    let second_call_oplogs = deps
+        .search_oplog(&source_worker_id, "initialize-cart")
+        .await;
+
+    let index = second_call_oplogs
+        .last()
+        .expect("Expect at least one entry for the product id G1001")
+        .oplog_index;
+
+    let error = golem_test_framework::dsl::TestDsl::fork_worker(
+        deps,
+        &source_worker_id,
+        &source_worker_id,
+        index,
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("WorkerAlreadyExists"));
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout(120000)]
+async fn fork_worker_3(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    let component_id = deps.store_component("shopping-cart").await;
+
+    let source_worker_id = WorkerId {
+        component_id: component_id.clone(),
+        worker_name: "baz".to_string(),
+    };
+
+    let _ = deps
+        .invoke_and_await(
+            &source_worker_id,
+            "golem:it/api.{initialize-cart}",
+            vec![Value::String("test-user-1".to_string())],
+        )
+        .await;
+
+    let target_worker_id = WorkerId {
+        component_id: component_id.clone(),
+        worker_name: "forked-baz".to_string(),
+    };
+
+    let error = golem_test_framework::dsl::TestDsl::fork_worker(
+        deps,
+        &source_worker_id,
+        &target_worker_id,
+        OplogIndex::INITIAL,
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("oplog_index_cut_off must be at least 2"));
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout(120000)]
+async fn fork_worker_4(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    let component_id = deps.store_component("shopping-cart").await;
+
+    let source_worker_id = WorkerId {
+        component_id: component_id.clone(),
+        worker_name: "buz".to_string(),
+    };
+
+    let target_worker_id = WorkerId {
+        component_id: component_id.clone(),
+        worker_name: "forked-buz".to_string(),
+    };
+
+    let error = golem_test_framework::dsl::TestDsl::fork_worker(
+        deps,
+        &source_worker_id,
+        &target_worker_id,
+        OplogIndex::from_u64(14),
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("WorkerNotFound"));
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout(120000)]
+async fn fork_worker_no_divergence_until_fork_point(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) {
+    let component_id = deps.store_component("environment-service").await;
+
+    let source_worker_id = WorkerId {
+        component_id: component_id.clone(),
+        worker_name: "foo".to_string(),
+    };
+
+    let _ = deps
+        .invoke_and_await(&source_worker_id, "golem:it/api.{get-environment}", vec![])
+        .await
+        .unwrap();
+
+    // The worker name is foo
+    let expected = Value::Tuple(vec![Value::Result(Ok(Some(Box::new(Value::List(vec![
+        Value::Tuple(vec![
+            Value::String("GOLEM_WORKER_NAME".to_string()),
+            Value::String("foo".to_string()),
+        ]),
+        Value::Tuple(vec![
+            Value::String("GOLEM_COMPONENT_ID".to_string()),
+            Value::String(format!("{}", component_id)),
+        ]),
+        Value::Tuple(vec![
+            Value::String("GOLEM_COMPONENT_VERSION".to_string()),
+            Value::String("0".to_string()),
+        ]),
+    ])))))]);
+
+    let target_worker_id = WorkerId {
+        component_id: component_id.clone(),
+        worker_name: "forked-foo".to_string(),
+    };
+
+    // We fork the worker post the completion and see if oplog corresponding to environment value
+    // has the same value as foo. As far as the fork cut off point is post the completion, there
+    // shouldn't be any divergence for worker information even if forked worker name
+    // is different from the source worker name
+    let _ = deps
+        .fork_worker(
+            &source_worker_id,
+            &target_worker_id,
+            OplogIndex::from_u64(7),
+        )
+        .await;
+
+    let result = deps
+        .get_oplog(&target_worker_id, OplogIndex::from_u64(7))
+        .await;
+
+    assert_eq!(result.len(), 1);
+
+    let entry = result.first().unwrap().clone();
+
+    match entry {
+        PublicOplogEntry::ExportedFunctionCompleted(parameters) => {
+            assert_eq!(parameters.response.value, expected);
+        }
+        _ => panic!("Expected ExportedFunctionCompleted"),
+    };
+}
