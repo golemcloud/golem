@@ -588,7 +588,7 @@ impl ApplicationComponentContext {
         for wasm_rpc_dep in wasm_rpc_deps {
             let ifaces = self
                 .app_ctx
-                .component_stub_interfaces(&wasm_rpc_dep)
+                .component_stub_interfaces(&wasm_rpc_dep.name)
                 .map_err(|err| GolemError(err.to_string()))?;
 
             mapping.push(ifaces);

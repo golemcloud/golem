@@ -7,7 +7,7 @@ use crate::log::{
 };
 use crate::model::app::{
     includes_from_yaml_file, AppBuildStep, Application, ComponentName,
-    ComponentPropertiesExtensions, ProfileName, DEFAULT_CONFIG_FILE_NAME,
+    ComponentPropertiesExtensions, DependencyType, ProfileName, DEFAULT_CONFIG_FILE_NAME,
 };
 use crate::model::app_raw;
 use crate::stub::{StubConfig, StubDefinition};
@@ -394,8 +394,11 @@ async fn gen_rpc<CPE: ComponentPropertiesExtensions>(
         for component_name in ctx.wit.component_order_cloned() {
             create_generated_base_wit(ctx, &component_name)?;
         }
-        for component_name in &ctx.application.all_wasm_rpc_dependencies() {
-            build_stub(ctx, component_name).await?;
+
+        for dep in &ctx.application.all_wasm_rpc_dependencies() {
+            if dep.dep_type == DependencyType::StaticWasmRpc {
+                build_stub(ctx, &dep.name).await?;
+            }
         }
     }
 
@@ -460,7 +463,10 @@ async fn link_rpc<CPE: ComponentPropertiesExtensions>(
         let source = ctx.application.component_source(component_name);
         let dependencies = ctx
             .application
-            .component_wasm_rpc_dependencies(component_name);
+            .component_wasm_rpc_dependencies(component_name)
+            .iter()
+            .filter(|dep| dep.dep_type == DependencyType::StaticWasmRpc)
+            .collect::<BTreeSet<_>>();
         let component_wasm = ctx
             .application
             .component_wasm(component_name, ctx.profile());
@@ -479,7 +485,7 @@ async fn link_rpc<CPE: ComponentPropertiesExtensions>(
                 "linking wasm rpc dependencies ({}) into {}",
                 dependencies
                     .iter()
-                    .map(|s| s.as_str().log_color_highlight())
+                    .map(|s| s.name.as_str().log_color_highlight())
                     .join(", "),
                 component_name.as_str().log_color_highlight(),
             ));
@@ -503,7 +509,7 @@ async fn link_rpc<CPE: ComponentPropertiesExtensions>(
                     "WASM RPC dependencies ({}) into {}",
                     dependencies
                         .iter()
-                        .map(|s| s.as_str().log_color_highlight())
+                        .map(|s| s.name.as_str().log_color_highlight())
                         .join(", "),
                     component_name.as_str().log_color_highlight(),
                 ),
@@ -512,7 +518,7 @@ async fn link_rpc<CPE: ComponentPropertiesExtensions>(
 
             let stub_wasms = dependencies
                 .iter()
-                .map(|dep| ctx.application.stub_wasm(dep))
+                .map(|dep| ctx.application.stub_wasm(&dep.name))
                 .collect::<Vec<_>>();
 
             commands::composition::compose(
@@ -614,18 +620,17 @@ pub fn clean<CPE: ComponentPropertiesExtensions>(config: Config<CPE>) -> anyhow:
         log_action("Cleaning", "component stubs");
         let _indent = LogIndent::new();
 
-        for component_name in app.all_wasm_rpc_dependencies() {
+        for dep in app.all_wasm_rpc_dependencies() {
             log_action(
                 "Cleaning",
-                format!(
-                    "component stub {}",
-                    component_name.as_str().log_color_highlight()
-                ),
+                format!("component stub {}", dep.name.as_str().log_color_highlight()),
             );
             let _indent = LogIndent::new();
 
-            delete_path("stub wit", &app.stub_wit(&component_name))?;
-            delete_path("stub wasm", &app.stub_wasm(&component_name))?;
+            delete_path("stub wit", &app.stub_wit(&dep.name))?;
+            if dep.dep_type == DependencyType::StaticWasmRpc {
+                delete_path("stub wasm", &app.stub_wasm(&dep.name))?;
+            }
         }
     }
 
@@ -1349,19 +1354,19 @@ fn add_stub_deps<CPE: ComponentPropertiesExtensions>(
 
         let _indent = LogIndent::new();
 
-        for dep_component_name in dependencies {
+        for dep_component in dependencies {
             log_action(
                 "Adding",
                 format!(
                     "{} stub wit dependency to {}",
-                    dep_component_name.as_str().log_color_highlight(),
+                    dep_component.name.as_str().log_color_highlight(),
                     component_name.as_str().log_color_highlight()
                 ),
             );
             let _indent = LogIndent::new();
 
             add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
-                stub_wit_root: ctx.application.stub_wit(dep_component_name),
+                stub_wit_root: ctx.application.stub_wit(&dep_component.name),
                 dest_wit_root: ctx
                     .application
                     .component_generated_wit(component_name, ctx.profile()),
