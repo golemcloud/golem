@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::io::Read;
 
 use async_trait::async_trait;
-use golem_client::model::ComponentFilePathWithPermissionsList;
+use golem_client::model::{ComponentFilePathWithPermissionsList, DynamicLinking};
 
 use crate::clients::component::ComponentClient;
 use crate::model::component::Component;
@@ -88,6 +88,7 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient
         component_type: golem_client::model::ComponentType,
         files_archive: Option<&Path>,
         files_permissions: Option<&ComponentFilePathWithPermissionsList>,
+        dynamic_linking: Option<DynamicLinking>,
     ) -> Result<Component, GolemError> {
         info!("Adding component {name:?} from {path:?}");
 
@@ -114,6 +115,7 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient
                         file,
                         files_permissions,
                         files_archive_file,
+                        dynamic_linking.as_ref(),
                     )
                     .await?
             }
@@ -131,6 +133,7 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient
                         bytes,
                         files_permissions,
                         files_archive_file,
+                        dynamic_linking.as_ref(),
                     )
                     .await?
             }
@@ -146,6 +149,7 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient
         component_type: Option<golem_client::model::ComponentType>,
         files_archive: Option<&Path>,
         files_permissions: Option<&ComponentFilePathWithPermissionsList>,
+        dynamic_linking: Option<DynamicLinking>,
     ) -> Result<Component, GolemError> {
         info!("Updating component {urn} from {path:?}");
 
@@ -172,6 +176,7 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient
                         file,
                         files_permissions,
                         files_archive_file,
+                        dynamic_linking.as_ref(),
                     )
                     .await?
             }
@@ -189,6 +194,7 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient
                         bytes,
                         files_permissions,
                         files_archive_file,
+                        dynamic_linking.as_ref(),
                     )
                     .await?
             }

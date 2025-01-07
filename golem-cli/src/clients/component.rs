@@ -15,7 +15,7 @@
 use crate::model::component::Component;
 use crate::model::{ComponentName, GolemError, PathBufOrStdin};
 use async_trait::async_trait;
-use golem_client::model::ComponentFilePathWithPermissionsList;
+use golem_client::model::{ComponentFilePathWithPermissionsList, DynamicLinking};
 use golem_client::model::{ComponentType, PluginInstallation};
 use golem_common::uri::oss::urn::ComponentUrn;
 use std::collections::HashMap;
@@ -51,6 +51,7 @@ pub trait ComponentClient {
         component_type: ComponentType,
         files_archive: Option<&Path>,
         files_permissions: Option<&ComponentFilePathWithPermissionsList>,
+        dynamic_linking: Option<DynamicLinking>,
     ) -> Result<Component, GolemError>;
 
     async fn update(
@@ -60,6 +61,7 @@ pub trait ComponentClient {
         component_type: Option<ComponentType>,
         files_archive: Option<&Path>,
         files_permissions: Option<&ComponentFilePathWithPermissionsList>,
+        dynamic_linking: Option<DynamicLinking>,
     ) -> Result<Component, GolemError>;
 
     async fn install_plugin(

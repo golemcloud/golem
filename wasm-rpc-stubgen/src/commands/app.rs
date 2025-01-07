@@ -33,6 +33,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::SystemTime;
 use walkdir::WalkDir;
+use wit_parser::PackageName;
 
 pub struct Config<CPE: ComponentPropertiesExtensions> {
     pub app_resolve_mode: ApplicationSourceMode,
@@ -60,10 +61,17 @@ pub enum ApplicationSourceMode {
     Explicit(Vec<PathBuf>),
 }
 
+#[derive(Debug)]
+pub struct ComponentStubInterfaces {
+    pub stub_interface_name: String,
+    pub exported_interfaces_per_stub_resource: BTreeMap<String, String>,
+}
+
 pub struct ApplicationContext<CPE: ComponentPropertiesExtensions> {
     pub config: Config<CPE>,
     pub application: Application<CPE>,
     pub wit: ResolvedWitApplication,
+    component_stub_defs: HashMap<ComponentName, StubDefinition>,
     common_wit_deps: OnceCell<anyhow::Result<WitDepsResolver>>,
     component_generated_base_wit_deps: HashMap<ComponentName, WitDepsResolver>,
 }
@@ -81,6 +89,7 @@ impl<CPE: ComponentPropertiesExtensions> ApplicationContext<CPE> {
                         config,
                         application,
                         wit,
+                        component_stub_defs: HashMap::new(),
                         common_wit_deps: OnceCell::new(),
                         component_generated_base_wit_deps: HashMap::new(),
                     }
@@ -274,6 +283,64 @@ impl<CPE: ComponentPropertiesExtensions> ApplicationContext<CPE> {
                 self.wit = wit;
             }),
         )
+    }
+
+    fn component_stub_def(
+        &mut self,
+        component_name: &ComponentName,
+    ) -> anyhow::Result<&StubDefinition> {
+        if !self.component_stub_defs.contains_key(component_name) {
+            self.component_stub_defs.insert(
+                component_name.clone(),
+                StubDefinition::new(StubConfig {
+                    source_wit_root: self
+                        .application
+                        .component_generated_base_wit(component_name),
+                    target_root: self.application.stub_temp_build_dir(component_name),
+                    selected_world: None,
+                    stub_crate_version: WASM_RPC_VERSION.to_string(),
+                    // NOTE: these overrides are deliberately not part of cli flags or the app manifest, at least for now
+                    wasm_rpc_override: WasmRpcOverride {
+                        wasm_rpc_path_override: std::env::var("WASM_RPC_PATH_OVERRIDE").ok(),
+                        wasm_rpc_version_override: std::env::var("WASM_RPC_VERSION_OVERRIDE").ok(),
+                    },
+                    extract_source_interface_package: false,
+                    seal_cargo_workspace: true,
+                })
+                .context("Failed to gather information for the stub generator")?,
+            );
+        }
+        Ok(self.component_stub_defs.get(component_name).unwrap())
+    }
+
+    pub fn component_stub_interfaces(
+        &mut self,
+        component_name: &ComponentName,
+    ) -> anyhow::Result<ComponentStubInterfaces> {
+        let stub_def = self.component_stub_def(component_name)?;
+
+        // TODO: cleanup in app manifest PR
+        let stub_package_name = PackageName {
+            namespace: stub_def.source_package_name.namespace.clone(),
+            name: format!("{}-stub", stub_def.source_package_name.name),
+            version: stub_def.source_package_name.version.clone(),
+        };
+
+        let result = ComponentStubInterfaces {
+            stub_interface_name: stub_package_name.interface_id(&stub_def.target_interface_name()),
+            exported_interfaces_per_stub_resource: BTreeMap::from_iter(
+                stub_def
+                    .stub_imported_interfaces()
+                    .iter()
+                    .filter_map(|interface| {
+                        interface
+                            .owner_interface
+                            .clone()
+                            .map(|owner| (interface.name.clone(), owner))
+                    }),
+            ),
+        };
+        Ok(result)
     }
 
     fn common_wit_deps(&self) -> anyhow::Result<&WitDepsResolver> {
@@ -1178,25 +1245,11 @@ fn update_cargo_toml<CPE: ComponentPropertiesExtensions>(
 }
 
 async fn build_stub<CPE: ComponentPropertiesExtensions>(
-    ctx: &ApplicationContext<CPE>,
+    ctx: &mut ApplicationContext<CPE>,
     component_name: &ComponentName,
 ) -> anyhow::Result<bool> {
-    let target_root = ctx.application.stub_temp_build_dir(component_name);
-
-    let stub_def = StubDefinition::new(StubConfig {
-        source_wit_root: ctx.application.component_generated_base_wit(component_name),
-        target_root: target_root.clone(),
-        selected_world: None,
-        stub_crate_version: WASM_RPC_VERSION.to_string(),
-        // NOTE: these overrides are deliberately not part of cli flags or the app manifest, at least for now
-        wasm_rpc_override: WasmRpcOverride {
-            wasm_rpc_path_override: std::env::var("WASM_RPC_PATH_OVERRIDE").ok(),
-            wasm_rpc_version_override: std::env::var("WASM_RPC_VERSION_OVERRIDE").ok(),
-        },
-        extract_source_interface_package: false,
-        seal_cargo_workspace: true,
-    })
-    .context("Failed to gather information for the stub generator")?;
+    let stub_def = ctx.component_stub_def(component_name)?;
+    let target_root = stub_def.target_wit_root();
 
     let stub_dep_package_ids = stub_def.stub_dep_package_ids();
     let stub_sources: Vec<PathBuf> = stub_def
@@ -1248,8 +1301,9 @@ async fn build_stub<CPE: ComponentPropertiesExtensions>(
         );
         fs::create_dir_all(&target_root)?;
 
-        let result =
-            commands::generate::build(&stub_def, &stub_wasm, &stub_wit, ctx.config.offline).await;
+        let offline = ctx.config.offline;
+        let stub_def = ctx.component_stub_def(component_name)?;
+        let result = commands::generate::build(stub_def, &stub_wasm, &stub_wit, offline).await;
         match result {
             Ok(()) => {
                 task_result_marker.success()?;

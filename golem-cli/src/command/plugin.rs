@@ -169,6 +169,7 @@ impl<PluginScopeRef: clap::Args> PluginSubcommand<PluginScopeRef> {
                                 non_interactive,
                                 format,
                                 vec![],
+                                None,
                             )
                             .await?;
 
