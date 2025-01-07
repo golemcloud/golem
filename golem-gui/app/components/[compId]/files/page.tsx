@@ -32,15 +32,6 @@ const FileComponent = () => {
             height: "80%",
           }}
         >
-          <Grid
-            container
-            sx={{
-              backgroundColor: "#1c1c1c",
-              borderRadius: "8px",
-              overflow: "hidden",
-              height: "80%",
-            }}
-          >
             <Grid
               container
               sx={{

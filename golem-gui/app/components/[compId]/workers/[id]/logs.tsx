@@ -73,7 +73,7 @@ export default function WorkerLogs() {
     );
 
   return (
-    <Box p={3}>
+    <Box>
       <List>
         {entries.map((log:Log , index: number) => (
           <Paper

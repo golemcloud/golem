@@ -28,7 +28,7 @@ const TerminalPage = ({ messages }: { messages: Array<EventMessage> }) => {
       className="text-black dark:text-white"
       sx={{ width: "100%", minHeight: "100vh" }}
     >
-      <Box className="flex border-b pb-1 border-t dark:bg-[#151414 justify-between items-center flex-col sm:flex-row">
+      <Box className="flex border-b pb-1 border-t dark:bg-[#151414] justify-between items-center flex-col sm:flex-row">
         <Box className="mt-1 mb-1 dark:bg-[#1e1e1e] rounded-md mx-2">
           <Tabs
             value={activeTab}
@@ -94,10 +94,7 @@ const TerminalPage = ({ messages }: { messages: Array<EventMessage> }) => {
           </Button2>
         </Box>
       </Box>
-      <Box
-        sx={{ flex: 1, mt: 2,paddingX:5}}
-        className="text-gray-700 dark:text-gray-300"
-      >
+      <Box className="text-gray-700 dark:text-gray-300 sm:px-5 px-3 flex-1 mt-2">
         {activeTab === 0 && (
           <TerminalLogs
             lastClearTimeStamp={lastClearTimeStamp}

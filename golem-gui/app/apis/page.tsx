@@ -19,6 +19,7 @@ import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 import ApiInfoCard from "@/components/api-info-card";
 import { Button2 } from "@/components/ui/button";
 import ErrorBoundary from "@/components/erro-boundary";
+import NotFoundCard from "@/components/not-found-card";
 
 const ComponentsPage = () => {
   const [open, setOpen] = useState(false);
@@ -103,38 +104,39 @@ const ComponentsPage = () => {
             </Box>
 
             {finalApis.length === 0 ? (
-              <Box
-                sx={{
-                  color: "#aaa",
-                  textAlign: "center",
-                  py: 8,
-                  border: "2px dashed #333",
-                  borderRadius: 2,
-                }}
-              >
-                <Box display="flex" justifyContent="center" mb={2}>
-                  <Box
-                    component="span"
-                    sx={{
-                      fontSize: 50,
-                      color: "#666",
-                    }}
-                  >
-                    <ApiIcon sx={{ fontSize: 40 }} />
-                  </Box>
-                </Box>
-                <Typography
-                  variant="h6"
-                  fontWeight="bold"
-                  gutterBottom
-                  className="text-[#888] dark:text-gray-400"
-                >
-                  No APIs Components
-                </Typography>
-                <Typography variant="body2" color="grey.500">
-                  No APIs found matching your search.
-                </Typography>
-              </Box>
+              // <Box
+              //   sx={{
+              //     color: "#aaa",
+              //     textAlign: "center",
+              //     py: 8,
+              //     border: "2px dashed #333",
+              //     borderRadius: 2,
+              //   }}
+              // >
+              //   <Box display="flex" justifyContent="center" mb={2}>
+              //     <Box
+              //       component="span"
+              //       sx={{
+              //         fontSize: 50,
+              //         color: "#666",
+              //       }}
+              //     >
+              //       <ApiIcon sx={{ fontSize: 40 }} />
+              //     </Box>
+              //   </Box>
+              //   <Typography
+              //     variant="h6"
+              //     fontWeight="bold"
+              //     gutterBottom
+              //     className="text-[#888] dark:text-gray-400"
+              //   >
+              //     No APIs Components
+              //   </Typography>
+              //   <Typography variant="body2" color="grey.500">
+              //     No APIs found matching your search.
+              //   </Typography>
+              // </Box>
+              <NotFoundCard heading="No APIs available" subheading="Create a  new api to get started" icon={<ApiIcon fontSize="large"/>}/>
             ) : (
               <Box className="grid w-full grid-cols-1  lg:grid-cols-2 xl:grid-cols-3  gap-6">
                 {!isLoading &&

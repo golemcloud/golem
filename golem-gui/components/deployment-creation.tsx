@@ -100,10 +100,11 @@ export default function DeploymentCreationPage({
               name="domain"
               control={control}
               rules={{ required: "Domain is required.",
-                pattern: {
-                  value: /^(?!:\/\/)([a-zA-Z0-9-_]+\.)+[a-zA-Z]{2,}$/,
-                  message: "Please enter a valid domain.",
-                }}}
+                // pattern: {
+                //   value: /^(?!:\/\/)([a-zA-Z0-9-_]+\.)+[a-zA-Z]{2,}$/,
+                //   message: "Please enter a valid domain.",
+                // }
+              }}
               render={({ field }) => <TextField size="small" {...field} />}
             />
 

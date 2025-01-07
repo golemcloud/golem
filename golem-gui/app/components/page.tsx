@@ -99,7 +99,7 @@ const ComponentsPage = () => {
             >
               {/* Need to debounce logic to reduce the computation*/}
               <TextField
-                placeholder="Worker Name..."
+                placeholder="Search Components..."
                 variant="outlined"
                 value={searchQuery}
                 size="small"
