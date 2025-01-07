@@ -1,3 +1,5 @@
+extern crate golem_worker_service_base;
+
 #[cfg(test)]
 mod tests {
     use golem_wasm_ast::analysis::{

@@ -189,8 +189,7 @@ impl ClientGenerator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
-    use poem_openapi::{ApiResponse, Object};
+    use poem_openapi::{ApiResponse, Object, payload::Json};
 
     #[derive(Object)]
     struct TestEndpoint {

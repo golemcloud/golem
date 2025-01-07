@@ -136,13 +136,10 @@ impl OpenApiExporter {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use serde_json::json;
-
     #[test]
     fn test_schema_generation() {
-        let exporter = OpenApiExporter;
-        let value = json!({
+        let exporter = super::OpenApiExporter;
+        let value = serde_json::json!({
             "string": "test",
             "number": 42,
             "boolean": true,
@@ -163,7 +160,7 @@ mod tests {
 
     #[test]
     fn test_openapi_format_default() {
-        let format = OpenApiFormat::default();
+        let format = super::OpenApiFormat::default();
         assert!(format.json);
     }
 }

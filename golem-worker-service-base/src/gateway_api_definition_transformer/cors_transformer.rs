@@ -182,6 +182,11 @@ mod tests {
             Some("X-Custom-Header".to_string()),
             Some(true),
             Some(86400),
+            Some(vec![
+                "Origin".to_string(),
+                "Access-Control-Request-Method".to_string(),
+                "Access-Control-Request-Headers".to_string(),
+            ]),
         )
         .unwrap()
     }
