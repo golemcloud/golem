@@ -124,6 +124,10 @@ export const MultiSelect = React.forwardRef<
   (
     {
       options,
+      maxCount = 2,
+      variant,
+      asChild,
+      animation=0,
       onValueChange,
       defaultValue = [],
       placeholder = "Select options",
