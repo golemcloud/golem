@@ -140,6 +140,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerFork
 
         let source_oplog = source_worker_instance.oplog();
 
+        source_oplog.commit(CommitLevel::Always).await;
+
         let initial_oplog_entry = source_oplog.read(OplogIndex::INITIAL).await;
 
         // Update the oplog initial entry with the new worker
