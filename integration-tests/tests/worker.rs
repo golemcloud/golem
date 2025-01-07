@@ -1371,8 +1371,6 @@ async fn fork_worker_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         )
         .await;
 
-    // We will repeat the following invocations in the forked worker and
-    // search oplog should return entries for these invocations
     let _ = deps
         .invoke_and_await(
             &source_worker_id,
@@ -1420,7 +1418,7 @@ async fn fork_worker_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         )
         .await;
 
-    // Now executing the functions against the forked worker
+    // Invoking G1002 again in forked worker
     let _ = deps
         .invoke_and_await(
             &target_worker_id,
@@ -1442,11 +1440,13 @@ async fn fork_worker_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         )
         .await;
 
-    let result1 = deps.search_oplog(&target_worker_id, "G1002").await;
+    let result1 = deps
+        .search_oplog(&target_worker_id, "G1002 AND NOT pending")
+        .await;
     let result2 = deps.search_oplog(&target_worker_id, "G1001").await;
 
-    assert_eq!(result2.len(), 2); //  two invocations for G1001
-    assert_eq!(result1.len(), 4); //  two invocations for G1002 and two log messages
+    assert_eq!(result2.len(), 2); //  two invocations for G1001 which was in the original source oplog
+    assert_eq!(result1.len(), 4); //  two invocations for G1002 and two log messages preceded
 }
 
 #[test]

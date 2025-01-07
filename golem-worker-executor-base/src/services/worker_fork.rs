@@ -5,14 +5,13 @@ use crate::error::GolemError;
 use crate::metrics::workers::record_worker_call;
 use crate::model::ExecutionStatus;
 use crate::services::oplog::CommitLevel;
-use crate::services::{HasAll, HasComponentService, HasConfig, HasOplog};
-use crate::worker::Worker;
+use crate::services::{HasAll, HasOplog};
+use crate::worker::{Worker};
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use golem_common::model::oplog::{OplogIndex, OplogIndexRange};
 use golem_common::model::{
-    AccountId, ComponentType, OwnedWorkerId, Timestamp, WorkerId, WorkerMetadata,
-    WorkerStatusRecord,
+    AccountId, OwnedWorkerId, Timestamp, WorkerId, WorkerMetadata,
 };
 
 #[async_trait]
@@ -45,7 +44,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx>> DefaultWorkerFork<Ctx, Svcs> {
         source_worker_id: &WorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cut_off: OplogIndex,
-    ) -> Result<(OwnedWorkerId, OwnedWorkerId, WorkerMetadata), GolemError> {
+    ) -> Result<(OwnedWorkerId, OwnedWorkerId), GolemError> {
         let second_index = OplogIndex::INITIAL.next();
 
         if oplog_index_cut_off < second_index {
@@ -68,14 +67,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx>> DefaultWorkerFork<Ctx, Svcs> {
 
         let owned_source_worker_id = OwnedWorkerId::new(account_id, source_worker_id);
 
-        let metadata = self
+        self
             .all
             .worker_service()
             .get(&owned_source_worker_id)
             .await
             .ok_or(GolemError::worker_not_found(source_worker_id.clone()))?;
 
-        Ok((owned_source_worker_id, owned_target_worker_id, metadata))
+        Ok((owned_source_worker_id, owned_target_worker_id))
     }
 }
 
@@ -91,7 +90,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerFork
     ) -> Result<(), GolemError> {
         record_worker_call("fork");
 
-        let (owned_source_worker_id, owned_target_worker_id, source_worker_metadata) = self
+        let (owned_source_worker_id, owned_target_worker_id) = self
             .validate_worker_forking(
                 &source_worker_id.account_id,
                 &source_worker_id.worker_id,
@@ -103,6 +102,19 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerFork
         let target_worker_id = owned_target_worker_id.worker_id.clone();
         let account_id = owned_target_worker_id.account_id.clone();
 
+        let source_worker_instance = Worker::get_or_create_suspended(
+            &self.all,
+            &owned_source_worker_id,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await?;
+
+        let source_worker_metadata =
+            source_worker_instance.get_metadata().await?;
+
         // Not sure if we should copy the metadata or not, or stick on to just default
         let target_worker_metadata = WorkerMetadata {
             worker_id: target_worker_id.clone(),
@@ -111,18 +123,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerFork
             args: source_worker_metadata.args.clone(),
             created_at: Timestamp::now_utc(),
             parent: source_worker_metadata.parent.clone(),
-            last_known_status: WorkerStatusRecord::default(),
+            last_known_status: source_worker_metadata.last_known_status.clone()
         };
-
-        let source_worker_instance = Worker::get_or_create_suspended(
-            &self.all,
-            &owned_source_worker_id,
-            Some(source_worker_metadata.args.clone()),
-            Some(source_worker_metadata.env.clone()),
-            None,
-            None,
-        )
-        .await?;
 
         let source_oplog = source_worker_instance.oplog();
 
@@ -143,7 +145,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerFork
                 target_initial_oplog_entry,
                 target_worker_metadata,
                 Arc::new(RwLock::new(ExecutionStatus::Suspended {
-                    last_known_status: WorkerStatusRecord::default(),
+                    last_known_status: source_worker_metadata.last_known_status,
                     component_type: source_worker_instance.component_type(),
                     timestamp: Timestamp::now_utc(),
                 })),
