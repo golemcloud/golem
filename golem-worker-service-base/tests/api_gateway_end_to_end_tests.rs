@@ -631,6 +631,11 @@ async fn test_api_def_with_cors_preflight_for_valid_input() {
         Some("Content-Type, Authorization".to_string()),
         Some(true),
         Some(3600),
+        Some(vec![
+            "Origin".to_string(),
+            "Access-Control-Request-Method".to_string(),
+            "Access-Control-Request-Headers".to_string(),
+        ]),
     )
     .unwrap();
 
@@ -753,6 +758,11 @@ async fn test_api_def_with_cors_preflight_for_preflight_input_and_simple_input()
         Some("Content-Type, Authorization".to_string()),
         Some(true),
         Some(3600),
+        Some(vec![
+            "Origin".to_string(),
+            "Access-Control-Request-Method".to_string(),
+            "Access-Control-Request-Headers".to_string(),
+        ]),
     )
     .unwrap();
 
