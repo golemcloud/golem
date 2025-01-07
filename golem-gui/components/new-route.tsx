@@ -222,7 +222,7 @@ const NewRouteForm = ({
           //we can add regex for path
           rules={{ required: "path is mandatory!",
             validate: (value:string)=>{
-              return value?.[0] =='/' ? 'Api path should always start with /': true
+              return value?.[0] !='/' ? 'Api path should always start with /': true
             }
            }}
 

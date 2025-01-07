@@ -65,11 +65,8 @@ const ComponentsPage = () => {
         obj[component.versionedComponentId.componentId] = component;
         return obj;
       }, {}) || {}
-    ).sort(
-      (a, b) =>
-        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-    );
-  }, [components]).filter(checkForMatch);
+    )?.reverse()
+  }, [components])?.filter(checkForMatch);
 
 
   useEffect(()=>{

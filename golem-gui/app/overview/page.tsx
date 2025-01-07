@@ -1,5 +1,5 @@
 "use client";
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import {
   Box,
   Typography,
@@ -13,7 +13,7 @@ import AddIcon from "@mui/icons-material/Add";
 import FooterLinks from "@/components/ui/footer-links";
 import CreateAPI from "@/components/create-api";
 import CreateComponentForm from "@/components/new-component";
-import { ApiDefinition } from "@/types/api";
+import { ApiDefinition, Component as GolemComponent } from "@/types/api";
 import { useRouter } from "next/navigation";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 import useComponents from "@/lib/hooks/use-component";
@@ -70,7 +70,16 @@ const ProjectDashboard = () => {
     {}
   );
 
-  const uniquesApis = Object.values(apiMap);
+   const finalComponents = useMemo(() => {
+      return Object.values(
+        components?.reduce<Record<string, GolemComponent>>((obj, component) => {
+          obj[component.versionedComponentId.componentId] = component;
+          return obj;
+        }, {}) || {}
+      )?.reverse()
+    }, [components])
+
+  const uniquesApis = Object.values(apiMap)?.reverse();
 
   function handleComponentClick(id: string) {
     console.log("Component Clicked");
@@ -222,8 +231,8 @@ const ProjectDashboard = () => {
               {!componentError && !componentsLoading && (
                 <Box className="grid w-full grid-cols-1 gap-3 lg:grid-cols-2 mt-2">
                   {!componentError &&
-                    components
-                      .slice(0, 8)
+                    finalComponents
+                      .slice(0, 6)
                       .map((component) => (
                         <ComponentCard
                           key={component.versionedComponentId.componentId}
@@ -242,7 +251,7 @@ const ProjectDashboard = () => {
                       ))}
                 </Box>
               )}
-              {components.length === 0 && (
+              {finalComponents.length === 0 && (
                 <Box
                   textAlign="center"
                   className="border-dashed border rounded-md m-auto p-16"
