@@ -205,7 +205,7 @@ async fn recover_counter_resource_test_2(
         &executor,
         &context,
         "counter_resource_test_2_caller",
-        &["caller"],
+        &["caller_composed"],
     )
     .await;
     let counter_worker_id = restore_from_recovery_golden_file(

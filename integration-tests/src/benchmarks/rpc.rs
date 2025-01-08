@@ -92,7 +92,7 @@ impl Benchmark for Rpc {
             .await;
         let component_id = benchmark_context
             .deps
-            .store_unique_component("parent_component")
+            .store_unique_component("parent_component_composed")
             .await;
 
         let mut worker_ids = Vec::new();

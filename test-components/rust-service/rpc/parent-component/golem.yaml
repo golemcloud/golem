@@ -6,7 +6,23 @@
 components:
   parent-component:
     template: rust
+    profiles:
+      debug:
+        componentWasm: ../target/wasm32-wasi/debug/parent_component.wasm
+        linkedWasm: ../target/golem-components/debug/parent_component_composed.wasm
+        customCommands:
+          copy:
+          - command: cp ../target/wasm32-wasi/debug/parent_component.wasm ../../..
+          - command: cp ../target/golem-components/debug/parent_component_composed.wasm ../../..
+      release:
+        componentWasm: ../target/wasm32-wasi/release/parent_component.wasm
+        linkedWasm: ../target/golem-components/release/parent_component_composed.wasm
+        customCommands:
+          copy:
+          - command: cp ../target/wasm32-wasi/release/parent_component.wasm ../../..
+          - command: cp ../target/golem-components/release/parent_component_composed.wasm ../../..
+    defaultProfile: debug
 dependencies:
   parent-component:
   - target: child-component
-    type: wasm-rpc
+    type: static-wasm-rpc

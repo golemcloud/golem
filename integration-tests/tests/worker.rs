@@ -819,7 +819,7 @@ async fn shopping_cart_example(deps: &EnvBasedTestDependencies, _tracing: &Traci
 #[tracing::instrument]
 #[timeout(120000)]
 async fn auction_example_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let registry_component_id = deps.store_component("auction_registry").await;
+    let registry_component_id = deps.store_component("auction_registry_composed").await;
     let auction_component_id = deps.store_component("auction").await;
 
     let mut env = HashMap::new();

@@ -6,7 +6,13 @@
 components:
   caller:
     template: ts
+    componentWasm: dist/caller-ts.wasm
+    linkedWasm: ../dist/caller-composed-ts.wasm
+    customCommands:
+      copy:
+      - command: cp dist/caller-ts.wasm ../..
+      - command: cp ../dist/caller-composed-ts.wasm ../..
 dependencies:
   caller:
   - target: counter
-    type: wasm-rpc
+    type: static-wasm-rpc
