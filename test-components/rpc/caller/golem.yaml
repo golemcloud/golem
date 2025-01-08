@@ -25,6 +25,6 @@ components:
 dependencies:
   caller:
   - target: counters
-    type: wasm-rpc
+    type: static-wasm-rpc
   - target: ephemeral
-    type: wasm-rpc
+    type: static-wasm-rpc
