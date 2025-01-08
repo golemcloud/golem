@@ -744,6 +744,7 @@ mod app_builder {
     use serde::Serialize;
     use std::collections::{BTreeMap, BTreeSet, HashMap};
     use std::path::{Path, PathBuf};
+    use std::str::FromStr;
 
     pub fn build_application<CPE: ComponentPropertiesExtensions>(
         apps: Vec<app_raw::ApplicationWithSource>,
@@ -1007,7 +1008,7 @@ mod app_builder {
             validation.with_context(vec![("component", component_name.clone())], |validation| {
                 for dependency in component_dependencies {
                     let dep_type = DependencyType::from_str(&dependency.type_);
-                    if let Some(dep_type) = dep_type {
+                    if let Ok(dep_type) = dep_type {
                         match dependency.target {
                             Some(target_name) => {
                                 let dependent_component = DependentComponent {
