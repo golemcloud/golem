@@ -11,6 +11,7 @@ use std::fmt::Formatter;
 use std::fmt::{Debug, Display};
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use wit_parser::PackageName;
 
 pub const DEFAULT_CONFIG_FILE_NAME: &str = "golem.yaml";
@@ -179,12 +180,16 @@ impl DependencyType {
             DependencyType::StaticWasmRpc => Self::STATIC_WASM_RPC,
         }
     }
+}
 
-    pub fn from_str(value: &str) -> Option<Self> {
-        match value {
-            Self::WASM_RPC => Some(Self::DynamicWasmRpc),
-            Self::STATIC_WASM_RPC => Some(Self::StaticWasmRpc),
-            _ => None,
+impl FromStr for DependencyType {
+    type Err = ();
+
+    fn from_str(str: &str) -> Result<Self, Self::Err> {
+        match str {
+            Self::WASM_RPC => Ok(Self::DynamicWasmRpc),
+            Self::STATIC_WASM_RPC => Ok(Self::StaticWasmRpc),
+            _ => Err(()),
         }
     }
 }
