@@ -92,6 +92,33 @@ const generateField = (
   //   | AnalysedType_TypeHandle;
 
   switch (true) {
+    case ["Handle"].includes(paramType):
+      return (
+        <>
+          <Typography>{parameter?.name}</Typography>
+          <Controller
+            key={index}
+            name={finalRootKey}
+            control={control}
+            render={({ field }) => (
+              <TextField
+                {...field}
+                label={parameter.name}
+                variant="outlined"
+                fullWidth
+                placeholder={parameter.name}
+                className="mt-2"
+                onChange={(e) => {
+                  handleChange(finalRootKey, e.target.value);
+                }}
+              />
+            )}
+          />
+          <Typography variant="caption" color="error">
+            {getFormErrorMessage(finalRootKey, errors)}
+          </Typography>
+        </>
+      );
     case ["Str", "S8", "S32", "Chr", "S64", "S16"].includes(paramType):
       return (
         <>
