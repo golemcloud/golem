@@ -39,7 +39,7 @@ export async function addNewcomponent(
   });
 
   if (response.error) {
-    toast.success(
+    toast.error(
       `Component Failed to ${mode === "create" ? "create" : "update"}`
     );
     return response;
