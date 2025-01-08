@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,7 +21,7 @@ use indexmap::IndexMap;
 use itertools::Itertools;
 use std::cell::OnceCell;
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use wit_parser::{
     Function, FunctionKind, Interface, InterfaceId, Package, PackageId, PackageName, Resolve,
     Results, Type, TypeDef, TypeDefKind, TypeId, TypeOwner, World, WorldId, WorldItem, WorldKey,
@@ -161,6 +161,10 @@ impl StubDefinition {
     pub fn target_world_name(&self) -> String {
         // TODO: naming
         format!("wasm-rpc-stub-{}", self.source_world_name())
+    }
+
+    pub fn target_root(&self) -> &Path {
+        &self.config.target_root
     }
 
     pub fn target_wit_root(&self) -> PathBuf {

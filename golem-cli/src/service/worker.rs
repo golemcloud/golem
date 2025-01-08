@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -384,6 +384,7 @@ async fn to_invoke_result_view<ProjectContext: Send + Sync>(
     InvokeResultView::try_parse_or_json(res, &component, function)
 }
 
+#[allow(clippy::large_enum_variant)]
 enum AsyncComponentRequest {
     Empty,
     Resolved(Component),

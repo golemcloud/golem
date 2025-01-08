@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use golem_service_base::migration::{Migrations, MigrationsDir};
+use std::collections::HashMap;
 use test_r::test;
 
 use async_trait::async_trait;
@@ -391,6 +392,7 @@ impl TestComponentService {
                 exports: Self::get_metadata(),
                 producers: vec![],
                 memories: vec![],
+                dynamic_linking: HashMap::new(),
             },
             created_at: Some(Utc::now()),
             component_type: None,

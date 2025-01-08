@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -51,6 +51,21 @@ pub async fn build(
     )
     .context("Failed to copy the generated WIT files to the destination")?;
 
+    Ok(())
+}
+
+pub fn generate_and_copy_stub_wit(
+    stub_def: &StubDefinition,
+    dest_wit_root: &Path,
+) -> anyhow::Result<()> {
+    let _ = generate_stub_wit_dir(stub_def)?;
+    fs::create_dir_all(dest_wit_root).context("Failed to create the target WIT root directory")?;
+    fs_extra::dir::copy(
+        stub_def.config.target_root.join(naming::wit::WIT_DIR),
+        dest_wit_root,
+        &CopyOptions::new().content_only(true).overwrite(true),
+    )
+    .context("Failed to copy the generated WIT files to the destination")?;
     Ok(())
 }
 

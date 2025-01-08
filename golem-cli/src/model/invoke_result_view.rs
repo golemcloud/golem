@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -109,6 +109,7 @@ impl InvokeResultView {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::vec;
 
     use test_r::test;
@@ -168,6 +169,7 @@ mod tests {
                     results: func_res,
                 })],
                 memories: vec![],
+                dynamic_linking: HashMap::new(),
             },
             project_id: None,
             created_at: Some(Utc::now()),

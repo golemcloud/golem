@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -109,6 +109,11 @@ pub enum ParsedFunctionSite {
 }
 
 impl ParsedFunctionSite {
+    pub fn parse(name: impl AsRef<str>) -> Result<Self, String> {
+        ParsedFunctionName::parse(format!("{}.{{x}}", name.as_ref()))
+            .map(|ParsedFunctionName { site, .. }| site)
+    }
+
     pub fn interface_name(&self) -> Option<String> {
         match self {
             Self::Global => None,
@@ -651,6 +656,28 @@ impl ParsedFunctionName {
             site: self.site.clone(),
             function,
         })
+    }
+
+    pub fn is_constructor(&self) -> Option<&str> {
+        match &self.function {
+            ParsedFunctionReference::RawResourceConstructor { resource, .. }
+            | ParsedFunctionReference::IndexedResourceConstructor { resource, .. } => {
+                Some(resource)
+            }
+            _ => None,
+        }
+    }
+
+    pub fn is_method(&self) -> Option<&str> {
+        match &self.function {
+            ParsedFunctionReference::RawResourceMethod { resource, .. }
+            | ParsedFunctionReference::IndexedResourceMethod { resource, .. }
+            | ParsedFunctionReference::RawResourceStaticMethod { resource, .. }
+            | ParsedFunctionReference::IndexedResourceStaticMethod { resource, .. } => {
+                Some(resource)
+            }
+            _ => None,
+        }
     }
 }
 

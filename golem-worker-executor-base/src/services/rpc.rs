@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -145,6 +145,19 @@ impl From<WorkerProxyError> for RpcError {
             WorkerProxyError::NotFound(error) => RpcError::NotFound { details: error },
             WorkerProxyError::AlreadyExists(error) => RpcError::Denied { details: error },
             WorkerProxyError::InternalError(error) => error.into(),
+        }
+    }
+}
+
+impl From<golem_wasm_rpc::RpcError> for RpcError {
+    fn from(value: golem_wasm_rpc::RpcError) -> Self {
+        match value {
+            golem_wasm_rpc::RpcError::ProtocolError(details) => Self::ProtocolError { details },
+            golem_wasm_rpc::RpcError::Denied(details) => Self::Denied { details },
+            golem_wasm_rpc::RpcError::NotFound(details) => Self::NotFound { details },
+            golem_wasm_rpc::RpcError::RemoteInternalError(details) => {
+                Self::RemoteInternalError { details }
+            }
         }
     }
 }

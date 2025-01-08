@@ -1,4 +1,4 @@
-// Copyright 2024 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -617,9 +617,11 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
                                                 Ok((Mrc::new(ComponentSection::Type(component_type.clone())), self.clone()))
                                             }
                                             InstanceTypeDeclaration::Alias(alias) => {
-                                                let component_idx = self.component_stack.last().unwrap().component_idx.unwrap();
+                                                let component_idx = self.component_stack.last().expect("Component stack is empty").component_idx.unwrap_or_default();
                                                 let new_ctx = self.push_component(self.get_component(), component_idx);
                                                 // Emulating an inner scope by duplicating the current component on the stack (TODO: refactor this)
+                                                // Note: because we not in an inner component, but an inner instance declaration and the current analysis stack
+                                                //       does not have this concept.
                                                 new_ctx.follow_redirects(Mrc::new(ComponentSection::Alias(alias.clone())))
                                             }
                                             InstanceTypeDeclaration::Export { .. } => {
