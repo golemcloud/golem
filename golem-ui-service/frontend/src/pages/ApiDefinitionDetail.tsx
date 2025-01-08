@@ -66,7 +66,10 @@ export const ApiDefinitionView = () => {
     updateDefinition.mutate(
       { id: id!, version: version!, definition: updatedDefinition },
       {
-        onSuccess: () => toast.success("Route added successfully"),
+        onSuccess: () => {
+          toast.success("Route added successfully");
+          setShowRouteModal(false);
+        },
         onError: () => toast.error("Failed to add route"),
       },
     );
@@ -112,6 +115,7 @@ export const ApiDefinitionView = () => {
         onSuccess: () => {
           toast.success("Route updated successfully");
           setEditingRoute(null);
+          setShowRouteModal(false);
         },
         onError: () => toast.error("Failed to update route"),
         retry: 0
