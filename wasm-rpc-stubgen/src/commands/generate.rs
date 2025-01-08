@@ -54,6 +54,21 @@ pub async fn build(
     Ok(())
 }
 
+pub fn generate_and_copy_stub_wit(
+    stub_def: &StubDefinition,
+    dest_wit_root: &Path,
+) -> anyhow::Result<()> {
+    let _ = generate_stub_wit_dir(stub_def)?;
+    fs::create_dir_all(dest_wit_root).context("Failed to create the target WIT root directory")?;
+    fs_extra::dir::copy(
+        stub_def.config.target_root.join(naming::wit::WIT_DIR),
+        dest_wit_root,
+        &CopyOptions::new().content_only(true).overwrite(true),
+    )
+    .context("Failed to copy the generated WIT files to the destination")?;
+    Ok(())
+}
+
 pub async fn generate_and_build_stub(
     stub_def: &StubDefinition,
     offline: bool,
