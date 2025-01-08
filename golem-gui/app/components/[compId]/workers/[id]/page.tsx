@@ -13,6 +13,7 @@ import Manage from "./manage";
 import { useWebSocketWithPath } from "@/lib/hooks/use-websocket";
 import SecondaryHeader from "@/components/ui/secondary-header";
 import ErrorBoundary from "@/components/erro-boundary";
+import EnvironmentTab from "./environment-tab";
 
 // interface CustomMessage extends WebSocketMessage {
 //   type: 'custom';
@@ -87,6 +88,7 @@ const WorkerListWithDropdowns = () => {
       </Tabs>
       {activeTab === 0 && <Overview worker={worker} isLoading={isLoading} messages={messages}/>}
       {activeTab === 1 && <TerminalPage messages={messages} />}
+      {activeTab === 2 && <EnvironmentTab worker={worker} />}
       {activeTab === 3 && <FileComponent />}
       {activeTab === 4 && <Manage />}
       {activeTab === 5 && <InvokePage worker={worker} />}

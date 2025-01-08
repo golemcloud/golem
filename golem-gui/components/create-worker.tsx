@@ -168,6 +168,7 @@ const removeArgumentVar = (index: number) => {
             Environment Variables
           </Typography>
           <Button2
+            type="button"
             startIcon={<AddIcon />}
             variant="primary"
             size="sm"
@@ -204,7 +205,7 @@ const removeArgumentVar = (index: number) => {
                 <OutlinedInput size="small" {...field} fullWidth type="password" />
               )}
             />
-            <Button2 variant="error" size="sm" onClick={() => removeEnvVar(index)}>
+            <Button2 type="button" variant="error" size="sm" onClick={() => removeEnvVar(index)}>
               <RemoveIcon />
             </Button2>
           </Box>
@@ -212,7 +213,6 @@ const removeArgumentVar = (index: number) => {
       </Box>
 
       <Divider sx={{ backgroundColor: "#333", mb: 3 }} />
-
       {/* Arguments */}
       <Box sx={{ mb: 3 }}>
         <Box
@@ -228,6 +228,7 @@ const removeArgumentVar = (index: number) => {
             Arguments
           </Typography>
           <Button2
+            type="button"
             startIcon={<AddIcon />}
             variant="primary"
             size="sm"
@@ -255,7 +256,7 @@ const removeArgumentVar = (index: number) => {
                 />
               )}
             />
-            <Button2 variant="error" size="sm" onClick={() => removeArgumentVar(index)}>
+            <Button2 type="button" variant="error" size="sm" onClick={() => removeArgumentVar(index)}>
               <RemoveIcon />
             </Button2>
           </Box>
