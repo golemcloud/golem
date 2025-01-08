@@ -1001,14 +1001,13 @@ mod app_builder {
         ) {
             validation.with_context(vec![("component", component_name.clone())], |validation| {
                 for dependency in component_dependencies {
-                    if dependency.type_ == DependencyType::WASM_RPC
-                        || dependency.type_ == DependencyType::STATIC_WASM_RPC
-                    {
+                    let dep_type = DependencyType::from_str(&dependency.type_);
+                    if let Some(dep_type) = dep_type {
                         match dependency.target {
                             Some(target_name) => {
                                 let dependent_component = DependentComponent {
                                     name: target_name.into(),
-                                    dep_type: DependencyType::DynamicWasmRpc,
+                                    dep_type,
                                 };
 
                                 let unique_key = UniqueSourceCheckedEntityKey::WasmRpcDependency((
