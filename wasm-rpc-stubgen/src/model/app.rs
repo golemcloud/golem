@@ -219,8 +219,8 @@ pub struct Application<CPE: ComponentPropertiesExtensions> {
     components: BTreeMap<ComponentName, Component<CPE>>,
     dependencies: BTreeMap<ComponentName, BTreeSet<DependentComponent>>,
     no_dependencies: BTreeSet<DependentComponent>,
-    custom_commands: WithSource<HashMap<String, Vec<app_raw::ExternalCommand>>>,
-    clean: WithSource<Vec<String>>,
+    custom_commands: HashMap<String, WithSource<Vec<app_raw::ExternalCommand>>>,
+    clean: Vec<WithSource<String>>,
 }
 
 impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
@@ -238,11 +238,11 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
 
     pub fn common_custom_commands(
         &self,
-    ) -> &WithSource<HashMap<String, Vec<app_raw::ExternalCommand>>> {
+    ) -> &HashMap<String, WithSource<Vec<app_raw::ExternalCommand>>> {
         &self.custom_commands
     }
 
-    pub fn common_clean(&self) -> &WithSource<Vec<String>> {
+    pub fn common_clean(&self) -> &Vec<WithSource<String>> {
         &self.clean
     }
 
@@ -278,7 +278,7 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
                 .keys()
                 .cloned()
         }));
-        custom_commands.extend(self.custom_commands.value.keys().cloned());
+        custom_commands.extend(self.custom_commands.keys().cloned());
         custom_commands
     }
 
@@ -757,8 +757,7 @@ mod app_builder {
         Include,
         TempDir,
         WitDeps,
-        CustomCommands,
-        Clean,
+        CustomCommand(String),
         Template(TemplateName),
         WasmRpcDependency((ComponentName, DependentComponent)),
         Component(ComponentName),
@@ -771,8 +770,7 @@ mod app_builder {
                 UniqueSourceCheckedEntityKey::Include => property,
                 UniqueSourceCheckedEntityKey::TempDir => property,
                 UniqueSourceCheckedEntityKey::WitDeps => property,
-                UniqueSourceCheckedEntityKey::CustomCommands => property,
-                UniqueSourceCheckedEntityKey::Clean => property,
+                UniqueSourceCheckedEntityKey::CustomCommand(_) => "Custom command",
                 UniqueSourceCheckedEntityKey::Template(_) => "Template",
                 UniqueSourceCheckedEntityKey::WasmRpcDependency(_) => "WASM RPC dependency",
                 UniqueSourceCheckedEntityKey::Component(_) => "Component",
@@ -790,10 +788,9 @@ mod app_builder {
                 UniqueSourceCheckedEntityKey::WitDeps => {
                     "witDeps".log_color_highlight().to_string()
                 }
-                UniqueSourceCheckedEntityKey::CustomCommands => {
-                    "customCommands".log_color_highlight().to_string()
+                UniqueSourceCheckedEntityKey::CustomCommand(command_name) => {
+                    command_name.log_color_highlight().to_string()
                 }
-                UniqueSourceCheckedEntityKey::Clean => "clean".log_color_highlight().to_string(),
                 UniqueSourceCheckedEntityKey::Template(template_name) => {
                     template_name.as_str().log_color_highlight().to_string()
                 }
@@ -822,8 +819,8 @@ mod app_builder {
         wit_deps: WithSource<Vec<String>>,
         templates: HashMap<TemplateName, app_raw::ComponentTemplate>,
         dependencies: BTreeMap<ComponentName, BTreeSet<DependentComponent>>,
-        custom_commands: WithSource<HashMap<String, Vec<app_raw::ExternalCommand>>>,
-        clean: WithSource<Vec<String>>,
+        custom_commands: HashMap<String, WithSource<Vec<app_raw::ExternalCommand>>>,
+        clean: Vec<WithSource<String>>,
         raw_components: HashMap<ComponentName, (PathBuf, app_raw::Component)>,
         resolved_components: BTreeMap<ComponentName, Component<CPE>>,
 
@@ -926,24 +923,24 @@ mod app_builder {
                         );
                     }
 
-                    if !app.application.custom_commands.is_empty()
-                        && self.add_entity_source(
-                            UniqueSourceCheckedEntityKey::CustomCommands,
+                    for (command_name, command) in app.application.custom_commands {
+                        if self.add_entity_source(
+                            UniqueSourceCheckedEntityKey::CustomCommand(command_name.clone()),
                             &app.source,
-                        )
-                    {
-                        self.custom_commands = WithSource::new(
-                            app_source_dir.to_path_buf(),
-                            app.application.custom_commands,
-                        )
+                        ) {
+                            self.custom_commands.insert(
+                                command_name,
+                                WithSource::new(app_source_dir.to_path_buf(), command),
+                            );
+                        }
                     }
 
-                    if !app.application.clean.is_empty()
-                        && self.add_entity_source(UniqueSourceCheckedEntityKey::Clean, &app.source)
-                    {
-                        self.clean =
-                            WithSource::new(app_source_dir.to_path_buf(), app.application.clean);
-                    }
+                    self.clean.extend(
+                        app.application
+                            .clean
+                            .into_iter()
+                            .map(|path| WithSource::new(app.source.to_path_buf(), path)),
+                    );
                 },
             );
         }
