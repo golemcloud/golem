@@ -127,7 +127,10 @@ impl GetBlobStorage for S3Test {
         };
         create_buckets(host_port, &config).await;
         let storage = s3::S3BlobStorage::new(config).await;
-        Arc::new(S3BlobStorageWithContainer { storage, _container: container })
+        Arc::new(S3BlobStorageWithContainer {
+            storage,
+            _container: container,
+        })
     }
 }
 

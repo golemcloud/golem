@@ -303,8 +303,8 @@ async fn set_if_not_exists(
         .await
         .unwrap();
     let result3 = kvs.get("test", "api", "entity", ns, key).await.unwrap();
-    assert_eq!(result1, true);
-    assert_eq!(result2, false);
+    assert!(result1);
+    assert!(!result2);
     assert_eq!(result3, Some(value1.into()));
 }
 
@@ -321,7 +321,7 @@ async fn del(
     let key = "key";
     let value = "value".as_bytes();
 
-    let _ = kvs.del("test", "api", ns.clone(), key).await.unwrap(); // deleting non-existing key must succeed
+    kvs.del("test", "api", ns.clone(), key).await.unwrap(); // deleting non-existing key must succeed
     kvs.set("test", "api", "entity", ns.clone(), key, value)
         .await
         .unwrap();
@@ -329,7 +329,7 @@ async fn del(
         .get("test", "api", "entity", ns.clone(), key)
         .await
         .unwrap();
-    let _ = kvs.del("test", "api", ns.clone(), key).await.unwrap();
+    kvs.del("test", "api", ns.clone(), key).await.unwrap();
     let result2 = kvs.get("test", "api", "entity", ns, key).await.unwrap();
 
     assert_eq!(result1, Some(value.into()));
@@ -351,15 +351,14 @@ async fn del_many(
     let value1 = "value1".as_bytes();
     let value2 = "value2".as_bytes();
 
-    let _ = kvs
-        .del_many(
-            "test",
-            "api",
-            ns.clone(),
-            vec![key1.to_string(), key2.to_string()],
-        )
-        .await
-        .unwrap(); // deleting non-existing key must succeed
+    kvs.del_many(
+        "test",
+        "api",
+        ns.clone(),
+        vec![key1.to_string(), key2.to_string()],
+    )
+    .await
+    .unwrap(); // deleting non-existing key must succeed
     kvs.set("test", "api", "entity", ns.clone(), key1, value1)
         .await
         .unwrap();
@@ -374,15 +373,14 @@ async fn del_many(
         .get("test", "api", "entity", ns.clone(), key2)
         .await
         .unwrap();
-    let _ = kvs
-        .del_many(
-            "test",
-            "api",
-            ns.clone(),
-            vec![key1.to_string(), key2.to_string()],
-        )
-        .await
-        .unwrap();
+    kvs.del_many(
+        "test",
+        "api",
+        ns.clone(),
+        vec![key1.to_string(), key2.to_string()],
+    )
+    .await
+    .unwrap();
     let result3 = kvs
         .get("test", "api", "entity", ns.clone(), key1)
         .await
@@ -416,8 +414,8 @@ async fn exists_set_exists(
         .await
         .unwrap();
     let result2 = kvs.exists("test", "api", ns, key).await.unwrap();
-    assert_eq!(result1, false);
-    assert_eq!(result2, true);
+    assert!(!result1);
+    assert!(result2);
 }
 
 #[test]
@@ -440,9 +438,9 @@ async fn exists_is_per_namespace(
         .unwrap();
     let result2 = kvs.exists("test", "api", ns, key).await.unwrap();
     let result3 = kvs.exists("test", "api", ns2, key).await.unwrap();
-    assert_eq!(result1, false);
-    assert_eq!(result2, true);
-    assert_eq!(result3, false);
+    assert!(!result1);
+    assert!(result2);
+    assert!(!result3);
 }
 
 #[test]
@@ -487,8 +485,8 @@ async fn keys(
 
     assert_eq!(keys1, Vec::<String>::new());
     assert_eq!(keys2.len(), 2);
-    assert_eq!(keys2.contains(&key1.to_string()), true);
-    assert_eq!(keys2.contains(&key2.to_string()), true);
+    assert!(keys2.contains(&key1.to_string()));
+    assert!(keys2.contains(&key2.to_string()));
     assert_eq!(keys3, vec![key2.to_string()]);
 }
 

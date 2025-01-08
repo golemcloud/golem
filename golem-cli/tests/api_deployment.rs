@@ -23,7 +23,7 @@ use golem_cli::model::ApiSecurityScheme;
 use golem_client::model::{ApiDeployment, HttpApiDefinitionResponseData};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use std::sync::Arc;
-use test_r::core::{DynamicTestRegistration, TestType};
+use test_r::core::{DynamicTestRegistration, TestProperties, TestType};
 use test_r::{add_test, inherit_test_dep, test_dep, test_gen};
 
 inherit_test_dep!(EnvBasedTestDependencies);
@@ -44,7 +44,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("api_deployment_deploy{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             api_deployment_deploy((deps, name.to_string(), cli.with_args(short)))
         }
@@ -52,7 +55,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("api_deployment_deploy_with_security{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             api_deployment_deploy_with_security((deps, name.to_string(), cli.with_args(short)))
         }
@@ -60,7 +66,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("api_deployment_get{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             api_deployment_get((deps, name.to_string(), cli.with_args(short)))
         }
@@ -68,7 +77,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("api_deployment_list{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             api_deployment_list((deps, name.to_string(), cli.with_args(short)))
         }
@@ -76,7 +88,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("api_deployment_delete{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             api_deployment_delete((deps, name.to_string(), cli.with_args(short)))
         }
