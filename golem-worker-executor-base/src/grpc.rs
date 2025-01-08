@@ -716,6 +716,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         // let hyper_method =
 
+        let worker = self.get_or_create(&header).await?;
+
         let http_method = grpc_method_to_hyper_method(header.method)?;
 
         let mut builder = hyper::Request::builder()
@@ -1813,7 +1815,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             let record = recorded_grpc_api_request!(
                 "invoke_worker_http_handler",
                 worker_id = proto_target_worker_id_string(&header.worker_id),
-                path = header.path_with_query,
+                url = header.uri,
             );
             self.invoke_worker_http_handler_internal(
                 header,
@@ -2554,6 +2556,46 @@ impl CanStartWorker for golem::workerexecutor::v1::GetFileContentsRequest {
 }
 
 impl CanStartWorker for golem::workerexecutor::v1::InvokeWorkerRequest {
+    fn account_id(&self) -> Result<AccountId, GolemError> {
+        Ok(self
+            .account_id
+            .clone()
+            .ok_or(GolemError::invalid_request("account_id not found"))?
+            .into())
+    }
+
+    fn account_limits(&self) -> Option<GrpcResourceLimits> {
+        self.account_limits
+    }
+
+    fn worker_id(&self) -> Result<common_model::TargetWorkerId, GolemError> {
+        self.worker_id
+            .clone()
+            .ok_or(GolemError::invalid_request("worker_id not found"))?
+            .try_into()
+            .map_err(GolemError::invalid_request)
+    }
+
+    fn args(&self) -> Option<Vec<String>> {
+        self.context.as_ref().map(|ctx| ctx.args.clone())
+    }
+
+    fn env(&self) -> Option<Vec<(String, String)>> {
+        self.context
+            .as_ref()
+            .map(|ctx| ctx.env.clone().into_iter().collect::<Vec<_>>())
+    }
+
+    fn parent(&self) -> Option<WorkerId> {
+        self.context.as_ref().and_then(|ctx| {
+            ctx.parent
+                .as_ref()
+                .and_then(|worker_id| worker_id.clone().try_into().ok())
+        })
+    }
+}
+
+impl CanStartWorker for golem::workerexecutor::v1::InvokeWorkerHttpHandlerRequestHeader {
     fn account_id(&self) -> Result<AccountId, GolemError> {
         Ok(self
             .account_id

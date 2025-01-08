@@ -21,8 +21,6 @@ use tracing::{debug, error};
 use wasmtime::component::{Func, Val};
 use wasmtime::{AsContextMut, StoreContextMut};
 use wasmtime_wasi_http::WasiHttpView;
-use wasmtime_wasi_http::WasiHttpCtx;
-use wasmtime_wasi_http::bindings::http::types::Scheme;
 use wasmtime_wasi_http::bindings::{Proxy, ProxyPre};
 
 use crate::durable_host::DurableWorkerCtxView;
@@ -37,42 +35,46 @@ pub async fn invoke_worker_incoming_http_handler<Ctx: WorkerCtx + DurableWorkerC
     instance: & wasmtime::component::Instance,
 ) -> Result<InvokeResult, GolemError> {
     let (sender, receiver) = tokio::sync::oneshot::channel();
+    {
+        let mut store = store.as_context_mut();
+        let scheme = wasi_http_scheme_from_request(&request)?;
+        let incoming = store.data_mut().durable_ctx_mut().as_wasi_http_view().new_incoming_request(scheme, request).unwrap();
+        let outgoing = store.data_mut().durable_ctx_mut().as_wasi_http_view().new_response_outparam(sender).unwrap();
 
-    let mut store = store.as_context_mut();
-    let incoming = store.data_mut().durable_ctx_mut().as_wasi_http_view().new_incoming_request(Scheme::Http, request).unwrap();
-    let outgoing = store.data_mut().durable_ctx_mut().as_wasi_http_view().new_response_outparam(sender).unwrap();
+        let proxy = Proxy::new(&mut store, instance).unwrap();
 
-    let proxy = Proxy::new(store, instance).unwrap();
+        let task = tokio::task::spawn(async move {
+            if let Err(_e) = proxy
+                .wasi_http_incoming_handler()
+                .call_handle(store, incoming, outgoing)
+                .await
+            {
+                todo!("task failed");
+            }
 
-    let task = tokio::task::spawn(async move {
-        if let Err(e) = proxy
-            .wasi_http_incoming_handler()
-            .call_handle(store, incoming, outgoing)
-            .await
-        {
-            todo!("task failed");
-        }
+            Ok(())
+        });
 
-        Ok(())
-    });
+        let _out = match receiver.await {
+            Ok(Ok(resp)) => Ok(resp),
+            Ok(Err(_e)) => Err(GolemError::unknown("boom")),
+            Err(_) => {
+                // An error in the receiver (`RecvError`) only indicates that the
+                // task exited before a response was sent (i.e., the sender was
+                // dropped); it does not describe the underlying cause of failure.
+                // Instead we retrieve and propagate the error from inside the task
+                // which should more clearly tell the user what went wrong. Note
+                // that we assume the task has already exited at this point so the
+                // `await` should resolve immediately.
+                let e = match task.await {
+                    Ok(r) => r.expect_err("if the receiver has an error, the task must have failed"),
+                    Err(_e) => GolemError::unknown("boom"),
+                };
+                todo!("guest never invoked `response-outparam::set` method: {e:?}")
+            }
+        };
 
-    match receiver.await {
-        Ok(Ok(resp)) => Ok(resp),
-        Ok(Err(e)) => Err(e.into()),
-        Err(_) => {
-            // An error in the receiver (`RecvError`) only indicates that the
-            // task exited before a response was sent (i.e., the sender was
-            // dropped); it does not describe the underlying cause of failure.
-            // Instead we retrieve and propagate the error from inside the task
-            // which should more clearly tell the user what went wrong. Note
-            // that we assume the task has already exited at this point so the
-            // `await` should resolve immediately.
-            let e = match task.await {
-                Ok(r) => r.expect_err("if the receiver has an error, the task must have failed"),
-                Err(e) => e.into(),
-            };
-            todo!("guest never invoked `response-outparam::set` method: {e:?}")
-        }
+        task.await.unwrap();
     }
 
     unimplemented!("invoke_worker_incoming_http_handler");
@@ -663,5 +665,18 @@ impl InvokeResult {
             InvokeResult::Exited { .. } => Some(TrapType::Exit),
             _ => None,
         }
+    }
+}
+
+fn wasi_http_scheme_from_request(req: &hyper::Request<hyper::body::Incoming>) -> Result<wasmtime_wasi_http::bindings::http::types::Scheme, GolemError> {
+    use http::uri::*;
+    use wasmtime_wasi_http::bindings::http::types::Scheme as WasiScheme;
+
+    let raw_scheme = req.uri().scheme().ok_or(GolemError::invalid_request("Could not extract scheme from uri".to_string()))?;
+
+    match raw_scheme {
+        scheme if *scheme == Scheme::HTTP  => Ok(WasiScheme::Http),
+        scheme if *scheme == Scheme::HTTPS => Ok(WasiScheme::Https),
+        scheme                             => Ok(WasiScheme::Other(scheme.to_string()))
     }
 }

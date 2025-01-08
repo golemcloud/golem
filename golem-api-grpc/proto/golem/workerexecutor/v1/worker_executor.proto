@@ -174,7 +174,7 @@ message InvokeWorkerHttpHandlerRequestHeader {
   optional golem.worker.InvocationContext context = 4;
   golem.worker.HttpMethod method = 5;
   string uri = 6;
-  golem.worker.HttpFields headers = 9;
+  golem.worker.HttpFields headers = 7;
 }
 
 message InvokeWorkerHttpHandlerRequestChunk {
