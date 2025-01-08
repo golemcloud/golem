@@ -41,27 +41,9 @@ async fn fork_interrupted_worker_to_completion(
     _tracing: &Tracing,
 ) {
     let response = Arc::new(Mutex::new("initial".to_string()));
-    let response_clone = response.clone();
-    let host_http_port = 8585;
+    let host_http_port = 8586;
 
-    let http_server = tokio::spawn(async move {
-        let route = Router::new().route(
-            "/poll",
-            get(move || async move {
-                let body = response_clone.lock().unwrap();
-                body.clone()
-            }),
-        );
-
-        let listener = tokio::net::TcpListener::bind(
-            format!("0.0.0.0:{}", host_http_port)
-                .parse::<SocketAddr>()
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-        axum::serve(listener, route).await.unwrap();
-    });
+    let http_server = run_http_server(&response, host_http_port);
 
     let component_id = deps.store_component("http-client-2").await;
     let mut env = HashMap::new();
@@ -110,6 +92,79 @@ async fn fork_interrupted_worker_to_completion(
     http_server.abort();
 
     assert_eq!(result.len(), 1);
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout(120000)]
+async fn fork_running_worker_to_completion(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    let response = Arc::new(Mutex::new("initial".to_string()));
+    let host_http_port = 8587;
+    let http_server = run_http_server(&response, host_http_port);
+
+    let component_id = deps.store_component("http-client-2").await;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+
+    let source_worker_id = deps
+        .start_worker_with(&component_id, "poll-loop-parent-component-1", vec![], env)
+        .await;
+
+    let target_worker_id = WorkerId {
+        component_id: component_id.clone(),
+        worker_name: "poll-loop-with-fork-component-1".to_string(),
+    };
+
+    deps.log_output(&source_worker_id).await;
+
+    deps.invoke(
+        &source_worker_id,
+        "golem:it/api.{start-polling}",
+        vec![Value::String("first".to_string())],
+    )
+    .await
+    .unwrap();
+
+    deps.wait_for_status(
+        &source_worker_id,
+        WorkerStatus::Running,
+        Duration::from_secs(10),
+    )
+    .await;
+
+    let oplog = deps.get_oplog(&source_worker_id, OplogIndex::INITIAL).await;
+
+    let last_index = OplogIndex::from_u64(oplog.len() as u64);
+
+    deps.fork_worker(&source_worker_id, &target_worker_id, last_index)
+        .await;
+
+    {
+        let mut response = response.lock().unwrap();
+        *response = "first".to_string();
+    }
+
+    deps.wait_for_status(
+        &target_worker_id,
+        WorkerStatus::Idle,
+        Duration::from_secs(10),
+    )
+    .await;
+
+    deps.wait_for_status(
+        &source_worker_id,
+        WorkerStatus::Idle,
+        Duration::from_secs(10),
+    )
+    .await;
+
+    let target_result = deps.search_oplog(&target_worker_id, "Received first").await;
+    let source_result = deps.search_oplog(&source_worker_id, "Received first").await;
+
+    http_server.abort();
+
+    assert_eq!(target_result.len(), 1);
+    assert_eq!(source_result.len(), 1);
 }
 
 #[test]
@@ -218,7 +273,10 @@ async fn fork_idle_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 #[test]
 #[tracing::instrument]
 #[timeout(120000)]
-async fn fork_running_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+async fn fork_worker_before_completion_of_function(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) {
     let component_id = deps.store_component("shopping-cart").await;
 
     let source_worker_id = WorkerId {
@@ -329,7 +387,10 @@ async fn fork_worker_when_target_already_exists(
 #[test]
 #[tracing::instrument]
 #[timeout(120000)]
-async fn fork_worker_with_invalid_cut_off(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+async fn fork_worker_with_invalid_oplog_index_cut_off(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) {
     let component_id = deps.store_component("shopping-cart").await;
 
     let source_worker_id = WorkerId {
@@ -458,4 +519,30 @@ async fn fork_worker_no_divergence_until_fork_point(
         }
         _ => panic!("Expected ExportedFunctionCompleted"),
     };
+}
+
+fn run_http_server(
+    response: &Arc<Mutex<String>>,
+    host_http_port: u16,
+) -> tokio::task::JoinHandle<()> {
+    let response_clone = response.clone();
+
+    tokio::spawn(async move {
+        let route = Router::new().route(
+            "/poll",
+            get(move || async move {
+                let body = response_clone.lock().unwrap();
+                body.clone()
+            }),
+        );
+
+        let listener = tokio::net::TcpListener::bind(
+            format!("0.0.0.0:{}", host_http_port)
+                .parse::<SocketAddr>()
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        axum::serve(listener, route).await.unwrap();
+    })
 }
