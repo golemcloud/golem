@@ -7,7 +7,8 @@ use crate::log::{
 };
 use crate::model::app::{
     includes_from_yaml_file, AppBuildStep, Application, ComponentName,
-    ComponentPropertiesExtensions, ProfileName, DEFAULT_CONFIG_FILE_NAME,
+    ComponentPropertiesExtensions, DependencyType, DependentComponent, ProfileName,
+    DEFAULT_CONFIG_FILE_NAME,
 };
 use crate::model::app_raw;
 use crate::stub::{StubConfig, StubDefinition};
@@ -251,8 +252,9 @@ async fn gen_rpc<CPE: ComponentPropertiesExtensions>(
         for component_name in ctx.wit.component_order_cloned() {
             create_generated_base_wit(ctx, &component_name)?;
         }
-        for component_name in &ctx.application.all_wasm_rpc_dependencies() {
-            build_client(ctx, component_name).await?;
+
+        for dep in &ctx.application.all_wasm_rpc_dependencies() {
+            build_client(ctx, dep).await?;
         }
     }
 
@@ -320,10 +322,13 @@ async fn link_rpc<CPE: ComponentPropertiesExtensions>(
     for component_name in ctx.selected_component_names() {
         let dependencies = ctx
             .application
-            .component_wasm_rpc_dependencies(component_name);
+            .component_wasm_rpc_dependencies(component_name)
+            .iter()
+            .filter(|dep| dep.dep_type == DependencyType::StaticWasmRpc)
+            .collect::<BTreeSet<_>>();
         let client_wasms = dependencies
             .iter()
-            .map(|dep| ctx.application.client_wasm(dep))
+            .map(|dep| ctx.application.client_wasm(&dep.name))
             .collect::<Vec<_>>();
         let component_wasm = ctx
             .application
@@ -336,7 +341,7 @@ async fn link_rpc<CPE: ComponentPropertiesExtensions>(
             &ctx.application.task_result_marker_dir(),
             LinkRpcMarkerHash {
                 component_name,
-                dependencies,
+                dependencies: &dependencies,
             },
         )?;
 
@@ -353,7 +358,7 @@ async fn link_rpc<CPE: ComponentPropertiesExtensions>(
                 "linking wasm rpc dependencies ({}) into {}",
                 dependencies
                     .iter()
-                    .map(|s| s.as_str().log_color_highlight())
+                    .map(|s| s.name.as_str().log_color_highlight())
                     .join(", "),
                 component_name.as_str().log_color_highlight(),
             ));
@@ -379,7 +384,7 @@ async fn link_rpc<CPE: ComponentPropertiesExtensions>(
                             "WASM RPC dependencies ({}) into {}",
                             dependencies
                                 .iter()
-                                .map(|s| s.as_str().log_color_highlight())
+                                .map(|s| s.name.as_str().log_color_highlight())
                                 .join(", "),
                             component_name.as_str().log_color_highlight(),
                         ),
@@ -489,18 +494,20 @@ pub fn clean<CPE: ComponentPropertiesExtensions>(config: Config<CPE>) -> anyhow:
         log_action("Cleaning", "component clients");
         let _indent = LogIndent::new();
 
-        for component_name in app.all_wasm_rpc_dependencies() {
+        for dep in app.all_wasm_rpc_dependencies() {
             log_action(
                 "Cleaning",
                 format!(
                     "component client {}",
-                    component_name.as_str().log_color_highlight()
+                    dep.name.as_str().log_color_highlight()
                 ),
             );
             let _indent = LogIndent::new();
 
-            delete_path("client wit", &app.client_wit(&component_name))?;
-            delete_path("client wasm", &app.client_wasm(&component_name))?;
+            delete_path("client wit", &app.client_wit(&dep.name))?;
+            if dep.dep_type == DependencyType::StaticWasmRpc {
+                delete_path("client wasm", &app.client_wasm(&dep.name))?;
+            }
         }
     }
 
@@ -1383,9 +1390,9 @@ fn update_cargo_toml<CPE: ComponentPropertiesExtensions>(
 
 async fn build_client<CPE: ComponentPropertiesExtensions>(
     ctx: &mut ApplicationContext<CPE>,
-    component_name: &ComponentName,
+    component: &DependentComponent,
 ) -> anyhow::Result<bool> {
-    let stub_def = ctx.component_stub_def(component_name)?;
+    let stub_def = ctx.component_stub_def(&component.name)?;
     let client_wit_root = stub_def.client_wit_root();
 
     let client_dep_package_ids = stub_def.stub_dep_package_ids();
@@ -1399,12 +1406,12 @@ async fn build_client<CPE: ComponentPropertiesExtensions>(
         })
         .collect();
 
-    let client_wasm = ctx.application.client_wasm(component_name);
-    let client_wit = ctx.application.client_wit(component_name);
+    let client_wasm = ctx.application.client_wasm(&component.name);
+    let client_wit = ctx.application.client_wit(&component.name);
     let task_result_marker = TaskResultMarker::new(
         &ctx.application.task_result_marker_dir(),
         ComponentGeneratorMarkerHash {
-            component_name,
+            component_name: &component.name,
             generator_kind: "client",
         },
     )?;
@@ -1412,54 +1419,91 @@ async fn build_client<CPE: ComponentPropertiesExtensions>(
     if is_up_to_date(
         ctx.config.skip_up_to_date_checks || !task_result_marker.is_up_to_date(),
         || client_sources,
-        || [client_wit.clone(), client_wasm.clone()],
+        || {
+            if component.dep_type == DependencyType::StaticWasmRpc {
+                vec![client_wit.clone(), client_wasm.clone()]
+            } else {
+                vec![client_wit.clone()]
+            }
+        },
     ) {
+        // TODO: message based on type
         log_skipping_up_to_date(format!(
-            "building WASM RPC client for {}",
-            component_name.as_str().log_color_highlight()
+            "generating WASM RPC client for {}",
+            component.name.as_str().log_color_highlight()
         ));
         Ok(false)
     } else {
-        log_action(
-            "Building",
-            format!(
-                "WASM RPC client for {}",
-                component_name.as_str().log_color_highlight()
-            ),
-        );
-
-        let _indent = LogIndent::new();
-
         task_result_marker.result(
             async {
-                delete_path("client temp build dir", &client_wit_root)?;
-                delete_path("client wit", &client_wit)?;
-                delete_path("client wasm", &client_wasm)?;
+                match component.dep_type {
+                    DependencyType::StaticWasmRpc => {
+                        log_action(
+                            "Building",
+                            format!(
+                                "WASM RPC client for {}",
+                                component.name.as_str().log_color_highlight()
+                            ),
+                        );
 
-                log_action(
-                    "Creating",
-                    format!(
-                        "client temp build dir {}",
-                        client_wit_root.log_color_highlight()
-                    ),
-                );
-                fs::create_dir_all(&client_wit_root)?;
+                        let _indent = LogIndent::new();
 
-                let offline = ctx.config.offline;
-                commands::generate::build(
-                    ctx.component_stub_def(component_name)?,
-                    &client_wasm,
-                    &client_wit,
-                    offline,
-                )
-                .await
+                        delete_path("client temp build dir", &client_wit_root)?;
+                        delete_path("client wit", &client_wit)?;
+                        delete_path("client wasm", &client_wasm)?;
+
+                        log_action(
+                            "Creating",
+                            format!(
+                                "client temp build dir {}",
+                                client_wit_root.log_color_highlight()
+                            ),
+                        );
+                        fs::create_dir_all(&client_wit_root)?;
+
+                        let offline = ctx.config.offline;
+                        commands::generate::build(
+                            ctx.component_stub_def(&component.name)?,
+                            &client_wasm,
+                            &client_wit,
+                            offline,
+                        )
+                        .await?;
+
+                        if !env_var_flag("WASM_RPC_KEEP_CLIENT_DIR") {
+                            delete_path("client temp build dir", &client_wit_root)?;
+                        }
+
+                        Ok(())
+                    }
+                    DependencyType::DynamicWasmRpc => {
+                        log_action(
+                            "Generating",
+                            format!(
+                                "WASM RPC client for {}",
+                                component.name.as_str().log_color_highlight()
+                            ),
+                        );
+                        let _indent = LogIndent::new();
+
+                        delete_path("client wit", &client_wit)?;
+
+                        log_action(
+                            "Creating",
+                            format!(
+                                "client temp build dir {}",
+                                client_wit_root.log_color_highlight()
+                            ),
+                        );
+                        fs::create_dir_all(&client_wit_root)?;
+
+                        let stub_def = ctx.component_stub_def(&component.name)?;
+                        commands::generate::generate_and_copy_client_wit(stub_def, &client_wit)
+                    }
+                }
             }
             .await,
         )?;
-
-        if !env_var_flag("WASM_RPC_KEEP_CLIENT_DIR") {
-            delete_path("client temp build dir", &client_wit_root)?;
-        }
 
         Ok(true)
     }
@@ -1485,19 +1529,19 @@ fn add_client_deps<CPE: ComponentPropertiesExtensions>(
 
         let _indent = LogIndent::new();
 
-        for dep_component_name in dependencies {
+        for dep_component in dependencies {
             log_action(
                 "Adding",
                 format!(
                     "{} client wit dependency to {}",
-                    dep_component_name.as_str().log_color_highlight(),
+                    dep_component.name.as_str().log_color_highlight(),
                     component_name.as_str().log_color_highlight()
                 ),
             );
             let _indent = LogIndent::new();
 
             add_client_as_dependency_to_wit_dir(AddClientAsDepConfig {
-                client_wit_root: ctx.application.client_wit(dep_component_name),
+                client_wit_root: ctx.application.client_wit(&dep_component.name),
                 dest_wit_root: ctx
                     .application
                     .component_generated_wit(component_name, ctx.profile()),
@@ -1684,7 +1728,7 @@ impl TaskResultMarkerHashInput for ComponentGeneratorMarkerHash<'_> {
 
 struct LinkRpcMarkerHash<'a> {
     component_name: &'a ComponentName,
-    dependencies: &'a BTreeSet<ComponentName>,
+    dependencies: &'a BTreeSet<&'a DependentComponent>,
 }
 
 impl TaskResultMarkerHashInput for LinkRpcMarkerHash<'_> {
@@ -1696,7 +1740,10 @@ impl TaskResultMarkerHashInput for LinkRpcMarkerHash<'_> {
         Ok(format!(
             "{}#{}",
             self.component_name,
-            self.dependencies.iter().map(|s| s.as_str()).join(",")
+            self.dependencies
+                .iter()
+                .map(|s| format!("{}#{}", s.name.as_str(), s.dep_type.as_str()))
+                .join(",")
         )
         .into_bytes())
     }

@@ -5,6 +5,7 @@ use crate::naming::wit::package_dep_dir_name_from_parser;
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use crate::{fs, naming};
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Formatter;
 use std::fmt::{Debug, Display};
@@ -160,13 +161,59 @@ impl<T: Default> Default for WithSource<T> {
     }
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum DependencyType {
+    /// Dynamic (stubless) wasm-rpc
+    DynamicWasmRpc,
+    /// Static (composed with compiled stub) wasm-rpc
+    StaticWasmRpc,
+}
+
+impl DependencyType {
+    pub const STATIC_WASM_RPC: &'static str = "static-wasm-rpc";
+    pub const WASM_RPC: &'static str = "wasm-rpc";
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            DependencyType::DynamicWasmRpc => Self::WASM_RPC,
+            DependencyType::StaticWasmRpc => Self::STATIC_WASM_RPC,
+        }
+    }
+
+    pub fn from_str(value: &str) -> Option<Self> {
+        match value {
+            Self::WASM_RPC => Some(Self::DynamicWasmRpc),
+            Self::STATIC_WASM_RPC => Some(Self::StaticWasmRpc),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct DependentComponent {
+    pub name: ComponentName,
+    pub dep_type: DependencyType,
+}
+
+impl PartialOrd for DependentComponent {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for DependentComponent {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.name.cmp(&other.name)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Application<CPE: ComponentPropertiesExtensions> {
     temp_dir: Option<WithSource<String>>,
     wit_deps: WithSource<Vec<String>>,
     components: BTreeMap<ComponentName, Component<CPE>>,
-    dependencies: BTreeMap<ComponentName, BTreeSet<ComponentName>>,
-    no_dependencies: BTreeSet<ComponentName>,
+    dependencies: BTreeMap<ComponentName, BTreeSet<DependentComponent>>,
+    no_dependencies: BTreeSet<DependentComponent>,
     custom_commands: WithSource<HashMap<String, Vec<app_raw::ExternalCommand>>>,
     clean: WithSource<Vec<String>>,
 }
@@ -198,7 +245,7 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
         &self.wit_deps
     }
 
-    pub fn all_wasm_rpc_dependencies(&self) -> BTreeSet<ComponentName> {
+    pub fn all_wasm_rpc_dependencies(&self) -> BTreeSet<DependentComponent> {
         self.dependencies.values().flatten().cloned().collect()
     }
 
@@ -258,7 +305,7 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
     pub fn component_wasm_rpc_dependencies(
         &self,
         component_name: &ComponentName,
-    ) -> &BTreeSet<ComponentName> {
+    ) -> &BTreeSet<DependentComponent> {
         self.dependencies
             .get(component_name)
             .unwrap_or(&self.no_dependencies)
@@ -679,7 +726,8 @@ mod app_builder {
     use crate::log::LogColorize;
     use crate::model::app::{
         Application, Component, ComponentName, ComponentProperties, ComponentPropertiesExtensions,
-        ProfileName, ResolvedComponentProperties, TemplateName, WithSource,
+        DependencyType, DependentComponent, ProfileName, ResolvedComponentProperties, TemplateName,
+        WithSource,
     };
     use crate::model::app_raw;
     use crate::validation::{ValidatedResult, ValidationBuilder};
@@ -706,7 +754,7 @@ mod app_builder {
         CustomCommands,
         Clean,
         Template(TemplateName),
-        WasmRpcDependency((ComponentName, ComponentName)),
+        WasmRpcDependency((ComponentName, DependentComponent)),
         Component(ComponentName),
     }
 
@@ -745,12 +793,13 @@ mod app_builder {
                 }
                 UniqueSourceCheckedEntityKey::WasmRpcDependency((
                     component_name,
-                    target_component_name,
+                    dependent_component,
                 )) => {
                     format!(
-                        "{} - {}",
+                        "{} - {} - {}",
                         component_name.as_str().log_color_highlight(),
-                        target_component_name.as_str().log_color_highlight()
+                        dependent_component.name.as_str().log_color_highlight(),
+                        dependent_component.dep_type.as_str().log_color_highlight(),
                     )
                 }
                 UniqueSourceCheckedEntityKey::Component(component_name) => {
@@ -766,7 +815,7 @@ mod app_builder {
         temp_dir: Option<WithSource<String>>,
         wit_deps: WithSource<Vec<String>>,
         templates: HashMap<TemplateName, app_raw::ComponentTemplate>,
-        dependencies: BTreeMap<ComponentName, BTreeSet<ComponentName>>,
+        dependencies: BTreeMap<ComponentName, BTreeSet<DependentComponent>>,
         custom_commands: WithSource<HashMap<String, Vec<app_raw::ExternalCommand>>>,
         clean: WithSource<Vec<String>>,
         raw_components: HashMap<ComponentName, (PathBuf, app_raw::Component)>,
@@ -952,18 +1001,25 @@ mod app_builder {
         ) {
             validation.with_context(vec![("component", component_name.clone())], |validation| {
                 for dependency in component_dependencies {
-                    if dependency.type_ == "wasm-rpc" {
+                    if dependency.type_ == DependencyType::WASM_RPC
+                        || dependency.type_ == DependencyType::STATIC_WASM_RPC
+                    {
                         match dependency.target {
                             Some(target_name) => {
+                                let dependent_component = DependentComponent {
+                                    name: target_name.into(),
+                                    dep_type: DependencyType::DynamicWasmRpc,
+                                };
+
                                 let unique_key = UniqueSourceCheckedEntityKey::WasmRpcDependency((
                                     component_name.clone().into(),
-                                    target_name.clone().into(),
+                                    dependent_component.clone(),
                                 ));
                                 if self.add_entity_source(unique_key, source) {
                                     self.dependencies
                                         .entry(component_name.clone().into())
                                         .or_default()
-                                        .insert(target_name.into());
+                                        .insert(dependent_component);
                                 }
                             }
                             None => validation.add_error(format!(
@@ -1003,7 +1059,7 @@ mod app_builder {
             for (component, deps) in &self.dependencies {
                 for target in deps {
                     let invalid_source = !self.raw_components.contains_key(component);
-                    let invalid_target = !self.raw_components.contains_key(target);
+                    let invalid_target = !self.raw_components.contains_key(&target.name);
 
                     if invalid_source || invalid_target {
                         let source = self
@@ -1023,14 +1079,14 @@ mod app_builder {
                                     validation.add_error(format!(
                                         "WASM RPC dependency {} - {} references unknown component",
                                         component.as_str().log_color_error_highlight(),
-                                        target.as_str().log_color_highlight()
+                                        target.name.as_str().log_color_highlight()
                                     ))
                                 }
                                 if invalid_target {
                                     validation.add_error(format!(
                                         "WASM RPC dependency {} - {} references unknown target component",
                                         component.as_str().log_color_highlight(),
-                                        target.as_str().log_color_error_highlight()
+                                        target.name.as_str().log_color_error_highlight()
                                     ))
                                 }
                             },
