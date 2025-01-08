@@ -300,7 +300,7 @@ export const PluginDetailPage = () => {
         onClose={() => setShowDeleteConfirm(false)}
         onConfirm={handleDelete}
         pluginName={plugin.name}
-        isDeleting={deletePlugin.isLoading}
+        isDeleting={deletePlugin.isPending}
         modelName="Plugin"
       />
     </div>

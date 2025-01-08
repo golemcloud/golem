@@ -21,7 +21,6 @@ import { useEffect, useState } from "react";
 
 import DeployModal from "../components/api/DeployModal";
 import RouteModal from "../components/api/ApiRoutesModal";
-import { displayError } from "../lib/error-utils";
 import toast from "react-hot-toast";
 
 export interface Route {
@@ -86,6 +85,7 @@ export const ApiDefinitionView = () => {
       {
         onSuccess: () => toast.success("Route deleted successfully"),
         onError: () => toast.error("Failed to delete route"),
+        retry: 0
       },
     );
   };
@@ -114,6 +114,7 @@ export const ApiDefinitionView = () => {
           setEditingRoute(null);
         },
         onError: () => toast.error("Failed to update route"),
+        retry: 0
       },
     );
   };
@@ -372,6 +373,7 @@ export const ApiDefinitionView = () => {
         }}
         onSave={editingRoute ? handleUpdateRoute : handleAddRoute}
         existingRoute={editingRoute}
+        isLoading={updateDefinition.isPending}
       />
 
       <DeployModal

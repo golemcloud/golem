@@ -24,7 +24,6 @@ interface OverviewTabProps {
 }
 
 const Overview: React.FC<OverviewTabProps> = ({ worker, component }) => {
-    const navigate = useNavigate();
 
     // Group functions by their exports
     const groupedFunctions = component.metadata?.exports.reduce((acc, exp) => {

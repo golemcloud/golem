@@ -24,6 +24,20 @@ export const displayError = (error: unknown, title?: string) => {
       errorMessage = golemError.error;
     }
   }
+  // handle {"errors":["string"]}
+  else if (error && typeof error === "object" && "errors" in error) {
+    const golemError = error as GolemError;
+    if (golemError.errors?.length) {
+      errorMessage = golemError.errors.join("\n");
+    }
+  }
+  //   handle {"error":"string"}
+  else if (error && typeof error === "object" && "error" in error) {
+    const golemError = error as GolemError;
+    if (golemError.error) {
+      errorMessage = golemError.error;
+    }
+  }
   // Handle standard Error type
   else if (error instanceof Error) {
     errorMessage = error.message;
@@ -38,7 +52,7 @@ export const displayError = (error: unknown, title?: string) => {
 
   // Show the toast with custom styling
   toast.error(formattedMessage, {
-    duration: 8000, // 8 seconds
+    duration: 4000, // 4 seconds
     style: {
       background: "#1F2937",
       color: "#F3F4F6",
@@ -51,6 +65,8 @@ export const displayError = (error: unknown, title?: string) => {
         "0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)",
     },
     icon: "⚠️",
+    // bottom right
+    position: "bottom-right",
   });
 };
 
@@ -83,38 +99,5 @@ export const createMutationErrorConfig = <
 >(
   errorTitle?: string
 ): Partial<UseMutationOptions<TData, TError, TVariables, TContext>> => ({
-  onError: (error:Error | GolemError) => displayError(error, errorTitle),
+  onError: (error: Error | GolemError) => displayError(error, errorTitle),
 });
-
-// Example usage with React Query:
-
-// For queries:
-/*
-const { data } = useQuery({
-  queryKey: ['key'],
-  queryFn: fetchData,
-  ...createQueryErrorConfig('Failed to fetch data')
-});
-*/
-
-// For mutations:
-/*
-const mutation = useMutation({
-  mutationFn: updateData,
-  ...createMutationErrorConfig('Failed to update data')
-});
-*/
-
-// With type parameters:
-/*
-const { data } = useQuery<UserData, GolemError>({
-  queryKey: ['users'],
-  queryFn: fetchUsers,
-  ...createQueryErrorConfig<UserData>('Failed to fetch users')
-});
-
-const mutation = useMutation<void, GolemError, UpdateUserInput>({
-  mutationFn: updateUser,
-  ...createMutationErrorConfig<void, GolemError, UpdateUserInput>('Failed to update user')
-});
-*/

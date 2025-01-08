@@ -220,6 +220,7 @@ export const useCreateWorker = (componentId: string) => {
     },
     onError: (error: Error | GolemError) =>
       displayError(error, "Error creating Worker"),
+    retry: 0,
   });
 };
 
@@ -367,5 +368,6 @@ export const useWorkerFiles = (componentId: string, workerName: string) => {
     queryFn: () => getWorkerFiles(componentId, workerName),
     onError: (error: Error | GolemError) =>
       displayError(error, "Error fetching Worker files"),
+    retry: 2
   });
 };

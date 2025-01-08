@@ -6,6 +6,7 @@ import {
   Webhook,
   X,
   Route as RouteC,
+  Loader2,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 
@@ -13,6 +14,7 @@ import toast from "react-hot-toast";
 import { type Route } from "../../pages/ApiDefinitionDetail";
 import { useComponents } from "../../api/components";
 import { Component } from "../../types/api";
+import { createWorker } from "../../api/workers";
 
 const HTTP_METHODS = [
   { value: "Get", color: "text-green-500 bg-green-500/10" },
@@ -28,7 +30,8 @@ interface RouteModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSave: (route: Route) => void;
-  existingRoute?: Route;
+  existingRoute?: Route | null;
+  isLoading: boolean;
 }
 
 export const RouteModal = ({
@@ -36,6 +39,7 @@ export const RouteModal = ({
   onClose,
   onSave,
   existingRoute,
+  isLoading,
 }: RouteModalProps) => {
   const [method, setMethod] = useState("Get");
   const [path, setPath] = useState("");
@@ -87,7 +91,7 @@ export const RouteModal = ({
     };
 
     onSave(route as Route);
-    onClose();
+    // onClose();
   };
 
   const getMethodColor = (methodValue: string) => {
@@ -266,7 +270,11 @@ export const RouteModal = ({
               onClick={handleSave}
               className="px-4 py-2 text-sm bg-primary rounded-md hover:bg-blue-600 flex items-center gap-2"
             >
-              <Webhook size={16} />
+              {isLoading ? (
+                <>
+                  <Loader2 size={16} className='animate-spin' />
+                </>) : (
+                <Webhook size={16} />)}
               Save Route
             </button>
           </div>
