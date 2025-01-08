@@ -6,6 +6,22 @@
 components:
   caller:
     template: rust
+    profiles:
+      debug:
+        componentWasm: ../target/wasm32-wasi/debug/caller.wasm
+        linkedWasm: ../target/golem-components/debug/caller_composed.wasm
+        customCommands:
+          copy:
+          - command: cp ../target/wasm32-wasi/debug/caller.wasm ../..
+          - command: cp ../target/golem-components/debug/caller_composed.wasm ../..
+      release:
+        componentWasm: ../target/wasm32-wasi/release/caller.wasm
+        linkedWasm: ../target/golem-components/release/caller_composed.wasm
+        customCommands:
+          copy:
+          - command: cp ../target/wasm32-wasi/release/caller.wasm ../..
+          - command: cp ../target/golem-components/release/caller_composed.wasm ../..
+    defaultProfile: debug
 dependencies:
   caller:
   - target: counters
