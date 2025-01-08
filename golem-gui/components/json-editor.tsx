@@ -11,7 +11,16 @@ const JsonEditor = ({ json }: {json:Record<string,unknown>|Array<unknown>|string
   const handleEditorDidMount = ( editor: MonacoEditor.IStandaloneCodeEditor) => {
     editorRef.current = editor;
     // Trigger format document action immediately after mount
-    editor?.getAction("editor.action.formatDocument")?.run();
+    const model = editor.getModel();
+    if (model) {
+      model.onDidChangeContent(() => {
+        // Trigger format action only when the editor's content changes
+        editor.getAction("editor.action.formatDocument")?.run();
+      });
+    }
+
+    // Initial formatting
+    editor.getAction("editor.action.formatDocument")?.run();
   };
 
   return (
