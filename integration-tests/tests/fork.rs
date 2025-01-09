@@ -99,7 +99,7 @@ async fn fork_interrupted_worker_to_completion(
 #[timeout(120000)]
 async fn fork_running_worker_to_completion(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let response = Arc::new(Mutex::new("initial".to_string()));
-    let host_http_port = 8587;
+    let host_http_port = 8586;
     let http_server = run_http_server(&response, host_http_port);
 
     let component_id = deps.store_component("http-client-2").await;
@@ -264,7 +264,7 @@ async fn fork_idle_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let result1 = deps
         .search_oplog(&target_worker_id, "G1002 AND NOT pending")
         .await;
-    let result2 = deps.search_oplog(&target_worker_id, "G1001").await;
+    let result2 = deps.search_oplog(&target_worker_id, "G1001 AND NOT pending").await;
 
     assert_eq!(result1.len(), 4); //  two invocations for G1002 and two log messages preceded
     assert_eq!(result2.len(), 2); //  two invocations for G1001 which was in the original source oplog
@@ -332,12 +332,12 @@ async fn fork_worker_before_completion_of_function(
         .await;
 
     let total_cart_initialisation = deps
-        .search_oplog(&target_worker_id, "initialize-cart")
+        .search_oplog(&target_worker_id, "initialize-cart AND NOT pending")
         .await;
 
     // Since the fork point was before the completion, it re-intitialises making the total initialisation
     // records in oplog being 2 along with the new log in target worker.
-    assert_eq!(total_cart_initialisation.len(), 3);
+    assert_eq!(total_cart_initialisation.len(), 2);
 }
 
 #[test]
