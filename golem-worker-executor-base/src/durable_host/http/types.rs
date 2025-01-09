@@ -35,8 +35,7 @@ use wasmtime_wasi_http::{HttpError, HttpResult};
 use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
 
 use crate::durable_host::http::serialized::{
-    SerializableErrorCode, SerializableHttpRequest, SerializableResponse,
-    SerializableResponseHeaders,
+    SerializableErrorCode, SerializableResponse, SerializableResponseHeaders,
 };
 use crate::durable_host::http::{continue_http_request, end_http_request};
 use crate::durable_host::serialized::SerializableError;
@@ -459,64 +458,64 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
             .ok_or_else(|| {
                 anyhow!("No matching BeginRemoteWrite index was found for the open HTTP request")
             })?;
+        let request = request_state.request.clone();
 
-        Durability::<
+        let durability = Durability::<
             Ctx,
-            SerializableHttpRequest,
             Option<Result<Result<Option<HashMap<String, Vec<u8>>>, SerializableErrorCode>, ()>>,
             SerializableError,
-        >::custom_wrap(
+        >::new(
             self,
+            "golem http::types::future_trailers",
+            "get",
             WrappedFunctionType::WriteRemoteBatched(Some(*begin_idx)),
-            "golem http::types::future_trailers::get",
-            request_state.request.clone(),
-            |ctx| {
-                Box::pin(async move {
-                    HostFutureTrailers::get(&mut ctx.as_wasi_http_view(), self_).await
-                })
-            },
-            |ctx, result| match result {
-                Some(Ok(Ok(None))) => Ok(Some(Ok(Ok(None)))),
-                Some(Ok(Ok(Some(trailers)))) => {
+        )
+        .await?;
+
+        if durability.is_live() {
+            let result = HostFutureTrailers::get(&mut self.as_wasi_http_view(), self_).await;
+            let to_serialize = match &result {
+                Ok(Some(Ok(Ok(None)))) => Ok(Some(Ok(Ok(None)))),
+                Ok(Some(Ok(Ok(Some(trailers))))) => {
                     let mut serialized_trailers = HashMap::new();
                     let host_fields: &Resource<wasmtime_wasi_http::types::HostFields> =
                         unsafe { std::mem::transmute(trailers) };
 
-                    for (key, value) in get_fields(ctx.table(), host_fields)? {
+                    for (key, value) in get_fields(self.table(), host_fields)? {
                         serialized_trailers
                             .insert(key.as_str().to_string(), value.as_bytes().to_vec());
                     }
                     Ok(Some(Ok(Ok(Some(serialized_trailers)))))
                 }
-                Some(Ok(Err(error_code))) => Ok(Some(Ok(Err(error_code.into())))),
-                Some(Err(_)) => Ok(Some(Err(()))),
-                None => Ok(None),
-            },
-            |ctx, serialized| {
-                Box::pin(async {
-                    match serialized {
-                        Some(Ok(Ok(None))) => Ok(Some(Ok(Ok(None)))),
-                        Some(Ok(Ok(Some(serialized_trailers)))) => {
-                            let mut fields = FieldMap::new();
-                            for (key, value) in serialized_trailers {
-                                fields.insert(
-                                    HeaderName::from_str(&key)?,
-                                    HeaderValue::try_from(value)?,
-                                );
-                            }
-                            let hdrs = ctx
-                                .table()
-                                .push(wasmtime_wasi_http::types::HostFields::Owned { fields })?;
-                            Ok(Some(Ok(Ok(Some(hdrs)))))
-                        }
-                        Some(Ok(Err(error_code))) => Ok(Some(Ok(Err(error_code.into())))),
-                        Some(Err(_)) => Ok(Some(Err(()))),
-                        None => Ok(None),
+                Ok(Some(Ok(Err(error_code)))) => Ok(Some(Ok(Err(error_code.into())))),
+                Ok(Some(Err(_))) => Ok(Some(Err(()))),
+                Ok(None) => Ok(None),
+                Err(err) => Err(SerializableError::from(err)),
+            };
+            let _ = durability
+                .persist_serializable(self, request, to_serialize)
+                .await;
+            result
+        } else {
+            let serialized = durability.replay(self).await;
+            match serialized {
+                Ok(Some(Ok(Ok(None)))) => Ok(Some(Ok(Ok(None)))),
+                Ok(Some(Ok(Ok(Some(serialized_trailers))))) => {
+                    let mut fields = FieldMap::new();
+                    for (key, value) in serialized_trailers {
+                        fields.insert(HeaderName::from_str(&key)?, HeaderValue::try_from(value)?);
                     }
-                })
-            },
-        )
-        .await
+                    let hdrs = self
+                        .table()
+                        .push(wasmtime_wasi_http::types::HostFields::Owned { fields })?;
+                    Ok(Some(Ok(Ok(Some(hdrs)))))
+                }
+                Ok(Some(Ok(Err(error_code)))) => Ok(Some(Ok(Err(error_code.into())))),
+                Ok(Some(Err(_))) => Ok(Some(Err(()))),
+                Ok(None) => Ok(None),
+                Err(error) => Err(error),
+            }
+        }
     }
 
     fn drop(&mut self, rep: Resource<FutureTrailers>) -> anyhow::Result<()> {

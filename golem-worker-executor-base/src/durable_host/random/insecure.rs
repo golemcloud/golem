@@ -16,7 +16,6 @@ use async_trait::async_trait;
 
 use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::{Durability, DurableWorkerCtx};
-use crate::metrics::wasm::record_host_function_call;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::WrappedFunctionType;
 use wasmtime_wasi::bindings::random::insecure::Host;
@@ -24,30 +23,36 @@ use wasmtime_wasi::bindings::random::insecure::Host;
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_insecure_random_bytes(&mut self, len: u64) -> anyhow::Result<Vec<u8>> {
-        record_host_function_call("random::insecure", "get_insecure_random_bytes");
-        Durability::<Ctx, (), Vec<u8>, SerializableError>::wrap(
+        let durability = Durability::<Ctx, Vec<u8>, SerializableError>::new(
             self,
+            "golem random::insecure",
+            "get_insecure_random_bytes",
             WrappedFunctionType::ReadLocal,
-            "golem random::insecure::get_insecure_random_bytes",
-            (),
-            |ctx| {
-                Box::pin(async move {
-                    Host::get_insecure_random_bytes(&mut ctx.as_wasi_view(), len).await
-                })
-            },
         )
-        .await
+        .await?;
+
+        if durability.is_live() {
+            let result = Host::get_insecure_random_bytes(&mut self.as_wasi_view(), len).await;
+            durability.persist(self, len, result).await
+        } else {
+            durability.replay(self).await
+        }
     }
 
     async fn get_insecure_random_u64(&mut self) -> anyhow::Result<u64> {
-        record_host_function_call("random::insecure", "get_insecure_random_u64");
-        Durability::<Ctx, (), u64, SerializableError>::wrap(
+        let durability = Durability::<Ctx, u64, SerializableError>::new(
             self,
+            "golem random::insecure",
+            "get_insecure_random_u64",
             WrappedFunctionType::ReadLocal,
-            "golem random::insecure::get_insecure_random_u64",
-            (),
-            |ctx| Box::pin(async { Host::get_insecure_random_u64(&mut ctx.as_wasi_view()).await }),
         )
-        .await
+        .await?;
+
+        if durability.is_live() {
+            let result = Host::get_insecure_random_u64(&mut self.as_wasi_view()).await;
+            durability.persist(self, (), result).await
+        } else {
+            durability.replay(self).await
+        }
     }
 }
