@@ -29,6 +29,7 @@ use golem_test_framework::config::EnvBasedTestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
 
 use golem_wasm_rpc::Value;
+use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
@@ -104,13 +105,17 @@ async fn fork_running_worker_1(deps: &EnvBasedTestDependencies, _tracing: &Traci
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
+    let source_worker_name = Uuid::new_v4().to_string();
     let source_worker_id = deps
-        .start_worker_with(&component_id, "poll-loop-parent-component-1", vec![], env)
+        .start_worker_with(&component_id, source_worker_name.as_str(), vec![], env)
         .await;
 
+    let target_worker_name =
+        Uuid::new_v4().to_string();
+    
     let target_worker_id = WorkerId {
         component_id: component_id.clone(),
-        worker_name: "poll-loop-with-fork-component-1".to_string(),
+        worker_name: target_worker_name,
     };
 
     deps.log_output(&source_worker_id).await;
