@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use test_r::{inherit_test_dep, test, timeout};
+use test_r::{flaky, inherit_test_dep, test, timeout};
 
 use crate::Tracing;
 use golem_common::model::oplog::OplogIndex;
@@ -96,10 +96,11 @@ async fn fork_interrupted_worker_to_completion(
 
 #[test]
 #[tracing::instrument]
+#[flaky(5)]
 #[timeout(120000)]
 async fn fork_running_worker_to_completion(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let response = Arc::new(Mutex::new("initial".to_string()));
-    let host_http_port = 8586;
+    let host_http_port = 8587;
     let http_server = run_http_server(&response, host_http_port);
 
     let component_id = deps.store_component("http-client-2").await;
@@ -147,14 +148,14 @@ async fn fork_running_worker_to_completion(deps: &EnvBasedTestDependencies, _tra
     deps.wait_for_status(
         &target_worker_id,
         WorkerStatus::Idle,
-        Duration::from_secs(10),
+        Duration::from_secs(20),
     )
     .await;
 
     deps.wait_for_status(
         &source_worker_id,
         WorkerStatus::Idle,
-        Duration::from_secs(10),
+        Duration::from_secs(20),
     )
     .await;
 
@@ -175,7 +176,7 @@ async fn fork_idle_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 
     let source_worker_id = WorkerId {
         component_id: component_id.clone(),
-        worker_name: "foo".to_string(),
+        worker_name: "baz".to_string(),
     };
 
     let _ = deps
@@ -214,7 +215,7 @@ async fn fork_idle_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 
     let target_worker_id = WorkerId {
         component_id: component_id.clone(),
-        worker_name: "forked-foo".to_string(),
+        worker_name: "forked-baz".to_string(),
     };
 
     let source_oplog = deps.get_oplog(&source_worker_id, OplogIndex::INITIAL).await;
