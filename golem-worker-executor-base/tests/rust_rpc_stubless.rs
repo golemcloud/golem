@@ -218,7 +218,10 @@ async fn counter_resource_test_1(
                     DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                         target_interface_name: HashMap::from_iter(vec![
                             ("api".to_string(), "rpc:counters-exports/api".to_string()),
-                            ("counter".to_string(), "rpc:counters-exports/api".to_string()),
+                            (
+                                "counter".to_string(),
+                                "rpc:counters-exports/api".to_string(),
+                            ),
                         ]),
                     }),
                 ),
@@ -284,7 +287,10 @@ async fn counter_resource_test_2(
                     DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                         target_interface_name: HashMap::from_iter(vec![
                             ("api".to_string(), "rpc:counters-exports/api".to_string()),
-                            ("counter".to_string(), "rpc:counters-exports/api".to_string()),
+                            (
+                                "counter".to_string(),
+                                "rpc:counters-exports/api".to_string(),
+                            ),
                         ]),
                     }),
                 ),
@@ -351,7 +357,10 @@ async fn counter_resource_test_2_with_restart(
                     DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                         target_interface_name: HashMap::from_iter(vec![
                             ("api".to_string(), "rpc:counters-exports/api".to_string()),
-                            ("counter".to_string(), "rpc:counters-exports/api".to_string()),
+                            (
+                                "counter".to_string(),
+                                "rpc:counters-exports/api".to_string(),
+                            ),
                         ]),
                     }),
                 ),
@@ -422,7 +431,10 @@ async fn counter_resource_test_3(
                     DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                         target_interface_name: HashMap::from_iter(vec![
                             ("api".to_string(), "rpc:counters-exports/api".to_string()),
-                            ("counter".to_string(), "rpc:counters-exports/api".to_string()),
+                            (
+                                "counter".to_string(),
+                                "rpc:counters-exports/api".to_string(),
+                            ),
                         ]),
                     }),
                 ),
@@ -489,7 +501,10 @@ async fn counter_resource_test_3_with_restart(
                     DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                         target_interface_name: HashMap::from_iter(vec![
                             ("api".to_string(), "rpc:counters-exports/api".to_string()),
-                            ("counter".to_string(), "rpc:counters-exports/api".to_string()),
+                            (
+                                "counter".to_string(),
+                                "rpc:counters-exports/api".to_string(),
+                            ),
                         ]),
                     }),
                 ),
@@ -560,7 +575,10 @@ async fn context_inheritance(
                     DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                         target_interface_name: HashMap::from_iter(vec![
                             ("api".to_string(), "rpc:counters-exports/api".to_string()),
-                            ("counter".to_string(), "rpc:counters-exports/api".to_string()),
+                            (
+                                "counter".to_string(),
+                                "rpc:counters-exports/api".to_string(),
+                            ),
                         ]),
                     }),
                 ),
@@ -674,7 +692,10 @@ async fn counter_resource_test_5(
                     DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                         target_interface_name: HashMap::from_iter(vec![
                             ("api".to_string(), "rpc:counters-exports/api".to_string()),
-                            ("counter".to_string(), "rpc:counters-exports/api".to_string()),
+                            (
+                                "counter".to_string(),
+                                "rpc:counters-exports/api".to_string(),
+                            ),
                         ]),
                     }),
                 ),
@@ -743,7 +764,10 @@ async fn counter_resource_test_5_with_restart(
                     DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                         target_interface_name: HashMap::from_iter(vec![
                             ("api".to_string(), "rpc:counters-exports/api".to_string()),
-                            ("counter".to_string(), "rpc:counters-exports/api".to_string()),
+                            (
+                                "counter".to_string(),
+                                "rpc:counters-exports/api".to_string(),
+                            ),
                         ]),
                     }),
                 ),
@@ -832,7 +856,10 @@ async fn wasm_rpc_bug_32_test(
                     DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                         target_interface_name: HashMap::from_iter(vec![
                             ("api".to_string(), "rpc:counters-exports/api".to_string()),
-                            ("counter".to_string(), "rpc:counters-exports/api".to_string()),
+                            (
+                                "counter".to_string(),
+                                "rpc:counters-exports/api".to_string(),
+                            ),
                         ]),
                     }),
                 ),
@@ -1038,7 +1065,10 @@ async fn ephemeral_worker_invocation_via_rpc1(
                     DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                         target_interface_name: HashMap::from_iter(vec![
                             ("api".to_string(), "rpc:counters-exports/api".to_string()),
-                            ("counter".to_string(), "rpc:counters-exports/api".to_string()),
+                            (
+                                "counter".to_string(),
+                                "rpc:counters-exports/api".to_string(),
+                            ),
                         ]),
                     }),
                 ),
