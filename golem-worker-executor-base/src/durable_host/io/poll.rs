@@ -20,7 +20,7 @@ use wasmtime::component::Resource;
 use wasmtime_wasi::bindings::io::poll::{Host, HostPollable, Pollable};
 
 use crate::durable_host::serialized::SerializableError;
-use crate::durable_host::{Durability2, DurableWorkerCtx, SuspendForSleep};
+use crate::durable_host::{Durability, DurableWorkerCtx, SuspendForSleep};
 use crate::metrics::wasm::record_host_function_call;
 use crate::workerctx::WorkerCtx;
 
@@ -48,7 +48,7 @@ impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn poll(&mut self, in_: Vec<Resource<Pollable>>) -> anyhow::Result<Vec<u32>> {
-        let durability = Durability2::<Ctx, Vec<u32>, SerializableError>::new(
+        let durability = Durability::<Ctx, Vec<u32>, SerializableError>::new(
             self,
             "golem io::poll",
             "poll",

@@ -16,7 +16,6 @@ use async_trait::async_trait;
 
 use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::{Durability, DurableWorkerCtx};
-use crate::metrics::wasm::record_host_function_call;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::WrappedFunctionType;
 use wasmtime_wasi::bindings::random::insecure_seed::Host;
@@ -24,14 +23,18 @@ use wasmtime_wasi::bindings::random::insecure_seed::Host;
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn insecure_seed(&mut self) -> anyhow::Result<(u64, u64)> {
-        record_host_function_call("random::insecure_seed", "insecure_seed");
-        Durability::<Ctx, (), (u64, u64), SerializableError>::wrap(
+        let durability = Durability::<Ctx, (u64, u64), SerializableError>::new(
             self,
+            "golem random::insecure_seed",
+            "insecure_seed",
             WrappedFunctionType::ReadLocal,
-            "golem random::insecure_seed::insecure_seed",
-            (),
-            |ctx| Box::pin(async { Host::insecure_seed(&mut ctx.as_wasi_view()).await }),
         )
-        .await
+        .await?;
+        if durability.is_live() {
+            let result = Host::insecure_seed(&mut self.as_wasi_view()).await;
+            durability.persist(self, (), result).await
+        } else {
+            durability.replay(self).await
+        }
     }
 }

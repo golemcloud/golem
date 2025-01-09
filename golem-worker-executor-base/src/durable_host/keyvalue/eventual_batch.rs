@@ -20,8 +20,7 @@ use wasmtime_wasi::{ResourceTableError, WasiView};
 use crate::durable_host::keyvalue::error::ErrorEntry;
 use crate::durable_host::keyvalue::types::{BucketEntry, IncomingValueEntry, OutgoingValueEntry};
 use crate::durable_host::serialized::SerializableError;
-use crate::durable_host::{Durability2, DurableWorkerCtx};
-use crate::metrics::wasm::record_host_function_call;
+use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::preview2::wasi::keyvalue::eventual_batch::{
     Bucket, Error, Host, IncomingValue, Key, OutgoingValue,
 };
@@ -42,7 +41,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .name
             .clone();
 
-        let durability = Durability2::<Ctx, Vec<Option<Vec<u8>>>, SerializableError>::new(
+        let durability = Durability::<Ctx, Vec<Option<Vec<u8>>>, SerializableError>::new(
             self,
             "golem keyvalue::eventual_batch",
             "get_many",
@@ -102,7 +101,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .name
             .clone();
 
-        let durability = Durability2::<Ctx, Vec<String>, SerializableError>::new(
+        let durability = Durability::<Ctx, Vec<String>, SerializableError>::new(
             self,
             "golem keyvalue::eventual_batch",
             "get_keys",
@@ -150,7 +149,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             })
             .collect::<Result<Vec<(String, Vec<u8>)>, ResourceTableError>>()?;
 
-        let durability = Durability2::<Ctx, (), SerializableError>::new(
+        let durability = Durability::<Ctx, (), SerializableError>::new(
             self,
             "golem keyvalue::eventual_batch",
             "set_many",
@@ -159,7 +158,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         .await?;
 
         let result = if durability.is_live() {
-            let input = (
+            let input: (String, Vec<(String, u64)>) = (
                 bucket.clone(),
                 key_values
                     .iter()
@@ -201,7 +200,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .name
             .clone();
 
-        let durability = Durability2::<Ctx, (), SerializableError>::new(
+        let durability = Durability::<Ctx, (), SerializableError>::new(
             self,
             "golem keyvalue::eventual_batch",
             "delete_many",

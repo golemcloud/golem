@@ -15,7 +15,7 @@
 use async_trait::async_trait;
 
 use crate::durable_host::serialized::SerializableError;
-use crate::durable_host::{Durability2, DurableWorkerCtx};
+use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::WrappedFunctionType;
 use wasmtime_wasi::bindings::random::insecure::Host;
@@ -23,7 +23,7 @@ use wasmtime_wasi::bindings::random::insecure::Host;
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_insecure_random_bytes(&mut self, len: u64) -> anyhow::Result<Vec<u8>> {
-        let durability = Durability2::<Ctx, Vec<u8>, SerializableError>::new(
+        let durability = Durability::<Ctx, Vec<u8>, SerializableError>::new(
             self,
             "golem random::insecure",
             "get_insecure_random_bytes",
@@ -40,7 +40,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn get_insecure_random_u64(&mut self) -> anyhow::Result<u64> {
-        let durability = Durability2::<Ctx, u64, SerializableError>::new(
+        let durability = Durability::<Ctx, u64, SerializableError>::new(
             self,
             "golem random::insecure",
             "get_insecure_random_u64",

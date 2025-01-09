@@ -35,7 +35,7 @@ use golem_common::model::oplog::WrappedFunctionType;
 use crate::durable_host::serialized::{
     SerializableDateTime, SerializableError, SerializableFileTimes,
 };
-use crate::durable_host::{Durability2, DurableWorkerCtx};
+use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::metrics::wasm::record_host_function_call;
 use crate::workerctx::WorkerCtx;
 
@@ -186,7 +186,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     }
 
     async fn stat(&mut self, self_: Resource<Descriptor>) -> Result<DescriptorStat, FsError> {
-        let durability = Durability2::<Ctx, SerializableFileTimes, SerializableError>::new(
+        let durability = Durability::<Ctx, SerializableFileTimes, SerializableError>::new(
             self,
             "filesystem::types::descriptor",
             "stat",
@@ -241,7 +241,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         path_flags: PathFlags,
         path: String,
     ) -> Result<DescriptorStat, FsError> {
-        let durability = Durability2::<Ctx, SerializableFileTimes, SerializableError>::new(
+        let durability = Durability::<Ctx, SerializableFileTimes, SerializableError>::new(
             self,
             "filesystem::types::descriptor",
             "stat_at",

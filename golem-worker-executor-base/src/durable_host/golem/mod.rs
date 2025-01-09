@@ -25,7 +25,7 @@ use wasmtime_wasi::WasiView;
 
 use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::wasm_rpc::UrnExtensions;
-use crate::durable_host::{Durability2, DurableWorkerCtx};
+use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::get_oplog_entry;
 use crate::metrics::wasm::record_host_function_call;
 use crate::model::InterruptKind;
@@ -170,7 +170,7 @@ impl<Ctx: WorkerCtx> golem::api0_2_0::host::Host for DurableWorkerCtx<Ctx> {
         promise_id: golem::api0_2_0::host::PromiseId,
         data: Vec<u8>,
     ) -> Result<bool, anyhow::Error> {
-        let durability = Durability2::<Ctx, bool, SerializableError>::new(
+        let durability = Durability::<Ctx, bool, SerializableError>::new(
             self,
             "", // TODO: fix in 2.0
             "golem_complete_promise",
@@ -197,7 +197,7 @@ impl<Ctx: WorkerCtx> golem::api0_2_0::host::Host for DurableWorkerCtx<Ctx> {
         &mut self,
         promise_id: golem::api0_2_0::host::PromiseId,
     ) -> Result<(), anyhow::Error> {
-        let durability = Durability2::<Ctx, (), SerializableError>::new(
+        let durability = Durability::<Ctx, (), SerializableError>::new(
             self,
             "", // TODO: fix in 2.0
             "golem_delete_promise",
@@ -440,7 +440,7 @@ impl<Ctx: WorkerCtx> golem::api0_2_0::host::Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn generate_idempotency_key(&mut self) -> anyhow::Result<golem::api0_2_0::host::Uuid> {
-        let durability = Durability2::<Ctx, (u64, u64), SerializableError>::new(
+        let durability = Durability::<Ctx, (u64, u64), SerializableError>::new(
             self,
             "golem api",
             "generate_idempotency_key",
@@ -473,7 +473,7 @@ impl<Ctx: WorkerCtx> golem::api0_2_0::host::Host for DurableWorkerCtx<Ctx> {
         target_version: ComponentVersion,
         mode: UpdateMode,
     ) -> anyhow::Result<()> {
-        let durability = Durability2::<Ctx, (), SerializableError>::new(
+        let durability = Durability::<Ctx, (), SerializableError>::new(
             self,
             "golem::api",
             "update-worker",

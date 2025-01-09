@@ -17,7 +17,7 @@ use async_trait::async_trait;
 use wasmtime::component::Resource;
 
 use crate::durable_host::serialized::SerializableError;
-use crate::durable_host::{Durability2, DurableWorkerCtx};
+use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::WrappedFunctionType;
 use wasmtime_wasi::bindings::filesystem::preopens::{Descriptor, Host};
@@ -25,7 +25,7 @@ use wasmtime_wasi::bindings::filesystem::preopens::{Descriptor, Host};
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_directories(&mut self) -> anyhow::Result<Vec<(Resource<Descriptor>, String)>> {
-        let durability = Durability2::<Ctx, Vec<String>, SerializableError>::new(
+        let durability = Durability::<Ctx, Vec<String>, SerializableError>::new(
             self,
             "cli::preopens",
             "get_directories",

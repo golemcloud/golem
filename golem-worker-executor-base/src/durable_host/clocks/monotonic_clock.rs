@@ -16,7 +16,7 @@ use async_trait::async_trait;
 use wasmtime::component::Resource;
 
 use crate::durable_host::serialized::SerializableError;
-use crate::durable_host::{Durability2, DurableWorkerCtx};
+use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::metrics::wasm::record_host_function_call;
 use crate::services::oplog::CommitLevel;
 use crate::workerctx::WorkerCtx;
@@ -26,7 +26,7 @@ use wasmtime_wasi::bindings::clocks::monotonic_clock::{Duration, Host, Instant, 
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn now(&mut self) -> anyhow::Result<Instant> {
-        let durability = Durability2::<Ctx, Instant, SerializableError>::new(
+        let durability = Durability::<Ctx, Instant, SerializableError>::new(
             self,
             "monotonic_clock",
             "now",
@@ -43,7 +43,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn resolution(&mut self) -> anyhow::Result<Instant> {
-        let durability = Durability2::<Ctx, Instant, SerializableError>::new(
+        let durability = Durability::<Ctx, Instant, SerializableError>::new(
             self,
             "monotonic_clock",
             "resolution",
@@ -65,7 +65,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn subscribe_duration(&mut self, when: Duration) -> anyhow::Result<Resource<Pollable>> {
-        let durability = Durability2::<Ctx, Instant, SerializableError>::new(
+        let durability = Durability::<Ctx, Instant, SerializableError>::new(
             self,
             "monotonic_clock",
             "now", // TODO: fix in 2.0 - should be 'subscribe_duration' but have to keep for backward compatibility with Golem 1.0

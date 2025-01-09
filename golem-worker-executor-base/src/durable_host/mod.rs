@@ -480,7 +480,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         match remote_worker_id.clone().try_into_worker_id() {
             Some(worker_id) => Ok(worker_id),
             None => {
-                let durability = Durability2::<Ctx, WorkerId, SerializableError>::new(
+                let durability = Durability::<Ctx, WorkerId, SerializableError>::new(
                     self,
                     "golem::rpc::wasm-rpc",
                     "generate_unique_local_worker_id",

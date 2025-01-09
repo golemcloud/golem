@@ -18,7 +18,7 @@ use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::wasm_rpc::serialized::{
     SerializableInvokeRequest, SerializableInvokeResult, SerializableInvokeResultV1,
 };
-use crate::durable_host::{Durability2, DurableWorkerCtx, OplogEntryVersion};
+use crate::durable_host::{Durability, DurableWorkerCtx, OplogEntryVersion};
 use crate::error::GolemError;
 use crate::get_oplog_entry;
 use crate::metrics::wasm::record_host_function_call;
@@ -105,7 +105,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let oplog_index = self.state.current_oplog_index().await;
 
         // NOTE: Now that IdempotencyKey::derived is used, we no longer need to persist this, but we do to avoid breaking existing oplogs
-        let durability = Durability2::<Ctx, (u64, u64), SerializableError>::new(
+        let durability = Durability::<Ctx, (u64, u64), SerializableError>::new(
             self,
             "golem::rpc::wasm-rpc",
             "invoke-and-await idempotency key",
@@ -126,7 +126,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         };
         let idempotency_key = IdempotencyKey::from_uuid(uuid);
 
-        let durability = Durability2::<Ctx, TypeAnnotatedValue, SerializableError>::new(
+        let durability = Durability::<Ctx, TypeAnnotatedValue, SerializableError>::new(
             self,
             "golem::rpc::wasm-rpc",
             "invoke-and-await result",
@@ -237,7 +237,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let oplog_index = self.state.current_oplog_index().await;
 
         // NOTE: Now that IdempotencyKey::derived is used, we no longer need to persist this, but we do to avoid breaking existing oplogs
-        let durability = Durability2::<Ctx, (u64, u64), SerializableError>::new(
+        let durability = Durability::<Ctx, (u64, u64), SerializableError>::new(
             self,
             "golem::rpc::wasm-rpc",
             "invoke-and-await idempotency key", // NOTE: must keep invoke-and-await in the name for compatibility with Golem 1.0
@@ -259,7 +259,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
         let idempotency_key = IdempotencyKey::from_uuid(uuid);
 
-        let durability = Durability2::<Ctx, (), SerializableError>::new(
+        let durability = Durability::<Ctx, (), SerializableError>::new(
             self,
             "golem::rpc::wasm-rpc",
             "invoke",
@@ -333,7 +333,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let oplog_index = self.state.current_oplog_index().await;
 
         // NOTE: Now that IdempotencyKey::derived is used, we no longer need to persist this, but we do to avoid breaking existing oplogs
-        let durability = Durability2::<Ctx, (u64, u64), SerializableError>::new(
+        let durability = Durability::<Ctx, (u64, u64), SerializableError>::new(
             self,
             "golem::rpc::wasm-rpc",
             "invoke-and-await idempotency key", // NOTE: must keep invoke-and-await in the name for compatibility with Golem 1.0

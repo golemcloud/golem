@@ -21,7 +21,7 @@ use crate::durable_host::blobstore::types::{
     ContainerEntry, IncomingValueEntry, OutgoingValueEntry, StreamObjectNamesEntry,
 };
 use crate::durable_host::serialized::SerializableError;
-use crate::durable_host::{Durability2, DurableWorkerCtx};
+use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::metrics::wasm::record_host_function_call;
 use crate::preview2::wasi::blobstore::container::{
     Container, ContainerMetadata, Error, Host, HostContainer, HostStreamObjectNames, IncomingValue,
@@ -67,7 +67,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         start: u64,
         end: u64,
     ) -> anyhow::Result<Result<Resource<IncomingValue>, Error>> {
-        let durability = Durability2::<Ctx, Vec<u8>, SerializableError>::new(
+        let durability = Durability::<Ctx, Vec<u8>, SerializableError>::new(
             self,
             "golem blobstore::container",
             "get_data",
@@ -112,7 +112,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         name: ObjectName,
         data: Resource<OutgoingValue>,
     ) -> anyhow::Result<Result<(), Error>> {
-        let durability = Durability2::<Ctx, (), SerializableError>::new(
+        let durability = Durability::<Ctx, (), SerializableError>::new(
             self,
             "golem blobstore::container",
             "write_data",
@@ -156,7 +156,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         &mut self,
         container: Resource<Container>,
     ) -> anyhow::Result<Result<Resource<StreamObjectNames>, Error>> {
-        let durability = Durability2::<Ctx, Vec<String>, SerializableError>::new(
+        let durability = Durability::<Ctx, Vec<String>, SerializableError>::new(
             self,
             "golem blobstore::container",
             "list_object",
@@ -199,7 +199,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         container: Resource<Container>,
         name: ObjectName,
     ) -> anyhow::Result<Result<(), Error>> {
-        let durability = Durability2::<Ctx, (), SerializableError>::new(
+        let durability = Durability::<Ctx, (), SerializableError>::new(
             self,
             "golem blobstore::container",
             "delete_object",
@@ -238,7 +238,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         container: Resource<Container>,
         names: Vec<ObjectName>,
     ) -> anyhow::Result<Result<(), Error>> {
-        let durability = Durability2::<Ctx, (), SerializableError>::new(
+        let durability = Durability::<Ctx, (), SerializableError>::new(
             self,
             "golem blobstore::container",
             "delete_objects",
@@ -277,7 +277,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         container: Resource<Container>,
         name: ObjectName,
     ) -> anyhow::Result<Result<bool, Error>> {
-        let durability = Durability2::<Ctx, bool, SerializableError>::new(
+        let durability = Durability::<Ctx, bool, SerializableError>::new(
             self,
             "golem blobstore::container",
             "has_object",
@@ -316,17 +316,14 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         container: Resource<Container>,
         name: ObjectName,
     ) -> anyhow::Result<Result<ObjectMetadata, Error>> {
-        let durability = Durability2::<
-            Ctx,
-            crate::services::blob_store::ObjectMetadata,
-            SerializableError,
-        >::new(
-            self,
-            "golem blobstore::container",
-            "object_info",
-            WrappedFunctionType::ReadRemote,
-        )
-        .await?;
+        let durability =
+            Durability::<Ctx, crate::services::blob_store::ObjectMetadata, SerializableError>::new(
+                self,
+                "golem blobstore::container",
+                "object_info",
+                WrappedFunctionType::ReadRemote,
+            )
+            .await?;
 
         let account_id = self.state.owned_worker_id.account_id();
         let container_name = self
@@ -363,7 +360,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
     }
 
     async fn clear(&mut self, container: Resource<Container>) -> anyhow::Result<Result<(), Error>> {
-        let durability = Durability2::<Ctx, (), SerializableError>::new(
+        let durability = Durability::<Ctx, (), SerializableError>::new(
             self,
             "golem blobstore::container",
             "clear",

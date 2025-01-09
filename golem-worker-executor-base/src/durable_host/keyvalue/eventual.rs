@@ -20,8 +20,7 @@ use wasmtime_wasi::WasiView;
 use crate::durable_host::keyvalue::error::ErrorEntry;
 use crate::durable_host::keyvalue::types::{BucketEntry, IncomingValueEntry, OutgoingValueEntry};
 use crate::durable_host::serialized::SerializableError;
-use crate::durable_host::{Durability2, DurableWorkerCtx};
-use crate::metrics::wasm::record_host_function_call;
+use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::preview2::wasi::keyvalue::eventual::{
     Bucket, Error, Host, IncomingValue, Key, OutgoingValue,
 };
@@ -42,15 +41,20 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .name
             .clone();
 
-        let durability = Durability2::<Ctx, Option<Vec<u8>>, SerializableError>::new(
+        let durability = Durability::<Ctx, Option<Vec<u8>>, SerializableError>::new(
             self,
             "golem keyvalue::eventual",
             "get",
             WrappedFunctionType::ReadRemote,
-        ).await?;
+        )
+        .await?;
 
         let result = if durability.is_live() {
-            let result = self.state.key_value_service.get(account_id, bucket.clone(), key.clone()).await;
+            let result = self
+                .state
+                .key_value_service
+                .get(account_id, bucket.clone(), key.clone())
+                .await;
             durability.persist(self, (bucket, key), result).await
         } else {
             durability.replay(self).await
@@ -97,16 +101,21 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .unwrap()
             .clone();
 
-        let durability = Durability2::<Ctx, (), SerializableError>::new(
+        let durability = Durability::<Ctx, (), SerializableError>::new(
             self,
             "golem keyvalue::eventual",
             "set",
             WrappedFunctionType::WriteRemote,
-        ).await?;
+        )
+        .await?;
 
         let result = if durability.is_live() {
             let input = (bucket.clone(), key.clone(), outgoing_value.len() as u64);
-            let result = self.state.key_value_service.set(account_id, bucket, key, outgoing_value).await;
+            let result = self
+                .state
+                .key_value_service
+                .set(account_id, bucket, key, outgoing_value)
+                .await;
             durability.persist(self, input, result).await
         } else {
             durability.replay(self).await
@@ -137,16 +146,21 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .name
             .clone();
 
-        let durability = Durability2::<Ctx, (), SerializableError>::new(
+        let durability = Durability::<Ctx, (), SerializableError>::new(
             self,
             "golem keyvalue::eventual",
             "delete",
             WrappedFunctionType::WriteRemote,
-        ).await?;
+        )
+        .await?;
 
         let result = if durability.is_live() {
             let input = (bucket.clone(), key.clone());
-            let result = self.state.key_value_service.delete(account_id, bucket, key).await;
+            let result = self
+                .state
+                .key_value_service
+                .delete(account_id, bucket, key)
+                .await;
             durability.persist(self, input, result).await
         } else {
             durability.replay(self).await
@@ -177,16 +191,21 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .name
             .clone();
 
-        let durability = Durability2::<Ctx, bool, SerializableError>::new(
+        let durability = Durability::<Ctx, bool, SerializableError>::new(
             self,
             "golem keyvalue::eventual",
             "exists",
             WrappedFunctionType::ReadRemote,
-        ).await?;
+        )
+        .await?;
 
         let result = if durability.is_live() {
             let input = (bucket.clone(), key.clone());
-            let result = self.state.key_value_service.exists(account_id, bucket, key).await;
+            let result = self
+                .state
+                .key_value_service
+                .exists(account_id, bucket, key)
+                .await;
             durability.persist(self, input, result).await
         } else {
             durability.replay(self).await

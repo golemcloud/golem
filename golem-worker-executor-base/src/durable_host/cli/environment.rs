@@ -15,7 +15,7 @@
 use async_trait::async_trait;
 
 use crate::durable_host::serialized::SerializableError;
-use crate::durable_host::{Durability2, DurableWorkerCtx};
+use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::WrappedFunctionType;
 use wasmtime_wasi::bindings::cli::environment::Host;
@@ -23,7 +23,7 @@ use wasmtime_wasi::bindings::cli::environment::Host;
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_environment(&mut self) -> anyhow::Result<Vec<(String, String)>> {
-        let durability = Durability2::<Ctx, Vec<(String, String)>, SerializableError>::new(
+        let durability = Durability::<Ctx, Vec<(String, String)>, SerializableError>::new(
             self,
             "golem environment",
             "get_environment",
@@ -40,7 +40,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn get_arguments(&mut self) -> anyhow::Result<Vec<String>> {
-        let durability = Durability2::<Ctx, Vec<String>, SerializableError>::new(
+        let durability = Durability::<Ctx, Vec<String>, SerializableError>::new(
             self,
             "golem environment",
             "get_arguments",
@@ -57,7 +57,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn initial_cwd(&mut self) -> anyhow::Result<Option<String>> {
-        let durability = Durability2::<Ctx, Option<String>, SerializableError>::new(
+        let durability = Durability::<Ctx, Option<String>, SerializableError>::new(
             self,
             "golem environment",
             "get_arguments", // TODO: fix in 2.0 - for backward compatibility with Golem 1.0

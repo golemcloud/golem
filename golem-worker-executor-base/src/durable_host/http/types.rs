@@ -39,7 +39,7 @@ use crate::durable_host::http::serialized::{
 };
 use crate::durable_host::http::{continue_http_request, end_http_request};
 use crate::durable_host::serialized::SerializableError;
-use crate::durable_host::{Durability2, DurableWorkerCtx, HttpRequestCloseOwner};
+use crate::durable_host::{Durability, DurableWorkerCtx, HttpRequestCloseOwner};
 use crate::get_oplog_entry;
 use crate::metrics::wasm::record_host_function_call;
 use crate::model::PersistenceLevel;
@@ -460,7 +460,7 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
             })?;
         let request = request_state.request.clone();
 
-        let durability = Durability2::<
+        let durability = Durability::<
             Ctx,
             Option<Result<Result<Option<HashMap<String, Vec<u8>>>, SerializableErrorCode>, ()>>,
             SerializableError,

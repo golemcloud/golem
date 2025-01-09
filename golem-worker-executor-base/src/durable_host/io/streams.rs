@@ -21,7 +21,7 @@ use crate::durable_host::http::end_http_request;
 use crate::durable_host::http::serialized::SerializableHttpRequest;
 use crate::durable_host::io::{ManagedStdErr, ManagedStdOut};
 use crate::durable_host::serialized::SerializableStreamError;
-use crate::durable_host::{Durability2, DurableWorkerCtx, HttpRequestCloseOwner};
+use crate::durable_host::{Durability, DurableWorkerCtx, HttpRequestCloseOwner};
 use crate::error::GolemError;
 use crate::metrics::wasm::record_host_function_call;
 use crate::workerctx::WorkerCtx;
@@ -43,7 +43,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
             let handle = self_.rep();
             let begin_idx = get_http_request_begin_idx(self, handle)?;
 
-            let durability = Durability2::<Ctx, Vec<u8>, SerializableStreamError>::new(
+            let durability = Durability::<Ctx, Vec<u8>, SerializableStreamError>::new(
                 self,
                 "http::types::incoming_body_stream",
                 "read",
@@ -76,7 +76,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
             let handle = self_.rep();
             let begin_idx = get_http_request_begin_idx(self, handle)?;
 
-            let durability = Durability2::<Ctx, Vec<u8>, SerializableStreamError>::new(
+            let durability = Durability::<Ctx, Vec<u8>, SerializableStreamError>::new(
                 self,
                 "http::types::incoming_body_stream",
                 "blocking_read",
@@ -105,7 +105,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
             let handle = self_.rep();
             let begin_idx = get_http_request_begin_idx(self, handle)?;
 
-            let durability = Durability2::<Ctx, u64, SerializableStreamError>::new(
+            let durability = Durability::<Ctx, u64, SerializableStreamError>::new(
                 self,
                 "http::types::incoming_body_stream",
                 "skip",
@@ -137,7 +137,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
             let handle = self_.rep();
             let begin_idx = get_http_request_begin_idx(self, handle)?;
 
-            let durability = Durability2::<Ctx, u64, SerializableStreamError>::new(
+            let durability = Durability::<Ctx, u64, SerializableStreamError>::new(
                 self,
                 "http::types::incoming_body_stream",
                 "blocking_skip",
