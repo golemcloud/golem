@@ -42,13 +42,13 @@ async fn auction_example_1(
         .store_component_with_dynamic_linking(
             "auction_registry",
             &[(
-                "auction:auction-stub/stub-auction",
+                "auction:auction-client/auction-client",
                 DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                     target_interface_name: HashMap::from_iter(vec![
-                        ("api".to_string(), "auction:auction/api".to_string()),
+                        ("api".to_string(), "auction:auction-exports/api".to_string()),
                         (
                             "running-auction".to_string(),
-                            "auction:auction/api".to_string(),
+                            "auction:auction-exports/api".to_string(),
                         ),
                     ]),
                 }),
@@ -127,13 +127,13 @@ async fn auction_example_2(
         .store_component_with_dynamic_linking(
             "auction_registry",
             &[(
-                "auction:auction-stub/stub-auction",
+                "auction:auction-client/auction-client",
                 DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                     target_interface_name: HashMap::from_iter(vec![
-                        ("api".to_string(), "auction:auction/api".to_string()),
+                        ("api".to_string(), "auction:auction-exports/api".to_string()),
                         (
                             "running-auction".to_string(),
-                            "auction:auction/api".to_string(),
+                            "auction:auction-exports/api".to_string(),
                         ),
                     ]),
                 }),
@@ -214,20 +214,20 @@ async fn counter_resource_test_1(
             "caller",
             &[
                 (
-                    "rpc:counters-stub/stub-counters",
+                    "rpc:counters-client/counters-client",
                     DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                         target_interface_name: HashMap::from_iter(vec![
-                            ("api".to_string(), "rpc:counters/api".to_string()),
-                            ("counter".to_string(), "rpc:counters/api".to_string()),
+                            ("api".to_string(), "rpc:counters-exports/api".to_string()),
+                            ("counter".to_string(), "rpc:counters-exports/api".to_string()),
                         ]),
                     }),
                 ),
                 (
-                    "rpc:ephemeral-stub/stub-ephemeral",
+                    "rpc:ephemeral-client/ephemeral-client",
                     DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                         target_interface_name: HashMap::from_iter(vec![(
                             "api".to_string(),
-                            "rpc:ephemeral/api".to_string(),
+                            "rpc:ephemeral-exports/api".to_string(),
                         )]),
                     }),
                 ),
@@ -280,20 +280,20 @@ async fn counter_resource_test_2(
             "caller",
             &[
                 (
-                    "rpc:counters-stub/stub-counters",
+                    "rpc:counters-client/counters-client",
                     DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                         target_interface_name: HashMap::from_iter(vec![
-                            ("api".to_string(), "rpc:counters/api".to_string()),
-                            ("counter".to_string(), "rpc:counters/api".to_string()),
+                            ("api".to_string(), "rpc:counters-exports/api".to_string()),
+                            ("counter".to_string(), "rpc:counters-exports/api".to_string()),
                         ]),
                     }),
                 ),
                 (
-                    "rpc:ephemeral-stub/stub-ephemeral",
+                    "rpc:ephemeral-client/ephemeral-client",
                     DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                         target_interface_name: HashMap::from_iter(vec![(
                             "api".to_string(),
-                            "rpc:ephemeral/api".to_string(),
+                            "rpc:ephemeral-exports/api".to_string(),
                         )]),
                     }),
                 ),
@@ -347,20 +347,20 @@ async fn counter_resource_test_2_with_restart(
             "caller",
             &[
                 (
-                    "rpc:counters-stub/stub-counters",
+                    "rpc:counters-client/counters-client",
                     DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                         target_interface_name: HashMap::from_iter(vec![
-                            ("api".to_string(), "rpc:counters/api".to_string()),
-                            ("counter".to_string(), "rpc:counters/api".to_string()),
+                            ("api".to_string(), "rpc:counters-exports/api".to_string()),
+                            ("counter".to_string(), "rpc:counters-exports/api".to_string()),
                         ]),
                     }),
                 ),
                 (
-                    "rpc:ephemeral-stub/stub-ephemeral",
+                    "rpc:ephemeral-client/ephemeral-client",
                     DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                         target_interface_name: HashMap::from_iter(vec![(
                             "api".to_string(),
-                            "rpc:ephemeral/api".to_string(),
+                            "rpc:ephemeral-exports/api".to_string(),
                         )]),
                     }),
                 ),
@@ -418,20 +418,20 @@ async fn counter_resource_test_3(
             "caller",
             &[
                 (
-                    "rpc:counters-stub/stub-counters",
+                    "rpc:counters-client/counters-client",
                     DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                         target_interface_name: HashMap::from_iter(vec![
-                            ("api".to_string(), "rpc:counters/api".to_string()),
-                            ("counter".to_string(), "rpc:counters/api".to_string()),
+                            ("api".to_string(), "rpc:counters-exports/api".to_string()),
+                            ("counter".to_string(), "rpc:counters-exports/api".to_string()),
                         ]),
                     }),
                 ),
                 (
-                    "rpc:ephemeral-stub/stub-ephemeral",
+                    "rpc:ephemeral-client/ephemeral-client",
                     DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                         target_interface_name: HashMap::from_iter(vec![(
                             "api".to_string(),
-                            "rpc:ephemeral/api".to_string(),
+                            "rpc:ephemeral-exports/api".to_string(),
                         )]),
                     }),
                 ),
@@ -485,20 +485,20 @@ async fn counter_resource_test_3_with_restart(
             "caller",
             &[
                 (
-                    "rpc:counters-stub/stub-counters",
+                    "rpc:counters-client/counters-client",
                     DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                         target_interface_name: HashMap::from_iter(vec![
-                            ("api".to_string(), "rpc:counters/api".to_string()),
-                            ("counter".to_string(), "rpc:counters/api".to_string()),
+                            ("api".to_string(), "rpc:counters-exports/api".to_string()),
+                            ("counter".to_string(), "rpc:counters-exports/api".to_string()),
                         ]),
                     }),
                 ),
                 (
-                    "rpc:ephemeral-stub/stub-ephemeral",
+                    "rpc:ephemeral-client/ephemeral-client",
                     DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                         target_interface_name: HashMap::from_iter(vec![(
                             "api".to_string(),
-                            "rpc:ephemeral/api".to_string(),
+                            "rpc:ephemeral-exports/api".to_string(),
                         )]),
                     }),
                 ),
@@ -556,20 +556,20 @@ async fn context_inheritance(
             "caller",
             &[
                 (
-                    "rpc:counters-stub/stub-counters",
+                    "rpc:counters-client/counters-client",
                     DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                         target_interface_name: HashMap::from_iter(vec![
-                            ("api".to_string(), "rpc:counters/api".to_string()),
-                            ("counter".to_string(), "rpc:counters/api".to_string()),
+                            ("api".to_string(), "rpc:counters-exports/api".to_string()),
+                            ("counter".to_string(), "rpc:counters-exports/api".to_string()),
                         ]),
                     }),
                 ),
                 (
-                    "rpc:ephemeral-stub/stub-ephemeral",
+                    "rpc:ephemeral-client/ephemeral-client",
                     DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                         target_interface_name: HashMap::from_iter(vec![(
                             "api".to_string(),
-                            "rpc:ephemeral/api".to_string(),
+                            "rpc:ephemeral-exports/api".to_string(),
                         )]),
                     }),
                 ),
@@ -670,20 +670,20 @@ async fn counter_resource_test_5(
             "caller",
             &[
                 (
-                    "rpc:counters-stub/stub-counters",
+                    "rpc:counters-client/counters-client",
                     DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                         target_interface_name: HashMap::from_iter(vec![
-                            ("api".to_string(), "rpc:counters/api".to_string()),
-                            ("counter".to_string(), "rpc:counters/api".to_string()),
+                            ("api".to_string(), "rpc:counters-exports/api".to_string()),
+                            ("counter".to_string(), "rpc:counters-exports/api".to_string()),
                         ]),
                     }),
                 ),
                 (
-                    "rpc:ephemeral-stub/stub-ephemeral",
+                    "rpc:ephemeral-client/ephemeral-client",
                     DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                         target_interface_name: HashMap::from_iter(vec![(
                             "api".to_string(),
-                            "rpc:ephemeral/api".to_string(),
+                            "rpc:ephemeral-exports/api".to_string(),
                         )]),
                     }),
                 ),
@@ -739,20 +739,20 @@ async fn counter_resource_test_5_with_restart(
             "caller",
             &[
                 (
-                    "rpc:counters-stub/stub-counters",
+                    "rpc:counters-client/counters-client",
                     DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                         target_interface_name: HashMap::from_iter(vec![
-                            ("api".to_string(), "rpc:counters/api".to_string()),
-                            ("counter".to_string(), "rpc:counters/api".to_string()),
+                            ("api".to_string(), "rpc:counters-exports/api".to_string()),
+                            ("counter".to_string(), "rpc:counters-exports/api".to_string()),
                         ]),
                     }),
                 ),
                 (
-                    "rpc:ephemeral-stub/stub-ephemeral",
+                    "rpc:ephemeral-client/ephemeral-client",
                     DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                         target_interface_name: HashMap::from_iter(vec![(
                             "api".to_string(),
-                            "rpc:ephemeral/api".to_string(),
+                            "rpc:ephemeral-exports/api".to_string(),
                         )]),
                     }),
                 ),
@@ -828,20 +828,20 @@ async fn wasm_rpc_bug_32_test(
             "caller",
             &[
                 (
-                    "rpc:counters-stub/stub-counters",
+                    "rpc:counters-client/counters-client",
                     DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                         target_interface_name: HashMap::from_iter(vec![
-                            ("api".to_string(), "rpc:counters/api".to_string()),
-                            ("counter".to_string(), "rpc:counters/api".to_string()),
+                            ("api".to_string(), "rpc:counters-exports/api".to_string()),
+                            ("counter".to_string(), "rpc:counters-exports/api".to_string()),
                         ]),
                     }),
                 ),
                 (
-                    "rpc:ephemeral-stub/stub-ephemeral",
+                    "rpc:ephemeral-client/ephemeral-client",
                     DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                         target_interface_name: HashMap::from_iter(vec![(
                             "api".to_string(),
-                            "rpc:ephemeral/api".to_string(),
+                            "rpc:ephemeral-exports/api".to_string(),
                         )]),
                     }),
                 ),
@@ -894,13 +894,13 @@ async fn error_message_invalid_uri(
         .store_component_with_dynamic_linking(
             "auction_registry",
             &[(
-                "auction:auction-stub/stub-auction",
+                "auction:auction-client/stub-auction",
                 DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                     target_interface_name: HashMap::from_iter(vec![
-                        ("api".to_string(), "auction:auction/api".to_string()),
+                        ("api".to_string(), "auction:auction-exports/api".to_string()),
                         (
                             "running-auction".to_string(),
-                            "auction:auction/api".to_string(),
+                            "auction:auction-exports/api".to_string(),
                         ),
                     ]),
                 }),
@@ -965,13 +965,13 @@ async fn error_message_non_existing_target_component(
         .store_component_with_dynamic_linking(
             "auction_registry",
             &[(
-                "auction:auction-stub/stub-auction",
+                "auction:auction-client/stub-auction",
                 DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                     target_interface_name: HashMap::from_iter(vec![
-                        ("api".to_string(), "auction:auction/api".to_string()),
+                        ("api".to_string(), "auction:auction-exports/api".to_string()),
                         (
                             "running-auction".to_string(),
-                            "auction:auction/api".to_string(),
+                            "auction:auction-exports/api".to_string(),
                         ),
                     ]),
                 }),
@@ -1034,20 +1034,20 @@ async fn ephemeral_worker_invocation_via_rpc1(
             "caller",
             &[
                 (
-                    "rpc:counters-stub/stub-counters",
+                    "rpc:counters-client/counters-client",
                     DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                         target_interface_name: HashMap::from_iter(vec![
-                            ("api".to_string(), "rpc:counters/api".to_string()),
-                            ("counter".to_string(), "rpc:counters/api".to_string()),
+                            ("api".to_string(), "rpc:counters-exports/api".to_string()),
+                            ("counter".to_string(), "rpc:counters-exports/api".to_string()),
                         ]),
                     }),
                 ),
                 (
-                    "rpc:ephemeral-stub/stub-ephemeral",
+                    "rpc:ephemeral-client/ephemeral-client",
                     DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                         target_interface_name: HashMap::from_iter(vec![(
                             "api".to_string(),
-                            "rpc:ephemeral/api".to_string(),
+                            "rpc:ephemeral-exports/api".to_string(),
                         )]),
                     }),
                 ),
