@@ -10,10 +10,11 @@ import {
   Trash2,
   Upload,
 } from "lucide-react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   useApiDefinition,
   useApiDeployments,
+  useDeleteApiDefinition,
   useDeleteDeployment,
   useUpdateApiDefinition,
 } from "../api/api-definitions";
@@ -33,7 +34,7 @@ export interface Route {
     };
     workerName: string;
     response?: string;
-    bindingType: "default";
+    bindingType: "default" | "file-server" | "cors-preflight"
   };
 }
 
@@ -48,6 +49,8 @@ export const ApiDefinitionView = () => {
   const { data: deployments, isLoading: isLoadingDeployments } = useApiDeployments(id!);
   const deleteDeployment = useDeleteDeployment();
   const updateDefinition = useUpdateApiDefinition();
+  const navigate = useNavigate();
+  const deleteApiDefinition = useDeleteApiDefinition();
 
   useEffect(() => {
     if (apiDefinition) {
@@ -71,6 +74,7 @@ export const ApiDefinitionView = () => {
           setShowRouteModal(false);
         },
         onError: () => toast.error("Failed to add route"),
+        retry: 0
       },
     );
   };
@@ -185,6 +189,31 @@ export const ApiDefinitionView = () => {
 
         {/* Action Buttons */}
         <div className={`flex flex-col sm:flex-row gap-2 ${showMobileMenu ? 'block' : 'hidden md:flex'}`}>
+          {apiDefinition.draft && (
+            <button
+              onClick={() => {
+                if (window.confirm('Are you sure you want to publish this API? This will disable API editing')) {
+                  const updatedDefinition = {
+                    ...apiDefinition,
+                    draft: false
+                  };
+
+                  updateDefinition.mutate(
+                    { id: id!, version: version!, definition: updatedDefinition },
+                    {
+                      onSuccess: () => toast.success("API published successfully"),
+                      onError: () => toast.error("Failed to publish API"),
+                      retry: 0
+                    }
+                  );
+                }
+              }}
+              className="flex items-center justify-center gap-2 px-4 py-2 bg-purple-500 text-white rounded hover:bg-purple-600"
+            >
+              <Share2 size={18} />
+              <span>Publish</span>
+            </button>
+          )}
           <button
             onClick={() => setShowDeployModal(true)}
             className="flex items-center justify-center gap-2 px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600"
@@ -192,12 +221,33 @@ export const ApiDefinitionView = () => {
             <Upload size={18} />
             <span>Deploy</span>
           </button>
+          {apiDefinition.draft && (
+            <button
+              onClick={() => setShowRouteModal(true)}
+              className="flex items-center justify-center gap-2 bg-primary text-white px-4 py-2 rounded hover:bg-blue-600"
+            >
+              <Plus size={18} />
+              <span>Add Route</span>
+            </button>
+          )}
+
           <button
-            onClick={() => setShowRouteModal(true)}
-            className="flex items-center justify-center gap-2 bg-primary text-white px-4 py-2 rounded hover:bg-blue-600"
+            onClick={() => {
+              if (window.confirm(`Are you sure you want to delete this API definition? This action cannot be undone.`)) {
+                deleteApiDefinition.mutate({ id: id!, version: version! }, {
+                  onSuccess: () => {
+                    toast.success("API definition deleted successfully");
+                    navigate('/apis'); 
+                  },
+                  onError: () => toast.error("Failed to delete API definition"),
+                  retry: 0
+                });
+              }
+            }}
+            className="flex items-center justify-center gap-2 px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600"
           >
-            <Plus size={18} />
-            <span>Add Route</span>
+            <Trash2 size={18} />
+            <span>Delete</span>
           </button>
         </div>
       </div>
@@ -262,7 +312,7 @@ export const ApiDefinitionView = () => {
                       <div className="flex items-center gap-2">
                         <Code2 className="h-4 w-4 flex-shrink-0" />
                         <span className="break-all">
-                          Component: {route.binding.componentId.componentId} (v{route.binding.componentId.version})
+                          Component: {route.binding.componentId?.componentId} (v{route.binding.componentId?.version})
                         </span>
                       </div>
                       <div className="flex items-center gap-2">
@@ -277,29 +327,34 @@ export const ApiDefinitionView = () => {
                     </div>
                   </div>
 
-                  <div className="flex gap-2 sm:flex-shrink-0">
-                    <button
-                      onClick={() => handleEditRoute(route, index)}
-                      className="p-1.5 text-primary hover:text-primary-accent rounded-md hover:bg-gray-600"
-                    >
-                      <Code2 size={16} />
-                    </button>
-                    <button
-                      onClick={() => {
-                        if (window.confirm("Are you sure you want to delete this route?")) {
-                          handleDeleteRoute(index);
-                        }
-                      }}
-                      className="p-1.5 text-red-400 hover:text-red-300 rounded-md hover:bg-gray-600"
-                    >
-                      <Trash2 size={16} />
-                    </button>
-                  </div>
+                  {apiDefinition.draft && route.binding.componentId && (
+                    <div className="flex gap-2 sm:flex-shrink-0">
+                      <button
+
+                        onClick={() => handleEditRoute(route, index)}
+                        className="p-1.5 text-primary hover:text-primary-accent rounded-md hover:bg-gray-600"
+                      >
+                        <Code2 size={16} />
+                      </button>
+
+
+                      <button
+                        onClick={() => {
+                          if (window.confirm("Are you sure you want to delete this route?")) {
+                            handleDeleteRoute(index);
+                          }
+                        }}
+                        className="p-1.5 text-red-400 hover:text-red-300 rounded-md hover:bg-gray-600"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
             ))}
 
-            {apiDefinition.routes.length === 0 && (
+            {apiDefinition.routes.length === 0 && apiDefinition.draft && (
               <div className="text-center py-6 md:py-8 text-muted-foreground">
                 <RouteIcon className="h-8 w-8 mx-auto mb-2 opacity-50" />
                 <p className="text-sm md:text-base">No routes defined yet</p>

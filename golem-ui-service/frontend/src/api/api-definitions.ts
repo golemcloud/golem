@@ -78,7 +78,7 @@ export const deleteApiDefinition = async (id: string, version: string) => {
 export const importOpenApiDefinition = async (openApiDoc: object) => {
   const { data } = await apiClient.put<ApiDefinition>(
     "/v1/api/definitions/import",
-    openApiDoc
+    openApiDoc 
   );
   return data;
 };
@@ -280,7 +280,6 @@ export const useApiDeployment = (
     onError: (error: Error | GolemError) =>
       displayError(error, "Error fetching Api deployment"),
     ...options,
-
   });
 };
 

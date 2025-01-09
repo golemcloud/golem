@@ -28,6 +28,12 @@ const HTTP_METHODS = [
   { value: "Options", color: "text-gray-500 bg-gray-500/10" },
 ];
 
+const BINDING_TYPES = [
+  { value: "default", label: "Default" },
+  { value: "file-server", label: "File Server" },
+  { value: "cors-preflight", label: "CORS Preflight" },
+];
+
 const RIB_TYPES = [
   {
     category: "Basic Types",
@@ -227,11 +233,20 @@ export const RouteModal = ({
   const [errors, setErrors] = useState<Record<string, boolean>>({});
   const [customWorkerExpression, setCustomWorkerExpression] = useState("");
   const [isCustomWorker, setIsCustomWorker] = useState(false);
+  const [isCustomResponse, setIsCustomResponse] = useState(false);
+  const [selectedFunction, setSelectedFunction] = useState("");
 
+  const [bindingType, setBindingType] = useState("default");
   const { data: components } = useComponents();
   const { data: workersData } = useWorkers(
     selectedComponent?.versionedComponentId.componentId || ""
   );
+  const availableFunctions = selectedComponent?.metadata.exports.flatMap(exp =>
+    exp.functions.map(fn => ({
+      value: `golem:component/api.${fn.name}`,
+      label: `${exp.name}.${fn.name}`
+    }))
+  ) || [];
 
   const workerOptions =
     workersData?.workers.map((w) => ({
@@ -244,7 +259,8 @@ export const RouteModal = ({
       setMethod(existingRoute.method);
       setPath(existingRoute.path);
       setSelectedWorker(existingRoute.binding.workerName);
-      setResponse(existingRoute.binding.response?.replace(/['"]/g, "") || "");
+      setBindingType(existingRoute.binding.bindingType || "default");
+      setResponse(existingRoute.binding.response!);
       setSelectedComponent(
         components?.find(
           (c) =>
@@ -266,8 +282,37 @@ export const RouteModal = ({
         setCustomWorkerExpression("");
       }
 
+      const isResponseFunction = existingRoute.binding.response?.includes('golem:component');
+      setIsCustomResponse(isResponseFunction!);
+
+      if (isResponseFunction) {
+        setSelectedFunction(existingRoute.binding.response?.replace(/['"]/g, '') || '');
+        setResponse('');
+      } else {
+        setResponse(existingRoute.binding.response!);
+        setSelectedFunction('');
+      }
+
     }
   }, [existingRoute, components]);
+
+  useEffect(() => {
+    // Set initial response based on binding type
+    if (bindingType === "file-server" && !response) {
+      setResponse('let file: string = request.path.file; "/files/${{file}}"');
+    } else if (bindingType === "cors-preflight" && !response) {
+      setResponse(`
+  {
+                  Access-Control-Allow-Origin: "{}",
+                  Access-Control-Allow-Methods: "{}",
+                  Access-Control-Allow-Headers: "{}",
+                  Access-Control-Expose-Headers: "{}",
+                  Access-Control-Allow-Credentials: {},
+                  Access-Control-Max-Age: {}u64
+}
+  `);
+    }
+  }, [bindingType]);
 
   useEffect(() => {
     // Reset errors when fields change
@@ -280,25 +325,25 @@ export const RouteModal = ({
       // For numeric types, append the type suffix
       return `${value}${type}`;
     }
-    // For other types, wrap in quotes
-    return `"${value}"`;
+    return value;
   };
+
 
   const formatSelectedWorker = (value: string): string => {
     if (!value) return "";
     if (value.startsWith('"')) {
       return value;
     }
-    return `"${value}"`
+    return `"${value}"`;
   }
 
-  const stripNumSuffix = (value: string): string => {
-    if (!value) return value;
+  const stripNumSuffix = (value: string): number => {
+    if (!value) return 0;
     let suffix = NUMERIC_TYPES.filter((t) => value.endsWith(t))[0]
     if (suffix) {
-      return value.slice(0, -suffix.length);
+      return Number(value.slice(0, -suffix.length));
     }
-    return value;
+    return Number(value);
   };
 
   const validateForm = (): boolean => {
@@ -307,7 +352,7 @@ export const RouteModal = ({
     if (!path) newErrors.path = true;
     if (!selectedComponent) newErrors.component = true;
     if (!selectedWorker && !customWorkerExpression) newErrors.worker = true;
-    if (selectedRibType && !response) newErrors.response = true;
+    if (selectedRibType && !response && !isCustomResponse) newErrors.response = true;
 
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -321,9 +366,16 @@ export const RouteModal = ({
 
     const finalWorkerName = isCustomWorker ? customWorkerExpression : formatSelectedWorker(selectedWorker);
 
-    const formattedResponse = response
-      ? formatResponse(response, selectedRibType)
-      : "";
+    let finalResponse = '';
+    if (selectedRibType) {
+      if (isCustomResponse) {
+        finalResponse = selectedFunction;
+      } else {
+        finalResponse = formatResponse(response, selectedRibType);
+      }
+    } else {
+      finalResponse = response;
+    }
 
     const route = {
       method,
@@ -334,8 +386,8 @@ export const RouteModal = ({
           version: selectedVersion,
         },
         workerName: finalWorkerName,
-        response: formattedResponse,
-        bindingType: "default",
+        response: finalResponse,
+        bindingType
       },
     };
 
@@ -345,8 +397,8 @@ export const RouteModal = ({
   if (!isOpen) return null;
 
   return (
-    <div className='fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50 backdrop-blur-sm'>
-      <div className='bg-card rounded-lg p-6 max-w-xl w-full shadow-xl border border-gray-700'>
+    <div className='fixed inset-0 bg-card bg-opacity-50 flex items-center justify-center p-4 z-50 backdrop-blur-sm'>
+      <div className='bg-card rounded-lg p-6 max-w-4xl w-full shadow-xl border border-card/85'>
         <div className='flex justify-between items-start mb-6'>
           <h2 className='text-xl font-semibold flex items-center gap-2'>
             <RouteC className='h-5 w-5 text-primary' />
@@ -361,8 +413,8 @@ export const RouteModal = ({
         </div>
 
         <div className='space-y-6'>
-          <div className='flex gap-4'>
-            <div className='relative w-32'>
+          <div className='grid grid-cols-12 gap-4'>
+            <div className='col-span-3'>
               <label className='block text-sm font-medium mb-1'>Method</label>
               <Dropdown
                 value={method}
@@ -375,8 +427,8 @@ export const RouteModal = ({
               />
             </div>
 
-            <div className="flex-1">
-              <label className=" text-sm font-medium mb-1 flex items-center gap-2">
+            <div className="col-span-6">
+              <label className="text-sm font-medium mb-1 flex items-center gap-2">
                 Path <span className="text-red-500">*</span>
                 <Tooltip content={TOOLTIP_CONTENT.path.content} title={TOOLTIP_CONTENT.path.title} />
               </label>
@@ -396,6 +448,15 @@ export const RouteModal = ({
               </div>
             </div>
 
+            <div className='col-span-3'>
+              <label className='block text-sm font-medium mb-1'>Binding Type</label>
+              <Dropdown
+                value={bindingType}
+                options={BINDING_TYPES}
+                onChange={setBindingType}
+                placeholder='Select binding type'
+              />
+            </div>
           </div>
 
           <div>
@@ -475,8 +536,7 @@ export const RouteModal = ({
                 <div className="relative">
                   <Code2 className={`absolute left-3 top-2.5 h-4 w-4 
                     ${errors.worker ? "text-red-500" : "text-muted-foreground"}`} />
-                  <input
-                    type="text"
+                  <textarea
                     value={customWorkerExpression}
                     onChange={(e) => setCustomWorkerExpression(e.target.value)}
                     className={`bg-card/80 w-full pl-10 pr-3 py-2 rounded-md transition-colors
@@ -490,67 +550,107 @@ export const RouteModal = ({
 
           <div className='space-y-4'>
             <div>
-              <label className='block text-sm font-medium mb-1'>
-                Response Type
+              <label className="text-sm font-medium mb-1 flex items-center justify-between">
+                <label className='block text-sm font-medium mb-1'>
+                  Response Type
+                </label>
+                <div className="flex items-center gap-2 text-sm font-normal">
+                  <label className="flex items-center gap-1.5">
+                    <input
+                      type="radio"
+                      checked={!isCustomResponse}
+                      onChange={() => {
+                        setIsCustomResponse(false);
+                        setSelectedFunction("");
+                      }}
+                      className="text-primary"
+                    />
+                    Value
+                  </label>
+                  <label className="flex items-center gap-1.5">
+                    <input
+                      type="radio"
+                      checked={isCustomResponse}
+                      onChange={() => {
+                        setIsCustomResponse(true);
+                        setResponse("");
+                      }}
+                      className="text-primary"
+                    />
+                    Function
+                  </label>
+                </div>
               </label>
-              <Dropdown
-                value={selectedRibType}
-                options={RIB_TYPES.reduce(
-                  (acc, category) => [
-                    ...acc,
-                    {
-                      value: category.category,
-                      label: category.category,
-                      disabled: true,
-                    },
-                    ...category.types,
-                  ],
-                  []
-                )}
-                onChange={(type) => {
-                  setSelectedRibType(type);
-                  if (NUMERIC_TYPES.includes(type) && response) {
-                    // Clear response if switching from numeric type to preserve format
-                    setResponse("");
-                  }
-                }}
-                placeholder='Select Rib type'
-              />
+              {!isCustomResponse && bindingType === 'default' && (
+                <Dropdown
+                  value={selectedRibType}
+                  options={RIB_TYPES.reduce(
+                    (acc, category) => [
+                      ...acc,
+                      {
+                        value: category.category,
+                        label: category.category,
+                        disabled: true,
+                      },
+                      ...category.types,
+                    ],
+                    []
+                  )}
+                  onChange={(type) => {
+                    setSelectedRibType(type);
+                    if (NUMERIC_TYPES.includes(type) && response) {
+                      setResponse("");
+                    }
+                  }}
+                  placeholder='Select Rib type'
+                />
+              )}
             </div>
 
-            {selectedRibType && (
+            {(selectedRibType || bindingType !== 'default') && (
               <div>
-                <label className='block text-sm font-medium mb-1'>
-                  Response Value{" "}
-                  {selectedRibType && <span className='text-red-500'>*</span>}
+                <label className="text-sm font-medium mb-1 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    Response {selectedRibType && <span className="text-red-500">*</span>}
+                  </div>
                 </label>
-                <div className='relative'>
-                  <Code2
-                    className={`absolute left-3 top-2.5 h-4 w-4 
-                    ${errors.response ? "text-red-500" : "text-muted-foreground"}`}
-                  />
-                  <input
-                    type={
-                      NUMERIC_TYPES.includes(selectedRibType)
-                        ? "number"
-                        : "text"
-                    }
 
-                    value={stripNumSuffix(response)}
-                    onChange={(e) => setResponse(e.target.value)}
-                    className={`bg-card/80 w-full pl-10 pr-3 py-2 rounded-md transition-colors
-                      ${errors.response ? "border-2 border-red-500" : "border border-gray-600"}`}
-                    placeholder={`Enter ${selectedRibType} value`}
+                {isCustomResponse ? (
+                  <Dropdown
+                    value={selectedFunction}
+                    options={availableFunctions}
+                    onChange={setSelectedFunction}
+                    placeholder="Select function"
+                    error={errors.response && isCustomResponse}
                   />
-                </div>
-                <p className='mt-1 text-xs text-muted-foreground'>
-                  {NUMERIC_TYPES.includes(selectedRibType)
-                    ? `Will be formatted as: ${response}${selectedRibType}`
-                    : "Will be wrapped in quotes"}
-                </p>
+                ) : bindingType !== 'default' || typeof response === 'string' ? (
+                  <textarea
+                    value={response}
+                    onChange={(e) => setResponse(e.target.value)}
+                    className={`bg-card/80 w-full p-3 rounded-md transition-colors font-mono text-sm h-40
+                      ${errors.response ? "border-2 border-red-500" : "border border-gray-600"}`}
+                    placeholder={`Enter response ${bindingType !== 'default' ? 'configuration' : 'value'}`}
+                  />
+                ) : (
+                  <div className='relative'>
+                    <Code2
+                      className={`absolute left-3 top-2.5 h-4 w-4 
+                      ${errors.response ? "text-red-500" : "text-muted-foreground"}`}
+                    />
+                    <input
+                      type={NUMERIC_TYPES.includes(selectedRibType) ? "number" : "text"}
+                      value={stripNumSuffix(response)}
+                      onChange={(e) => setResponse(e.target.value)}
+                      className={`bg-card/80 w-full pl-10 pr-3 py-2 rounded-md transition-colors
+                      ${errors.response ? "border-2 border-red-500" : "border border-gray-600"}`}
+                      placeholder={`Enter ${selectedRibType} value`}
+                    />
+                  </div>
+                )}
               </div>
             )}
           </div>
+
 
           <div className='flex justify-end space-x-3 mt-6 pt-4 border-t border-gray-700'>
             <button

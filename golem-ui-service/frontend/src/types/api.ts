@@ -138,7 +138,7 @@ export interface ApiRoute {
     workerName: string;
     idempotencyKey?: string;
     response?: string;
-    bindingType: "default";
+    bindingType: "default" | "file-server" | "cors-preflight";
     responseMappingInput?: Record<string, unknown>;
     workerNameInput?: Record<string, unknown>;
     idempotencyKeyInput?: Record<string, unknown>;
@@ -181,4 +181,3 @@ export interface Plugin {
   };
   owner?: Record<string, unknown>;
 }
-

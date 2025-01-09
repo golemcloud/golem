@@ -46,6 +46,7 @@ export const getWorkers = async (
   cursor?: string,
   count?: number
 ) => {
+  if(!componentId) return { workers: [] };
   const { data } = await apiClient.get<WorkerListResponse>(
     `/v1/components/${componentId}/workers`,
     {
