@@ -320,13 +320,19 @@ async fn link_rpc<CPE: ComponentPropertiesExtensions>(
     let _indent = LogIndent::new();
 
     for component_name in ctx.selected_component_names() {
-        let dependencies = ctx
+        let static_dependencies = ctx
             .application
             .component_wasm_rpc_dependencies(component_name)
             .iter()
             .filter(|dep| dep.dep_type == DependencyType::StaticWasmRpc)
             .collect::<BTreeSet<_>>();
-        let client_wasms = dependencies
+        let dynamic_dependencies = ctx
+            .application
+            .component_wasm_rpc_dependencies(component_name)
+            .iter()
+            .filter(|dep| dep.dep_type == DependencyType::DynamicWasmRpc)
+            .collect::<BTreeSet<_>>();
+        let client_wasms = static_dependencies
             .iter()
             .map(|dep| ctx.application.client_wasm(&dep.name))
             .collect::<Vec<_>>();
@@ -341,9 +347,37 @@ async fn link_rpc<CPE: ComponentPropertiesExtensions>(
             &ctx.application.task_result_marker_dir(),
             LinkRpcMarkerHash {
                 component_name,
-                dependencies: &dependencies,
+                dependencies: &static_dependencies,
             },
         )?;
+
+        if !dynamic_dependencies.is_empty() {
+            log_action(
+                "Found",
+                format!(
+                    "dynamic WASM RPC dependencies ({}) for {}",
+                    dynamic_dependencies
+                        .iter()
+                        .map(|s| s.name.as_str().log_color_highlight())
+                        .join(", "),
+                    component_name.as_str().log_color_highlight(),
+                ),
+            );
+        }
+
+        if !static_dependencies.is_empty() {
+            log_action(
+                "Found",
+                format!(
+                    "static WASM RPC dependencies ({}) for {}",
+                    static_dependencies
+                        .iter()
+                        .map(|s| s.name.as_str().log_color_highlight())
+                        .join(", "),
+                    component_name.as_str().log_color_highlight(),
+                ),
+            );
+        }
 
         if is_up_to_date(
             ctx.config.skip_up_to_date_checks || !task_result_marker.is_up_to_date(),
@@ -355,11 +389,7 @@ async fn link_rpc<CPE: ComponentPropertiesExtensions>(
             || [linked_wasm.clone()],
         ) {
             log_skipping_up_to_date(format!(
-                "linking wasm rpc dependencies ({}) into {}",
-                dependencies
-                    .iter()
-                    .map(|s| s.name.as_str().log_color_highlight())
-                    .join(", "),
+                "linking RPC for {}",
                 component_name.as_str().log_color_highlight(),
             ));
             continue;
@@ -367,13 +397,12 @@ async fn link_rpc<CPE: ComponentPropertiesExtensions>(
 
         task_result_marker.result(
             async {
-                if dependencies.is_empty() {
+                if static_dependencies.is_empty() {
                     log_action(
                         "Copying",
                         format!(
-                            "(without linking) {} to {}, no wasm rpc dependencies defined",
-                            component_wasm.log_color_highlight(),
-                            linked_wasm.log_color_highlight(),
+                            "{} without linking, no static WASM RPC dependencies were found",
+                            component_name.as_str().log_color_highlight(),
                         ),
                     );
                     fs::copy(&component_wasm, &linked_wasm).map(|_| ())
@@ -381,8 +410,8 @@ async fn link_rpc<CPE: ComponentPropertiesExtensions>(
                     log_action(
                         "Linking",
                         format!(
-                            "WASM RPC dependencies ({}) into {}",
-                            dependencies
+                            "static WASM RPC dependencies ({}) into {}",
+                            static_dependencies
                                 .iter()
                                 .map(|s| s.name.as_str().log_color_highlight())
                                 .join(", "),
