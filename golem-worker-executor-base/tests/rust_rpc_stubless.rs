@@ -894,7 +894,7 @@ async fn error_message_invalid_uri(
         .store_component_with_dynamic_linking(
             "auction_registry",
             &[(
-                "auction:auction-client/stub-auction",
+                "auction:auction-client/auction-client",
                 DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                     target_interface_name: HashMap::from_iter(vec![
                         ("api".to_string(), "auction:auction-exports/api".to_string()),
@@ -965,7 +965,7 @@ async fn error_message_non_existing_target_component(
         .store_component_with_dynamic_linking(
             "auction_registry",
             &[(
-                "auction:auction-client/stub-auction",
+                "auction:auction-client/auction-client",
                 DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                     target_interface_name: HashMap::from_iter(vec![
                         ("api".to_string(), "auction:auction-exports/api".to_string()),
