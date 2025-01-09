@@ -333,12 +333,19 @@ async fn fork_worker_before_completion_of_function(
         )
         .await;
 
+    deps.wait_for_status(
+        &target_worker_id,
+        WorkerStatus::Idle,
+        Duration::from_secs(10),
+    )
+    .await;
+
     let total_cart_initialisation = deps
         .search_oplog(&target_worker_id, "initialize-cart AND NOT pending")
         .await;
 
     // Since the fork point was before the completion, it re-intitialises making the total initialisation
-    // records in oplog being 2 along with the new log in target worker.
+    // records 2 along with the new log in target worker.
     assert_eq!(total_cart_initialisation.len(), 2);
 }
 
