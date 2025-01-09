@@ -25,7 +25,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_environment(&mut self) -> anyhow::Result<Vec<(String, String)>> {
         let durability = Durability::<Ctx, Vec<(String, String)>, SerializableError>::new(
             self,
-            "golem environment",
+            "golem_environment",
             "get_environment",
             WrappedFunctionType::ReadLocal,
         )
@@ -42,7 +42,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_arguments(&mut self) -> anyhow::Result<Vec<String>> {
         let durability = Durability::<Ctx, Vec<String>, SerializableError>::new(
             self,
-            "golem environment",
+            "golem_environment",
             "get_arguments",
             WrappedFunctionType::ReadLocal,
         )
@@ -59,7 +59,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn initial_cwd(&mut self) -> anyhow::Result<Option<String>> {
         let durability = Durability::<Ctx, Option<String>, SerializableError>::new(
             self,
-            "golem environment",
+            "golem_environment",
             "get_arguments", // TODO: fix in 2.0 - for backward compatibility with Golem 1.0
             WrappedFunctionType::ReadLocal,
         )
