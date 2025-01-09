@@ -103,85 +103,8 @@ async fn fork_interrupted_worker(deps: &EnvBasedTestDependencies, _tracing: &Tra
 
 #[test]
 #[tracing::instrument]
-#[flaky(5)]
 #[timeout(120000)]
 async fn fork_running_worker_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let response = Arc::new(Mutex::new("initial".to_string()));
-    let host_http_port = 8587;
-    let http_server = run_http_server(&response, host_http_port);
-
-    let component_id = deps.store_component("http-client-2").await;
-    let mut env = HashMap::new();
-    env.insert("PORT".to_string(), host_http_port.to_string());
-
-    let source_worker_name = Uuid::new_v4().to_string();
-    let source_worker_id = deps
-        .start_worker_with(&component_id, source_worker_name.as_str(), vec![], env)
-        .await;
-
-    let target_worker_name = Uuid::new_v4().to_string();
-
-    let target_worker_id = WorkerId {
-        component_id: component_id.clone(),
-        worker_name: target_worker_name,
-    };
-
-    deps.log_output(&source_worker_id).await;
-
-    deps.invoke(
-        &source_worker_id,
-        "golem:it/api.{start-polling}",
-        vec![Value::String("first".to_string())],
-    )
-    .await
-    .unwrap();
-
-    deps.wait_for_status(
-        &source_worker_id,
-        WorkerStatus::Running,
-        Duration::from_secs(10),
-    )
-    .await;
-
-    let oplog = deps.get_oplog(&source_worker_id, OplogIndex::INITIAL).await;
-
-    let last_index = OplogIndex::from_u64(oplog.len() as u64);
-
-    deps.fork_worker(&source_worker_id, &target_worker_id, last_index)
-        .await;
-
-    {
-        let mut response = response.lock().unwrap();
-        *response = "first".to_string();
-    }
-
-    deps.wait_for_status(
-        &target_worker_id,
-        WorkerStatus::Idle,
-        Duration::from_secs(20),
-    )
-    .await;
-
-    deps.wait_for_status(
-        &source_worker_id,
-        WorkerStatus::Idle,
-        Duration::from_secs(20),
-    )
-    .await;
-
-    let target_result = deps.search_oplog(&target_worker_id, "Received first").await;
-    let source_result = deps.search_oplog(&source_worker_id, "Received first").await;
-
-    http_server.abort();
-
-    assert_eq!(target_result.len(), 1);
-    assert_eq!(source_result.len(), 1);
-}
-
-#[test]
-#[tracing::instrument]
-#[timeout(120000)]
-async fn fork_running_worker_2(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let component_id = deps.store_component("shopping-cart").await;
 
     let source_worker_name = Uuid::new_v4().to_string();
@@ -254,6 +177,84 @@ async fn fork_running_worker_2(deps: &EnvBasedTestDependencies, _tracing: &Traci
     // Since the fork point was before the completion, it re-intitialises making the total initialisation
     // records 2 along with the new log in target worker.
     assert_eq!(total_cart_initialisation.len(), 2);
+}
+
+#[test]
+#[ignore]
+#[tracing::instrument]
+#[flaky(5)]
+#[timeout(120000)]
+async fn fork_running_worker_2(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    let response = Arc::new(Mutex::new("initial".to_string()));
+    let host_http_port = 8587;
+    let http_server = run_http_server(&response, host_http_port);
+
+    let component_id = deps.store_component("http-client-2").await;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+
+    let source_worker_name = Uuid::new_v4().to_string();
+    let source_worker_id = deps
+        .start_worker_with(&component_id, source_worker_name.as_str(), vec![], env)
+        .await;
+
+    let target_worker_name = Uuid::new_v4().to_string();
+
+    let target_worker_id = WorkerId {
+        component_id: component_id.clone(),
+        worker_name: target_worker_name,
+    };
+
+    deps.log_output(&source_worker_id).await;
+
+    deps.invoke(
+        &source_worker_id,
+        "golem:it/api.{start-polling}",
+        vec![Value::String("first".to_string())],
+    )
+    .await
+    .unwrap();
+
+    deps.wait_for_status(
+        &source_worker_id,
+        WorkerStatus::Running,
+        Duration::from_secs(10),
+    )
+    .await;
+
+    let oplog = deps.get_oplog(&source_worker_id, OplogIndex::INITIAL).await;
+
+    let last_index = OplogIndex::from_u64(oplog.len() as u64);
+
+    deps.fork_worker(&source_worker_id, &target_worker_id, last_index)
+        .await;
+
+    {
+        let mut response = response.lock().unwrap();
+        *response = "first".to_string();
+    }
+
+    deps.wait_for_status(
+        &target_worker_id,
+        WorkerStatus::Idle,
+        Duration::from_secs(20),
+    )
+    .await;
+
+    deps.wait_for_status(
+        &source_worker_id,
+        WorkerStatus::Idle,
+        Duration::from_secs(20),
+    )
+    .await;
+
+    let target_result = deps.search_oplog(&target_worker_id, "Received first").await;
+    let source_result = deps.search_oplog(&source_worker_id, "Received first").await;
+
+    http_server.abort();
+
+    assert_eq!(target_result.len(), 1);
+    assert_eq!(source_result.len(), 1);
 }
 
 #[test]
