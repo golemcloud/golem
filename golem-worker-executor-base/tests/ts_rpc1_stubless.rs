@@ -43,11 +43,11 @@ async fn counter_resource_test_1(
         .store_component_with_dynamic_linking(
             CALLER_COMPONENT_NAME,
             &[(
-                "rpc:counters-stub/stub-counters",
+                "rpc:counters-client/counters-client",
                 DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                     target_interface_name: HashMap::from_iter(vec![
-                        ("api".to_string(), "rpc:counters/api".to_string()),
-                        ("counter".to_string(), "rpc:counters/api".to_string()),
+                        ("api".to_string(), "rpc:counters-exports/api".to_string()),
+                        ("counter".to_string(), "rpc:counters-exports/api".to_string()),
                     ]),
                 }),
             )],
@@ -99,11 +99,11 @@ async fn counter_resource_test_1_with_restart(
         .store_component_with_dynamic_linking(
             CALLER_COMPONENT_NAME,
             &[(
-                "rpc:counters-stub/stub-counters",
+                "rpc:counters-client/counters-client",
                 DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                     target_interface_name: HashMap::from_iter(vec![
-                        ("api".to_string(), "rpc:counters/api".to_string()),
-                        ("counter".to_string(), "rpc:counters/api".to_string()),
+                        ("api".to_string(), "rpc:counters-exports/api".to_string()),
+                        ("counter".to_string(), "rpc:counters-exports/api".to_string()),
                     ]),
                 }),
             )],
@@ -159,11 +159,11 @@ async fn context_inheritance(
         .store_component_with_dynamic_linking(
             CALLER_COMPONENT_NAME,
             &[(
-                "rpc:counters-stub/stub-counters",
+                "rpc:counters-client/counters-client",
                 DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                     target_interface_name: HashMap::from_iter(vec![
-                        ("api".to_string(), "rpc:counters/api".to_string()),
-                        ("counter".to_string(), "rpc:counters/api".to_string()),
+                        ("api".to_string(), "rpc:counters-exports/api".to_string()),
+                        ("counter".to_string(), "rpc:counters-exports/api".to_string()),
                     ]),
                 }),
             )],
