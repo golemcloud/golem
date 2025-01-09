@@ -97,7 +97,7 @@ pub async fn generate_and_build_client(
         .config
         .client_root
         .join("target")
-        .join("wasm32-wasi")
+        .join("wasm32-wasip1")
         .join("release")
         .join(format!(
             "{}.wasm",

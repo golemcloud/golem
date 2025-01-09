@@ -260,7 +260,7 @@ jobs:
         run: rustup update stable --no-self-update && rustup default stable
       - uses: cargo-bins/cargo-binstall@main
       - name: Install cargo-component
-        run: cargo binstall --no-confirm cargo-component@0.13.2
+        run: cargo binstall --no-confirm cargo-component@0.20.0
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: debug
@@ -375,7 +375,7 @@ jobs:
         run: rustup update stable --no-self-update && rustup default stable
       - uses: cargo-bins/cargo-binstall@main
       - name: Install cargo-component
-        run: cargo binstall --no-confirm cargo-component@0.13.2
+        run: cargo binstall --no-confirm cargo-component@0.20.0
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: debug

@@ -170,7 +170,7 @@ impl Language {
             ],
             Language::Python => vec![Tool::ComponentizePy],
             Language::Rust => vec![
-                Tool::RustTargetWasm32Wasi,
+                Tool::RustTargetWasm32WasiP1,
                 Tool::CargoComponent,
                 Tool::GolemSdkRust,
             ],
@@ -201,7 +201,7 @@ impl Language {
     }
 
     pub fn common_rpc_tools() -> Vec<Tool> {
-        vec![Tool::RustTargetWasm32Wasi]
+        vec![Tool::RustTargetWasm32WasiP1]
     }
 }
 
@@ -294,7 +294,7 @@ enum Tool {
     Python,
     Rustc,
     Rustup,
-    RustTargetWasm32Wasi,
+    RustTargetWasm32WasiP1,
     TinyGo,
     WasiSdk,
     WasmTools,
@@ -315,10 +315,10 @@ impl Tool {
             Tool::CargoComponent => ToolMetadata {
                 short_name: "cargo-component",
                 description: "Cargo subcommand for building WebAssembly components",
-                version_requirement: ExactVersion("0.13.2"),
+                version_requirement: ExactVersion("0.20.0"),
                 instructions: indoc! {"
                     Install the following specific version of cargo-component:
-                        cargo install --force --locked cargo-component@0.13.2
+                        cargo install --force --locked cargo-component@0.20.0
 
                     For more information see:
                         https://github.com/bytecodealliance/cargo-component
@@ -464,13 +464,13 @@ impl Tool {
                     Check PATH for $HOME/.cargo/bin
                 "},
             },
-            Tool::RustTargetWasm32Wasi => ToolMetadata {
-                short_name: "rust target wasm32-wasi",
+            Tool::RustTargetWasm32WasiP1 => ToolMetadata {
+                short_name: "rust target wasm32-wasip1",
                 description: "Rust target for building WebAssembly components",
-                version_requirement: ExactByNameVersion("wasm32-wasi"),
+                version_requirement: ExactByNameVersion("wasm32-wasip1"),
                 instructions: indoc! {"
                     Install WebAssembly target for rust:
-                        rustup target add wasm32-wasi
+                        rustup target add wasm32-wasip1
                 "},
             },
             Tool::TinyGo => ToolMetadata {
@@ -545,7 +545,7 @@ impl Tool {
             Tool::Python => vec![],
             Tool::Rustc => vec![Tool::Rustup],
             Tool::Rustup => vec![],
-            Tool::RustTargetWasm32Wasi => vec![Tool::Rustc],
+            Tool::RustTargetWasm32WasiP1 => vec![Tool::Rustc],
             Tool::TinyGo => vec![Tool::Go],
             Tool::WasiSdk => vec![],
             Tool::WasmTools => vec![Tool::Cargo],
@@ -602,7 +602,7 @@ impl Tool {
             Tool::Python => cmd_version(dir, "python", vec!["--version"], &version_regex),
             Tool::Rustc => cmd_version(dir, "rustc", vec!["--version"], &version_regex),
             Tool::Rustup => cmd_version(dir, "rustup", vec!["--version"], &version_regex),
-            Tool::RustTargetWasm32Wasi => rust_target(dir, "wasm32-wasi"),
+            Tool::RustTargetWasm32WasiP1 => rust_target(dir, "wasm32-wasip1"),
             Tool::TinyGo => cmd_version(dir, "tinygo", vec!["version"], &version_regex),
             Tool::WasiSdk => std::env::var("WASI_SDK")
                 .map(|_| "WASI_SDK set".to_string())

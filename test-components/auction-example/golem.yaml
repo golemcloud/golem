@@ -14,10 +14,10 @@ templates:
           - src
           - wit
           targets:
-          - ../target/wasm32-wasi/debug/{{ component_name | to_snake_case }}.wasm
+          - ../target/wasm32-wasip1/debug/{{ component_name | to_snake_case }}.wasm
         sourceWit: wit
         generatedWit: wit-generated
-        componentWasm: ../target/wasm32-wasi/debug/{{ component_name | to_snake_case }}.wasm
+        componentWasm: ../target/wasm32-wasip1/debug/{{ component_name | to_snake_case }}.wasm
         linkedWasm: ../target/golem-components/debug/{{ component_name | to_snake_case }}.wasm
         customCommands:
           copy:
@@ -31,10 +31,10 @@ templates:
           - src
           - wit
           targets:
-          - ../target/wasm32-wasi/release/{{ component_name | to_snake_case }}.wasm
+          - ../target/wasm32-wasip1/release/{{ component_name | to_snake_case }}.wasm
         sourceWit: wit
         generatedWit: wit-generated
-        componentWasm: ../target/wasm32-wasi/release/{{ component_name | to_snake_case }}.wasm
+        componentWasm: ../target/wasm32-wasip1/release/{{ component_name | to_snake_case }}.wasm
         linkedWasm: ../target/golem-components/release/{{ component_name | to_snake_case }}.wasm
         customCommands:
           copy:

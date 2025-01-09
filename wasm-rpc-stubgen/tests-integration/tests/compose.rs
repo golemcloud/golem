@@ -48,7 +48,7 @@ async fn compose_with_single_stub() {
     let component_wasm = caller_dir
         .path()
         .join("target")
-        .join("wasm32-wasi")
+        .join("wasm32-wasip1")
         .join("debug")
         .join("caller_no_dep.wasm");
 
