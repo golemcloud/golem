@@ -353,7 +353,7 @@ const CreateComponentModal = ({
               />
             </div>
 
-            <div>
+            <div className="hidden">
               <label className="block text-sm font-medium mb-1.5 text-gray-300">
                 Additional Files
               </label>

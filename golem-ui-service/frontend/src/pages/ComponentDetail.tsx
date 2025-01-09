@@ -16,15 +16,16 @@ import {
   Trash2,
   XCircle,
 } from "lucide-react";
-import { deleteComponent, useComponent } from "../api/components";
 import { useDeleteWorker, useWorkers } from "../api/workers";
 import { useEffect, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
 
 import CreateComponentModal from "../components/components/CreateComponentModal";
 import { CreateWorkerModal } from "../components/workers/CreateWorkerModal";
 import { Link } from "react-router-dom";
+import { PluginSection } from "../components/components/Plugins";
 import { WorkerActionModal } from "../components/workers/UpdateWorkerModal";
+import { useComponent } from "../api/components";
+import { useParams } from "react-router-dom";
 
 const StatCard = ({
   title,
@@ -58,8 +59,7 @@ const getStatusColor = (status: string) => {
 };
 
 export const ComponentDetail = () => {
-  const { id } = useParams<{ id: string }>();
-  const navigate = useNavigate();
+  const { id, version } = useParams<{ id: string, version: string }>();
   const [showCreateWorkerModal, setShowCreateWorkerModal] = useState(false);
   const [showUpdateModal, setShowUpdateModal] = useState(false);
   const [showMobileMenu, setShowMobileMenu] = useState(false);
@@ -76,8 +76,8 @@ export const ComponentDetail = () => {
     currentStatus: "",
   });
 
-  const { data: component, isLoading } = useComponent(id!);
-  const { data: workers } = useWorkers(id!);
+  const { data: component, isLoading } = useComponent(id!, version!);
+  const { data: _workers } = useWorkers(id!);
 
   useEffect(() => {
     if (component) {
@@ -118,10 +118,12 @@ export const ComponentDetail = () => {
   ) => {
     setActionModal({ isOpen: true, workerId, action, currentStatus });
   };
-
-  const activeWorkers = workers?.workers.filter((w) => w.status != "Failed").length ?? 0;
-  const runningWorkers = workers?.workers.filter((w) => w.status === "Running").length ?? 0;
-  const failedWorkers = workers?.workers.filter((w) => w.status === "Failed").length ?? 0;
+  
+  const workers = _workers?.workers.filter((w) => w.componentVersion == version);
+  
+  const activeWorkers = workers?.filter((w) => w.status != "Failed").length ?? 0;
+  const runningWorkers = workers?.filter((w) => w.status === "Running").length ?? 0;
+  const failedWorkers = workers?.filter((w) => w.status === "Failed").length ?? 0;
 
   return (
     <div className="space-y-4 md:space-y-8 px-4 md:px-6">
@@ -178,7 +180,7 @@ export const ComponentDetail = () => {
       {/* Stats Grid */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-6">
         <StatCard
-          title="Latest Version"
+          title="Version"
           value={component.versionedComponentId.version}
           icon={Tag}
         />
@@ -240,7 +242,7 @@ export const ComponentDetail = () => {
             Workers
           </h2>
           <div className="space-y-3 md:space-y-4">
-            {workers?.workers.map((worker) => (
+            {workers?.map((worker) => (
               <div
                 key={worker.workerId.workerName}
                 className="group flex flex-col md:flex-row md:items-center md:justify-between p-3 md:p-4 bg-card/50 rounded-lg
@@ -252,7 +254,7 @@ export const ComponentDetail = () => {
                   </div>
                   <div className="min-w-0 flex-1">
                     <h3 className="font-medium flex items-center gap-2 text-sm md:text-base">
-                      <Link 
+                      <Link
                         to={`/components/${id}/workers/${worker.workerId.workerName}`}
                         className="truncate hover:text-primary transition-colors"
                       >
@@ -300,7 +302,7 @@ export const ComponentDetail = () => {
               </div>
             ))}
 
-            {(!workers?.workers || workers.workers.length === 0) && (
+            {(!workers || workers.length === 0) && (
               <div className="text-center py-8 md:py-12 text-muted-foreground">
                 <Server size={32} className="mx-auto mb-2 text-gray-600" />
                 <p className="text-sm md:text-base">No workers found</p>
@@ -310,6 +312,13 @@ export const ComponentDetail = () => {
               </div>
             )}
           </div>
+        </div>
+
+        <div className="md:col-span-7">
+          <PluginSection
+            componentId={component.versionedComponentId.componentId}
+            version={component.versionedComponentId.version}
+          />
         </div>
       </div>
 

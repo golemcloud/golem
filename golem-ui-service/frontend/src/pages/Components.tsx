@@ -88,7 +88,7 @@ export const Components = () => {
           {components?.map((component) => (
             <Link
               key={component.versionedComponentId.componentId}
-              to={`/components/${component.versionedComponentId.componentId}`}
+              to={`/components/${component.versionedComponentId.componentId}/${component.versionedComponentId.version}`}
               className="group block bg-card rounded-lg p-4 md:p-6 hover:bg-card/80 
                        transition-all duration-200 hover:shadow-xl shadow-lg"
             >

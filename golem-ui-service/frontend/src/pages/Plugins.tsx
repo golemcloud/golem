@@ -82,7 +82,7 @@ export const PluginsPage = () => {
                 </div>
               </div>
               <button
-                onClick={() => deletePlugin({ name: plugin.name, version: plugin.version })}
+                onClick={() => confirm("Delete Plugin?") && deletePlugin({ name: plugin.name, version: plugin.version })}
                 className="p-2 text-muted-foreground hover:text-red-400 rounded-md hover:bg-card/50
                          transition-all duration-200"
                 title="Delete plugin"

@@ -20,7 +20,7 @@ function App() {
           <Route path="/" element={<Overview />} />
           <Route path="/workers" element={<div>Workers Page</div>} />
           <Route path="/components" element={<Components />} />
-          <Route path="/components/:id" element={<ComponentDetail />} />
+          <Route path="/components/:id/:version" element={<ComponentDetail />} />
           <Route path="/plugins" element={<PluginsPage />} />
           <Route path="/apis" element={<ApiDefinitionsPage />} />
           <Route

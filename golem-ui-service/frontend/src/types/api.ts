@@ -170,14 +170,24 @@ export interface Plugin {
   icon: number[];
   homepage: string;
   specs: {
-    type: "ComponentTransformer";
+    type: "ComponentTransformer"| "OplogProcessor"
     providedWitPackage: string;
     jsonSchema: string;
     validateUrl: string;
     transformUrl: string;
+    componentId: string;
+    componentVersion: number;
   };
   scope: {
     type: "Global";
   };
   owner?: Record<string, unknown>;
+}
+
+export interface PluginInstall {
+  name: string;
+  version: string;
+  priority: number;
+  parameters: Record<string, string>;
+  id: string;
 }

@@ -81,6 +81,56 @@ export const createPlugin = async (payload: CreatePluginPayload) => {
   return data;
 };
 
+export const activatePlugin = async (
+  componentId: string,
+  workerName: string,
+  pluginInstallationId: string
+) => {
+  const { data } = await apiClient.post<InstalledPlugin>(
+    `/v1/components/${componentId}/workers/${workerName}/activate-plugin?plugin-installation-id=${pluginInstallationId}`
+  );
+  return data;
+};
+
+export const deactivatePlugin = async (
+  componentId: string,
+  workerName: string,
+  pluginInstallationId: string
+) => {
+  const { data } = await apiClient.post<InstalledPlugin>(
+    `/v1/components/${componentId}/workers/${workerName}/deactivate-plugin?plugin-installation-id=${pluginInstallationId}`
+  );
+  return data;
+};
+
+export const useActivatePlugin = (
+  componentId: string,
+  workerName: string,
+) => {
+  return useMutation({
+    mutationFn: ( pluginInstallationId: string) =>
+      activatePlugin(componentId, workerName, pluginInstallationId),
+    onSuccess: () => {},
+    onError: (error: Error | GolemError) => {
+      displayError(error, "Error installing plugin");
+    },
+  });
+};
+
+export const useDeactivatePlugin = (
+  componentId: string,
+  workerName: string
+  
+) => {
+  return useMutation({
+    mutationFn: (pluginInstallationId: string) =>
+      deactivatePlugin(componentId, workerName, pluginInstallationId),
+    onSuccess: () => {},
+    onError: (error: Error | GolemError) => {
+      displayError(error, "Error deactivating plugin");
+    },
+  });
+};
 export const deletePlugin = async (name: string, version: string) => {
   const { data } = await apiClient.delete<void>(
     `/v1/plugins/${name}/${version}`
@@ -202,7 +252,7 @@ export const useInstalledPlugins = (componentId: string, version: number) => {
   });
 };
 
-export const useInstallPlugin = (componentId: string) => {
+export const useInstallPlugin = (componentId: string, version: number) => {
   const queryClient = useQueryClient();
 
   return useMutation({
@@ -210,7 +260,10 @@ export const useInstallPlugin = (componentId: string) => {
       installPlugin(componentId, payload),
     onSuccess: () => {
       queryClient.invalidateQueries({
-        queryKey: pluginKeys.installs(componentId, "latest"),
+        queryKey: pluginKeys.installs(componentId, version),
+      });
+      queryClient.invalidateQueries({
+        queryKey: pluginKeys.list(),
       });
     },
     onError: (error: Error | GolemError) => {
@@ -219,7 +272,10 @@ export const useInstallPlugin = (componentId: string) => {
   });
 };
 
-export const useUpdatePluginInstallation = (componentId: string) => {
+export const useUpdatePluginInstallation = (
+  componentId: string,
+  version: number
+) => {
   const queryClient = useQueryClient();
 
   return useMutation({
@@ -232,7 +288,10 @@ export const useUpdatePluginInstallation = (componentId: string) => {
     }) => updatePluginInstallation(componentId, installationId, payload),
     onSuccess: () => {
       queryClient.invalidateQueries({
-        queryKey: pluginKeys.installs(componentId, "latest"),
+        queryKey: pluginKeys.installs(componentId, version),
+      });
+      queryClient.invalidateQueries({
+        queryKey: pluginKeys.list(),
       });
     },
     onError: (error: Error | GolemError) => {
@@ -241,7 +300,7 @@ export const useUpdatePluginInstallation = (componentId: string) => {
   });
 };
 
-export const useUninstallPlugin = (componentId: string) => {
+export const useUninstallPlugin = (componentId: string, version: number) => {
   const queryClient = useQueryClient();
 
   return useMutation({
@@ -249,7 +308,10 @@ export const useUninstallPlugin = (componentId: string) => {
       uninstallPlugin(componentId, installationId),
     onSuccess: () => {
       queryClient.invalidateQueries({
-        queryKey: pluginKeys.installs(componentId, "latest"),
+        queryKey: pluginKeys.installs(componentId, version),
+      });
+      queryClient.invalidateQueries({
+        queryKey: pluginKeys.list(),
       });
     },
     onError: (error: Error | GolemError) => {

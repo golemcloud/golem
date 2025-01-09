@@ -17,6 +17,7 @@ import {
     XCircle,
 } from "lucide-react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useActivatePlugin, useDeactivatePlugin } from '../api/plugins';
 import { useDeleteWorker, useInterruptWorker, useResumeWorker, useWorker, useWorkerLogs } from "../api/workers";
 import { useEffect, useState } from "react";
 
@@ -91,7 +92,9 @@ export default function WorkerDetail() {
         return (tabParam as TabType) || "overview";
     });
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-
+    const deactivatePlugin = useDeactivatePlugin(componentId!, workerName!);
+    
+    const activatePlugin = useActivatePlugin(componentId!, workerName!);
     const handleTabChange = (tab: TabType) => {
         setActiveTab(tab);
         setSearchParams({ tab });
@@ -100,9 +103,10 @@ export default function WorkerDetail() {
 
     const { data: worker, isLoading, error } = useWorker(componentId!, workerName!);
     const interruptWorker = useInterruptWorker();
-    const { data: component } = useComponent(componentId!);
+    const { data: component } = useComponent(componentId!,worker?.componentVersion!);
     const resumeWorker = useResumeWorker();
     const deleteWorker = useDeleteWorker();
+
     const {
         data: logs,
         isLoading: isLoadingLogs,
@@ -115,31 +119,57 @@ export default function WorkerDetail() {
         }
     }, [worker]);
 
-    const handleAction = async (action: "interrupt" | "resume" | "delete") => {
+    const handleAction = async (
+        action: "interrupt" | "resume" | "delete" | 'activate-plugin' | 'deactivate-plugin',
+        pluginID?: string
+    ) => {
         try {
-            if (action === "interrupt") {
-                await interruptWorker.mutateAsync({
-                    componentId: componentId!,
-                    workerName: workerName!,
-                    recoverImmediately: false,
-                });
-                toast.success("Worker interrupted successfully");
-            } else if (action === "resume") {
-                await resumeWorker.mutateAsync({
-                    componentId: componentId!,
-                    workerName: workerName!,
-                });
-                toast.success("Worker resumed successfully");
-            } else {
-                await deleteWorker.mutateAsync({
-                    componentId: componentId!,
-                    workerName: workerName!,
-                });
-                toast.success("Worker deleted successfully");
-                navigate(`/components/${componentId}`);
+            switch (action) {
+                case "interrupt":
+                    await interruptWorker.mutateAsync({
+                        componentId: componentId!,
+                        workerName: workerName!,
+                        recoverImmediately: false,
+                    });
+                    toast.success("Worker interrupted successfully");
+                    break;
+
+                case "resume":
+                    await resumeWorker.mutateAsync({
+                        componentId: componentId!,
+                        workerName: workerName!,
+                    });
+                    toast.success("Worker resumed successfully");
+                    break;
+
+                case "delete":
+                    await deleteWorker.mutateAsync({
+                        componentId: componentId!,
+                        workerName: workerName!,
+                    });
+                    toast.success("Worker deleted successfully");
+                    navigate(`/components/${componentId}`);
+                    break;
+
+                case "activate-plugin":
+
+                    await activatePlugin.mutateAsync(
+                        pluginID
+                    );
+                    toast.success(`Plugin activated successfully`);
+                    break;
+
+                case "deactivate-plugin":
+                    
+                    await deactivatePlugin.mutateAsync(
+                        pluginID
+                    );
+                    toast.success(`Plugin deactivated successfully`);
+                    break;
             }
         } catch (error) {
             console.error(error);
+            toast.error(`Failed to ${action}: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
     };
 
@@ -176,7 +206,7 @@ export default function WorkerDetail() {
                 <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
                     <div className="flex items-center gap-4">
                         <Link
-                            to={`/components/${componentId}`}
+                            to={`/components/${componentId}/${component?.versionedComponentId.version}`}
                             className="p-2 text-muted-foreground hover:text-foreground rounded-lg hover:bg-card/60 transition-colors">
                             <ArrowLeft size={20} />
                         </Link>

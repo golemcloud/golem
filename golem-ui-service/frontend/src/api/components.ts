@@ -38,7 +38,7 @@ export const deleteComponent = async (componentId: string) => {
 
 export const getComponentVersion = async (
   componentId: string,
-  version: number
+  version: string|number
 ) => {
   const { data } = await apiClient.get<Component>(
     `/v1/components/${componentId}/versions/${version}`
@@ -134,14 +134,15 @@ export const useDeleteComponent = () => {
 };
 
 export const useComponent = (
-  componentId: string
+  componentId: string,
+  version: string|number
 ): {
   data: Component;
   isLoading: boolean;
 } => {
   return useQuery({
     queryKey: componentKeys.detail(componentId),
-    queryFn: () => getComponent(componentId),
+    queryFn: () => getComponentVersion(componentId, version),
     onError: (error: Error | GolemError) => displayError(error, "Error fetching component"),
     enabled: !!componentId, // Only run if componentId is provided
   });
