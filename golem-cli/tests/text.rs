@@ -31,7 +31,7 @@ use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use indoc::formatdoc;
 use regex::Regex;
 use std::sync::Arc;
-use test_r::core::{DynamicTestRegistration, TestType};
+use test_r::core::{DynamicTestRegistration, TestProperties, TestType};
 
 inherit_test_dep!(EnvBasedTestDependencies);
 inherit_test_dep!(Tracing);
@@ -51,7 +51,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("text_component_add{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             text_component_add((deps, name.to_string(), cli.with_args(short)))
         }
@@ -59,7 +62,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("text_component_update{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             text_component_update((deps, name.to_string(), cli.with_args(short)))
         }
@@ -67,7 +73,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("text_component_get{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             text_component_get((deps, name.to_string(), cli.with_args(short)))
         }
@@ -75,7 +84,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("text_component_list{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             text_component_list((deps, name.to_string(), cli.with_args(short)))
         }
@@ -83,7 +95,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("text_worker_add{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             text_worker_add((deps, name.to_string(), cli.with_args(short)))
         }
@@ -91,7 +106,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("text_worker_invoke_and_await{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             text_worker_invoke_and_await((deps, name.to_string(), cli.with_args(short)))
         }
@@ -99,7 +117,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("text_worker_get{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             text_worker_get((deps, name.to_string(), cli.with_args(short)))
         }
@@ -107,7 +128,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("text_worker_list{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             text_worker_list((deps, name.to_string(), cli.with_args(short)))
         }
@@ -115,7 +139,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("text_example_list{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             text_example_list((deps, name.to_string(), cli.with_args(short)))
         }
@@ -123,7 +150,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("text_api_definition_import{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             text_api_definition_import((deps, name.to_string(), cli.with_args(short)))
         }
@@ -131,7 +161,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("text_api_definition_add{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             text_api_definition_add((deps, name.to_string(), cli.with_args(short)))
         }
@@ -139,7 +172,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("text_api_definition_update{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             text_api_definition_update((deps, name.to_string(), cli.with_args(short)))
         }
@@ -147,7 +183,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("text_api_definition_list{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             text_api_definition_list((deps, name.to_string(), cli.with_args(short)))
         }
@@ -155,7 +194,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("text_api_definition_get{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             text_api_definition_get((deps, name.to_string(), cli.with_args(short)))
         }
@@ -163,7 +205,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("text_api_deployment_deploy{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             text_api_deployment_deploy((deps, name.to_string(), cli.with_args(short)))
         }
@@ -171,7 +216,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("text_api_deployment_get{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             text_api_deployment_get((deps, name.to_string(), cli.with_args(short)))
         }
@@ -179,7 +227,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("text_api_deployment_list{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             text_api_deployment_list((deps, name.to_string(), cli.with_args(short)))
         }

@@ -7250,7 +7250,7 @@ dependencies = [
  "pin-project-lite",
  "poem-derive",
  "prometheus",
- "quick-xml",
+ "quick-xml 0.36.2",
  "regex",
  "rfc7239",
  "serde 1.0.216",
@@ -7300,7 +7300,7 @@ dependencies = [
  "num-traits 0.2.19",
  "poem",
  "poem-openapi-derive",
- "quick-xml",
+ "quick-xml 0.36.2",
  "regex",
  "serde 1.0.216",
  "serde_json",
@@ -7852,6 +7852,15 @@ checksum = "f7649a7b4df05aed9ea7ec6f628c67c9953a43869b8bc50929569b2999d443fe"
 dependencies = [
  "memchr",
  "serde 1.0.216",
+]
+
+[[package]]
+name = "quick-xml"
+version = "0.37.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "165859e9e55f79d67b96c5d96f4e88b6f2695a1972849c15a6a3f5c59fc2c003"
+dependencies = [
+ "memchr",
 ]
 
 [[package]]
@@ -9694,9 +9703,9 @@ dependencies = [
 
 [[package]]
 name = "test-r"
-version = "1.2.0"
+version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "096af9a5318c22b4f7bcf483eeacac44d831ae3ac78f4fab065be61c25713a10"
+checksum = "3d8cb299f722f145e6379e79c8c406f923340f28b33497c3957ef9cf9fa2b225"
 dependencies = [
  "ctor",
  "test-r-core",
@@ -9706,9 +9715,9 @@ dependencies = [
 
 [[package]]
 name = "test-r-core"
-version = "1.2.0"
+version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "be35981a41cf8814f5cf4c01cebdf1a32b5e3b2c77436db13dc6c6f6669485ab"
+checksum = "065e701871bdcf15c796c9c12c7806b7f67b75603f54ddcf9531f927a54919bb"
 dependencies = [
  "anstream",
  "anstyle",
@@ -9720,7 +9729,7 @@ dependencies = [
  "futures",
  "interprocess",
  "parking_lot",
- "quick-xml",
+ "quick-xml 0.37.2",
  "rand",
  "tokio",
  "topological-sort",
@@ -9729,11 +9738,11 @@ dependencies = [
 
 [[package]]
 name = "test-r-macro"
-version = "1.1.1"
+version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "040d55dfc68c3a12628b74488faa4bf39487b32d506e0b03de0edeb468d152be"
+checksum = "3356b06edde5f3c37f868e1113fb86347a0f4837814fe45c98d4dc778a2f2eb2"
 dependencies = [
- "heck 0.5.0",
+ "darling",
  "proc-macro2",
  "quote",
  "rand",

@@ -35,7 +35,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
-use test_r::core::{DynamicTestRegistration, TestType};
+use test_r::core::{DynamicTestRegistration, TestProperties, TestType};
 use uuid::Uuid;
 
 inherit_test_dep!(EnvBasedTestDependencies);
@@ -56,7 +56,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("api_definition_json_import{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             api_definition_import(
                 (deps, name.to_string(), cli.with_args(short)),
@@ -67,7 +70,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("api_definition_yaml_import{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             api_definition_import(
                 (deps, name.to_string(), cli.with_args(short)),
@@ -78,7 +84,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("api_definition_yaml_add{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             api_definition_add(
                 (deps, name.to_string(), cli.with_args(short)),
@@ -89,7 +98,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("api_definition_yaml_add_with_security{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             api_definition_add_with_security(
                 (deps, name.to_string(), cli.with_args(short)),
@@ -100,7 +112,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("api_definition_json_add_with_security{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             api_definition_add_with_security(
                 (deps, name.to_string(), cli.with_args(short)),
@@ -111,7 +126,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("api_definition_json_add{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             api_definition_add(
                 (deps, name.to_string(), cli.with_args(short)),
@@ -122,7 +140,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("api_definition_yaml_update{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             api_definition_update(
                 (deps, name.to_string(), cli.with_args(short)),
@@ -133,7 +154,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("api_definition_json_update{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             api_definition_update(
                 (deps, name.to_string(), cli.with_args(short)),
@@ -144,7 +168,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("api_definition_update_immutable{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             api_definition_update_immutable((deps, name.to_string(), cli.with_args(short)))
         }
@@ -152,7 +179,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("api_definition_list{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             api_definition_list((deps, name.to_string(), cli.with_args(short)))
         }
@@ -160,7 +190,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("api_definition_list_versions{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             api_definition_list_versions((deps, name.to_string(), cli.with_args(short)))
         }
@@ -168,7 +201,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("api_definition_get{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             api_definition_get((deps, name.to_string(), cli.with_args(short)))
         }
@@ -176,7 +212,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("api_definition_delete{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             api_definition_delete((deps, name.to_string(), cli.with_args(short)))
         }
