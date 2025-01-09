@@ -104,8 +104,9 @@ const Sidebar = ({ id, navigationLinks, variant, apiTab }: SidebarProps) => {
       )}
 
       {variant === "apis" && (
+        //TODO:for now handling for button. but needs to Link.(don't want to break the ui)
         <Button
-          onClick={() => router.push(`/apis/${id}/new-route`)}
+          onClick={(e) =>{e.preventDefault(); router.push(`/apis/${id}/new-route`)}}
           variant="outlined"
           sx={{
             textTransform: "none",

@@ -7,13 +7,8 @@ import {
 } from "next/navigation";
 import { Home, Settings, RocketLaunch } from "@mui/icons-material";
 import PlayForWorkIcon from "@mui/icons-material/PlayForWork";
-import { useMemo, useState } from "react";
-import useApiDefinitions from "@/lib/hooks/use-api-definitons";
-import { Loader } from "lucide-react";
-import CreateNewApiVersion from "@/components/create-api-new-version";
-import CustomModal from "@/components/CustomModal";
+import { useMemo } from "react";
 import SecondaryHeader from "@/components/ui/secondary-header";
-import ErrorBoundary from "@/components/erro-boundary";
 
 export default function APISLayout({
   children,
@@ -24,10 +19,6 @@ export default function APISLayout({
   const params = useSearchParams();
   const version = params.get("version");
   const pathname = usePathname();
-  const [open, setOpen] = useState(false);
-  const { getApiDefintion, isLoading } =
-    useApiDefinitions(apiId);
-  const { data: apiDefinition, error } = getApiDefintion(apiId, version);
   const navigationLinks = useMemo(() => {
     return [
       {
@@ -55,16 +46,12 @@ export default function APISLayout({
         icon: <PlayForWorkIcon fontSize="small" />,
       },
     ];
-  }, [apiId, apiDefinition?.version]);
+  }, [apiId, version]);
 
   const tab = useMemo(() => {
     const parts = pathname?.split("/") || [];
     return parts[parts.length - 1] || "overview";
   }, [pathname]);
-
-  if (isLoading) {
-    return <Loader />;
-  }
 
   return (
     <div style={{ display: "flex" }}>
@@ -74,28 +61,10 @@ export default function APISLayout({
       >
         <SecondaryHeader
           variant="apis"
-          onClick={() => {
-            setOpen(true);
-          }}
           apiTab={tab}
         />
-        {error && <ErrorBoundary message={error}/>}
-
         <div className="mx-auto max-w-7xl px-2 md:px-4 lg:px-8">
           <div className="mx-auto max-w-2xl lg:max-w-none py-5 md:p-5">
-            <CustomModal
-              open={open}
-              onClose={() => setOpen(false)}
-              heading={"Create New version"}
-            >
-              {apiDefinition && (
-                <CreateNewApiVersion
-                  apiId={apiId}
-                  version={apiDefinition.version}
-                  onSuccess={() => setOpen(false)}
-                />
-              )}
-            </CustomModal>
             {children}
           </div>
         </div>

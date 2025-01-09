@@ -38,9 +38,7 @@ export function ApiDropdown({ dropdowns }: ApiDropdownProps) {
               {dropdown.list.map((item, idx) => (
                 <DropdownMenuItem
                   key={idx}
-                  onClick={() => {
-                    item.onClick();
-                  }}
+                  onClick={item.onClick}
                   className="cursor-pointer"
                 >
                   {item.label}

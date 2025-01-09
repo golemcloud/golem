@@ -21,7 +21,7 @@ import {
   useSearchParams,
   useRouter,
 } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button2 } from "@/components/ui/button";
 import { Dropdown } from "@/components/ui/dropdown-button";
 import PlayForWorkIcon from "@mui/icons-material/PlayForWork";
@@ -33,6 +33,7 @@ import DeploymentCreationPage from "../deployment-creation";
 import NewRouteForm from "../new-route";
 import DeleteApiVersion from "../api-version-deletion";
 import { downloadApi } from "@/lib/hooks/use-api-definitons";
+import CreateComponentForm from '@/components/new-component';
 
 const actionsMap = {
   new_version: "Create New Version",
@@ -41,14 +42,13 @@ const actionsMap = {
   deployment: "Create New Deployment",
 } as Record<string, string>;
 type secondaryHeaderProps = {
-  onClick: () => void;
+  onClick?: () => void;
   variant: string;
   id?: string;
   apiTab?: string;
 };
 
 export default function SecondaryHeader({
-  onClick,
   variant,
   apiTab,
 }: secondaryHeaderProps) {
@@ -69,63 +69,65 @@ export default function SecondaryHeader({
   // }, [pathname]);
 
   const router = useRouter();
-  let navigationLinks;
-  if (variant === "apis") {
-    navigationLinks = [
-      {
-        name: "Overview",
-        href: `/apis/${apiId}/overview${version ? `?version=${version}` : ""}`,
-        icon: <Home fontSize="small" />,
-      },
-      {
-        name: "Settings",
-        href: `/apis/${apiId}/settings${version ? `?version=${version}` : ""}`,
-        icon: <Settings fontSize="small" />,
-      },
-      {
-        name: "Deployments",
-        href: `/apis/${apiId}/deployments${
-          version ? `?version=${version}` : ""
-        }`,
-        icon: <RocketLaunch fontSize="small" />,
-      },
-      {
-        name: "Playground",
-        href: `/apis/${apiId}/playground${
-          version ? `?version=${version}` : ""
-        }`,
-        icon: <PlayForWorkIcon fontSize="small" />,
-      },
-    ];
-  } else {
-    navigationLinks = [
-      {
-        name: "Overview",
-        href: `/components/${compId}/overview`,
-        icon: <Home fontSize="small" />,
-      },
-      {
-        name: "Workers",
-        href: `/components/${compId}/workers`,
-        icon: <CodeIcon fontSize="small" />,
-      },
-      {
-        name: "Exports",
-        href: `/components/${compId}/exports`,
-        icon: <RocketLaunch fontSize="small" />,
-      },
-      {
-        name: "Files",
-        href: `/components/${compId}/files`,
-        icon: <ArticleIcon fontSize="small" />,
-      },
-      {
-        name: "Settings",
-        href: `/components/${compId}/settings`,
-        icon: <Settings fontSize="small" />,
-      },
-    ];
-  }
+  const navigationLinks = useMemo(()=>{
+    if (variant === "apis") {
+      return [
+        {
+          name: "Overview",
+          href: `/apis/${apiId}/overview${version ? `?version=${version}` : ""}`,
+          icon: <Home fontSize="small" />,
+        },
+        {
+          name: "Settings",
+          href: `/apis/${apiId}/settings${version ? `?version=${version}` : ""}`,
+          icon: <Settings fontSize="small" />,
+        },
+        {
+          name: "Deployments",
+          href: `/apis/${apiId}/deployments${
+            version ? `?version=${version}` : ""
+          }`,
+          icon: <RocketLaunch fontSize="small" />,
+        },
+        {
+          name: "Playground",
+          href: `/apis/${apiId}/playground${
+            version ? `?version=${version}` : ""
+          }`,
+          icon: <PlayForWorkIcon fontSize="small" />,
+        },
+      ];
+    } else {
+      return [
+        {
+          name: "Overview",
+          href: `/components/${compId}/overview`,
+          icon: <Home fontSize="small" />,
+        },
+        {
+          name: "Workers",
+          href: `/components/${compId}/workers`,
+          icon: <CodeIcon fontSize="small" />,
+        },
+        {
+          name: "Exports",
+          href: `/components/${compId}/exports`,
+          icon: <RocketLaunch fontSize="small" />,
+        },
+        {
+          name: "Files",
+          href: `/components/${compId}/files`,
+          icon: <ArticleIcon fontSize="small" />,
+        },
+        {
+          name: "Settings",
+          href: `/components/${compId}/settings`,
+          icon: <Settings fontSize="small" />,
+        },
+      ];
+    }
+  }, [variant, compId, apiId, version])
+
 
   const dropdowns = [
     {
@@ -230,7 +232,7 @@ export default function SecondaryHeader({
               variant="primary"
               startIcon={<AddIcon />}
               size="md"
-              onClick={onClick}
+              onClick={(e)=>{e.preventDefault(); setOpen("new_component")}}
             >
               New
             </Button2>
@@ -367,6 +369,12 @@ export default function SecondaryHeader({
             apiId={apiId}
             version={version}
             onSuccess={handleClose}
+          />
+        )}
+        {open == "new_component" && (
+          <CreateComponentForm
+            mode="create"
+            onSubmitSuccess={handleClose}
           />
         )}
       </CustomModal>
