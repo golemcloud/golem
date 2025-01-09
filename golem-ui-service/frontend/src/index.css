@@ -108,17 +108,17 @@
     --chart-4: 280 65% 60%;
     --chart-5: 340 75% 55%;
 
-     /* Add subtle border to all card elements */
-     & .bg-card,
-     & div[class*="bg-gray-800"] {
-       @apply border-2 border-border/40;
-     }
- 
-     /* Add slightly stronger border to hoverable cards */
-     & .bg-card:hover,
-     & div[class*="bg-gray-800"]:hover {
-       @apply border-border/60;
-     }
+    /* Add subtle border to all card elements */
+    & .bg-card,
+    & div[class*="bg-gray-800"] {
+      @apply border-2 border-border/40;
+    }
+
+    /* Add slightly stronger border to hoverable cards */
+    & .bg-card:hover,
+    & div[class*="bg-gray-800"]:hover {
+      @apply border-border/60;
+    }
   }
 
   [data-theme="light"] {
@@ -171,17 +171,17 @@
     --chart-4: 280 65% 60%;
     --chart-5: 340 75% 55%;
 
-         /* Add subtle border to all card elements */
-         & .bg-card,
-         & div[class*="bg-gray-800"] {
-           @apply border-2 border-border/40;
-         }
-     
-         /* Add slightly stronger border to hoverable cards */
-         & .bg-card:hover,
-         & div[class*="bg-gray-800"]:hover {
-           @apply border-border/60;
-         }
+    /* Add subtle border to all card elements */
+    & .bg-card,
+    & div[class*="bg-gray-800"] {
+      @apply border-2 border-border/40;
+    }
+
+    /* Add slightly stronger border to hoverable cards */
+    & .bg-card:hover,
+    & div[class*="bg-gray-800"]:hover {
+      @apply border-border/60;
+    }
   }
 
   [data-theme="light"] .logo-light {

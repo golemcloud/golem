@@ -33,7 +33,7 @@ const JsonDisplay = ({ data }: { data: string }) => {
     } catch (err) {
       setFormattedJson(data);
       console.error(err);
-      displayError(err,"Error parsing component")
+      displayError(err, "Error parsing component");
     }
   }, [data]);
 
@@ -100,8 +100,8 @@ export const PluginDetailPage = () => {
     if (plugin) {
       document.title = `Plugins: ${name} - Golem UI`;
     }
-  }, [plugin]);
-  
+  }, [plugin, name]);
+
   const handleDelete = async () => {
     try {
       await deletePlugin.mutateAsync({
@@ -153,9 +153,14 @@ export const PluginDetailPage = () => {
                 <Puzzle size={24} />
               </div>
               <div className="min-w-0">
-                <h1 className="text-xl md:text-2xl font-bold truncate">{plugin.name}</h1>
+                <h1 className="text-xl md:text-2xl font-bold truncate">
+                  {plugin.name}
+                </h1>
                 <div className="flex items-center gap-2 mt-1">
-                  <Package size={14} className="text-muted-foreground flex-shrink-0" />
+                  <Package
+                    size={14}
+                    className="text-muted-foreground flex-shrink-0"
+                  />
                   <span className="text-sm text-muted-foreground">
                     Version {plugin.version}
                   </span>
@@ -166,10 +171,11 @@ export const PluginDetailPage = () => {
           <div className="flex items-center gap-3">
             <span
               className={`px-3 py-1 rounded-full text-xs md:text-sm
-                      ${plugin.scope.type === "Global"
-                  ? "bg-primary/10 text-primary"
-                  : "bg-purple-500/10 text-purple-400"
-                }`}
+                      ${
+                        plugin.scope.type === "Global"
+                          ? "bg-primary/10 text-primary"
+                          : "bg-purple-500/10 text-purple-400"
+                      }`}
             >
               {plugin.scope.type}
             </span>
@@ -192,12 +198,17 @@ export const PluginDetailPage = () => {
           <DetailsCard title="Plugin Details" icon={Settings}>
             <div className="space-y-4">
               <div>
-                <label className="text-xs md:text-sm text-muted-foreground block mb-1">Type</label>
+                <label className="text-xs md:text-sm text-muted-foreground block mb-1">
+                  Type
+                </label>
                 <div className="flex items-center gap-2 text-muted-foreground/80 text-sm">
                   {plugin.specs.type === "ComponentTransformer" ? (
                     <Code size={16} className="text-green-400 flex-shrink-0" />
                   ) : (
-                    <Server size={16} className="text-purple-400 flex-shrink-0" />
+                    <Server
+                      size={16}
+                      className="text-purple-400 flex-shrink-0"
+                    />
                   )}
                   <span>{plugin.specs.type}</span>
                 </div>
@@ -245,8 +256,10 @@ export const PluginDetailPage = () => {
                     <label className="text-xs md:text-sm text-muted-foreground block mb-1">
                       Validate URL
                     </label>
-                    <div className="font-mono text-xs md:text-sm bg-gray-900/50 p-3 rounded-lg 
-                                border border-gray-700/50 break-all">
+                    <div
+                      className="font-mono text-xs md:text-sm bg-gray-900/50 p-3 rounded-lg 
+                                border border-gray-700/50 break-all"
+                    >
                       {plugin.specs.validateUrl}
                     </div>
                   </div>
@@ -254,8 +267,10 @@ export const PluginDetailPage = () => {
                     <label className="text-xs md:text-sm text-muted-foreground block mb-1">
                       Transform URL
                     </label>
-                    <div className="font-mono text-xs md:text-sm bg-gray-900/50 p-3 rounded-lg 
-                                border border-gray-700/50 break-all">
+                    <div
+                      className="font-mono text-xs md:text-sm bg-gray-900/50 p-3 rounded-lg 
+                                border border-gray-700/50 break-all"
+                    >
                       {plugin.specs.transformUrl}
                     </div>
                   </div>
@@ -275,8 +290,10 @@ export const PluginDetailPage = () => {
                   <label className="text-xs md:text-sm text-muted-foreground block mb-1">
                     Component ID
                   </label>
-                  <div className="font-mono text-xs md:text-sm bg-gray-900/50 p-3 rounded-lg
-                              border border-gray-700/50 break-all">
+                  <div
+                    className="font-mono text-xs md:text-sm bg-gray-900/50 p-3 rounded-lg
+                              border border-gray-700/50 break-all"
+                  >
                     {plugin.specs.componentId}
                   </div>
                 </div>
@@ -285,8 +302,13 @@ export const PluginDetailPage = () => {
                     Version
                   </label>
                   <div className="flex items-center gap-2">
-                    <Package size={16} className="text-muted-foreground flex-shrink-0" />
-                    <span className="text-sm">{plugin.specs.componentVersion}</span>
+                    <Package
+                      size={16}
+                      className="text-muted-foreground flex-shrink-0"
+                    />
+                    <span className="text-sm">
+                      {plugin.specs.componentVersion}
+                    </span>
                   </div>
                 </div>
               </div>

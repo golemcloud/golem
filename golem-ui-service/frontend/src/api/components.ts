@@ -26,7 +26,7 @@ export const getComponents = async (componentName?: string) => {
 
 export const getComponentVersions = async (componentId: string) => {
   const { data } = await apiClient.get<Component[]>(
-    `/v1/components/${componentId}`
+    `/v1/components/${componentId}`,
   );
   return data;
 };
@@ -38,10 +38,10 @@ export const deleteComponent = async (componentId: string) => {
 
 export const getComponentVersion = async (
   componentId: string,
-  version: string|number
+  version: string | number,
 ) => {
   const { data } = await apiClient.get<Component>(
-    `/v1/components/${componentId}/versions/${version}`
+    `/v1/components/${componentId}/versions/${version}`,
   );
   return data;
 };
@@ -69,14 +69,14 @@ export const updateComponent = async ({
       headers: {
         "Content-Type": "multipart/form-data",
       },
-    }
+    },
   );
   return data;
 };
 
 // Hooks
 export const useComponents = (
-  componentName?: string
+  componentName?: string,
 ): {
   data: Component[];
   isLoading: boolean;
@@ -84,7 +84,8 @@ export const useComponents = (
   return useQuery({
     queryKey: componentKeys.list({ componentName }),
     queryFn: () => getComponents(componentName),
-    onError: (error: Error | GolemError) => displayError(error, "Error fetching components"),
+    onError: (error: Error | GolemError) =>
+      displayError(error, "Error fetching components"),
   });
 };
 
@@ -92,7 +93,8 @@ export const useComponentVersions = (componentId: string) => {
   return useQuery({
     queryKey: componentKeys.versions(componentId),
     queryFn: () => getComponentVersions(componentId),
-    onError: (error: Error | GolemError) => displayError(error, "Error fetching component versions"),
+    onError: (error: Error | GolemError) =>
+      displayError(error, "Error fetching component versions"),
   });
 };
 
@@ -104,7 +106,8 @@ export const useCreateComponent = () => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: componentKeys.lists() });
     },
-    onError: (error: Error | GolemError) => displayError(error, "Error creating component"),
+    onError: (error: Error | GolemError) =>
+      displayError(error, "Error creating component"),
   });
 };
 
@@ -118,7 +121,8 @@ export const useUpdateComponent = () => {
         queryKey: componentKeys.detail(componentId),
       });
     },
-    onError: (error: Error | GolemError) => displayError(error, "Error updating component"),
+    onError: (error: Error | GolemError) =>
+      displayError(error, "Error updating component"),
   });
 };
 export const useDeleteComponent = () => {
@@ -129,13 +133,14 @@ export const useDeleteComponent = () => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: componentKeys.lists() });
     },
-    onError: (error: Error | GolemError) => displayError(error, "Error deleting component"),
+    onError: (error: Error | GolemError) =>
+      displayError(error, "Error deleting component"),
   });
 };
 
 export const useComponent = (
   componentId: string,
-  version: string|number
+  version: string | number,
 ): {
   data: Component;
   isLoading: boolean;
@@ -143,14 +148,15 @@ export const useComponent = (
   return useQuery({
     queryKey: componentKeys.detail(componentId),
     queryFn: () => getComponentVersion(componentId, version),
-    onError: (error: Error | GolemError) => displayError(error, "Error fetching component"),
+    onError: (error: Error | GolemError) =>
+      displayError(error, "Error fetching component"),
     enabled: !!componentId, // Only run if componentId is provided
   });
 };
 
 export const getComponent = async (componentId: string) => {
   const { data } = await apiClient.get<Component>(
-    `/v1/components/${componentId}/latest`
+    `/v1/components/${componentId}/latest`,
   );
   return data;
 };

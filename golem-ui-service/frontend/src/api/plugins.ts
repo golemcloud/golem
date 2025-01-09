@@ -71,7 +71,7 @@ export const getPluginVersions = async (name: string) => {
 
 export const getPluginVersion = async (name: string, version: string) => {
   const { data } = await apiClient.get<Plugin>(
-    `/v1/plugins/${name}/${version}`
+    `/v1/plugins/${name}/${version}`,
   );
   return data;
 };
@@ -84,10 +84,10 @@ export const createPlugin = async (payload: CreatePluginPayload) => {
 export const activatePlugin = async (
   componentId: string,
   workerName: string,
-  pluginInstallationId: string
+  pluginInstallationId: string,
 ) => {
   const { data } = await apiClient.post<InstalledPlugin>(
-    `/v1/components/${componentId}/workers/${workerName}/activate-plugin?plugin-installation-id=${pluginInstallationId}`
+    `/v1/components/${componentId}/workers/${workerName}/activate-plugin?plugin-installation-id=${pluginInstallationId}`,
   );
   return data;
 };
@@ -95,20 +95,17 @@ export const activatePlugin = async (
 export const deactivatePlugin = async (
   componentId: string,
   workerName: string,
-  pluginInstallationId: string
+  pluginInstallationId: string,
 ) => {
   const { data } = await apiClient.post<InstalledPlugin>(
-    `/v1/components/${componentId}/workers/${workerName}/deactivate-plugin?plugin-installation-id=${pluginInstallationId}`
+    `/v1/components/${componentId}/workers/${workerName}/deactivate-plugin?plugin-installation-id=${pluginInstallationId}`,
   );
   return data;
 };
 
-export const useActivatePlugin = (
-  componentId: string,
-  workerName: string,
-) => {
+export const useActivatePlugin = (componentId: string, workerName: string) => {
   return useMutation({
-    mutationFn: ( pluginInstallationId: string) =>
+    mutationFn: (pluginInstallationId: string) =>
       activatePlugin(componentId, workerName, pluginInstallationId),
     onSuccess: () => {},
     onError: (error: Error | GolemError) => {
@@ -119,8 +116,7 @@ export const useActivatePlugin = (
 
 export const useDeactivatePlugin = (
   componentId: string,
-  workerName: string
-  
+  workerName: string,
 ) => {
   return useMutation({
     mutationFn: (pluginInstallationId: string) =>
@@ -133,7 +129,7 @@ export const useDeactivatePlugin = (
 };
 export const deletePlugin = async (name: string, version: string) => {
   const { data } = await apiClient.delete<void>(
-    `/v1/plugins/${name}/${version}`
+    `/v1/plugins/${name}/${version}`,
   );
   return data;
 };
@@ -141,21 +137,21 @@ export const deletePlugin = async (name: string, version: string) => {
 // Component Plugin Installation Functions
 export const getInstalledPlugins = async (
   componentId: string,
-  version: number
+  version: number,
 ) => {
   const { data } = await apiClient.get<InstalledPlugin[]>(
-    `/v1/components/${componentId}/versions/${version}/plugins/installs`
+    `/v1/components/${componentId}/versions/${version}/plugins/installs`,
   );
   return data;
 };
 
 export const installPlugin = async (
   componentId: string,
-  payload: InstallPluginPayload
+  payload: InstallPluginPayload,
 ) => {
   const { data } = await apiClient.post<InstalledPlugin>(
     `/v1/components/${componentId}/latest/plugins/installs`,
-    payload
+    payload,
   );
   return data;
 };
@@ -163,21 +159,21 @@ export const installPlugin = async (
 export const updatePluginInstallation = async (
   componentId: string,
   installationId: string,
-  payload: UpdatePluginInstallPayload
+  payload: UpdatePluginInstallPayload,
 ) => {
   const { data } = await apiClient.put<void>(
     `/v1/components/${componentId}/versions/latest/plugins/installs/${installationId}`,
-    payload
+    payload,
   );
   return data;
 };
 
 export const uninstallPlugin = async (
   componentId: string,
-  installationId: string
+  installationId: string,
 ) => {
   const { data } = await apiClient.delete<void>(
-    `/v1/components/${componentId}/latest/plugins/installs/${installationId}`
+    `/v1/components/${componentId}/latest/plugins/installs/${installationId}`,
   );
   return data;
 };
@@ -274,7 +270,7 @@ export const useInstallPlugin = (componentId: string, version: number) => {
 
 export const useUpdatePluginInstallation = (
   componentId: string,
-  version: number
+  version: number,
 ) => {
   const queryClient = useQueryClient();
 

@@ -65,9 +65,15 @@ export const PluginsPage = () => {
               <div className="space-y-1 min-w-0">
                 <h3 className="text-base md:text-lg font-medium flex items-center gap-2">
                   {plugin.specs.type === "OplogProcessor" ? (
-                    <Database size={18} className="text-purple-400 flex-shrink-0" />
+                    <Database
+                      size={18}
+                      className="text-purple-400 flex-shrink-0"
+                    />
                   ) : (
-                    <GitBranch size={18} className="text-green-400 flex-shrink-0" />
+                    <GitBranch
+                      size={18}
+                      className="text-green-400 flex-shrink-0"
+                    />
                   )}
                   <Link
                     to={`/plugins/${plugin.name}/${plugin.version}`}
@@ -82,7 +88,10 @@ export const PluginsPage = () => {
                 </div>
               </div>
               <button
-                onClick={() => confirm("Delete Plugin?") && deletePlugin({ name: plugin.name, version: plugin.version })}
+                onClick={() =>
+                  confirm("Delete Plugin?") &&
+                  deletePlugin({ name: plugin.name, version: plugin.version })
+                }
                 className="p-2 text-muted-foreground hover:text-red-400 rounded-md hover:bg-card/50
                          transition-all duration-200"
                 title="Delete plugin"
@@ -92,7 +101,9 @@ export const PluginsPage = () => {
             </div>
 
             <div className="mt-4 md:mt-6 space-y-3 md:space-y-4">
-              <p className="text-gray-300 text-sm md:text-base break-words">{plugin.description}</p>
+              <p className="text-gray-300 text-sm md:text-base break-words">
+                {plugin.description}
+              </p>
 
               <div className="flex flex-col sm:flex-row gap-3 sm:gap-6 text-muted-foreground text-xs md:text-sm">
                 <div className="flex items-center gap-2">
@@ -108,7 +119,10 @@ export const PluginsPage = () => {
               {plugin.specs.type === "OplogProcessor" && (
                 <div className="bg-muted/70 p-3 md:p-4 rounded-lg space-y-2">
                   <div className="flex items-center gap-2 text-xs md:text-sm break-all">
-                    <Database size={14} className="text-purple-400 flex-shrink-0" />
+                    <Database
+                      size={14}
+                      className="text-purple-400 flex-shrink-0"
+                    />
                     <span>Component ID: {plugin.specs.componentId}</span>
                   </div>
                   <div className="flex items-center gap-2 text-xs md:text-sm">
@@ -137,7 +151,9 @@ export const PluginsPage = () => {
         {(!plugins || plugins.length === 0) && (
           <div className="text-center py-8 md:py-12 bg-card rounded-lg">
             <Package size={48} className="mx-auto text-gray-600 mb-4" />
-            <p className="text-sm md:text-base text-muted-foreground">No plugins found</p>
+            <p className="text-sm md:text-base text-muted-foreground">
+              No plugins found
+            </p>
             <p className="text-xs md:text-sm text-gray-500 mt-2">
               Create your first plugin to get started
             </p>

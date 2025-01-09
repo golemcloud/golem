@@ -77,7 +77,7 @@ export const displayError = (error: unknown, title?: string) => {
  * @returns Partial query options with error handling
  */
 export const createQueryErrorConfig = <TData, TError = GolemError>(
-  errorTitle?: string
+  errorTitle?: string,
 ): Partial<UseQueryOptions<TData, TError>> => ({
   retry: 1, // Only retry once
   retryDelay: (attemptIndex: number) =>
@@ -97,7 +97,7 @@ export const createMutationErrorConfig = <
   TVariables = void,
   TContext = unknown,
 >(
-  errorTitle?: string
+  errorTitle?: string,
 ): Partial<UseMutationOptions<TData, TError, TVariables, TContext>> => ({
   onError: (error: Error | GolemError) => displayError(error, errorTitle),
 });

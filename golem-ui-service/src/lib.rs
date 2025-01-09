@@ -196,7 +196,7 @@ impl UiService {
             .layer(TraceLayer::new_for_http())
             .layer(cors);
 
-        println!("UI Service listening on {}", self.addr);
+        println!("UI Service listening on http://{}", self.addr);
         println!("API proxy configured for {}", self.api_url);
         if self.dev_mode {
             println!("Running in development mode");

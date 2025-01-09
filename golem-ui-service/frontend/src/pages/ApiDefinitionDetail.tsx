@@ -34,7 +34,7 @@ export interface Route {
     };
     workerName: string;
     response?: string;
-    bindingType: "default" | "file-server" | "cors-preflight"
+    bindingType: "default" | "file-server" | "cors-preflight";
   };
 }
 
@@ -43,10 +43,14 @@ export const ApiDefinitionView = () => {
   const [showRouteModal, setShowRouteModal] = useState(false);
   const [showDeployModal, setShowDeployModal] = useState(false);
   const [showMobileMenu, setShowMobileMenu] = useState(false);
-  const [editingRoute, setEditingRoute] = useState<(Route & { index: number }) | null>(null);
+  const [editingRoute, setEditingRoute] = useState<
+    (Route & { index: number }) | null
+  >(null);
 
-  const { data: apiDefinition, isLoading: isLoadingDefinition } = useApiDefinition(id!, version!);
-  const { data: deployments, isLoading: isLoadingDeployments } = useApiDeployments(id!);
+  const { data: apiDefinition, isLoading: isLoadingDefinition } =
+    useApiDefinition(id!, version!);
+  const { data: deployments, isLoading: isLoadingDeployments } =
+    useApiDeployments(id!);
   const deleteDeployment = useDeleteDeployment();
   const updateDefinition = useUpdateApiDefinition();
   const navigate = useNavigate();
@@ -74,7 +78,7 @@ export const ApiDefinitionView = () => {
           setShowRouteModal(false);
         },
         onError: () => toast.error("Failed to add route"),
-        retry: 0
+        retry: 0,
       },
     );
   };
@@ -92,7 +96,7 @@ export const ApiDefinitionView = () => {
       {
         onSuccess: () => toast.success("Route deleted successfully"),
         onError: () => toast.error("Failed to delete route"),
-        retry: 0
+        retry: 0,
       },
     );
   };
@@ -122,7 +126,7 @@ export const ApiDefinitionView = () => {
           setShowRouteModal(false);
         },
         onError: () => toast.error("Failed to update route"),
-        retry: 0
+        retry: 0,
       },
     );
   };
@@ -173,7 +177,9 @@ export const ApiDefinitionView = () => {
                 </span>
               )}
             </h1>
-            <p className="text-sm text-muted-foreground">Version {apiDefinition.version}</p>
+            <p className="text-sm text-muted-foreground">
+              Version {apiDefinition.version}
+            </p>
           </div>
         </div>
 
@@ -188,23 +194,34 @@ export const ApiDefinitionView = () => {
         </div>
 
         {/* Action Buttons */}
-        <div className={`flex flex-col sm:flex-row gap-2 ${showMobileMenu ? 'block' : 'hidden md:flex'}`}>
+        <div
+          className={`flex flex-col sm:flex-row gap-2 ${showMobileMenu ? "block" : "hidden md:flex"}`}
+        >
           {apiDefinition.draft && (
             <button
               onClick={() => {
-                if (window.confirm('Are you sure you want to publish this API? This will disable API editing')) {
+                if (
+                  window.confirm(
+                    "Are you sure you want to publish this API? This will disable API editing",
+                  )
+                ) {
                   const updatedDefinition = {
                     ...apiDefinition,
-                    draft: false
+                    draft: false,
                   };
 
                   updateDefinition.mutate(
-                    { id: id!, version: version!, definition: updatedDefinition },
                     {
-                      onSuccess: () => toast.success("API published successfully"),
+                      id: id!,
+                      version: version!,
+                      definition: updatedDefinition,
+                    },
+                    {
+                      onSuccess: () =>
+                        toast.success("API published successfully"),
                       onError: () => toast.error("Failed to publish API"),
-                      retry: 0
-                    }
+                      retry: 0,
+                    },
                   );
                 }
               }}
@@ -233,15 +250,23 @@ export const ApiDefinitionView = () => {
 
           <button
             onClick={() => {
-              if (window.confirm(`Are you sure you want to delete this API definition? This action cannot be undone.`)) {
-                deleteApiDefinition.mutate({ id: id!, version: version! }, {
-                  onSuccess: () => {
-                    toast.success("API definition deleted successfully");
-                    navigate('/apis'); 
+              if (
+                window.confirm(
+                  `Are you sure you want to delete this API definition? This action cannot be undone.`,
+                )
+              ) {
+                deleteApiDefinition.mutate(
+                  { id: id!, version: version! },
+                  {
+                    onSuccess: () => {
+                      toast.success("API definition deleted successfully");
+                      navigate("/apis");
+                    },
+                    onError: () =>
+                      toast.error("Failed to delete API definition"),
+                    retry: 0,
                   },
-                  onError: () => toast.error("Failed to delete API definition"),
-                  retry: 0
-                });
+                );
               }
             }}
             className="flex items-center justify-center gap-2 px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600"
@@ -266,7 +291,9 @@ export const ApiDefinitionView = () => {
             {apiDefinition.routes.length > 0 && (
               <button
                 onClick={() => {
-                  const text = apiDefinition.routes.map((r) => `${r.method} ${r.path}`).join("\n");
+                  const text = apiDefinition.routes
+                    .map((r) => `${r.method} ${r.path}`)
+                    .join("\n");
                   navigator.clipboard.writeText(text);
                   toast.success("Routes copied to clipboard");
                 }}
@@ -290,7 +317,8 @@ export const ApiDefinitionView = () => {
                       <span
                         className={`
                         px-2 py-0.5 rounded text-xs md:text-sm font-medium
-                        ${route.method === "GET"
+                        ${
+                          route.method === "GET"
                             ? "bg-green-500/10 text-green-500"
                             : route.method === "POST"
                               ? "bg-primary/10 text-blue-500"
@@ -301,27 +329,34 @@ export const ApiDefinitionView = () => {
                                   : route.method === "PATCH"
                                     ? "bg-purple-500/10 text-purple-500"
                                     : "bg-gray-500/10 text-gray-500"
-                          }`}
+                        }`}
                       >
                         {route.method}
                       </span>
-                      <span className="font-mono text-sm break-all">{route.path}</span>
+                      <span className="font-mono text-sm break-all">
+                        {route.path}
+                      </span>
                     </div>
 
                     <div className="text-xs md:text-sm text-muted-foreground space-y-1">
                       <div className="flex items-center gap-2">
                         <Code2 className="h-4 w-4 flex-shrink-0" />
                         <span className="break-all">
-                          Component: {route.binding.componentId?.componentId} (v{route.binding.componentId?.version})
+                          Component: {route.binding.componentId?.componentId} (v
+                          {route.binding.componentId?.version})
                         </span>
                       </div>
                       <div className="flex items-center gap-2">
                         <Box className="h-4 w-4 flex-shrink-0" />
-                        <span className="break-all">Worker: {route.binding.workerName}</span>
+                        <span className="break-all">
+                          Worker: {route.binding.workerName}
+                        </span>
                       </div>
                       {route.binding.response && (
                         <div className="flex items-center gap-2 text-gray-500">
-                          <span className="break-all">Response Type: {route.binding.response}</span>
+                          <span className="break-all">
+                            Response Type: {route.binding.response}
+                          </span>
                         </div>
                       )}
                     </div>
@@ -330,17 +365,19 @@ export const ApiDefinitionView = () => {
                   {apiDefinition.draft && route.binding.componentId && (
                     <div className="flex gap-2 sm:flex-shrink-0">
                       <button
-
                         onClick={() => handleEditRoute(route, index)}
                         className="p-1.5 text-primary hover:text-primary-accent rounded-md hover:bg-gray-600"
                       >
                         <Code2 size={16} />
                       </button>
 
-
                       <button
                         onClick={() => {
-                          if (window.confirm("Are you sure you want to delete this route?")) {
+                          if (
+                            window.confirm(
+                              "Are you sure you want to delete this route?",
+                            )
+                          ) {
                             handleDeleteRoute(index);
                           }
                         }}
@@ -385,7 +422,10 @@ export const ApiDefinitionView = () => {
                 <div className="flex items-center justify-between">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
-                      <Globe size={16} className="text-muted-foreground flex-shrink-0" />
+                      <Globe
+                        size={16}
+                        className="text-muted-foreground flex-shrink-0"
+                      />
                       <span className="truncate">{deployment.site.host}</span>
                     </div>
                     {deployment.site.subdomain && (
@@ -396,8 +436,14 @@ export const ApiDefinitionView = () => {
                   </div>
                   <button
                     onClick={() => {
-                      if (window.confirm("Are you sure you want to delete this deployment?")) {
-                        handleDeleteDeployment(`${deployment.site.subdomain}.${deployment.site.host}`);
+                      if (
+                        window.confirm(
+                          "Are you sure you want to delete this deployment?",
+                        )
+                      ) {
+                        handleDeleteDeployment(
+                          `${deployment.site.subdomain}.${deployment.site.host}`,
+                        );
                       }
                     }}
                     className="p-1.5 text-red-400 hover:text-red-300 rounded-md hover:bg-gray-600 flex-shrink-0"

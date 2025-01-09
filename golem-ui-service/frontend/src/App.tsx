@@ -20,7 +20,10 @@ function App() {
           <Route path="/" element={<Overview />} />
           <Route path="/workers" element={<div>Workers Page</div>} />
           <Route path="/components" element={<Components />} />
-          <Route path="/components/:id/:version" element={<ComponentDetail />} />
+          <Route
+            path="/components/:id/:version"
+            element={<ComponentDetail />}
+          />
           <Route path="/plugins" element={<PluginsPage />} />
           <Route path="/apis" element={<ApiDefinitionsPage />} />
           <Route
@@ -31,8 +34,14 @@ function App() {
             path="/plugins/:name/:version"
             element={<PluginDetailPage />}
           />
-          <Route path="/components/:componentId/workers/:workerName" element={<WorkerDetail />} />
-          <Route path="/components/:componentId/workers/:workerName/invoke" element={<FunctionInvoker />} />
+          <Route
+            path="/components/:componentId/workers/:workerName"
+            element={<WorkerDetail />}
+          />
+          <Route
+            path="/components/:componentId/workers/:workerName/invoke"
+            element={<FunctionInvoker />}
+          />
 
           {/* <Route path="/api" */}
         </Routes>

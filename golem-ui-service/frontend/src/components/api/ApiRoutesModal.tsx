@@ -1,6 +1,5 @@
 import {
   AlertCircle,
-  Box,
   ChevronDown,
   Code2,
   Globe,
@@ -111,34 +110,35 @@ const TOOLTIP_CONTENT = {
   },
 };
 
-
-const Tooltip = ({ content, title }: { content: string, title: string }) => {
+const Tooltip = ({ content, title }: { content: string; title: string }) => {
   const [isOpen, setIsOpen] = useState(false);
   const tooltipRef = useRef<HTMLDivElement>(null);
-  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (tooltipRef.current && !tooltipRef.current.contains(event.target as Node)) {
+      if (
+        tooltipRef.current &&
+        !tooltipRef.current.contains(event.target as Node)
+      ) {
         setIsOpen(false);
       }
     };
 
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
-
 
   return (
     <div className="relative inline-block">
-      <button
-        onClick={() => setIsOpen(!isOpen)}
-      >
+      <button onClick={() => setIsOpen(!isOpen)}>
         <HelpCircle
-          className={`w-4 h-4 cursor-pointer transition-colors ${isOpen ? 'text-primary' : 'text-muted-foreground hover:text-gray-300'
-            }`}
-
-        /></button>
+          className={`w-4 h-4 cursor-pointer transition-colors ${
+            isOpen
+              ? "text-primary"
+              : "text-muted-foreground hover:text-gray-300"
+          }`}
+        />
+      </button>
       {isOpen && (
         <div
           ref={tooltipRef}
@@ -187,14 +187,15 @@ const Dropdown = ({
   placeholder?: string;
   error?: boolean;
 }) => (
-  <div className='relative inline-block w-full'>
+  <div className="relative inline-block w-full">
     <select
       value={value}
       onChange={(e) => onChange(e.target.value)}
       className={`w-full pl-3 pr-8 py-2 bg-card/80 rounded-md appearance-none transition-colors
         ${error ? "border-red-500 border-2" : "border border-gray-600"} 
-        ${className}`}>
-      <option value='' disabled>
+        ${className}`}
+    >
+      <option value="" disabled>
         {placeholder}
       </option>
       {options.map((opt) => (
@@ -209,8 +210,8 @@ const Dropdown = ({
         pointer-events-none`}
     />
     {error && (
-      <div className='absolute right-8 top-1/2 transform -translate-y-1/2'>
-        <AlertCircle className='w-4 h-4 text-red-500' />
+      <div className="absolute right-8 top-1/2 transform -translate-y-1/2">
+        <AlertCircle className="w-4 h-4 text-red-500" />
       </div>
     )}
   </div>
@@ -239,14 +240,15 @@ export const RouteModal = ({
   const [bindingType, setBindingType] = useState("default");
   const { data: components } = useComponents();
   const { data: workersData } = useWorkers(
-    selectedComponent?.versionedComponentId.componentId || ""
+    selectedComponent?.versionedComponentId.componentId || "",
   );
-  const availableFunctions = selectedComponent?.metadata.exports.flatMap(exp =>
-    exp.functions.map(fn => ({
-      value: `golem:component/api.${fn.name}`,
-      label: `${exp.name}.${fn.name}`
-    }))
-  ) || [];
+  const availableFunctions =
+    selectedComponent?.metadata.exports.flatMap((exp) =>
+      exp.functions.map((fn) => ({
+        value: `golem:component/api.${fn.name}`,
+        label: `${exp.name}.${fn.name}`,
+      })),
+    ) || [];
 
   const workerOptions =
     workersData?.workers.map((w) => ({
@@ -265,10 +267,10 @@ export const RouteModal = ({
         components?.find(
           (c) =>
             c.versionedComponentId.componentId ===
-            existingRoute.binding.componentId.componentId &&
+              existingRoute.binding.componentId.componentId &&
             c.versionedComponentId.version ===
-            existingRoute.binding.componentId.version
-        )
+              existingRoute.binding.componentId.version,
+        ),
       );
       setSelectedVersion(existingRoute.binding.componentId.version);
 
@@ -282,17 +284,19 @@ export const RouteModal = ({
         setCustomWorkerExpression("");
       }
 
-      const isResponseFunction = existingRoute.binding.response?.includes('golem:component');
+      const isResponseFunction =
+        existingRoute.binding.response?.includes("golem:component");
       setIsCustomResponse(isResponseFunction!);
 
       if (isResponseFunction) {
-        setSelectedFunction(existingRoute.binding.response?.replace(/['"]/g, '') || '');
-        setResponse('');
+        setSelectedFunction(
+          existingRoute.binding.response?.replace(/['"]/g, "") || "",
+        );
+        setResponse("");
       } else {
         setResponse(existingRoute.binding.response!);
-        setSelectedFunction('');
+        setSelectedFunction("");
       }
-
     }
   }, [existingRoute, components]);
 
@@ -312,7 +316,7 @@ export const RouteModal = ({
 }
   `);
     }
-  }, [bindingType]);
+  }, [bindingType, response]);
 
   useEffect(() => {
     // Reset errors when fields change
@@ -328,18 +332,17 @@ export const RouteModal = ({
     return value;
   };
 
-
   const formatSelectedWorker = (value: string): string => {
     if (!value) return "";
     if (value.startsWith('"')) {
       return value;
     }
     return `"${value}"`;
-  }
+  };
 
   const stripNumSuffix = (value: string): number => {
     if (!value) return 0;
-    let suffix = NUMERIC_TYPES.filter((t) => value.endsWith(t))[0]
+    const suffix = NUMERIC_TYPES.filter((t) => value.endsWith(t))[0];
     if (suffix) {
       return Number(value.slice(0, -suffix.length));
     }
@@ -352,7 +355,8 @@ export const RouteModal = ({
     if (!path) newErrors.path = true;
     if (!selectedComponent) newErrors.component = true;
     if (!selectedWorker && !customWorkerExpression) newErrors.worker = true;
-    if (selectedRibType && !response && !isCustomResponse) newErrors.response = true;
+    if (selectedRibType && !response && !isCustomResponse)
+      newErrors.response = true;
 
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -364,9 +368,11 @@ export const RouteModal = ({
       return;
     }
 
-    const finalWorkerName = isCustomWorker ? customWorkerExpression : formatSelectedWorker(selectedWorker);
+    const finalWorkerName = isCustomWorker
+      ? customWorkerExpression
+      : formatSelectedWorker(selectedWorker);
 
-    let finalResponse = '';
+    let finalResponse = "";
     if (selectedRibType) {
       if (isCustomResponse) {
         finalResponse = selectedFunction;
@@ -387,7 +393,7 @@ export const RouteModal = ({
         },
         workerName: finalWorkerName,
         response: finalResponse,
-        bindingType
+        bindingType,
       },
     };
 
@@ -397,25 +403,26 @@ export const RouteModal = ({
   if (!isOpen) return null;
 
   return (
-    <div className='fixed inset-0 bg-card bg-opacity-50 flex items-center justify-center p-4 z-50 backdrop-blur-sm'>
-      <div className='bg-card rounded-lg p-6 max-w-4xl w-full shadow-xl border border-card/85'>
-        <div className='flex justify-between items-start mb-6'>
-          <h2 className='text-xl font-semibold flex items-center gap-2'>
-            <RouteC className='h-5 w-5 text-primary' />
+    <div className="fixed inset-0 bg-card bg-opacity-50 flex items-center justify-center p-4 z-50 backdrop-blur-sm">
+      <div className="bg-card rounded-lg p-6 max-w-4xl w-full shadow-xl border border-card/85">
+        <div className="flex justify-between items-start mb-6">
+          <h2 className="text-xl font-semibold flex items-center gap-2">
+            <RouteC className="h-5 w-5 text-primary" />
             {existingRoute ? "Edit Route" : "Add New Route"}
           </h2>
           <button
             onClick={onClose}
-            className='text-muted-foreground hover:text-gray-300 p-1 rounded-md
-              hover:bg-gray-700/50 transition-colors'>
+            className="text-muted-foreground hover:text-gray-300 p-1 rounded-md
+              hover:bg-gray-700/50 transition-colors"
+          >
             <X size={20} />
           </button>
         </div>
 
-        <div className='space-y-6'>
-          <div className='grid grid-cols-12 gap-4'>
-            <div className='col-span-3'>
-              <label className='block text-sm font-medium mb-1'>Method</label>
+        <div className="space-y-6">
+          <div className="grid grid-cols-12 gap-4">
+            <div className="col-span-3">
+              <label className="block text-sm font-medium mb-1">Method</label>
               <Dropdown
                 value={method}
                 options={HTTP_METHODS.map((m) => ({
@@ -423,14 +430,17 @@ export const RouteModal = ({
                   label: m.value,
                 }))}
                 onChange={setMethod}
-                placeholder='Select method'
+                placeholder="Select method"
               />
             </div>
 
             <div className="col-span-6">
               <label className="text-sm font-medium mb-1 flex items-center gap-2">
                 Path <span className="text-red-500">*</span>
-                <Tooltip content={TOOLTIP_CONTENT.path.content} title={TOOLTIP_CONTENT.path.title} />
+                <Tooltip
+                  content={TOOLTIP_CONTENT.path.content}
+                  title={TOOLTIP_CONTENT.path.title}
+                />
               </label>
               <div className="relative">
                 <Globe
@@ -448,20 +458,22 @@ export const RouteModal = ({
               </div>
             </div>
 
-            <div className='col-span-3'>
-              <label className='block text-sm font-medium mb-1'>Binding Type</label>
+            <div className="col-span-3">
+              <label className="block text-sm font-medium mb-1">
+                Binding Type
+              </label>
               <Dropdown
                 value={bindingType}
                 options={BINDING_TYPES}
                 onChange={setBindingType}
-                placeholder='Select binding type'
+                placeholder="Select binding type"
               />
             </div>
           </div>
 
           <div>
-            <label className='block text-sm font-medium mb-1'>
-              Component <span className='text-red-500'>*</span>
+            <label className="block text-sm font-medium mb-1">
+              Component <span className="text-red-500">*</span>
             </label>
             <Dropdown
               value={
@@ -480,12 +492,12 @@ export const RouteModal = ({
                 const component = components?.find(
                   (c) =>
                     c.versionedComponentId.componentId === cId &&
-                    c.versionedComponentId.version.toString() === version
+                    c.versionedComponentId.version.toString() === version,
                 );
                 setSelectedComponent(component);
                 setSelectedVersion(Number(version));
               }}
-              placeholder='Select component'
+              placeholder="Select component"
               error={errors.component}
             />
           </div>
@@ -494,7 +506,10 @@ export const RouteModal = ({
             <label className=" text-sm font-medium mb-1 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 Worker <span className="text-red-500">*</span>
-                <Tooltip content={TOOLTIP_CONTENT.worker.content} title={TOOLTIP_CONTENT.worker.title} />
+                <Tooltip
+                  content={TOOLTIP_CONTENT.worker.content}
+                  title={TOOLTIP_CONTENT.worker.title}
+                />
               </div>
               <div className="flex items-center gap-2 text-sm font-normal">
                 <label className="flex items-center gap-1.5">
@@ -534,8 +549,10 @@ export const RouteModal = ({
                 />
               ) : (
                 <div className="relative">
-                  <Code2 className={`absolute left-3 top-2.5 h-4 w-4 
-                    ${errors.worker ? "text-red-500" : "text-muted-foreground"}`} />
+                  <Code2
+                    className={`absolute left-3 top-2.5 h-4 w-4 
+                    ${errors.worker ? "text-red-500" : "text-muted-foreground"}`}
+                  />
                   <textarea
                     value={customWorkerExpression}
                     onChange={(e) => setCustomWorkerExpression(e.target.value)}
@@ -548,10 +565,10 @@ export const RouteModal = ({
             </div>
           </div>
 
-          <div className='space-y-4'>
+          <div className="space-y-4">
             <div>
               <label className="text-sm font-medium mb-1 flex items-center justify-between">
-                <label className='block text-sm font-medium mb-1'>
+                <label className="block text-sm font-medium mb-1">
                   Response Type
                 </label>
                 <div className="flex items-center gap-2 text-sm font-normal">
@@ -581,7 +598,7 @@ export const RouteModal = ({
                   </label>
                 </div>
               </label>
-              {!isCustomResponse && bindingType === 'default' && (
+              {!isCustomResponse && bindingType === "default" && (
                 <Dropdown
                   value={selectedRibType}
                   options={RIB_TYPES.reduce(
@@ -594,7 +611,7 @@ export const RouteModal = ({
                       },
                       ...category.types,
                     ],
-                    []
+                    [],
                   )}
                   onChange={(type) => {
                     setSelectedRibType(type);
@@ -602,16 +619,17 @@ export const RouteModal = ({
                       setResponse("");
                     }
                   }}
-                  placeholder='Select Rib type'
+                  placeholder="Select Rib type"
                 />
               )}
             </div>
 
-            {(selectedRibType || bindingType !== 'default') && (
+            {(selectedRibType || bindingType !== "default") && (
               <div>
                 <label className="text-sm font-medium mb-1 flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    Response {selectedRibType && <span className="text-red-500">*</span>}
+                    Response{" "}
+                    {selectedRibType && <span className="text-red-500">*</span>}
                   </div>
                 </label>
 
@@ -623,22 +641,27 @@ export const RouteModal = ({
                     placeholder="Select function"
                     error={errors.response && isCustomResponse}
                   />
-                ) : bindingType !== 'default' || typeof response === 'string' ? (
+                ) : bindingType !== "default" ||
+                  typeof response === "string" ? (
                   <textarea
                     value={response}
                     onChange={(e) => setResponse(e.target.value)}
                     className={`bg-card/80 w-full p-3 rounded-md transition-colors font-mono text-sm h-40
                       ${errors.response ? "border-2 border-red-500" : "border border-gray-600"}`}
-                    placeholder={`Enter response ${bindingType !== 'default' ? 'configuration' : 'value'}`}
+                    placeholder={`Enter response ${bindingType !== "default" ? "configuration" : "value"}`}
                   />
                 ) : (
-                  <div className='relative'>
+                  <div className="relative">
                     <Code2
                       className={`absolute left-3 top-2.5 h-4 w-4 
                       ${errors.response ? "text-red-500" : "text-muted-foreground"}`}
                     />
                     <input
-                      type={NUMERIC_TYPES.includes(selectedRibType) ? "number" : "text"}
+                      type={
+                        NUMERIC_TYPES.includes(selectedRibType)
+                          ? "number"
+                          : "text"
+                      }
                       value={stripNumSuffix(response)}
                       onChange={(e) => setResponse(e.target.value)}
                       className={`bg-card/80 w-full pl-10 pr-3 py-2 rounded-md transition-colors
@@ -651,23 +674,24 @@ export const RouteModal = ({
             )}
           </div>
 
-
-          <div className='flex justify-end space-x-3 mt-6 pt-4 border-t border-gray-700'>
+          <div className="flex justify-end space-x-3 mt-6 pt-4 border-t border-gray-700">
             <button
               onClick={onClose}
-              className='px-4 py-2 text-sm bg-gray-700 rounded-md hover:bg-gray-600
-                transition-colors'
-              disabled={isLoading}>
+              className="px-4 py-2 text-sm bg-gray-700 rounded-md hover:bg-gray-600
+                transition-colors"
+              disabled={isLoading}
+            >
               Cancel
             </button>
             <button
               onClick={handleSave}
               disabled={isLoading}
-              className='px-4 py-2 text-sm bg-primary rounded-md hover:bg-blue-600 
-                disabled:opacity-50 transition-colors flex items-center gap-2'>
+              className="px-4 py-2 text-sm bg-primary rounded-md hover:bg-blue-600 
+                disabled:opacity-50 transition-colors flex items-center gap-2"
+            >
               {isLoading ? (
                 <>
-                  <Loader2 size={16} className='animate-spin' />
+                  <Loader2 size={16} className="animate-spin" />
                   <span>Saving...</span>
                 </>
               ) : (

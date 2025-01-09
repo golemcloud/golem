@@ -170,7 +170,7 @@ export interface Plugin {
   icon: number[];
   homepage: string;
   specs: {
-    type: "ComponentTransformer"| "OplogProcessor"
+    type: "ComponentTransformer" | "OplogProcessor";
     providedWitPackage: string;
     jsonSchema: string;
     validateUrl: string;

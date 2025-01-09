@@ -12,7 +12,6 @@ import { useCreateComponent, useUpdateComponent } from "../../api/components";
 import { useEffect, useRef, useState } from "react";
 
 import { Component } from "../../types/api";
-import { displayError } from "../../lib/error-utils";
 import toast from "react-hot-toast";
 
 type ComponentType = "Durable" | "Ephemeral";
@@ -142,7 +141,9 @@ const FileDropzone = ({
         <Upload className="h-8 w-8 mx-auto text-muted-foreground" />
         <div>
           <p className="text-sm text-gray-300">{placeholder}</p>
-          <p className="text-xs text-muted-foreground mt-1">or click to browse</p>
+          <p className="text-xs text-muted-foreground mt-1">
+            or click to browse
+          </p>
         </div>
       </div>
     )}
@@ -309,10 +310,11 @@ const CreateComponentModal = ({
                     setComponentType(option.value as ComponentType)
                   }
                   className={`flex items-center gap-3 p-4 rounded-lg border-2 transition-all
-                                             ${componentType === option.value
-                      ? "border-blue-500 bg-primary/10"
-                      : "border-gray-600 hover:border-gray-500"
-                    }`}
+                                             ${
+                                               componentType === option.value
+                                                 ? "border-blue-500 bg-primary/10"
+                                                 : "border-gray-600 hover:border-gray-500"
+                                             }`}
                   disabled={isSubmitting}
                 >
                   <option.icon

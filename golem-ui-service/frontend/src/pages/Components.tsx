@@ -72,7 +72,9 @@ export const Components = () => {
       {!components || components.length === 0 ? (
         <div className="text-center py-8 md:py-12 bg-card rounded-lg">
           <Box size={48} className="mx-auto text-gray-600 mb-4" />
-          <p className="text-sm md:text-base text-muted-foreground">No components found</p>
+          <p className="text-sm md:text-base text-muted-foreground">
+            No components found
+          </p>
           <p className="text-xs md:text-sm text-gray-500 mt-2">
             Create your first component to get started
           </p>
@@ -122,7 +124,10 @@ export const Components = () => {
                 </div>
 
                 <div className="mt-2 flex items-center gap-2 truncate">
-                  <Tag size={14} className="text-muted-foreground flex-shrink-0" />
+                  <Tag
+                    size={14}
+                    className="text-muted-foreground flex-shrink-0"
+                  />
                   <span className="text-xs md:text-sm text-muted-foreground truncate">
                     {component.versionedComponentId.componentId}
                   </span>

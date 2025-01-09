@@ -83,7 +83,9 @@ const ListItem = ({
               {title}
             </h3>
           </Link>
-          {subtitle && <p className="text-xs text-muted-foreground">{subtitle}</p>}
+          {subtitle && (
+            <p className="text-xs text-muted-foreground">{subtitle}</p>
+          )}
         </div>
       </div>
       {status && (
@@ -117,7 +119,7 @@ export const Overview = () => {
   const { data: plugins, isLoading: pluginsLoading } = usePlugins();
 
   document.title = `Overview - Golem UI`;
-  
+
   return (
     <div className="space-y-8">
       <div className="bg-card/50 p-6 rounded-lg">

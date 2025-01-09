@@ -1,11 +1,8 @@
 import { ExternalLink, Globe, Server, Upload, X } from "lucide-react";
 
 import { ApiDefinition } from "../../types/api";
-import { displayError } from "../../lib/error-utils";
-// import { ApiDefinition } from '../types/api';
 import toast from "react-hot-toast";
 import { useCreateDeployment } from "../../api/api-definitions";
-// import { useCreateDeployment } from '../api/api-deployments';
 import { useState } from "react";
 
 interface DeployModalProps {
@@ -116,7 +113,8 @@ export const DeployModal = ({
 
             <div>
               <label className="block text-sm font-medium mb-1">
-                Subdomain <span className="text-muted-foreground">(Optional)</span>
+                Subdomain{" "}
+                <span className="text-muted-foreground">(Optional)</span>
               </label>
               <div className="relative">
                 <ExternalLink className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />

@@ -1,6 +1,5 @@
 import { AlertCircle, Loader2, Plus, Server, Settings, X } from "lucide-react";
 
-import { displayError } from "../../lib/error-utils";
 import toast from "react-hot-toast";
 import { useComponents } from "../../api/components";
 import { useCreatePlugin } from "../../api/plugins";
@@ -38,7 +37,10 @@ const Input: React.FC<InputProps> = ({ label, error, ...props }) => (
   </div>
 );
 
-export const CreatePluginModal = ({ isOpen, onClose }: CreatePluginModalProps) => {
+export const CreatePluginModal = ({
+  isOpen,
+  onClose,
+}: CreatePluginModalProps) => {
   const [name, setName] = useState("");
   const [version, setVersion] = useState("");
   const [description, setDescription] = useState("");
@@ -120,7 +122,9 @@ export const CreatePluginModal = ({ isOpen, onClose }: CreatePluginModalProps) =
               <Plus size={20} />
             </div>
             <div>
-              <h2 className="text-lg md:text-xl font-semibold">Create New Plugin</h2>
+              <h2 className="text-lg md:text-xl font-semibold">
+                Create New Plugin
+              </h2>
               <p className="text-xs md:text-sm text-muted-foreground mt-1">
                 Configure your plugin settings
               </p>
@@ -190,14 +194,19 @@ export const CreatePluginModal = ({ isOpen, onClose }: CreatePluginModalProps) =
                   key={option.value}
                   onClick={() => setType(option.value as PluginType)}
                   className={`flex items-center gap-3 p-3 md:p-4 rounded-lg border-2 transition-all
-                           ${type === option.value
-                              ? "border-blue-500 bg-primary/10"
-                              : "border-gray-600 hover:border-gray-500"
+                           ${
+                             type === option.value
+                               ? "border-blue-500 bg-primary/10"
+                               : "border-gray-600 hover:border-gray-500"
                            }`}
                   disabled={isSubmitting}
                 >
                   <option.icon
-                    className={type === option.value ? "text-primary" : "text-muted-foreground"}
+                    className={
+                      type === option.value
+                        ? "text-primary"
+                        : "text-muted-foreground"
+                    }
                     size={20}
                   />
                   <span className="text-sm md:text-base">{option.label}</span>

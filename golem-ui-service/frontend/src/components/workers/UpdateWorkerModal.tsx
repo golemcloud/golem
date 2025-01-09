@@ -126,10 +126,11 @@ export const WorkerActionModal = ({
             </button>
             <button
               onClick={handleAction}
-              className={`px-4 py-2 text-sm rounded-md ${action === "interrupt"
-                ? "bg-yellow-500 hover:bg-yellow-600"
-                : "bg-green-500 hover:bg-green-600"
-                }`}
+              className={`px-4 py-2 text-sm rounded-md ${
+                action === "interrupt"
+                  ? "bg-yellow-500 hover:bg-yellow-600"
+                  : "bg-green-500 hover:bg-green-600"
+              }`}
             >
               {action === "interrupt" ? "Interrupt Worker" : "Resume Worker"}
             </button>

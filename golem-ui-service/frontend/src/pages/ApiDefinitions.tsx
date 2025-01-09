@@ -41,7 +41,7 @@ const ApiDefinitionCard = ({ apiDef }: { apiDef: ApiDefinition }) => {
             onClick={() => {
               if (
                 window.confirm(
-                  "Are you sure you want to delete this API definition?"
+                  "Are you sure you want to delete this API definition?",
                 )
               ) {
                 deleteDefinition({ id: apiDef.id, version: apiDef.version });
@@ -61,7 +61,7 @@ const ApiDefinitionCard = ({ apiDef }: { apiDef: ApiDefinition }) => {
 export const ApiDefinitionsPage = () => {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const { data: apiDefinitions, isLoading } = useApiDefinitions();
-  
+
   document.title = `API Definitions - Golem UI`;
 
   if (isLoading) {
@@ -95,7 +95,9 @@ export const ApiDefinitionsPage = () => {
 
         {(!apiDefinitions || apiDefinitions.length === 0) && (
           <div className="text-center py-6 md:py-8 bg-card rounded-lg">
-            <p className="text-sm md:text-base text-muted-foreground">No API definitions found</p>
+            <p className="text-sm md:text-base text-muted-foreground">
+              No API definitions found
+            </p>
             <button
               onClick={() => setShowCreateModal(true)}
               className="text-primary hover:text-primary-accent mt-2 text-sm"
