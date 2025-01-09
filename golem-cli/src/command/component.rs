@@ -36,6 +36,7 @@ use golem_wasm_rpc_stubgen::commands::app::{
 };
 use golem_wasm_rpc_stubgen::log::Output;
 use golem_wasm_rpc_stubgen::model::app;
+use golem_wasm_rpc_stubgen::model::app::DependencyType;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::marker::PhantomData;
 use std::path::PathBuf;
@@ -703,7 +704,10 @@ impl ApplicationComponentContext {
             .application_context
             .application
             .component_wasm_rpc_dependencies(component_name)
-            .clone();
+            .iter()
+            .filter(|dep| dep.dep_type == DependencyType::DynamicWasmRpc)
+            .cloned()
+            .collect::<Vec<_>>();
 
         for wasm_rpc_dep in wasm_rpc_deps {
             let ifaces = self
