@@ -12,7 +12,7 @@ export const componentKeys = {
   list: (filters: Record<string, unknown>) =>
     [...componentKeys.lists(), filters] as const,
   details: () => [...componentKeys.all, "detail"] as const,
-  detail: (id: string) => [...componentKeys.details(), id] as const,
+  detail: (id: string,version:string|number) => [...componentKeys.details(), id, version] as const,
   versions: (id: string) => [...componentKeys.detail(id), "versions"] as const,
 };
 
@@ -117,9 +117,9 @@ export const useUpdateComponent = () => {
   return useMutation({
     mutationFn: updateComponent,
     onSuccess: (_, { componentId }) => {
-      queryClient.invalidateQueries({
-        queryKey: componentKeys.detail(componentId),
-      });
+      // queryClient.invalidateQueries({
+      //   queryKey: componentKeys.detail(componentId),
+      // });
     },
     onError: (error: Error | GolemError) =>
       displayError(error, "Error updating component"),
@@ -146,11 +146,12 @@ export const useComponent = (
   isLoading: boolean;
 } => {
   return useQuery({
-    queryKey: componentKeys.detail(componentId),
+    queryKey: componentKeys.detail(componentId, version),
     queryFn: () => getComponentVersion(componentId, version),
     onError: (error: Error | GolemError) =>
       displayError(error, "Error fetching component"),
     enabled: !!componentId, // Only run if componentId is provided
+    cacheTime: 0, // Disable cache
   });
 };
 
