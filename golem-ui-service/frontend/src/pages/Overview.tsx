@@ -179,7 +179,7 @@ export const Overview = () => {
                       subtitle={`Version ${component.versionedComponentId.version}`}
                       status="active"
                       icon={Server}
-                      url={`/components/${component.versionedComponentId.componentId}`}
+                      url={`/components/${component.versionedComponentId.componentId}/${component.versionedComponentId.version}`}
                     />
                   ))}
                 {!components?.length && (
