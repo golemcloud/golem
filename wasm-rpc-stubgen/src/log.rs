@@ -262,7 +262,7 @@ pub trait LogColorize {
     }
 }
 
-impl<'a> LogColorize for &'a str {
+impl LogColorize for &str {
     fn as_str(&self) -> impl Colorize {
         *self
     }
@@ -274,7 +274,7 @@ impl LogColorize for String {
     }
 }
 
-impl<'a> LogColorize for &'a Path {
+impl LogColorize for &Path {
     fn as_str(&self) -> impl Colorize {
         ColoredString::from(self.display().to_string())
     }
