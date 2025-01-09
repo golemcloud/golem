@@ -290,28 +290,31 @@ pub trait OplogOps: Oplog {
         })
     }
 
+    async fn get_raw_payload_of_entry(&self, entry: &OplogEntry) -> Result<Option<Bytes>, String> {
+        match entry {
+            OplogEntry::ImportedFunctionInvokedV1 { response, .. } => {
+                Ok(Some(self.download_payload(response).await?))
+            }
+            OplogEntry::ImportedFunctionInvoked { response, .. } => {
+                Ok(Some(self.download_payload(response).await?))
+            }
+            OplogEntry::ExportedFunctionInvoked { request, .. } => {
+                Ok(Some(self.download_payload(request).await?))
+            }
+            OplogEntry::ExportedFunctionCompleted { response, .. } => {
+                Ok(Some(self.download_payload(response).await?))
+            }
+            _ => Ok(None),
+        }
+    }
+
     async fn get_payload_of_entry<T: Decode>(
         &self,
         entry: &OplogEntry,
     ) -> Result<Option<T>, String> {
-        match entry {
-            OplogEntry::ImportedFunctionInvokedV1 { response, .. } => {
-                let response_bytes: Bytes = self.download_payload(response).await?;
-                try_deserialize(&response_bytes)
-            }
-            OplogEntry::ImportedFunctionInvoked { response, .. } => {
-                let response_bytes: Bytes = self.download_payload(response).await?;
-                try_deserialize(&response_bytes)
-            }
-            OplogEntry::ExportedFunctionInvoked { request, .. } => {
-                let response_bytes: Bytes = self.download_payload(request).await?;
-                try_deserialize(&response_bytes)
-            }
-            OplogEntry::ExportedFunctionCompleted { response, .. } => {
-                let response_bytes: Bytes = self.download_payload(response).await?;
-                try_deserialize(&response_bytes)
-            }
-            _ => Ok(None),
+        match self.get_raw_payload_of_entry(entry).await? {
+            Some(response_bytes) => try_deserialize(&response_bytes),
+            None => Ok(None),
         }
     }
 

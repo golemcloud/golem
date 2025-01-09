@@ -26,7 +26,6 @@ use wasmtime_wasi::WasiView;
 use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::wasm_rpc::UrnExtensions;
 use crate::durable_host::{Durability, DurableWorkerCtx};
-use crate::error::GolemError;
 use crate::get_oplog_entry;
 use crate::metrics::wasm::record_host_function_call;
 use crate::model::InterruptKind;
@@ -171,45 +170,54 @@ impl<Ctx: WorkerCtx> golem::api0_2_0::host::Host for DurableWorkerCtx<Ctx> {
         promise_id: golem::api0_2_0::host::PromiseId,
         data: Vec<u8>,
     ) -> Result<bool, anyhow::Error> {
-        record_host_function_call("golem::api", "complete_promise");
-        let promise_id: PromiseId = promise_id.into();
-        Durability::<Ctx, PromiseId, bool, SerializableError>::wrap(
+        let durability = Durability::<Ctx, bool, SerializableError>::new(
             self,
-            WrappedFunctionType::WriteLocal,
+            "", // TODO: fix in 2.0
             "golem_complete_promise",
-            promise_id.clone(),
-            |ctx| {
-                Box::pin(async move {
-                    Ok(ctx
-                        .public_state
-                        .promise_service
-                        .complete(promise_id, data)
-                        .await?)
-                })
-            },
+            WrappedFunctionType::WriteLocal,
         )
-        .await
+        .await?;
+
+        let promise_id: PromiseId = promise_id.into();
+        let result = if durability.is_live() {
+            let result = self
+                .public_state
+                .promise_service
+                .complete(promise_id.clone(), data)
+                .await;
+
+            durability.persist(self, promise_id, result).await
+        } else {
+            durability.replay(self).await
+        }?;
+        Ok(result)
     }
 
     async fn delete_promise(
         &mut self,
         promise_id: golem::api0_2_0::host::PromiseId,
     ) -> Result<(), anyhow::Error> {
-        record_host_function_call("golem::api", "delete_promise");
-        let promise_id: PromiseId = promise_id.into();
-        Durability::<Ctx, PromiseId, (), SerializableError>::wrap(
+        let durability = Durability::<Ctx, (), SerializableError>::new(
             self,
-            WrappedFunctionType::WriteLocal,
+            "", // TODO: fix in 2.0
             "golem_delete_promise",
-            promise_id.clone(),
-            |ctx| {
-                Box::pin(async move {
-                    ctx.public_state.promise_service.delete(promise_id).await;
-                    Ok(())
-                })
-            },
+            WrappedFunctionType::WriteLocal,
         )
-        .await
+        .await?;
+
+        let promise_id: PromiseId = promise_id.into();
+        if durability.is_live() {
+            let result = {
+                self.public_state
+                    .promise_service
+                    .delete(promise_id.clone())
+                    .await;
+                Ok(())
+            };
+            durability.persist(self, promise_id, result).await
+        } else {
+            durability.replay(self).await
+        }
     }
 
     async fn get_self_uri(
@@ -432,7 +440,13 @@ impl<Ctx: WorkerCtx> golem::api0_2_0::host::Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn generate_idempotency_key(&mut self) -> anyhow::Result<golem::api0_2_0::host::Uuid> {
-        record_host_function_call("golem::api", "generate_idempotency_key");
+        let durability = Durability::<Ctx, (u64, u64), SerializableError>::new(
+            self,
+            "golem api",
+            "generate_idempotency_key",
+            WrappedFunctionType::WriteRemote,
+        )
+        .await?;
 
         let current_idempotency_key = self
             .get_current_idempotency_key()
@@ -440,25 +454,16 @@ impl<Ctx: WorkerCtx> golem::api0_2_0::host::Host for DurableWorkerCtx<Ctx> {
             .unwrap_or(IdempotencyKey::fresh());
         let oplog_index = self.state.current_oplog_index().await;
 
-        // NOTE: Now that IdempotencyKey::derived is used, we no longer need to persist this, but we do to avoid breaking existing oplogs
-        let uuid = Durability::<Ctx, (), (u64, u64), SerializableError>::custom_wrap(
-            self,
-            WrappedFunctionType::WriteRemote,
-            "golem api::generate_idempotency_key",
-            (),
-            |_ctx| {
-                Box::pin(async move {
-                    let key = IdempotencyKey::derived(&current_idempotency_key, oplog_index);
-                    let uuid = Uuid::parse_str(&key.value.to_string()).unwrap(); // this is guaranteed to be a uuid
-                    Ok::<Uuid, GolemError>(uuid)
-                })
-            },
-            |_ctx, uuid: &Uuid| Ok(uuid.as_u64_pair()),
-            |_ctx, (high_bits, low_bits)| {
-                Box::pin(async move { Ok(Uuid::from_u64_pair(high_bits, low_bits)) })
-            },
-        )
-        .await?;
+        // TODO: Fix in 2.0 - Now that IdempotencyKey::derived is used, we no longer need to persist this, but we do to avoid breaking existing oplogs
+        let (hi, lo) = if durability.is_live() {
+            let key = IdempotencyKey::derived(&current_idempotency_key, oplog_index);
+            let uuid = Uuid::parse_str(&key.value.to_string()).unwrap(); // this is guaranteed to be a uuid
+            let result: Result<(u64, u64), anyhow::Error> = Ok(uuid.as_u64_pair());
+            durability.persist(self, (), result).await
+        } else {
+            durability.replay(self).await
+        }?;
+        let uuid = Uuid::from_u64_pair(hi, lo);
         Ok(uuid.into())
     }
 
@@ -468,7 +473,13 @@ impl<Ctx: WorkerCtx> golem::api0_2_0::host::Host for DurableWorkerCtx<Ctx> {
         target_version: ComponentVersion,
         mode: UpdateMode,
     ) -> anyhow::Result<()> {
-        record_host_function_call("golem::api", "update_worker");
+        let durability = Durability::<Ctx, (), SerializableError>::new(
+            self,
+            "golem::api",
+            "update-worker",
+            WrappedFunctionType::WriteRemote,
+        )
+        .await?;
 
         let worker_id: WorkerId = worker_id.into();
         let owned_worker_id = OwnedWorkerId::new(&self.owned_worker_id.account_id, &worker_id);
@@ -477,30 +488,19 @@ impl<Ctx: WorkerCtx> golem::api0_2_0::host::Host for DurableWorkerCtx<Ctx> {
             UpdateMode::Automatic => golem_api_grpc::proto::golem::worker::UpdateMode::Automatic,
             UpdateMode::SnapshotBased => golem_api_grpc::proto::golem::worker::UpdateMode::Manual,
         };
-        Durability::<
-            Ctx,
-            (
-                WorkerId,
-                u64,
-                golem_api_grpc::proto::golem::worker::UpdateMode,
-            ),
-            (),
-            SerializableError,
-        >::wrap(
-            self,
-            WrappedFunctionType::WriteRemote,
-            "golem::api::update-worker",
-            (worker_id, target_version, mode),
-            |ctx| {
-                Box::pin(async move {
-                    ctx.state
-                        .worker_proxy
-                        .update(&owned_worker_id, target_version, mode)
-                        .await
-                })
-            },
-        )
-        .await?;
+
+        if durability.is_live() {
+            let result = self
+                .state
+                .worker_proxy
+                .update(&owned_worker_id, target_version, mode)
+                .await;
+            durability
+                .persist(self, (worker_id, target_version, mode), result)
+                .await
+        } else {
+            durability.replay(self).await
+        }?;
 
         Ok(())
     }
