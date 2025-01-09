@@ -36,10 +36,7 @@ inherit_test_dep!(EnvBasedTestDependencies);
 #[test]
 #[tracing::instrument]
 #[timeout(120000)]
-async fn fork_interrupted_worker_to_completion(
-    deps: &EnvBasedTestDependencies,
-    _tracing: &Tracing,
-) {
+async fn fork_interrupted_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let response = Arc::new(Mutex::new("initial".to_string()));
     let host_http_port = 8586;
 
@@ -98,7 +95,7 @@ async fn fork_interrupted_worker_to_completion(
 #[tracing::instrument]
 #[flaky(5)]
 #[timeout(120000)]
-async fn fork_running_worker_to_completion(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+async fn fork_running_worker_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let response = Arc::new(Mutex::new("initial".to_string()));
     let host_http_port = 8587;
     let http_server = run_http_server(&response, host_http_port);
@@ -166,6 +163,80 @@ async fn fork_running_worker_to_completion(deps: &EnvBasedTestDependencies, _tra
 
     assert_eq!(target_result.len(), 1);
     assert_eq!(source_result.len(), 1);
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout(120000)]
+async fn fork_running_worker_2(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    let component_id = deps.store_component("shopping-cart").await;
+
+    let source_worker_id = WorkerId {
+        component_id: component_id.clone(),
+        worker_name: "sc".to_string(),
+    };
+
+    let _ = deps
+        .invoke_and_await(
+            &source_worker_id,
+            "golem:it/api.{initialize-cart}",
+            vec![Value::String("test-user-1".to_string())],
+        )
+        .await;
+
+    let _ = deps
+        .invoke_and_await(
+            &source_worker_id,
+            "golem:it/api.{add-item}",
+            vec![Value::Record(vec![
+                Value::String("G1002".to_string()),
+                Value::String("Mud Golem".to_string()),
+                Value::F32(11.0),
+                Value::U32(10),
+            ])],
+        )
+        .await;
+
+    let target_worker_id = WorkerId {
+        component_id: component_id.clone(),
+        worker_name: "forked-sc".to_string(),
+    };
+
+    let source_oplog = deps.get_oplog(&source_worker_id, OplogIndex::INITIAL).await;
+
+    let oplog_index_of_function_invoked: OplogIndex = OplogIndex::from_u64(3);
+
+    let log_record = source_oplog
+        .get(u64::from(oplog_index_of_function_invoked) as usize - 1)
+        .expect("Expect at least one entry in source oplog");
+
+    assert!(matches!(
+        log_record,
+        PublicOplogEntry::ExportedFunctionInvoked(_)
+    ));
+
+    let _ = deps
+        .fork_worker(
+            &source_worker_id,
+            &target_worker_id,
+            oplog_index_of_function_invoked,
+        )
+        .await;
+
+    deps.wait_for_status(
+        &target_worker_id,
+        WorkerStatus::Idle,
+        Duration::from_secs(10),
+    )
+    .await;
+
+    let total_cart_initialisation = deps
+        .search_oplog(&target_worker_id, "initialize-cart AND NOT pending")
+        .await;
+
+    // Since the fork point was before the completion, it re-intitialises making the total initialisation
+    // records 2 along with the new log in target worker.
+    assert_eq!(total_cart_initialisation.len(), 2);
 }
 
 #[test]
@@ -276,83 +347,6 @@ async fn fork_idle_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 #[test]
 #[tracing::instrument]
 #[timeout(120000)]
-async fn fork_worker_before_completion_of_function(
-    deps: &EnvBasedTestDependencies,
-    _tracing: &Tracing,
-) {
-    let component_id = deps.store_component("shopping-cart").await;
-
-    let source_worker_id = WorkerId {
-        component_id: component_id.clone(),
-        worker_name: "sc".to_string(),
-    };
-
-    let _ = deps
-        .invoke_and_await(
-            &source_worker_id,
-            "golem:it/api.{initialize-cart}",
-            vec![Value::String("test-user-1".to_string())],
-        )
-        .await;
-
-    let _ = deps
-        .invoke_and_await(
-            &source_worker_id,
-            "golem:it/api.{add-item}",
-            vec![Value::Record(vec![
-                Value::String("G1002".to_string()),
-                Value::String("Mud Golem".to_string()),
-                Value::F32(11.0),
-                Value::U32(10),
-            ])],
-        )
-        .await;
-
-    let target_worker_id = WorkerId {
-        component_id: component_id.clone(),
-        worker_name: "forked-sc".to_string(),
-    };
-
-    let source_oplog = deps.get_oplog(&source_worker_id, OplogIndex::INITIAL).await;
-
-    let oplog_index_of_function_invoked: OplogIndex = OplogIndex::from_u64(3);
-
-    let log_record = source_oplog
-        .get(u64::from(oplog_index_of_function_invoked) as usize - 1)
-        .expect("Expect at least one entry in source oplog");
-
-    assert!(matches!(
-        log_record,
-        PublicOplogEntry::ExportedFunctionInvoked(_)
-    ));
-
-    let _ = deps
-        .fork_worker(
-            &source_worker_id,
-            &target_worker_id,
-            oplog_index_of_function_invoked,
-        )
-        .await;
-
-    deps.wait_for_status(
-        &target_worker_id,
-        WorkerStatus::Idle,
-        Duration::from_secs(10),
-    )
-    .await;
-
-    let total_cart_initialisation = deps
-        .search_oplog(&target_worker_id, "initialize-cart AND NOT pending")
-        .await;
-
-    // Since the fork point was before the completion, it re-intitialises making the total initialisation
-    // records 2 along with the new log in target worker.
-    assert_eq!(total_cart_initialisation.len(), 2);
-}
-
-#[test]
-#[tracing::instrument]
-#[timeout(120000)]
 async fn fork_worker_when_target_already_exists(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
@@ -437,7 +431,7 @@ async fn fork_worker_with_invalid_oplog_index_cut_off(
 #[test]
 #[tracing::instrument]
 #[timeout(120000)]
-async fn fork_worker_4(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+async fn fork_invalid_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let component_id = deps.store_component("shopping-cart").await;
 
     let source_worker_id = WorkerId {
@@ -463,10 +457,13 @@ async fn fork_worker_4(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     assert!(error.contains("WorkerNotFound"));
 }
 
+// Divergence possibility is mainly respect to environment variables referring to worker-ids.
+// Fork shouldn't change the original environment variable values of the source worker
+// stored in oplog until cut off
 #[test]
 #[tracing::instrument]
 #[timeout(120000)]
-async fn fork_worker_no_divergence_until_fork_point(
+async fn fork_worker_ensures_zero_divergence_until_cut_off(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
 ) {
