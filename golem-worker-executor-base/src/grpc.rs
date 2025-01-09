@@ -67,7 +67,6 @@ use crate::model::{InterruptKind, LastError, ListDirectoryResult, ReadFileResult
 use crate::services::events::Event;
 use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActivator};
 use crate::services::worker_event::WorkerEventReceiver;
-use crate::services::worker_fork::{DefaultWorkerFork, WorkerForkService};
 use crate::services::{
     All, HasActiveWorkers, HasAll, HasComponentService, HasEvents, HasOplogService, HasPlugins,
     HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,

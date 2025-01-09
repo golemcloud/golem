@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::marker::PhantomData;
 use std::sync::RwLock;
 
 use crate::metrics::workers::record_worker_call;
@@ -22,7 +21,6 @@ use crate::services::rpc::Rpc;
 use crate::services::{rpc, HasOplog, HasWorkerForkService};
 use golem_common::model::oplog::{OplogIndex, OplogIndexRange};
 use golem_common::model::{AccountId, Timestamp, WorkerMetadata, WorkerStatusRecord};
-use std::fmt::Display;
 use std::sync::Arc;
 
 use super::file_loader::FileLoader;
