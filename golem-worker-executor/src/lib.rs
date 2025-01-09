@@ -44,7 +44,7 @@ use golem_worker_executor_base::services::worker_activator::WorkerActivator;
 use golem_worker_executor_base::services::worker_enumeration::{
     RunningWorkerEnumerationService, WorkerEnumerationService,
 };
-use golem_worker_executor_base::services::worker_fork::{DefaultWorkerFork, WorkerForkService};
+use golem_worker_executor_base::services::worker_fork::DefaultWorkerFork;
 use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
 use golem_worker_executor_base::services::{plugins, All};
 use golem_worker_executor_base::wasi_host::create_linker;
