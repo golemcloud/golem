@@ -427,7 +427,11 @@ mod protobuf {
                     .into_iter()
                     .map(|memory| memory.into())
                     .collect(),
-                dynamic_linking: HashMap::new(),
+                dynamic_linking: value
+                    .dynamic_linking
+                    .into_iter()
+                    .map(|(k, v)| v.try_into().map(|v| (k, v)))
+                    .collect::<Result<_, _>>()?,
             })
         }
     }
