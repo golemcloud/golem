@@ -63,6 +63,10 @@ pub trait HasConfig {
     fn config(&self) -> Arc<golem_config::GolemConfig>;
 }
 
+pub trait HasWorkerForkService {
+    fn worker_fork_service(&self) -> Arc<dyn worker_fork::WorkerForkService + Send + Sync>;
+}
+
 pub trait HasWorkerService {
     fn worker_service(&self) -> Arc<dyn worker::WorkerService + Send + Sync>;
 }
@@ -154,6 +158,7 @@ pub trait HasAll<Ctx: WorkerCtx>:
     HasActiveWorkers<Ctx>
     + HasComponentService
     + HasConfig
+    + HasWorkerForkService
     + HasWorkerService
     + HasWorkerEnumerationService
     + HasRunningWorkerEnumerationService
@@ -182,6 +187,7 @@ impl<
         T: HasActiveWorkers<Ctx>
             + HasComponentService
             + HasConfig
+            + HasWorkerForkService
             + HasWorkerService
             + HasWorkerEnumerationService
             + HasRunningWorkerEnumerationService
@@ -215,6 +221,7 @@ pub struct All<Ctx: WorkerCtx> {
     runtime: Handle,
     component_service: Arc<dyn component::ComponentService + Send + Sync>,
     shard_manager_service: Arc<dyn shard_manager::ShardManagerService + Send + Sync>,
+    worker_fork: Arc<dyn worker_fork::WorkerForkService + Send + Sync>,
     worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
     worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService + Send + Sync>,
     running_worker_enumeration_service:
@@ -249,6 +256,7 @@ impl<Ctx: WorkerCtx> Clone for All<Ctx> {
             runtime: self.runtime.clone(),
             component_service: self.component_service.clone(),
             shard_manager_service: self.shard_manager_service.clone(),
+            worker_fork: self.worker_fork.clone(),
             worker_service: self.worker_service.clone(),
             worker_enumeration_service: self.worker_enumeration_service.clone(),
             running_worker_enumeration_service: self.running_worker_enumeration_service.clone(),
@@ -280,6 +288,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         runtime: Handle,
         component_service: Arc<dyn component::ComponentService + Send + Sync>,
         shard_manager_service: Arc<dyn shard_manager::ShardManagerService + Send + Sync>,
+        worker_fork: Arc<dyn worker_fork::WorkerForkService + Send + Sync>,
         worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
         worker_enumeration_service: Arc<
             dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
@@ -314,6 +323,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             runtime,
             component_service,
             shard_manager_service,
+            worker_fork,
             worker_service,
             worker_enumeration_service,
             running_worker_enumeration_service,
@@ -343,6 +353,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             this.runtime(),
             this.component_service(),
             this.shard_manager_service(),
+            this.worker_fork_service(),
             this.worker_service(),
             this.worker_enumeration_service(),
             this.running_worker_enumeration_service(),
@@ -400,6 +411,12 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasShardManagerService for T {
 impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasConfig for T {
     fn config(&self) -> Arc<golem_config::GolemConfig> {
         self.all().golem_config.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasWorkerForkService for T {
+    fn worker_fork_service(&self) -> Arc<dyn worker_fork::WorkerForkService + Send + Sync> {
+        self.all().worker_fork.clone()
     }
 }
 

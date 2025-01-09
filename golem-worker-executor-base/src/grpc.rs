@@ -67,7 +67,7 @@ use crate::model::{InterruptKind, LastError, ListDirectoryResult, ReadFileResult
 use crate::services::events::Event;
 use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActivator};
 use crate::services::worker_event::WorkerEventReceiver;
-use crate::services::worker_fork::{DefaultWorkerFork, WorkerFork};
+use crate::services::worker_fork::{DefaultWorkerFork, WorkerForkService};
 use crate::services::{
     All, HasActiveWorkers, HasAll, HasComponentService, HasEvents, HasOplogService, HasPlugins,
     HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
@@ -142,7 +142,6 @@ pub struct WorkerExecutorImpl<
 > {
     /// Reference to all the initialized services
     services: Svcs,
-    worker_fork: Arc<dyn WorkerFork + Sync + Send>,
     ctx: PhantomData<Ctx>,
 }
 
@@ -152,7 +151,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     fn clone(&self) -> Self {
         Self {
             services: self.services.clone(),
-            worker_fork: self.worker_fork.clone(),
             ctx: PhantomData,
         }
     }
@@ -169,12 +167,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         lazy_worker_activator: Arc<LazyWorkerActivator<Ctx>>,
         port: u16,
     ) -> Result<Self, Error> {
-        let worker_fork: Arc<dyn WorkerFork + Sync + Send> =
-            Arc::new(DefaultWorkerFork::new(services.clone()));
-
         let worker_executor = WorkerExecutorImpl {
             services: services.clone(),
-            worker_fork,
             ctx: PhantomData,
         };
         let worker_activator = Arc::new(DefaultWorkerActivator::new(services.clone()));
@@ -460,7 +454,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let owned_source_worker_id = OwnedWorkerId::new(&account_id, &source_worker_id);
 
-        self.worker_fork
+        self.services
+            .worker_fork_service()
             .fork(
                 &owned_source_worker_id,
                 &owned_target_worker_id.worker_id,

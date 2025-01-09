@@ -13,23 +13,49 @@
 // limitations under the License.
 
 use std::marker::PhantomData;
-use std::sync::{Arc, RwLock};
+use std::sync::RwLock;
 
-use crate::error::GolemError;
 use crate::metrics::workers::record_worker_call;
 use crate::model::ExecutionStatus;
 use crate::services::oplog::CommitLevel;
-use crate::services::{HasAll, HasOplog};
+use crate::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc, Rpc};
+use crate::services::{rpc, HasAll, HasOplog, HasWorkerForkService};
+use golem_common::model::oplog::{OplogIndex, OplogIndexRange};
+use golem_common::model::{AccountId, Timestamp, WorkerMetadata, WorkerStatusRecord};
+use std::collections::HashMap;
+use std::fmt::{Display, Formatter};
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use bincode::{Decode, Encode};
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::WitValue;
+use tokio::runtime::Handle;
+use tracing::debug;
+
+use super::file_loader::FileLoader;
+use crate::error::GolemError;
+use crate::services::events::Events;
+use crate::services::oplog::plugin::OplogProcessorPlugin;
+use crate::services::plugins::Plugins;
+use crate::services::shard::ShardService;
+use crate::services::worker_proxy::{WorkerProxy, WorkerProxyError};
+use crate::services::{
+    active_workers, blob_store, component, golem_config, key_value, oplog, promise, scheduler,
+    shard, shard_manager, worker, worker_activator, worker_enumeration, HasActiveWorkers,
+    HasBlobStoreService, HasComponentService, HasConfig, HasEvents, HasExtraDeps, HasFileLoader,
+    HasKeyValueService, HasOplogProcessorPlugin, HasOplogService, HasPlugins, HasPromiseService,
+    HasRpc, HasRunningWorkerEnumerationService, HasSchedulerService, HasShardManagerService,
+    HasShardService, HasWasmtimeEngine, HasWorkerActivator, HasWorkerEnumerationService,
+    HasWorkerProxy, HasWorkerService,
+};
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
-use async_trait::async_trait;
-use golem_common::model::oplog::{OplogIndex, OplogIndexRange};
-use golem_common::model::{
-    AccountId, OwnedWorkerId, Timestamp, WorkerId, WorkerMetadata, WorkerStatusRecord,
-};
+use golem_common::model::component::ComponentOwner;
+use golem_common::model::{IdempotencyKey, OwnedWorkerId, TargetWorkerId, WorkerId};
 
 #[async_trait]
-pub trait WorkerFork {
+pub trait WorkerForkService {
     async fn fork(
         &self,
         source_worker_id: &OwnedWorkerId,
@@ -38,17 +64,288 @@ pub trait WorkerFork {
     ) -> Result<(), GolemError>;
 }
 
-#[derive(Clone)]
-pub struct DefaultWorkerFork<Ctx: WorkerCtx, Svcs: HasAll<Ctx>> {
-    all: Svcs,
-    ctx: PhantomData<Ctx>,
+pub struct DefaultWorkerFork<Ctx: WorkerCtx> {
+    rpc: Arc<dyn rpc::Rpc + Send + Sync>,
+    active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
+    engine: Arc<wasmtime::Engine>,
+    linker: Arc<wasmtime::component::Linker<Ctx>>,
+    runtime: Handle,
+    component_service: Arc<dyn component::ComponentService + Send + Sync>,
+    shard_manager_service: Arc<dyn shard_manager::ShardManagerService + Send + Sync>,
+    worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
+    worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
+    worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService + Send + Sync>,
+    running_worker_enumeration_service:
+        Arc<dyn worker_enumeration::RunningWorkerEnumerationService + Send + Sync>,
+    promise_service: Arc<dyn promise::PromiseService + Send + Sync>,
+    golem_config: Arc<golem_config::GolemConfig>,
+    shard_service: Arc<dyn shard::ShardService + Send + Sync>,
+    key_value_service: Arc<dyn key_value::KeyValueService + Send + Sync>,
+    blob_store_service: Arc<dyn blob_store::BlobStoreService + Send + Sync>,
+    oplog_service: Arc<dyn oplog::OplogService + Send + Sync>,
+    scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
+    worker_activator: Arc<dyn worker_activator::WorkerActivator<Ctx> + Send + Sync>,
+    events: Arc<Events>,
+    file_loader: Arc<FileLoader>,
+    plugins: Arc<
+        dyn Plugins<<Ctx::ComponentOwner as ComponentOwner>::PluginOwner, Ctx::PluginScope>
+            + Send
+            + Sync,
+    >,
+    oplog_processor_plugin: Arc<dyn OplogProcessorPlugin + Send + Sync>,
+    extra_deps: Ctx::ExtraDeps,
 }
 
-impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx>> DefaultWorkerFork<Ctx, Svcs> {
-    pub fn new(all: Svcs) -> Self {
+impl<Ctx: WorkerCtx> HasEvents for DefaultWorkerFork<Ctx> {
+    fn events(&self) -> Arc<Events> {
+        self.events.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasActiveWorkers<Ctx> for DefaultWorkerFork<Ctx> {
+    fn active_workers(&self) -> Arc<active_workers::ActiveWorkers<Ctx>> {
+        self.active_workers.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasComponentService for DefaultWorkerFork<Ctx> {
+    fn component_service(&self) -> Arc<dyn component::ComponentService + Send + Sync> {
+        self.component_service.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasConfig for DefaultWorkerFork<Ctx> {
+    fn config(&self) -> Arc<golem_config::GolemConfig> {
+        self.golem_config.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasWorkerService for DefaultWorkerFork<Ctx> {
+    fn worker_service(&self) -> Arc<dyn worker::WorkerService + Send + Sync> {
+        self.worker_service.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasWorkerEnumerationService for DefaultWorkerFork<Ctx> {
+    fn worker_enumeration_service(
+        &self,
+    ) -> Arc<dyn worker_enumeration::WorkerEnumerationService + Send + Sync> {
+        self.worker_enumeration_service.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasRunningWorkerEnumerationService for DefaultWorkerFork<Ctx> {
+    fn running_worker_enumeration_service(
+        &self,
+    ) -> Arc<dyn worker_enumeration::RunningWorkerEnumerationService + Send + Sync> {
+        self.running_worker_enumeration_service.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasPromiseService for DefaultWorkerFork<Ctx> {
+    fn promise_service(&self) -> Arc<dyn promise::PromiseService + Send + Sync> {
+        self.promise_service.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasWasmtimeEngine<Ctx> for DefaultWorkerFork<Ctx> {
+    fn engine(&self) -> Arc<wasmtime::Engine> {
+        self.engine.clone()
+    }
+
+    fn linker(&self) -> Arc<wasmtime::component::Linker<Ctx>> {
+        self.linker.clone()
+    }
+
+    fn runtime(&self) -> Handle {
+        self.runtime.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasKeyValueService for DefaultWorkerFork<Ctx> {
+    fn key_value_service(&self) -> Arc<dyn key_value::KeyValueService + Send + Sync> {
+        self.key_value_service.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasBlobStoreService for DefaultWorkerFork<Ctx> {
+    fn blob_store_service(&self) -> Arc<dyn blob_store::BlobStoreService + Send + Sync> {
+        self.blob_store_service.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasSchedulerService for DefaultWorkerFork<Ctx> {
+    fn scheduler_service(&self) -> Arc<dyn scheduler::SchedulerService + Send + Sync> {
+        self.scheduler_service.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasOplogService for DefaultWorkerFork<Ctx> {
+    fn oplog_service(&self) -> Arc<dyn oplog::OplogService + Send + Sync> {
+        self.oplog_service.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasWorkerForkService for DefaultWorkerFork<Ctx> {
+    fn worker_fork_service(&self) -> Arc<dyn WorkerForkService + Send + Sync> {
+        Arc::new(self.clone())
+    }
+}
+
+impl<Ctx: WorkerCtx> HasRpc for DefaultWorkerFork<Ctx> {
+    fn rpc(&self) -> Arc<dyn Rpc + Send + Sync> {
+        self.rpc.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasExtraDeps<Ctx> for DefaultWorkerFork<Ctx> {
+    fn extra_deps(&self) -> Ctx::ExtraDeps {
+        self.extra_deps.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasShardService for DefaultWorkerFork<Ctx> {
+    fn shard_service(&self) -> Arc<dyn shard::ShardService + Send + Sync> {
+        self.shard_service.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasShardManagerService for DefaultWorkerFork<Ctx> {
+    fn shard_manager_service(&self) -> Arc<dyn shard_manager::ShardManagerService + Send + Sync> {
+        self.shard_manager_service.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasWorkerActivator<Ctx> for DefaultWorkerFork<Ctx> {
+    fn worker_activator(&self) -> Arc<dyn worker_activator::WorkerActivator<Ctx> + Send + Sync> {
+        self.worker_activator.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasWorkerProxy for DefaultWorkerFork<Ctx> {
+    fn worker_proxy(&self) -> Arc<dyn WorkerProxy + Send + Sync> {
+        self.worker_proxy.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasFileLoader for DefaultWorkerFork<Ctx> {
+    fn file_loader(&self) -> Arc<FileLoader> {
+        self.file_loader.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx>
+    HasPlugins<<Ctx::ComponentOwner as ComponentOwner>::PluginOwner, Ctx::PluginScope>
+    for DefaultWorkerFork<Ctx>
+{
+    fn plugins(
+        &self,
+    ) -> Arc<
+        dyn Plugins<<Ctx::ComponentOwner as ComponentOwner>::PluginOwner, Ctx::PluginScope>
+            + Send
+            + Sync,
+    > {
+        self.plugins.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasOplogProcessorPlugin for DefaultWorkerFork<Ctx> {
+    fn oplog_processor_plugin(&self) -> Arc<dyn OplogProcessorPlugin + Send + Sync> {
+        self.oplog_processor_plugin.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> Clone for DefaultWorkerFork<Ctx> {
+    fn clone(&self) -> Self {
         Self {
-            all,
-            ctx: PhantomData,
+            rpc: self.rpc.clone(),
+            active_workers: self.active_workers.clone(),
+            engine: self.engine.clone(),
+            linker: self.linker.clone(),
+            runtime: self.runtime.clone(),
+            component_service: self.component_service.clone(),
+            shard_manager_service: self.shard_manager_service.clone(),
+            worker_service: self.worker_service.clone(),
+            worker_proxy: self.worker_proxy.clone(),
+            worker_enumeration_service: self.worker_enumeration_service.clone(),
+            running_worker_enumeration_service: self.running_worker_enumeration_service.clone(),
+            promise_service: self.promise_service.clone(),
+            golem_config: self.golem_config.clone(),
+            shard_service: self.shard_service.clone(),
+            key_value_service: self.key_value_service.clone(),
+            blob_store_service: self.blob_store_service.clone(),
+            oplog_service: self.oplog_service.clone(),
+            scheduler_service: self.scheduler_service.clone(),
+            worker_activator: self.worker_activator.clone(),
+            events: self.events.clone(),
+            file_loader: self.file_loader.clone(),
+            plugins: self.plugins.clone(),
+            oplog_processor_plugin: self.oplog_processor_plugin.clone(),
+            extra_deps: self.extra_deps.clone(),
+        }
+    }
+}
+
+impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
+    pub fn new(
+        rpc: Arc<dyn Rpc + Send + Sync>,
+        active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
+        engine: Arc<wasmtime::Engine>,
+        linker: Arc<wasmtime::component::Linker<Ctx>>,
+        runtime: Handle,
+        component_service: Arc<dyn component::ComponentService + Send + Sync>,
+        shard_manager_service: Arc<dyn shard_manager::ShardManagerService + Send + Sync>,
+        worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
+        worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
+        worker_enumeration_service: Arc<
+            dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
+        >,
+        running_worker_enumeration_service: Arc<
+            dyn worker_enumeration::RunningWorkerEnumerationService + Send + Sync,
+        >,
+        promise_service: Arc<dyn promise::PromiseService + Send + Sync>,
+        golem_config: Arc<golem_config::GolemConfig>,
+        shard_service: Arc<dyn ShardService + Send + Sync>,
+        key_value_service: Arc<dyn key_value::KeyValueService + Send + Sync>,
+        blob_store_service: Arc<dyn blob_store::BlobStoreService + Send + Sync>,
+        oplog_service: Arc<dyn oplog::OplogService + Send + Sync>,
+        scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
+        worker_activator: Arc<dyn worker_activator::WorkerActivator<Ctx> + Send + Sync>,
+        events: Arc<Events>,
+        file_loader: Arc<FileLoader>,
+        plugins: Arc<
+            dyn Plugins<<Ctx::ComponentOwner as ComponentOwner>::PluginOwner, Ctx::PluginScope>
+                + Send
+                + Sync,
+        >,
+        oplog_processor_plugin: Arc<dyn OplogProcessorPlugin + Send + Sync>,
+        extra_deps: Ctx::ExtraDeps,
+    ) -> Self {
+        Self {
+            rpc,
+            active_workers,
+            engine,
+            linker,
+            runtime,
+            component_service,
+            shard_manager_service,
+            worker_service,
+            worker_proxy,
+            worker_enumeration_service,
+            running_worker_enumeration_service,
+            promise_service,
+            golem_config,
+            shard_service,
+            key_value_service,
+            blob_store_service,
+            oplog_service,
+            scheduler_service,
+            worker_activator,
+            events,
+            file_loader,
+            plugins,
+            oplog_processor_plugin,
+            extra_deps,
         }
     }
 
@@ -69,7 +366,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx>> DefaultWorkerFork<Ctx, Svcs> {
 
         let owned_target_worker_id = OwnedWorkerId::new(account_id, target_worker_id);
 
-        let target_metadata = self.all.worker_service().get(&owned_target_worker_id).await;
+        let target_metadata = self.worker_service.get(&owned_target_worker_id).await;
 
         // We allow forking only if the target worker does not exist
         if target_metadata.is_some() {
@@ -77,12 +374,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx>> DefaultWorkerFork<Ctx, Svcs> {
         }
 
         // We assume the source worker belongs to this executor
-        self.all.shard_service().check_worker(source_worker_id)?;
+        self.shard_service.check_worker(source_worker_id)?;
 
         let owned_source_worker_id = OwnedWorkerId::new(account_id, source_worker_id);
 
-        self.all
-            .worker_service()
+        self.worker_service
             .get(&owned_source_worker_id)
             .await
             .ok_or(GolemError::worker_not_found(source_worker_id.clone()))?;
@@ -92,9 +388,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx>> DefaultWorkerFork<Ctx, Svcs> {
 }
 
 #[async_trait]
-impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerFork
-    for DefaultWorkerFork<Ctx, Svcs>
-{
+impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
     async fn fork(
         &self,
         source_worker_id: &OwnedWorkerId,
@@ -115,15 +409,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerFork
         let target_worker_id = owned_target_worker_id.worker_id.clone();
         let account_id = owned_target_worker_id.account_id.clone();
 
-        let source_worker_instance = Worker::get_or_create_suspended(
-            &self.all,
-            &owned_source_worker_id,
-            None,
-            None,
-            None,
-            None,
-        )
-        .await?;
+        let source_worker_instance =
+            Worker::get_or_create_suspended(&self, &owned_source_worker_id, None, None, None, None)
+                .await?;
 
         let source_worker_metadata = source_worker_instance.get_metadata().await?;
 
@@ -152,8 +440,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerFork
             ))?;
 
         let new_oplog = self
-            .all
-            .oplog_service()
+            .oplog_service
             .create(
                 &owned_target_worker_id,
                 target_initial_oplog_entry,
@@ -179,8 +466,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerFork
         // as we need to make sure as it may live in another worker executor,
         // depending on sharding.
         // This will replay until the fork point in the forked worker
-        self.all
-            .worker_proxy()
+        self.worker_proxy
             .resume(&target_worker_id, true)
             .await
             .map_err(|err| {
