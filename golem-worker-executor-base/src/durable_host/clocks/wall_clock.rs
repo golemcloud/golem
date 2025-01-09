@@ -16,7 +16,6 @@ use async_trait::async_trait;
 
 use crate::durable_host::serialized::{SerializableDateTime, SerializableError};
 use crate::durable_host::{Durability, DurableWorkerCtx};
-use crate::metrics::wasm::record_host_function_call;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::WrappedFunctionType;
 use wasmtime_wasi::bindings::clocks::wall_clock::{Datetime, Host};
@@ -24,26 +23,36 @@ use wasmtime_wasi::bindings::clocks::wall_clock::{Datetime, Host};
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn now(&mut self) -> anyhow::Result<Datetime> {
-        record_host_function_call("clocks::wall_clock", "now");
-        Durability::<Ctx, (), SerializableDateTime, SerializableError>::wrap(
+        let durability = Durability::<Ctx, SerializableDateTime, SerializableError>::new(
             self,
+            "wall_clock",
+            "now",
             WrappedFunctionType::ReadLocal,
-            "wall_clock::now",
-            (),
-            |ctx| Box::pin(async { Host::now(&mut ctx.as_wasi_view()).await }),
         )
-        .await
+        .await?;
+
+        if durability.is_live() {
+            let result = Host::now(&mut self.as_wasi_view()).await;
+            durability.persist(self, (), result).await
+        } else {
+            durability.replay(self).await
+        }
     }
 
     async fn resolution(&mut self) -> anyhow::Result<Datetime> {
-        record_host_function_call("clocks::wall_clock", "resolution");
-        Durability::<Ctx, (), SerializableDateTime, SerializableError>::wrap(
+        let durability = Durability::<Ctx, SerializableDateTime, SerializableError>::new(
             self,
+            "wall_clock",
+            "resolution",
             WrappedFunctionType::ReadLocal,
-            "wall_clock::resolution",
-            (),
-            |ctx| Box::pin(async { Host::resolution(&mut ctx.as_wasi_view()).await }),
         )
-        .await
+        .await?;
+
+        if durability.is_live() {
+            let result = Host::resolution(&mut self.as_wasi_view()).await;
+            durability.persist(self, (), result).await
+        } else {
+            durability.replay(self).await
+        }
     }
 }

@@ -23,7 +23,7 @@ use golem_cli::model::Format;
 use golem_test_framework::config::EnvBasedTestDependencies;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
-use test_r::core::{DynamicTestRegistration, TestType};
+use test_r::core::{DynamicTestRegistration, TestProperties, TestType};
 use url::Url;
 
 inherit_test_dep!(EnvBasedTestDependencies);
@@ -54,7 +54,10 @@ fn make(r: &mut DynamicTestRegistration, args_kind: ArgsKind) {
     add_test!(
         r,
         format!("profile_add_get_list_switch_delete_{args_kind}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &EnvBasedTestDependencies, _tracing: &Tracing| {
             profile_add_get_list_switch_delete((deps, args_kind))
         }
@@ -62,7 +65,10 @@ fn make(r: &mut DynamicTestRegistration, args_kind: ArgsKind) {
     add_test!(
         r,
         format!("profile_config_{args_kind}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &EnvBasedTestDependencies, _tracing: &Tracing| {
             profile_config((deps, args_kind))
         }

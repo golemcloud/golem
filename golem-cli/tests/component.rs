@@ -20,7 +20,7 @@ use golem_common::uri::oss::url::ComponentUrl;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use itertools::Itertools;
 use std::sync::Arc;
-use test_r::core::{DynamicTestRegistration, TestType};
+use test_r::core::{DynamicTestRegistration, TestProperties, TestType};
 use test_r::{add_test, inherit_test_dep, test_dep, test_gen};
 
 inherit_test_dep!(EnvBasedTestDependencies);
@@ -41,7 +41,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("component_add_and_find_all{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             component_add_and_find_all((deps, name.to_string(), cli.with_args(short)))
         }
@@ -49,7 +52,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("component_add_and_find_by_name{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             component_add_and_find_by_name((deps, name.to_string(), cli.with_args(short)))
         }
@@ -57,7 +63,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("component_add_and_get{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             component_add_and_get((deps, name.to_string(), cli.with_args(short)))
         }
@@ -65,7 +74,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("component_add_and_get_urn{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             component_add_and_get_urn((deps, name.to_string(), cli.with_args(short)))
         }
@@ -73,7 +85,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("component_add_and_get_url{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             component_add_and_get_url((deps, name.to_string(), cli.with_args(short)))
         }
@@ -81,7 +96,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("component_add_from_project_file{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             component_add_from_project_file((deps, name.to_string(), cli.with_args(short)))
         }
@@ -89,7 +107,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("component_update{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             component_update((deps, name.to_string(), cli.with_args(short)))
         }
@@ -97,7 +118,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("component_update_urn{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             component_update_urn((deps, name.to_string(), cli.with_args(short)))
         }
@@ -105,7 +129,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("component_update_url{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             component_update_url((deps, name.to_string(), cli.with_args(short)))
         }
@@ -113,7 +140,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("component_update_from_project_file{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             component_update_from_project_file((deps, name.to_string(), cli.with_args(short)))
         }

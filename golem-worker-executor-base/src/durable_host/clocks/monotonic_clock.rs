@@ -26,27 +26,37 @@ use wasmtime_wasi::bindings::clocks::monotonic_clock::{Duration, Host, Instant, 
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn now(&mut self) -> anyhow::Result<Instant> {
-        record_host_function_call("clocks::monotonic_clock", "now");
-        Durability::<Ctx, (), Instant, SerializableError>::wrap(
+        let durability = Durability::<Ctx, Instant, SerializableError>::new(
             self,
+            "monotonic_clock",
+            "now",
             WrappedFunctionType::ReadLocal,
-            "monotonic_clock::now",
-            (),
-            |ctx| Box::pin(async { Host::now(&mut ctx.as_wasi_view()).await }),
         )
-        .await
+        .await?;
+
+        if durability.is_live() {
+            let result = Host::now(&mut self.as_wasi_view()).await;
+            durability.persist(self, (), result).await
+        } else {
+            durability.replay(self).await
+        }
     }
 
     async fn resolution(&mut self) -> anyhow::Result<Instant> {
-        record_host_function_call("clocks::monotonic_clock", "resolution");
-        Durability::<Ctx, (), Instant, SerializableError>::wrap(
+        let durability = Durability::<Ctx, Instant, SerializableError>::new(
             self,
+            "monotonic_clock",
+            "resolution",
             WrappedFunctionType::ReadLocal,
-            "monotonic_clock::resolution",
-            (),
-            |ctx| Box::pin(async { Host::resolution(&mut ctx.as_wasi_view()).await }),
         )
-        .await
+        .await?;
+
+        if durability.is_live() {
+            let result = Host::resolution(&mut self.as_wasi_view()).await;
+            durability.persist(self, (), result).await
+        } else {
+            durability.replay(self).await
+        }
     }
 
     async fn subscribe_instant(&mut self, when: Instant) -> anyhow::Result<Resource<Pollable>> {
@@ -55,15 +65,23 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn subscribe_duration(&mut self, when: Duration) -> anyhow::Result<Resource<Pollable>> {
-        record_host_function_call("clocks::monotonic_clock", "subscribe_duration");
-        let now = Durability::<Ctx, (), Instant, SerializableError>::wrap(
+        let durability = Durability::<Ctx, Instant, SerializableError>::new(
             self,
+            "monotonic_clock",
+            "now", // TODO: fix in 2.0 - should be 'subscribe_duration' but have to keep for backward compatibility with Golem 1.0
             WrappedFunctionType::ReadLocal,
-            "monotonic_clock::now", // should be 'subscribe_duration' but have to keep for backward compatibility with Golem 1.0
-            (),
-            |ctx| Box::pin(async { Host::now(&mut ctx.as_wasi_view()).await }),
         )
         .await?;
+
+        let now = {
+            if durability.is_live() {
+                let result = Host::now(&mut self.as_wasi_view()).await;
+                durability.persist(self, (), result).await
+            } else {
+                durability.replay(self).await
+            }
+        }?;
+
         self.state.oplog.commit(CommitLevel::DurableOnly).await;
         let when = now.saturating_add(when);
         Host::subscribe_instant(&mut self.as_wasi_view(), when).await

@@ -18,7 +18,7 @@ use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::wasm_rpc::serialized::{
     SerializableInvokeRequest, SerializableInvokeResult, SerializableInvokeResultV1,
 };
-use crate::durable_host::{Durability, DurableWorkerCtx};
+use crate::durable_host::{Durability, DurableWorkerCtx, OplogEntryVersion};
 use crate::error::GolemError;
 use crate::get_oplog_entry;
 use crate::metrics::wasm::record_host_function_call;
@@ -34,6 +34,7 @@ use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
 use golem_common::model::{
     AccountId, ComponentId, IdempotencyKey, OwnedWorkerId, TargetWorkerId, WorkerId,
 };
+use golem_common::serialization::try_deserialize;
 use golem_common::uri::oss::urn::{WorkerFunctionUrn, WorkerOrFunctionUrn};
 use golem_wasm_rpc::golem::rpc::types::{
     FutureInvokeResult, HostFutureInvokeResult, Pollable, Uri,
@@ -88,7 +89,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         function_name: String,
         mut function_params: Vec<WitValue>,
     ) -> anyhow::Result<Result<WitValue, golem_wasm_rpc::RpcError>> {
-        record_host_function_call("golem::rpc::wasm-rpc", "invoke-and-await");
         let args = self.get_arguments().await?;
         let env = self.get_environment().await?;
 
@@ -105,37 +105,36 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let oplog_index = self.state.current_oplog_index().await;
 
         // NOTE: Now that IdempotencyKey::derived is used, we no longer need to persist this, but we do to avoid breaking existing oplogs
-        let uuid = Durability::<Ctx, (), (u64, u64), SerializableError>::custom_wrap(
+        let durability = Durability::<Ctx, (u64, u64), SerializableError>::new(
             self,
+            "golem::rpc::wasm-rpc",
+            "invoke-and-await idempotency key",
             WrappedFunctionType::ReadLocal,
-            "golem::rpc::wasm-rpc::invoke-and-await idempotency key",
-            (),
-            |_ctx| {
-                Box::pin(async move {
-                    let key = IdempotencyKey::derived(&current_idempotency_key, oplog_index);
-                    let uuid = Uuid::parse_str(&key.value.to_string()).unwrap(); // this is guaranteed to be a uuid
-                    Ok::<Uuid, GolemError>(uuid)
-                })
-            },
-            |_ctx, uuid: &Uuid| Ok(uuid.as_u64_pair()),
-            |_ctx, (high_bits, low_bits)| {
-                Box::pin(async move { Ok(Uuid::from_u64_pair(high_bits, low_bits)) })
-            },
         )
         .await?;
+        let uuid = if durability.is_live() {
+            let key = IdempotencyKey::derived(&current_idempotency_key, oplog_index);
+            let uuid = Uuid::parse_str(&key.value.to_string())?; // this is guaranteed to be a uuid
+            durability
+                .persist_serializable(self, (), Ok(uuid.as_u64_pair()))
+                .await?;
+            uuid
+        } else {
+            let (high_bits, low_bits) =
+                durability.replay::<(u64, u64), anyhow::Error>(self).await?;
+            Uuid::from_u64_pair(high_bits, low_bits)
+        };
         let idempotency_key = IdempotencyKey::from_uuid(uuid);
 
-        // NOTE: Could be Durability::<Ctx, SerializableInvokeRequest, TypeAnnotatedValue, SerializableError>::wrap but need to support old WitValue values during recovery
-        let result: Result<WitValue, RpcError> = Durability::<
-            Ctx,
-            SerializableInvokeRequest,
-            TypeAnnotatedValue,
-            SerializableError,
-        >::full_custom_wrap(
+        let durability = Durability::<Ctx, TypeAnnotatedValue, SerializableError>::new(
             self,
+            "golem::rpc::wasm-rpc",
+            "invoke-and-await result",
             WrappedFunctionType::WriteRemote,
-            "golem::rpc::wasm-rpc::invoke-and-await",
-            SerializableInvokeRequest {
+        )
+        .await?;
+        let result: Result<WitValue, RpcError> = if durability.is_live() {
+            let input = SerializableInvokeRequest {
                 remote_worker_id: remote_worker_id.worker_id(),
                 idempotency_key: idempotency_key.clone(),
                 function_name: function_name.clone(),
@@ -147,62 +146,65 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     &function_params,
                 )
                 .await,
-            },
-            |ctx| {
-                Box::pin(async move {
-                    ctx.rpc()
-                        .invoke_and_await(
-                            &remote_worker_id,
-                            Some(idempotency_key),
-                            function_name,
-                            function_params,
-                            ctx.worker_id(),
-                            &args,
-                            &env,
-                        )
-                        .await
-                })
-            },
-            |_, typed_value| Ok(typed_value.clone()),
-            |_, typed_value| {
-                typed_value
-                    .clone()
-                    .try_into()
+            };
+            let result = self
+                .rpc()
+                .invoke_and_await(
+                    &remote_worker_id,
+                    Some(idempotency_key),
+                    function_name,
+                    function_params,
+                    self.worker_id(),
+                    &args,
+                    &env,
+                )
+                .await;
+            durability
+                .persist_serializable(self, input, result.clone().map_err(|err| (&err).into()))
+                .await?;
+            result.and_then(|tav| {
+                tav.try_into()
                     .map_err(|s: String| RpcError::ProtocolError { details: s })
-            },
-            |_, oplog, entry| {
-                Box::pin(async move {
-                    match entry {
-                        OplogEntry::ImportedFunctionInvokedV1 { .. } => {
-                            // Legacy oplog entry, used WitValue in its payload
-                            let wit_value = DurableWorkerCtx::<Ctx>::default_load::<
-                                WitValue,
-                                SerializableError,
-                            >(oplog, entry)
-                            .await;
-                            wit_value.map_err(|err| err.into())
-                        }
-                        OplogEntry::ImportedFunctionInvoked { .. } => {
-                            // New oplog entry, uses TypeAnnotatedValue in its payload
-                            let typed_value = DurableWorkerCtx::<Ctx>::try_default_load::<
-                                TypeAnnotatedValue,
-                                SerializableError,
-                            >(oplog.clone(), entry)
-                            .await;
-                            match typed_value {
-                                Ok(Ok(typed_value)) => typed_value
-                                    .try_into()
-                                    .map_err(|s: String| RpcError::ProtocolError { details: s }),
-                                Ok(Err(err)) => Err(err.into()),
-                                Err(err) => Err(err.into()),
-                            }
-                        }
-                        _ => unreachable!(),
+            })
+        } else {
+            let (bytes, oplog_entry_version) = durability.replay_raw(self).await?;
+            match oplog_entry_version {
+                OplogEntryVersion::V1 => {
+                    // Legacy oplog entry, used WitValue in its payload
+                    let wit_value: Result<WitValue, SerializableError> = try_deserialize(&bytes)
+                        .map_err(|err| {
+                            GolemError::unexpected_oplog_entry(
+                                "ImportedFunctionInvoked payload",
+                                err,
+                            )
+                        })?
+                        .expect("Empty payload");
+                    wit_value.map_err(|err| err.into())
+                }
+                OplogEntryVersion::V2 => {
+                    // New oplog entry, uses TypeAnnotatedValue in its payload
+                    let typed_value: Result<
+                        Result<TypeAnnotatedValue, SerializableError>,
+                        GolemError,
+                    > = try_deserialize(&bytes)
+                        .map_err(|err| {
+                            GolemError::unexpected_oplog_entry(
+                                "ImportedFunctionInvoked payload",
+                                err,
+                            )
+                        })
+                        .map(|ok| ok.expect("Empty payload"));
+
+                    match typed_value {
+                        Ok(Ok(typed_value)) => typed_value
+                            .try_into()
+                            .map_err(|s: String| RpcError::ProtocolError { details: s }),
+                        Ok(Err(err)) => Err(err.into()),
+                        Err(err) => Err(err.into()),
                     }
-                })
-            },
-        )
-        .await;
+                }
+            }
+        };
 
         match result {
             Ok(wit_value) => Ok(Ok(wit_value)),
@@ -219,7 +221,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         function_name: String,
         mut function_params: Vec<WitValue>,
     ) -> anyhow::Result<Result<(), golem_wasm_rpc::RpcError>> {
-        record_host_function_call("golem::rpc::wasm-rpc", "invoke");
         let args = self.get_arguments().await?;
         let env = self.get_environment().await?;
 
@@ -236,31 +237,37 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let oplog_index = self.state.current_oplog_index().await;
 
         // NOTE: Now that IdempotencyKey::derived is used, we no longer need to persist this, but we do to avoid breaking existing oplogs
-        let uuid = Durability::<Ctx, (), (u64, u64), SerializableError>::custom_wrap(
+        let durability = Durability::<Ctx, (u64, u64), SerializableError>::new(
             self,
+            "golem::rpc::wasm-rpc",
+            "invoke-and-await idempotency key", // NOTE: must keep invoke-and-await in the name for compatibility with Golem 1.0
             WrappedFunctionType::ReadLocal,
-            "golem::rpc::wasm-rpc::invoke-and-await idempotency key", // NOTE: must keep invoke-and-await in the name for compatibility with Golem 1.0
-            (),
-            |_ctx| {
-                Box::pin(async move {
-                    let key = IdempotencyKey::derived(&current_idempotency_key, oplog_index);
-                    let uuid = Uuid::parse_str(&key.value.to_string()).unwrap(); // this is guaranteed to be a uuid
-                    Ok::<Uuid, GolemError>(uuid)
-                })
-            },
-            |_ctx, uuid: &Uuid| Ok(uuid.as_u64_pair()),
-            |_ctx, (high_bits, low_bits)| {
-                Box::pin(async move { Ok(Uuid::from_u64_pair(high_bits, low_bits)) })
-            },
         )
         .await?;
+        let uuid = if durability.is_live() {
+            let key = IdempotencyKey::derived(&current_idempotency_key, oplog_index);
+            let uuid = Uuid::parse_str(&key.value.to_string())?; // this is guaranteed to be a uuid
+            durability
+                .persist_serializable(self, (), Ok(uuid.as_u64_pair()))
+                .await?;
+            uuid
+        } else {
+            let (high_bits, low_bits) =
+                durability.replay::<(u64, u64), anyhow::Error>(self).await?;
+            Uuid::from_u64_pair(high_bits, low_bits)
+        };
+
         let idempotency_key = IdempotencyKey::from_uuid(uuid);
 
-        let result = Durability::<Ctx, SerializableInvokeRequest, (), SerializableError>::wrap(
+        let durability = Durability::<Ctx, (), SerializableError>::new(
             self,
+            "golem::rpc::wasm-rpc",
+            "invoke",
             WrappedFunctionType::WriteRemote,
-            "golem::rpc::wasm-rpc::invoke",
-            SerializableInvokeRequest {
+        )
+        .await?;
+        let result: Result<(), RpcError> = if durability.is_live() {
+            let input = SerializableInvokeRequest {
                 remote_worker_id: remote_worker_id.worker_id(),
                 idempotency_key: idempotency_key.clone(),
                 function_name: function_name.clone(),
@@ -272,24 +279,23 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     &function_params,
                 )
                 .await,
-            },
-            |ctx| {
-                Box::pin(async move {
-                    ctx.rpc()
-                        .invoke(
-                            &remote_worker_id,
-                            Some(idempotency_key),
-                            function_name,
-                            function_params,
-                            ctx.worker_id(),
-                            &args,
-                            &env,
-                        )
-                        .await
-                })
-            },
-        )
-        .await;
+            };
+            let result = self
+                .rpc()
+                .invoke(
+                    &remote_worker_id,
+                    Some(idempotency_key),
+                    function_name,
+                    function_params,
+                    self.worker_id(),
+                    &args,
+                    &env,
+                )
+                .await;
+            durability.persist(self, input, result).await
+        } else {
+            durability.replay(self).await
+        };
 
         match result {
             Ok(result) => Ok(Ok(result)),
@@ -306,7 +312,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         function_name: String,
         mut function_params: Vec<WitValue>,
     ) -> anyhow::Result<Resource<FutureInvokeResult>> {
-        record_host_function_call("golem::rpc::wasm-rpc", "async-invoke-and-await");
         let args = self.get_arguments().await?;
         let env = self.get_environment().await?;
 
@@ -328,24 +333,25 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let oplog_index = self.state.current_oplog_index().await;
 
         // NOTE: Now that IdempotencyKey::derived is used, we no longer need to persist this, but we do to avoid breaking existing oplogs
-        let uuid = Durability::<Ctx, (), (u64, u64), SerializableError>::custom_wrap(
+        let durability = Durability::<Ctx, (u64, u64), SerializableError>::new(
             self,
+            "golem::rpc::wasm-rpc",
+            "invoke-and-await idempotency key", // NOTE: must keep invoke-and-await in the name for compatibility with Golem 1.0
             WrappedFunctionType::ReadLocal,
-            "golem::rpc::wasm-rpc::invoke-and-await idempotency key", // NOTE: must keep invoke-and-await in the name for compatibility with Golem 1.0
-            (),
-            |_ctx| {
-                Box::pin(async move {
-                    let key = IdempotencyKey::derived(&current_idempotency_key, oplog_index);
-                    let uuid = Uuid::parse_str(&key.value.to_string()).unwrap(); // this is guaranteed to be a uuid
-                    Ok::<Uuid, GolemError>(uuid)
-                })
-            },
-            |_ctx, uuid: &Uuid| Ok(uuid.as_u64_pair()),
-            |_ctx, (high_bits, low_bits)| {
-                Box::pin(async move { Ok(Uuid::from_u64_pair(high_bits, low_bits)) })
-            },
         )
         .await?;
+        let uuid = if durability.is_live() {
+            let key = IdempotencyKey::derived(&current_idempotency_key, oplog_index);
+            let uuid = Uuid::parse_str(&key.value.to_string())?; // this is guaranteed to be a uuid
+            durability
+                .persist_serializable(self, (), Ok(uuid.as_u64_pair()))
+                .await?;
+            uuid
+        } else {
+            let (high_bits, low_bits) =
+                durability.replay::<(u64, u64), anyhow::Error>(self).await?;
+            Uuid::from_u64_pair(high_bits, low_bits)
+        };
         let idempotency_key = IdempotencyKey::from_uuid(uuid);
         let worker_id = self.worker_id().clone();
         let request = SerializableInvokeRequest {
