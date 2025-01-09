@@ -41,6 +41,8 @@ async fn fork_interrupted_worker(deps: &EnvBasedTestDependencies, _tracing: &Tra
     let response = Arc::new(Mutex::new("initial".to_string()));
     let host_http_port = 8586;
 
+    let source_worker_name = Uuid::new_v4().to_string();
+
     let http_server = run_http_server(&response, host_http_port);
 
     let component_id = deps.store_component("http-client-2").await;
@@ -48,12 +50,14 @@ async fn fork_interrupted_worker(deps: &EnvBasedTestDependencies, _tracing: &Tra
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = deps
-        .start_worker_with(&component_id, "poll-loop-parent-component-0", vec![], env)
+        .start_worker_with(&component_id, source_worker_name.as_str(), vec![], env)
         .await;
 
-    let target = WorkerId {
+    let target_worker_name = Uuid::new_v4().to_string();
+
+    let target_worker_id = WorkerId {
         component_id: component_id.clone(),
-        worker_name: "poll-loop-with-fork-component-0".to_string(),
+        worker_name: target_worker_name,
     };
 
     deps.log_output(&worker_id).await;
@@ -75,17 +79,22 @@ async fn fork_interrupted_worker(deps: &EnvBasedTestDependencies, _tracing: &Tra
 
     let last_index = OplogIndex::from_u64(oplog.len() as u64);
 
-    deps.fork_worker(&worker_id, &target, last_index).await;
+    deps.fork_worker(&worker_id, &target_worker_id, last_index)
+        .await;
 
     {
         let mut response = response.lock().unwrap();
         *response = "first".to_string();
     }
 
-    deps.wait_for_status(&target, WorkerStatus::Idle, Duration::from_secs(10))
-        .await;
+    deps.wait_for_status(
+        &target_worker_id,
+        WorkerStatus::Idle,
+        Duration::from_secs(10),
+    )
+    .await;
 
-    let result = deps.search_oplog(&target, "Received first").await;
+    let result = deps.search_oplog(&target_worker_id, "Received first").await;
 
     http_server.abort();
 
@@ -110,9 +119,8 @@ async fn fork_running_worker_1(deps: &EnvBasedTestDependencies, _tracing: &Traci
         .start_worker_with(&component_id, source_worker_name.as_str(), vec![], env)
         .await;
 
-    let target_worker_name =
-        Uuid::new_v4().to_string();
-    
+    let target_worker_name = Uuid::new_v4().to_string();
+
     let target_worker_id = WorkerId {
         component_id: component_id.clone(),
         worker_name: target_worker_name,
@@ -176,9 +184,11 @@ async fn fork_running_worker_1(deps: &EnvBasedTestDependencies, _tracing: &Traci
 async fn fork_running_worker_2(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let component_id = deps.store_component("shopping-cart").await;
 
+    let source_worker_name = Uuid::new_v4().to_string();
+
     let source_worker_id = WorkerId {
         component_id: component_id.clone(),
-        worker_name: "sc".to_string(),
+        worker_name: source_worker_name,
     };
 
     let _ = deps
@@ -202,9 +212,11 @@ async fn fork_running_worker_2(deps: &EnvBasedTestDependencies, _tracing: &Traci
         )
         .await;
 
+    let target_worker_name = Uuid::new_v4().to_string();
+
     let target_worker_id = WorkerId {
         component_id: component_id.clone(),
-        worker_name: "forked-sc".to_string(),
+        worker_name: target_worker_name,
     };
 
     let source_oplog = deps.get_oplog(&source_worker_id, OplogIndex::INITIAL).await;
@@ -250,9 +262,11 @@ async fn fork_running_worker_2(deps: &EnvBasedTestDependencies, _tracing: &Traci
 async fn fork_idle_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let component_id = deps.store_component("shopping-cart").await;
 
+    let source_worker_name = Uuid::new_v4().to_string();
+
     let source_worker_id = WorkerId {
         component_id: component_id.clone(),
-        worker_name: "baz".to_string(),
+        worker_name: source_worker_name,
     };
 
     let _ = deps
@@ -289,9 +303,11 @@ async fn fork_idle_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         )
         .await;
 
+    let target_worker_name = Uuid::new_v4().to_string();
+
     let target_worker_id = WorkerId {
         component_id: component_id.clone(),
-        worker_name: "forked-baz".to_string(),
+        worker_name: target_worker_name,
     };
 
     let source_oplog = deps.get_oplog(&source_worker_id, OplogIndex::INITIAL).await;
@@ -358,9 +374,11 @@ async fn fork_worker_when_target_already_exists(
 ) {
     let component_id = deps.store_component("shopping-cart").await;
 
+    let source_worker_name = Uuid::new_v4().to_string();
+
     let source_worker_id = WorkerId {
         component_id: component_id.clone(),
-        worker_name: "bar".to_string(),
+        worker_name: source_worker_name,
     };
 
     let _ = deps
@@ -402,9 +420,11 @@ async fn fork_worker_with_invalid_oplog_index_cut_off(
 ) {
     let component_id = deps.store_component("shopping-cart").await;
 
+    let source_worker_name = Uuid::new_v4().to_string();
+
     let source_worker_id = WorkerId {
         component_id: component_id.clone(),
-        worker_name: "baz".to_string(),
+        worker_name: source_worker_name,
     };
 
     let _ = deps
@@ -415,9 +435,11 @@ async fn fork_worker_with_invalid_oplog_index_cut_off(
         )
         .await;
 
+    let target_worker_name = Uuid::new_v4().to_string();
+
     let target_worker_id = WorkerId {
         component_id: component_id.clone(),
-        worker_name: "forked-baz".to_string(),
+        worker_name: target_worker_name,
     };
 
     let error = golem_test_framework::dsl::TestDsl::fork_worker(
@@ -439,9 +461,11 @@ async fn fork_worker_with_invalid_oplog_index_cut_off(
 async fn fork_invalid_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let component_id = deps.store_component("shopping-cart").await;
 
+    let source_worker_name = Uuid::new_v4().to_string();
+
     let source_worker_id = WorkerId {
         component_id: component_id.clone(),
-        worker_name: "buz".to_string(),
+        worker_name: source_worker_name,
     };
 
     let target_worker_id = WorkerId {
@@ -474,9 +498,11 @@ async fn fork_worker_ensures_zero_divergence_until_cut_off(
 ) {
     let component_id = deps.store_component("environment-service").await;
 
+    let source_worker_name = Uuid::new_v4().to_string();
+
     let source_worker_id = WorkerId {
         component_id: component_id.clone(),
-        worker_name: "foo".to_string(),
+        worker_name: source_worker_name.clone(),
     };
 
     let _ = deps
@@ -488,7 +514,7 @@ async fn fork_worker_ensures_zero_divergence_until_cut_off(
     let expected = Value::Tuple(vec![Value::Result(Ok(Some(Box::new(Value::List(vec![
         Value::Tuple(vec![
             Value::String("GOLEM_WORKER_NAME".to_string()),
-            Value::String("foo".to_string()),
+            Value::String(source_worker_name),
         ]),
         Value::Tuple(vec![
             Value::String("GOLEM_COMPONENT_ID".to_string()),
@@ -500,9 +526,11 @@ async fn fork_worker_ensures_zero_divergence_until_cut_off(
         ]),
     ])))))]);
 
+    let target_worker_name = Uuid::new_v4().to_string();
+
     let target_worker_id = WorkerId {
         component_id: component_id.clone(),
-        worker_name: "forked-foo".to_string(),
+        worker_name: target_worker_name,
     };
 
     // We fork the worker post the completion and see if oplog corresponding to environment value
