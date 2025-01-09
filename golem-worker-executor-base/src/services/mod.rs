@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use crate::services::events::Events;
 use crate::services::plugins::Plugins;
+use crate::services::worker_fork::WorkerForkService;
 use crate::workerctx::WorkerCtx;
 use file_loader::FileLoader;
 use golem_common::model::component::ComponentOwner;

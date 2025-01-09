@@ -18,20 +18,12 @@ use std::sync::RwLock;
 use crate::metrics::workers::record_worker_call;
 use crate::model::ExecutionStatus;
 use crate::services::oplog::CommitLevel;
-use crate::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc, Rpc};
-use crate::services::{rpc, HasAll, HasOplog, HasWorkerForkService};
+use crate::services::rpc::Rpc;
+use crate::services::{rpc, HasOplog, HasWorkerForkService};
 use golem_common::model::oplog::{OplogIndex, OplogIndexRange};
 use golem_common::model::{AccountId, Timestamp, WorkerMetadata, WorkerStatusRecord};
-use std::collections::HashMap;
-use std::fmt::{Display, Formatter};
+use std::fmt::Display;
 use std::sync::Arc;
-
-use async_trait::async_trait;
-use bincode::{Decode, Encode};
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::WitValue;
-use tokio::runtime::Handle;
-use tracing::debug;
 
 use super::file_loader::FileLoader;
 use crate::error::GolemError;
@@ -39,7 +31,7 @@ use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
 use crate::services::plugins::Plugins;
 use crate::services::shard::ShardService;
-use crate::services::worker_proxy::{WorkerProxy, WorkerProxyError};
+use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{
     active_workers, blob_store, component, golem_config, key_value, oplog, promise, scheduler,
     shard, shard_manager, worker, worker_activator, worker_enumeration, HasActiveWorkers,
@@ -51,8 +43,10 @@ use crate::services::{
 };
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
+use async_trait::async_trait;
 use golem_common::model::component::ComponentOwner;
-use golem_common::model::{IdempotencyKey, OwnedWorkerId, TargetWorkerId, WorkerId};
+use golem_common::model::{OwnedWorkerId, WorkerId};
+use tokio::runtime::Handle;
 
 #[async_trait]
 pub trait WorkerForkService {
@@ -65,35 +59,36 @@ pub trait WorkerForkService {
 }
 
 pub struct DefaultWorkerFork<Ctx: WorkerCtx> {
-    rpc: Arc<dyn rpc::Rpc + Send + Sync>,
-    active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
-    engine: Arc<wasmtime::Engine>,
-    linker: Arc<wasmtime::component::Linker<Ctx>>,
-    runtime: Handle,
-    component_service: Arc<dyn component::ComponentService + Send + Sync>,
-    shard_manager_service: Arc<dyn shard_manager::ShardManagerService + Send + Sync>,
-    worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
-    worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
-    worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService + Send + Sync>,
-    running_worker_enumeration_service:
+    pub rpc: Arc<dyn rpc::Rpc + Send + Sync>,
+    pub active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
+    pub engine: Arc<wasmtime::Engine>,
+    pub linker: Arc<wasmtime::component::Linker<Ctx>>,
+    pub runtime: Handle,
+    pub component_service: Arc<dyn component::ComponentService + Send + Sync>,
+    pub shard_manager_service: Arc<dyn shard_manager::ShardManagerService + Send + Sync>,
+    pub worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
+    pub worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
+    pub worker_enumeration_service:
+        Arc<dyn worker_enumeration::WorkerEnumerationService + Send + Sync>,
+    pub running_worker_enumeration_service:
         Arc<dyn worker_enumeration::RunningWorkerEnumerationService + Send + Sync>,
-    promise_service: Arc<dyn promise::PromiseService + Send + Sync>,
-    golem_config: Arc<golem_config::GolemConfig>,
-    shard_service: Arc<dyn shard::ShardService + Send + Sync>,
-    key_value_service: Arc<dyn key_value::KeyValueService + Send + Sync>,
-    blob_store_service: Arc<dyn blob_store::BlobStoreService + Send + Sync>,
-    oplog_service: Arc<dyn oplog::OplogService + Send + Sync>,
-    scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
-    worker_activator: Arc<dyn worker_activator::WorkerActivator<Ctx> + Send + Sync>,
-    events: Arc<Events>,
-    file_loader: Arc<FileLoader>,
-    plugins: Arc<
+    pub promise_service: Arc<dyn promise::PromiseService + Send + Sync>,
+    pub golem_config: Arc<golem_config::GolemConfig>,
+    pub shard_service: Arc<dyn shard::ShardService + Send + Sync>,
+    pub key_value_service: Arc<dyn key_value::KeyValueService + Send + Sync>,
+    pub blob_store_service: Arc<dyn blob_store::BlobStoreService + Send + Sync>,
+    pub oplog_service: Arc<dyn oplog::OplogService + Send + Sync>,
+    pub scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
+    pub worker_activator: Arc<dyn worker_activator::WorkerActivator<Ctx> + Send + Sync>,
+    pub events: Arc<Events>,
+    pub file_loader: Arc<FileLoader>,
+    pub plugins: Arc<
         dyn Plugins<<Ctx::ComponentOwner as ComponentOwner>::PluginOwner, Ctx::PluginScope>
             + Send
             + Sync,
     >,
-    oplog_processor_plugin: Arc<dyn OplogProcessorPlugin + Send + Sync>,
-    extra_deps: Ctx::ExtraDeps,
+    pub oplog_processor_plugin: Arc<dyn OplogProcessorPlugin + Send + Sync>,
+    pub extra_deps: Ctx::ExtraDeps,
 }
 
 impl<Ctx: WorkerCtx> HasEvents for DefaultWorkerFork<Ctx> {
@@ -409,9 +404,15 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
         let target_worker_id = owned_target_worker_id.worker_id.clone();
         let account_id = owned_target_worker_id.account_id.clone();
 
-        let source_worker_instance =
-            Worker::get_or_create_suspended(&self, &owned_source_worker_id, None, None, None, None)
-                .await?;
+        let source_worker_instance = Worker::get_or_create_suspended::<Self>(
+            &self,
+            &owned_source_worker_id,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await?;
 
         let source_worker_metadata = source_worker_instance.get_metadata().await?;
 
