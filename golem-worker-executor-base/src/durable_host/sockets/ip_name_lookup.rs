@@ -64,19 +64,21 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         network: Resource<Network>,
         name: String,
     ) -> Result<Resource<ResolveAddressStream>, SocketError> {
-        record_host_function_call("sockets::ip_name_lookup", "resolve_addresses");
-
-        let addresses: Result<Vec<IpAddress>, SocketError> =
-            Durability::<Ctx, String, SerializableIpAddresses, SerializableError>::wrap(
+        let durability =
+            Durability::<Ctx, Vec<IpAddress>, SerializableIpAddresses, SerializableError>::new(
                 self,
+                "sockets::ip_name_lookup",
+                "resolve_addresses",
                 WrappedFunctionType::ReadRemote,
-                "sockets::ip_name_lookup::resolve_addresses",
-                name.clone(),
-                |ctx| {
-                    Box::pin(async move { resolve_and_drain_addresses(ctx, network, name).await })
-                },
             )
-            .await;
+            .await?;
+
+        let addresses = if durability.is_live() {
+            let result = resolve_and_drain_addresses(self, network, name.clone()).await;
+            durability.persist(self, name, result).await
+        } else {
+            durability.replay(self).await
+        };
 
         let stream = ResolveAddressStream::Done(Ok(addresses?.into_iter()));
         Ok(self.table().push(stream)?)

@@ -89,7 +89,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         function_name: String,
         mut function_params: Vec<WitValue>,
     ) -> anyhow::Result<Result<WitValue, golem_wasm_rpc::RpcError>> {
-        record_host_function_call("golem::rpc::wasm-rpc", "invoke-and-await");
         let args = self.get_arguments().await?;
         let env = self.get_environment().await?;
 
@@ -222,7 +221,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         function_name: String,
         mut function_params: Vec<WitValue>,
     ) -> anyhow::Result<Result<(), golem_wasm_rpc::RpcError>> {
-        record_host_function_call("golem::rpc::wasm-rpc", "invoke");
         let args = self.get_arguments().await?;
         let env = self.get_environment().await?;
 
@@ -314,7 +312,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         function_name: String,
         mut function_params: Vec<WitValue>,
     ) -> anyhow::Result<Resource<FutureInvokeResult>> {
-        record_host_function_call("golem::rpc::wasm-rpc", "async-invoke-and-await");
         let args = self.get_arguments().await?;
         let env = self.get_environment().await?;
 

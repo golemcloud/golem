@@ -480,20 +480,23 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         match remote_worker_id.clone().try_into_worker_id() {
             Some(worker_id) => Ok(worker_id),
             None => {
-                let worker_id = Durability::<Ctx, (), WorkerId, SerializableError>::wrap(
+                let durability = Durability2::<Ctx, WorkerId, SerializableError>::new(
                     self,
+                    "golem::rpc::wasm-rpc",
+                    "generate_unique_local_worker_id",
                     WrappedFunctionType::ReadLocal,
-                    "golem::rpc::wasm-rpc::generate_unique_local_worker_id",
-                    (),
-                    |ctx| {
-                        Box::pin(async move {
-                            ctx.rpc()
-                                .generate_unique_local_worker_id(remote_worker_id)
-                                .await
-                        })
-                    },
                 )
                 .await?;
+                let worker_id = if durability.is_live() {
+                    let result = self
+                        .rpc()
+                        .generate_unique_local_worker_id(remote_worker_id)
+                        .await;
+                    durability.persist(self, (), result).await
+                } else {
+                    durability.replay(self).await
+                }?;
+
                 Ok(worker_id)
             }
         }
