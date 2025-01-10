@@ -244,6 +244,9 @@ async fn get_oplog_with_api_changing_updates(
         .filter(|entry| !matches!(entry, PublicOplogEntry::PendingWorkerInvocation(_)))
         .collect::<Vec<_>>();
 
+    println!("oplog length\n{:#?}", oplog.len());
+    println!("oplog\n{:#?}", oplog);
+
     check!(result[0] == Value::U64(11));
     assert_eq!(oplog.len(), 13);
 }
