@@ -1,7 +1,7 @@
 package golem:itrpc;
 
 interface rpc-api {
-  use golem:it/api.{data};
+  use golem:it-exports/api.{data};
 
   echo: func(input: string) -> string;
 
@@ -11,6 +11,5 @@ interface rpc-api {
 }
 
 world parent-component {
-  import golem:it-stub/stub-child-component;
   export rpc-api;
 }

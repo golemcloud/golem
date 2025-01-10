@@ -49,9 +49,9 @@ fn transform_component(component: Bytes) -> anyhow::Result<Vec<u8>> {
     let component = graph.register_package(component)?;
 
     #[cfg(debug_assertions)]
-    let adapter_bytes = include_bytes!("../../target/wasm32-wasi/debug/adapter.wasm");
+    let adapter_bytes = include_bytes!("../../target/wasm32-wasip1/debug/adapter.wasm");
     #[cfg(not(debug_assertions))]
-    let adapter_bytes = include_bytes!("../../target/wasm32-wasi/release/adapter.wasm");
+    let adapter_bytes = include_bytes!("../../target/wasm32-wasip1/release/adapter.wasm");
 
     let adapter = Package::from_bytes("adapter", None, adapter_bytes, graph.types_mut())?;
     let adapter = graph.register_package(adapter)?;

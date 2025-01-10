@@ -19,6 +19,7 @@ pub mod fmt {
     use golem_client::model::WorkerStatus;
     use itertools::Itertools;
     use regex::Regex;
+    use std::collections::BTreeMap;
 
     pub trait TextFormat {
         fn print(&self);
@@ -46,12 +47,12 @@ pub mod fmt {
             println!("{}\n", self.message());
 
             let fields = self.fields();
-            let max_field_len = fields.iter().map(|(name, _)| name.len()).max().unwrap_or(0) + 1;
+            let padding = fields.iter().map(|(name, _)| name.len()).max().unwrap_or(0) + 1;
 
             for (name, value) in self.fields() {
                 let lines: Vec<_> = value.lines().collect();
                 if lines.len() == 1 {
-                    println!("{: <max_field_len$} {}", format!("{}:", name), lines[0]);
+                    println!("{:<padding$} {}", format!("{}:", name), lines[0]);
                 } else {
                     println!("{}:", name);
                     for line in lines {
@@ -188,7 +189,8 @@ pub mod fmt {
         "list",
         "option",
         "result",
-        "tuple"
+        "tuple",
+        "record",
     };
 
     // A very naive highlighter for basic coloring of builtin types and user defined names
@@ -198,7 +200,7 @@ pub mod fmt {
         }
 
         let separator =
-            Regex::new(r"[ :/.{}()<>]").expect("Failed to compile export separator pattern");
+            Regex::new(r"[ :/.{}()<>,]").expect("Failed to compile export separator pattern");
         let mut formatted = String::with_capacity(export.len());
 
         fn format_token(target: &mut String, token: &str) {
@@ -236,6 +238,27 @@ pub mod fmt {
 
     pub fn format_exports(exports: &[String]) -> String {
         exports.iter().map(|e| format_export(e.as_str())).join("\n")
+    }
+
+    pub fn format_dynamic_links(links: &BTreeMap<String, BTreeMap<String, String>>) -> String {
+        links
+            .iter()
+            .map(|(name, link)| {
+                let padding = link.keys().map(|name| name.len()).max().unwrap_or_default() + 1;
+
+                format!(
+                    "{}:\n{}",
+                    name,
+                    link.iter()
+                        .map(|(resource, interface)| format!(
+                            "  {:<padding$} {}",
+                            format!("{}:", resource),
+                            format_export(interface)
+                        ))
+                        .join("\n")
+                )
+            })
+            .join("\n")
     }
 
     pub fn format_table<E, R>(table: &[E]) -> String
@@ -589,7 +612,13 @@ pub mod component {
             .fmt_field_option("Project ID", &view.project_id, format_id)
             .fmt_field("Component size", &view.component_size, format_binary_size)
             .fmt_field_option("Created at", &view.created_at, |d| d.to_string())
-            .fmt_field("Exports", &view.exports, |e| format_exports(e.as_slice()));
+            .fmt_field("Exports", &view.exports, |e| format_exports(e.as_slice()))
+            .fmt_field_optional(
+                "Dynamic WASM RPC links",
+                &view.dynamic_linking,
+                !view.dynamic_linking.is_empty(),
+                format_dynamic_links,
+            );
 
         fields.build()
     }

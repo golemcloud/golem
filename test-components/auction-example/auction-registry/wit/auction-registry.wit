@@ -1,10 +1,10 @@
 package auction:registry;
 
 interface api {
-  use auction:auction/api.{bidder-id};
-  use auction:auction/api.{auction-id};
-  use auction:auction/api.{deadline};
-  use auction:auction/api.{auction};
+  use auction:auction-exports/api.{bidder-id};
+  use auction:auction-exports/api.{auction-id};
+  use auction:auction-exports/api.{deadline};
+  use auction:auction-exports/api.{auction};
 
   create-bidder: func(name: string, address: string) -> bidder-id;
 
@@ -16,7 +16,5 @@ interface api {
 }
 
 world auction-registry {
-  import auction:auction-stub/stub-auction;
-
   export api;
 }

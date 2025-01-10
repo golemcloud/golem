@@ -75,7 +75,7 @@ impl<Ctx> CliCommand<Ctx> for SingleExecutableCommand {
                 })
                 .await
                 {
-                    Ok(_) => Ok(GolemResult::Str("".to_string())),
+                    Ok(_) => Ok(GolemResult::Empty),
                     Err(e) => Err(GolemError(format!("{e:#}"))),
                 }
             }

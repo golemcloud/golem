@@ -597,7 +597,7 @@ fn worker_invoke_drop(
         "worker".to_string(),
         "invoke-and-await".to_string(),
         cfg.arg('f', "function"),
-        "rpc:counters/api.{[constructor]counter}".to_string(),
+        "rpc:counters-exports/api.{[constructor]counter}".to_string(),
         cfg.arg('j', "parameters"),
         "[{\"typ\" : { \"type\": \"Str\" }, \"value\" : \"counter1\"}]".to_string(),
         cfg.arg('k', "idempotency-key"),
@@ -632,7 +632,7 @@ fn worker_invoke_drop(
         "worker".to_string(),
         "invoke-and-await".to_string(),
         cfg.arg('f', "function"),
-        "rpc:counters/api.{[drop]counter}".to_string(),
+        "rpc:counters-exports/api.{[drop]counter}".to_string(),
         cfg.arg('j', "parameters"),
         json_parameter_list.to_string(),
         cfg.arg('k', "idempotency-key"),
@@ -1148,7 +1148,7 @@ fn worker_invoke_indexed_resource(
         "worker".to_owned(),
         "invoke".to_owned(),
         cfg.arg('f', "function"),
-        r#"rpc:counters/api.{counter("counter1").inc-by}"#.to_owned(),
+        r#"rpc:counters-exports/api.{counter("counter1").inc-by}"#.to_owned(),
         cfg.arg('a', "arg"),
         "1".to_owned(),
     ];
@@ -1159,7 +1159,7 @@ fn worker_invoke_indexed_resource(
         "worker".to_owned(),
         "invoke".to_owned(),
         cfg.arg('f', "function"),
-        r#"rpc:counters/api.{counter("counter1").inc-by}"#.to_owned(),
+        r#"rpc:counters-exports/api.{counter("counter1").inc-by}"#.to_owned(),
         cfg.arg('a', "arg"),
         "2".to_owned(),
     ];
@@ -1170,7 +1170,7 @@ fn worker_invoke_indexed_resource(
         "worker".to_owned(),
         "invoke".to_owned(),
         cfg.arg('f', "function"),
-        r#"rpc:counters/api.{counter("counter2").inc-by}"#.to_owned(),
+        r#"rpc:counters-exports/api.{counter("counter2").inc-by}"#.to_owned(),
         cfg.arg('a', "arg"),
         "5".to_owned(),
     ];
@@ -1181,7 +1181,7 @@ fn worker_invoke_indexed_resource(
         "worker".to_owned(),
         "invoke-and-await".to_owned(),
         cfg.arg('f', "function"),
-        r#"rpc:counters/api.{counter("counter1").get-value}"#.to_owned(),
+        r#"rpc:counters-exports/api.{counter("counter1").get-value}"#.to_owned(),
     ];
     cli_args.append(&mut worker_ref(cfg, ref_kind, &component, &worker_name));
     let result = cli.run_json(&cli_args)?;

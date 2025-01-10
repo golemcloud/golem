@@ -78,9 +78,9 @@ mod internal {
     use std::sync::Arc;
     use tracing::{debug, error};
 
-    pub(crate) async fn get_session_details_or_redirect<'a>(
+    pub(crate) async fn get_session_details_or_redirect(
         state_from_request: &str,
-        identity_token_verifier: CoreIdTokenVerifier<'a>,
+        identity_token_verifier: CoreIdTokenVerifier<'_>,
         id_token: &str,
         session_store: &GatewaySessionStore,
         input: &HttpRequestDetails,
@@ -136,10 +136,10 @@ mod internal {
             }
         }
     }
-    pub(crate) async fn get_claims<'a>(
+    pub(crate) async fn get_claims(
         nonce: &DataValue,
         id_token: CoreIdToken,
-        identity_token_verifier: CoreIdTokenVerifier<'a>,
+        identity_token_verifier: CoreIdTokenVerifier<'_>,
         session_id: &SessionId,
         session_store: &GatewaySessionStore,
         input: &HttpRequestDetails,

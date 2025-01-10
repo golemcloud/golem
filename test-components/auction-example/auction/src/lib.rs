@@ -4,14 +4,14 @@ mod model;
 mod bindings;
 
 use bindings::*;
-use exports::auction::auction::api::{
+use exports::auction::auction_exports::api::{
     Auction as WitAuction, BidResult as WitBidResult, BidderId as WitBidderId, Guest,
 };
 use once_cell::sync::Lazy;
 use std::cell::RefCell;
 
 use crate::auction_logic::now;
-use crate::bindings::exports::auction::auction::api::GuestRunningAuction;
+use crate::bindings::exports::auction::auction_exports::api::GuestRunningAuction;
 use model::*;
 
 struct Component;

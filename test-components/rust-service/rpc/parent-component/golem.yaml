@@ -1,0 +1,28 @@
+# Schema for IDEA:
+# $schema: https://schema.golem.cloud/app/golem/1.1.0/golem.schema.json
+# Schema for vscode-yaml
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.1.0/golem.schema.json
+
+components:
+  parent-component:
+    template: rust
+    profiles:
+      debug:
+        componentWasm: ../target/wasm32-wasip1/debug/parent_component.wasm
+        linkedWasm: ../target/golem-components/debug/parent_component_composed.wasm
+        customCommands:
+          copy:
+          - command: cp ../target/wasm32-wasip1/debug/parent_component.wasm ../../..
+          - command: cp ../target/golem-components/debug/parent_component_composed.wasm ../../..
+      release:
+        componentWasm: ../target/wasm32-wasip1/release/parent_component.wasm
+        linkedWasm: ../target/golem-components/release/parent_component_composed.wasm
+        customCommands:
+          copy:
+          - command: cp ../target/wasm32-wasip1/release/parent_component.wasm ../../..
+          - command: cp ../target/golem-components/release/parent_component_composed.wasm ../../..
+    defaultProfile: debug
+dependencies:
+  parent-component:
+  - target: child-component
+    type: static-wasm-rpc

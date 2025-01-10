@@ -966,9 +966,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
-    async fn stop_internal_running<'a>(
+    async fn stop_internal_running(
         &self,
-        mut instance: MutexGuard<'a, WorkerInstance>,
+        mut instance: MutexGuard<'_, WorkerInstance>,
         called_from_invocation_loop: bool,
         fail_pending_invocations: Option<GolemError>,
     ) {

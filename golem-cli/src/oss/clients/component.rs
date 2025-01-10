@@ -94,9 +94,12 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient
 
         let files_archive_file = match files_archive {
             Some(fa) => {
-                let file = File::open(fa)
-                    .await
-                    .map_err(|e| GolemError(format!("Can't open component files archive: {e}")))?;
+                let file = File::open(fa).await.map_err(|e| {
+                    GolemError(format!(
+                        "Can't open component files archive ({}): {e}",
+                        fa.to_string_lossy()
+                    ))
+                })?;
                 Some(file)
             }
             None => None,
@@ -104,9 +107,12 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient
 
         let component = match path {
             PathBufOrStdin::Path(path) => {
-                let file = File::open(path)
-                    .await
-                    .map_err(|e| GolemError(format!("Can't open component file: {e}")))?;
+                let file = File::open(&path).await.map_err(|e| {
+                    GolemError(format!(
+                        "Can't open component file ({}): {e}",
+                        path.to_string_lossy()
+                    ))
+                })?;
 
                 self.client
                     .create_component(
@@ -155,9 +161,12 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient
 
         let files_archive_file = match files_archive {
             Some(fa) => {
-                let file = File::open(fa)
-                    .await
-                    .map_err(|e| GolemError(format!("Can't open component files archive: {e}")))?;
+                let file = File::open(fa).await.map_err(|e| {
+                    GolemError(format!(
+                        "Can't open component files archive ({}): {e}",
+                        fa.to_string_lossy()
+                    ))
+                })?;
                 Some(file)
             }
             None => None,
@@ -165,9 +174,12 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient
 
         let component = match path {
             PathBufOrStdin::Path(path) => {
-                let file = File::open(path)
-                    .await
-                    .map_err(|e| GolemError(format!("Can't open component file: {e}")))?;
+                let file = File::open(&path).await.map_err(|e| {
+                    GolemError(format!(
+                        "Can't open component file ({}): {e}",
+                        path.to_string_lossy()
+                    ))
+                })?;
 
                 self.client
                     .update_component(
