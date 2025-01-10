@@ -219,7 +219,7 @@ jobs:
       - name: Install Fontconfig
         run: |
           sudo apt-get update
-          sudo apt-get install fontconfig
+          sudo apt-get install libfontconfig1-dev
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
       - uses: Swatinem/rust-cache@v2
@@ -292,7 +292,7 @@ jobs:
       - name: Install Fontconfig
         run: |
           sudo apt-get update
-          sudo apt-get install fontconfig
+          sudo apt-get install libfontconfig1-dev
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
       - uses: Swatinem/rust-cache@v2
@@ -345,7 +345,7 @@ jobs:
       - name: Install Fontconfig
         run: |
           sudo apt-get update
-          sudo apt-get install fontconfig
+          sudo apt-get install libfontconfig1-dev
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
       - uses: Swatinem/rust-cache@v2
@@ -386,7 +386,7 @@ jobs:
       - name: Install Fontconfig
         run: |
           sudo apt-get update
-          sudo apt-get install fontconfig
+          sudo apt-get install libfontconfig1-dev
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
       - uses: cargo-bins/cargo-binstall@main
@@ -432,7 +432,7 @@ jobs:
       - name: Install Fontconfig
         run: |
           sudo apt-get update
-          sudo apt-get install fontconfig
+          sudo apt-get install libfontconfig1-dev
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
       - uses: Swatinem/rust-cache@v2
@@ -475,7 +475,7 @@ jobs:
       - name: Install Fontconfig
         run: |
           sudo apt-get update
-          sudo apt-get install fontconfig
+          sudo apt-get install libfontconfig1-dev
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
       - uses: Swatinem/rust-cache@v2
