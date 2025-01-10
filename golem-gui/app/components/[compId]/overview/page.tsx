@@ -105,9 +105,9 @@ const Overview = () => {
     return [
       {
         label: "Latest Component Version",
-        value: `v${latestComponent?.versionedComponentId?.version}`,
+        value: error ?  "" : `v${latestComponent?.versionedComponentId?.version}`,
         icon: <InsertChart fontSize="small" />,
-        isLoading: componentDataLoading,
+        isLoading: !error && componentDataLoading,
         handleClick: () => {},
       },
     ];

@@ -100,10 +100,10 @@ export default function DeploymentCreationPage({
               name="domain"
               control={control}
               rules={{ required: "Domain is required.",
-                // pattern: {
-                //   value: /^(?!:\/\/)([a-zA-Z0-9-_]+\.)+[a-zA-Z]{2,}$/,
-                //   message: "Please enter a valid domain.",
-                // }
+                pattern: {
+                  value:  /^(?!:\/\/)([a-zA-Z0-9-_]+\.)+[a-zA-Z]{2,}$/,
+                  message: "Please enter a valid domain.",
+                }
               }}
               render={({ field }) => <TextField size="small" {...field} />}
             />
@@ -117,7 +117,13 @@ export default function DeploymentCreationPage({
             <Controller
               name="subdomain"
               control={control}
-              rules={{ required: "Subdomain is required." }}
+              //
+              rules={{ required: "Subdomain is required.",
+                pattern: {
+                  value:  /^(?!-)[a-zA-Z0-9-]{1,63}(?<!-)$/,
+                  message: "Subdomain can only contain alphanumeric characters and dashes, cannot start or end with a dash, and must be at most 63 characters long.",
+                }
+               }}
               render={({ field }) => <TextField size="small" {...field} />}
             />
             <Typography variant="caption" color="error">

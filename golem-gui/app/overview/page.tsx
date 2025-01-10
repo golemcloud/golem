@@ -125,7 +125,7 @@ const ProjectDashboard = () => {
                   </Button>
                 )}
               </Box>
-              {error && <ErrorBoundary message={error} />}
+              {error !== componentError && <ErrorBoundary message={error} />}
               {uniquesApis?.length === 0 && (
                 <Box
                   textAlign="center"
