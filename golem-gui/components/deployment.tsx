@@ -16,6 +16,7 @@ import useApiDeployments from "@/lib/hooks/use-api-deployments";
 import CustomModal from "./CustomModal";
 import { Button2 as Button } from "./ui/button";
 import ErrorBoundary from "./erro-boundary";
+import useApiDefinitions from '@/lib/hooks/use-api-definitons';
 
 export default function DeploymentPage({
   apiId,
@@ -28,8 +29,12 @@ export default function DeploymentPage({
   const [open, setOpen] = useState(false);
   const handleOpen = () => setOpen(true);
   const handleClose = () => setOpen(false);
-  const { apiDeployments, addApiDeployment, isLoading, error } =
+  const { apiDeployments, addApiDeployment, isLoading} =
     useApiDeployments(apiId);
+
+const {getApiDefintion, isLoading:apiLoading, error: requestError} = useApiDefinitions(apiId)
+const {error} = (!apiLoading && getApiDefintion() || {});
+
   const deployments = limit ? apiDeployments.slice(0, limit) : apiDeployments;
   const depolymentMap = deployments?.reduce<Record<string, ApiDeployment[]>>(
     (obj, deployment: ApiDeployment) => {
@@ -43,7 +48,6 @@ export default function DeploymentPage({
     },
     {}
   );
-
   return (
     <>
       <Box>
@@ -83,8 +87,8 @@ export default function DeploymentPage({
 
             {isLoading && <Loader className="self-center" />}
           </Stack>
-          {error && (
-           <ErrorBoundary message={error}/>
+          {(error || requestError)&& (
+           <ErrorBoundary message={requestError || error}/>
           )}
           {!isLoading && !error && deployments.length === 0 ? (
             <Typography variant="body2" className="text-muted-foreground">
