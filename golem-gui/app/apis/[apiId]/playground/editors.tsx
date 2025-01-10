@@ -33,7 +33,7 @@ export default function Editors() {
             break;
           default: //do nothing
         }
-        return setOpen(null);
+        return handleClose();
       }
       setOpen(trigger?.type || null);
     })();
